@@ -1,0 +1,492 @@
+{
+  "E:\\Auto\\Auto\\app\\layout.tsx": {
+    "mtime": 1780471872.078518,
+    "ast_hash": "61c98c3b16c3e0138ad80c05ad904a46",
+    "semantic_hash": "61c98c3b16c3e0138ad80c05ad904a46"
+  },
+  "E:\\Auto\\Auto\\app\\page.tsx": {
+    "mtime": 1780471872.078518,
+    "ast_hash": "931ee87c2662dceb9ab2ffff3772de92",
+    "semantic_hash": "931ee87c2662dceb9ab2ffff3772de92"
+  },
+  "E:\\Auto\\Auto\\app\\server\\inner.tsx": {
+    "mtime": 1780088946.0,
+    "ast_hash": "6c624bae0ea7a1ebdf0c1b2ea73102f3",
+    "semantic_hash": "6c624bae0ea7a1ebdf0c1b2ea73102f3"
+  },
+  "E:\\Auto\\Auto\\app\\server\\page.tsx": {
+    "mtime": 1780088946.0,
+    "ast_hash": "99ffa840dab8066d68d79d59a52ecd36",
+    "semantic_hash": "99ffa840dab8066d68d79d59a52ecd36"
+  },
+  "E:\\Auto\\Auto\\app\\sign-in\\[[...sign-in]]\\page.tsx": {
+    "mtime": 1780472632.1735435,
+    "ast_hash": "8aa14abccb7f94dd416d94d0a98325ca",
+    "semantic_hash": "8aa14abccb7f94dd416d94d0a98325ca"
+  },
+  "E:\\Auto\\Auto\\app\\sign-up\\[[...sign-up]]\\page.tsx": {
+    "mtime": 1780472632.1754942,
+    "ast_hash": "67e85a66812d927cdb140db4da7c0e9e",
+    "semantic_hash": "67e85a66812d927cdb140db4da7c0e9e"
+  },
+  "E:\\Auto\\Auto\\components\\ConvexClientProvider.tsx": {
+    "mtime": 1780471871.8405118,
+    "ast_hash": "b36e3857e970ba14122b1860582b0ded",
+    "semantic_hash": "b36e3857e970ba14122b1860582b0ded"
+  },
+  "E:\\Auto\\Auto\\convex\\_generated\\ai\\ai-files.state.json": {
+    "mtime": 1780471268.0552802,
+    "ast_hash": "fbb66975fd2f1bbcb5fe53cbef6c76eb",
+    "semantic_hash": "fbb66975fd2f1bbcb5fe53cbef6c76eb"
+  },
+  "E:\\Auto\\Auto\\convex\\_generated\\api.d.ts": {
+    "mtime": 1780473332.4651663,
+    "ast_hash": "6cd519c2ee062b541a4be95885fdd03e",
+    "semantic_hash": "6cd519c2ee062b541a4be95885fdd03e"
+  },
+  "E:\\Auto\\Auto\\convex\\_generated\\api.js": {
+    "mtime": 1780088946.0,
+    "ast_hash": "ea14005171d3e17b1b28a7139ad36d62",
+    "semantic_hash": "ea14005171d3e17b1b28a7139ad36d62"
+  },
+  "E:\\Auto\\Auto\\convex\\_generated\\dataModel.d.ts": {
+    "mtime": 1780088946.0,
+    "ast_hash": "af87bff09394971f8debeb5b8e9f8a70",
+    "semantic_hash": "af87bff09394971f8debeb5b8e9f8a70"
+  },
+  "E:\\Auto\\Auto\\convex\\_generated\\server.d.ts": {
+    "mtime": 1780088946.0,
+    "ast_hash": "a6d3e29e1cd98c6a0ebcf82d5074009e",
+    "semantic_hash": "a6d3e29e1cd98c6a0ebcf82d5074009e"
+  },
+  "E:\\Auto\\Auto\\convex\\_generated\\server.js": {
+    "mtime": 1780088946.0,
+    "ast_hash": "cfc7a4ed084119abac0e51d79f525f4f",
+    "semantic_hash": "cfc7a4ed084119abac0e51d79f525f4f"
+  },
+  "E:\\Auto\\Auto\\convex\\auth.config.ts": {
+    "mtime": 1780474304.4702706,
+    "ast_hash": "358a01b1a73bfdcc72c8a77557551242",
+    "semantic_hash": "358a01b1a73bfdcc72c8a77557551242"
+  },
+  "E:\\Auto\\Auto\\convex\\http.ts": {
+    "mtime": 1780473316.6216967,
+    "ast_hash": "bd2d70875cc5b752e3aa62447dde4639",
+    "semantic_hash": "bd2d70875cc5b752e3aa62447dde4639"
+  },
+  "E:\\Auto\\Auto\\convex\\schema.ts": {
+    "mtime": 1780509453.1962633,
+    "ast_hash": "cdf4c65d28014d78ec8fbd15b59aea9a",
+    "semantic_hash": "cdf4c65d28014d78ec8fbd15b59aea9a"
+  },
+  "E:\\Auto\\Auto\\convex\\tsconfig.json": {
+    "mtime": 1780088946.0,
+    "ast_hash": "e87faa74e11bb10a6b2489fcf7859cb1",
+    "semantic_hash": "e87faa74e11bb10a6b2489fcf7859cb1"
+  },
+  "E:\\Auto\\Auto\\convex\\users.ts": {
+    "mtime": 1780509777.6295524,
+    "ast_hash": "e54461d0ca3df14c81f3a4e07fa867c7",
+    "semantic_hash": "e54461d0ca3df14c81f3a4e07fa867c7"
+  },
+  "E:\\Auto\\Auto\\eslint.config.mjs": {
+    "mtime": 1780088946.0,
+    "ast_hash": "13acc7103302ecb0361130192cb22520",
+    "semantic_hash": "13acc7103302ecb0361130192cb22520"
+  },
+  "E:\\Auto\\Auto\\next.config.ts": {
+    "mtime": 1780088946.0,
+    "ast_hash": "9b77af189a21a7a64e4bd7a426f64176",
+    "semantic_hash": "9b77af189a21a7a64e4bd7a426f64176"
+  },
+  "E:\\Auto\\Auto\\package.json": {
+    "mtime": 1780473297.0211844,
+    "ast_hash": "b794f0c55205b89f7a01c846b6efbd24",
+    "semantic_hash": "b794f0c55205b89f7a01c846b6efbd24"
+  },
+  "E:\\Auto\\Auto\\postcss.config.mjs": {
+    "mtime": 1780088946.0,
+    "ast_hash": "675899342e765a4d16acd75a53389101",
+    "semantic_hash": "675899342e765a4d16acd75a53389101"
+  },
+  "E:\\Auto\\Auto\\proxy.ts": {
+    "mtime": 1780088946.0,
+    "ast_hash": "439c77b6133e7d39cc1f04af8da74137",
+    "semantic_hash": "439c77b6133e7d39cc1f04af8da74137"
+  },
+  "E:\\Auto\\Auto\\skills-lock.json": {
+    "mtime": 1780471267.4053543,
+    "ast_hash": "0fb1b4cf9c8ce6af3ddb013a5a801630",
+    "semantic_hash": "0fb1b4cf9c8ce6af3ddb013a5a801630"
+  },
+  "E:\\Auto\\Auto\\tsconfig.json": {
+    "mtime": 1780088946.0,
+    "ast_hash": "7831df54b0184c9a88a681bd02b3e9e4",
+    "semantic_hash": "7831df54b0184c9a88a681bd02b3e9e4"
+  },
+  "E:\\Auto\\Auto\\.agents\\rules\\graphify.md": {
+    "mtime": 1780498462.571838,
+    "ast_hash": "a0e4d192b9e2e17256124dbfc8e24e6a",
+    "semantic_hash": "a0e4d192b9e2e17256124dbfc8e24e6a"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-create-component\\SKILL.md": {
+    "mtime": 1780471266.9467175,
+    "ast_hash": "ec825ce9174c3c08775e6189be9c8b80",
+    "semantic_hash": "ec825ce9174c3c08775e6189be9c8b80"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-create-component\\agents\\openai.yaml": {
+    "mtime": 1780471266.9482238,
+    "ast_hash": "0a7ae3f14ed8bbb7a59c8838d8e58bbc",
+    "semantic_hash": "0a7ae3f14ed8bbb7a59c8838d8e58bbc"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-create-component\\references\\advanced-patterns.md": {
+    "mtime": 1780471266.9497313,
+    "ast_hash": "c521b78d48ce8ae0bd9613766063e463",
+    "semantic_hash": "c521b78d48ce8ae0bd9613766063e463"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-create-component\\references\\hybrid-components.md": {
+    "mtime": 1780471266.9497313,
+    "ast_hash": "927a09d1ec50cffbcbe90c0d3b7145f7",
+    "semantic_hash": "927a09d1ec50cffbcbe90c0d3b7145f7"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-create-component\\references\\local-components.md": {
+    "mtime": 1780471266.9507394,
+    "ast_hash": "fa7ca7ad7cb3a6599c0ed76ca7da1cf3",
+    "semantic_hash": "fa7ca7ad7cb3a6599c0ed76ca7da1cf3"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-create-component\\references\\packaged-components.md": {
+    "mtime": 1780471266.9507394,
+    "ast_hash": "f2572e9e30a334c4ca4e96a54f16108b",
+    "semantic_hash": "f2572e9e30a334c4ca4e96a54f16108b"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-migration-helper\\SKILL.md": {
+    "mtime": 1780471266.9517536,
+    "ast_hash": "b36253cd6208c2c9cb605fbbb8346fd9",
+    "semantic_hash": "b36253cd6208c2c9cb605fbbb8346fd9"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-migration-helper\\agents\\openai.yaml": {
+    "mtime": 1780471266.9527469,
+    "ast_hash": "2e6fb6113c711b485feae55627659d19",
+    "semantic_hash": "2e6fb6113c711b485feae55627659d19"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-migration-helper\\references\\migration-patterns.md": {
+    "mtime": 1780471266.9537535,
+    "ast_hash": "600a39ee758284cb13184a7c34fb0a9d",
+    "semantic_hash": "600a39ee758284cb13184a7c34fb0a9d"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-migration-helper\\references\\migrations-component.md": {
+    "mtime": 1780471266.9537535,
+    "ast_hash": "aa0dba7e8b4336da2a8b92d7e10ab95c",
+    "semantic_hash": "aa0dba7e8b4336da2a8b92d7e10ab95c"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-performance-audit\\SKILL.md": {
+    "mtime": 1780471266.9547508,
+    "ast_hash": "a87f528412cb9f4b9d1a2cae6b77392e",
+    "semantic_hash": "a87f528412cb9f4b9d1a2cae6b77392e"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-performance-audit\\agents\\openai.yaml": {
+    "mtime": 1780471266.9557457,
+    "ast_hash": "fcceae233d93de638332d7419443bedf",
+    "semantic_hash": "fcceae233d93de638332d7419443bedf"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-performance-audit\\references\\function-budget.md": {
+    "mtime": 1780471266.956746,
+    "ast_hash": "7d3345eaa4cadd3706cb7d0c245e91ed",
+    "semantic_hash": "7d3345eaa4cadd3706cb7d0c245e91ed"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-performance-audit\\references\\hot-path-rules.md": {
+    "mtime": 1780471266.956746,
+    "ast_hash": "8015a530db1586dc684daa40d37c9c5e",
+    "semantic_hash": "8015a530db1586dc684daa40d37c9c5e"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-performance-audit\\references\\occ-conflicts.md": {
+    "mtime": 1780471266.957745,
+    "ast_hash": "67910e750e26c1d431d8d46e50eca490",
+    "semantic_hash": "67910e750e26c1d431d8d46e50eca490"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-performance-audit\\references\\subscription-cost.md": {
+    "mtime": 1780471266.957745,
+    "ast_hash": "6af1c1c1b47d36d2b69002111ce372df",
+    "semantic_hash": "6af1c1c1b47d36d2b69002111ce372df"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-quickstart\\SKILL.md": {
+    "mtime": 1780471266.9587502,
+    "ast_hash": "6e611fcde8ac05c4c810dcd7fd5068a2",
+    "semantic_hash": "6e611fcde8ac05c4c810dcd7fd5068a2"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-quickstart\\agents\\openai.yaml": {
+    "mtime": 1780471266.9587502,
+    "ast_hash": "488d168fd73397e3f8d84cc2191214bb",
+    "semantic_hash": "488d168fd73397e3f8d84cc2191214bb"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-setup-auth\\SKILL.md": {
+    "mtime": 1780471266.9597526,
+    "ast_hash": "06366db7119b25ddf68175979166d1a7",
+    "semantic_hash": "06366db7119b25ddf68175979166d1a7"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-setup-auth\\agents\\openai.yaml": {
+    "mtime": 1780471266.960793,
+    "ast_hash": "6085f6499e386748452563303ad8d075",
+    "semantic_hash": "6085f6499e386748452563303ad8d075"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-setup-auth\\references\\auth0.md": {
+    "mtime": 1780471266.961799,
+    "ast_hash": "65d097addc858433fe10e97882528ae1",
+    "semantic_hash": "65d097addc858433fe10e97882528ae1"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-setup-auth\\references\\clerk.md": {
+    "mtime": 1780471266.961799,
+    "ast_hash": "692b879bedc8bc5787e1813cd04cf711",
+    "semantic_hash": "692b879bedc8bc5787e1813cd04cf711"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-setup-auth\\references\\convex-auth.md": {
+    "mtime": 1780471266.9627986,
+    "ast_hash": "6bf92f2d2db0304c5cb3d45751e9e082",
+    "semantic_hash": "6bf92f2d2db0304c5cb3d45751e9e082"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-setup-auth\\references\\workos-authkit.md": {
+    "mtime": 1780471266.9627986,
+    "ast_hash": "43b20ab3d92d60ae7785ed73a024ad26",
+    "semantic_hash": "43b20ab3d92d60ae7785ed73a024ad26"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex\\SKILL.md": {
+    "mtime": 1780471266.9637983,
+    "ast_hash": "a79b3d59cd110f16134585800b876874",
+    "semantic_hash": "a79b3d59cd110f16134585800b876874"
+  },
+  "E:\\Auto\\Auto\\.agents\\workflows\\graphify.md": {
+    "mtime": 1780498462.571838,
+    "ast_hash": "637776aa6f7496d069afe7520c845c8a",
+    "semantic_hash": "637776aa6f7496d069afe7520c845c8a"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-create-component\\SKILL.md": {
+    "mtime": 1780471266.9467175,
+    "ast_hash": "ec825ce9174c3c08775e6189be9c8b80",
+    "semantic_hash": "ec825ce9174c3c08775e6189be9c8b80"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-create-component\\agents\\openai.yaml": {
+    "mtime": 1780471266.9482238,
+    "ast_hash": "0a7ae3f14ed8bbb7a59c8838d8e58bbc",
+    "semantic_hash": "0a7ae3f14ed8bbb7a59c8838d8e58bbc"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-create-component\\references\\advanced-patterns.md": {
+    "mtime": 1780471266.9497313,
+    "ast_hash": "c521b78d48ce8ae0bd9613766063e463",
+    "semantic_hash": "c521b78d48ce8ae0bd9613766063e463"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-create-component\\references\\hybrid-components.md": {
+    "mtime": 1780471266.9497313,
+    "ast_hash": "927a09d1ec50cffbcbe90c0d3b7145f7",
+    "semantic_hash": "927a09d1ec50cffbcbe90c0d3b7145f7"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-create-component\\references\\local-components.md": {
+    "mtime": 1780471266.9507394,
+    "ast_hash": "fa7ca7ad7cb3a6599c0ed76ca7da1cf3",
+    "semantic_hash": "fa7ca7ad7cb3a6599c0ed76ca7da1cf3"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-create-component\\references\\packaged-components.md": {
+    "mtime": 1780471266.9507394,
+    "ast_hash": "f2572e9e30a334c4ca4e96a54f16108b",
+    "semantic_hash": "f2572e9e30a334c4ca4e96a54f16108b"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-migration-helper\\SKILL.md": {
+    "mtime": 1780471266.9517536,
+    "ast_hash": "b36253cd6208c2c9cb605fbbb8346fd9",
+    "semantic_hash": "b36253cd6208c2c9cb605fbbb8346fd9"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-migration-helper\\agents\\openai.yaml": {
+    "mtime": 1780471266.9527469,
+    "ast_hash": "2e6fb6113c711b485feae55627659d19",
+    "semantic_hash": "2e6fb6113c711b485feae55627659d19"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-migration-helper\\references\\migration-patterns.md": {
+    "mtime": 1780471266.9537535,
+    "ast_hash": "600a39ee758284cb13184a7c34fb0a9d",
+    "semantic_hash": "600a39ee758284cb13184a7c34fb0a9d"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-migration-helper\\references\\migrations-component.md": {
+    "mtime": 1780471266.9537535,
+    "ast_hash": "aa0dba7e8b4336da2a8b92d7e10ab95c",
+    "semantic_hash": "aa0dba7e8b4336da2a8b92d7e10ab95c"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-performance-audit\\SKILL.md": {
+    "mtime": 1780471266.9547508,
+    "ast_hash": "a87f528412cb9f4b9d1a2cae6b77392e",
+    "semantic_hash": "a87f528412cb9f4b9d1a2cae6b77392e"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-performance-audit\\agents\\openai.yaml": {
+    "mtime": 1780471266.9557457,
+    "ast_hash": "fcceae233d93de638332d7419443bedf",
+    "semantic_hash": "fcceae233d93de638332d7419443bedf"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-performance-audit\\references\\function-budget.md": {
+    "mtime": 1780471266.956746,
+    "ast_hash": "7d3345eaa4cadd3706cb7d0c245e91ed",
+    "semantic_hash": "7d3345eaa4cadd3706cb7d0c245e91ed"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-performance-audit\\references\\hot-path-rules.md": {
+    "mtime": 1780471266.956746,
+    "ast_hash": "8015a530db1586dc684daa40d37c9c5e",
+    "semantic_hash": "8015a530db1586dc684daa40d37c9c5e"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-performance-audit\\references\\occ-conflicts.md": {
+    "mtime": 1780471266.957745,
+    "ast_hash": "67910e750e26c1d431d8d46e50eca490",
+    "semantic_hash": "67910e750e26c1d431d8d46e50eca490"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-performance-audit\\references\\subscription-cost.md": {
+    "mtime": 1780471266.957745,
+    "ast_hash": "6af1c1c1b47d36d2b69002111ce372df",
+    "semantic_hash": "6af1c1c1b47d36d2b69002111ce372df"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-quickstart\\SKILL.md": {
+    "mtime": 1780471266.9587502,
+    "ast_hash": "6e611fcde8ac05c4c810dcd7fd5068a2",
+    "semantic_hash": "6e611fcde8ac05c4c810dcd7fd5068a2"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-quickstart\\agents\\openai.yaml": {
+    "mtime": 1780471266.9587502,
+    "ast_hash": "488d168fd73397e3f8d84cc2191214bb",
+    "semantic_hash": "488d168fd73397e3f8d84cc2191214bb"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-setup-auth\\SKILL.md": {
+    "mtime": 1780471266.9597526,
+    "ast_hash": "06366db7119b25ddf68175979166d1a7",
+    "semantic_hash": "06366db7119b25ddf68175979166d1a7"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-setup-auth\\agents\\openai.yaml": {
+    "mtime": 1780471266.960793,
+    "ast_hash": "6085f6499e386748452563303ad8d075",
+    "semantic_hash": "6085f6499e386748452563303ad8d075"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-setup-auth\\references\\auth0.md": {
+    "mtime": 1780471266.961799,
+    "ast_hash": "65d097addc858433fe10e97882528ae1",
+    "semantic_hash": "65d097addc858433fe10e97882528ae1"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-setup-auth\\references\\clerk.md": {
+    "mtime": 1780471266.961799,
+    "ast_hash": "692b879bedc8bc5787e1813cd04cf711",
+    "semantic_hash": "692b879bedc8bc5787e1813cd04cf711"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-setup-auth\\references\\convex-auth.md": {
+    "mtime": 1780471266.9627986,
+    "ast_hash": "6bf92f2d2db0304c5cb3d45751e9e082",
+    "semantic_hash": "6bf92f2d2db0304c5cb3d45751e9e082"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-setup-auth\\references\\workos-authkit.md": {
+    "mtime": 1780471266.9627986,
+    "ast_hash": "43b20ab3d92d60ae7785ed73a024ad26",
+    "semantic_hash": "43b20ab3d92d60ae7785ed73a024ad26"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex\\SKILL.md": {
+    "mtime": 1780471266.9637983,
+    "ast_hash": "a79b3d59cd110f16134585800b876874",
+    "semantic_hash": "a79b3d59cd110f16134585800b876874"
+  },
+  "E:\\Auto\\Auto\\AGENTS.md": {
+    "mtime": 1780471263.0066776,
+    "ast_hash": "34281e9ffd842238948717ac9c01f392",
+    "semantic_hash": "34281e9ffd842238948717ac9c01f392"
+  },
+  "E:\\Auto\\Auto\\CLAUDE.md": {
+    "mtime": 1780471263.0081837,
+    "ast_hash": "34281e9ffd842238948717ac9c01f392",
+    "semantic_hash": "34281e9ffd842238948717ac9c01f392"
+  },
+  "E:\\Auto\\Auto\\README.md": {
+    "mtime": 1780088946.0,
+    "ast_hash": "418d50e20395ef10912d6e0697e37b91",
+    "semantic_hash": "418d50e20395ef10912d6e0697e37b91"
+  },
+  "E:\\Auto\\Auto\\convex\\README.md": {
+    "mtime": 1780088946.0,
+    "ast_hash": "3a0f15b8c7f1cc532958811e1ce6d311",
+    "semantic_hash": "3a0f15b8c7f1cc532958811e1ce6d311"
+  },
+  "E:\\Auto\\Auto\\convex\\_generated\\ai\\guidelines.md": {
+    "mtime": 1780471263.0056772,
+    "ast_hash": "e1d69cf237f235d870171f1c50306b82",
+    "semantic_hash": "e1d69cf237f235d870171f1c50306b82"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-create-component\\assets\\icon.svg": {
+    "mtime": 1780471266.9482238,
+    "ast_hash": "750ee31db4186a3a336f1c6376a15221",
+    "semantic_hash": "750ee31db4186a3a336f1c6376a15221"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-migration-helper\\assets\\icon.svg": {
+    "mtime": 1780471266.9527469,
+    "ast_hash": "d3f9b469ddd0979fdf7a34ffdf0d291d",
+    "semantic_hash": "d3f9b469ddd0979fdf7a34ffdf0d291d"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-performance-audit\\assets\\icon.svg": {
+    "mtime": 1780471266.9557457,
+    "ast_hash": "9d96d8029f3a3e73c898bffd41abbf4b",
+    "semantic_hash": "9d96d8029f3a3e73c898bffd41abbf4b"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-quickstart\\assets\\icon.svg": {
+    "mtime": 1780471266.9597526,
+    "ast_hash": "ee6d5a57c359c31069c6543131eecfb0",
+    "semantic_hash": "ee6d5a57c359c31069c6543131eecfb0"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-setup-auth\\assets\\icon.svg": {
+    "mtime": 1780471266.960793,
+    "ast_hash": "5fd65f0f070bca77e1ea8ed46fbc1fd3",
+    "semantic_hash": "5fd65f0f070bca77e1ea8ed46fbc1fd3"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-create-component\\assets\\icon.svg": {
+    "mtime": 1780471266.9482238,
+    "ast_hash": "750ee31db4186a3a336f1c6376a15221",
+    "semantic_hash": "750ee31db4186a3a336f1c6376a15221"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-migration-helper\\assets\\icon.svg": {
+    "mtime": 1780471266.9527469,
+    "ast_hash": "d3f9b469ddd0979fdf7a34ffdf0d291d",
+    "semantic_hash": "d3f9b469ddd0979fdf7a34ffdf0d291d"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-performance-audit\\assets\\icon.svg": {
+    "mtime": 1780471266.9557457,
+    "ast_hash": "9d96d8029f3a3e73c898bffd41abbf4b",
+    "semantic_hash": "9d96d8029f3a3e73c898bffd41abbf4b"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-quickstart\\assets\\icon.svg": {
+    "mtime": 1780471266.9597526,
+    "ast_hash": "ee6d5a57c359c31069c6543131eecfb0",
+    "semantic_hash": "ee6d5a57c359c31069c6543131eecfb0"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-setup-auth\\assets\\icon.svg": {
+    "mtime": 1780471266.960793,
+    "ast_hash": "5fd65f0f070bca77e1ea8ed46fbc1fd3",
+    "semantic_hash": "5fd65f0f070bca77e1ea8ed46fbc1fd3"
+  },
+  "E:\\Auto\\Auto\\public\\convex.svg": {
+    "mtime": 1780088946.0,
+    "ast_hash": "20364a01e3ca0df13c306ce011fab625",
+    "semantic_hash": "20364a01e3ca0df13c306ce011fab625"
+  },
+  "E:\\Auto\\Auto\\convex\\memberships.ts": {
+    "mtime": 1780509819.1158397,
+    "ast_hash": "317f705d1f55a23fc184654d67a68709",
+    "semantic_hash": "317f705d1f55a23fc184654d67a68709"
+  },
+  "E:\\Auto\\Auto\\convex\\organizations.ts": {
+    "mtime": 1780509712.898026,
+    "ast_hash": "883bc3e7cfa4366511d884218f951ae4",
+    "semantic_hash": "883bc3e7cfa4366511d884218f951ae4"
+  },
+  "E:\\Auto\\Auto\\convex\\roles.ts": {
+    "mtime": 1780509733.0270872,
+    "ast_hash": "567b38ac7e9551c66ce7f88fa6957936",
+    "semantic_hash": "567b38ac7e9551c66ce7f88fa6957936"
+  },
+  "E:\\Auto\\Auto\\convex\\utils\\permissions.ts": {
+    "mtime": 1780509670.999976,
+    "ast_hash": "6444ad583d4b9a9dcb7b96fc6cde74ce",
+    "semantic_hash": "6444ad583d4b9a9dcb7b96fc6cde74ce"
+  },
+  "E:\\Auto\\Auto\\convex\\utils\\tenancy.ts": {
+    "mtime": 1780509692.0947635,
+    "ast_hash": "5029a3d50b3419f4baf57d36e41c750d",
+    "semantic_hash": "5029a3d50b3419f4baf57d36e41c750d"
+  }
+}
