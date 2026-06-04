@@ -1,6 +1,6 @@
 "use node";
 
-import { action } from "./_generated/server";
+import { action, internalAction } from "./_generated/server";
 import { v } from "convex/values";
 import { Resend } from "resend";
 
@@ -68,6 +68,48 @@ export const sendTaskAlarm = action({
       return { success: true, mock: false };
     } catch (error) {
       console.error("Failed to send email via Resend:", error);
+      return { success: false, error: String(error) };
+    }
+  },
+});
+
+export const sendTeamInvite = internalAction({
+  args: {
+    toEmail: v.string(),
+    orgName: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const resendApiKey = process.env.RESEND_API_KEY;
+
+    // Use localhost for now, but remind user to update for prod
+    const inviteUrl = "http://localhost:3000/sign-up";
+
+    const emailHtml = `
+      <h1>You've been invited to join ${args.orgName}</h1>
+      <p>Your team at ${args.orgName} has invited you to join them on AutoFlow CRM.</p>
+      <p>Click the link below to sign up and join your team automatically:</p>
+      <p><a href="${inviteUrl}">Accept Invitation & Sign Up</a></p>
+      <br />
+      <p>If the link doesn't work, copy and paste this into your browser: ${inviteUrl}</p>
+    `;
+
+    if (!resendApiKey) {
+      console.log(`[MOCK EMAIL] To: ${args.toEmail} | Subject: Join ${args.orgName}`);
+      return { success: true, mock: true };
+    }
+
+    const resend = new Resend(resendApiKey);
+
+    try {
+      await resend.emails.send({
+        from: 'AutoFlow Teams <onboarding@resend.dev>',
+        to: args.toEmail,
+        subject: `You're invited to join ${args.orgName} on AutoFlow`,
+        html: emailHtml,
+      });
+      return { success: true, mock: false };
+    } catch (error) {
+      console.error("Failed to send invite email via Resend:", error);
       return { success: false, error: String(error) };
     }
   },

@@ -33,19 +33,48 @@ export const updateOrCreateUser = internalMutation({
       .withIndex("by_clerkId", (q) => q.eq("clerkId", args.clerkId))
       .unique();
 
+    let userId;
     if (existingUser) {
       await ctx.db.patch(existingUser._id, {
         email: args.email,
         name: args.name,
         imageUrl: args.imageUrl,
       });
+      userId = existingUser._id;
     } else {
-      await ctx.db.insert("users", {
+      userId = await ctx.db.insert("users", {
         clerkId: args.clerkId,
         email: args.email,
         name: args.name,
         imageUrl: args.imageUrl,
       });
+    }
+
+    // Process any pending invitations for this email
+    const pendingInvites = await ctx.db
+      .query("invitations")
+      .withIndex("by_email", (q) => q.eq("email", args.email.toLowerCase().trim()))
+      .collect();
+
+    for (const invite of pendingInvites) {
+      // Check if membership already exists to prevent duplicates
+      const existingMembership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) =>
+          q.eq("orgId", invite.orgId).eq("userId", userId)
+        )
+        .unique();
+
+      if (!existingMembership) {
+        await ctx.db.insert("memberships", {
+          orgId: invite.orgId,
+          userId: userId,
+          roleId: invite.roleId,
+        });
+      }
+      
+      // Delete the invitation once processed
+      await ctx.db.delete(invite._id);
     }
   },
 });

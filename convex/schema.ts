@@ -29,6 +29,15 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_user", ["orgId", "userId"]),
 
+  invitations: defineTable({
+    orgId: v.id("organizations"),
+    email: v.string(),
+    roleId: v.id("roles"),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_email", ["email"]),
+
   vehicles: defineTable({
     orgId: v.id("organizations"),
     vin: v.string(),

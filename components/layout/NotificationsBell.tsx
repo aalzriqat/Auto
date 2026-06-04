@@ -4,7 +4,6 @@ import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
-import { useUser } from "@clerk/nextjs";
 import { Bell, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -13,11 +12,8 @@ import { Id } from "@/convex/_generated/dataModel";
 
 export function NotificationsBell() {
   const { activeOrgId } = useOrg();
-  const { user } = useUser();
-
-  const memberships = useQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId } : "skip");
-  const membership = memberships?.find(m => m.userEmail === user?.primaryEmailAddress?.emailAddress);
-  const localUserId = membership?.userId;
+  const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const localUserId = myMembership?.userId;
 
   const notifications = useQuery(
     api.notifications.list,

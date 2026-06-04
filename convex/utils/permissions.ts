@@ -106,6 +106,7 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
     name: "SALES",
     permissions: [
       PERMISSIONS.VIEW_ORG,
+      PERMISSIONS.VIEW_USERS,
       PERMISSIONS.VIEW_VEHICLES,
       PERMISSIONS.VIEW_CUSTOMERS,
       PERMISSIONS.CREATE_CUSTOMERS,
@@ -124,6 +125,7 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
     name: "RECEPTION",
     permissions: [
       PERMISSIONS.VIEW_ORG,
+      PERMISSIONS.VIEW_USERS,
       PERMISSIONS.VIEW_VEHICLES,
       PERMISSIONS.VIEW_CUSTOMERS,
       PERMISSIONS.CREATE_CUSTOMERS,
@@ -137,6 +139,7 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
     name: "ACCOUNTANT",
     permissions: [
       PERMISSIONS.VIEW_ORG,
+      PERMISSIONS.VIEW_USERS,
       PERMISSIONS.VIEW_VEHICLES,
       PERMISSIONS.VIEW_CUSTOMERS,
       PERMISSIONS.VIEW_SALES,

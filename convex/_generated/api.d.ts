@@ -16,6 +16,7 @@ import type * as expenses from "../expenses.js";
 import type * as http from "../http.js";
 import type * as leads from "../leads.js";
 import type * as memberships from "../memberships.js";
+import type * as migrateRoles from "../migrateRoles.js";
 import type * as migrations from "../migrations.js";
 import type * as notifications from "../notifications.js";
 import type * as organizations from "../organizations.js";
@@ -42,6 +43,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   leads: typeof leads;
   memberships: typeof memberships;
+  migrateRoles: typeof migrateRoles;
   migrations: typeof migrations;
   notifications: typeof notifications;
   organizations: typeof organizations;

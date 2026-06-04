@@ -122,7 +122,22 @@ export const get = query({
 export const listMine = query({
   args: {},
   handler: async (ctx) => {
-    const user = await requireAuth(ctx);
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) {
+      throw new ConvexError("Unauthenticated: You must be logged in.");
+    }
+
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
+      .unique();
+
+    if (!user) {
+      // The Clerk webhook hasn't finished syncing yet.
+      // Return an empty array. When the webhook inserts the user, 
+      // this query will automatically re-run because it's tracking the `users` table.
+      return [];
+    }
 
     const memberships = await ctx.db
       .query("memberships")

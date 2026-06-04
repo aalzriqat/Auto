@@ -1,5 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 
@@ -82,16 +83,44 @@ export const add = mutation({
       throw new ConvexError("The specified role does not belong to this organization.");
     }
 
+    const org = await ctx.db.get(args.orgId);
+    if (!org) throw new ConvexError("Organization not found");
+
+    const email = args.userEmail.toLowerCase().trim();
+
     // Find the target user by email
     const targetUser = await ctx.db
       .query("users")
-      .filter((q) => q.eq(q.field("email"), args.userEmail.toLowerCase().trim()))
+      .filter((q) => q.eq(q.field("email"), email))
       .first();
 
     if (!targetUser) {
-      throw new ConvexError(
-        "No user found with that email. They must sign up first before being added."
-      );
+      // User doesn't exist yet, create an invitation!
+      // Check if they are already invited
+      const existingInvite = await ctx.db
+        .query("invitations")
+        .withIndex("by_email", (q) => q.eq("email", email))
+        .filter((q) => q.eq(q.field("orgId"), args.orgId))
+        .first();
+
+      if (existingInvite) {
+        throw new ConvexError("An invitation is already pending for this email.");
+      }
+
+      await ctx.db.insert("invitations", {
+        orgId: args.orgId,
+        email,
+        roleId: args.roleId,
+        createdAt: Date.now(),
+      });
+
+      // Schedule the invite email
+      await ctx.scheduler.runAfter(0, internal.email.sendTeamInvite, {
+        toEmail: email,
+        orgName: org.name,
+      });
+
+      return { status: "invited" };
     }
 
     // Check for existing membership
@@ -106,11 +135,13 @@ export const add = mutation({
       throw new ConvexError("This user is already a member of this organization.");
     }
 
-    return await ctx.db.insert("memberships", {
+    await ctx.db.insert("memberships", {
       orgId: args.orgId,
       userId: targetUser._id,
       roleId: args.roleId,
     });
+
+    return { status: "added" };
   },
 });
 

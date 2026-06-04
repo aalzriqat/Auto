@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState, ReactNode } from "react";
-import { useQuery } from "convex/react";
+import { useQuery, useConvexAuth } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 
@@ -15,9 +15,10 @@ const OrgContext = createContext<OrgContextType | undefined>(undefined);
 
 export function OrgProvider({ children }: { children: ReactNode }) {
   const [activeOrgId, setActiveOrgId] = useState<Id<"organizations"> | null>(null);
+  const { isAuthenticated } = useConvexAuth();
 
   // Fetch user's organizations
-  const orgs = useQuery(api.organizations.listMine);
+  const orgs = useQuery(api.organizations.listMine, isAuthenticated ? undefined : "skip");
 
   useEffect(() => {
     // Auto-select the first org if none is selected and orgs are available

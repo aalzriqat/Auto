@@ -66,12 +66,17 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
     if (!activeOrgId) return;
     setIsSubmitting(true);
     try {
-      await addMember({
+      const result = await addMember({
         orgId: activeOrgId,
         userEmail: values.userEmail,
         roleId: values.roleId as Id<"roles">,
       });
-      toast.success("Member added successfully!");
+      
+      if (result.status === "invited") {
+        toast.success("Invitation sent! They will be added automatically when they sign up.");
+      } else {
+        toast.success("Member added successfully!");
+      }
       form.reset();
       onOpenChange(false);
     } catch (error: any) {
@@ -87,8 +92,7 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
         <DialogHeader>
           <DialogTitle>Add Team Member</DialogTitle>
           <DialogDescription>
-            Invite an existing user to your dealership organization by their email address.
-            They must have already signed up to AutoFlow before they can be added.
+            Invite anyone to your dealership by their email address. If they don't have an account, they'll receive an email invitation to join AutoFlow.
           </DialogDescription>
         </DialogHeader>
 

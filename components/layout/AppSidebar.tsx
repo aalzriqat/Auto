@@ -19,24 +19,35 @@ import { OrgSwitcher } from "@/components/layout/OrgSwitcher";
 import { NotificationsBell } from "@/components/layout/NotificationsBell";
 import { LanguageSwitcher } from "@/components/layout/LanguageSwitcher";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useOrg } from "@/components/providers/OrgProvider";
+
+import { useQuery } from "convex/react";
+import { api } from "@/convex/_generated/api";
 
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { name: "Vehicles", href: "/vehicles", icon: Car },
-  { name: "Customers", href: "/customers", icon: Users },
-  { name: "Leads", href: "/leads", icon: Target },
-  { name: "Sales", href: "/sales", icon: BadgeDollarSign },
-  { name: "Tasks", href: "/tasks", icon: ClipboardList },
-  { name: "Expenses", href: "/expenses", icon: Receipt },
-  { name: "Team", href: "/team", icon: Shield },
+  { name: "Vehicles", href: "/vehicles", icon: Car, permission: "view:vehicles" },
+  { name: "Customers", href: "/customers", icon: Users, permission: "view:customers" },
+  { name: "Leads", href: "/leads", icon: Target, permission: "view:leads" },
+  { name: "Sales", href: "/sales", icon: BadgeDollarSign, permission: "view:sales" },
+  { name: "Tasks", href: "/tasks", icon: ClipboardList, permission: "view:tasks" },
+  { name: "Expenses", href: "/expenses", icon: Receipt, permission: "view:expenses" },
+  { name: "Team", href: "/team", icon: Shield, permission: "view:users" },
 ];
 
 export function AppSidebar() {
   const { user } = useUser();
   const { t } = useLanguage();
-  // We don't have usePathname working perfectly in app router without a small trick, 
-  // but let's use it from next/navigation
+  const { activeOrgId } = useOrg();
   const pathname = typeof window !== 'undefined' ? window.location.pathname : "";
+
+  const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const permissions = myMembership?.permissions || [];
+
+  const visibleNavigation = navigation.filter(item => {
+    if (!item.permission) return true;
+    return permissions.includes(item.permission);
+  });
 
   return (
     <Sidebar variant="inset" collapsible="icon">
@@ -47,7 +58,7 @@ export function AppSidebar() {
         <SidebarGroup>
           <SidebarGroupContent>
             <SidebarMenu>
-              {navigation.map((item) => {
+              {visibleNavigation.map((item) => {
                 const isActive = pathname.startsWith(item.href);
                 return (
                   <SidebarMenuItem key={item.name}>
