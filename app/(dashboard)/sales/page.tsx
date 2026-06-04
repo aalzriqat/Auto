@@ -16,9 +16,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, Search, Pencil, Trash2 } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, FileText } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
+import { generateBillOfSale } from "@/lib/pdf";
 import {
   Dialog,
   DialogContent,
@@ -145,6 +146,23 @@ export default function SalesPage() {
                   </TableCell>
                   <TableCell>{getStatusBadge(sale.status)}</TableCell>
                   <TableCell className="text-right">
+                    <Button variant="ghost" size="icon" onClick={() => {
+                      try {
+                        generateBillOfSale(
+                          "AutoFlow Dealership",
+                          sale.customerName,
+                          sale.vehicleSummary,
+                          sale.vehicleVin,
+                          sale.salePrice,
+                          sale.saleDate
+                        );
+                        toast.success("Bill of Sale generated");
+                      } catch (err) {
+                        toast.error("Failed to generate PDF");
+                      }
+                    }}>
+                      <FileText className="h-4 w-4 text-blue-500" />
+                    </Button>
                     <Button variant="ghost" size="icon" onClick={() => handleEdit(sale)}>
                       <Pencil className="h-4 w-4 text-muted-foreground" />
                     </Button>

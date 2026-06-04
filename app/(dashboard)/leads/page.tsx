@@ -7,9 +7,10 @@ import { useOrg } from "@/components/providers/OrgProvider";
 import { Button } from "@/components/ui/button";
 import { LeadDialog } from "@/components/leads/LeadDialog";
 import { Doc } from "@/convex/_generated/dataModel";
-import { Plus, User, Car, Calendar, Trash2 } from "lucide-react";
+import { Plus, User, Car, Calendar, Trash2, FileText } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
+import { generateQuote } from "@/lib/pdf";
 import {
   Dialog,
   DialogContent,
@@ -141,15 +142,39 @@ export default function LeadsPage() {
                         )}
                       </div>
 
-                      <button 
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setLeadToDelete(lead);
-                        }}
-                        className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-destructive/10 rounded text-muted-foreground hover:text-destructive"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            try {
+                              generateQuote(
+                                "AutoFlow Dealership",
+                                lead.customerName,
+                                lead.vehicleSummary || "Unknown Vehicle",
+                                "TBD",
+                                0
+                              );
+                              toast.success("Quote generated");
+                            } catch (err) {
+                              toast.error("Failed to generate Quote");
+                            }
+                          }}
+                          className="p-1 hover:bg-blue-500/10 rounded text-muted-foreground hover:text-blue-500"
+                          title="Generate Quote"
+                        >
+                          <FileText className="w-3.5 h-3.5" />
+                        </button>
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setLeadToDelete(lead);
+                          }}
+                          className="p-1 hover:bg-destructive/10 rounded text-muted-foreground hover:text-destructive"
+                          title="Delete Lead"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
                   ))
                 )}
