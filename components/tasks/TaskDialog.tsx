@@ -66,7 +66,7 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
     defaultValues: {
       title: "",
       description: "",
-      dueDate: new Date().toISOString().split('T')[0],
+      dueDate: new Date(new Date().getTime() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16),
       assignedTo: "",
       customerId: "none",
       status: "PENDING",
@@ -76,22 +76,28 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
   useEffect(() => {
     if (task && open) {
       const date = new Date(task.dueDate);
+      const tzOffset = date.getTimezoneOffset() * 60000;
+      const localISOTime = new Date(date.getTime() - tzOffset).toISOString().slice(0, 16);
+      
       form.reset({
         title: task.title,
         description: task.description || "",
-        dueDate: date.toISOString().split('T')[0],
+        dueDate: localISOTime,
         assignedTo: task.assignedTo,
         customerId: task.customerId || "none",
         status: task.status,
       });
     } else if (open && !task) {
-      // Auto-assign to self if possible
-      const myMembership = memberships?.find(m => m.userId); // Just picking first for now or rely on user to pick
+      const myMembership = memberships?.find(m => m.userId);
+      const now = new Date();
+      const tzOffset = now.getTimezoneOffset() * 60000;
+      const localISOTime = new Date(now.getTime() - tzOffset).toISOString().slice(0, 16);
+      
       form.reset({
         title: "",
         description: "",
-        dueDate: new Date().toISOString().split('T')[0],
-        assignedTo: "",
+        dueDate: localISOTime,
+        assignedTo: myMembership ? myMembership.userId : "",
         customerId: "none",
         status: "PENDING",
       });
@@ -196,9 +202,9 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
                 name="dueDate"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Due Date <span className="text-red-500">*</span></FormLabel>
+                    <FormLabel>Due Date & Time <span className="text-red-500">*</span></FormLabel>
                     <FormControl>
-                      <Input type="date" {...field} />
+                      <Input type="datetime-local" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>

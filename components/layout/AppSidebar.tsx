@@ -16,6 +16,7 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 import { OrgSwitcher } from "@/components/layout/OrgSwitcher";
+import { NotificationsBell } from "@/components/layout/NotificationsBell";
 
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
@@ -60,12 +61,15 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
-      <SidebarFooter className="p-4 flex flex-row items-center gap-3">
-        <UserButton />
-        <div className="flex flex-col overflow-hidden">
-          <span className="text-sm font-medium truncate">{user?.fullName || "User"}</span>
-          <span className="text-xs text-muted-foreground truncate">{user?.primaryEmailAddress?.emailAddress}</span>
+      <SidebarFooter className="p-4 flex flex-row items-center justify-between gap-2 border-t">
+        <div className="flex flex-row items-center gap-3 overflow-hidden">
+          <UserButton />
+          <div className="flex flex-col overflow-hidden">
+            <span className="text-sm font-medium truncate">{user?.fullName || "User"}</span>
+            <span className="text-xs text-muted-foreground truncate">{user?.primaryEmailAddress?.emailAddress}</span>
+          </div>
         </div>
+        <NotificationsBell />
       </SidebarFooter>
     </Sidebar>
   );

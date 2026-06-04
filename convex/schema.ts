@@ -130,6 +130,7 @@ export default defineSchema({
     description: v.optional(v.string()),
     dueDate: v.number(), // Timestamp for the deadline/schedule
     status: v.union(v.literal("PENDING"), v.literal("COMPLETED")),
+    alarmTriggered: v.optional(v.boolean()), // Track if the cron has sent the notification
     // Optional associations
     customerId: v.optional(v.id("customers")),
     leadId: v.optional(v.id("leads")),
@@ -137,4 +138,16 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_assignedTo", ["orgId", "assignedTo"])
     .index("by_org_status", ["orgId", "status"]),
+
+  notifications: defineTable({
+    orgId: v.id("organizations"),
+    userId: v.id("users"),
+    title: v.string(),
+    message: v.string(),
+    isRead: v.boolean(),
+    link: v.optional(v.string()), // Optional URL to navigate to when clicked
+    relatedTaskId: v.optional(v.id("tasks")),
+  })
+    .index("by_user", ["userId"])
+    .index("by_org_user", ["orgId", "userId"]),
 });

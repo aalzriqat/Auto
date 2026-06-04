@@ -1,23 +1,26 @@
 import { mutation } from "./_generated/server";
-import { ALL_PERMISSIONS } from "./utils/permissions";
+import { PERMISSIONS } from "./utils/permissions";
 
-/**
- * Migration to add missing permissions to all OWNER roles.
- */
-export const updateOwnerPermissions = mutation({
+export const grantTaskPermissionsToAll = mutation({
   args: {},
   handler: async (ctx) => {
-    const roles = await ctx.db.query("roles").filter(q => q.eq(q.field("name"), "OWNER")).collect();
+    const roles = await ctx.db.query("roles").collect();
     
     let count = 0;
     for (const role of roles) {
-      // Just reset the OWNER role to have ALL_PERMISSIONS from the current codebase
+      const currentPerms = role.permissions || [];
+      const newPerms = new Set(currentPerms);
+      
+      // Give everyone view and create tasks
+      newPerms.add(PERMISSIONS.VIEW_TASKS);
+      newPerms.add(PERMISSIONS.CREATE_TASKS);
+
       await ctx.db.patch(role._id, {
-        permissions: [...ALL_PERMISSIONS],
+        permissions: Array.from(newPerms),
       });
       count++;
     }
     
-    return `Updated ${count} OWNER roles.`;
+    return `Granted task permissions to ${count} roles.`;
   },
 });
