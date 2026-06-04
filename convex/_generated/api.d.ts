@@ -8,25 +8,9 @@
  * @module
  */
 
-import type * as crons from "../crons.js";
-import type * as customers from "../customers.js";
-import type * as dashboard from "../dashboard.js";
-import type * as email from "../email.js";
-import type * as expenses from "../expenses.js";
 import type * as http from "../http.js";
-import type * as leads from "../leads.js";
-import type * as memberships from "../memberships.js";
-import type * as migrateRoles from "../migrateRoles.js";
-import type * as migrations from "../migrations.js";
-import type * as notifications from "../notifications.js";
-import type * as organizations from "../organizations.js";
-import type * as roles from "../roles.js";
-import type * as sales from "../sales.js";
-import type * as tasks from "../tasks.js";
+import type * as myFunctions from "../myFunctions.js";
 import type * as users from "../users.js";
-import type * as utils_permissions from "../utils/permissions.js";
-import type * as utils_tenancy from "../utils/tenancy.js";
-import type * as vehicles from "../vehicles.js";
 
 import type {
   ApiFromModules,
@@ -35,25 +19,9 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
-  crons: typeof crons;
-  customers: typeof customers;
-  dashboard: typeof dashboard;
-  email: typeof email;
-  expenses: typeof expenses;
   http: typeof http;
-  leads: typeof leads;
-  memberships: typeof memberships;
-  migrateRoles: typeof migrateRoles;
-  migrations: typeof migrations;
-  notifications: typeof notifications;
-  organizations: typeof organizations;
-  roles: typeof roles;
-  sales: typeof sales;
-  tasks: typeof tasks;
+  myFunctions: typeof myFunctions;
   users: typeof users;
-  "utils/permissions": typeof utils_permissions;
-  "utils/tenancy": typeof utils_tenancy;
-  vehicles: typeof vehicles;
 }>;
 
 /**
