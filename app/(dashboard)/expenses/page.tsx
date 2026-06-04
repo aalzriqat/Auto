@@ -84,17 +84,17 @@ export default function ExpensesPage() {
           </p>
         </div>
         <Button onClick={handleAddNew}>
-          <Plus className="mr-2 h-4 w-4" /> Record Expense
+          <Plus className="me-2 h-4 w-4" /> Record Expense
         </Button>
       </div>
 
       <div className="flex items-center w-full max-w-sm space-x-2">
-        <Search className="h-4 w-4 text-muted-foreground absolute ml-3" />
+        <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
         <Input
           placeholder="Search expenses..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="pl-9"
+          className="ps-9"
         />
       </div>
 
@@ -106,8 +106,8 @@ export default function ExpensesPage() {
               <TableHead>Title</TableHead>
               <TableHead>Category</TableHead>
               <TableHead>Linked Vehicle</TableHead>
-              <TableHead className="text-right">Amount</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
+              <TableHead className="text-end">Amount</TableHead>
+              <TableHead className="text-end">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -138,10 +138,10 @@ export default function ExpensesPage() {
                       <span className="text-sm text-muted-foreground italic">General Expense</span>
                     )}
                   </TableCell>
-                  <TableCell className="text-right font-medium text-red-500">
+                  <TableCell className="text-end font-medium text-red-500">
                     -${expense.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className="text-end">
                     <Button variant="ghost" size="icon" onClick={() => handleEdit(expense)}>
                       <Pencil className="h-4 w-4 text-muted-foreground" />
                     </Button>

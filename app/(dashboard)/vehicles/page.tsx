@@ -95,17 +95,17 @@ export default function VehiclesPage() {
           </p>
         </div>
         <Button onClick={handleAddNew}>
-          <Plus className="mr-2 h-4 w-4" /> Add Vehicle
+          <Plus className="me-2 h-4 w-4" /> Add Vehicle
         </Button>
       </div>
 
       <div className="flex items-center w-full max-w-sm space-x-2">
-        <Search className="h-4 w-4 text-muted-foreground absolute ml-3" />
+        <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
         <Input
           placeholder="Search by VIN, Make, Model..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="pl-9"
+          className="ps-9"
         />
       </div>
 
@@ -118,7 +118,7 @@ export default function VehiclesPage() {
               <TableHead>Year</TableHead>
               <TableHead>Price</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
+              <TableHead className="text-end">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -138,7 +138,7 @@ export default function VehiclesPage() {
               filteredVehicles.map((vehicle) => (
                 <TableRow key={vehicle._id}>
                   <TableCell className="font-medium">
-                    {vehicle.make} {vehicle.model} {vehicle.trim && <span className="text-muted-foreground text-xs ml-1">{vehicle.trim}</span>}
+                    {vehicle.make} {vehicle.model} {vehicle.trim && <span className="text-muted-foreground text-xs ms-1">{vehicle.trim}</span>}
                   </TableCell>
                   <TableCell className="font-mono text-xs">{vehicle.vin}</TableCell>
                   <TableCell>{vehicle.year}</TableCell>
@@ -146,7 +146,7 @@ export default function VehiclesPage() {
                   <TableCell>
                     <StatusBadge status={vehicle.status} />
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className="text-end">
                     <Button variant="ghost" size="icon" onClick={() => handleEdit(vehicle)}>
                       <Pencil className="h-4 w-4 text-muted-foreground" />
                     </Button>

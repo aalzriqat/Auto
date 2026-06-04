@@ -17,6 +17,8 @@ import {
 } from "@/components/ui/sidebar";
 import { OrgSwitcher } from "@/components/layout/OrgSwitcher";
 import { NotificationsBell } from "@/components/layout/NotificationsBell";
+import { LanguageSwitcher } from "@/components/layout/LanguageSwitcher";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 
 const navigation = [
   { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
@@ -31,6 +33,7 @@ const navigation = [
 
 export function AppSidebar() {
   const { user } = useUser();
+  const { t } = useLanguage();
   // We don't have usePathname working perfectly in app router without a small trick, 
   // but let's use it from next/navigation
   const pathname = typeof window !== 'undefined' ? window.location.pathname : "";
@@ -51,7 +54,7 @@ export function AppSidebar() {
                     <SidebarMenuButton asChild isActive={isActive}>
                       <Link href={item.href}>
                         <item.icon />
-                        <span>{item.name}</span>
+                        <span>{t(item.name as any)}</span>
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
@@ -69,7 +72,10 @@ export function AppSidebar() {
             <span className="text-xs text-muted-foreground truncate">{user?.primaryEmailAddress?.emailAddress}</span>
           </div>
         </div>
-        <NotificationsBell />
+        <div className="flex items-center gap-1">
+          <LanguageSwitcher />
+          <NotificationsBell />
+        </div>
       </SidebarFooter>
     </Sidebar>
   );

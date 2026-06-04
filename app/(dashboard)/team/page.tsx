@@ -63,7 +63,7 @@ export default function TeamPage() {
         </div>
         {canManageUsers && (
           <Button onClick={() => setIsInviteOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" /> Add Member
+            <Plus className="me-2 h-4 w-4" /> Add Member
           </Button>
         )}
       </div>
@@ -74,7 +74,7 @@ export default function TeamPage() {
             <TableRow>
               <TableHead>Member</TableHead>
               <TableHead>Role</TableHead>
-              {canManageUsers && <TableHead className="text-right">Actions</TableHead>}
+              {canManageUsers && <TableHead className="text-end">Actions</TableHead>}
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -116,7 +116,7 @@ export default function TeamPage() {
                   </TableCell>
                   
                   {canManageUsers && (
-                    <TableCell className="text-right">
+                    <TableCell className="text-end">
                       <Button 
                         variant="ghost" 
                         size="icon" 

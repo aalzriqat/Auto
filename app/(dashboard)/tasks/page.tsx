@@ -105,17 +105,17 @@ export default function TasksPage() {
           </p>
         </div>
         <Button onClick={handleAddNew}>
-          <Plus className="mr-2 h-4 w-4" /> Schedule Task
+          <Plus className="me-2 h-4 w-4" /> Schedule Task
         </Button>
       </div>
 
       <div className="flex items-center w-full max-w-sm space-x-2">
-        <Search className="h-4 w-4 text-muted-foreground absolute ml-3" />
+        <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
         <Input
           placeholder="Search tasks..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="pl-9"
+          className="ps-9"
         />
       </div>
 
@@ -129,7 +129,7 @@ export default function TasksPage() {
               <TableHead>Assigned To</TableHead>
               <TableHead>Related Customer</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
+              <TableHead className="text-end">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -166,7 +166,7 @@ export default function TasksPage() {
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center text-sm">
-                      <Calendar className="mr-2 h-3 w-3 text-muted-foreground" />
+                      <Calendar className="me-2 h-3 w-3 text-muted-foreground" />
                       {new Date(task.dueDate).toLocaleDateString()}
                     </div>
                   </TableCell>
@@ -179,7 +179,7 @@ export default function TasksPage() {
                     )}
                   </TableCell>
                   <TableCell>{getStatusBadge(task.status, task.dueDate)}</TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className="text-end">
                     <Button variant="ghost" size="icon" onClick={() => handleEdit(task)}>
                       <Pencil className="h-4 w-4 text-muted-foreground" />
                     </Button>

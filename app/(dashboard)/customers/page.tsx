@@ -77,17 +77,17 @@ export default function CustomersPage() {
           </p>
         </div>
         <Button onClick={handleAddNew}>
-          <Plus className="mr-2 h-4 w-4" /> Add Customer
+          <Plus className="me-2 h-4 w-4" /> Add Customer
         </Button>
       </div>
 
       <div className="flex items-center w-full max-w-sm space-x-2">
-        <Search className="h-4 w-4 text-muted-foreground absolute ml-3" />
+        <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
         <Input
           placeholder="Search by name, email, phone..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="pl-9"
+          className="ps-9"
         />
       </div>
 
@@ -98,7 +98,7 @@ export default function CustomersPage() {
               <TableHead>Name</TableHead>
               <TableHead>Contact</TableHead>
               <TableHead>National ID</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
+              <TableHead className="text-end">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -140,7 +140,7 @@ export default function CustomersPage() {
                   <TableCell className="text-sm">
                     {customer.nationalId || <span className="text-muted-foreground italic">N/A</span>}
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className="text-end">
                     <Button variant="ghost" size="icon" onClick={() => handleEdit(customer)}>
                       <Pencil className="h-4 w-4 text-muted-foreground" />
                     </Button>

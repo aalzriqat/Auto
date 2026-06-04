@@ -38,7 +38,7 @@ function Onboarding() {
           </p>
         </div>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="space-y-2 text-left">
+          <div className="space-y-2 text-start">
             <label htmlFor="orgName" className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
               Dealership Name
             </label>

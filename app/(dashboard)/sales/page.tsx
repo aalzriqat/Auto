@@ -87,17 +87,17 @@ export default function SalesPage() {
           </p>
         </div>
         <Button onClick={handleAddNew}>
-          <Plus className="mr-2 h-4 w-4" /> Log Sale
+          <Plus className="me-2 h-4 w-4" /> Log Sale
         </Button>
       </div>
 
       <div className="flex items-center w-full max-w-sm space-x-2">
-        <Search className="h-4 w-4 text-muted-foreground absolute ml-3" />
+        <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
         <Input
           placeholder="Search by customer, vehicle, or salesperson..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          className="pl-9"
+          className="ps-9"
         />
       </div>
 
@@ -109,9 +109,9 @@ export default function SalesPage() {
               <TableHead>Customer</TableHead>
               <TableHead>Vehicle</TableHead>
               <TableHead>Salesperson</TableHead>
-              <TableHead className="text-right">Price</TableHead>
+              <TableHead className="text-end">Price</TableHead>
               <TableHead>Status</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
+              <TableHead className="text-end">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -141,11 +141,11 @@ export default function SalesPage() {
                     </div>
                   </TableCell>
                   <TableCell>{sale.salespersonName}</TableCell>
-                  <TableCell className="text-right font-medium">
+                  <TableCell className="text-end font-medium">
                     ${sale.salePrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </TableCell>
                   <TableCell>{getStatusBadge(sale.status)}</TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className="text-end">
                     <Button variant="ghost" size="icon" onClick={() => {
                       try {
                         generateBillOfSale(

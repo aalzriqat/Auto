@@ -90,7 +90,7 @@ export default function LeadsPage() {
           </p>
         </div>
         <Button onClick={handleAddNew}>
-          <Plus className="mr-2 h-4 w-4" /> Add Lead
+          <Plus className="me-2 h-4 w-4" /> Add Lead
         </Button>
       </div>
 
@@ -142,7 +142,7 @@ export default function LeadsPage() {
                         )}
                       </div>
 
-                      <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
+                      <div className="absolute top-2 end-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1">
                         <button 
                           onClick={(e) => {
                             e.stopPropagation();

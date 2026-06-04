@@ -72,13 +72,13 @@ export function OrgSwitcher() {
                 <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
                   {activeOrg?.name?.charAt(0).toUpperCase() || "A"}
                 </div>
-                <div className="grid flex-1 text-left text-sm leading-tight">
+                <div className="grid flex-1 text-start text-sm leading-tight">
                   <span className="truncate font-semibold">
                     {activeOrg?.name || "Loading..."}
                   </span>
                   <span className="truncate text-xs">Dealership</span>
                 </div>
-                <ChevronsUpDown className="ml-auto size-4" />
+                <ChevronsUpDown className="ms-auto size-4" />
               </SidebarMenuButton>
             </DropdownMenuTrigger>
             <DropdownMenuContent
@@ -126,7 +126,7 @@ export function OrgSwitcher() {
         <form onSubmit={handleCreateOrg}>
           <div className="grid gap-4 py-4">
             <div className="grid grid-cols-4 items-center gap-4">
-              <Label htmlFor="name" className="text-right">
+              <Label htmlFor="name" className="text-end">
                 Name
               </Label>
               <Input

@@ -66,7 +66,7 @@ export function NotificationsBell() {
         {unreadCount > 0 && (
           <Badge 
             variant="destructive" 
-            className="absolute -top-1 -right-1 h-5 w-5 flex items-center justify-center p-0 text-[10px]"
+            className="absolute -top-1 -end-1 h-5 w-5 flex items-center justify-center p-0 text-[10px]"
           >
             {unreadCount}
           </Badge>
@@ -74,7 +74,7 @@ export function NotificationsBell() {
       </Button>
       
       {open && (
-        <div className="absolute right-0 bottom-12 mb-2 w-80 bg-background border rounded-md shadow-lg z-50 overflow-hidden">
+        <div className="absolute end-0 bottom-12 mb-2 w-80 bg-background border rounded-md shadow-lg z-50 overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b bg-card">
             <h4 className="font-semibold text-sm">Notifications</h4>
             {unreadCount > 0 && (
