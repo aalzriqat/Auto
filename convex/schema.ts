@@ -122,4 +122,19 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_org_vehicle", ["orgId", "vehicleId"]),
+
+  tasks: defineTable({
+    orgId: v.id("organizations"),
+    assignedTo: v.id("users"), // The salesperson or employee responsible
+    title: v.string(),
+    description: v.optional(v.string()),
+    dueDate: v.number(), // Timestamp for the deadline/schedule
+    status: v.union(v.literal("PENDING"), v.literal("COMPLETED")),
+    // Optional associations
+    customerId: v.optional(v.id("customers")),
+    leadId: v.optional(v.id("leads")),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_assignedTo", ["orgId", "assignedTo"])
+    .index("by_org_status", ["orgId", "status"]),
 });
