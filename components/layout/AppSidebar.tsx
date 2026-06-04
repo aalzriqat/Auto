@@ -1,6 +1,6 @@
 "use client";
 
-import { Car, Users, LayoutDashboard, Target, BadgeDollarSign } from "lucide-react";
+import { Car, Users, LayoutDashboard, Target, BadgeDollarSign, Shield } from "lucide-react";
 import { UserButton, useUser } from "@clerk/nextjs";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
@@ -23,6 +23,7 @@ const navigation = [
   { name: "Customers", href: "/customers", icon: Users },
   { name: "Leads", href: "/leads", icon: Target },
   { name: "Sales", href: "/sales", icon: BadgeDollarSign },
+  { name: "Team", href: "/team", icon: Shield },
 ];
 
 export function AppSidebar() {
