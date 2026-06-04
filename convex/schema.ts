@@ -102,4 +102,24 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_org_salesperson", ["orgId", "salespersonId"]),
+
+  expenses: defineTable({
+    orgId: v.id("organizations"),
+    vehicleId: v.optional(v.id("vehicles")), // Optional because there might be general expenses
+    title: v.string(), // e.g., "Brake replacement", "Detailing", "Office supplies"
+    amount: v.number(),
+    date: v.number(),
+    category: v.union(
+      v.literal("REPAIR"),
+      v.literal("MAINTENANCE"),
+      v.literal("DETAILING"),
+      v.literal("TRANSPORT"),
+      v.literal("MARKETING"),
+      v.literal("OFFICE"),
+      v.literal("OTHER")
+    ),
+    notes: v.optional(v.string()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_vehicle", ["orgId", "vehicleId"]),
 });

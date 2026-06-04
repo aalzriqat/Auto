@@ -40,6 +40,12 @@ export const PERMISSIONS = {
   EDIT_SALES: "edit:sales",
   DELETE_SALES: "delete:sales",
 
+  // Expenses
+  VIEW_EXPENSES: "view:expenses",
+  CREATE_EXPENSES: "create:expenses",
+  EDIT_EXPENSES: "edit:expenses",
+  DELETE_EXPENSES: "delete:expenses",
+
   // Reports
   VIEW_REPORTS: "view:reports",
 } as const;
@@ -79,6 +85,10 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.VIEW_SALES,
       PERMISSIONS.CREATE_SALES,
       PERMISSIONS.EDIT_SALES,
+      PERMISSIONS.VIEW_EXPENSES,
+      PERMISSIONS.CREATE_EXPENSES,
+      PERMISSIONS.EDIT_EXPENSES,
+      PERMISSIONS.DELETE_EXPENSES,
       PERMISSIONS.VIEW_REPORTS,
     ],
   },
@@ -117,6 +127,7 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.VIEW_VEHICLES,
       PERMISSIONS.VIEW_CUSTOMERS,
       PERMISSIONS.VIEW_SALES,
+      PERMISSIONS.VIEW_EXPENSES,
       PERMISSIONS.VIEW_REPORTS,
     ],
   },
