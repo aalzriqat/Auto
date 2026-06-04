@@ -39,7 +39,7 @@ export function AppSidebar() {
   const pathname = typeof window !== 'undefined' ? window.location.pathname : "";
 
   return (
-    <Sidebar variant="inset">
+    <Sidebar variant="inset" collapsible="icon">
       <SidebarHeader>
         <OrgSwitcher />
       </SidebarHeader>
@@ -65,16 +65,19 @@ export function AppSidebar() {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className="p-4 flex flex-row items-center justify-between gap-2 border-t">
-        <div className="flex flex-row items-center gap-3 overflow-hidden">
+        <div className="flex flex-row items-center gap-3 overflow-hidden group-data-[collapsible=icon]:hidden">
           <UserButton />
           <div className="flex flex-col overflow-hidden">
             <span className="text-sm font-medium truncate">{user?.fullName || "User"}</span>
             <span className="text-xs text-muted-foreground truncate">{user?.primaryEmailAddress?.emailAddress}</span>
           </div>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 group-data-[collapsible=icon]:hidden">
           <LanguageSwitcher />
           <NotificationsBell />
+        </div>
+        <div className="hidden group-data-[collapsible=icon]:flex items-center justify-center w-full">
+          <UserButton />
         </div>
       </SidebarFooter>
     </Sidebar>

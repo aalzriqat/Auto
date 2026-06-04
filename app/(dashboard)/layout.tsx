@@ -1,7 +1,7 @@
 "use client";
 
 import { AppSidebar } from "@/components/layout/AppSidebar";
-import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
+import { SidebarProvider, SidebarTrigger, SidebarInset } from "@/components/ui/sidebar";
 import { OrgProvider, useOrg } from "@/components/providers/OrgProvider";
 import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
@@ -73,14 +73,14 @@ function DashboardWrapper({ children }: { children: React.ReactNode }) {
   return (
     <SidebarProvider>
       <AppSidebar />
-      <main className="flex-1 overflow-auto bg-background">
+      <SidebarInset className="overflow-auto">
         <header className="sticky top-0 z-10 flex h-14 items-center gap-4 border-b bg-background px-4 lg:h-[60px]">
           <SidebarTrigger />
         </header>
         <div className="p-4 md:p-6 lg:p-8">
           {children}
         </div>
-      </main>
+      </SidebarInset>
       <Toaster />
     </SidebarProvider>
   );
