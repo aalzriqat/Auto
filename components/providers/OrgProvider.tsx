@@ -27,7 +27,10 @@ export function OrgProvider({ children }: { children: ReactNode }) {
       if (stored && orgs.some((o: any) => o._id === stored)) {
         setActiveOrgId(stored as Id<"organizations">);
       } else {
-        setActiveOrgId(orgs[0]._id);
+        const firstOrgId = orgs[0]?._id;
+        if (firstOrgId) {
+          setActiveOrgId(firstOrgId);
+        }
       }
     }
   }, [orgs, activeOrgId]);
