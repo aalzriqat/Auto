@@ -8,6 +8,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -53,6 +54,7 @@ interface LeadDialogProps {
 
 export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
   const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
   
   // Data for dropdowns
   const customers = useQuery(api.customers.list, activeOrgId ? { orgId: activeOrgId } : "skip");
@@ -116,13 +118,13 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
           leadId: lead._id,
           ...payload,
         });
-        toast.success("Lead updated successfully");
+        toast.success(t("LeadUpdatedSuccess" as any) || "Lead updated successfully");
       } else {
         await createLead({
           orgId: activeOrgId,
           ...payload,
         });
-        toast.success("Lead created successfully");
+        toast.success(t("LeadAddedSuccess" as any) || "Lead created successfully");
       }
       onOpenChange(false);
     } catch (error: any) {
@@ -136,9 +138,9 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{lead ? "Edit Lead" : "Create Lead"}</DialogTitle>
+          <DialogTitle>{lead ? (t("EditLead" as any) || "Edit Lead") : (t("AddLead" as any) || "Create Lead")}</DialogTitle>
           <DialogDescription>
-            {lead ? "Update the lead's details and stage." : "Create a new sales lead."}
+            {lead ? (t("UpdateLeadDesc" as any) || "Update the lead's details and stage.") : (t("AddLeadDesc" as any) || "Create a new sales lead.")}
           </DialogDescription>
         </DialogHeader>
 
@@ -150,11 +152,11 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                 name="customerId"
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
-                    <FormLabel>Customer <span className="text-red-500">*</span></FormLabel>
+                    <FormLabel>{t("Customer" as any) || "Customer"} <span className="text-red-500">*</span></FormLabel>
                     <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
                       <FormControl>
                         <SelectTrigger>
-                          <SelectValue placeholder="Select a customer" />
+                          <SelectValue placeholder={t("SelectCustomer" as any) || "Select a customer"} />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
@@ -175,18 +177,18 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                 name="vehicleId"
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
-                    <FormLabel>Vehicle of Interest (Optional)</FormLabel>
+                    <FormLabel>{t("VehicleOfInterest" as any) || "Vehicle of Interest (Optional)"}</FormLabel>
                     <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
                       <FormControl>
                         <SelectTrigger>
-                          <SelectValue placeholder="Select a vehicle" />
+                          <SelectValue placeholder={t("SelectVehicle" as any) || "Select a vehicle"} />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="none">No specific vehicle yet</SelectItem>
+                        <SelectItem value="none">{t("NoSpecificVehicle" as any) || "No specific vehicle yet"}</SelectItem>
                         {vehicles?.map((v) => (
                           <SelectItem key={v._id} value={v._id}>
-                            {v.year} {v.make} {v.model} - {v.vin} (${v.sellingPrice.toLocaleString()})
+                            {v.year} {v.make} {v.model} - {v.vin} ({v.sellingPrice.toLocaleString()} JOD)
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -201,15 +203,15 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                 name="assignedUserId"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Assigned Salesperson</FormLabel>
+                    <FormLabel>{t("AssignedTo" as any) || "Assigned Salesperson"}</FormLabel>
                     <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
                       <FormControl>
                         <SelectTrigger>
-                          <SelectValue placeholder="Unassigned" />
+                          <SelectValue placeholder={t("NoAssigned" as any) || "Unassigned"} />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="none">Unassigned</SelectItem>
+                        <SelectItem value="none">{t("NoAssigned" as any) || "Unassigned"}</SelectItem>
                         {memberships?.map((m) => (
                           <SelectItem key={m.userId} value={m.userId}>
                             {m.userName}
@@ -227,22 +229,22 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                 name="stage"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Stage</FormLabel>
+                    <FormLabel>{t("Stage" as any) || "Stage"}</FormLabel>
                     <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
                       <FormControl>
                         <SelectTrigger>
-                          <SelectValue placeholder="Select stage" />
+                          <SelectValue placeholder={t("Stage" as any) || "Select stage"} />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="NEW">New</SelectItem>
-                        <SelectItem value="CONTACTED">Contacted</SelectItem>
-                        <SelectItem value="INTERESTED">Interested</SelectItem>
-                        <SelectItem value="TEST_DRIVE">Test Drive</SelectItem>
-                        <SelectItem value="NEGOTIATION">Negotiation</SelectItem>
-                        <SelectItem value="RESERVED">Reserved</SelectItem>
-                        <SelectItem value="WON">Won</SelectItem>
-                        <SelectItem value="LOST">Lost</SelectItem>
+                        <SelectItem value="NEW">{t("StageNew" as any) || "New"}</SelectItem>
+                        <SelectItem value="CONTACTED">{t("StageContacted" as any) || "Contacted"}</SelectItem>
+                        <SelectItem value="INTERESTED">{t("Interested" as any) || "Interested"}</SelectItem>
+                        <SelectItem value="TEST_DRIVE">{t("StageTestDrive" as any) || "Test Drive"}</SelectItem>
+                        <SelectItem value="NEGOTIATION">{t("StageNegotiation" as any) || "Negotiation"}</SelectItem>
+                        <SelectItem value="RESERVED">{t("Reserved" as any) || "Reserved"}</SelectItem>
+                        <SelectItem value="WON">{t("StageWon" as any) || "Won"}</SelectItem>
+                        <SelectItem value="LOST">{t("Lost" as any) || "Lost"}</SelectItem>
                       </SelectContent>
                     </Select>
                     <FormMessage />
@@ -255,9 +257,9 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                 name="source"
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
-                    <FormLabel>Source</FormLabel>
+                    <FormLabel>{t("LeadSource" as any) || "Source"}</FormLabel>
                     <FormControl>
-                      <Input placeholder="e.g. Walk-in, Website, Facebook, Referral" {...field} />
+                      <Input placeholder={t("SourcePlaceholder" as any) || "e.g. Walk-in, Website, Facebook, Referral"} {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -269,9 +271,9 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                 name="notes"
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
-                    <FormLabel>Notes</FormLabel>
+                    <FormLabel>{t("Notes" as any) || "Notes"}</FormLabel>
                     <FormControl>
-                      <Input placeholder="Customer preferences, budget, etc." {...field} />
+                      <Input placeholder={t("NotesPlaceholder" as any) || "Customer preferences, budget, etc."} {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -280,10 +282,10 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
             </div>
             <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-                Cancel
+                {t("Cancel" as any) || "Cancel"}
               </Button>
               <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? "Saving..." : lead ? "Save Changes" : "Create Lead"}
+                {isSubmitting ? (t("Saving" as any) || "Saving...") : lead ? (t("SaveChanges" as any) || "Save Changes") : (t("AddLead" as any) || "Create Lead")}
               </Button>
             </div>
           </form>

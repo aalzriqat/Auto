@@ -124,35 +124,35 @@ export default function PrintBillOfSalePage() {
             <tbody>
               <tr className="border-b">
                 <th className="py-2 font-semibold">Sale Price</th>
-                <td className="py-2 text-right">${sale.salePrice.toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                <td className="py-2 text-right">{sale.salePrice.toLocaleString(undefined, {minimumFractionDigits: 2})} JOD</td>
               </tr>
               <tr className="border-b">
                 <th className="py-2 font-semibold">Dealer Fees</th>
-                <td className="py-2 text-right">${(sale.dealerFees || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                <td className="py-2 text-right">{(sale.dealerFees || 0).toLocaleString(undefined, {minimumFractionDigits: 2})} JOD</td>
               </tr>
               <tr className="border-b">
                 <th className="py-2 font-semibold">Taxes</th>
-                <td className="py-2 text-right">${(sale.taxAmount || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                <td className="py-2 text-right">{(sale.taxAmount || 0).toLocaleString(undefined, {minimumFractionDigits: 2})} JOD</td>
               </tr>
               <tr className="border-b">
                 <th className="py-2 font-semibold">Extended Warranty</th>
-                <td className="py-2 text-right">${(sale.warrantySold || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                <td className="py-2 text-right">{(sale.warrantySold || 0).toLocaleString(undefined, {minimumFractionDigits: 2})} JOD</td>
               </tr>
               <tr className="border-b">
                 <th className="py-2 font-semibold">GAP Insurance</th>
-                <td className="py-2 text-right">${(sale.gapSold || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                <td className="py-2 text-right">{(sale.gapSold || 0).toLocaleString(undefined, {minimumFractionDigits: 2})} JOD</td>
               </tr>
               <tr className="border-b text-red-700">
                 <th className="py-2 font-semibold">Trade-in Allowance</th>
-                <td className="py-2 text-right">-${(sale.tradeInValue || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                <td className="py-2 text-right">-{(sale.tradeInValue || 0).toLocaleString(undefined, {minimumFractionDigits: 2})} JOD</td>
               </tr>
               <tr className="border-b text-red-700">
                 <th className="py-2 font-semibold">Down Payment</th>
-                <td className="py-2 text-right">-${(sale.downPayment || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                <td className="py-2 text-right">-{(sale.downPayment || 0).toLocaleString(undefined, {minimumFractionDigits: 2})} JOD</td>
               </tr>
               <tr className="border-b-2 border-black bg-gray-50">
                 <th className="py-3 font-bold text-base">Total Amount Due / Financed</th>
-                <td className="py-3 text-right font-bold text-base">${(sale.loanAmount || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}</td>
+                <td className="py-3 text-right font-bold text-base">{(sale.loanAmount || 0).toLocaleString(undefined, {minimumFractionDigits: 2})} JOD</td>
               </tr>
             </tbody>
           </table>

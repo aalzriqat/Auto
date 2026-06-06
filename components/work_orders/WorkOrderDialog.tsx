@@ -254,7 +254,7 @@ export function WorkOrderDialog({ open, onOpenChange, vehicleId, workOrder }: Wo
               ))}
 
               <div className="flex justify-end pt-2">
-                <span className="font-semibold text-lg">Total Cost: <span className="text-primary">${totalCost.toLocaleString(undefined, {minimumFractionDigits: 2})}</span></span>
+                <span className="font-semibold text-lg">Total Cost: <span className="text-primary">{totalCost.toLocaleString(undefined, {minimumFractionDigits: 2})} JOD</span></span>
               </div>
             </div>
 

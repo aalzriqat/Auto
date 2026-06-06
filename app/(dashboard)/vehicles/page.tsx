@@ -11,6 +11,7 @@ import { VehicleDialog } from "@/components/vehicles/VehicleDialog";
 import { VehicleHistoryDialog } from "@/components/vehicles/VehicleHistoryDialog";
 import { VehicleDetailsDialog } from "@/components/vehicles/VehicleDetailsDialog";
 import { Doc, Id } from "@/convex/_generated/dataModel";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 import {
   Table,
   TableBody,
@@ -39,26 +40,27 @@ import {
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({ status, t }: { status: string; t: any }) {
   switch (status) {
     case "AVAILABLE":
-      return <Badge variant="default" className="bg-green-600">Available</Badge>;
+      return <Badge variant="default" className="bg-green-600">{t("AvailableLC" as any) || "Available"}</Badge>;
     case "RESERVED":
-      return <Badge variant="secondary" className="bg-yellow-500 text-white">Reserved</Badge>;
+      return <Badge variant="secondary" className="bg-yellow-500 text-white">{t("Reserved" as any) || "Reserved"}</Badge>;
     case "SOLD":
-      return <Badge variant="secondary" className="bg-blue-600 text-white">Sold</Badge>;
+      return <Badge variant="secondary" className="bg-blue-600 text-white">{t("Sold" as any) || "Sold"}</Badge>;
     case "IN_INSPECTION":
-      return <Badge variant="outline" className="text-orange-500 border-orange-500">Inspection</Badge>;
+      return <Badge variant="outline" className="text-orange-500 border-orange-500">{t("InInspection" as any) || "Inspection"}</Badge>;
     case "IN_REPAIR":
-      return <Badge variant="outline" className="text-red-500 border-red-500">Repair</Badge>;
+      return <Badge variant="outline" className="text-red-500 border-red-500">{t("InRepair" as any) || "Repair"}</Badge>;
     case "ARCHIVED":
-      return <Badge variant="secondary">Archived</Badge>;
+      return <Badge variant="secondary">{t("Archived" as any) || "Archived"}</Badge>;
     default:
       return <Badge variant="outline">{status}</Badge>;
   }
 }
 
 export default function VehiclesPage() {
+  const { t } = useLanguage();
   const searchParams = useSearchParams();
   const highlightId = searchParams.get("highlightId");
 
@@ -215,18 +217,18 @@ export default function VehiclesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight">Inventory</h2>
+          <h2 className="text-2xl font-bold tracking-tight">{t("Vehicles")}</h2>
           <p className="text-muted-foreground">
-            Manage your dealership's vehicles.
+            {t("ManageInventory" as any)}
           </p>
         </div>
         <div className="flex gap-2">
           {canEdit && (
             <Button variant="outline" onClick={() => setIsApprovalsDialogOpen(true)}>
               <ClipboardList className="me-2 h-4 w-4" /> 
-              Approvals
+              {t("Approvals" as any)}
               {((pendingRequests?.length || 0) + (pendingEdits?.length || 0)) > 0 && (
                 <span className="ms-2 bg-red-500 text-white text-xs px-2 py-0.5 rounded-full">
                   {(pendingRequests?.length || 0) + (pendingEdits?.length || 0)}
@@ -236,7 +238,7 @@ export default function VehiclesPage() {
           )}
           {canCreate && (
             <Button onClick={handleAddNew}>
-              <Plus className="me-2 h-4 w-4" /> Add Vehicle
+              <Plus className="me-2 h-4 w-4" /> {t("AddVehicle")}
             </Button>
           )}
         </div>
@@ -245,7 +247,7 @@ export default function VehiclesPage() {
       <div className="flex items-center w-full max-w-sm space-x-2">
         <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
         <Input
-          placeholder="Search by VIN, Make, Model..."
+          placeholder={t("Search" as any) || "Search vehicles..."}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           className="ps-9"
@@ -256,26 +258,26 @@ export default function VehiclesPage() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Vehicle</TableHead>
-              <TableHead>VIN</TableHead>
-              <TableHead>Year</TableHead>
-              <TableHead>Price</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Notes</TableHead>
-              <TableHead className="text-end">Actions</TableHead>
+              <TableHead>{t("Vehicle")}</TableHead>
+              <TableHead>{t("VIN" as any)}</TableHead>
+              <TableHead>{t("Year" as any)}</TableHead>
+              <TableHead>{t("Price" as any)}</TableHead>
+              <TableHead>{t("Status" as any)}</TableHead>
+              <TableHead>{t("Notes" as any)}</TableHead>
+              <TableHead className="text-end">{t("Actions" as any)}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {filteredVehicles === undefined ? (
               <TableRow>
                 <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-                  Loading inventory...
+                  {t("LoadingInventory" as any)}
                 </TableCell>
               </TableRow>
             ) : filteredVehicles.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-                  No vehicles found.
+                  {t("NoVehiclesFound" as any)}
                 </TableCell>
               </TableRow>
             ) : (
@@ -290,7 +292,7 @@ export default function VehiclesPage() {
                   </TableCell>
                   <TableCell className="font-mono text-xs">{vehicle.vin}</TableCell>
                   <TableCell>{vehicle.year}</TableCell>
-                  <TableCell>${vehicle.sellingPrice.toLocaleString()}</TableCell>
+                  <TableCell>{vehicle.sellingPrice.toLocaleString()} JOD</TableCell>
                   <TableCell>
                     <button 
                       onClick={() => {
@@ -299,7 +301,7 @@ export default function VehiclesPage() {
                       }} 
                       className="hover:opacity-80 transition-opacity flex flex-col items-start text-left gap-1"
                     >
-                      <StatusBadge status={vehicle.status} />
+                      <StatusBadge status={vehicle.status} t={t} />
                       {vehicle.pendingStatusRequest && (
                         <span className="text-[10px] text-muted-foreground font-medium flex items-center mt-1">
                           <Hourglass className="h-3 w-3 mr-1 inline" />
@@ -309,25 +311,25 @@ export default function VehiclesPage() {
                     </button>
                   </TableCell>
                   <TableCell className="max-w-[200px] truncate" title={vehicle.notes}>
-                    {vehicle.notes ? vehicle.notes : <span className="text-muted-foreground italic text-xs">No notes</span>}
+                    {vehicle.notes ? vehicle.notes : <span className="text-muted-foreground italic text-xs">{t("NoNotes" as any)}</span>}
                   </TableCell>
                   <TableCell className="text-end space-x-1">
-                    <Button variant="ghost" size="icon" onClick={() => setDetailsVehicle(vehicle)} title="View Details">
+                    <Button variant="ghost" size="icon" onClick={() => setDetailsVehicle(vehicle)} title={t("ViewDetails" as any)}>
                       <Eye className="h-4 w-4 text-muted-foreground" />
                     </Button>
-                    <Button variant="ghost" size="icon" onClick={() => setGalleryVehicle(vehicle)} title="View Gallery">
+                    <Button variant="ghost" size="icon" onClick={() => setGalleryVehicle(vehicle)} title={t("ViewGallery" as any)}>
                       <ImageIcon className="h-4 w-4 text-muted-foreground" />
                     </Button>
-                    <Button variant="ghost" size="icon" onClick={() => setHistoryVehicle(vehicle)} title="View Audit Trail">
+                    <Button variant="ghost" size="icon" onClick={() => setHistoryVehicle(vehicle)} title={t("ViewAuditTrail" as any)}>
                       <History className="h-4 w-4 text-muted-foreground" />
                     </Button>
                     {canEdit && (
-                      <Button variant="ghost" size="icon" onClick={() => handleEdit(vehicle)} title="Edit Vehicle">
+                      <Button variant="ghost" size="icon" onClick={() => handleEdit(vehicle)} title={t("EditVehicle" as any)}>
                         <Pencil className="h-4 w-4 text-muted-foreground" />
                       </Button>
                     )}
                     {canDelete && (
-                      <Button variant="ghost" size="icon" onClick={() => setVehicleToDelete(vehicle)} title="Delete Vehicle">
+                      <Button variant="ghost" size="icon" onClick={() => setVehicleToDelete(vehicle)} title={t("DeleteVehicle" as any)}>
                         <Trash2 className="h-4 w-4 text-red-500" />
                       </Button>
                     )}
@@ -364,15 +366,15 @@ export default function VehiclesPage() {
       <Dialog open={!!vehicleToDelete} onOpenChange={(open) => !open && setVehicleToDelete(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Remove Vehicle</DialogTitle>
+            <DialogTitle>{t("RemoveVehicle" as any)}</DialogTitle>
             <DialogDescription>
-              Are you sure you want to remove the {vehicleToDelete?.year} {vehicleToDelete?.make} {vehicleToDelete?.model}? 
-              This action cannot be undone unless it is archived.
+              {t("RemoveVehicleConfirm" as any)} {vehicleToDelete?.year} {vehicleToDelete?.make} {vehicleToDelete?.model}? 
+              {t("RemoveVehicleWarning" as any)}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setVehicleToDelete(null)}>Cancel</Button>
-            <Button variant="destructive" onClick={handleDelete}>Remove</Button>
+            <Button variant="outline" onClick={() => setVehicleToDelete(null)}>{t("Cancel")}</Button>
+            <Button variant="destructive" onClick={handleDelete}>{t("Remove" as any)}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -383,7 +385,7 @@ export default function VehiclesPage() {
           <DialogHeader>
             <DialogTitle>{galleryVehicle?.year} {galleryVehicle?.make} {galleryVehicle?.model}</DialogTitle>
             <DialogDescription>
-              Vehicle Images Gallery
+              {t("VehicleGallery" as any)}
             </DialogDescription>
           </DialogHeader>
           <div className="py-4">
@@ -409,7 +411,7 @@ export default function VehiclesPage() {
             ) : (
               <div className="text-center py-12 text-muted-foreground border-2 border-dashed rounded-lg">
                 <ImageIcon className="h-12 w-12 mx-auto mb-3 opacity-20" />
-                <p>No images available for this vehicle.</p>
+                <p>{t("NoImages" as any)}</p>
               </div>
             )}
           </div>
@@ -417,12 +419,12 @@ export default function VehiclesPage() {
             {galleryVehicle?.imageUrls && galleryVehicle.imageUrls.length > 0 ? (
               <Button variant="outline" onClick={handleDownloadAll}>
                 <Download className="h-4 w-4 mr-2" />
-                Download All
+                {t("DownloadAll" as any)}
               </Button>
             ) : (
               <div />
             )}
-            <Button variant="ghost" onClick={() => setGalleryVehicle(null)}>Close</Button>
+            <Button variant="ghost" onClick={() => setGalleryVehicle(null)}>{t("Close" as any)}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -431,19 +433,19 @@ export default function VehiclesPage() {
       <Dialog open={!!statusRequestVehicle} onOpenChange={(open) => !open && setStatusRequestVehicle(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Change Status</DialogTitle>
+            <DialogTitle>{t("ChangeStatus" as any)}</DialogTitle>
             <DialogDescription>
               {canEdit 
-                ? "Update the status for this vehicle." 
-                : "Request a status change for this vehicle. A manager must approve it."}
+                ? t("UpdateStatusDesc" as any) 
+                : t("RequestStatusDesc" as any)}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label>New Status</Label>
+              <Label>{t("NewStatus" as any)}</Label>
               <Select value={selectedStatus} onValueChange={setSelectedStatus}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Select status" />
+                  <SelectValue placeholder={t("SelectStatus" as any)} />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="AVAILABLE">Available</SelectItem>
@@ -457,9 +459,9 @@ export default function VehiclesPage() {
             </div>
             {!canEdit && (
               <div className="space-y-2">
-                <Label>Notes (Optional)</Label>
+                <Label>{t("Notes" as any)} (Optional)</Label>
                 <Input 
-                  placeholder="Reason for change..." 
+                  placeholder={t("ReasonForChange" as any)} 
                   value={statusRequestNotes}
                   onChange={(e) => setStatusRequestNotes(e.target.value)}
                 />
@@ -467,8 +469,8 @@ export default function VehiclesPage() {
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setStatusRequestVehicle(null)}>Cancel</Button>
-            <Button onClick={handleStatusSubmit}>Submit</Button>
+            <Button variant="outline" onClick={() => setStatusRequestVehicle(null)}>{t("Cancel" as any)}</Button>
+            <Button onClick={handleStatusSubmit}>{t("Submit" as any)}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -477,15 +479,15 @@ export default function VehiclesPage() {
       <Dialog open={isApprovalsDialogOpen} onOpenChange={setIsApprovalsDialogOpen}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Pending Status Approvals</DialogTitle>
+            <DialogTitle>{t("PendingApprovals" as any)}</DialogTitle>
             <DialogDescription>
-              Review and approve vehicle status change requests.
+              {t("ReviewApprovals" as any)}
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-4">
             {!pendingRequests?.length && !pendingEdits?.length ? (
               <div className="text-center py-8 text-muted-foreground">
-                No pending requests.
+                {t("NoPendingRequests" as any)}
               </div>
             ) : (
               <>
@@ -495,9 +497,9 @@ export default function VehiclesPage() {
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
                         <Badge variant={req.type === "CREATE" ? "default" : "secondary"}>
-                          {req.type === "CREATE" ? "NEW VEHICLE" : "EDIT DETAILS"}
+                          {req.type === "CREATE" ? t("NewVehicleReq" as any) : t("EditDetailsReq" as any)}
                         </Badge>
-                        <span className="text-xs text-muted-foreground">By: {req.user?.name}</span>
+                        <span className="text-xs text-muted-foreground">{t("ByReq" as any)} {req.user?.name}</span>
                       </div>
                       <p className="font-semibold text-sm mt-2">
                         {req.payload?.year} {req.payload?.make} {req.payload?.model}
@@ -505,15 +507,15 @@ export default function VehiclesPage() {
                       <div className="flex items-center gap-2 text-xs text-muted-foreground">
                         <span>VIN: {req.payload?.vin}</span>
                         <span>•</span>
-                        <span>Price: ${req.payload?.sellingPrice?.toLocaleString()}</span>
+                        <span>Price: {req.payload?.sellingPrice?.toLocaleString()} JOD</span>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
                       <Button variant="outline" size="sm" onClick={() => handleResolveEdit(req._id, "REJECTED")} className="text-red-500 hover:text-red-600 hover:bg-red-50 border-red-200">
-                        <X className="h-4 w-4 mr-1" /> Reject
+                        <X className="h-4 w-4 mr-1" /> {t("Reject" as any)}
                       </Button>
                       <Button size="sm" onClick={() => handleResolveEdit(req._id, "APPROVED")} className="bg-green-600 hover:bg-green-700 text-white">
-                        <Check className="h-4 w-4 mr-1" /> Approve
+                        <Check className="h-4 w-4 mr-1" /> {t("Approve" as any)}
                       </Button>
                     </div>
                   </div>
@@ -524,8 +526,8 @@ export default function VehiclesPage() {
                   <div key={req._id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 border rounded-lg bg-card">
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
-                        <Badge variant="outline">STATUS CHANGE</Badge>
-                        <span className="text-xs text-muted-foreground">By: {req.user?.name}</span>
+                        <Badge variant="outline">{t("StatusChangeReq" as any)}</Badge>
+                        <span className="text-xs text-muted-foreground">{t("ByReq" as any)} {req.user?.name}</span>
                       </div>
                       <p className="font-semibold text-sm mt-2">
                         {req.vehicle?.year} {req.vehicle?.make} {req.vehicle?.model}
@@ -534,9 +536,9 @@ export default function VehiclesPage() {
                         <span>VIN: {req.vehicle?.vin}</span>
                       </div>
                       <div className="flex items-center gap-2 text-sm mt-2">
-                        <StatusBadge status={req.vehicle?.currentStatus || ""} />
+                        <StatusBadge status={req.vehicle?.currentStatus || ""} t={t} />
                         <span>→</span>
-                        <StatusBadge status={req.requestedStatus} />
+                        <StatusBadge status={req.requestedStatus} t={t} />
                       </div>
                       {req.notes && (
                         <p className="text-xs text-muted-foreground italic mt-2">"{req.notes}"</p>
@@ -544,10 +546,10 @@ export default function VehiclesPage() {
                     </div>
                     <div className="flex items-center gap-2">
                       <Button variant="outline" size="sm" onClick={() => handleResolveRequest(req._id, "REJECTED")} className="text-red-500 hover:text-red-600 hover:bg-red-50 border-red-200">
-                        <X className="h-4 w-4 mr-1" /> Reject
+                        <X className="h-4 w-4 mr-1" /> {t("Reject" as any)}
                       </Button>
                       <Button size="sm" onClick={() => handleResolveRequest(req._id, "APPROVED")} className="bg-green-600 hover:bg-green-700 text-white">
-                        <Check className="h-4 w-4 mr-1" /> Approve
+                        <Check className="h-4 w-4 mr-1" /> {t("Approve" as any)}
                       </Button>
                     </div>
                   </div>
@@ -556,7 +558,7 @@ export default function VehiclesPage() {
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsApprovalsDialogOpen(false)}>Close</Button>
+            <Button variant="outline" onClick={() => setIsApprovalsDialogOpen(false)}>{t("Close" as any)}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

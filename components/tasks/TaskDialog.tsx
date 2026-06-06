@@ -8,6 +8,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -56,6 +57,7 @@ interface TaskDialogProps {
 
 export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
   const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
   
   const memberships = useQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId } : "skip");
   const customers = useQuery(api.customers.list, activeOrgId ? { orgId: activeOrgId } : "skip");
@@ -134,7 +136,7 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
           status: status,
           communicationMethod: communicationMethod,
         });
-        toast.success("Task updated successfully");
+        toast.success(t("TaskUpdatedSuccess" as any) || "Task updated successfully");
       } else {
         await createTask({
           orgId: activeOrgId,
@@ -147,11 +149,11 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
           status: status,
           communicationMethod: communicationMethod,
         });
-        toast.success("Task created successfully!");
+        toast.success(t("TaskCreatedSuccess" as any) || "Task created successfully!");
       }
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || "Failed to save task");
+      toast.error(error.message || (t("TaskSaveFail" as any) || "Failed to save task"));
     } finally {
       setIsSubmitting(false);
     }
@@ -161,11 +163,11 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{task ? "Edit Task" : "Create Task"}</DialogTitle>
+          <DialogTitle>{task ? (t("EditTask" as any) || "Edit Task") : (t("CreateTask" as any) || "Create Task")}</DialogTitle>
           <DialogDescription>
             {task 
-              ? "Update task details." 
-              : "Schedule a new task and assign it to a team member."}
+              ? (t("UpdateTaskDesc" as any) || "Update task details.") 
+              : (t("CreateTaskDesc" as any) || "Schedule a new task and assign it to a team member.")}
           </DialogDescription>
         </DialogHeader>
 
@@ -177,9 +179,9 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
                 name="title"
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
-                    <FormLabel>Task Title <span className="text-red-500">*</span></FormLabel>
+                    <FormLabel>{t("TaskTitle" as any) || "Task Title"} <span className="text-red-500">*</span></FormLabel>
                     <FormControl>
-                      <Input placeholder="e.g. Call customer for follow-up" {...field} />
+                      <Input placeholder={t("TaskTitlePlaceholder" as any) || "e.g. Call customer for follow-up"} {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -191,11 +193,11 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
                 name="assignedTo"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Assign To <span className="text-red-500">*</span></FormLabel>
+                    <FormLabel>{t("AssignTo" as any) || "Assign To"} <span className="text-red-500">*</span></FormLabel>
                     <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
                       <FormControl>
                         <SelectTrigger>
-                          <SelectValue placeholder="Select team member" />
+                          <SelectValue placeholder={t("SelectTeamMember" as any) || "Select team member"} />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
@@ -216,7 +218,7 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
                 name="dueDate"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Due Date & Time <span className="text-red-500">*</span></FormLabel>
+                    <FormLabel>{t("DueDateTime" as any) || "Due Date & Time"} <span className="text-red-500">*</span></FormLabel>
                     <FormControl>
                       <DateTimePicker value={field.value} onChange={field.onChange} />
                     </FormControl>
@@ -230,15 +232,15 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
                 name="customerId"
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
-                    <FormLabel>Related Customer</FormLabel>
+                    <FormLabel>{t("RelatedCustomer" as any) || "Related Customer"}</FormLabel>
                     <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
                       <FormControl>
                         <SelectTrigger>
-                          <SelectValue placeholder="Select customer" />
+                          <SelectValue placeholder={t("SelectCustomer" as any) || "Select customer"} />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="none">-- General Task (No Customer) --</SelectItem>
+                        <SelectItem value="none">{t("GeneralTaskNoCustomer" as any) || "-- General Task (No Customer) --"}</SelectItem>
                         {customers?.map((c) => (
                           <SelectItem key={c._id} value={c._id}>
                             {c.firstName} {c.lastName}
@@ -256,15 +258,15 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
                 name="vehicleId"
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
-                    <FormLabel>Related Vehicle</FormLabel>
+                    <FormLabel>{t("RelatedVehicle" as any) || "Related Vehicle"}</FormLabel>
                     <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
                       <FormControl>
                         <SelectTrigger>
-                          <SelectValue placeholder="Select vehicle" />
+                          <SelectValue placeholder={t("SelectVehicle" as any) || "Select vehicle"} />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="none">-- General Task (No Vehicle) --</SelectItem>
+                        <SelectItem value="none">{t("GeneralTaskNoVehicle" as any) || "-- General Task (No Vehicle) --"}</SelectItem>
                         {vehicles?.map((v) => (
                           <SelectItem key={v._id} value={v._id}>
                             {v.year} {v.make} {v.model} ({v.vin.substring(v.vin.length - 6)})
@@ -282,18 +284,18 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
                 name="communicationMethod"
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
-                    <FormLabel>Preferred Communication</FormLabel>
+                    <FormLabel>{t("PreferredCommunication" as any) || "Preferred Communication"}</FormLabel>
                     <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
                       <FormControl>
                         <SelectTrigger>
-                          <SelectValue placeholder="Select method" />
+                          <SelectValue placeholder={t("SelectMethod" as any) || "Select method"} />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="none">-- Not Specified --</SelectItem>
-                        <SelectItem value="PHONE">Phone</SelectItem>
-                        <SelectItem value="EMAIL">Email</SelectItem>
-                        <SelectItem value="FAX">Fax</SelectItem>
+                        <SelectItem value="none">{t("NotSpecified" as any) || "-- Not Specified --"}</SelectItem>
+                        <SelectItem value="PHONE">{t("Phone" as any) || "Phone"}</SelectItem>
+                        <SelectItem value="EMAIL">{t("Email" as any) || "Email"}</SelectItem>
+                        <SelectItem value="FAX">{t("Fax" as any) || "Fax"}</SelectItem>
                       </SelectContent>
                     </Select>
                     <FormMessage />
@@ -306,16 +308,16 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
                 name="status"
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
-                    <FormLabel>Status</FormLabel>
+                    <FormLabel>{t("Status" as any) || "Status"}</FormLabel>
                     <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
                       <FormControl>
                         <SelectTrigger>
-                          <SelectValue placeholder="Select status" />
+                          <SelectValue placeholder={t("SelectStatus" as any) || "Select status"} />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="PENDING">Pending</SelectItem>
-                        <SelectItem value="COMPLETED">Completed</SelectItem>
+                        <SelectItem value="PENDING">{t("TaskPending" as any) || "Pending"}</SelectItem>
+                        <SelectItem value="COMPLETED">{t("TaskCompleted" as any) || "Completed"}</SelectItem>
                       </SelectContent>
                     </Select>
                     <FormMessage />
@@ -328,11 +330,11 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
                 name="description"
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
-                    <FormLabel>Description / Notes</FormLabel>
+                    <FormLabel>{t("DescriptionNotes" as any) || "Description / Notes"}</FormLabel>
                     <FormControl>
                       <textarea 
                         className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                        placeholder="Task details..." 
+                        placeholder={t("TaskDetailsPlaceholder" as any) || "Task details..."} 
                         {...field} 
                       />
                     </FormControl>
@@ -344,10 +346,10 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
             
             <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-                Cancel
+                {t("Cancel" as any) || "Cancel"}
               </Button>
               <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? "Saving..." : task ? "Save Changes" : "Create Task"}
+                {isSubmitting ? (t("Saving" as any) || "Saving...") : task ? (t("SaveChanges" as any) || "Save Changes") : (t("CreateTask" as any) || "Create Task")}
               </Button>
             </div>
           </form>

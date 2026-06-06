@@ -3,6 +3,7 @@
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 import {
   Dialog,
   DialogContent,
@@ -22,6 +23,7 @@ interface TaskHistoryDialogProps {
 
 export function TaskHistoryDialog({ open, onOpenChange, task }: TaskHistoryDialogProps) {
   const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
   const history = useQuery(
     api.tasks.getHistory,
     activeOrgId && task ? { orgId: activeOrgId, taskId: task._id } : "skip"
@@ -30,15 +32,15 @@ export function TaskHistoryDialog({ open, onOpenChange, task }: TaskHistoryDialo
   const getActionBadge = (action: string) => {
     switch (action) {
       case "CREATE":
-        return <Badge variant="default" className="bg-blue-500">Created</Badge>;
+        return <Badge variant="default" className="bg-blue-500">{t("Created" as any) || "Created"}</Badge>;
       case "UPDATE":
-        return <Badge variant="outline" className="border-blue-500 text-blue-500">Updated</Badge>;
+        return <Badge variant="outline" className="border-blue-500 text-blue-500">{t("Updated" as any) || "Updated"}</Badge>;
       case "RESCHEDULE":
-        return <Badge variant="secondary" className="bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300">Rescheduled</Badge>;
+        return <Badge variant="secondary" className="bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300">{t("Rescheduled" as any) || "Rescheduled"}</Badge>;
       case "CANCEL":
-        return <Badge variant="secondary" className="bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300">Cancelled</Badge>;
+        return <Badge variant="secondary" className="bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300">{t("Cancelled" as any) || "Cancelled"}</Badge>;
       case "STATUS_CHANGE":
-        return <Badge variant="secondary" className="bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300">Status Changed</Badge>;
+        return <Badge variant="secondary" className="bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300">{t("StatusChanged" as any) || "Status Changed"}</Badge>;
       default:
         return <Badge variant="outline">{action}</Badge>;
     }
@@ -48,18 +50,18 @@ export function TaskHistoryDialog({ open, onOpenChange, task }: TaskHistoryDialo
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[85vh] flex flex-col">
         <DialogHeader>
-          <DialogTitle>Task History</DialogTitle>
+          <DialogTitle>{t("TaskHistory" as any) || "Task History"}</DialogTitle>
           <DialogDescription>
-            Audit trail for: {task?.title}
+            {t("AuditTrailFor" as any) || "Audit trail for:"} {task?.title}
           </DialogDescription>
         </DialogHeader>
 
         <ScrollArea className="flex-1 -mx-6 px-6">
           <div className="space-y-6 py-4">
             {history === undefined ? (
-              <div className="text-center py-8 text-muted-foreground">Loading history...</div>
+              <div className="text-center py-8 text-muted-foreground">{t("LoadingHistory" as any) || "Loading history..."}</div>
             ) : history.length === 0 ? (
-              <div className="text-center py-8 text-muted-foreground">No history found for this task.</div>
+              <div className="text-center py-8 text-muted-foreground">{t("NoHistoryFound" as any) || "No history found for this task."}</div>
             ) : (
               <div className="relative border-l ml-3 pl-6 space-y-8">
                 {history.map((entry: any) => (
@@ -82,7 +84,7 @@ export function TaskHistoryDialog({ open, onOpenChange, task }: TaskHistoryDialo
                       
                       {entry.note && (
                         <div className="mt-3 bg-muted/50 p-3 rounded-md border text-sm">
-                          <span className="font-semibold block mb-1">Note / Reason:</span>
+                          <span className="font-semibold block mb-1">{t("NoteReason" as any) || "Note / Reason:"}</span>
                           <span className="italic text-muted-foreground">{entry.note}</span>
                         </div>
                       )}

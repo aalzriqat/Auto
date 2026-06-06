@@ -10,8 +10,10 @@ import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
 import { Id } from "@/convex/_generated/dataModel";
 import Link from "next/link";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 
 export function NotificationsBell() {
+  const { t, locale } = useLanguage();
   const { activeOrgId } = useOrg();
   const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
   const localUserId = myMembership?.userId;
@@ -50,7 +52,7 @@ export function NotificationsBell() {
     if (!activeOrgId || !localUserId) return;
     try {
       await markAllAsRead({ orgId: activeOrgId, userId: localUserId });
-      toast.success("All notifications marked as read");
+      toast.success(t("SaveChanges" as any) || "All notifications marked as read");
     } catch (e) {
       console.error(e);
     }
@@ -64,7 +66,7 @@ export function NotificationsBell() {
   };
 
   const formatTime = (ts: number) => {
-    const rtf = new Intl.RelativeTimeFormat('en', { numeric: 'auto' });
+    const rtf = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' });
     const diff = (ts - Date.now()) / 1000;
     
     if (Math.abs(diff) < 60) return "Just now";
@@ -90,19 +92,19 @@ export function NotificationsBell() {
       {open && (
         <div className="absolute end-0 top-12 mt-2 w-80 bg-background border rounded-md shadow-lg z-50 overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b bg-card">
-            <h4 className="font-semibold text-sm">Notifications</h4>
+            <h4 className="font-semibold text-sm">{t("Notifications")}</h4>
             {unreadCount > 0 && (
               <Button variant="ghost" size="sm" className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground" onClick={handleMarkAllAsRead}>
-                Mark all as read
+                {t("MarkAllRead")}
               </Button>
             )}
           </div>
           
           <div className="max-h-80 overflow-y-auto">
             {notifications === undefined ? (
-              <div className="p-4 text-center text-sm text-muted-foreground">Loading...</div>
+              <div className="p-4 text-center text-sm text-muted-foreground">{t("Loading")}</div>
             ) : notifications.length === 0 ? (
-              <div className="p-4 text-center text-sm text-muted-foreground">No notifications.</div>
+              <div className="p-4 text-center text-sm text-muted-foreground">{t("NoNotifications")}</div>
             ) : (
               <div className="flex flex-col">
                 {notifications.map((notif) => (

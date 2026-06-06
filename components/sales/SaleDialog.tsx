@@ -1,5 +1,7 @@
 "use client";
 
+"use client";
+
 import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -8,6 +10,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -57,7 +60,7 @@ const saleSchema = z.object({
   termMonths: z.coerce.number().min(0).optional(),
   warrantySold: z.coerce.number().min(0).optional(),
   gapSold: z.coerce.number().min(0).optional(),
-});
+});
 
 type SaleFormValues = z.infer<typeof saleSchema>;
 
@@ -69,6 +72,7 @@ interface SaleDialogProps {
 
 export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
   const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
   
   // Queries for dropdowns
   const customers = useQuery(api.customers.list, activeOrgId ? { orgId: activeOrgId } : "skip");
@@ -243,7 +247,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
           warrantySold: values.warrantySold,
           gapSold: values.gapSold,
         });
-        toast.success("Sale recorded successfully!");
+        toast.success(t("SaleRemovedSuccess" as any) || "Sale recorded successfully!");
       }
       onOpenChange(false);
     } catch (error: any) {
@@ -257,11 +261,11 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{sale ? "Edit Sale" : "Log a Sale"}</DialogTitle>
+          <DialogTitle>{sale ? (t("EditSale" as any) || "Edit Sale") : (t("LogSale" as any) || "Log a Sale")}</DialogTitle>
           <DialogDescription>
             {sale 
-              ? "Update sale details. If you cancel it, the vehicle will be marked as available again." 
-              : "Record a new vehicle sale. This will automatically mark the vehicle as SOLD and close related leads."}
+              ? (t("UpdateSaleDesc" as any) || "Update sale details. If you cancel it, the vehicle will be marked as available again.") 
+              : (t("AddSaleDesc" as any) || "Record a new vehicle sale. This will automatically mark the vehicle as SOLD and close related leads.")}
           </DialogDescription>
         </DialogHeader>
 
@@ -271,7 +275,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
             <div className="space-y-6">
               {/* Vehicle & Customer Section */}
               <div className="bg-muted/30 p-4 rounded-lg border space-y-4">
-                <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">Vehicle & Customer</h3>
+                <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">{t("VehicleAndCustomer" as any) || "Vehicle & Customer"}</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {!sale && (
                     <>
@@ -280,7 +284,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                         name="vehicleId"
                         render={({ field }) => (
                           <FormItem className="md:col-span-2">
-                            <FormLabel>Vehicle <span className="text-red-500">*</span></FormLabel>
+                            <FormLabel>{t("Vehicle" as any) || "Vehicle"} <span className="text-red-500">*</span></FormLabel>
                             <Select onValueChange={(val) => {
                               field.onChange(val);
                               const v = availableVehicles?.find(v => v._id === val);
@@ -289,12 +293,12 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                               }
                             }} defaultValue={field.value} value={field.value}>
                               <FormControl>
-                                <SelectTrigger><SelectValue placeholder="Select vehicle" /></SelectTrigger>
+                                <SelectTrigger><SelectValue placeholder={t("SelectVehicle" as any) || "Select vehicle"} /></SelectTrigger>
                               </FormControl>
                               <SelectContent>
                                 {availableVehicles?.map((v) => (
                                   <SelectItem key={v._id} value={v._id}>
-                                    {v.year} {v.make} {v.model} - {v.vin} (${v.sellingPrice.toLocaleString()})
+                                    {v.year} {v.make} {v.model} - {v.vin} ({v.sellingPrice.toLocaleString()} JOD)
                                   </SelectItem>
                                 ))}
                               </SelectContent>
@@ -308,10 +312,10 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                         name="customerId"
                         render={({ field }) => (
                           <FormItem>
-                            <FormLabel>Customer <span className="text-red-500">*</span></FormLabel>
+                            <FormLabel>{t("Customer" as any) || "Customer"} <span className="text-red-500">*</span></FormLabel>
                             <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
                               <FormControl>
-                                <SelectTrigger><SelectValue placeholder="Select customer" /></SelectTrigger>
+                                <SelectTrigger><SelectValue placeholder={t("SelectCustomer" as any) || "Select customer"} /></SelectTrigger>
                               </FormControl>
                               <SelectContent>
                                 {customers?.map((c) => (
@@ -330,10 +334,10 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                         name="salespersonId"
                         render={({ field }) => (
                           <FormItem>
-                            <FormLabel>Salesperson <span className="text-red-500">*</span></FormLabel>
+                            <FormLabel>{t("Salesperson" as any) || "Salesperson"} <span className="text-red-500">*</span></FormLabel>
                             <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
                               <FormControl>
-                                <SelectTrigger><SelectValue placeholder="Select salesperson" /></SelectTrigger>
+                                <SelectTrigger><SelectValue placeholder={t("SelectSalesperson" as any) || "Select salesperson"} /></SelectTrigger>
                               </FormControl>
                               <SelectContent>
                                 {memberships?.map((m) => (
@@ -354,7 +358,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                     name="saleDate"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Sale Date <span className="text-red-500">*</span></FormLabel>
+                        <FormLabel>{t("SaleDate" as any) || "Sale Date"} <span className="text-red-500">*</span></FormLabel>
                         <FormControl>
                           <Input type="date" {...field} />
                         </FormControl>
@@ -367,15 +371,15 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                     name="status"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Status</FormLabel>
+                        <FormLabel>{t("Status" as any) || "Status"}</FormLabel>
                         <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
                           <FormControl>
-                            <SelectTrigger><SelectValue placeholder="Select status" /></SelectTrigger>
+                            <SelectTrigger><SelectValue placeholder={t("SelectStatus" as any) || "Select status"} /></SelectTrigger>
                           </FormControl>
                           <SelectContent>
-                            <SelectItem value="PENDING">Pending (Financing/Paperwork)</SelectItem>
-                            <SelectItem value="COMPLETED">Completed (Delivered)</SelectItem>
-                            <SelectItem value="CANCELLED">Cancelled (Refunded/Backed out)</SelectItem>
+                            <SelectItem value="PENDING">{t("PendingStatus" as any) || "Pending (Financing/Paperwork)"}</SelectItem>
+                            <SelectItem value="COMPLETED">{t("CompletedStatus" as any) || "Completed (Delivered)"}</SelectItem>
+                            <SelectItem value="CANCELLED">{t("CancelledStatus" as any) || "Cancelled (Refunded/Backed out)"}</SelectItem>
                           </SelectContent>
                         </Select>
                         <FormMessage />
@@ -387,14 +391,14 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
 
               {/* Pricing & Fees Section */}
               <div className="bg-muted/30 p-4 rounded-lg border space-y-4">
-                <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">Pricing & Fees</h3>
+                <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">{t("PricingAndFees" as any) || "Pricing & Fees"}</h3>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <FormField
                     control={form.control}
                     name="salePrice"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Sale Price ($) <span className="text-red-500">*</span></FormLabel>
+                        <FormLabel>{t("SalePrice" as any) || "Sale Price (JOD)"} <span className="text-red-500">*</span></FormLabel>
                         <FormControl><Input type="number" step="0.01" {...field} /></FormControl>
                         <FormMessage />
                       </FormItem>
@@ -405,7 +409,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                     name="taxAmount"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Taxes ($)</FormLabel>
+                        <FormLabel>{t("Taxes" as any) || "Taxes (JOD)"}</FormLabel>
                         <FormControl><Input type="number" step="0.01" {...field} /></FormControl>
                         <FormMessage />
                       </FormItem>
@@ -416,7 +420,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                     name="dealerFees"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Dealer Fees ($)</FormLabel>
+                        <FormLabel>{t("DealerFees" as any) || "Dealer Fees (JOD)"}</FormLabel>
                         <FormControl><Input type="number" step="0.01" {...field} /></FormControl>
                         <FormMessage />
                       </FormItem>
@@ -427,20 +431,20 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
 
               {/* Trade-In & Financing Section */}
               <div className="bg-muted/30 p-4 rounded-lg border space-y-4">
-                <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">Financing & Trade-In</h3>
+                <h3 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">{t("FinancingAndTradeIn" as any) || "Financing & Trade-In"}</h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <FormField
                     control={form.control}
                     name="tradeInVehicleId"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Trade-In Vehicle</FormLabel>
+                        <FormLabel>{t("TradeInVehicle" as any) || "Trade-In Vehicle"}</FormLabel>
                         <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
                           <FormControl>
-                            <SelectTrigger><SelectValue placeholder="Select trade-in (optional)" /></SelectTrigger>
+                            <SelectTrigger><SelectValue placeholder={t("SelectTradeIn" as any) || "Select trade-in (optional)"} /></SelectTrigger>
                           </FormControl>
                           <SelectContent>
-                            <SelectItem value="none">None</SelectItem>
+                            <SelectItem value="none">{t("None" as any) || "None"}</SelectItem>
                             {availableVehicles?.map((v) => (
                               <SelectItem key={v._id} value={v._id}>
                                 {v.year} {v.make} {v.model} - {v.vin}
@@ -448,7 +452,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                             ))}
                           </SelectContent>
                         </Select>
-                        <p className="text-xs text-muted-foreground">Vehicle must be added to inventory first.</p>
+                        <p className="text-xs text-muted-foreground">{t("VehicleMustBeAdded" as any) || "Vehicle must be added to inventory first."}</p>
                         <FormMessage />
                       </FormItem>
                     )}
@@ -458,7 +462,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                     name="tradeInValue"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Trade-In Allowance ($)</FormLabel>
+                        <FormLabel>{t("TradeInValue" as any) || "Trade-In Allowance (JOD)"}</FormLabel>
                         <FormControl><Input type="number" step="0.01" {...field} /></FormControl>
                         <FormMessage />
                       </FormItem>
@@ -469,7 +473,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                     name="downPayment"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Down Payment ($)</FormLabel>
+                        <FormLabel>{t("DownPayment" as any) || "Down Payment (JOD)"}</FormLabel>
                         <FormControl><Input type="number" step="0.01" {...field} /></FormControl>
                         <FormMessage />
                       </FormItem>
@@ -480,15 +484,15 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                     name="financingType"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Financing Type</FormLabel>
+                        <FormLabel>{t("FinancingType" as any) || "Financing Type"}</FormLabel>
                         <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
                           <FormControl>
-                            <SelectTrigger><SelectValue placeholder="Select type" /></SelectTrigger>
+                            <SelectTrigger><SelectValue placeholder={t("SelectType" as any) || "Select type"} /></SelectTrigger>
                           </FormControl>
                           <SelectContent>
-                            <SelectItem value="CASH">Cash</SelectItem>
-                            <SelectItem value="FINANCED">Financed</SelectItem>
-                            <SelectItem value="LEASE">Lease</SelectItem>
+                            <SelectItem value="CASH">{t("Cash" as any) || "Cash"}</SelectItem>
+                            <SelectItem value="FINANCED">{t("Financed" as any) || "Financed"}</SelectItem>
+                            <SelectItem value="LEASE">{t("Lease" as any) || "Lease"}</SelectItem>
                           </SelectContent>
                         </Select>
                         <FormMessage />
@@ -501,9 +505,9 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                     name="loanAmount"
                     render={({ field }) => (
                       <FormItem className="md:col-span-2">
-                        <FormLabel>Total Out-the-Door / Loan Amount ($)</FormLabel>
+                        <FormLabel>{t("TotalLoanAmount" as any) || "Total Out-the-Door / Loan Amount (JOD)"}</FormLabel>
                         <FormControl><Input type="number" step="0.01" disabled {...field} className="font-bold bg-muted" /></FormControl>
-                        <p className="text-xs text-muted-foreground">Calculated automatically: Price + Tax + Fees + Warranty + GAP - Down Payment - Trade-In</p>
+                        <p className="text-xs text-muted-foreground">{t("CalculatedAutomatically" as any) || "Calculated automatically: Price + Tax + Fees + Warranty + GAP - Down Payment - Trade-In"}</p>
                         <FormMessage />
                       </FormItem>
                     )}
@@ -514,14 +518,14 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
             
             {watchAll.financingType === "FINANCED" && (
               <div className="bg-muted p-4 rounded-lg space-y-4">
-                <h4 className="font-semibold">F&I Deal Structuring</h4>
+                <h4 className="font-semibold">{t("DealStructuring" as any) || "F&I Deal Structuring"}</h4>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   <FormField
                     control={form.control}
                     name="apr"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>APR (%)</FormLabel>
+                        <FormLabel>{t("APR" as any) || "APR (%)"}</FormLabel>
                         <FormControl>
                           <Input type="number" step="0.1" {...field} />
                         </FormControl>
@@ -534,7 +538,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                     name="termMonths"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Term (Months)</FormLabel>
+                        <FormLabel>{t("TermMonths" as any) || "Term (Months)"}</FormLabel>
                         <FormControl>
                           <Input type="number" {...field} />
                         </FormControl>
@@ -547,7 +551,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                     name="warrantySold"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Extended Warranty ($)</FormLabel>
+                        <FormLabel>{t("Warranty" as any) || "Extended Warranty (JOD)"}</FormLabel>
                         <FormControl>
                           <Input type="number" {...field} />
                         </FormControl>
@@ -560,7 +564,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                     name="gapSold"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>GAP Insurance ($)</FormLabel>
+                        <FormLabel>{t("GAPInsurance" as any) || "GAP Insurance (JOD)"}</FormLabel>
                         <FormControl>
                           <Input type="number" {...field} />
                         </FormControl>
@@ -570,18 +574,18 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                   />
                 </div>
                 <div className="mt-4 flex items-center justify-between border-t pt-4 border-primary/20">
-                  <span className="font-semibold text-lg">Estimated Monthly Payment</span>
-                  <span className="font-bold text-2xl text-primary">${estimatedPayment.toFixed(2)} / mo</span>
+                  <span className="font-semibold text-lg">{t("EstMonthlyPayment" as any) || "Estimated Monthly Payment"}</span>
+                  <span className="font-bold text-2xl text-primary">{estimatedPayment.toFixed(2)} JOD / mo</span>
                 </div>
               </div>
             )}
             
             <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-                Cancel
+                {t("Cancel" as any) || "Cancel"}
               </Button>
               <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? "Saving..." : sale ? "Save Changes" : "Log Sale"}
+                {isSubmitting ? (t("Saving" as any) || "Saving...") : sale ? (t("SaveChanges" as any) || "Save Changes") : (t("LogSale" as any) || "Log Sale")}
               </Button>
             </div>
           </form>

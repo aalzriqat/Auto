@@ -6,6 +6,7 @@ import {
 import { api } from "@/convex/_generated/api";
 import { Doc } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 import { format } from "date-fns";
 import {
   Dialog,
@@ -42,6 +43,7 @@ export function VehicleDetailsDialog({
   canViewPurchasePrice,
 }: VehicleDetailsDialogProps) {
   const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
   
   const relations = useQuery(
     api.vehicles.getRelations,
@@ -65,7 +67,7 @@ export function VehicleDetailsDialog({
               {vehicle.year} {vehicle.make} {vehicle.model}
             </DialogTitle>
             <DialogDescription>
-              Detailed information and related records for this vehicle.
+              {t("VehicleDetailsDesc" as any) || "Detailed information and related records for this vehicle."}
             </DialogDescription>
           </DialogHeader>
         </div>
@@ -77,13 +79,13 @@ export function VehicleDetailsDialog({
                 value="overview" 
                 className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
               >
-                Overview
+                {t("Overview" as any) || "Overview"}
               </TabsTrigger>
               <TabsTrigger 
                 value="leads_sales" 
                 className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
               >
-                Leads & Sales
+                {t("LeadsSales" as any) || "Leads & Sales"}
                 {relations && (relations.leads.length > 0 || relations.sales.length > 0) && (
                   <Badge variant="secondary" className="ml-2 text-xs px-1.5 py-0.5">{relations.leads.length + relations.sales.length}</Badge>
                 )}
@@ -92,7 +94,7 @@ export function VehicleDetailsDialog({
                 value="expenses" 
                 className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
               >
-                Expenses
+                {t("Expenses" as any) || "Expenses"}
                 {relations?.expenses && relations.expenses.length > 0 && (
                   <Badge variant="secondary" className="ml-2 text-xs px-1.5 py-0.5">{relations.expenses.length}</Badge>
                 )}
@@ -101,7 +103,7 @@ export function VehicleDetailsDialog({
                 value="tasks" 
                 className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
               >
-                Tasks
+                {t("Tasks" as any) || "Tasks"}
                 {relations?.tasks && relations.tasks.length > 0 && (
                   <Badge variant="secondary" className="ml-2 text-xs px-1.5 py-0.5">{relations.tasks.length}</Badge>
                 )}
@@ -110,7 +112,7 @@ export function VehicleDetailsDialog({
                 value="test_drives" 
                 className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
               >
-                Test Drives
+                {t("TestDrives" as any) || "Test Drives"}
                 {relations?.testDrives && relations.testDrives.length > 0 && (
                   <Badge variant="secondary" className="ml-2 text-xs px-1.5 py-0.5">{relations.testDrives.length}</Badge>
                 )}
@@ -119,7 +121,7 @@ export function VehicleDetailsDialog({
                 value="work_orders" 
                 className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
               >
-                Work Orders
+                {t("WorkOrders" as any) || "Work Orders"}
                 {relations?.workOrders && relations.workOrders.length > 0 && (
                   <Badge variant="secondary" className="ml-2 text-xs px-1.5 py-0.5">{relations.workOrders.length}</Badge>
                 )}
@@ -131,29 +133,36 @@ export function VehicleDetailsDialog({
             <TabsContent value="overview" className="m-0 focus-visible:outline-none">
               <div className="grid grid-cols-2 gap-x-6 gap-y-4">
                 <div className="space-y-1">
-                  <span className="text-sm font-medium text-muted-foreground">VIN</span>
+                  <span className="text-sm font-medium text-muted-foreground">{t("VIN" as any)}</span>
                   <p className="font-mono text-sm font-semibold bg-muted px-2 py-1 rounded inline-block">{vehicle.vin}</p>
                 </div>
                 <div className="space-y-1">
-                  <span className="text-sm font-medium text-muted-foreground">Status</span>
-                  <p className="text-sm font-semibold">{vehicle.status}</p>
+                  <span className="text-sm font-medium text-muted-foreground">{t("Status" as any)}</span>
+                  <p className="text-sm font-semibold">
+                    {vehicle.status === "AVAILABLE" ? t("AvailableLC" as any) || "Available" :
+                     vehicle.status === "RESERVED" ? t("Reserved" as any) || "Reserved" :
+                     vehicle.status === "SOLD" ? t("Sold" as any) || "Sold" :
+                     vehicle.status === "IN_INSPECTION" ? t("InInspection" as any) || "Inspection" :
+                     vehicle.status === "IN_REPAIR" ? t("InRepair" as any) || "Repair" :
+                     vehicle.status === "ARCHIVED" ? t("Archived" as any) || "Archived" : vehicle.status}
+                  </p>
                 </div>
 
                 <div className="space-y-1">
-                  <span className="text-sm font-medium text-muted-foreground">Make</span>
+                  <span className="text-sm font-medium text-muted-foreground">{t("Make" as any) || "Make"}</span>
                   <p className="text-sm">{vehicle.make}</p>
                 </div>
                 <div className="space-y-1">
-                  <span className="text-sm font-medium text-muted-foreground">Model</span>
+                  <span className="text-sm font-medium text-muted-foreground">{t("Model" as any) || "Model"}</span>
                   <p className="text-sm">{vehicle.model}</p>
                 </div>
 
                 <div className="space-y-1">
-                  <span className="text-sm font-medium text-muted-foreground">Year</span>
+                  <span className="text-sm font-medium text-muted-foreground">{t("Year" as any)}</span>
                   <p className="text-sm">{vehicle.year}</p>
                 </div>
                 <div className="space-y-1">
-                  <span className="text-sm font-medium text-muted-foreground">Trim</span>
+                  <span className="text-sm font-medium text-muted-foreground">{t("Trim" as any) || "Trim"}</span>
                   <p className="text-sm">{vehicle.trim || "N/A"}</p>
                 </div>
 
@@ -162,20 +171,20 @@ export function VehicleDetailsDialog({
                 </div>
 
                 <div className="space-y-1">
-                  <span className="text-sm font-medium text-muted-foreground">Color</span>
+                  <span className="text-sm font-medium text-muted-foreground">{t("Color" as any) || "Color"}</span>
                   <p className="text-sm">{vehicle.color}</p>
                 </div>
                 <div className="space-y-1">
-                  <span className="text-sm font-medium text-muted-foreground">Mileage</span>
-                  <p className="text-sm">{vehicle.mileage.toLocaleString()} miles</p>
+                  <span className="text-sm font-medium text-muted-foreground">{t("Mileage" as any) || "Mileage"}</span>
+                  <p className="text-sm">{vehicle.mileage.toLocaleString()}</p>
                 </div>
 
                 <div className="space-y-1">
-                  <span className="text-sm font-medium text-muted-foreground">Transmission</span>
+                  <span className="text-sm font-medium text-muted-foreground">{t("Transmission" as any) || "Transmission"}</span>
                   <p className="text-sm">{vehicle.transmission}</p>
                 </div>
                 <div className="space-y-1">
-                  <span className="text-sm font-medium text-muted-foreground">Fuel Type</span>
+                  <span className="text-sm font-medium text-muted-foreground">{t("FuelType" as any) || "Fuel Type"}</span>
                   <p className="text-sm">{vehicle.fuelType}</p>
                 </div>
 
@@ -184,19 +193,19 @@ export function VehicleDetailsDialog({
                 </div>
 
                 <div className="space-y-1">
-                  <span className="text-sm font-medium text-muted-foreground">Selling Price</span>
-                  <p className="text-sm font-bold text-green-500">${vehicle.sellingPrice.toLocaleString()}</p>
+                  <span className="text-sm font-medium text-muted-foreground">{t("SellingPrice" as any) || "Selling Price"}</span>
+                  <p className="text-sm font-bold text-green-500">{vehicle.sellingPrice.toLocaleString()} JOD</p>
                 </div>
                 {canViewPurchasePrice && vehicle.purchasePrice !== undefined && (
                   <div className="space-y-1">
-                    <span className="text-sm font-medium text-muted-foreground">Purchase Price</span>
-                    <p className="text-sm font-medium">${vehicle.purchasePrice.toLocaleString()}</p>
+                    <span className="text-sm font-medium text-muted-foreground">{t("PurchasePrice" as any) || "Purchase Price"}</span>
+                    <p className="text-sm font-medium">{vehicle.purchasePrice.toLocaleString()} JOD</p>
                   </div>
                 )}
 
                 {vehicle.notes && (
                   <div className="col-span-2 space-y-1 mt-2 bg-muted/50 p-3 rounded-lg border">
-                    <span className="text-sm font-medium text-muted-foreground block mb-1">Notes</span>
+                    <span className="text-sm font-medium text-muted-foreground block mb-1">{t("Notes" as any)}</span>
                     <p className="text-sm whitespace-pre-wrap">{vehicle.notes}</p>
                   </div>
                 )}
@@ -205,11 +214,11 @@ export function VehicleDetailsDialog({
 
             <TabsContent value="leads_sales" className="m-0 focus-visible:outline-none space-y-6">
               <div>
-                <h3 className="font-semibold text-sm mb-3">Sales Record</h3>
+                <h3 className="font-semibold text-sm mb-3">{t("SalesRecord" as any) || "Sales Record"}</h3>
                 {!relations ? (
-                  <p className="text-sm text-muted-foreground">Loading...</p>
+                  <p className="text-sm text-muted-foreground">{t("Loading" as any) || "Loading..."}</p>
                 ) : relations.sales.length === 0 ? (
-                  <p className="text-sm text-muted-foreground italic">No sales recorded for this vehicle.</p>
+                  <p className="text-sm text-muted-foreground italic">{t("NoSales" as any) || "No sales recorded for this vehicle."}</p>
                 ) : (
                   <div className="space-y-3">
                     {relations.sales.map((sale) => (
@@ -219,13 +228,13 @@ export function VehicleDetailsDialog({
                           <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded">{sale.status}</span>
                         </div>
                         <div className="grid grid-cols-2 gap-2 text-muted-foreground text-xs mt-2">
-                          <p>Sale Date: {format(sale.saleDate, "PP")}</p>
-                          <p>Price: <span className="font-medium text-foreground">${sale.salePrice.toLocaleString()}</span></p>
-                          <p>Salesperson: {sale.salespersonName}</p>
+                          <p>{t("SaleDate" as any) || "Sale Date"}: {format(sale.saleDate, "PP")}</p>
+                          <p>{t("Price" as any) || "Price"}: <span className="font-medium text-foreground">{sale.salePrice.toLocaleString()} JOD</span></p>
+                          <p>{t("Salesperson" as any) || "Salesperson"}: {sale.salespersonName}</p>
                         </div>
                         <div className="mt-3 flex justify-end border-t border-border/50 pt-2">
                           <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => window.open(`/sales/${sale._id}/print`, '_blank')}>
-                            <Printer className="h-3 w-3 mr-1" /> Print Bill of Sale
+                            <Printer className="h-3 w-3 mr-1" /> {t("PrintBillOfSale" as any) || "Print Bill of Sale"}
                           </Button>
                         </div>
                       </div>
@@ -237,11 +246,11 @@ export function VehicleDetailsDialog({
               <Separator />
 
               <div>
-                <h3 className="font-semibold text-sm mb-3">Associated Leads</h3>
+                <h3 className="font-semibold text-sm mb-3">{t("AssociatedLeads" as any) || "Associated Leads"}</h3>
                 {!relations ? (
-                  <p className="text-sm text-muted-foreground">Loading...</p>
+                  <p className="text-sm text-muted-foreground">{t("Loading" as any) || "Loading..."}</p>
                 ) : relations.leads.length === 0 ? (
-                  <p className="text-sm text-muted-foreground italic">No leads currently interested in this vehicle.</p>
+                  <p className="text-sm text-muted-foreground italic">{t("NoLeads" as any) || "No leads currently interested in this vehicle."}</p>
                 ) : (
                   <div className="space-y-3">
                     {relations.leads.map((lead) => (
@@ -260,11 +269,11 @@ export function VehicleDetailsDialog({
             </TabsContent>
 
             <TabsContent value="expenses" className="m-0 focus-visible:outline-none">
-              <h3 className="font-semibold text-sm mb-3">Vehicle Expenses</h3>
+              <h3 className="font-semibold text-sm mb-3">{t("VehicleExpenses" as any) || "Vehicle Expenses"}</h3>
               {!relations ? (
-                <p className="text-sm text-muted-foreground">Loading...</p>
+                <p className="text-sm text-muted-foreground">{t("Loading" as any) || "Loading..."}</p>
               ) : relations.expenses.length === 0 ? (
-                <p className="text-sm text-muted-foreground italic">No expenses recorded for this vehicle.</p>
+                <p className="text-sm text-muted-foreground italic">{t("NoExpenses" as any) || "No expenses recorded for this vehicle."}</p>
               ) : (
                 <div className="space-y-3">
                   {relations.expenses.map((exp) => (
@@ -286,13 +295,13 @@ export function VehicleDetailsDialog({
                         )}
                         {exp.notes && <p className="text-xs mt-1 italic">{exp.notes}</p>}
                       </div>
-                      <span className="font-semibold text-destructive">${exp.amount.toLocaleString()}</span>
+                      <span className="font-semibold text-destructive">{exp.amount.toLocaleString()} JOD</span>
                     </div>
                   ))}
                   <div className="pt-2 border-t flex justify-between items-center">
-                    <span className="text-sm font-semibold">Total Expenses</span>
+                    <span className="text-sm font-semibold">{t("TotalExpenses" as any) || "Total Expenses"}</span>
                     <span className="font-bold text-destructive">
-                      ${relations.expenses.reduce((sum, e) => sum + e.amount, 0).toLocaleString()}
+                      {relations.expenses.reduce((sum, e) => sum + e.amount, 0).toLocaleString()} JOD
                     </span>
                   </div>
                 </div>
@@ -300,11 +309,11 @@ export function VehicleDetailsDialog({
             </TabsContent>
 
             <TabsContent value="tasks" className="m-0 focus-visible:outline-none">
-              <h3 className="font-semibold text-sm mb-3">Associated Tasks</h3>
+              <h3 className="font-semibold text-sm mb-3">{t("AssociatedTasks" as any) || "Associated Tasks"}</h3>
               {!relations ? (
-                <p className="text-sm text-muted-foreground">Loading...</p>
+                <p className="text-sm text-muted-foreground">{t("Loading" as any) || "Loading..."}</p>
               ) : relations.tasks.length === 0 ? (
-                <p className="text-sm text-muted-foreground italic">No tasks assigned for this vehicle.</p>
+                <p className="text-sm text-muted-foreground italic">{t("NoTasks" as any) || "No tasks assigned for this vehicle."}</p>
               ) : (
                 <div className="space-y-3">
                   {relations.tasks.map((task) => (
@@ -331,13 +340,13 @@ export function VehicleDetailsDialog({
             </TabsContent>
             <TabsContent value="test_drives" className="m-0 focus-visible:outline-none">
               <div className="flex justify-between items-center mb-4">
-                <h3 className="font-semibold text-sm">Test Drives Record</h3>
-                <Button size="sm" onClick={() => { setSelectedTestDrive(null); setTestDriveOpen(true); }}>Log Test Drive</Button>
+                <h3 className="font-semibold text-sm">{t("TestDrivesRecord" as any) || "Test Drives Record"}</h3>
+                <Button size="sm" onClick={() => { setSelectedTestDrive(null); setTestDriveOpen(true); }}>{t("LogTestDrive" as any) || "Log Test Drive"}</Button>
               </div>
               {!relations ? (
-                <p className="text-sm text-muted-foreground">Loading...</p>
+                <p className="text-sm text-muted-foreground">{t("Loading" as any) || "Loading..."}</p>
               ) : !relations.testDrives || relations.testDrives.length === 0 ? (
-                <p className="text-sm text-muted-foreground italic">No test drives recorded.</p>
+                <p className="text-sm text-muted-foreground italic">{t("NoTestDrives" as any) || "No test drives recorded."}</p>
               ) : (
                 <div className="space-y-3">
                   {relations.testDrives.map((td: any) => (
@@ -371,13 +380,13 @@ export function VehicleDetailsDialog({
             </TabsContent>
             <TabsContent value="work_orders" className="m-0 focus-visible:outline-none">
               <div className="flex justify-between items-center mb-4">
-                <h3 className="font-semibold text-sm">Service & Work Orders</h3>
-                <Button size="sm" onClick={() => { setSelectedWorkOrder(null); setWorkOrderOpen(true); }}>New Work Order</Button>
+                <h3 className="font-semibold text-sm">{t("ServiceWorkOrders" as any) || "Service & Work Orders"}</h3>
+                <Button size="sm" onClick={() => { setSelectedWorkOrder(null); setWorkOrderOpen(true); }}>{t("NewWorkOrder" as any) || "New Work Order"}</Button>
               </div>
               {!relations ? (
-                <p className="text-sm text-muted-foreground">Loading...</p>
+                <p className="text-sm text-muted-foreground">{t("Loading" as any) || "Loading..."}</p>
               ) : !relations.workOrders || relations.workOrders.length === 0 ? (
-                <p className="text-sm text-muted-foreground italic">No work orders recorded.</p>
+                <p className="text-sm text-muted-foreground italic">{t("NoWorkOrders" as any) || "No work orders recorded."}</p>
               ) : (
                 <div className="space-y-3">
                   {relations.workOrders.map((wo: any) => (
@@ -395,7 +404,7 @@ export function VehicleDetailsDialog({
                       
                       <div className="flex justify-between items-center mt-3 pt-3 border-t border-border/50">
                         <span className="text-muted-foreground text-xs">{wo.tasks.length} task{wo.tasks.length !== 1 && 's'}</span>
-                        <span className="font-semibold text-primary">Total: ${wo.totalCost.toLocaleString(undefined, {minimumFractionDigits: 2})}</span>
+                        <span className="font-semibold text-primary">Total: {wo.totalCost.toLocaleString(undefined, {minimumFractionDigits: 2})} JOD</span>
                       </div>
                     </div>
                   ))}

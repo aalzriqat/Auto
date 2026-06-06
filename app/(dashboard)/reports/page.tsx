@@ -144,7 +144,7 @@ export default function ReportsPage() {
                 <LineChart className="h-4 w-4 text-muted-foreground no-print" />
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">${salesReport?.totalRevenue?.toLocaleString() ?? 0}</div>
+                <div className="text-2xl font-bold">{salesReport?.totalRevenue?.toLocaleString() ?? 0} JOD</div>
               </CardContent>
             </Card>
             <Card className="print-shadow-none border print:border-gray-200">
@@ -153,7 +153,7 @@ export default function ReportsPage() {
                 <Receipt className="h-4 w-4 text-muted-foreground no-print" />
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">${salesReport?.totalCost?.toLocaleString() ?? 0}</div>
+                <div className="text-2xl font-bold">{salesReport?.totalCost?.toLocaleString() ?? 0} JOD</div>
               </CardContent>
             </Card>
             <Card className="print-shadow-none border print:border-gray-200">
@@ -162,7 +162,7 @@ export default function ReportsPage() {
                 <BadgeDollarSignIcon className="h-4 w-4 text-green-500 no-print" />
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold text-green-600">${salesReport?.totalProfit?.toLocaleString() ?? 0}</div>
+                <div className="text-2xl font-bold text-green-600">{salesReport?.totalProfit?.toLocaleString() ?? 0} JOD</div>
               </CardContent>
             </Card>
           </div>
@@ -185,9 +185,9 @@ export default function ReportsPage() {
                     <TableCell>{new Date(sale.saleDate).toLocaleDateString()}</TableCell>
                     <TableCell>{sale.vehicleYear} {sale.vehicleMake} {sale.vehicleModel}</TableCell>
                     <TableCell className="font-mono text-xs">{sale.vehicleVin || "-"}</TableCell>
-                    <TableCell className="text-right">${sale.salePrice.toLocaleString()}</TableCell>
-                    <TableCell className="text-right">${sale.totalCost.toLocaleString()}</TableCell>
-                    <TableCell className="text-right text-green-600 font-medium">${sale.netProfit.toLocaleString()}</TableCell>
+                    <TableCell className="text-right">{sale.salePrice.toLocaleString()} JOD</TableCell>
+                    <TableCell className="text-right">{sale.totalCost.toLocaleString()} JOD</TableCell>
+                    <TableCell className="text-right text-green-600 font-medium">{sale.netProfit.toLocaleString()} JOD</TableCell>
                   </TableRow>
                 ))}
                 {!salesReport?.sales?.length && (
@@ -235,7 +235,7 @@ export default function ReportsPage() {
                 <BadgeDollarSignIcon className="h-4 w-4 text-muted-foreground no-print" />
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">${inventoryReport?.totalValue?.toLocaleString() ?? 0}</div>
+                <div className="text-2xl font-bold">{inventoryReport?.totalValue?.toLocaleString() ?? 0} JOD</div>
               </CardContent>
             </Card>
           </div>
@@ -258,9 +258,9 @@ export default function ReportsPage() {
                     <TableCell className="font-medium">{vehicle.year} {vehicle.make} {vehicle.model}</TableCell>
                     <TableCell className="font-mono text-xs">{vehicle.vin}</TableCell>
                     <TableCell>{vehicle.status}</TableCell>
-                    <TableCell className="text-right">${vehicle.purchasePrice.toLocaleString()}</TableCell>
-                    <TableCell className="text-right">${vehicle.totalExpenses.toLocaleString()}</TableCell>
-                    <TableCell className="text-right font-medium">${vehicle.totalInvestment.toLocaleString()}</TableCell>
+                    <TableCell className="text-right">{vehicle.purchasePrice.toLocaleString()} JOD</TableCell>
+                    <TableCell className="text-right">{vehicle.totalExpenses.toLocaleString()} JOD</TableCell>
+                    <TableCell className="text-right font-medium">{vehicle.totalInvestment.toLocaleString()} JOD</TableCell>
                   </TableRow>
                 ))}
                 {!inventoryReport?.vehicles?.length && (
@@ -298,7 +298,7 @@ export default function ReportsPage() {
               <Receipt className="h-4 w-4 text-muted-foreground no-print" />
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold">${expensesReport?.totalExpenses?.toLocaleString() ?? 0}</div>
+              <div className="text-2xl font-bold">{expensesReport?.totalExpenses?.toLocaleString() ?? 0} JOD</div>
             </CardContent>
           </Card>
 
@@ -320,7 +320,7 @@ export default function ReportsPage() {
                     <TableCell>{exp.category}</TableCell>
                     <TableCell>{exp.description}</TableCell>
                     <TableCell>{exp.vehicleDesc}</TableCell>
-                    <TableCell className="text-right font-medium">${exp.amount.toLocaleString()}</TableCell>
+                    <TableCell className="text-right font-medium">{exp.amount.toLocaleString()} JOD</TableCell>
                   </TableRow>
                 ))}
                 {!expensesReport?.expenses?.length && (
@@ -367,8 +367,8 @@ export default function ReportsPage() {
                   <TableRow key={perf.userId}>
                     <TableCell className="font-medium">{perf.userName}</TableCell>
                     <TableCell className="text-right">{perf.vehiclesSold}</TableCell>
-                    <TableCell className="text-right">${perf.totalRevenue.toLocaleString()}</TableCell>
-                    <TableCell className="text-right text-green-600 font-medium">${perf.totalProfit.toLocaleString()}</TableCell>
+                    <TableCell className="text-right">{perf.totalRevenue.toLocaleString()} JOD</TableCell>
+                    <TableCell className="text-right text-green-600 font-medium">{perf.totalProfit.toLocaleString()} JOD</TableCell>
                   </TableRow>
                 ))}
                 {!performanceReport?.length && (

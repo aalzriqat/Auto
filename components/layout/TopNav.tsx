@@ -30,7 +30,7 @@ const navigation = [
 
 export function TopNav() {
   const { user } = useUser();
-  const { t } = useLanguage();
+  const { t, isRtl } = useLanguage();
   const { activeOrgId } = useOrg();
   const pathname = typeof window !== 'undefined' ? window.location.pathname : "";
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -56,10 +56,10 @@ export function TopNav() {
                 <span className="sr-only">Toggle navigation menu</span>
               </Button>
             </SheetTrigger>
-            <SheetContent side="left" className="w-[280px] sm:w-[300px]">
-              <SheetHeader>
-                <SheetTitle className="text-left">Navigation</SheetTitle>
-              </SheetHeader>
+              <SheetContent side={isRtl ? "right" : "left"} className="w-[280px] sm:w-[300px]">
+                <SheetHeader>
+                  <SheetTitle className="text-start">{t("Navigation" as any) || "Navigation"}</SheetTitle>
+                </SheetHeader>
               <nav className="flex flex-col gap-2 mt-4">
                 {visibleNavigation.map((item) => {
                   const isActive = pathname.startsWith(item.href);
@@ -83,33 +83,33 @@ export function TopNav() {
               </nav>
             </SheetContent>
           </Sheet>
-          <div className="flex items-center gap-2">
-            {/* You can add a text logo or image here if desired */}
+          
+          <div className="hidden md:flex items-center">
             <OrgSwitcher />
           </div>
+          
+          {/* Desktop Navigation Links */}
+          <nav className="hidden md:flex items-center gap-1 mx-4">
+            {visibleNavigation.map((item) => {
+              const isActive = pathname.startsWith(item.href);
+              return (
+                <Link
+                  key={item.name}
+                  href={item.href}
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors",
+                    isActive 
+                      ? "bg-primary/10 text-primary" 
+                      : "hover:bg-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50"
+                  )}
+                >
+                  <item.icon className="h-4 w-4" />
+                  {t(item.name as any)}
+                </Link>
+              );
+            })}
+          </nav>
         </div>
-
-        {/* Center: Desktop Navigation */}
-        <nav className="hidden md:flex items-center gap-1 lg:gap-2 absolute left-1/2 -translate-x-1/2">
-          {visibleNavigation.map((item) => {
-            const isActive = pathname.startsWith(item.href);
-            return (
-              <Link
-                key={item.name}
-                href={item.href}
-                className={cn(
-                  "flex items-center gap-2 px-3 py-2 rounded-full text-sm font-medium transition-colors",
-                  isActive 
-                    ? "bg-primary/10 text-primary" 
-                    : "hover:bg-muted text-muted-foreground hover:text-foreground"
-                )}
-              >
-                <item.icon className="h-4 w-4" />
-                <span className="hidden lg:inline">{t(item.name as any)}</span>
-              </Link>
-            );
-          })}
-        </nav>
 
         {/* Right Side: Tools & Profile */}
         <div className="flex items-center gap-2 shrink-0">

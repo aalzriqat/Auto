@@ -151,7 +151,7 @@ export default function ExpensesPage() {
                     )}
                   </TableCell>
                   <TableCell className="text-end font-medium text-red-500">
-                    -${expense.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    -{expense.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} JOD
                   </TableCell>
                   <TableCell className="text-end">
                     <Button variant="ghost" size="icon" onClick={() => handleEdit(expense)}>
