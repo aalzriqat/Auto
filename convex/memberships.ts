@@ -380,8 +380,21 @@ export const createAccount = action({
         throw new Error(errorData.errors?.[0]?.message || "Failed to create user in Clerk");
       }
 
-      // Success! The Clerk webhook will automatically pick up the user.created event,
-      // create the user in the Convex users table, and convert the invitation into a membership.
+      // Parse Clerk API response
+      const clerkUser = await response.json();
+      const clerkId = clerkUser.id;
+
+      // 3. Finalize: Instantly create the user and membership in Convex
+      // This bypasses the webhook delay ensuring immediate access.
+      await ctx.runMutation(internal.memberships.finalizeDirectAccount, {
+        clerkId,
+        email: args.email,
+        name: args.name,
+        orgId: args.orgId,
+        roleId: args.roleId,
+        inviteId,
+      });
+
       return { success: true };
     } catch (error: any) {
       // 3. Rollback: Delete the invitation if Clerk creation failed
@@ -391,3 +404,55 @@ export const createAccount = action({
   }
 });
 
+export const finalizeDirectAccount = internalMutation({
+  args: {
+    clerkId: v.string(),
+    email: v.string(),
+    name: v.string(),
+    orgId: v.id("organizations"),
+    roleId: v.id("roles"),
+    inviteId: v.id("invitations"),
+  },
+  handler: async (ctx, args) => {
+    // Upsert User
+    const existingUser = await ctx.db
+      .query("users")
+      .withIndex("by_clerkId", (q) => q.eq("clerkId", args.clerkId))
+      .unique();
+
+    let userId;
+    if (existingUser) {
+      await ctx.db.patch(existingUser._id, {
+        email: args.email,
+        name: args.name,
+      });
+      userId = existingUser._id;
+    } else {
+      userId = await ctx.db.insert("users", {
+        clerkId: args.clerkId,
+        email: args.email,
+        name: args.name,
+      });
+    }
+
+    // Insert Membership
+    const existingMembership = await ctx.db
+      .query("memberships")
+      .withIndex("by_org_user", (q) => q.eq("orgId", args.orgId).eq("userId", userId))
+      .unique();
+
+    if (!existingMembership) {
+      await ctx.db.insert("memberships", {
+        orgId: args.orgId,
+        userId: userId,
+        roleId: args.roleId,
+      });
+    }
+
+    // Clean up Invitation
+    const invite = await ctx.db.get(args.inviteId);
+    if (invite) {
+      await ctx.db.delete(args.inviteId);
+    }
+  }
+});
