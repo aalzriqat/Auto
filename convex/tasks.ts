@@ -78,6 +78,7 @@ export const create = mutation({
     communicationMethod: v.optional(v.union(v.literal("PHONE"), v.literal("EMAIL"), v.literal("FAX"))),
     customerId: v.optional(v.id("customers")),
     leadId: v.optional(v.id("leads")),
+    vehicleId: v.optional(v.id("vehicles")),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_TASKS]);
@@ -104,6 +105,7 @@ export const create = mutation({
       communicationMethod: args.communicationMethod,
       customerId: args.customerId,
       leadId: args.leadId,
+      vehicleId: args.vehicleId,
     });
 
     await ctx.db.insert("taskHistory", {
@@ -130,6 +132,7 @@ export const update = mutation({
     statusNote: v.optional(v.string()),
     communicationMethod: v.optional(v.union(v.literal("PHONE"), v.literal("EMAIL"), v.literal("FAX"))),
     customerId: v.optional(v.union(v.id("customers"), v.null())),
+    vehicleId: v.optional(v.union(v.id("vehicles"), v.null())),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_TASKS]);
@@ -179,9 +182,14 @@ export const update = mutation({
       changes.push(`Updated communication method to ${args.communicationMethod}.`);
     }
     
-    if (args.customerId !== undefined && args.customerId !== task.customerId) {
+    if (args.customerId !== undefined) {
       patch.customerId = args.customerId === null ? undefined : args.customerId;
-      changes.push("Updated related customer.");
+      changes.push(args.customerId ? "Linked customer." : "Removed customer link.");
+    }
+
+    if (args.vehicleId !== undefined) {
+      patch.vehicleId = args.vehicleId === null ? undefined : args.vehicleId;
+      changes.push(args.vehicleId ? "Linked vehicle." : "Removed vehicle link.");
     }
 
     if (Object.keys(patch).length > 0) {

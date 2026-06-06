@@ -41,6 +41,9 @@ const expenseSchema = z.object({
   date: z.string().min(1, "Date is required"),
   category: z.enum(["REPAIR", "MAINTENANCE", "DETAILING", "TRANSPORT", "MARKETING", "OFFICE", "OTHER"]),
   vehicleId: z.string().optional(),
+  status: z.enum(["PENDING", "PAID"]),
+  vendor: z.string().optional(),
+  payerId: z.string().optional(),
   notes: z.string().optional(),
 });
 
@@ -56,6 +59,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
   const { activeOrgId } = useOrg();
   
   const vehicles = useQuery(api.vehicles.list, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const memberships = useQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId } : "skip");
 
   const createExpense = useMutation(api.expenses.create);
   const updateExpense = useMutation(api.expenses.update);
@@ -69,6 +73,9 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
       date: new Date().toISOString().split('T')[0],
       category: "OTHER",
       vehicleId: "none",
+      status: "PAID",
+      vendor: "",
+      payerId: "none",
       notes: "",
     },
   });
@@ -82,6 +89,9 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
         date: date.toISOString().split('T')[0],
         category: expense.category as any,
         vehicleId: expense.vehicleId || "none",
+        status: expense.status || "PAID",
+        vendor: expense.vendor || "",
+        payerId: expense.payerId || "none",
         notes: expense.notes || "",
       });
     } else if (open && !expense) {
@@ -91,6 +101,9 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
         date: new Date().toISOString().split('T')[0],
         category: "OTHER",
         vehicleId: "none",
+        status: "PAID",
+        vendor: "",
+        payerId: "none",
         notes: "",
       });
     }
@@ -102,6 +115,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
     try {
       const parsedDate = new Date(values.date).getTime();
       const parsedVehicleId = values.vehicleId === "none" ? undefined : (values.vehicleId as Id<"vehicles">);
+      const parsedPayerId = values.payerId === "none" ? undefined : (values.payerId as Id<"users">);
 
       if (expense) {
         await updateExpense({
@@ -112,6 +126,9 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
           date: parsedDate,
           category: values.category as any,
           vehicleId: parsedVehicleId === undefined ? null : parsedVehicleId,
+          status: values.status,
+          vendor: values.vendor,
+          payerId: parsedPayerId === undefined ? null : parsedPayerId,
           notes: values.notes,
         });
         toast.success("Expense updated successfully");
@@ -123,6 +140,9 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
           date: parsedDate,
           category: values.category as any,
           vehicleId: parsedVehicleId,
+          status: values.status,
+          vendor: values.vendor,
+          payerId: parsedPayerId,
           notes: values.notes,
         });
         toast.success("Expense recorded successfully!");
@@ -236,6 +256,68 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                         {vehicles?.map((v) => (
                           <SelectItem key={v._id} value={v._id}>
                             {v.year} {v.make} {v.model} - {v.vin.slice(-6)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="status"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Payment Status</FormLabel>
+                    <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select status" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="PAID">Paid</SelectItem>
+                        <SelectItem value="PENDING">Pending</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="vendor"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Vendor / Payee</FormLabel>
+                    <FormControl>
+                      <Input placeholder="e.g. Joe's Repair Shop" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="payerId"
+                render={({ field }) => (
+                  <FormItem className="md:col-span-2">
+                    <FormLabel>Paid By / Responsible Person</FormLabel>
+                    <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select team member" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="none">-- Not Specified --</SelectItem>
+                        {memberships?.map((m) => (
+                          <SelectItem key={m.userId} value={m.userId}>
+                            {m.userName}
                           </SelectItem>
                         ))}
                       </SelectContent>

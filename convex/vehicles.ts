@@ -373,3 +373,91 @@ export const deleteImage = mutation({
     await ctx.db.patch(args.vehicleId, { imageIds: newImageIds });
   },
 });
+
+export const getRelations = query({
+  args: {
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+
+    // 1. Fetch Sales
+    const sales = await ctx.db
+      .query("sales")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .filter((q) => q.eq(q.field("vehicleId"), args.vehicleId))
+      .collect();
+
+    const enrichedSales = await Promise.all(
+      sales.map(async (sale) => {
+        const customer = await ctx.db.get(sale.customerId);
+        const salesperson = await ctx.db.get(sale.salespersonId as any);
+        return {
+          ...sale,
+          customerName: customer ? `${customer.firstName} ${customer.lastName}` : "Unknown",
+          salespersonName: salesperson && "name" in salesperson ? salesperson.name : "Unknown",
+        };
+      })
+    );
+
+    // 2. Fetch Leads
+    const leads = await ctx.db
+      .query("leads")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .filter((q) => q.eq(q.field("vehicleId"), args.vehicleId))
+      .collect();
+
+    const enrichedLeads = await Promise.all(
+      leads.map(async (lead) => {
+        const customer = await ctx.db.get(lead.customerId);
+        const assignedUser = lead.assignedUserId ? await ctx.db.get(lead.assignedUserId as any) : null;
+        return {
+          ...lead,
+          customerName: customer ? `${customer.firstName} ${customer.lastName}` : "Unknown",
+          assignedUserName: assignedUser && "name" in assignedUser ? assignedUser.name : "Unassigned",
+        };
+      })
+    );
+
+    // 3. Fetch Expenses
+    const expenses = await ctx.db
+      .query("expenses")
+      .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
+      .collect();
+
+    const enrichedExpenses = await Promise.all(
+      expenses.map(async (exp) => {
+        const payer = exp.payerId ? await ctx.db.get(exp.payerId) : null;
+        return {
+          ...exp,
+          payerName: payer && "name" in payer ? payer.name : null,
+          status: exp.status || "PAID",
+        };
+      })
+    );
+
+    // 4. Fetch Tasks
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
+      .collect();
+
+    const enrichedTasks = await Promise.all(
+      tasks.map(async (task) => {
+        const assignedUser = await ctx.db.get(task.assignedTo as any);
+        return {
+          ...task,
+          assignedUserName: assignedUser && "name" in assignedUser ? assignedUser.name : "Unknown",
+        };
+      })
+    );
+
+    return {
+      sales: enrichedSales.sort((a, b) => b.saleDate - a.saleDate),
+      leads: enrichedLeads.sort((a, b) => b._creationTime - a._creationTime),
+      expenses: enrichedExpenses.sort((a, b) => b.date - a.date),
+      tasks: enrichedTasks.sort((a, b) => a.dueDate - b.dueDate),
+    };
+  },
+});

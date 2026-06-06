@@ -104,7 +104,10 @@ export default function ExpensesPage() {
             <TableRow>
               <TableHead>Date</TableHead>
               <TableHead>Title</TableHead>
+              <TableHead>Status</TableHead>
               <TableHead>Category</TableHead>
+              <TableHead>Vendor</TableHead>
+              <TableHead>Paid By</TableHead>
               <TableHead>Linked Vehicle</TableHead>
               <TableHead className="text-end">Amount</TableHead>
               <TableHead className="text-end">Actions</TableHead>
@@ -113,13 +116,13 @@ export default function ExpensesPage() {
           <TableBody>
             {filteredExpenses === undefined ? (
               <TableRow>
-                <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
                   Loading expenses...
                 </TableCell>
               </TableRow>
             ) : filteredExpenses.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
                   No expenses found.
                 </TableCell>
               </TableRow>
@@ -130,7 +133,16 @@ export default function ExpensesPage() {
                     {new Date(expense.date).toLocaleDateString()}
                   </TableCell>
                   <TableCell>{expense.title}</TableCell>
+                  <TableCell>
+                    {expense.status === "PAID" ? (
+                      <Badge className="bg-green-100 text-green-800 hover:bg-green-100">Paid</Badge>
+                    ) : (
+                      <Badge variant="outline" className="bg-yellow-100 text-yellow-800 hover:bg-yellow-100 border-yellow-200">Pending</Badge>
+                    )}
+                  </TableCell>
                   <TableCell>{getCategoryBadge(expense.category)}</TableCell>
+                  <TableCell>{expense.vendor || <span className="text-muted-foreground italic">N/A</span>}</TableCell>
+                  <TableCell>{expense.payerName || <span className="text-muted-foreground italic">Unassigned</span>}</TableCell>
                   <TableCell>
                     {expense.vehicleSummary ? (
                       <span className="text-sm">{expense.vehicleSummary}</span>

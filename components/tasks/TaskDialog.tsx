@@ -41,6 +41,7 @@ const taskSchema = z.object({
   dueDate: z.date({ required_error: "Due date is required" }),
   assignedTo: z.string().min(1, "Assignee is required"),
   customerId: z.string().optional(),
+  vehicleId: z.string().optional(),
   communicationMethod: z.enum(["PHONE", "EMAIL", "FAX", "none"]).optional(),
   status: z.enum(["PENDING", "COMPLETED", "CANCELLED"]),
 });
@@ -58,6 +59,7 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
   
   const memberships = useQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId } : "skip");
   const customers = useQuery(api.customers.list, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const vehicles = useQuery(api.vehicles.list, activeOrgId ? { orgId: activeOrgId } : "skip");
 
   const createTask = useMutation(api.tasks.create);
   const updateTask = useMutation(api.tasks.update);
@@ -71,6 +73,7 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
       dueDate: new Date(),
       assignedTo: "",
       customerId: "none",
+      vehicleId: "none",
       communicationMethod: "none",
       status: "PENDING",
     },
@@ -88,6 +91,7 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
         dueDate: new Date(task.dueDate),
         assignedTo: task.assignedTo,
         customerId: task.customerId || "none",
+        vehicleId: task.vehicleId || "none",
         communicationMethod: (task.communicationMethod as any) || "none",
         status: task.status,
       });
@@ -100,6 +104,7 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
         dueDate: new Date(),
         assignedTo: myMembership ? myMembership.userId : "",
         customerId: "none",
+        vehicleId: "none",
         communicationMethod: "none",
         status: "PENDING",
       });
@@ -113,6 +118,7 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
       const dueDate = values.dueDate.getTime();
       const status = values.status as "PENDING" | "COMPLETED" | "CANCELLED";
       const customerId = values.customerId === "none" ? undefined : (values.customerId as Id<"customers">);
+      const vehicleId = values.vehicleId === "none" ? undefined : (values.vehicleId as Id<"vehicles">);
       const communicationMethod = values.communicationMethod === "none" ? undefined : (values.communicationMethod as "PHONE" | "EMAIL" | "FAX");
 
       if (task) {
@@ -124,6 +130,7 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
           dueDate: dueDate,
           assignedTo: values.assignedTo as Id<"users">,
           customerId: customerId === undefined ? null : customerId,
+          vehicleId: vehicleId === undefined ? null : vehicleId,
           status: status,
           communicationMethod: communicationMethod,
         });
@@ -136,6 +143,7 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
           dueDate: dueDate,
           assignedTo: values.assignedTo as Id<"users">,
           customerId: customerId,
+          vehicleId: vehicleId,
           status: status,
           communicationMethod: communicationMethod,
         });
@@ -234,6 +242,32 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
                         {customers?.map((c) => (
                           <SelectItem key={c._id} value={c._id}>
                             {c.firstName} {c.lastName}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="vehicleId"
+                render={({ field }) => (
+                  <FormItem className="md:col-span-2">
+                    <FormLabel>Related Vehicle</FormLabel>
+                    <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select vehicle" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="none">-- General Task (No Vehicle) --</SelectItem>
+                        {vehicles?.map((v) => (
+                          <SelectItem key={v._id} value={v._id}>
+                            {v.year} {v.make} {v.model} ({v.vin.substring(v.vin.length - 6)})
                           </SelectItem>
                         ))}
                       </SelectContent>

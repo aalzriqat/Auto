@@ -179,6 +179,9 @@ export default defineSchema({
       v.literal("OFFICE"),
       v.literal("OTHER")
     ),
+    status: v.optional(v.union(v.literal("PENDING"), v.literal("PAID"))),
+    vendor: v.optional(v.string()),
+    payerId: v.optional(v.id("users")),
     notes: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
@@ -197,10 +200,12 @@ export default defineSchema({
     // Optional associations
     customerId: v.optional(v.id("customers")),
     leadId: v.optional(v.id("leads")),
+    vehicleId: v.optional(v.id("vehicles")),
   })
     .index("by_org", ["orgId"])
     .index("by_org_assignedTo", ["orgId", "assignedTo"])
-    .index("by_org_status", ["orgId", "status"]),
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_vehicle", ["orgId", "vehicleId"]),
 
   taskHistory: defineTable({
     orgId: v.id("organizations"),

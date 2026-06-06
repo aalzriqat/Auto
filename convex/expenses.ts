@@ -52,9 +52,18 @@ export const list = query({
         if (exp.vehicleId) {
           vehicle = await ctx.db.get(exp.vehicleId);
         }
+        let payerName = null;
+        if (exp.payerId) {
+          const payer = await ctx.db.get(exp.payerId);
+          if (payer && "name" in payer) {
+            payerName = payer.name;
+          }
+        }
         return {
           ...exp,
           vehicleSummary: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model} - ${vehicle.vin}` : null,
+          payerName,
+          status: exp.status || "PAID", // Default old records to PAID
         };
       })
     );
@@ -74,6 +83,9 @@ export const create = mutation({
     amount: v.number(),
     date: v.number(),
     category: expenseCategory,
+    status: v.optional(v.union(v.literal("PENDING"), v.literal("PAID"))),
+    vendor: v.optional(v.string()),
+    payerId: v.optional(v.id("users")),
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -93,6 +105,9 @@ export const create = mutation({
       amount: args.amount,
       date: args.date,
       category: args.category,
+      status: args.status || "PAID",
+      vendor: args.vendor,
+      payerId: args.payerId,
       notes: args.notes,
     });
 
@@ -121,6 +136,9 @@ export const update = mutation({
     amount: v.optional(v.number()),
     date: v.optional(v.number()),
     category: v.optional(expenseCategory),
+    status: v.optional(v.union(v.literal("PENDING"), v.literal("PAID"))),
+    vendor: v.optional(v.string()),
+    payerId: v.optional(v.union(v.id("users"), v.null())),
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -147,6 +165,11 @@ export const update = mutation({
     if (args.amount !== undefined) patch.amount = args.amount;
     if (args.date !== undefined) patch.date = args.date;
     if (args.category !== undefined) patch.category = args.category;
+    if (args.status !== undefined) patch.status = args.status;
+    if (args.vendor !== undefined) patch.vendor = args.vendor;
+    if (args.payerId !== undefined) {
+      patch.payerId = args.payerId === null ? undefined : args.payerId;
+    }
     if (args.notes !== undefined) patch.notes = args.notes;
 
     if (Object.keys(patch).length > 0) {
