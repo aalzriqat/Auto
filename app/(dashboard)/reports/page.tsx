@@ -258,9 +258,9 @@ export default function ReportsPage() {
                     <TableCell className="font-medium">{vehicle.year} {vehicle.make} {vehicle.model}</TableCell>
                     <TableCell className="font-mono text-xs">{vehicle.vin}</TableCell>
                     <TableCell>{vehicle.status}</TableCell>
-                    <TableCell className="text-right">{vehicle.purchasePrice.toLocaleString()} JOD</TableCell>
-                    <TableCell className="text-right">{vehicle.totalExpenses.toLocaleString()} JOD</TableCell>
-                    <TableCell className="text-right font-medium">{vehicle.totalInvestment.toLocaleString()} JOD</TableCell>
+                    <TableCell className="text-right">{(vehicle.purchasePrice || 0).toLocaleString()} JOD</TableCell>
+                    <TableCell className="text-right">{(vehicle.totalExpenses || 0).toLocaleString()} JOD</TableCell>
+                    <TableCell className="text-right font-medium">{(vehicle.totalInvestment || 0).toLocaleString()} JOD</TableCell>
                   </TableRow>
                 ))}
                 {!inventoryReport?.vehicles?.length && (
@@ -318,7 +318,7 @@ export default function ReportsPage() {
                   <TableRow key={exp._id}>
                     <TableCell>{new Date(exp.date).toLocaleDateString()}</TableCell>
                     <TableCell>{exp.category}</TableCell>
-                    <TableCell>{exp.description}</TableCell>
+                    <TableCell>{exp.notes || "-"}</TableCell>
                     <TableCell>{exp.vehicleDesc}</TableCell>
                     <TableCell className="text-right font-medium">{exp.amount.toLocaleString()} JOD</TableCell>
                   </TableRow>
