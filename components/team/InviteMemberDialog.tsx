@@ -37,6 +37,7 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 
 const createAccountSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters"),
+  username: z.string().min(3, "Username must be at least 3 characters").regex(/^[a-zA-Z0-9_]+$/, "Username can only contain letters, numbers, and underscores"),
   email: z.string().email("Invalid email address"),
   password: z.string().min(8, "Password must be at least 8 characters"),
   roleId: z.string().min(1, "Role is required"),
@@ -62,6 +63,7 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
     resolver: zodResolver(createAccountSchema),
     defaultValues: {
       name: "",
+      username: "",
       email: "",
       password: "",
       roleId: "",
@@ -75,6 +77,7 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
       await createAccount({
         orgId: activeOrgId,
         name: values.name,
+        username: values.username,
         email: values.email,
         password: values.password,
         roleId: values.roleId as Id<"roles">,
@@ -112,6 +115,20 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
                   <FormLabel>{isRTL ? "الاسم الكامل" : "Full Name"}</FormLabel>
                   <FormControl>
                     <Input placeholder={isRTL ? "الاسم الكامل" : "John Doe"} {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="username"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{isRTL ? "اسم المستخدم" : "Username"}</FormLabel>
+                  <FormControl>
+                    <Input placeholder="johndoe" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>

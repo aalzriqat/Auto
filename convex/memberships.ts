@@ -339,6 +339,7 @@ export const createAccount = action({
   args: {
     orgId: v.id("organizations"),
     name: v.string(),
+    username: v.string(),
     email: v.string(),
     password: v.string(),
     roleId: v.id("roles"),
@@ -365,6 +366,7 @@ export const createAccount = action({
         body: JSON.stringify({
           email_address: [args.email.toLowerCase().trim()],
           password: args.password,
+          username: args.username,
           first_name: args.name.split(" ")[0],
           last_name: args.name.split(" ").slice(1).join(" ") || undefined,
           skip_password_checks: false,
