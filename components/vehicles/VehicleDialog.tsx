@@ -26,7 +26,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Upload, X } from "lucide-react";
+import { Upload, X, Search, Loader2 } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -73,6 +73,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
   
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [isDecoding, setIsDecoding] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [imageIds, setImageIds] = useState<string[]>([]);
   const [imageUrls, setImageUrls] = useState<string[]>([]);
@@ -172,6 +173,50 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
     }
   };
 
+  const handleDecodeVIN = async () => {
+    const vin = form.getValues("vin");
+    if (!vin || vin.length !== 17) {
+      toast.error("Please enter a valid 17-character VIN");
+      return;
+    }
+    
+    setIsDecoding(true);
+    try {
+      const response = await fetch(`https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/${vin}?format=json`);
+      const data = await response.json();
+      
+      if (data.Results && data.Results.length > 0) {
+        const result = data.Results[0];
+        
+        // NHTSA returns "0" or "0 - ..." for success
+        if (result.ErrorCode && result.ErrorCode !== "0" && !result.ErrorCode.startsWith("0 -")) {
+           toast.error(`VIN Decode Warning: ${result.ErrorText}`);
+        } else {
+           toast.success("VIN decoded successfully!");
+        }
+
+        if (result.Make) form.setValue("make", result.Make.charAt(0).toUpperCase() + result.Make.slice(1).toLowerCase());
+        if (result.Model) form.setValue("model", result.Model.charAt(0).toUpperCase() + result.Model.slice(1).toLowerCase());
+        if (result.ModelYear && !isNaN(parseInt(result.ModelYear))) form.setValue("year", parseInt(result.ModelYear));
+        if (result.Trim) form.setValue("trim", result.Trim);
+        
+        if (result.FuelTypePrimary) {
+           const fuel = result.FuelTypePrimary.toLowerCase();
+           if (fuel.includes("gasoline")) form.setValue("fuelType", "Gasoline");
+           else if (fuel.includes("diesel")) form.setValue("fuelType", "Diesel");
+           else if (fuel.includes("electric")) form.setValue("fuelType", "Electric");
+           else if (fuel.includes("hybrid")) form.setValue("fuelType", "Hybrid");
+        }
+      } else {
+        toast.error("No data found for this VIN.");
+      }
+    } catch (error) {
+      toast.error("Failed to decode VIN. Please try again.");
+    } finally {
+      setIsDecoding(false);
+    }
+  };
+
   const handleRemoveImage = async (index: number) => {
     const storageId = imageIds[index];
     const newImageIds = [...imageIds];
@@ -264,7 +309,19 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                   <FormItem>
                     <FormLabel>VIN</FormLabel>
                     <FormControl>
-                      <Input placeholder="17-character VIN" {...field} />
+                      <div className="flex gap-2">
+                        <Input placeholder="17-character VIN" {...field} />
+                        <Button 
+                          type="button" 
+                          variant="secondary" 
+                          onClick={handleDecodeVIN}
+                          disabled={isDecoding || field.value.length !== 17}
+                          className="shrink-0"
+                        >
+                          {isDecoding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4 me-2" />}
+                          Decode
+                        </Button>
+                      </div>
                     </FormControl>
                     <FormMessage />
                   </FormItem>

@@ -160,6 +160,8 @@ export default defineSchema({
     loanAmount: v.optional(v.number()),
     apr: v.optional(v.number()),
     termMonths: v.optional(v.number()),
+    warrantySold: v.optional(v.number()),
+    gapSold: v.optional(v.number()),
   })
     .index("by_org", ["orgId"])
     .index("by_org_salesperson", ["orgId", "salespersonId"]),
@@ -235,4 +237,40 @@ export default defineSchema({
   })
     .index("by_user", ["userId"])
     .index("by_org_user", ["orgId", "userId"]),
+
+  test_drives: defineTable({
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    customerId: v.id("customers"),
+    salespersonId: v.id("users"),
+    startTime: v.number(),
+    endTime: v.optional(v.number()),
+    demoPlateNumber: v.optional(v.string()),
+    notes: v.optional(v.string()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_vehicle", ["orgId", "vehicleId"])
+    .index("by_org_customer", ["orgId", "customerId"]),
+
+  workOrders: defineTable({
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    status: v.union(v.literal("OPEN"), v.literal("IN_PROGRESS"), v.literal("COMPLETED")),
+    title: v.string(),
+    totalCost: v.number(),
+    tasks: v.array(
+      v.object({
+        id: v.string(),
+        description: v.string(),
+        partsCost: v.number(),
+        laborCost: v.number(),
+        mechanicName: v.optional(v.string()),
+        completed: v.boolean(),
+      })
+    ),
+    expenseId: v.optional(v.id("expenses")),
+    notes: v.optional(v.string()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_vehicle", ["orgId", "vehicleId"]),
 });

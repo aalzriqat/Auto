@@ -55,6 +55,8 @@ const saleSchema = z.object({
   loanAmount: z.coerce.number().min(0).optional(),
   apr: z.coerce.number().min(0).optional(),
   termMonths: z.coerce.number().min(0).optional(),
+  warrantySold: z.coerce.number().min(0).optional(),
+  gapSold: z.coerce.number().min(0).optional(),
 });
 
 type SaleFormValues = z.infer<typeof saleSchema>;
@@ -98,8 +100,35 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
       loanAmount: 0,
       apr: 0,
       termMonths: 0,
+      warrantySold: 0,
+      gapSold: 0,
     },
   });
+
+  // Calculator logic
+  const watchAll = form.watch();
+  const estimatedPayment = (() => {
+    if (watchAll.financingType !== "FINANCED") return 0;
+    
+    const price = Number(watchAll.salePrice) || 0;
+    const taxes = Number(watchAll.taxAmount) || 0;
+    const fees = Number(watchAll.dealerFees) || 0;
+    const warranty = Number(watchAll.warrantySold) || 0;
+    const gap = Number(watchAll.gapSold) || 0;
+    const downPayment = Number(watchAll.downPayment) || 0;
+    const tradeIn = Number(watchAll.tradeInValue) || 0;
+    
+    const principal = price + taxes + fees + warranty + gap - downPayment - tradeIn;
+    const apr = Number(watchAll.apr) || 0;
+    const months = Number(watchAll.termMonths) || 1;
+
+    if (principal <= 0) return 0;
+    if (apr === 0) return principal / months;
+
+    const r = (apr / 100) / 12;
+    const payment = (principal * r * Math.pow(1 + r, months)) / (Math.pow(1 + r, months) - 1);
+    return payment;
+  })();
 
   useEffect(() => {
     if (sale && open) {
@@ -121,6 +150,8 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
         loanAmount: sale.loanAmount || 0,
         apr: sale.apr || 0,
         termMonths: sale.termMonths || 0,
+        warrantySold: sale.warrantySold || 0,
+        gapSold: sale.gapSold || 0,
       });
     } else if (open && !sale) {
       form.reset({
@@ -140,6 +171,8 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
         loanAmount: 0,
         apr: 0,
         termMonths: 0,
+        warrantySold: 0,
+        gapSold: 0,
       });
     }
   }, [sale, open, form]);
@@ -150,12 +183,14 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
   const dealerFees = form.watch("dealerFees");
   const downPayment = form.watch("downPayment");
   const tradeInValue = form.watch("tradeInValue");
+  const warrantySold = form.watch("warrantySold");
+  const gapSold = form.watch("gapSold");
   const financingType = form.watch("financingType");
 
   useEffect(() => {
-    const total = (Number(salePrice) || 0) + (Number(taxAmount) || 0) + (Number(dealerFees) || 0) - (Number(downPayment) || 0) - (Number(tradeInValue) || 0);
+    const total = (Number(salePrice) || 0) + (Number(taxAmount) || 0) + (Number(dealerFees) || 0) + (Number(warrantySold) || 0) + (Number(gapSold) || 0) - (Number(downPayment) || 0) - (Number(tradeInValue) || 0);
     form.setValue("loanAmount", total > 0 ? total : 0);
-  }, [salePrice, taxAmount, dealerFees, downPayment, tradeInValue, form]);
+  }, [salePrice, taxAmount, dealerFees, downPayment, tradeInValue, warrantySold, gapSold, form]);
 
   const onSubmit = async (values: SaleFormValues) => {
     if (!activeOrgId) return;
@@ -181,6 +216,8 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
           loanAmount: values.loanAmount,
           apr: values.apr,
           termMonths: values.termMonths,
+          warrantySold: values.warrantySold,
+          gapSold: values.gapSold,
         });
         toast.success("Sale updated successfully");
       } else {
@@ -203,8 +240,10 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
           loanAmount: values.loanAmount,
           apr: values.apr,
           termMonths: values.termMonths,
+          warrantySold: values.warrantySold,
+          gapSold: values.gapSold,
         });
-        toast.success("Sale logged successfully!");
+        toast.success("Sale recorded successfully!");
       }
       onOpenChange(false);
     } catch (error: any) {
@@ -457,33 +496,6 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                     )}
                   />
                   
-                  {financingType !== "CASH" && (
-                    <>
-                      <FormField
-                        control={form.control}
-                        name="apr"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>APR (%)</FormLabel>
-                            <FormControl><Input type="number" step="0.01" {...field} /></FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                      <FormField
-                        control={form.control}
-                        name="termMonths"
-                        render={({ field }) => (
-                          <FormItem>
-                            <FormLabel>Term (Months)</FormLabel>
-                            <FormControl><Input type="number" {...field} /></FormControl>
-                            <FormMessage />
-                          </FormItem>
-                        )}
-                      />
-                    </>
-                  )}
-                  
                   <FormField
                     control={form.control}
                     name="loanAmount"
@@ -491,7 +503,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                       <FormItem className="md:col-span-2">
                         <FormLabel>Total Out-the-Door / Loan Amount ($)</FormLabel>
                         <FormControl><Input type="number" step="0.01" disabled {...field} className="font-bold bg-muted" /></FormControl>
-                        <p className="text-xs text-muted-foreground">Calculated automatically: Price + Tax + Fees - Down Payment - Trade-In</p>
+                        <p className="text-xs text-muted-foreground">Calculated automatically: Price + Tax + Fees + Warranty + GAP - Down Payment - Trade-In</p>
                         <FormMessage />
                       </FormItem>
                     )}
@@ -500,8 +512,71 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
               </div>
             </div>
             
+            {watchAll.financingType === "FINANCED" && (
+              <div className="bg-muted p-4 rounded-lg space-y-4">
+                <h4 className="font-semibold">F&I Deal Structuring</h4>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <FormField
+                    control={form.control}
+                    name="apr"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>APR (%)</FormLabel>
+                        <FormControl>
+                          <Input type="number" step="0.1" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="termMonths"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Term (Months)</FormLabel>
+                        <FormControl>
+                          <Input type="number" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="warrantySold"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Extended Warranty ($)</FormLabel>
+                        <FormControl>
+                          <Input type="number" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="gapSold"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>GAP Insurance ($)</FormLabel>
+                        <FormControl>
+                          <Input type="number" {...field} />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+                <div className="mt-4 flex items-center justify-between border-t pt-4 border-primary/20">
+                  <span className="font-semibold text-lg">Estimated Monthly Payment</span>
+                  <span className="font-bold text-2xl text-primary">${estimatedPayment.toFixed(2)} / mo</span>
+                </div>
+              </div>
+            )}
+            
             <div className="flex justify-end gap-2 pt-4">
-
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel
               </Button>

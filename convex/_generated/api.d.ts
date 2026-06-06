@@ -24,6 +24,7 @@ import type * as reports from "../reports.js";
 import type * as roles from "../roles.js";
 import type * as sales from "../sales.js";
 import type * as tasks from "../tasks.js";
+import type * as test_drives from "../test_drives.js";
 import type * as users from "../users.js";
 import type * as utils_notifications from "../utils/notifications.js";
 import type * as utils_permissions from "../utils/permissions.js";
@@ -31,6 +32,7 @@ import type * as utils_tenancy from "../utils/tenancy.js";
 import type * as vehicleEdits from "../vehicleEdits.js";
 import type * as vehicleRequests from "../vehicleRequests.js";
 import type * as vehicles from "../vehicles.js";
+import type * as workOrders from "../workOrders.js";
 
 import type {
   ApiFromModules,
@@ -55,6 +57,7 @@ declare const fullApi: ApiFromModules<{
   roles: typeof roles;
   sales: typeof sales;
   tasks: typeof tasks;
+  test_drives: typeof test_drives;
   users: typeof users;
   "utils/notifications": typeof utils_notifications;
   "utils/permissions": typeof utils_permissions;
@@ -62,6 +65,7 @@ declare const fullApi: ApiFromModules<{
   vehicleEdits: typeof vehicleEdits;
   vehicleRequests: typeof vehicleRequests;
   vehicles: typeof vehicles;
+  workOrders: typeof workOrders;
 }>;
 
 /**

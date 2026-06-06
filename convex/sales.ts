@@ -120,6 +120,8 @@ export const create = mutation({
     loanAmount: v.optional(v.number()),
     apr: v.optional(v.number()),
     termMonths: v.optional(v.number()),
+    warrantySold: v.optional(v.number()),
+    gapSold: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
@@ -173,6 +175,8 @@ export const create = mutation({
       loanAmount: args.loanAmount,
       apr: args.apr,
       termMonths: args.termMonths,
+      warrantySold: args.warrantySold,
+      gapSold: args.gapSold,
     });
 
     // Mark the vehicle as SOLD
@@ -230,6 +234,8 @@ export const update = mutation({
     loanAmount: v.optional(v.number()),
     apr: v.optional(v.number()),
     termMonths: v.optional(v.number()),
+    warrantySold: v.optional(v.number()),
+    gapSold: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_SALES]);
@@ -253,6 +259,8 @@ export const update = mutation({
     if (args.loanAmount !== undefined) patch.loanAmount = args.loanAmount;
     if (args.apr !== undefined) patch.apr = args.apr;
     if (args.termMonths !== undefined) patch.termMonths = args.termMonths;
+    if (args.warrantySold !== undefined) patch.warrantySold = args.warrantySold;
+    if (args.gapSold !== undefined) patch.gapSold = args.gapSold;
 
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(args.saleId, patch);

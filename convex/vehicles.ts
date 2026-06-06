@@ -453,11 +453,37 @@ export const getRelations = query({
       })
     );
 
+    // 5. Fetch Test Drives
+    const testDrives = await ctx.db
+      .query("test_drives")
+      .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
+      .collect();
+
+    const enrichedTestDrives = await Promise.all(
+      testDrives.map(async (td) => {
+        const customer = await ctx.db.get(td.customerId);
+        const salesperson = await ctx.db.get(td.salespersonId as any);
+        return {
+          ...td,
+          customerName: customer ? `${customer.firstName} ${customer.lastName}` : "Unknown",
+          salespersonName: salesperson && "name" in salesperson ? salesperson.name : "Unknown",
+        };
+      })
+    );
+
+    // 6. Fetch Work Orders
+    const workOrders = await ctx.db
+      .query("workOrders")
+      .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
+      .collect();
+
     return {
       sales: enrichedSales.sort((a, b) => b.saleDate - a.saleDate),
       leads: enrichedLeads.sort((a, b) => b._creationTime - a._creationTime),
       expenses: enrichedExpenses.sort((a, b) => b.date - a.date),
       tasks: enrichedTasks.sort((a, b) => a.dueDate - b.dueDate),
+      testDrives: enrichedTestDrives.sort((a, b) => b.startTime - a.startTime),
+      workOrders: workOrders.sort((a, b) => b._creationTime - a._creationTime),
     };
   },
 });
