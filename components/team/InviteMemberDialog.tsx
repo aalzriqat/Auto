@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useAction } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -33,13 +33,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 
-const inviteSchema = z.object({
-  userEmail: z.string().email("Invalid email address"),
+const createAccountSchema = z.object({
+  name: z.string().min(2, "Name must be at least 2 characters"),
+  email: z.string().email("Invalid email address"),
+  password: z.string().min(8, "Password must be at least 8 characters"),
   roleId: z.string().min(1, "Role is required"),
 });
 
-type InviteFormValues = z.infer<typeof inviteSchema>;
+type CreateAccountFormValues = z.infer<typeof createAccountSchema>;
 
 interface InviteMemberDialogProps {
   open: boolean;
@@ -48,39 +51,40 @@ interface InviteMemberDialogProps {
 
 export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogProps) {
   const { activeOrgId } = useOrg();
+  const { isRtl: isRTL } = useLanguage();
   
   const roles = useQuery(api.roles.list, activeOrgId ? { orgId: activeOrgId } : "skip");
-  const addMember = useMutation(api.memberships.add);
+  const createAccount = useAction(api.memberships.createAccount);
   
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const form = useForm<InviteFormValues>({
-    resolver: zodResolver(inviteSchema),
+  const form = useForm<CreateAccountFormValues>({
+    resolver: zodResolver(createAccountSchema),
     defaultValues: {
-      userEmail: "",
+      name: "",
+      email: "",
+      password: "",
       roleId: "",
     },
   });
 
-  const onSubmit = async (values: InviteFormValues) => {
+  const onSubmit = async (values: CreateAccountFormValues) => {
     if (!activeOrgId) return;
     setIsSubmitting(true);
     try {
-      const result = await addMember({
+      await createAccount({
         orgId: activeOrgId,
-        userEmail: values.userEmail,
+        name: values.name,
+        email: values.email,
+        password: values.password,
         roleId: values.roleId as Id<"roles">,
       });
       
-      if (result.status === "invited") {
-        toast.success("Invitation sent! They will be added automatically when they sign up.");
-      } else {
-        toast.success("Member added successfully!");
-      }
+      toast.success(isRTL ? "تم إنشاء الحساب بنجاح!" : "Account created successfully!");
       form.reset();
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || "Failed to add member");
+      toast.error(error.message || (isRTL ? "فشل إنشاء الحساب" : "Failed to create account"));
     } finally {
       setIsSubmitting(false);
     }
@@ -88,11 +92,13 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent dir={isRTL ? "rtl" : "ltr"}>
         <DialogHeader>
-          <DialogTitle>Add Team Member</DialogTitle>
+          <DialogTitle>{isRTL ? "إضافة عضو جديد" : "Add Team Member"}</DialogTitle>
           <DialogDescription>
-            Invite anyone to your dealership by their email address. If they don't have an account, they'll receive an email invitation to join AutoFlow.
+            {isRTL 
+              ? "قم بإنشاء حساب جديد لعضو الفريق بإدخال الاسم، البريد الإلكتروني، وكلمة المرور."
+              : "Create a new account for a team member by providing their name, email, and a password."}
           </DialogDescription>
         </DialogHeader>
 
@@ -100,12 +106,40 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             <FormField
               control={form.control}
-              name="userEmail"
+              name="name"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>User Email</FormLabel>
+                  <FormLabel>{isRTL ? "الاسم الكامل" : "Full Name"}</FormLabel>
                   <FormControl>
-                    <Input placeholder="employee@dealership.com" {...field} />
+                    <Input placeholder={isRTL ? "الاسم الكامل" : "John Doe"} {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="email"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{isRTL ? "البريد الإلكتروني" : "Email Address"}</FormLabel>
+                  <FormControl>
+                    <Input type="email" placeholder="employee@dealership.com" {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="password"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{isRTL ? "كلمة المرور" : "Password"}</FormLabel>
+                  <FormControl>
+                    <Input type="password" placeholder="********" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -117,11 +151,11 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
               name="roleId"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Assign Role</FormLabel>
+                  <FormLabel>{isRTL ? "تحديد الصلاحية" : "Assign Role"}</FormLabel>
                   <Select onValueChange={field.onChange} defaultValue={field.value}>
                     <FormControl>
                       <SelectTrigger>
-                        <SelectValue placeholder="Select a role" />
+                        <SelectValue placeholder={isRTL ? "اختر صلاحية" : "Select a role"} />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
@@ -137,12 +171,14 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
               )}
             />
 
-            <div className="flex justify-end gap-2 pt-4">
+            <div className={`flex justify-end gap-2 pt-4 ${isRTL ? 'flex-row-reverse' : ''}`}>
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-                Cancel
+                {isRTL ? "إلغاء" : "Cancel"}
               </Button>
               <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? "Adding..." : "Add Member"}
+                {isSubmitting 
+                  ? (isRTL ? "جاري الإنشاء..." : "Creating...") 
+                  : (isRTL ? "إنشاء حساب" : "Create Account")}
               </Button>
             </div>
           </form>

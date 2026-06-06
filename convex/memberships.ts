@@ -1,5 +1,5 @@
 import { v, ConvexError } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { mutation, query, action, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -266,3 +266,126 @@ export const leave = mutation({
     await ctx.db.delete(membership._id);
   },
 });
+
+// ─── Direct Account Creation ──────────────────────────────────────────────────
+
+/**
+ * Prepares the direct account creation by checking permissions
+ * and inserting a temporary invitation to be converted by the webhook.
+ */
+export const prepareDirectAccount = internalMutation({
+  args: {
+    orgId: v.id("organizations"),
+    email: v.string(),
+    roleId: v.id("roles"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_USERS]);
+
+    const role = await ctx.db.get(args.roleId);
+    if (!role || role.orgId !== args.orgId) {
+      throw new ConvexError("The specified role does not belong to this organization.");
+    }
+
+    const email = args.email.toLowerCase().trim();
+
+    // Find the target user by email
+    const targetUser = await ctx.db
+      .query("users")
+      .filter((q) => q.eq(q.field("email"), email))
+      .first();
+
+    if (targetUser) {
+      const existing = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) =>
+          q.eq("orgId", args.orgId).eq("userId", targetUser._id)
+        )
+        .unique();
+
+      if (existing) {
+        throw new ConvexError("This user is already a member of this organization.");
+      }
+    }
+
+    // Check if they are already invited
+    const existingInvite = await ctx.db
+      .query("invitations")
+      .withIndex("by_email", (q) => q.eq("email", email))
+      .filter((q) => q.eq(q.field("orgId"), args.orgId))
+      .first();
+
+    if (existingInvite) {
+      throw new ConvexError("An invitation is already pending for this email. Delete it first if you want to recreate.");
+    }
+
+    return await ctx.db.insert("invitations", {
+      orgId: args.orgId,
+      email,
+      roleId: args.roleId,
+      createdAt: Date.now(),
+    });
+  }
+});
+
+export const rollbackDirectAccount = internalMutation({
+  args: { inviteId: v.id("invitations") },
+  handler: async (ctx, args) => {
+    await ctx.db.delete(args.inviteId);
+  }
+});
+
+export const createAccount = action({
+  args: {
+    orgId: v.id("organizations"),
+    name: v.string(),
+    email: v.string(),
+    password: v.string(),
+    roleId: v.id("roles"),
+  },
+  handler: async (ctx, args) => {
+    // 1. Prepare: Check permissions and insert invitation
+    const inviteId = await ctx.runMutation(internal.memberships.prepareDirectAccount, {
+      orgId: args.orgId,
+      email: args.email,
+      roleId: args.roleId,
+    });
+
+    try {
+      // 2. Call Clerk API to create the user
+      const clerkSecret = process.env.CLERK_SECRET_KEY;
+      if (!clerkSecret) throw new Error("CLERK_SECRET_KEY is not set.");
+
+      const response = await fetch("https://api.clerk.com/v1/users", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${clerkSecret}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email_address: [args.email.toLowerCase().trim()],
+          password: args.password,
+          first_name: args.name.split(" ")[0],
+          last_name: args.name.split(" ").slice(1).join(" ") || undefined,
+          skip_password_checks: false,
+          skip_password_requirement: false,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error("Clerk user creation failed:", errorData);
+        throw new Error(errorData.errors?.[0]?.message || "Failed to create user in Clerk");
+      }
+
+      // Success! The Clerk webhook will automatically pick up the user.created event,
+      // create the user in the Convex users table, and convert the invitation into a membership.
+      return { success: true };
+    } catch (error: any) {
+      // 3. Rollback: Delete the invitation if Clerk creation failed
+      await ctx.runMutation(internal.memberships.rollbackDirectAccount, { inviteId });
+      throw new ConvexError(error.message || "An unexpected error occurred during user creation.");
+    }
+  }
+});
+
