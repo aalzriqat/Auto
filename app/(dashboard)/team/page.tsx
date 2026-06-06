@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { Button } from "@/components/ui/button";
@@ -33,7 +33,7 @@ export default function TeamPage() {
   const memberships = useQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId } : "skip");
   const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
   
-  const removeMember = useMutation(api.memberships.remove);
+  const removeMember = useAction(api.memberships.remove);
 
   const [isInviteOpen, setIsInviteOpen] = useState(false);
   const [memberToDelete, setMemberToDelete] = useState<any>(null);

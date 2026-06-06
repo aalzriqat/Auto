@@ -194,7 +194,7 @@ export const updateRole = mutation({
  * The last OWNER cannot be removed — there must always be at least one.
  * Requires MANAGE_USERS permission.
  */
-export const remove = mutation({
+export const removeMembershipInternal = internalMutation({
   args: {
     orgId: v.id("organizations"),
     membershipId: v.id("memberships"),
@@ -228,8 +228,45 @@ export const remove = mutation({
       }
     }
 
+    const user = await ctx.db.get(membership.userId);
+
     await ctx.db.delete(args.membershipId);
+
+    // Also remove the user record entirely from the database
+    // since accounts are strictly tied to orgs in this setup
+    if (user) {
+      await ctx.db.delete(user._id);
+      return user.clerkId;
+    }
+    
+    return null;
   },
+});
+
+export const remove = action({
+  args: {
+    orgId: v.id("organizations"),
+    membershipId: v.id("memberships"),
+  },
+  handler: async (ctx, args) => {
+    const clerkId = await ctx.runMutation(internal.memberships.removeMembershipInternal, args);
+
+    if (clerkId) {
+      const clerkSecret = process.env.CLERK_SECRET_KEY;
+      if (clerkSecret) {
+        try {
+          await fetch(`https://api.clerk.com/v1/users/${clerkId}`, {
+            method: "DELETE",
+            headers: {
+              "Authorization": `Bearer ${clerkSecret}`
+            }
+          });
+        } catch (error) {
+          console.error("Failed to delete user from Clerk:", error);
+        }
+      }
+    }
+  }
 });
 
 /**
