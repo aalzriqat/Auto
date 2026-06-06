@@ -1,10 +1,10 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id, Doc } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Upload, X } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -48,6 +49,7 @@ const vehicleSchema = z.object({
   sellingPrice: z.coerce.number().min(0),
   status: z.enum(["AVAILABLE", "RESERVED", "SOLD", "IN_INSPECTION", "IN_REPAIR", "ARCHIVED"]).optional(),
   notes: z.string().optional(),
+  imageIds: z.array(z.string()).optional(),
 });
 
 type VehicleFormValues = z.infer<typeof vehicleSchema>;
@@ -56,13 +58,24 @@ interface VehicleDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   vehicle?: Doc<"vehicles"> | null;
+  canCreate?: boolean;
+  canEdit?: boolean;
 }
 
-export function VehicleDialog({ open, onOpenChange, vehicle }: VehicleDialogProps) {
+export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, canEdit = false }: VehicleDialogProps) {
   const { activeOrgId } = useOrg();
   const createVehicle = useMutation(api.vehicles.create);
   const updateVehicle = useMutation(api.vehicles.update);
+  const requestCreate = useMutation(api.vehicleEdits.requestCreate);
+  const requestUpdate = useMutation(api.vehicleEdits.requestUpdate);
+  const generateUploadUrl = useMutation(api.vehicles.generateUploadUrl);
+  const deleteImage = useMutation(api.vehicles.deleteImage);
+  
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [imageIds, setImageIds] = useState<string[]>([]);
+  const [imageUrls, setImageUrls] = useState<string[]>([]);
 
   const form = useForm<VehicleFormValues>({
     resolver: zodResolver(vehicleSchema),
@@ -80,6 +93,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle }: VehicleDialogProp
       sellingPrice: 0,
       status: "AVAILABLE",
       notes: "",
+      imageIds: [],
     },
   });
 
@@ -99,7 +113,10 @@ export function VehicleDialog({ open, onOpenChange, vehicle }: VehicleDialogProp
         sellingPrice: vehicle.sellingPrice,
         status: vehicle.status,
         notes: vehicle.notes || "",
+        imageIds: vehicle.imageIds || [],
       });
+      setImageIds(vehicle.imageIds || []);
+      setImageUrls((vehicle as any).imageUrls || []);
     } else if (open && !vehicle) {
       form.reset({
         vin: "",
@@ -115,27 +132,109 @@ export function VehicleDialog({ open, onOpenChange, vehicle }: VehicleDialogProp
         sellingPrice: 0,
         status: "AVAILABLE",
         notes: "",
+        imageIds: [],
       });
+      setImageIds([]);
+      setImageUrls([]);
     }
   }, [vehicle, open, form]);
+
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0 || !activeOrgId) return;
+
+    setIsUploading(true);
+    try {
+      const newImageIds = [...imageIds];
+      const newImageUrls = [...imageUrls];
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const postUrl = await generateUploadUrl({ orgId: activeOrgId });
+        const result = await fetch(postUrl, {
+          method: "POST",
+          headers: { "Content-Type": file.type },
+          body: file,
+        });
+        const { storageId } = await result.json();
+        newImageIds.push(storageId);
+        newImageUrls.push(URL.createObjectURL(file));
+      }
+
+      setImageIds(newImageIds);
+      setImageUrls(newImageUrls);
+      form.setValue("imageIds", newImageIds);
+    } catch (error) {
+      toast.error("Failed to upload image");
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const handleRemoveImage = async (index: number) => {
+    const storageId = imageIds[index];
+    const newImageIds = [...imageIds];
+    const newImageUrls = [...imageUrls];
+    newImageIds.splice(index, 1);
+    newImageUrls.splice(index, 1);
+    setImageIds(newImageIds);
+    setImageUrls(newImageUrls);
+    form.setValue("imageIds", newImageIds);
+
+    if (vehicle && activeOrgId) {
+      try {
+        await deleteImage({ orgId: activeOrgId, vehicleId: vehicle._id, storageId: storageId as Id<"_storage"> });
+      } catch (err) {
+        console.error("Failed to delete image from server", err);
+      }
+    }
+  };
 
   const onSubmit = async (values: VehicleFormValues) => {
     if (!activeOrgId) return;
     setIsSubmitting(true);
     try {
+      const { imageIds: _formImageIds, ...restValues } = values;
+
       if (vehicle) {
-        await updateVehicle({
-          orgId: activeOrgId,
-          vehicleId: vehicle._id,
-          ...values,
-        });
-        toast.success("Vehicle updated successfully");
+        if (canEdit) {
+          await updateVehicle({
+            orgId: activeOrgId,
+            vehicleId: vehicle._id,
+            ...restValues,
+            imageIds: imageIds as Id<"_storage">[],
+          });
+          toast.success("Vehicle updated successfully");
+        } else {
+          await requestUpdate({
+            orgId: activeOrgId,
+            vehicleId: vehicle._id,
+            payload: {
+              ...restValues,
+              imageIds: imageIds as Id<"_storage">[],
+            },
+          });
+          toast.success("Update request submitted for approval");
+        }
       } else {
-        await createVehicle({
-          orgId: activeOrgId,
-          ...values,
-        });
-        toast.success("Vehicle added successfully");
+        if (canCreate) {
+          await createVehicle({
+            orgId: activeOrgId,
+            ...restValues,
+            imageIds: imageIds as Id<"_storage">[],
+          });
+          toast.success("Vehicle added successfully");
+        } else {
+          await requestCreate({
+            orgId: activeOrgId,
+            payload: {
+              ...restValues,
+              imageIds: imageIds as Id<"_storage">[],
+            },
+          });
+          toast.success("Creation request submitted for approval");
+        }
       }
       onOpenChange(false);
     } catch (error: any) {
@@ -358,17 +457,100 @@ export function VehicleDialog({ open, onOpenChange, vehicle }: VehicleDialogProp
                 )}
               />
             </div>
-            <div className="flex justify-end gap-2">
+            
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">Vehicle Images</label>
+                <div>
+                  <input 
+                    type="file" 
+                    accept="image/*" 
+                    multiple 
+                    className="hidden" 
+                    ref={fileInputRef} 
+                    onChange={handleUpload} 
+                  />
+                  <Button 
+                    type="button" 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isUploading}
+                  >
+                    <Upload className="w-4 h-4 mr-2" />
+                    {isUploading ? "Uploading..." : "Upload Images"}
+                  </Button>
+                </div>
+              </div>
+              
+              {imageUrls.length > 0 ? (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-2">
+                  {imageUrls.map((url, index) => (
+                    <div key={index} className="relative group aspect-video bg-muted rounded-md overflow-hidden border">
+                      <img src={url} alt={`Vehicle ${index + 1}`} className="object-cover w-full h-full" />
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveImage(index)}
+                        className="absolute top-1 right-1 bg-black/50 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="border-2 border-dashed rounded-lg p-8 text-center text-muted-foreground bg-muted/20">
+                  <Upload className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                  <p>No images uploaded yet</p>
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel
               </Button>
               <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? "Saving..." : vehicle ? "Save Changes" : "Add Vehicle"}
+                {isSubmitting 
+                  ? "Saving..." 
+                  : vehicle 
+                    ? (canEdit ? "Save Changes" : "Submit for Approval") 
+                    : (canCreate ? "Add Vehicle" : "Submit for Approval")}
               </Button>
             </div>
+            
+            {vehicle && (vehicle.addedBy || vehicle.updatedBy) && (
+              <div className="pt-4 border-t mt-6">
+                <AuditLog addedBy={vehicle.addedBy} updatedBy={vehicle.updatedBy} updatedAt={vehicle.updatedAt} />
+              </div>
+            )}
           </form>
         </Form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function AuditLog({ addedBy, updatedBy, updatedAt }: { addedBy?: Id<"users">, updatedBy?: Id<"users">, updatedAt?: number }) {
+  const addedByUser = useQuery(api.users.getUser, addedBy ? { userId: addedBy } : "skip");
+  const updatedByUser = useQuery(api.users.getUser, updatedBy ? { userId: updatedBy } : "skip");
+
+  const rtf = new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' });
+
+  return (
+    <div className="text-xs text-muted-foreground flex flex-col gap-1 bg-muted/30 p-3 rounded-md">
+      <h4 className="font-semibold text-foreground mb-1">Audit Trail</h4>
+      {addedBy && (
+        <p>
+          <span className="font-medium">Added by:</span> {addedByUser === undefined ? "Loading..." : addedByUser?.name || "Unknown User"}
+        </p>
+      )}
+      {updatedBy && updatedAt && (
+        <p>
+          <span className="font-medium">Last updated by:</span> {updatedByUser === undefined ? "Loading..." : updatedByUser?.name || "Unknown User"} 
+          {" "}on {rtf.format(new Date(updatedAt))}
+        </p>
+      )}
+    </div>
   );
 }

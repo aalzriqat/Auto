@@ -20,12 +20,16 @@ import type * as migrateRoles from "../migrateRoles.js";
 import type * as migrations from "../migrations.js";
 import type * as notifications from "../notifications.js";
 import type * as organizations from "../organizations.js";
+import type * as reports from "../reports.js";
 import type * as roles from "../roles.js";
 import type * as sales from "../sales.js";
 import type * as tasks from "../tasks.js";
 import type * as users from "../users.js";
+import type * as utils_notifications from "../utils/notifications.js";
 import type * as utils_permissions from "../utils/permissions.js";
 import type * as utils_tenancy from "../utils/tenancy.js";
+import type * as vehicleEdits from "../vehicleEdits.js";
+import type * as vehicleRequests from "../vehicleRequests.js";
 import type * as vehicles from "../vehicles.js";
 
 import type {
@@ -47,12 +51,16 @@ declare const fullApi: ApiFromModules<{
   migrations: typeof migrations;
   notifications: typeof notifications;
   organizations: typeof organizations;
+  reports: typeof reports;
   roles: typeof roles;
   sales: typeof sales;
   tasks: typeof tasks;
   users: typeof users;
+  "utils/notifications": typeof utils_notifications;
   "utils/permissions": typeof utils_permissions;
   "utils/tenancy": typeof utils_tenancy;
+  vehicleEdits: typeof vehicleEdits;
+  vehicleRequests: typeof vehicleRequests;
   vehicles: typeof vehicles;
 }>;
 

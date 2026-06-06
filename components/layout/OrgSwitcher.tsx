@@ -12,12 +12,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  SidebarMenu,
-  SidebarMenuItem,
-  SidebarMenuButton,
-  useSidebar,
-} from "@/components/ui/sidebar";
+// removed sidebar components
 import {
   Dialog,
   DialogContent,
@@ -34,7 +29,6 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 export function OrgSwitcher() {
-  const { isMobile } = useSidebar();
   const { activeOrgId, setActiveOrgId } = useOrg();
   const orgs = useQuery(api.organizations.listMine);
   
@@ -61,60 +55,57 @@ export function OrgSwitcher() {
 
   return (
     <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-      <SidebarMenu>
-        <SidebarMenuItem>
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <SidebarMenuButton
-                size="lg"
-                className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
-              >
-                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                  {activeOrg?.name?.charAt(0).toUpperCase() || "A"}
-                </div>
-                <div className="grid flex-1 text-start text-sm leading-tight">
-                  <span className="truncate font-semibold">
-                    {activeOrg?.name || "Loading..."}
-                  </span>
-                  <span className="truncate text-xs">Dealership</span>
-                </div>
-                <ChevronsUpDown className="ms-auto size-4" />
-              </SidebarMenuButton>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              className="w-[--radix-dropdown-menu-trigger-width] min-w-56 rounded-lg"
-              align="start"
-              side={isMobile ? "bottom" : "right"}
-              sideOffset={4}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="lg"
+            className="flex items-center gap-2 px-2 hover:bg-accent hover:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground"
+          >
+            <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+              {activeOrg?.name?.charAt(0).toUpperCase() || "A"}
+            </div>
+            <div className="grid flex-1 text-start text-sm leading-tight max-w-[120px] md:max-w-[150px]">
+              <span className="truncate font-semibold">
+                {activeOrg?.name || "Loading..."}
+              </span>
+              <span className="truncate text-xs text-muted-foreground">Dealership</span>
+            </div>
+            <ChevronsUpDown className="size-4 shrink-0 opacity-50" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent
+          className="w-56 rounded-lg"
+          align="start"
+          side="bottom"
+          sideOffset={8}
+        >
+          <DropdownMenuLabel className="text-xs text-muted-foreground">
+            Organizations
+          </DropdownMenuLabel>
+          {orgs?.map((org: any) => (
+            <DropdownMenuItem
+              key={org._id}
+              onClick={() => setActiveOrgId(org._id)}
+              className="gap-2 p-2 cursor-pointer"
             >
-              <DropdownMenuLabel className="text-xs text-muted-foreground">
-                Organizations
-              </DropdownMenuLabel>
-              {orgs?.map((org: any) => (
-                <DropdownMenuItem
-                  key={org._id}
-                  onClick={() => setActiveOrgId(org._id)}
-                  className="gap-2 p-2"
-                >
-                  <div className="flex size-6 items-center justify-center rounded-sm border">
-                    {org.name.charAt(0).toUpperCase()}
-                  </div>
-                  {org.name}
-                </DropdownMenuItem>
-              ))}
-              <DropdownMenuSeparator />
-              <DialogTrigger asChild>
-                <DropdownMenuItem className="gap-2 p-2">
-                  <div className="flex size-6 items-center justify-center rounded-md border bg-background">
-                    <Plus className="size-4" />
-                  </div>
-                  <div className="font-medium text-muted-foreground">Add organization</div>
-                </DropdownMenuItem>
-              </DialogTrigger>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </SidebarMenuItem>
-      </SidebarMenu>
+              <div className="flex size-6 items-center justify-center rounded-sm border bg-background">
+                {org.name.charAt(0).toUpperCase()}
+              </div>
+              <span className="truncate">{org.name}</span>
+            </DropdownMenuItem>
+          ))}
+          <DropdownMenuSeparator />
+          <DialogTrigger asChild>
+            <DropdownMenuItem className="gap-2 p-2 cursor-pointer">
+              <div className="flex size-6 items-center justify-center rounded-md border bg-background">
+                <Plus className="size-4" />
+              </div>
+              <div className="font-medium text-muted-foreground">Add organization</div>
+            </DropdownMenuItem>
+          </DialogTrigger>
+        </DropdownMenuContent>
+      </DropdownMenu>
 
       <DialogContent>
         <DialogHeader>

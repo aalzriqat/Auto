@@ -2,6 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { notifyManagers, getActorName } from "./utils/notifications";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -85,7 +86,7 @@ export const create = mutation({
       }
     }
 
-    return await ctx.db.insert("expenses", {
+    const id = await ctx.db.insert("expenses", {
       orgId: args.orgId,
       vehicleId: args.vehicleId,
       title: args.title,
@@ -94,6 +95,17 @@ export const create = mutation({
       category: args.category,
       notes: args.notes,
     });
+
+    const actorName = await getActorName(ctx);
+    await notifyManagers(
+      ctx,
+      args.orgId,
+      "New Expense Added",
+      `${actorName} added a new expense: ${args.title} ($${args.amount})`,
+      `/expenses?highlightId=${id}`
+    );
+
+    return id;
   },
 });
 
@@ -139,6 +151,15 @@ export const update = mutation({
 
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(args.expenseId, patch);
+
+      const actorName = await getActorName(ctx);
+      await notifyManagers(
+        ctx,
+        args.orgId,
+        "Expense Updated",
+        `${actorName} updated an expense record.`,
+        `/expenses?highlightId=${args.expenseId}`
+      );
     }
   },
 });
@@ -160,5 +181,13 @@ export const remove = mutation({
     }
 
     await ctx.db.delete(args.expenseId);
+
+    const actorName = await getActorName(ctx);
+    await notifyManagers(
+      ctx,
+      args.orgId,
+      "Expense Deleted",
+      `${actorName} deleted expense: ${expense.title}`
+    );
   },
 });

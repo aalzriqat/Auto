@@ -1,41 +1,10 @@
-"use client";
+const fs = require('fs');
+const path = 'e:/Auto/Auto/components/sales/SaleDialog.tsx';
 
-import { useState, useEffect } from "react";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import * as z from "zod";
-import { useQuery, useMutation } from "convex/react";
-import { api } from "@/convex/_generated/api";
-import { Doc, Id } from "@/convex/_generated/dataModel";
-import { useOrg } from "@/components/providers/OrgProvider";
-import { toast } from "sonner";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog";
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "@/components/ui/form";
-import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+let content = fs.readFileSync(path, 'utf8');
 
-// Zod schema for the form
-// Note: We use string for numeric inputs in the form and convert on submit
+// Update Schema
+const newSchema = `
 const saleSchema = z.object({
   vehicleId: z.string().min(1, "Vehicle is required"),
   customerId: z.string().min(1, "Customer is required"),
@@ -56,32 +25,12 @@ const saleSchema = z.object({
   apr: z.coerce.number().min(0).optional(),
   termMonths: z.coerce.number().min(0).optional(),
 });
+`;
 
-type SaleFormValues = z.infer<typeof saleSchema>;
+content = content.replace(/const saleSchema = z\.object\(\{[^}]+\}\);/s, newSchema.trim());
 
-interface SaleDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  sale?: (Doc<"sales"> & { vehicle: any, customer: any, salesperson: any }) | null;
-}
-
-export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
-  const { activeOrgId } = useOrg();
-  
-  // Queries for dropdowns
-  const customers = useQuery(api.customers.list, activeOrgId ? { orgId: activeOrgId } : "skip");
-  // Only fetch AVAILABLE vehicles if we're creating a new sale, or include the current one if editing
-  const availableVehicles = useQuery(api.vehicles.list, activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE" } : "skip");
-  const memberships = useQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId } : "skip");
-
-  const createSale = useMutation(api.sales.create);
-  const updateSale = useMutation(api.sales.update);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  const form = useForm<SaleFormValues>({
-    resolver: zodResolver(saleSchema),
-    defaultValues: {
-
+// Update defaultValues
+const newDefaultValues = `
       vehicleId: "",
       customerId: "",
       salespersonId: "",
@@ -98,14 +47,12 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
       loanAmount: 0,
       apr: 0,
       termMonths: 0,
-    },
-  });
+`;
 
-  useEffect(() => {
-    if (sale && open) {
-      const date = new Date(sale.saleDate);
-      form.reset({
-        vehicleId: sale.vehicleId,
+content = content.replace(/defaultValues: \{[^}]+\},/s, `defaultValues: {\n${newDefaultValues}    },`);
+
+// Update reset on edit
+const newResetEdit = `        vehicleId: sale.vehicleId,
         customerId: sale.customerId,
         salespersonId: sale.salespersonId,
         salePrice: sale.salePrice,
@@ -115,16 +62,17 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
         taxAmount: sale.taxAmount || 0,
         dealerFees: sale.dealerFees || 0,
         downPayment: sale.downPayment || 0,
-        tradeInVehicleId: sale.tradeInVehicleId || "none",
+        tradeInVehicleId: sale.tradeInVehicleId || "",
         tradeInValue: sale.tradeInValue || 0,
         financingType: sale.financingType || "CASH",
         loanAmount: sale.loanAmount || 0,
         apr: sale.apr || 0,
-        termMonths: sale.termMonths || 0,
-      });
-    } else if (open && !sale) {
-      form.reset({
-        vehicleId: "",
+        termMonths: sale.termMonths || 0,`;
+
+content = content.replace(/form\.reset\(\{\s+vehicleId: sale\.vehicleId,[\s\S]*?status: sale\.status,\s+\}\);/, `form.reset({\n${newResetEdit}\n      });`);
+
+// Update reset on new
+const newResetNew = `        vehicleId: "",
         customerId: "",
         salespersonId: "",
         salePrice: 0,
@@ -134,17 +82,56 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
         taxAmount: 0,
         dealerFees: 0,
         downPayment: 0,
-        tradeInVehicleId: "none",
+        tradeInVehicleId: "",
         tradeInValue: 0,
         financingType: "CASH",
         loanAmount: 0,
         apr: 0,
-        termMonths: 0,
-      });
-    }
-  }, [sale, open, form]);
+        termMonths: 0,`;
 
-  
+content = content.replace(/form\.reset\(\{\s+vehicleId: "",[\s\S]*?status: "COMPLETED",\s+\}\);/, `form.reset({\n${newResetNew}\n      });`);
+
+// Update submit payload for update
+const newUpdatePayload = `
+          salePrice: values.salePrice,
+          saleDate: parsedDate,
+          status: values.status,
+          taxRate: values.taxRate,
+          taxAmount: values.taxAmount,
+          dealerFees: values.dealerFees,
+          downPayment: values.downPayment,
+          tradeInVehicleId: values.tradeInVehicleId ? values.tradeInVehicleId as Id<"vehicles"> : undefined,
+          tradeInValue: values.tradeInValue,
+          financingType: values.financingType,
+          loanAmount: values.loanAmount,
+          apr: values.apr,
+          termMonths: values.termMonths,
+`;
+content = content.replace(/salePrice: values\.salePrice,\s+saleDate: parsedDate,\s+status: values\.status,/, newUpdatePayload.trim());
+
+// Update submit payload for create
+const newCreatePayload = `
+          vehicleId: values.vehicleId as Id<"vehicles">,
+          customerId: values.customerId as Id<"customers">,
+          salespersonId: values.salespersonId as Id<"users">,
+          salePrice: values.salePrice,
+          saleDate: parsedDate,
+          status: values.status,
+          taxRate: values.taxRate,
+          taxAmount: values.taxAmount,
+          dealerFees: values.dealerFees,
+          downPayment: values.downPayment,
+          tradeInVehicleId: values.tradeInVehicleId ? values.tradeInVehicleId as Id<"vehicles"> : undefined,
+          tradeInValue: values.tradeInValue,
+          financingType: values.financingType,
+          loanAmount: values.loanAmount,
+          apr: values.apr,
+          termMonths: values.termMonths,
+`;
+content = content.replace(/vehicleId: values\.vehicleId as Id<"vehicles">,[\s\S]*?status: values\.status,/, newCreatePayload.trim());
+
+// We need to inject an effect to calculate loanAmount
+const effectCode = `
   const salePrice = form.watch("salePrice");
   const taxAmount = form.watch("taxAmount");
   const dealerFees = form.watch("dealerFees");
@@ -156,79 +143,15 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     const total = (Number(salePrice) || 0) + (Number(taxAmount) || 0) + (Number(dealerFees) || 0) - (Number(downPayment) || 0) - (Number(tradeInValue) || 0);
     form.setValue("loanAmount", total > 0 ? total : 0);
   }, [salePrice, taxAmount, dealerFees, downPayment, tradeInValue, form]);
+`;
 
-  const onSubmit = async (values: SaleFormValues) => {
-    if (!activeOrgId) return;
-    setIsSubmitting(true);
-    try {
-      const parsedDate = new Date(values.saleDate).getTime();
-      
-      if (sale) {
-        // Updating
-        await updateSale({
-          orgId: activeOrgId,
-          saleId: sale._id,
-          salePrice: values.salePrice,
-          saleDate: parsedDate,
-          status: values.status,
-          taxRate: values.taxRate,
-          taxAmount: values.taxAmount,
-          dealerFees: values.dealerFees,
-          downPayment: values.downPayment,
-          tradeInVehicleId: values.tradeInVehicleId && values.tradeInVehicleId !== "none" ? values.tradeInVehicleId as Id<"vehicles"> : undefined,
-          tradeInValue: values.tradeInValue,
-          financingType: values.financingType,
-          loanAmount: values.loanAmount,
-          apr: values.apr,
-          termMonths: values.termMonths,
-        });
-        toast.success("Sale updated successfully");
-      } else {
-        // Creating
-        await createSale({
-          orgId: activeOrgId,
-          vehicleId: values.vehicleId as Id<"vehicles">,
-          customerId: values.customerId as Id<"customers">,
-          salespersonId: values.salespersonId as Id<"users">,
-          salePrice: values.salePrice,
-          saleDate: parsedDate,
-          status: values.status,
-          taxRate: values.taxRate,
-          taxAmount: values.taxAmount,
-          dealerFees: values.dealerFees,
-          downPayment: values.downPayment,
-          tradeInVehicleId: values.tradeInVehicleId && values.tradeInVehicleId !== "none" ? values.tradeInVehicleId as Id<"vehicles"> : undefined,
-          tradeInValue: values.tradeInValue,
-          financingType: values.financingType,
-          loanAmount: values.loanAmount,
-          apr: values.apr,
-          termMonths: values.termMonths,
-        });
-        toast.success("Sale logged successfully!");
-      }
-      onOpenChange(false);
-    } catch (error: any) {
-      toast.error(error.message || "Failed to log sale");
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
+content = content.replace('const onSubmit = async (values: SaleFormValues) => {', effectCode + '\n  const onSubmit = async (values: SaleFormValues) => {');
 
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>{sale ? "Edit Sale" : "Log a Sale"}</DialogTitle>
-          <DialogDescription>
-            {sale 
-              ? "Update sale details. If you cancel it, the vehicle will be marked as available again." 
-              : "Record a new vehicle sale. This will automatically mark the vehicle as SOLD and close related leads."}
-          </DialogDescription>
-        </DialogHeader>
+// Now we need to update the UI form. We'll replace the grid layout to include sections.
+// Find the form children
+const formRegex = /<div className="grid grid-cols-1 md:grid-cols-2 gap-4">([\s\S]*?)<\/div>\s*<div className="flex justify-end gap-2 pt-4">/m;
 
-        <Form {...form}>
-          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-            
+const newFormUI = `
             <div className="space-y-6">
               {/* Vehicle & Customer Section */}
               <div className="bg-muted/30 p-4 rounded-lg border space-y-4">
@@ -255,7 +178,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                               <SelectContent>
                                 {availableVehicles?.map((v) => (
                                   <SelectItem key={v._id} value={v._id}>
-                                    {v.year} {v.make} {v.model} - {v.vin} (${v.sellingPrice.toLocaleString()})
+                                    {v.year} {v.make} {v.model} - {v.vin} (\${v.sellingPrice.toLocaleString()})
                                   </SelectItem>
                                 ))}
                               </SelectContent>
@@ -401,7 +324,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                             <SelectTrigger><SelectValue placeholder="Select trade-in (optional)" /></SelectTrigger>
                           </FormControl>
                           <SelectContent>
-                            <SelectItem value="none">None</SelectItem>
+                            <SelectItem value="">None</SelectItem>
                             {availableVehicles?.map((v) => (
                               <SelectItem key={v._id} value={v._id}>
                                 {v.year} {v.make} {v.model} - {v.vin}
@@ -501,17 +424,13 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
             </div>
             
             <div className="flex justify-end gap-2 pt-4">
+`;
 
-              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? "Saving..." : sale ? "Save Changes" : "Log Sale"}
-              </Button>
-            </div>
-          </form>
-        </Form>
-      </DialogContent>
-    </Dialog>
-  );
-}
+content = content.replace(formRegex, newFormUI);
+
+// The component had <SelectItem value="">None</SelectItem>, wait, value="" might trigger error if it requires min(1).
+// the schema has tradeInVehicleId: z.string().optional() so it should be fine. But z.string().optional() might get "" which is still a string. It's better to pass undefined.
+// In the submit handler, we do `tradeInVehicleId: values.tradeInVehicleId ? values.tradeInVehicleId as Id<"vehicles"> : undefined` so it's fine.
+
+fs.writeFileSync('e:/Auto/Auto/components/sales/SaleDialog.tsx', content);
+console.log("SaleDialog updated");

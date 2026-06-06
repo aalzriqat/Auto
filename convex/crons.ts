@@ -1,6 +1,7 @@
 import { cronJobs } from "convex/server";
 import { mutation } from "./_generated/server";
 import { api } from "./_generated/api";
+import { notifyManagers } from "./utils/notifications";
 
 const crons = cronJobs();
 
@@ -52,9 +53,19 @@ export const triggerAlarms = mutation({
           relatedTaskId: task._id,
         });
 
-        // Schedule email action
+        // Fetch assignee details for notifications and email
         const assignee = await ctx.db.get(task.assignedTo);
+        const assigneeName = assignee ? (assignee.name || assignee.email) : 'someone';
         const email = assignee?.email;
+
+        // Notify managers about the upcoming/overdue task
+        await notifyManagers(
+          ctx,
+          task.orgId,
+          "Task Overdue Warning",
+          `Task "${task.title}" assigned to ${assigneeName} is due soon or overdue!`,
+          "/tasks"
+        );
 
         if (email) {
           await ctx.scheduler.runAfter(0, api.email.sendTaskAlarm, {

@@ -2,6 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { notifyManagers, getActorName } from "./utils/notifications";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -109,6 +110,16 @@ export const create = mutation({
     salePrice: v.number(),
     saleDate: v.number(),
     status: v.optional(saleStatus),
+    taxRate: v.optional(v.number()),
+    taxAmount: v.optional(v.number()),
+    dealerFees: v.optional(v.number()),
+    downPayment: v.optional(v.number()),
+    tradeInVehicleId: v.optional(v.id("vehicles")),
+    tradeInValue: v.optional(v.number()),
+    financingType: v.optional(v.union(v.literal("CASH"), v.literal("FINANCED"), v.literal("LEASE"))),
+    loanAmount: v.optional(v.number()),
+    apr: v.optional(v.number()),
+    termMonths: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
@@ -152,6 +163,16 @@ export const create = mutation({
       salePrice: args.salePrice,
       saleDate: args.saleDate,
       status: args.status ?? "PENDING",
+      taxRate: args.taxRate,
+      taxAmount: args.taxAmount,
+      dealerFees: args.dealerFees,
+      downPayment: args.downPayment,
+      tradeInVehicleId: args.tradeInVehicleId,
+      tradeInValue: args.tradeInValue,
+      financingType: args.financingType,
+      loanAmount: args.loanAmount,
+      apr: args.apr,
+      termMonths: args.termMonths,
     });
 
     // Mark the vehicle as SOLD
@@ -175,6 +196,15 @@ export const create = mutation({
       await ctx.db.patch(lead._id, { stage: "WON" as const });
     }
 
+    const actorName = await getActorName(ctx);
+    await notifyManagers(
+      ctx,
+      args.orgId,
+      "New Sale Recorded",
+      `${actorName} recorded a new sale for ${vehicle.year} ${vehicle.make} ${vehicle.model}`,
+      `/sales?highlightId=${saleId}`
+    );
+
     return saleId;
   },
 });
@@ -190,6 +220,16 @@ export const update = mutation({
     salePrice: v.optional(v.number()),
     saleDate: v.optional(v.number()),
     status: v.optional(saleStatus),
+    taxRate: v.optional(v.number()),
+    taxAmount: v.optional(v.number()),
+    dealerFees: v.optional(v.number()),
+    downPayment: v.optional(v.number()),
+    tradeInVehicleId: v.optional(v.id("vehicles")),
+    tradeInValue: v.optional(v.number()),
+    financingType: v.optional(v.union(v.literal("CASH"), v.literal("FINANCED"), v.literal("LEASE"))),
+    loanAmount: v.optional(v.number()),
+    apr: v.optional(v.number()),
+    termMonths: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_SALES]);
@@ -203,6 +243,16 @@ export const update = mutation({
     if (args.salePrice !== undefined) patch.salePrice = args.salePrice;
     if (args.saleDate !== undefined) patch.saleDate = args.saleDate;
     if (args.status !== undefined) patch.status = args.status;
+    if (args.taxRate !== undefined) patch.taxRate = args.taxRate;
+    if (args.taxAmount !== undefined) patch.taxAmount = args.taxAmount;
+    if (args.dealerFees !== undefined) patch.dealerFees = args.dealerFees;
+    if (args.downPayment !== undefined) patch.downPayment = args.downPayment;
+    if (args.tradeInVehicleId !== undefined) patch.tradeInVehicleId = args.tradeInVehicleId;
+    if (args.tradeInValue !== undefined) patch.tradeInValue = args.tradeInValue;
+    if (args.financingType !== undefined) patch.financingType = args.financingType;
+    if (args.loanAmount !== undefined) patch.loanAmount = args.loanAmount;
+    if (args.apr !== undefined) patch.apr = args.apr;
+    if (args.termMonths !== undefined) patch.termMonths = args.termMonths;
 
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(args.saleId, patch);
@@ -214,6 +264,17 @@ export const update = mutation({
       if (vehicle && vehicle.status === "SOLD") {
         await ctx.db.patch(sale.vehicleId, { status: "AVAILABLE" as const });
       }
+    }
+
+    if (Object.keys(patch).length > 0) {
+      const actorName = await getActorName(ctx);
+      await notifyManagers(
+        ctx,
+        args.orgId,
+        "Sale Updated",
+        `${actorName} updated a sale record.`,
+        `/sales?highlightId=${args.saleId}`
+      );
     }
   },
 });
@@ -248,5 +309,13 @@ export const remove = mutation({
     }
 
     await ctx.db.delete(args.saleId);
+
+    const actorName = await getActorName(ctx);
+    await notifyManagers(
+      ctx,
+      args.orgId,
+      "Sale Deleted",
+      `${actorName} deleted a sale record.`
+    );
   },
 });

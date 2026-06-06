@@ -1,12 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { VehicleDialog } from "@/components/vehicles/VehicleDialog";
+import { VehicleHistoryDialog } from "@/components/vehicles/VehicleHistoryDialog";
+import { VehicleDetailsDialog } from "@/components/vehicles/VehicleDetailsDialog";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import {
   Table,
@@ -17,7 +20,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Search, Pencil, Trash2 } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, ImageIcon, Download, ClipboardList, Check, X, Hourglass, History, Eye } from "lucide-react";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -27,6 +30,14 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Label } from "@/components/ui/label";
 
 function StatusBadge({ status }: { status: string }) {
   switch (status) {
@@ -48,6 +59,9 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 export default function VehiclesPage() {
+  const searchParams = useSearchParams();
+  const highlightId = searchParams.get("highlightId");
+
   const { activeOrgId } = useOrg();
   const vehicles = useQuery(api.vehicles.list, activeOrgId ? { orgId: activeOrgId } : "skip");
   const removeVehicle = useMutation(api.vehicles.remove);
@@ -57,12 +71,86 @@ export default function VehiclesPage() {
   const [editingVehicle, setEditingVehicle] = useState<Doc<"vehicles"> | null>(null);
   
   const [vehicleToDelete, setVehicleToDelete] = useState<Doc<"vehicles"> | null>(null);
+  const [galleryVehicle, setGalleryVehicle] = useState<any | null>(null);
+  const [historyVehicle, setHistoryVehicle] = useState<Doc<"vehicles"> | null>(null);
+  const [detailsVehicle, setDetailsVehicle] = useState<Doc<"vehicles"> | null>(null);
+  const [statusRequestVehicle, setStatusRequestVehicle] = useState<Doc<"vehicles"> | null>(null);
+  const [isApprovalsDialogOpen, setIsApprovalsDialogOpen] = useState(false);
+  const [statusRequestNotes, setStatusRequestNotes] = useState("");
+  const [selectedStatus, setSelectedStatus] = useState<any>("");
+
+  const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const permissions = myMembership?.permissions || [];
+  const canCreate = permissions.includes("create:vehicles");
+  const canEdit = permissions.includes("edit:vehicles");
+  const canDelete = permissions.includes("delete:vehicles");
+
+  const pendingRequests = useQuery(api.vehicleRequests.listPending, activeOrgId && canEdit ? { orgId: activeOrgId } : "skip");
+  const pendingEdits = useQuery(api.vehicleEdits.listPending, activeOrgId && canEdit ? { orgId: activeOrgId } : "skip");
+  const createStatusRequest = useMutation(api.vehicleRequests.create);
+  const resolveStatusRequest = useMutation(api.vehicleRequests.resolve);
+  const resolveEditRequest = useMutation(api.vehicleEdits.resolve);
+  const updateVehicle = useMutation(api.vehicles.update);
+
+  const handleStatusSubmit = async () => {
+    if (!activeOrgId || !statusRequestVehicle || !selectedStatus) return;
+    try {
+      if (canEdit) {
+        // Manager can change directly
+        await updateVehicle({ orgId: activeOrgId, vehicleId: statusRequestVehicle._id, status: selectedStatus });
+        toast.success("Vehicle status updated");
+      } else {
+        // Sales/Reception requests it
+        await createStatusRequest({
+          orgId: activeOrgId,
+          vehicleId: statusRequestVehicle._id,
+          requestedStatus: selectedStatus,
+          notes: statusRequestNotes,
+        });
+        toast.success("Status change request submitted to your manager");
+      }
+      setStatusRequestVehicle(null);
+      setSelectedStatus("");
+      setStatusRequestNotes("");
+    } catch (error: any) {
+      toast.error(error.message || "Failed to submit request");
+    }
+  };
+
+  const handleResolveRequest = async (requestId: Id<"vehicleStatusRequests">, status: "APPROVED" | "REJECTED") => {
+    if (!activeOrgId) return;
+    try {
+      await resolveStatusRequest({ orgId: activeOrgId, requestId, status });
+      toast.success(`Status request ${status.toLowerCase()}`);
+    } catch (error: any) {
+      toast.error(error.message || `Failed to ${status.toLowerCase()} request`);
+    }
+  };
+
+  const handleResolveEdit = async (requestId: Id<"vehicleEdits">, status: "APPROVED" | "REJECTED") => {
+    if (!activeOrgId) return;
+    try {
+      await resolveEditRequest({ orgId: activeOrgId, requestId, status });
+      toast.success(`Edit request ${status.toLowerCase()}`);
+    } catch (error: any) {
+      toast.error(error.message || `Failed to ${status.toLowerCase()} request`);
+    }
+  };
 
   const filteredVehicles = vehicles?.filter(v => 
     v.vin.toLowerCase().includes(searchQuery.toLowerCase()) ||
     v.make.toLowerCase().includes(searchQuery.toLowerCase()) ||
     v.model.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  useEffect(() => {
+    if (highlightId && vehicles) {
+      const el = document.getElementById(`row-${highlightId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }
+  }, [highlightId, vehicles]);
 
   const handleEdit = (vehicle: Doc<"vehicles">) => {
     setEditingVehicle(vehicle);
@@ -85,6 +173,46 @@ export default function VehiclesPage() {
     }
   };
 
+  const handleDownloadSingle = async (url: string, index: number) => {
+    if (!galleryVehicle) return;
+    try {
+      const response = await fetch(url);
+      const blob = await response.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
+      
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = blobUrl;
+      a.download = `${galleryVehicle.make}-${galleryVehicle.model}-image-${index + 1}.jpg`.replace(/\s+/g, '-').toLowerCase();
+      
+      document.body.appendChild(a);
+      a.click();
+      
+      window.URL.revokeObjectURL(blobUrl);
+      document.body.removeChild(a);
+    } catch (error) {
+      console.error("Error downloading image:", error);
+      toast.error("Failed to download image.");
+    }
+  };
+
+  const handleDownloadAll = async () => {
+    if (!galleryVehicle?.imageUrls) return;
+    
+    try {
+      const toastId = toast.loading("Downloading images...");
+      for (let i = 0; i < galleryVehicle.imageUrls.length; i++) {
+        await handleDownloadSingle(galleryVehicle.imageUrls[i], i);
+        // Small delay to prevent browser from blocking multiple rapid downloads
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+      toast.success("All images downloaded successfully", { id: toastId });
+    } catch (error) {
+      console.error("Error downloading images:", error);
+      toast.error("Failed to download some images.");
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -94,9 +222,24 @@ export default function VehiclesPage() {
             Manage your dealership's vehicles.
           </p>
         </div>
-        <Button onClick={handleAddNew}>
-          <Plus className="me-2 h-4 w-4" /> Add Vehicle
-        </Button>
+        <div className="flex gap-2">
+          {canEdit && (
+            <Button variant="outline" onClick={() => setIsApprovalsDialogOpen(true)}>
+              <ClipboardList className="me-2 h-4 w-4" /> 
+              Approvals
+              {((pendingRequests?.length || 0) + (pendingEdits?.length || 0)) > 0 && (
+                <span className="ms-2 bg-red-500 text-white text-xs px-2 py-0.5 rounded-full">
+                  {(pendingRequests?.length || 0) + (pendingEdits?.length || 0)}
+                </span>
+              )}
+            </Button>
+          )}
+          {canCreate && (
+            <Button onClick={handleAddNew}>
+              <Plus className="me-2 h-4 w-4" /> Add Vehicle
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="flex items-center w-full max-w-sm space-x-2">
@@ -118,25 +261,30 @@ export default function VehiclesPage() {
               <TableHead>Year</TableHead>
               <TableHead>Price</TableHead>
               <TableHead>Status</TableHead>
+              <TableHead>Notes</TableHead>
               <TableHead className="text-end">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {filteredVehicles === undefined ? (
               <TableRow>
-                <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
                   Loading inventory...
                 </TableCell>
               </TableRow>
             ) : filteredVehicles.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
                   No vehicles found.
                 </TableCell>
               </TableRow>
             ) : (
               filteredVehicles.map((vehicle) => (
-                <TableRow key={vehicle._id}>
+                <TableRow 
+                  key={vehicle._id}
+                  id={`row-${vehicle._id}`}
+                  className={highlightId === vehicle._id ? "bg-primary/20 transition-all duration-1000" : ""}
+                >
                   <TableCell className="font-medium">
                     {vehicle.make} {vehicle.model} {vehicle.trim && <span className="text-muted-foreground text-xs ms-1">{vehicle.trim}</span>}
                   </TableCell>
@@ -144,15 +292,45 @@ export default function VehiclesPage() {
                   <TableCell>{vehicle.year}</TableCell>
                   <TableCell>${vehicle.sellingPrice.toLocaleString()}</TableCell>
                   <TableCell>
-                    <StatusBadge status={vehicle.status} />
+                    <button 
+                      onClick={() => {
+                        setStatusRequestVehicle(vehicle);
+                        setSelectedStatus(vehicle.status);
+                      }} 
+                      className="hover:opacity-80 transition-opacity flex flex-col items-start text-left gap-1"
+                    >
+                      <StatusBadge status={vehicle.status} />
+                      {vehicle.pendingStatusRequest && (
+                        <span className="text-[10px] text-muted-foreground font-medium flex items-center mt-1">
+                          <Hourglass className="h-3 w-3 mr-1 inline" />
+                          Pending: {vehicle.pendingStatusRequest}
+                        </span>
+                      )}
+                    </button>
                   </TableCell>
-                  <TableCell className="text-end">
-                    <Button variant="ghost" size="icon" onClick={() => handleEdit(vehicle)}>
-                      <Pencil className="h-4 w-4 text-muted-foreground" />
+                  <TableCell className="max-w-[200px] truncate" title={vehicle.notes}>
+                    {vehicle.notes ? vehicle.notes : <span className="text-muted-foreground italic text-xs">No notes</span>}
+                  </TableCell>
+                  <TableCell className="text-end space-x-1">
+                    <Button variant="ghost" size="icon" onClick={() => setDetailsVehicle(vehicle)} title="View Details">
+                      <Eye className="h-4 w-4 text-muted-foreground" />
                     </Button>
-                    <Button variant="ghost" size="icon" onClick={() => setVehicleToDelete(vehicle)}>
-                      <Trash2 className="h-4 w-4 text-red-500" />
+                    <Button variant="ghost" size="icon" onClick={() => setGalleryVehicle(vehicle)} title="View Gallery">
+                      <ImageIcon className="h-4 w-4 text-muted-foreground" />
                     </Button>
+                    <Button variant="ghost" size="icon" onClick={() => setHistoryVehicle(vehicle)} title="View Audit Trail">
+                      <History className="h-4 w-4 text-muted-foreground" />
+                    </Button>
+                    {canEdit && (
+                      <Button variant="ghost" size="icon" onClick={() => handleEdit(vehicle)} title="Edit Vehicle">
+                        <Pencil className="h-4 w-4 text-muted-foreground" />
+                      </Button>
+                    )}
+                    {canDelete && (
+                      <Button variant="ghost" size="icon" onClick={() => setVehicleToDelete(vehicle)} title="Delete Vehicle">
+                        <Trash2 className="h-4 w-4 text-red-500" />
+                      </Button>
+                    )}
                   </TableCell>
                 </TableRow>
               ))
@@ -165,6 +343,21 @@ export default function VehiclesPage() {
         open={isVehicleDialogOpen}
         onOpenChange={setIsVehicleDialogOpen}
         vehicle={editingVehicle}
+        canCreate={canCreate}
+        canEdit={canEdit}
+      />
+
+      <VehicleHistoryDialog
+        vehicle={historyVehicle}
+        open={!!historyVehicle}
+        onOpenChange={(open) => !open && setHistoryVehicle(null)}
+      />
+
+      <VehicleDetailsDialog 
+        vehicle={detailsVehicle}
+        open={!!detailsVehicle}
+        onOpenChange={(open) => !open && setDetailsVehicle(null)}
+        canViewPurchasePrice={canEdit}
       />
 
       {/* Delete Confirmation Dialog */}
@@ -180,6 +373,190 @@ export default function VehiclesPage() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setVehicleToDelete(null)}>Cancel</Button>
             <Button variant="destructive" onClick={handleDelete}>Remove</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Gallery Dialog */}
+      <Dialog open={!!galleryVehicle} onOpenChange={(open) => !open && setGalleryVehicle(null)}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>{galleryVehicle?.year} {galleryVehicle?.make} {galleryVehicle?.model}</DialogTitle>
+            <DialogDescription>
+              Vehicle Images Gallery
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            {galleryVehicle?.imageUrls && galleryVehicle.imageUrls.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-h-[60vh] overflow-y-auto pr-2">
+                {galleryVehicle.imageUrls.map((url: string, index: number) => (
+                  <div key={index} className="relative aspect-video rounded-md overflow-hidden bg-muted group">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={url}
+                      alt={`Vehicle image ${index + 1}`}
+                      className="object-cover w-full h-full"
+                    />
+                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                      <Button variant="secondary" size="sm" onClick={() => handleDownloadSingle(url, index)}>
+                        <Download className="h-4 w-4 mr-2" />
+                        Download
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-12 text-muted-foreground border-2 border-dashed rounded-lg">
+                <ImageIcon className="h-12 w-12 mx-auto mb-3 opacity-20" />
+                <p>No images available for this vehicle.</p>
+              </div>
+            )}
+          </div>
+          <DialogFooter className="sm:justify-between items-center w-full mt-4">
+            {galleryVehicle?.imageUrls && galleryVehicle.imageUrls.length > 0 ? (
+              <Button variant="outline" onClick={handleDownloadAll}>
+                <Download className="h-4 w-4 mr-2" />
+                Download All
+              </Button>
+            ) : (
+              <div />
+            )}
+            <Button variant="ghost" onClick={() => setGalleryVehicle(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Status Change Request Dialog */}
+      <Dialog open={!!statusRequestVehicle} onOpenChange={(open) => !open && setStatusRequestVehicle(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Change Status</DialogTitle>
+            <DialogDescription>
+              {canEdit 
+                ? "Update the status for this vehicle." 
+                : "Request a status change for this vehicle. A manager must approve it."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>New Status</Label>
+              <Select value={selectedStatus} onValueChange={setSelectedStatus}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="AVAILABLE">Available</SelectItem>
+                  <SelectItem value="RESERVED">Reserved</SelectItem>
+                  <SelectItem value="SOLD">Sold</SelectItem>
+                  <SelectItem value="IN_INSPECTION">In Inspection</SelectItem>
+                  <SelectItem value="IN_REPAIR">In Repair</SelectItem>
+                  <SelectItem value="ARCHIVED">Archived</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {!canEdit && (
+              <div className="space-y-2">
+                <Label>Notes (Optional)</Label>
+                <Input 
+                  placeholder="Reason for change..." 
+                  value={statusRequestNotes}
+                  onChange={(e) => setStatusRequestNotes(e.target.value)}
+                />
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setStatusRequestVehicle(null)}>Cancel</Button>
+            <Button onClick={handleStatusSubmit}>Submit</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Approvals Dialog */}
+      <Dialog open={isApprovalsDialogOpen} onOpenChange={setIsApprovalsDialogOpen}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Pending Status Approvals</DialogTitle>
+            <DialogDescription>
+              Review and approve vehicle status change requests.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            {!pendingRequests?.length && !pendingEdits?.length ? (
+              <div className="text-center py-8 text-muted-foreground">
+                No pending requests.
+              </div>
+            ) : (
+              <>
+                {/* Edit Requests */}
+                {pendingEdits?.map((req) => (
+                  <div key={req._id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 border rounded-lg bg-card">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <Badge variant={req.type === "CREATE" ? "default" : "secondary"}>
+                          {req.type === "CREATE" ? "NEW VEHICLE" : "EDIT DETAILS"}
+                        </Badge>
+                        <span className="text-xs text-muted-foreground">By: {req.user?.name}</span>
+                      </div>
+                      <p className="font-semibold text-sm mt-2">
+                        {req.payload?.year} {req.payload?.make} {req.payload?.model}
+                      </p>
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <span>VIN: {req.payload?.vin}</span>
+                        <span>•</span>
+                        <span>Price: ${req.payload?.sellingPrice?.toLocaleString()}</span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" size="sm" onClick={() => handleResolveEdit(req._id, "REJECTED")} className="text-red-500 hover:text-red-600 hover:bg-red-50 border-red-200">
+                        <X className="h-4 w-4 mr-1" /> Reject
+                      </Button>
+                      <Button size="sm" onClick={() => handleResolveEdit(req._id, "APPROVED")} className="bg-green-600 hover:bg-green-700 text-white">
+                        <Check className="h-4 w-4 mr-1" /> Approve
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+                
+                {/* Status Requests */}
+                {pendingRequests?.map((req) => (
+                  <div key={req._id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 border rounded-lg bg-card">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <Badge variant="outline">STATUS CHANGE</Badge>
+                        <span className="text-xs text-muted-foreground">By: {req.user?.name}</span>
+                      </div>
+                      <p className="font-semibold text-sm mt-2">
+                        {req.vehicle?.year} {req.vehicle?.make} {req.vehicle?.model}
+                      </p>
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <span>VIN: {req.vehicle?.vin}</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-sm mt-2">
+                        <StatusBadge status={req.vehicle?.currentStatus || ""} />
+                        <span>→</span>
+                        <StatusBadge status={req.requestedStatus} />
+                      </div>
+                      {req.notes && (
+                        <p className="text-xs text-muted-foreground italic mt-2">"{req.notes}"</p>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button variant="outline" size="sm" onClick={() => handleResolveRequest(req._id, "REJECTED")} className="text-red-500 hover:text-red-600 hover:bg-red-50 border-red-200">
+                        <X className="h-4 w-4 mr-1" /> Reject
+                      </Button>
+                      <Button size="sm" onClick={() => handleResolveRequest(req._id, "APPROVED")} className="bg-green-600 hover:bg-green-700 text-white">
+                        <Check className="h-4 w-4 mr-1" /> Approve
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsApprovalsDialogOpen(false)}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

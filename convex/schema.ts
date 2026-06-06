@@ -60,10 +60,50 @@ export default defineSchema({
       v.literal("ARCHIVED")
     ),
     notes: v.optional(v.string()),
+    imageIds: v.optional(v.array(v.id("_storage"))),
+    addedBy: v.optional(v.id("users")),
+    updatedBy: v.optional(v.id("users")),
+    updatedAt: v.optional(v.number()),
   })
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_vin", ["orgId", "vin"]),
+
+  vehicleStatusRequests: defineTable({
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    requestedBy: v.id("users"),
+    requestedStatus: v.union(
+      v.literal("AVAILABLE"),
+      v.literal("RESERVED"),
+      v.literal("SOLD"),
+      v.literal("IN_INSPECTION"),
+      v.literal("IN_REPAIR"),
+      v.literal("ARCHIVED")
+    ),
+    notes: v.optional(v.string()),
+    status: v.union(v.literal("PENDING"), v.literal("APPROVED"), v.literal("REJECTED")),
+    resolvedBy: v.optional(v.id("users")),
+    resolvedAt: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_vehicle", ["vehicleId"]),
+
+  vehicleEdits: defineTable({
+    orgId: v.id("organizations"),
+    vehicleId: v.optional(v.id("vehicles")), // Null means it's a creation request
+    requestedBy: v.id("users"),
+    type: v.union(v.literal("CREATE"), v.literal("UPDATE")),
+    payload: v.any(), // The full or partial vehicle data
+    status: v.union(v.literal("PENDING"), v.literal("APPROVED"), v.literal("REJECTED")),
+    resolvedBy: v.optional(v.id("users")),
+    resolvedAt: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"]),
 
   customers: defineTable({
     orgId: v.id("organizations"),
@@ -108,6 +148,18 @@ export default defineSchema({
     salePrice: v.number(),
     saleDate: v.number(), // timestamp
     status: v.union(v.literal("PENDING"), v.literal("COMPLETED"), v.literal("CANCELLED")),
+    
+    // Deal Structuring Fields
+    taxRate: v.optional(v.number()),
+    taxAmount: v.optional(v.number()),
+    dealerFees: v.optional(v.number()),
+    downPayment: v.optional(v.number()),
+    tradeInVehicleId: v.optional(v.id("vehicles")),
+    tradeInValue: v.optional(v.number()),
+    financingType: v.optional(v.union(v.literal("CASH"), v.literal("FINANCED"), v.literal("LEASE"))),
+    loanAmount: v.optional(v.number()),
+    apr: v.optional(v.number()),
+    termMonths: v.optional(v.number()),
   })
     .index("by_org", ["orgId"])
     .index("by_org_salesperson", ["orgId", "salespersonId"]),
@@ -138,7 +190,9 @@ export default defineSchema({
     title: v.string(),
     description: v.optional(v.string()),
     dueDate: v.number(), // Timestamp for the deadline/schedule
-    status: v.union(v.literal("PENDING"), v.literal("COMPLETED")),
+    status: v.union(v.literal("PENDING"), v.literal("COMPLETED"), v.literal("CANCELLED")),
+    statusNote: v.optional(v.string()), // Notes when cancelled or rescheduled
+    communicationMethod: v.optional(v.union(v.literal("PHONE"), v.literal("EMAIL"), v.literal("FAX"))),
     alarmTriggered: v.optional(v.boolean()), // Track if the cron has sent the notification
     // Optional associations
     customerId: v.optional(v.id("customers")),
@@ -147,6 +201,23 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_assignedTo", ["orgId", "assignedTo"])
     .index("by_org_status", ["orgId", "status"]),
+
+  taskHistory: defineTable({
+    orgId: v.id("organizations"),
+    taskId: v.id("tasks"),
+    userId: v.id("users"),
+    action: v.union(
+      v.literal("CREATE"), 
+      v.literal("UPDATE"), 
+      v.literal("RESCHEDULE"), 
+      v.literal("CANCEL"), 
+      v.literal("STATUS_CHANGE")
+    ),
+    details: v.string(),
+    note: v.optional(v.string()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_task", ["taskId"]),
 
   notifications: defineTable({
     orgId: v.id("organizations"),

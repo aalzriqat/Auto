@@ -4,9 +4,12 @@ import { useState } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
+import { Id } from "@/convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TaskDialog } from "@/components/tasks/TaskDialog";
+import { TaskHistoryDialog } from "@/components/tasks/TaskHistoryDialog";
+import { CustomerDetailsDialog } from "@/components/customers/CustomerDetailsDialog";
 import {
   Table,
   TableBody,
@@ -15,8 +18,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, Search, Pencil, Trash2, Calendar, CheckSquare } from "lucide-react";
+import { Plus, Search, Pencil, Calendar, CheckSquare, XCircle, Clock, History, Phone, Mail, Printer } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import { DateTimePicker } from "@/components/ui/datetime-picker";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -36,7 +40,12 @@ export default function TasksPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isTaskDialogOpen, setIsTaskDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<any>(null);
-  const [taskToDelete, setTaskToDelete] = useState<any>(null);
+  const [taskToCancel, setTaskToCancel] = useState<any>(null);
+  const [taskToReschedule, setTaskToReschedule] = useState<any>(null);
+  const [historyTask, setHistoryTask] = useState<any>(null);
+  const [statusNote, setStatusNote] = useState("");
+  const [newDueDate, setNewDueDate] = useState<Date | undefined>(undefined);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
 
   const filteredTasks = tasks?.filter(t => {
     const q = searchQuery.toLowerCase();
@@ -55,14 +64,51 @@ export default function TasksPage() {
     setIsTaskDialogOpen(true);
   };
 
-  const handleDelete = async () => {
-    if (!activeOrgId || !taskToDelete) return;
+  const handleCancel = async () => {
+    if (!activeOrgId || !taskToCancel) return;
+    if (!statusNote.trim()) {
+      toast.error("Please provide a cancellation reason.");
+      return;
+    }
     try {
-      await removeTask({ orgId: activeOrgId, taskId: taskToDelete._id });
-      toast.success("Task deleted successfully");
-      setTaskToDelete(null);
+      await updateTask({ 
+        orgId: activeOrgId, 
+        taskId: taskToCancel._id,
+        status: "CANCELLED",
+        statusNote: statusNote.trim()
+      });
+      toast.success("Task cancelled successfully");
+      setTaskToCancel(null);
+      setStatusNote("");
     } catch (error: any) {
-      toast.error(error.message || "Failed to delete task");
+      toast.error(error.message || "Failed to cancel task");
+    }
+  };
+
+  const handleReschedule = async () => {
+    if (!activeOrgId || !taskToReschedule) return;
+    if (!statusNote.trim()) {
+      toast.error("Please provide a reschedule reason.");
+      return;
+    }
+    if (!newDueDate) {
+      toast.error("Please select a new date.");
+      return;
+    }
+    try {
+      const parsedDate = newDueDate.getTime();
+      await updateTask({ 
+        orgId: activeOrgId, 
+        taskId: taskToReschedule._id,
+        dueDate: parsedDate,
+        statusNote: statusNote.trim()
+      });
+      toast.success("Task rescheduled successfully");
+      setTaskToReschedule(null);
+      setStatusNote("");
+      setNewDueDate(undefined);
+    } catch (error: any) {
+      toast.error(error.message || "Failed to reschedule task");
     }
   };
 
@@ -82,6 +128,9 @@ export default function TasksPage() {
   };
 
   const getStatusBadge = (status: string, dueDate: number) => {
+    if (status === "CANCELLED") {
+      return <Badge variant="secondary" className="bg-gray-200 text-gray-700">Cancelled</Badge>;
+    }
     if (status === "COMPLETED") {
       return <Badge variant="default" className="bg-green-600 hover:bg-green-700">Completed</Badge>;
     }
@@ -159,9 +208,14 @@ export default function TasksPage() {
                     </Button>
                   </TableCell>
                   <TableCell>
-                    <div className="font-medium">{task.title}</div>
+                    <div className="font-medium flex items-center gap-2">
+                      {task.status === "CANCELLED" ? <span className="line-through text-muted-foreground">{task.title}</span> : task.title}
+                    </div>
                     {task.description && (
                       <div className="text-xs text-muted-foreground line-clamp-1">{task.description}</div>
+                    )}
+                    {task.statusNote && (
+                      <div className="text-xs font-semibold text-blue-600 dark:text-blue-400 mt-1">Note: {task.statusNote}</div>
                     )}
                   </TableCell>
                   <TableCell>
@@ -172,19 +226,48 @@ export default function TasksPage() {
                   </TableCell>
                   <TableCell>{task.assigneeName}</TableCell>
                   <TableCell>
-                    {task.customerName ? (
-                      <span className="text-sm">{task.customerName}</span>
-                    ) : (
-                      <span className="text-sm text-muted-foreground italic">-</span>
-                    )}
+                    <div className="flex flex-col items-start gap-1">
+                      {task.customerName && task.customerId ? (
+                        <button 
+                          onClick={() => setSelectedCustomerId(task.customerId)}
+                          className="text-sm text-blue-500 hover:text-blue-700 hover:underline transition-colors focus:outline-none"
+                        >
+                          {task.customerName}
+                        </button>
+                      ) : (
+                        <span className="text-sm text-muted-foreground italic">-</span>
+                      )}
+                      
+                      {task.communicationMethod && (
+                        <div className="flex items-center text-xs text-muted-foreground mt-1">
+                          {task.communicationMethod === "PHONE" && <Phone className="h-3 w-3 mr-1" />}
+                          {task.communicationMethod === "EMAIL" && <Mail className="h-3 w-3 mr-1" />}
+                          {task.communicationMethod === "FAX" && <Printer className="h-3 w-3 mr-1" />}
+                          <span className="capitalize">{task.communicationMethod.toLowerCase()}</span>
+                        </div>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell>{getStatusBadge(task.status, task.dueDate)}</TableCell>
-                  <TableCell className="text-end">
-                    <Button variant="ghost" size="icon" onClick={() => handleEdit(task)}>
+                  <TableCell className="text-end space-x-1">
+                    <Button variant="ghost" size="icon" onClick={() => setHistoryTask(task)} title="View History">
+                      <History className="h-4 w-4 text-muted-foreground" />
+                    </Button>
+                    <Button variant="ghost" size="icon" onClick={() => {
+                      setTaskToReschedule(task);
+                      setStatusNote("");
+                      setNewDueDate(new Date(task.dueDate));
+                    }} title="Reschedule">
+                      <Clock className="h-4 w-4 text-blue-500" />
+                    </Button>
+                    <Button variant="ghost" size="icon" onClick={() => handleEdit(task)} title="Edit">
                       <Pencil className="h-4 w-4 text-muted-foreground" />
                     </Button>
-                    <Button variant="ghost" size="icon" onClick={() => setTaskToDelete(task)}>
-                      <Trash2 className="h-4 w-4 text-red-500" />
+                    <Button variant="ghost" size="icon" onClick={() => {
+                      setTaskToCancel(task);
+                      setStatusNote("");
+                    }} title="Cancel">
+                      <XCircle className="h-4 w-4 text-red-500" />
                     </Button>
                   </TableCell>
                 </TableRow>
@@ -200,20 +283,71 @@ export default function TasksPage() {
         task={editingTask}
       />
 
-      <Dialog open={!!taskToDelete} onOpenChange={(open) => !open && setTaskToDelete(null)}>
+      <Dialog open={!!taskToCancel} onOpenChange={(open) => !open && setTaskToCancel(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete Task</DialogTitle>
+            <DialogTitle>Cancel Task</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete this task? This action cannot be undone.
+              Please provide a reason for cancelling this task. It will remain in the database for historical purposes.
             </DialogDescription>
           </DialogHeader>
+          <div className="py-4">
+            <Input 
+              placeholder="Reason for cancellation..." 
+              value={statusNote}
+              onChange={(e) => setStatusNote(e.target.value)}
+            />
+          </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setTaskToDelete(null)}>Cancel</Button>
-            <Button variant="destructive" onClick={handleDelete}>Delete</Button>
+            <Button variant="outline" onClick={() => setTaskToCancel(null)}>Keep Task</Button>
+            <Button variant="destructive" onClick={handleCancel}>Cancel Task</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <Dialog open={!!taskToReschedule} onOpenChange={(open) => !open && setTaskToReschedule(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reschedule Task</DialogTitle>
+            <DialogDescription>
+              Select a new date and provide a reason for rescheduling.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4 space-y-4">
+            <div>
+              <label className="text-sm font-medium mb-1 block">New Due Date & Time</label>
+              <DateTimePicker 
+                value={newDueDate} 
+                onChange={(date) => setNewDueDate(date)}
+              />
+            </div>
+            <div>
+              <label className="text-sm font-medium mb-1 block">Reason</label>
+              <Input 
+                placeholder="Why is it being rescheduled?" 
+                value={statusNote}
+                onChange={(e) => setStatusNote(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTaskToReschedule(null)}>Cancel</Button>
+            <Button onClick={handleReschedule}>Save Changes</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <TaskHistoryDialog
+        open={!!historyTask}
+        onOpenChange={(open) => !open && setHistoryTask(null)}
+        task={historyTask}
+      />
+
+      <CustomerDetailsDialog
+        customerId={selectedCustomerId as Id<"customers">}
+        open={!!selectedCustomerId}
+        onOpenChange={(open) => !open && setSelectedCustomerId(null)}
+      />
     </div>
   );
 }

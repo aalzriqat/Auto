@@ -2,6 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { notifyManagers, notifyUser, getActorName } from "./utils/notifications";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -158,7 +159,7 @@ export const create = mutation({
       }
     }
 
-    return await ctx.db.insert("leads", {
+    const id = await ctx.db.insert("leads", {
       orgId: args.orgId,
       customerId: args.customerId,
       assignedUserId: args.assignedUserId,
@@ -167,6 +168,28 @@ export const create = mutation({
       stage: args.stage ?? "NEW",
       notes: args.notes,
     });
+
+    const actorName = await getActorName(ctx);
+    await notifyManagers(
+      ctx,
+      args.orgId,
+      "New Lead Created",
+      `${actorName} created a new lead.`,
+      `/leads?highlightId=${id}`
+    );
+
+    if (args.assignedUserId) {
+      await notifyUser(
+        ctx,
+        args.orgId,
+        args.assignedUserId,
+        "New Lead Assigned",
+        `${actorName} assigned a new lead to you.`,
+        `/leads?highlightId=${id}`
+      );
+    }
+
+    return id;
   },
 });
 
@@ -232,6 +255,27 @@ export const update = mutation({
 
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(args.leadId, patch);
+
+      const actorName = await getActorName(ctx);
+      await notifyManagers(
+        ctx,
+        args.orgId,
+        "Lead Updated",
+        `${actorName} updated a lead.`,
+        `/leads?highlightId=${args.leadId}`
+      );
+
+      // If re-assigned to a new user
+      if (args.assignedUserId && args.assignedUserId !== lead.assignedUserId) {
+        await notifyUser(
+          ctx,
+          args.orgId,
+          args.assignedUserId,
+          "Lead Assigned",
+          `${actorName} assigned a lead to you.`,
+          `/leads?highlightId=${args.leadId}`
+        );
+      }
     }
   },
 });
@@ -253,5 +297,13 @@ export const remove = mutation({
     }
 
     await ctx.db.delete(args.leadId);
+
+    const actorName = await getActorName(ctx);
+    await notifyManagers(
+      ctx,
+      args.orgId,
+      "Lead Deleted",
+      `${actorName} deleted a lead.`
+    );
   },
 });

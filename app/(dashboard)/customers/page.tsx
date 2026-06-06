@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -28,6 +29,9 @@ import {
 } from "@/components/ui/dialog";
 
 export default function CustomersPage() {
+  const searchParams = useSearchParams();
+  const highlightId = searchParams.get("highlightId");
+
   const { activeOrgId } = useOrg();
   const customers = useQuery(api.customers.list, activeOrgId ? { orgId: activeOrgId } : "skip");
   const removeCustomer = useMutation(api.customers.remove);
@@ -45,6 +49,15 @@ export default function CustomersPage() {
            (c.email && c.email.toLowerCase().includes(q)) ||
            (c.phone && c.phone.includes(q));
   });
+
+  useEffect(() => {
+    if (highlightId && customers) {
+      const el = document.getElementById(`row-${highlightId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }
+  }, [highlightId, customers]);
 
   const handleEdit = (customer: Doc<"customers">) => {
     setEditingCustomer(customer);
@@ -116,7 +129,11 @@ export default function CustomersPage() {
               </TableRow>
             ) : (
               filteredCustomers.map((customer) => (
-                <TableRow key={customer._id}>
+                <TableRow 
+                  key={customer._id}
+                  id={`row-${customer._id}`}
+                  className={highlightId === customer._id ? "bg-primary/20 transition-all duration-1000" : ""}
+                >
                   <TableCell className="font-medium">
                     {customer.firstName} {customer.lastName}
                   </TableCell>

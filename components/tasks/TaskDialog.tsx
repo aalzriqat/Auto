@@ -24,6 +24,7 @@ import {
   FormLabel,
   FormMessage,
 } from "@/components/ui/form";
+import { DateTimePicker } from "@/components/ui/datetime-picker";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import {
@@ -37,10 +38,11 @@ import {
 const taskSchema = z.object({
   title: z.string().min(1, "Title is required"),
   description: z.string().optional(),
-  dueDate: z.string().min(1, "Due date is required"),
+  dueDate: z.date({ required_error: "Due date is required" }),
   assignedTo: z.string().min(1, "Assignee is required"),
   customerId: z.string().optional(),
-  status: z.enum(["PENDING", "COMPLETED"]),
+  communicationMethod: z.enum(["PHONE", "EMAIL", "FAX", "none"]).optional(),
+  status: z.enum(["PENDING", "COMPLETED", "CANCELLED"]),
 });
 
 type TaskFormValues = z.infer<typeof taskSchema>;
@@ -66,9 +68,10 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
     defaultValues: {
       title: "",
       description: "",
-      dueDate: new Date(new Date().getTime() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16),
+      dueDate: new Date(),
       assignedTo: "",
       customerId: "none",
+      communicationMethod: "none",
       status: "PENDING",
     },
   });
@@ -82,23 +85,22 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
       form.reset({
         title: task.title,
         description: task.description || "",
-        dueDate: localISOTime,
+        dueDate: new Date(task.dueDate),
         assignedTo: task.assignedTo,
         customerId: task.customerId || "none",
+        communicationMethod: (task.communicationMethod as any) || "none",
         status: task.status,
       });
     } else if (open && !task) {
       const myMembership = memberships?.find(m => m.userId);
-      const now = new Date();
-      const tzOffset = now.getTimezoneOffset() * 60000;
-      const localISOTime = new Date(now.getTime() - tzOffset).toISOString().slice(0, 16);
       
       form.reset({
         title: "",
         description: "",
-        dueDate: localISOTime,
+        dueDate: new Date(),
         assignedTo: myMembership ? myMembership.userId : "",
         customerId: "none",
+        communicationMethod: "none",
         status: "PENDING",
       });
     }
@@ -108,8 +110,10 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
     if (!activeOrgId) return;
     setIsSubmitting(true);
     try {
-      const parsedDate = new Date(values.dueDate).getTime();
-      const parsedCustomerId = values.customerId === "none" ? undefined : (values.customerId as Id<"customers">);
+      const dueDate = values.dueDate.getTime();
+      const status = values.status as "PENDING" | "COMPLETED" | "CANCELLED";
+      const customerId = values.customerId === "none" ? undefined : (values.customerId as Id<"customers">);
+      const communicationMethod = values.communicationMethod === "none" ? undefined : (values.communicationMethod as "PHONE" | "EMAIL" | "FAX");
 
       if (task) {
         await updateTask({
@@ -117,10 +121,11 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
           taskId: task._id,
           title: values.title,
           description: values.description,
-          dueDate: parsedDate,
+          dueDate: dueDate,
           assignedTo: values.assignedTo as Id<"users">,
-          customerId: parsedCustomerId === undefined ? null : parsedCustomerId,
-          status: values.status,
+          customerId: customerId === undefined ? null : customerId,
+          status: status,
+          communicationMethod: communicationMethod,
         });
         toast.success("Task updated successfully");
       } else {
@@ -128,10 +133,11 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
           orgId: activeOrgId,
           title: values.title,
           description: values.description,
-          dueDate: parsedDate,
+          dueDate: dueDate,
           assignedTo: values.assignedTo as Id<"users">,
-          customerId: parsedCustomerId,
-          status: values.status,
+          customerId: customerId,
+          status: status,
+          communicationMethod: communicationMethod,
         });
         toast.success("Task created successfully!");
       }
@@ -204,7 +210,7 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
                   <FormItem>
                     <FormLabel>Due Date & Time <span className="text-red-500">*</span></FormLabel>
                     <FormControl>
-                      <Input type="datetime-local" {...field} />
+                      <DateTimePicker value={field.value} onChange={field.onChange} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -230,6 +236,30 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
                             {c.firstName} {c.lastName}
                           </SelectItem>
                         ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="communicationMethod"
+                render={({ field }) => (
+                  <FormItem className="md:col-span-2">
+                    <FormLabel>Preferred Communication</FormLabel>
+                    <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select method" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="none">-- Not Specified --</SelectItem>
+                        <SelectItem value="PHONE">Phone</SelectItem>
+                        <SelectItem value="EMAIL">Email</SelectItem>
+                        <SelectItem value="FAX">Fax</SelectItem>
                       </SelectContent>
                     </Select>
                     <FormMessage />

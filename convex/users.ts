@@ -15,6 +15,18 @@ export const getMe = query({
   },
 });
 
+/**
+ * Returns a specific user's basic info by their ID (for audit logs).
+ */
+export const getUser = query({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) return null;
+    return { name: user.name || "Unknown User" };
+  },
+});
+
 // ─── Internal Mutations (called from webhooks, not client-facing) ────────────
 
 /**

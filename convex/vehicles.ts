@@ -2,6 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { notifyManagers, getActorName } from "./utils/notifications";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -28,19 +29,43 @@ export const list = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
 
+    let vehicles;
     if (args.status) {
-      return await ctx.db
+      vehicles = await ctx.db
         .query("vehicles")
         .withIndex("by_org_status", (q) =>
           q.eq("orgId", args.orgId).eq("status", args.status!)
         )
         .collect();
+    } else {
+      vehicles = await ctx.db
+        .query("vehicles")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .collect();
     }
 
-    return await ctx.db
-      .query("vehicles")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+    const pendingRequests = await ctx.db
+      .query("vehicleStatusRequests")
+      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
       .collect();
+
+    const pendingMap = new Map<string, string>();
+    for (const req of pendingRequests) {
+      pendingMap.set(req.vehicleId, req.requestedStatus);
+    }
+
+    return Promise.all(
+      vehicles.map(async (vehicle) => {
+        const imageUrls = await Promise.all(
+          (vehicle.imageIds ?? []).map((id) => ctx.storage.getUrl(id))
+        );
+        return { 
+          ...vehicle, 
+          imageUrls,
+          pendingStatusRequest: pendingMap.get(vehicle._id) ?? null
+        };
+      })
+    );
   },
 });
 
@@ -60,7 +85,11 @@ export const get = query({
       throw new ConvexError("Vehicle not found in this organization.");
     }
 
-    return vehicle;
+    const imageUrls = await Promise.all(
+      (vehicle.imageIds ?? []).map((id) => ctx.storage.getUrl(id))
+    );
+
+    return { ...vehicle, imageUrls };
   },
 });
 
@@ -105,9 +134,10 @@ export const create = mutation({
     sellingPrice: v.number(),
     status: v.optional(vehicleStatus),
     notes: v.optional(v.string()),
+    imageIds: v.optional(v.array(v.id("_storage"))),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
 
     const normalizedVin = args.vin.trim().toUpperCase();
 
@@ -123,7 +153,7 @@ export const create = mutation({
       throw new ConvexError(`A vehicle with VIN "${normalizedVin}" already exists.`);
     }
 
-    return await ctx.db.insert("vehicles", {
+    const id = await ctx.db.insert("vehicles", {
       orgId: args.orgId,
       vin: normalizedVin,
       make: args.make.trim(),
@@ -138,7 +168,34 @@ export const create = mutation({
       sellingPrice: args.sellingPrice,
       status: args.status ?? "AVAILABLE",
       notes: args.notes,
+      imageIds: args.imageIds,
+      addedBy: user._id,
+      updatedBy: user._id,
+      updatedAt: Date.now(),
     });
+
+    const { orgId: _, ...payloadArgs } = args;
+    await ctx.db.insert("vehicleEdits", {
+      orgId: args.orgId,
+      requestedBy: user._id,
+      type: "CREATE",
+      payload: payloadArgs,
+      status: "APPROVED",
+      resolvedBy: user._id,
+      resolvedAt: Date.now(),
+      createdAt: Date.now(),
+    });
+
+    const actorName = await getActorName(ctx);
+    await notifyManagers(
+      ctx,
+      args.orgId,
+      "New Vehicle Added",
+      `${actorName} added a ${args.year} ${args.make.trim()} ${args.model.trim()}`,
+      `/vehicles?highlightId=${id}`
+    );
+
+    return id;
   },
 });
 
@@ -162,9 +219,10 @@ export const update = mutation({
     sellingPrice: v.optional(v.number()),
     status: v.optional(vehicleStatus),
     notes: v.optional(v.string()),
+    imageIds: v.optional(v.array(v.id("_storage"))),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
 
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.orgId !== args.orgId) {
@@ -192,15 +250,50 @@ export const update = mutation({
     const patch: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(updates)) {
       if (value !== undefined) {
-        patch[key] = key === "vin" ? (value as string).trim().toUpperCase()
+        const newValue = key === "vin" ? (value as string).trim().toUpperCase()
                    : key === "make" || key === "model" || key === "color"
                      ? (value as string).trim()
                    : value;
+        
+        if (key === "imageIds") {
+          const oldImages = JSON.stringify(vehicle.imageIds || []);
+          const newImages = JSON.stringify(newValue || []);
+          if (oldImages !== newImages) patch[key] = newValue;
+        } else {
+          const oldValue = vehicle[key as keyof typeof vehicle];
+          const normNew = newValue === "" ? undefined : newValue;
+          const normOld = oldValue === "" ? undefined : oldValue;
+          if (normNew !== normOld) {
+            patch[key] = newValue;
+          }
+        }
       }
     }
-
+    
     if (Object.keys(patch).length > 0) {
+      await ctx.db.insert("vehicleEdits", {
+        orgId: args.orgId,
+        vehicleId: args.vehicleId,
+        requestedBy: user._id,
+        type: "UPDATE",
+        payload: patch,
+        status: "APPROVED",
+        resolvedBy: user._id,
+        resolvedAt: Date.now(),
+        createdAt: Date.now(),
+      });
+
+      patch.updatedBy = user._id;
+      patch.updatedAt = Date.now();
       await ctx.db.patch(args.vehicleId, patch);
+      const actorName = await getActorName(ctx);
+      await notifyManagers(
+        ctx,
+        args.orgId,
+        "Vehicle Updated",
+        `${actorName} updated details for the ${vehicle.year} ${vehicle.make} ${vehicle.model}`,
+        `/vehicles?highlightId=${args.vehicleId}`
+      );
     }
   },
 });
@@ -227,6 +320,56 @@ export const remove = mutation({
       );
     }
 
+    // Delete associated images
+    for (const imageId of vehicle.imageIds ?? []) {
+      await ctx.storage.delete(imageId);
+    }
+
     await ctx.db.delete(args.vehicleId);
+
+    const actorName = await getActorName(ctx);
+    await notifyManagers(
+      ctx,
+      args.orgId,
+      "Vehicle Deleted",
+      `${actorName} deleted a ${vehicle.year} ${vehicle.make} ${vehicle.model} (VIN: ${vehicle.vin})`
+    );
+  },
+});
+
+/**
+ * Generates an upload URL for uploading vehicle images.
+ */
+export const generateUploadUrl = mutation({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+    return await ctx.storage.generateUploadUrl();
+  },
+});
+
+/**
+ * Deletes an image from a vehicle and storage.
+ */
+export const deleteImage = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    storageId: v.id("_storage"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+
+    const vehicle = await ctx.db.get(args.vehicleId);
+    if (!vehicle || vehicle.orgId !== args.orgId) {
+      throw new ConvexError("Vehicle not found in this organization.");
+    }
+
+    // Delete from storage
+    await ctx.storage.delete(args.storageId);
+
+    // Remove from vehicle array
+    const newImageIds = (vehicle.imageIds ?? []).filter((id) => id !== args.storageId);
+    await ctx.db.patch(args.vehicleId, { imageIds: newImageIds });
   },
 });

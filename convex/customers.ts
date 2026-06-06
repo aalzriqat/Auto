@@ -2,6 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { notifyManagers, getActorName } from "./utils/notifications";
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
@@ -99,7 +100,7 @@ export const create = mutation({
       }
     }
 
-    return await ctx.db.insert("customers", {
+    const id = await ctx.db.insert("customers", {
       orgId: args.orgId,
       firstName: args.firstName.trim(),
       lastName: args.lastName.trim(),
@@ -109,6 +110,17 @@ export const create = mutation({
       nationalId: args.nationalId?.trim(),
       address: args.address?.trim(),
     });
+
+    const actorName = await getActorName(ctx);
+    await notifyManagers(
+      ctx,
+      args.orgId,
+      "New Customer Added",
+      `${actorName} added a new customer: ${args.firstName.trim()} ${args.lastName.trim()}`,
+      `/customers?highlightId=${id}`
+    );
+
+    return id;
   },
 });
 
@@ -165,6 +177,15 @@ export const update = mutation({
 
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(args.customerId, patch);
+      
+      const actorName = await getActorName(ctx);
+      await notifyManagers(
+        ctx,
+        args.orgId,
+        "Customer Updated",
+        `${actorName} updated details for ${customer.firstName} ${customer.lastName}`,
+        `/customers?highlightId=${args.customerId}`
+      );
     }
   },
 });
@@ -212,5 +233,13 @@ export const remove = mutation({
     }
 
     await ctx.db.delete(args.customerId);
+
+    const actorName = await getActorName(ctx);
+    await notifyManagers(
+      ctx,
+      args.orgId,
+      "Customer Deleted",
+      `${actorName} deleted customer ${customer.firstName} ${customer.lastName}`
+    );
   },
 });
