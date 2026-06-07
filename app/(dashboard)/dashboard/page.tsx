@@ -7,7 +7,9 @@ import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Car, Users, Target, BadgeDollarSign, TrendingUp, Shield, CheckCircle2, Clock, AlertCircle } from "lucide-react";
+import { Car, Users, Target, BadgeDollarSign, TrendingUp, Shield, CheckCircle2, Clock, AlertCircle, BarChart as BarChartIcon } from "lucide-react";
+import { motion } from "framer-motion";
+import { EmptyState } from "@/components/ui/empty-state";
 import {
   AreaChart,
   Area,
@@ -64,7 +66,12 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <motion.div 
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4 }}
+      className="space-y-6"
+    >
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold tracking-tight">{t("Dashboard")}</h2>
@@ -88,7 +95,10 @@ export default function DashboardPage() {
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
         {/* Vehicles Card */}
-        <div className="rounded-xl border bg-card text-card-foreground shadow">
+        <motion.div 
+          initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
+          className="rounded-xl border bg-card text-card-foreground shadow"
+        >
           <div className="p-6 flex flex-row items-center justify-between space-y-0 pb-2">
             <h3 className="tracking-tight text-sm font-medium">{t("Vehicles")}</h3>
             <Car className="h-4 w-4 text-muted-foreground" />
@@ -105,10 +115,13 @@ export default function DashboardPage() {
               </>
             )}
           </div>
-        </div>
+        </motion.div>
 
         {/* Leads Card */}
-        <div className="rounded-xl border bg-card text-card-foreground shadow">
+        <motion.div 
+          initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
+          className="rounded-xl border bg-card text-card-foreground shadow"
+        >
           <div className="p-6 flex flex-row items-center justify-between space-y-0 pb-2">
             <h3 className="tracking-tight text-sm font-medium">{t("ActiveLeads" as any)}</h3>
             <Target className="h-4 w-4 text-muted-foreground" />
@@ -120,13 +133,16 @@ export default function DashboardPage() {
               <div className="text-2xl font-bold">{stats.activeLeads}</div>
             )}
           </div>
-        </div>
+        </motion.div>
 
         {/* Sales Card */}
-        <div className="rounded-xl border bg-card text-card-foreground shadow">
+        <motion.div 
+          initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}
+          className="rounded-xl border bg-card text-card-foreground shadow"
+        >
           <div className="p-6 flex flex-row items-center justify-between space-y-0 pb-2">
             <h3 className="tracking-tight text-sm font-medium">
-              {t("Sales")} {timeRange === "DAY" ? `(${t("Today" as any)})` : timeRange === "MONTH" ? "(30d)" : timeRange === "YEAR" ? "(1y)" : `(${t("AllTime" as any)})`}
+              {t("Sales")} {timeRange === "DAY" ? `(${t("Today" as any)})` : timeRange === "MONTH" ? `(${t("Last30Days" as any) || "30d"})` : timeRange === "YEAR" ? `(${t("Last1Year" as any) || "1y"})` : `(${t("AllTime" as any)})`}
             </h3>
             <BadgeDollarSign className="h-4 w-4 text-muted-foreground" />
           </div>
@@ -142,10 +158,13 @@ export default function DashboardPage() {
               </>
             )}
           </div>
-        </div>
+        </motion.div>
 
         {/* Team Card */}
-        <div className="rounded-xl border bg-card text-card-foreground shadow">
+        <motion.div 
+          initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}
+          className="rounded-xl border bg-card text-card-foreground shadow"
+        >
           <div className="p-6 flex flex-row items-center justify-between space-y-0 pb-2">
             <h3 className="tracking-tight text-sm font-medium">{t("TeamMembers" as any)}</h3>
             <Users className="h-4 w-4 text-muted-foreground" />
@@ -157,11 +176,14 @@ export default function DashboardPage() {
               <div className="text-2xl font-bold">{stats.teamMembers}</div>
             )}
           </div>
-        </div>
+        </motion.div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
-        <div className="rounded-xl border bg-card text-card-foreground shadow col-span-4">
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.5 }}
+          className="rounded-xl border bg-card text-card-foreground shadow col-span-4"
+        >
           <div className="p-6 flex flex-row items-center justify-between space-y-0 pb-2">
             <div className="space-y-1">
               <h3 className="font-semibold leading-none tracking-tight">{t("Revenue")}</h3>
@@ -173,9 +195,7 @@ export default function DashboardPage() {
               {stats === undefined ? (
                 <Skeleton className="h-full w-full" />
               ) : stats.salesTrend?.length === 0 ? (
-                <div className="h-full w-full flex items-center justify-center text-muted-foreground border border-dashed rounded-lg">
-                  {t("NoSalesData" as any)}
-                </div>
+                <EmptyState icon={TrendingUp} title={t("NoSalesData" as any) || "No sales data available"} className="min-h-[300px]" />
               ) : (
                 <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                   <AreaChart data={stats.salesTrend}>
@@ -204,9 +224,12 @@ export default function DashboardPage() {
               )}
             </div>
           </div>
-        </div>
+        </motion.div>
 
-        <div className="rounded-xl border bg-card text-card-foreground shadow col-span-3">
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.6 }}
+          className="rounded-xl border bg-card text-card-foreground shadow col-span-3"
+        >
           <div className="p-6 flex flex-row items-center justify-between space-y-0 pb-2">
             <div className="space-y-1">
               <h3 className="font-semibold leading-none tracking-tight">{t("ProfitTracking" as any)}</h3>
@@ -218,9 +241,7 @@ export default function DashboardPage() {
               {stats === undefined ? (
                 <Skeleton className="h-full w-full" />
               ) : stats.salesTrend?.length === 0 ? (
-                <div className="h-full w-full flex items-center justify-center text-muted-foreground border border-dashed rounded-lg">
-                  {t("NoProfitData" as any)}
-                </div>
+                <EmptyState icon={BarChartIcon} title={t("NoProfitData" as any) || "No profit data available"} className="min-h-[300px]" />
               ) : (
                 <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                   <BarChart data={stats.salesTrend}>
@@ -246,14 +267,17 @@ export default function DashboardPage() {
               )}
             </div>
           </div>
-        </div>
+        </motion.div>
       </div>
 
       {/* Team Activity and Tasks */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
         
         {/* Task Overview */}
-        <div className="rounded-xl border bg-card text-card-foreground shadow col-span-2">
+        <motion.div 
+          initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.7 }}
+          className="rounded-xl border bg-card text-card-foreground shadow col-span-2"
+        >
           <div className="p-6 flex flex-row items-center justify-between space-y-0 pb-2">
             <div className="space-y-1">
               <h3 className="font-semibold leading-none tracking-tight">{t("TaskOverview" as any)}</h3>
@@ -287,10 +311,13 @@ export default function DashboardPage() {
               </>
             )}
           </div>
-        </div>
+        </motion.div>
 
         {/* Team Activity Board */}
-        <div className="rounded-xl border bg-card text-card-foreground shadow col-span-5">
+        <motion.div 
+          initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.8 }}
+          className="rounded-xl border bg-card text-card-foreground shadow col-span-5"
+        >
           <div className="p-6 flex flex-row items-center justify-between space-y-0 pb-2">
             <div className="space-y-1">
               <h3 className="font-semibold leading-none tracking-tight">{t("TeamActivityBoard" as any)}</h3>
@@ -301,9 +328,7 @@ export default function DashboardPage() {
             {stats === undefined ? (
               <Skeleton className="h-[200px] w-full mt-4" />
             ) : stats.teamTasks?.length === 0 ? (
-              <div className="h-[200px] w-full flex items-center justify-center text-muted-foreground border border-dashed rounded-lg mt-4">
-                {t("NoTasksAssigned" as any)}
-              </div>
+              <EmptyState icon={Users} title={t("NoTasksAssigned" as any) || "No tasks assigned"} className="min-h-[200px] mt-4" />
             ) : (
               <div className="mt-4">
                 <table className="w-full text-sm text-left">
@@ -337,9 +362,9 @@ export default function DashboardPage() {
               </div>
             )}
           </div>
-        </div>
+        </motion.div>
 
       </div>
-    </div>
+    </motion.div>
   );
 }

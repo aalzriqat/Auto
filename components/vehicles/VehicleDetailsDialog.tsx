@@ -2,6 +2,11 @@ import { useQuery } from "convex/react";
 import {
   ExternalLink,
   Printer,
+  Banknote,
+  CheckSquare,
+  Wrench,
+  Users,
+  Car,
 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import { Doc } from "@/convex/_generated/dataModel";
@@ -25,10 +30,14 @@ import {
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useState } from "react";
 import { TestDriveDialog } from "@/components/test_drives/TestDriveDialog";
 import { WorkOrderDialog } from "@/components/work_orders/WorkOrderDialog";
 import { VehicleValuationsTab } from "@/components/vehicles/VehicleValuationsTab";
+import { EmptyState } from "@/components/ui/empty-state";
+import { usePermissions } from "@/hooks/use-permissions";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 
 interface VehicleDetailsDialogProps {
   vehicle: Doc<"vehicles"> | null;
@@ -45,6 +54,7 @@ export function VehicleDetailsDialog({
 }: VehicleDetailsDialogProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  const { hasPermission, isLoading: permissionsLoading } = usePermissions();
   
   const relations = useQuery(
     api.vehicles.getRelations,
@@ -76,63 +86,77 @@ export function VehicleDetailsDialog({
         <Tabs defaultValue="overview" className="flex-1 flex flex-col min-h-0">
           <div className="px-6 border-b">
             <TabsList className="bg-transparent h-12 p-0 -mb-px">
-              <TabsTrigger 
-                value="overview" 
-                className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
-              >
-                {t("Overview" as any) || "Overview"}
-              </TabsTrigger>
-              <TabsTrigger 
-                value="leads_sales" 
-                className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
-              >
-                {t("LeadsSales" as any) || "Leads & Sales"}
-                {relations && (relations.leads.length > 0 || relations.sales.length > 0) && (
-                  <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.leads.length + relations.sales.length}</Badge>
-                )}
-              </TabsTrigger>
-              <TabsTrigger 
-                value="expenses" 
-                className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
-              >
-                {t("Expenses" as any) || "Expenses"}
-                {relations?.expenses && relations.expenses.length > 0 && (
-                  <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.expenses.length}</Badge>
-                )}
-              </TabsTrigger>
-              <TabsTrigger 
-                value="tasks" 
-                className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
-              >
-                {t("Tasks" as any) || "Tasks"}
-                {relations?.tasks && relations.tasks.length > 0 && (
-                  <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.tasks.length}</Badge>
-                )}
-              </TabsTrigger>
-              <TabsTrigger 
-                value="test_drives" 
-                className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
-              >
-                {t("TestDrives" as any) || "Test Drives"}
-                {relations?.testDrives && relations.testDrives.length > 0 && (
-                  <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.testDrives.length}</Badge>
-                )}
-              </TabsTrigger>
-              <TabsTrigger 
-                value="work_orders" 
-                className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
-              >
-                {t("WorkOrders" as any) || "Work Orders"}
-                {relations?.workOrders && relations.workOrders.length > 0 && (
-                  <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.workOrders.length}</Badge>
-                )}
-              </TabsTrigger>
-              <TabsTrigger 
-                value="valuations" 
-                className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
-              >
-                {t("Valuations" as any) || "Valuations"}
-              </TabsTrigger>
+              {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_INFO)) && (
+                <TabsTrigger 
+                  value="overview" 
+                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
+                >
+                  {t("Overview" as any) || "Overview"}
+                </TabsTrigger>
+              )}
+              {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_LEADS)) && (
+                <TabsTrigger 
+                  value="leads_sales" 
+                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
+                >
+                  {t("LeadsSales" as any) || "Leads & Sales"}
+                  {relations && (relations.leads.length > 0 || relations.sales.length > 0) && (
+                    <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.leads.length + relations.sales.length}</Badge>
+                  )}
+                </TabsTrigger>
+              )}
+              {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_EXPENSES)) && (
+                <TabsTrigger 
+                  value="expenses" 
+                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
+                >
+                  {t("Expenses" as any) || "Expenses"}
+                  {relations?.expenses && relations.expenses.length > 0 && (
+                    <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.expenses.length}</Badge>
+                  )}
+                </TabsTrigger>
+              )}
+              {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_TASKS)) && (
+                <TabsTrigger 
+                  value="tasks" 
+                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
+                >
+                  {t("Tasks" as any) || "Tasks"}
+                  {relations?.tasks && relations.tasks.length > 0 && (
+                    <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.tasks.length}</Badge>
+                  )}
+                </TabsTrigger>
+              )}
+              {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_TEST_DRIVES)) && (
+                <TabsTrigger 
+                  value="test_drives" 
+                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
+                >
+                  {t("TestDrives" as any) || "Test Drives"}
+                  {relations?.testDrives && relations.testDrives.length > 0 && (
+                    <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.testDrives.length}</Badge>
+                  )}
+                </TabsTrigger>
+              )}
+              {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_WORK_ORDERS)) && (
+                <TabsTrigger 
+                  value="work_orders" 
+                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
+                >
+                  {t("WorkOrders" as any) || "Work Orders"}
+                  {relations?.workOrders && relations.workOrders.length > 0 && (
+                    <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.workOrders.length}</Badge>
+                  )}
+                </TabsTrigger>
+              )}
+              {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_VALUATIONS)) && (
+                <TabsTrigger 
+                  value="valuations" 
+                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
+                >
+                  {t("Valuations" as any) || "Valuations"}
+                </TabsTrigger>
+              )}
             </TabsList>
           </div>
 
@@ -223,9 +247,12 @@ export function VehicleDetailsDialog({
               <div>
                 <h3 className="font-semibold text-sm mb-3">{t("SalesRecord" as any) || "Sales Record"}</h3>
                 {!relations ? (
-                  <p className="text-sm text-muted-foreground">{t("Loading" as any) || "Loading..."}</p>
+                  <div className="space-y-3">
+                    <Skeleton className="h-[100px] w-full rounded-lg" />
+                    <Skeleton className="h-[100px] w-full rounded-lg" />
+                  </div>
                 ) : relations.sales.length === 0 ? (
-                  <p className="text-sm text-muted-foreground italic">{t("NoSales" as any) || "No sales recorded for this vehicle."}</p>
+                  <EmptyState icon={Banknote} title={t("NoSales" as any) || "No sales recorded for this vehicle."} />
                 ) : (
                   <div className="space-y-3">
                     {relations.sales.map((sale) => (
@@ -255,9 +282,12 @@ export function VehicleDetailsDialog({
               <div>
                 <h3 className="font-semibold text-sm mb-3">{t("AssociatedLeads" as any) || "Associated Leads"}</h3>
                 {!relations ? (
-                  <p className="text-sm text-muted-foreground">{t("Loading" as any) || "Loading..."}</p>
+                  <div className="space-y-3">
+                    <Skeleton className="h-[80px] w-full rounded-lg" />
+                    <Skeleton className="h-[80px] w-full rounded-lg" />
+                  </div>
                 ) : relations.leads.length === 0 ? (
-                  <p className="text-sm text-muted-foreground italic">{t("NoLeads" as any) || "No leads currently interested in this vehicle."}</p>
+                  <EmptyState icon={Users} title={t("NoLeads" as any) || "No leads currently interested in this vehicle."} />
                 ) : (
                   <div className="space-y-3">
                     {relations.leads.map((lead) => (
@@ -278,9 +308,12 @@ export function VehicleDetailsDialog({
             <TabsContent value="expenses" className="m-0 focus-visible:outline-none">
               <h3 className="font-semibold text-sm mb-3">{t("VehicleExpenses" as any) || "Vehicle Expenses"}</h3>
               {!relations ? (
-                <p className="text-sm text-muted-foreground">{t("Loading" as any) || "Loading..."}</p>
+                <div className="space-y-3">
+                  <Skeleton className="h-[80px] w-full rounded-lg" />
+                  <Skeleton className="h-[80px] w-full rounded-lg" />
+                </div>
               ) : relations.expenses.length === 0 ? (
-                <p className="text-sm text-muted-foreground italic">{t("NoExpenses" as any) || "No expenses recorded for this vehicle."}</p>
+                <EmptyState icon={Banknote} title={t("NoExpenses" as any) || "No expenses recorded for this vehicle."} />
               ) : (
                 <div className="space-y-3">
                   {relations.expenses.map((exp) => (
@@ -318,9 +351,12 @@ export function VehicleDetailsDialog({
             <TabsContent value="tasks" className="m-0 focus-visible:outline-none">
               <h3 className="font-semibold text-sm mb-3">{t("AssociatedTasks" as any) || "Associated Tasks"}</h3>
               {!relations ? (
-                <p className="text-sm text-muted-foreground">{t("Loading" as any) || "Loading..."}</p>
+                <div className="space-y-3">
+                  <Skeleton className="h-[80px] w-full rounded-lg" />
+                  <Skeleton className="h-[80px] w-full rounded-lg" />
+                </div>
               ) : relations.tasks.length === 0 ? (
-                <p className="text-sm text-muted-foreground italic">{t("NoTasks" as any) || "No tasks assigned for this vehicle."}</p>
+                <EmptyState icon={CheckSquare} title={t("NoTasks" as any) || "No tasks assigned for this vehicle."} />
               ) : (
                 <div className="space-y-3">
                   {relations.tasks.map((task) => (
@@ -351,9 +387,12 @@ export function VehicleDetailsDialog({
                 <Button size="sm" onClick={() => { setSelectedTestDrive(null); setTestDriveOpen(true); }}>{t("LogTestDrive" as any) || "Log Test Drive"}</Button>
               </div>
               {!relations ? (
-                <p className="text-sm text-muted-foreground">{t("Loading" as any) || "Loading..."}</p>
+                <div className="space-y-3 mt-4">
+                  <Skeleton className="h-[120px] w-full rounded-lg" />
+                  <Skeleton className="h-[120px] w-full rounded-lg" />
+                </div>
               ) : !relations.testDrives || relations.testDrives.length === 0 ? (
-                <p className="text-sm text-muted-foreground italic">{t("NoTestDrives" as any) || "No test drives recorded."}</p>
+                <EmptyState icon={Car} title={t("NoTestDrives" as any) || "No test drives recorded."} />
               ) : (
                 <div className="space-y-3">
                   {relations.testDrives.map((td: any) => (
@@ -391,9 +430,12 @@ export function VehicleDetailsDialog({
                 <Button size="sm" onClick={() => { setSelectedWorkOrder(null); setWorkOrderOpen(true); }}>{t("NewWorkOrder" as any) || "New Work Order"}</Button>
               </div>
               {!relations ? (
-                <p className="text-sm text-muted-foreground">{t("Loading" as any) || "Loading..."}</p>
+                <div className="space-y-3 mt-4">
+                  <Skeleton className="h-[100px] w-full rounded-lg" />
+                  <Skeleton className="h-[100px] w-full rounded-lg" />
+                </div>
               ) : !relations.workOrders || relations.workOrders.length === 0 ? (
-                <p className="text-sm text-muted-foreground italic">{t("NoWorkOrders" as any) || "No work orders recorded."}</p>
+                <EmptyState icon={Wrench} title={t("NoWorkOrders" as any) || "No work orders recorded."} />
               ) : (
                 <div className="space-y-3">
                   {relations.workOrders.map((wo: any) => (
