@@ -87,10 +87,10 @@ export function BranchesClient() {
   return (
     <div className="flex-1 space-y-4 p-4 md:p-8 pt-6">
       <div className="flex items-center justify-between space-y-2">
-        <h2 className="text-3xl font-bold tracking-tight">Branches Management</h2>
+        <h2 className="text-3xl font-bold tracking-tight">{t("BranchesManagement" as any) || "Branches Management"}</h2>
         <Button onClick={handleOpenAdd}>
           <Plus className="mr-2 h-4 w-4" />
-          Add Branch
+          {t("AddBranch" as any) || "Add Branch"}
         </Button>
       </div>
 
@@ -103,12 +103,12 @@ export function BranchesClient() {
                   <AlertTriangle className="h-6 w-6" />
                 </div>
                 <div>
-                  <h3 className="text-lg font-semibold text-yellow-900">Branch System Not Initialized</h3>
-                  <p className="text-yellow-700">You need to create a default branch and migrate existing vehicles and users to it.</p>
+                  <h3 className="text-lg font-semibold text-yellow-900">{t("BranchSystemNotInitialized" as any) || "Branch System Not Initialized"}</h3>
+                  <p className="text-yellow-700">{t("BranchInitDesc" as any) || "You need to create a default branch and migrate existing vehicles and users to it."}</p>
                 </div>
               </div>
               <Button onClick={handleMigrate} className="bg-yellow-600 hover:bg-yellow-700 text-white">
-                Initialize & Migrate Data
+                {t("InitializeMigrateData" as any) || "Initialize & Migrate Data"}
               </Button>
             </div>
           </CardContent>
@@ -119,32 +119,32 @@ export function BranchesClient() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Store className="h-5 w-5" />
-            Physical Branches
+            {t("PhysicalBranches" as any) || "Physical Branches"}
           </CardTitle>
-          <CardDescription>Manage your physical dealership locations</CardDescription>
+          <CardDescription>{t("ManagePhysicalBranches" as any) || "Manage your physical dealership locations"}</CardDescription>
         </CardHeader>
         <CardContent>
           <div className="rounded-md border">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Address</TableHead>
-                  <TableHead>Phone</TableHead>
-                  <TableHead>Manager</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead>{t("Name" as any) || "Name"}</TableHead>
+                  <TableHead>{t("Address" as any) || "Address"}</TableHead>
+                  <TableHead>{t("Phone" as any) || "Phone"}</TableHead>
+                  <TableHead>{t("Manager" as any) || "Manager"}</TableHead>
+                  <TableHead>{t("Status" as any) || "Status"}</TableHead>
+                  <TableHead className="text-right">{t("Actions" as any) || "Actions"}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {branches === undefined ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center">Loading...</TableCell>
+                    <TableCell colSpan={6} className="text-center">{t("Loading" as any) || "Loading..."}</TableCell>
                   </TableRow>
                 ) : branches.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={6} className="text-center text-muted-foreground">
-                      No branches found.
+                      {t("NoBranchesFound" as any) || "No branches found."}
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -156,7 +156,7 @@ export function BranchesClient() {
                       <TableCell>{branch.managerName}</TableCell>
                       <TableCell>
                         <Badge variant={branch.isActive ? "default" : "secondary"}>
-                          {branch.isActive ? "Active" : "Inactive"}
+                          {branch.isActive ? (t("Active" as any) || "Active") : (t("Inactive" as any) || "Inactive")}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
@@ -165,7 +165,7 @@ export function BranchesClient() {
                           size="sm"
                           onClick={() => handleOpenEdit(branch)}
                         >
-                          Edit
+                          {t("Edit" as any) || "Edit"}
                         </Button>
                       </TableCell>
                     </TableRow>
@@ -180,11 +180,11 @@ export function BranchesClient() {
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{editingBranch ? "Edit Branch" : "Add New Branch"}</DialogTitle>
+            <DialogTitle>{editingBranch ? (t("EditBranch" as any) || "Edit Branch") : (t("AddNewBranch" as any) || "Add New Branch")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label>Branch Name</Label>
+              <Label>{t("BranchName" as any) || "Branch Name"}</Label>
               <Input
                 value={formData.name}
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
@@ -192,7 +192,7 @@ export function BranchesClient() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Address (Optional)</Label>
+              <Label>{t("AddressOptional" as any) || "Address (Optional)"}</Label>
               <Input
                 value={formData.address}
                 onChange={(e) => setFormData({ ...formData, address: e.target.value })}
@@ -200,7 +200,7 @@ export function BranchesClient() {
               />
             </div>
             <div className="space-y-2">
-              <Label>Phone (Optional)</Label>
+              <Label>{t("PhoneOptional" as any) || "Phone (Optional)"}</Label>
               <Input
                 value={formData.phone}
                 onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
@@ -215,13 +215,13 @@ export function BranchesClient() {
                 onChange={(e) => setFormData({ ...formData, isActive: e.target.checked })}
                 className="w-4 h-4 text-primary rounded border-gray-300"
               />
-              <Label htmlFor="isActive">Active Branch</Label>
+              <Label htmlFor="isActive">{t("ActiveBranch" as any) || "Active Branch"}</Label>
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setIsDialogOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setIsDialogOpen(false)}>{t("Cancel" as any) || "Cancel"}</Button>
             <Button onClick={handleSave} disabled={!formData.name}>
-              {editingBranch ? "Save Changes" : "Create Branch"}
+              {editingBranch ? (t("SaveChanges" as any) || "Save Changes") : (t("CreateBranch" as any) || "Create Branch")}
             </Button>
           </DialogFooter>
         </DialogContent>

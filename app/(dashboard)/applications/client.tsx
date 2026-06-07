@@ -25,14 +25,14 @@ export function ApplicationClient() {
   return (
     <div className="flex-1 space-y-4 p-4 md:p-8 pt-6">
       <div className="flex items-center justify-between space-y-2">
-        <h2 className="text-3xl font-bold tracking-tight">Finance Applications</h2>
+        <h2 className="text-3xl font-bold tracking-tight">{t("FinanceApplications" as any) || "Finance Applications"}</h2>
       </div>
 
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <FileText className="h-5 w-5" />
-            Active Applications
+            {t("ActiveApplications" as any) || "Active Applications"}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -40,24 +40,24 @@ export function ApplicationClient() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Customer</TableHead>
-                  <TableHead>Vehicle</TableHead>
-                  <TableHead>Company</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead>{t("Customer" as any) || "Customer"}</TableHead>
+                  <TableHead>{t("Vehicle" as any) || "Vehicle"}</TableHead>
+                  <TableHead>{t("Company" as any) || "Company"}</TableHead>
+                  <TableHead>{t("Amount" as any) || "Amount"}</TableHead>
+                  <TableHead>{t("Status" as any) || "Status"}</TableHead>
+                  <TableHead>{t("Date" as any) || "Date"}</TableHead>
+                  <TableHead className="text-right">{t("Actions" as any) || "Actions"}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {applications === undefined ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center">Loading...</TableCell>
+                    <TableCell colSpan={7} className="text-center">{t("LoadingApplications" as any) || "Loading..."}</TableCell>
                   </TableRow>
                 ) : applications.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={7} className="text-center text-muted-foreground">
-                      No applications found.
+                      {t("NoApplicationsFound" as any) || "No applications found."}
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -66,7 +66,7 @@ export function ApplicationClient() {
                       <TableCell className="font-medium">{app.customerName}</TableCell>
                       <TableCell>{app.vehicleDesc}</TableCell>
                       <TableCell>{app.companyName}</TableCell>
-                      <TableCell>{app.financedAmount.toLocaleString()} JOD</TableCell>
+                      <TableCell>{app.financedAmount.toLocaleString()} {t("JOD" as any) || "JOD"}</TableCell>
                       <TableCell>
                         <Badge variant={
                           app.status === "APPROVED" ? "default" :
@@ -87,7 +87,7 @@ export function ApplicationClient() {
                           }}
                         >
                           <Eye className="h-4 w-4 mr-2" />
-                          Review
+                          {t("ReviewApp" as any) || "Review"}
                         </Button>
                       </TableCell>
                     </TableRow>
