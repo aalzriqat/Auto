@@ -27,7 +27,8 @@ export const list = query({
     status: v.optional(vehicleStatus),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+    const canViewCostPrice = role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
 
     let vehicles;
     if (args.status) {
@@ -59,8 +60,10 @@ export const list = query({
         const imageUrls = await Promise.all(
           (vehicle.imageIds ?? []).map((id) => ctx.storage.getUrl(id))
         );
+        const { purchasePrice, ...rest } = vehicle;
         return { 
-          ...vehicle, 
+          ...rest,
+          ...(canViewCostPrice ? { purchasePrice } : {}),
           imageUrls,
           pendingStatusRequest: pendingMap.get(vehicle._id) ?? null
         };
@@ -78,7 +81,8 @@ export const get = query({
     vehicleId: v.id("vehicles"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+    const canViewCostPrice = role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
 
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.orgId !== args.orgId) {
@@ -89,7 +93,12 @@ export const get = query({
       (vehicle.imageIds ?? []).map((id) => ctx.storage.getUrl(id))
     );
 
-    return { ...vehicle, imageUrls };
+    const { purchasePrice, ...rest } = vehicle;
+    return { 
+      ...rest,
+      ...(canViewCostPrice ? { purchasePrice } : {}),
+      imageUrls 
+    };
   },
 });
 

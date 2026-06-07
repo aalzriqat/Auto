@@ -91,6 +91,7 @@ const PERMISSION_GROUPS = [
     actions: [
       { id: PERMISSIONS.MANAGE_SETTINGS, label: "Manage Settings" },
       { id: PERMISSIONS.MANAGE_USERS, label: "Manage Users & Roles" },
+      { id: PERMISSIONS.VIEW_COST_PRICE, label: "View Cost Price" },
     ]
   }
 ];

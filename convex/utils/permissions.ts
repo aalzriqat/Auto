@@ -77,6 +77,9 @@ export const PERMISSIONS = {
   // Settings
   VIEW_SETTINGS: "view:settings",
   MANAGE_SETTINGS: "manage:settings",
+
+  // Financial — sensitive field visibility
+  VIEW_COST_PRICE: "view:cost_price",
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -128,6 +131,7 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.VIEW_REPORTS,
       PERMISSIONS.VIEW_SETTINGS,
       PERMISSIONS.MANAGE_SETTINGS,
+      PERMISSIONS.VIEW_COST_PRICE,
     ],
   },
   {
