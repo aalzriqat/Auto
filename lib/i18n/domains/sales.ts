@@ -177,6 +177,7 @@ export const salesEn = {
   LoadingApplications: "Loading applications...",
   NoApplicationsFound: "No applications found.",
   JOD: "JOD",
+  Company: "Company",
 
   // Application Details
   ApplicationDetails: "Application Details",
@@ -386,6 +387,7 @@ export const salesAr = {
   LoadingApplications: "جاري تحميل الطلبات...",
   NoApplicationsFound: "لم يتم العثور على طلبات.",
   JOD: "دينار",
+  Company: "الشركة",
 
   // Application Details
   ApplicationDetails: "تفاصيل الطلب",
