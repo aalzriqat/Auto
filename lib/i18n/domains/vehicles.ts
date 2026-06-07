@@ -88,6 +88,13 @@ export const vehiclesEn = {
   StatusReserved: "Reserved",
   StatusMaintenance: "Maintenance",
   DecodeVIN: "Decode VIN",
+  AddNewValuation: "Add New Valuation",
+  SelectBank: "Select a bank...",
+  SaveValuation: "Save Valuation",
+  ExistingValuations: "Existing Valuations",
+  NoValuationsRecorded: "No valuations recorded yet.",
+  UnknownCompany: "Unknown Company",
+  Expires: "Expires:",
 };
 
 export const vehiclesAr = {
@@ -180,4 +187,11 @@ export const vehiclesAr = {
   StatusReserved: "محجوز",
   StatusMaintenance: "صيانة",
   DecodeVIN: "فك شفرة المركبة (VIN)",
+  AddNewValuation: "إضافة تخمين جديد",
+  SelectBank: "اختر البنك...",
+  SaveValuation: "حفظ التخمين",
+  ExistingValuations: "التخمينات الحالية",
+  NoValuationsRecorded: "لم يتم تسجيل أي تخمينات بعد.",
+  UnknownCompany: "شركة غير معروفة",
+  Expires: "ينتهي:",
 };

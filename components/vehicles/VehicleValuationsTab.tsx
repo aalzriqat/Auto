@@ -54,13 +54,13 @@ export function VehicleValuationsTab({ vehicleId }: { vehicleId: Id<"vehicles"> 
   return (
     <div className="space-y-6">
       <div className="bg-muted/30 p-4 rounded-lg border space-y-4">
-        <h3 className="font-semibold text-sm">Add New Valuation</h3>
+        <h3 className="font-semibold text-sm">{t("AddNewValuation" as any) || "Add New Valuation"}</h3>
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label>{t("Select Company" as any)}</Label>
             <Select value={companyId} onValueChange={setCompanyId}>
               <SelectTrigger>
-                <SelectValue placeholder="Select a bank..." />
+                <SelectValue placeholder={t("SelectBank" as any) || "Select a bank..."} />
               </SelectTrigger>
               <SelectContent>
                 {companies.map((c) => (
@@ -82,14 +82,14 @@ export function VehicleValuationsTab({ vehicleId }: { vehicleId: Id<"vehicles"> 
           </div>
         </div>
         <Button onClick={handleSave} disabled={isSubmitting}>
-          {isSubmitting ? "Saving..." : "Save Valuation"}
+          {isSubmitting ? (t("Saving" as any) || "Saving...") : (t("SaveValuation" as any) || "Save Valuation")}
         </Button>
       </div>
 
       <div>
-        <h3 className="font-semibold text-sm mb-3">Existing Valuations</h3>
+        <h3 className="font-semibold text-sm mb-3">{t("ExistingValuations" as any) || "Existing Valuations"}</h3>
         {valuations.length === 0 ? (
-          <p className="text-sm text-muted-foreground italic">No valuations recorded yet.</p>
+          <p className="text-sm text-muted-foreground italic">{t("NoValuationsRecorded" as any) || "No valuations recorded yet."}</p>
         ) : (
           <div className="space-y-3">
             {valuations.map((val) => {
@@ -97,8 +97,8 @@ export function VehicleValuationsTab({ vehicleId }: { vehicleId: Id<"vehicles"> 
               return (
                 <div key={val._id} className="flex justify-between items-center p-3 border rounded-lg">
                   <div>
-                    <p className="font-medium">{comp?.name || "Unknown Company"}</p>
-                    {val.expiresAt && <p className="text-xs text-muted-foreground">Expires: {format(val.expiresAt, "PP")}</p>}
+                    <p className="font-medium">{comp?.name || t("UnknownCompany" as any) || "Unknown Company"}</p>
+                    {val.expiresAt && <p className="text-xs text-muted-foreground">{t("Expires" as any) || "Expires:"} {format(val.expiresAt, "PP")}</p>}
                   </div>
                   <p className="font-bold text-primary">{val.valuationAmount.toLocaleString()} JOD</p>
                 </div>
