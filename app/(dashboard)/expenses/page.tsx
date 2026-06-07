@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ExpenseDialog } from "@/components/expenses/ExpenseDialog";
@@ -29,6 +30,7 @@ import {
 
 export default function ExpensesPage() {
   const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
   const expenses = useQuery(api.expenses.list, activeOrgId ? { orgId: activeOrgId } : "skip");
   const removeExpense = useMutation(api.expenses.remove);
 
@@ -67,10 +69,10 @@ export default function ExpensesPage() {
 
   const getCategoryBadge = (category: string) => {
     switch (category) {
-      case "REPAIR": return <Badge variant="destructive">Repair</Badge>;
-      case "MAINTENANCE": return <Badge variant="secondary" className="bg-blue-500/20 text-blue-600 hover:bg-blue-500/30">Maintenance</Badge>;
-      case "DETAILING": return <Badge variant="secondary" className="bg-cyan-500/20 text-cyan-600 hover:bg-cyan-500/30">Detailing</Badge>;
-      default: return <Badge variant="outline">{category}</Badge>;
+      case "REPAIR": return <Badge variant="destructive">{t("Repair" as any)}</Badge>;
+      case "MAINTENANCE": return <Badge variant="secondary" className="bg-blue-500/20 text-blue-600 hover:bg-blue-500/30">{t("Maintenance" as any)}</Badge>;
+      case "DETAILING": return <Badge variant="secondary" className="bg-cyan-500/20 text-cyan-600 hover:bg-cyan-500/30">{t("Detailing" as any)}</Badge>;
+      default: return <Badge variant="outline">{t(category as any)}</Badge>;
     }
   };
 
@@ -78,20 +80,20 @@ export default function ExpensesPage() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight">Expenses</h2>
+          <h2 className="text-2xl font-bold tracking-tight">{t("Expenses" as any)}</h2>
           <p className="text-muted-foreground">
-            Track dealership overhead and individual vehicle repair costs.
+            {t("TrackExpenses" as any)}
           </p>
         </div>
         <Button onClick={handleAddNew}>
-          <Plus className="me-2 h-4 w-4" /> Record Expense
+          <Plus className="me-2 h-4 w-4" /> {t("RecordExpense" as any)}
         </Button>
       </div>
 
       <div className="flex items-center w-full max-w-sm space-x-2">
         <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
         <Input
-          placeholder="Search expenses..."
+          placeholder={t("SearchExpenses" as any)}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           className="ps-9"
@@ -102,28 +104,28 @@ export default function ExpensesPage() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Date</TableHead>
-              <TableHead>Title</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Category</TableHead>
-              <TableHead>Vendor</TableHead>
-              <TableHead>Paid By</TableHead>
-              <TableHead>Linked Vehicle</TableHead>
-              <TableHead className="text-end">Amount</TableHead>
-              <TableHead className="text-end">Actions</TableHead>
+              <TableHead>{t("Date" as any)}</TableHead>
+              <TableHead>{t("Title" as any)}</TableHead>
+              <TableHead>{t("Status" as any)}</TableHead>
+              <TableHead>{t("Category" as any)}</TableHead>
+              <TableHead>{t("Vendor" as any)}</TableHead>
+              <TableHead>{t("PaidBy" as any)}</TableHead>
+              <TableHead>{t("LinkedVehicle" as any)}</TableHead>
+              <TableHead className="text-end">{t("Amount" as any)}</TableHead>
+              <TableHead className="text-end">{t("Actions" as any)}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {filteredExpenses === undefined ? (
               <TableRow>
                 <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
-                  Loading expenses...
+                  {t("LoadingExpenses" as any)}
                 </TableCell>
               </TableRow>
             ) : filteredExpenses.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
-                  No expenses found.
+                  {t("NoExpensesFound" as any)}
                 </TableCell>
               </TableRow>
             ) : (
@@ -135,19 +137,19 @@ export default function ExpensesPage() {
                   <TableCell>{expense.title}</TableCell>
                   <TableCell>
                     {expense.status === "PAID" ? (
-                      <Badge className="bg-green-100 text-green-800 hover:bg-green-100">Paid</Badge>
+                      <Badge className="bg-green-100 text-green-800 hover:bg-green-100">{t("Paid" as any)}</Badge>
                     ) : (
-                      <Badge variant="outline" className="bg-yellow-100 text-yellow-800 hover:bg-yellow-100 border-yellow-200">Pending</Badge>
+                      <Badge variant="outline" className="bg-yellow-100 text-yellow-800 hover:bg-yellow-100 border-yellow-200">{t("Pending" as any)}</Badge>
                     )}
                   </TableCell>
                   <TableCell>{getCategoryBadge(expense.category)}</TableCell>
-                  <TableCell>{expense.vendor || <span className="text-muted-foreground italic">N/A</span>}</TableCell>
-                  <TableCell>{expense.payerName || <span className="text-muted-foreground italic">Unassigned</span>}</TableCell>
+                  <TableCell>{expense.vendor || <span className="text-muted-foreground italic">{t("NA" as any)}</span>}</TableCell>
+                  <TableCell>{expense.payerName || <span className="text-muted-foreground italic">{t("Unassigned" as any)}</span>}</TableCell>
                   <TableCell>
                     {expense.vehicleSummary ? (
                       <span className="text-sm">{expense.vehicleSummary}</span>
                     ) : (
-                      <span className="text-sm text-muted-foreground italic">General Expense</span>
+                      <span className="text-sm text-muted-foreground italic">{t("GeneralExpense" as any)}</span>
                     )}
                   </TableCell>
                   <TableCell className="text-end font-medium text-red-500">
@@ -177,14 +179,14 @@ export default function ExpensesPage() {
       <Dialog open={!!expenseToDelete} onOpenChange={(open) => !open && setExpenseToDelete(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Delete Expense</DialogTitle>
+            <DialogTitle>{t("DeleteExpense" as any)}</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete this expense? This action cannot be undone and will affect your profit margin calculations.
+              {t("DeleteExpenseDesc" as any)}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setExpenseToDelete(null)}>Cancel</Button>
-            <Button variant="destructive" onClick={handleDelete}>Delete Permanently</Button>
+            <Button variant="outline" onClick={() => setExpenseToDelete(null)}>{t("Cancel" as any)}</Button>
+            <Button variant="destructive" onClick={handleDelete}>{t("DeletePermanently" as any)}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
