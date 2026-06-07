@@ -1,16 +1,16 @@
-# Graph Report - Auto  (2026-06-06)
+# Graph Report - Auto  (2026-06-07)
 
 ## Corpus Check
-- 163 files · ~95,919 words
+- 184 files · ~108,634 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1210 nodes · 2034 edges · 96 communities (85 shown, 11 thin omitted)
+- 1289 nodes · 2431 edges · 97 communities (85 shown, 12 thin omitted)
 - Extraction: 100% EXTRACTED · 0% INFERRED · 0% AMBIGUOUS
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `a851db70`
+- Built from commit: `25ed0044`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -104,47 +104,48 @@
 - [[_COMMUNITY_Community 91|Community 91]]
 - [[_COMMUNITY_Community 92|Community 92]]
 - [[_COMMUNITY_Community 93|Community 93]]
+- [[_COMMUNITY_Community 96|Community 96]]
 
 ## God Nodes (most connected - your core abstractions)
-1. `useOrg()` - 57 edges
-2. `useLanguage()` - 40 edges
-3. `cn()` - 32 edges
-4. `api` - 31 edges
-5. `Button` - 28 edges
-6. `DialogHeader()` - 23 edges
-7. `DialogContent` - 22 edges
-8. `DialogTitle` - 22 edges
-9. `DialogDescription` - 22 edges
-10. `Input` - 20 edges
+1. `useOrg()` - 77 edges
+2. `useLanguage()` - 72 edges
+3. `api` - 41 edges
+4. `Button` - 39 edges
+5. `cn()` - 32 edges
+6. `DialogHeader()` - 29 edges
+7. `DialogContent` - 28 edges
+8. `DialogTitle` - 28 edges
+9. `Input` - 27 edges
+10. `requireTenantAuth()` - 24 edges
 
 ## Surprising Connections (you probably didn't know these)
 - `Onboarding()` --calls--> `useOrg()`  [EXTRACTED]
   app/(dashboard)/layout.tsx → components/providers/OrgProvider.tsx
 - `DashboardWrapper()` --calls--> `useOrg()`  [EXTRACTED]
   app/(dashboard)/layout.tsx → components/providers/OrgProvider.tsx
-- `ReportsPage()` --calls--> `useOrg()`  [EXTRACTED]
-  app/(dashboard)/reports/page.tsx → components/providers/OrgProvider.tsx
 - `DropdownMenuShortcut()` --calls--> `cn()`  [EXTRACTED]
   components/ui/dropdown-menu.tsx → lib/utils.ts
 - `SheetFooter()` --calls--> `cn()`  [EXTRACTED]
   components/ui/sheet.tsx → lib/utils.ts
+- `ApplicationClient()` --calls--> `useLanguage()`  [EXTRACTED]
+  app/(dashboard)/applications/client.tsx → components/providers/LanguageProvider.tsx
 
 ## Import Cycles
 - None detected.
 
-## Communities (96 total, 11 thin omitted)
+## Communities (97 total, 12 thin omitted)
 
 ### Community 0 - "Community 0"
-Cohesion: 0.08
-Nodes (47): CustomerDialogProps, CustomerFormValues, customerSchema, ExpenseDialog(), ExpenseDialogProps, ExpenseFormValues, expenseSchema, LeadDialogProps (+39 more)
+Cohesion: 0.05
+Nodes (141): ApplicationDetailsDialog(), BranchesClient(), metadata, CustomerDetailsDialog(), CustomerDetailsDialogProps, CustomerDialog(), CustomerDialogProps, CustomerFormValues (+133 more)
 
 ### Community 1 - "Community 1"
 Cohesion: 0.05
 Nodes (37): dependencies, @base-ui/react, class-variance-authority, clerk, @clerk/nextjs, clsx, convex, date-fns (+29 more)
 
 ### Community 2 - "Community 2"
-Cohesion: 0.09
-Nodes (22): useIsMobile(), Sidebar, SidebarContent, SidebarContext, SidebarContextProps, SidebarFooter, SidebarGroup, SidebarGroupAction (+14 more)
+Cohesion: 0.08
+Nodes (25): useIsMobile(), Sidebar, SidebarContent, SidebarContext, SidebarContextProps, SidebarFooter, SidebarGroup, SidebarGroupAction (+17 more)
 
 ### Community 3 - "Community 3"
 Cohesion: 0.18
@@ -156,7 +157,7 @@ Nodes (19): compilerOptions, allowJs, esModuleInterop, incremental, isolatedModu
 
 ### Community 5 - "Community 5"
 Cohesion: 0.16
-Nodes (22): CustomerDetailsDialog(), CustomerDialog(), CustomersPage(), DashboardPage(), ExpensesPage(), NotificationsBell(), LeadDialog(), LeadsPage() (+14 more)
+Nodes (12): backfillPermissions, grantTaskPermissionsToAll, listQuotesByCustomer, saveQuote, updateQuoteStatus, create, list, remove (+4 more)
 
 ### Community 6 - "Community 6"
 Cohesion: 0.11
@@ -167,20 +168,20 @@ Cohesion: 0.12
 Nodes (16): compilerOptions, allowJs, allowSyntheticDefaultImports, forceConsistentCasingInFileNames, isolatedModules, jsx, lib, module (+8 more)
 
 ### Community 8 - "Community 8"
-Cohesion: 0.17
-Nodes (12): LanguageSwitcher(), OrgSwitcher(), navigation, TopNav(), SheetContent, SheetContentProps, SheetDescription, SheetFooter() (+4 more)
+Cohesion: 0.19
+Nodes (11): LanguageSwitcher(), OrgSwitcher(), navigation, SheetContent, SheetContentProps, SheetDescription, SheetFooter(), SheetHeader() (+3 more)
 
 ### Community 10 - "Community 10"
-Cohesion: 0.13
-Nodes (12): crons, triggerAlarms, sendTaskAlarm, sendTeamInvite, http, list, markAllAsRead, markAsRead (+4 more)
+Cohesion: 0.25
+Nodes (7): addRule, generateUploadUrl, getForApplication, listRules, removeRule, saveDocumentFile, updateDocumentStatus
 
 ### Community 11 - "Community 11"
-Cohesion: 0.16
-Nodes (15): stats, create, get, listMine, remove, update, deleteUser, getMe (+7 more)
+Cohesion: 0.17
+Nodes (13): create, get, listMine, remove, update, deleteUser, getMe, getUser (+5 more)
 
 ### Community 12 - "Community 12"
-Cohesion: 0.17
-Nodes (13): DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuShortcut(), DropdownMenuSubContent (+5 more)
+Cohesion: 0.20
+Nodes (9): DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuShortcut(), DropdownMenuSubContent (+1 more)
 
 ### Community 13 - "Community 13"
 Cohesion: 0.10
@@ -195,8 +196,8 @@ Cohesion: 0.22
 Nodes (8): name, private, scripts, build, dev, lint, start, version
 
 ### Community 16 - "Community 16"
-Cohesion: 0.28
-Nodes (19): STAGES, Badge(), BadgeProps, badgeVariants, Button, DialogContent, DialogDescription, DialogFooter() (+11 more)
+Cohesion: 0.29
+Nodes (6): createCompany, deleteCompany, listCompanies, listValuations, saveValuation, updateCompany
 
 ### Community 17 - "Community 17"
 Cohesion: 0.18
@@ -207,36 +208,36 @@ Cohesion: 0.25
 Nodes (7): create, get, getByEmail, getRelations, list, remove, update
 
 ### Community 19 - "Community 19"
-Cohesion: 0.14
-Nodes (17): cn(), ButtonProps, buttonVariants, Calendar(), CalendarProps, DateTimePicker(), DateTimePickerProps, Label (+9 more)
+Cohesion: 0.20
+Nodes (11): cn(), buttonVariants, Calendar(), CalendarProps, DateTimePicker(), DateTimePickerProps, PopoverContent, Skeleton() (+3 more)
 
 ### Community 20 - "Community 20"
-Cohesion: 0.12
-Nodes (19): create, expenseCategory, list, remove, update, create, get, leadStage (+11 more)
+Cohesion: 0.09
+Nodes (26): createFromQuote, finalizeDeal, get, list, updateStatus, crons, triggerAlarms, add (+18 more)
 
 ### Community 21 - "Community 21"
-Cohesion: 0.17
-Nodes (11): add, createAccount, finalizeDirectAccount, getMyMembership, leave, list, prepareDirectAccount, remove (+3 more)
+Cohesion: 0.09
+Nodes (21): sendTaskAlarm, sendTeamInvite, http, add, createAccount, finalizeDirectAccount, getMyMembership, leave (+13 more)
 
 ### Community 22 - "Community 22"
 Cohesion: 0.29
 Nodes (6): create, get, list, remove, saleStatus, update
 
 ### Community 23 - "Community 23"
-Cohesion: 0.29
-Nodes (6): CompanyInfo, CustomerInfo, generateBillOfSale(), generateQuote(), PricingInfo, VehicleInfo
+Cohesion: 0.25
+Nodes (7): CompanyInfo, CustomerInfo, generateBillOfSale(), generateFinanceQuote(), generateQuote(), PricingInfo, VehicleInfo
 
 ### Community 24 - "Community 24"
-Cohesion: 0.15
-Nodes (15): defaultEndDate, defaultStartDate, ReportsPage(), Card, CardContent, CardDescription, CardFooter, CardHeader (+7 more)
+Cohesion: 0.33
+Nodes (5): create, expenseCategory, list, remove, update
 
 ### Community 25 - "Community 25"
 Cohesion: 0.08
 Nodes (24): Agent Mode, Checklist, Convex Quickstart, Development vs Production, Environment variables, Install, Next.js (App Router), Next Steps (+16 more)
 
 ### Community 26 - "Community 26"
-Cohesion: 0.17
-Nodes (10): fixExistingRoles, create, get, list, remove, update, internalMutation, ALL_PERMISSIONS (+2 more)
+Cohesion: 0.33
+Nodes (5): create, get, list, remove, update
 
 ### Community 27 - "Community 27"
 Cohesion: 0.33
@@ -271,12 +272,12 @@ Cohesion: 0.08
 Nodes (23): 1. Push Filters To Storage, 2. Minimize Data Sources, 3. Minimize Row Size, 4. Isolate Frequently-Updated Fields, 5. Match Consistency To Read Patterns, Aggregates, Backfills, Check for redundant indexes (+15 more)
 
 ### Community 42 - "Community 42"
-Cohesion: 0.13
-Nodes (16): commonAr, commonEn, customersAr, customersEn, dashboardAr, dashboardEn, leadsAr, leadsEn (+8 more)
+Cohesion: 0.10
+Nodes (20): commonAr, commonEn, customersAr, customersEn, dashboardAr, dashboardEn, expensesAr, expensesEn (+12 more)
 
 ### Community 43 - "Community 43"
-Cohesion: 0.20
-Nodes (12): CustomerDetailsDialogProps, api, components, LanguageContext, LanguageContextType, OrgContext, OrgContextType, TaskHistoryDialogProps (+4 more)
+Cohesion: 0.40
+Nodes (4): add, list, migrateToDefaultBranch, update
 
 ### Community 44 - "Community 44"
 Cohesion: 0.10
@@ -299,8 +300,8 @@ Cohesion: 0.11
 Nodes (18): 1. Bound your reads, 2. Read smaller shapes, 3. Break large mutations into batches, 4. Move heavy work to actions, 5. Trim return values, 6. Replace `ctx.runQuery` and `ctx.runMutation` with helper functions, 7. Avoid unnecessary `runAction` calls, Common Causes (+10 more)
 
 ### Community 49 - "Community 49"
-Cohesion: 0.12
-Nodes (15): grantTaskPermissionsToAll, complete, create, list, remove, create, listPending, resolve (+7 more)
+Cohesion: 0.13
+Nodes (13): stats, list, markAllAsRead, markAsRead, complete, create, list, remove (+5 more)
 
 ### Community 50 - "Community 50"
 Cohesion: 0.11
@@ -391,8 +392,8 @@ Cohesion: 0.18
 Nodes (10): After Choosing a Provider, Checklist, Convex Authentication Setup, Core Pattern: Protecting Backend Functions, First Step: Choose the Auth Provider, Provider References, Reference Files, When Not to Use (+2 more)
 
 ### Community 72 - "Community 72"
-Cohesion: 0.20
-Nodes (8): DashboardWrapper(), Onboarding(), OrgProvider(), SidebarInset, SidebarProvider, SidebarTrigger, Toaster(), ToasterProps
+Cohesion: 0.18
+Nodes (9): DashboardWrapper(), Onboarding(), TopNav(), OrgProvider(), SidebarInset, SidebarProvider, SidebarTrigger, Toaster() (+1 more)
 
 ### Community 73 - "Community 73"
 Cohesion: 0.25
@@ -447,24 +448,24 @@ Cohesion: 0.40
 Nodes (4): Get started, Join the community, Learn more, Welcome to your Convex + Next.js + Clerk app
 
 ## Knowledge Gaps
-- **801 isolated node(s):** `STAGES`, `defaultEndDate`, `defaultStartDate`, `inter`, `cairo` (+796 more)
+- **838 isolated node(s):** `metadata`, `STAGES`, `defaultEndDate`, `defaultStartDate`, `metadata` (+833 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **11 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **12 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `api` connect `Community 43` to `Community 0`, `Community 72`, `Community 9`, `Community 10`, `Community 8`, `Community 12`, `Community 16`, `Community 19`, `Community 24`?**
-  _High betweenness centrality (0.011) - this node is a cross-community bridge._
-- **Why does `useOrg()` connect `Community 5` to `Community 0`, `Community 72`, `Community 8`, `Community 10`, `Community 43`, `Community 12`, `Community 16`, `Community 19`, `Community 24`?**
-  _High betweenness centrality (0.010) - this node is a cross-community bridge._
-- **Why does `query` connect `Community 11` to `Community 10`, `Community 81`, `Community 18`, `Community 82`, `Community 20`, `Community 21`, `Community 22`, `Community 49`, `Community 17`, `Community 26`?**
-  _High betweenness centrality (0.008) - this node is a cross-community bridge._
-- **What connects `STAGES`, `defaultEndDate`, `defaultStartDate` to the rest of the system?**
-  _801 weakly-connected nodes found - possible documentation gaps or missing edges._
+- **Why does `useOrg()` connect `Community 0` to `Community 96`, `Community 49`, `Community 72`, `Community 8`?**
+  _High betweenness centrality (0.016) - this node is a cross-community bridge._
+- **Why does `mutation` connect `Community 20` to `Community 5`, `Community 10`, `Community 43`, `Community 11`, `Community 16`, `Community 49`, `Community 18`, `Community 82`, `Community 17`, `Community 21`, `Community 22`, `Community 24`, `Community 26`?**
+  _High betweenness centrality (0.013) - this node is a cross-community bridge._
+- **Why does `api` connect `Community 0` to `Community 72`, `Community 9`, `Community 8`, `Community 49`, `Community 20`?**
+  _High betweenness centrality (0.013) - this node is a cross-community bridge._
+- **What connects `metadata`, `STAGES`, `defaultEndDate` to the rest of the system?**
+  _838 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Community 0` be split into smaller, more focused modules?**
-  _Cohesion score 0.08135593220338982 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.0520432753935292 - nodes in this community are weakly interconnected._
 - **Should `Community 1` be split into smaller, more focused modules?**
   _Cohesion score 0.05405405405405406 - nodes in this community are weakly interconnected._
 - **Should `Community 2` be split into smaller, more focused modules?**
-  _Cohesion score 0.08666666666666667 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.07692307692307693 - nodes in this community are weakly interconnected._
