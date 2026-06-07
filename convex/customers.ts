@@ -193,7 +193,7 @@ export const update = mutation({
 
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(args.customerId, patch);
-      
+
       const actorName = await getActorName(ctx);
       await notifyManagers(
         ctx,

@@ -5,11 +5,11 @@ import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { 
-  LineChart, 
-  Car, 
-  Receipt, 
-  Download, 
+import {
+  LineChart,
+  Car,
+  Receipt,
+  Download,
   Printer,
   Users,
   Target
@@ -47,7 +47,7 @@ defaultStartDate.setDate(defaultStartDate.getDate() - 30);
 export default function ReportsPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  
+
   const [startDateStr, setStartDateStr] = useState(defaultStartDate.toISOString().split('T')[0]);
   const [endDateStr, setEndDateStr] = useState(defaultEndDate.toISOString().split('T')[0]);
 
@@ -69,11 +69,9 @@ export default function ReportsPage() {
 
   return (
     <div className="flex-1 space-y-4 p-4 md:p-8 pt-6">
-      <div className="flex items-center justify-between space-y-2 no-print">
-        <h2 className="text-3xl font-bold tracking-tight">{t("ReportsHub" as any) || "Reports Hub"}</h2>
-      </div>
 
-      <style dangerouslySetInnerHTML={{__html: `
+      <style dangerouslySetInnerHTML={{
+        __html: `
         @media print {
           .no-print { display: none !important; }
           body { padding: 0; margin: 0; }
@@ -106,18 +104,18 @@ export default function ReportsPage() {
         <div className="flex items-end gap-4 no-print bg-card p-4 rounded-lg border shadow-sm">
           <div className="space-y-1">
             <label className="text-sm font-medium">{t("StartDate" as any) || "Start Date"}</label>
-            <Input 
-              type="date" 
-              value={startDateStr} 
-              onChange={(e) => setStartDateStr(e.target.value)} 
+            <Input
+              type="date"
+              value={startDateStr}
+              onChange={(e) => setStartDateStr(e.target.value)}
             />
           </div>
           <div className="space-y-1">
             <label className="text-sm font-medium">{t("EndDate" as any) || "End Date"}</label>
-            <Input 
-              type="date" 
-              value={endDateStr} 
-              onChange={(e) => setEndDateStr(e.target.value)} 
+            <Input
+              type="date"
+              value={endDateStr}
+              onChange={(e) => setEndDateStr(e.target.value)}
             />
           </div>
         </div>

@@ -59,7 +59,7 @@ interface ExpenseDialogProps {
 export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  
+
   const vehicles = useQuery(api.vehicles.list, activeOrgId ? { orgId: activeOrgId } : "skip");
   const memberships = useQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId } : "skip");
 
@@ -163,8 +163,8 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
         <DialogHeader>
           <DialogTitle>{expense ? t("EditExpense" as any) : t("RecordExpense" as any)}</DialogTitle>
           <DialogDescription>
-            {expense 
-              ? t("UpdateExpenseDetails" as any) 
+            {expense
+              ? t("UpdateExpenseDetails" as any)
               : t("LogNewExpense" as any)}
           </DialogDescription>
         </DialogHeader>
@@ -336,10 +336,10 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                   <FormItem className="md:col-span-2">
                     <FormLabel>{t("Notes" as any)}</FormLabel>
                     <FormControl>
-                      <textarea 
+                      <textarea
                         className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
                         placeholder={t("AnyExtraDetails" as any)}
-                        {...field} 
+                        {...field}
                       />
                     </FormControl>
                     <FormMessage />
@@ -347,7 +347,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                 )}
               />
             </div>
-            
+
             <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 {t("Cancel" as any)}

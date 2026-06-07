@@ -58,7 +58,7 @@ interface TaskDialogProps {
 export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  
+
   const memberships = useQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId } : "skip");
   const customers = useQuery(api.customers.list, activeOrgId ? { orgId: activeOrgId } : "skip");
   const vehicles = useQuery(api.vehicles.list, activeOrgId ? { orgId: activeOrgId } : "skip");
@@ -86,7 +86,7 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
       const date = new Date(task.dueDate);
       const tzOffset = date.getTimezoneOffset() * 60000;
       const localISOTime = new Date(date.getTime() - tzOffset).toISOString().slice(0, 16);
-      
+
       form.reset({
         title: task.title,
         description: task.description || "",
@@ -99,7 +99,7 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
       });
     } else if (open && !task) {
       const myMembership = memberships?.find(m => m.userId);
-      
+
       form.reset({
         title: "",
         description: "",
@@ -165,8 +165,8 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
         <DialogHeader>
           <DialogTitle>{task ? (t("EditTask" as any) || "Edit Task") : (t("CreateTask" as any) || "Create Task")}</DialogTitle>
           <DialogDescription>
-            {task 
-              ? (t("UpdateTaskDesc" as any) || "Update task details.") 
+            {task
+              ? (t("UpdateTaskDesc" as any) || "Update task details.")
               : (t("CreateTaskDesc" as any) || "Schedule a new task and assign it to a team member.")}
           </DialogDescription>
         </DialogHeader>
@@ -302,7 +302,7 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
                   </FormItem>
                 )}
               />
-              
+
               <FormField
                 control={form.control}
                 name="status"
@@ -332,10 +332,10 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
                   <FormItem className="md:col-span-2">
                     <FormLabel>{t("DescriptionNotes" as any) || "Description / Notes"}</FormLabel>
                     <FormControl>
-                      <textarea 
+                      <textarea
                         className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                        placeholder={t("TaskDetailsPlaceholder" as any) || "Task details..."} 
-                        {...field} 
+                        placeholder={t("TaskDetailsPlaceholder" as any) || "Task details..."}
+                        {...field}
                       />
                     </FormControl>
                     <FormMessage />
@@ -343,7 +343,7 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
                 )}
               />
             </div>
-            
+
             <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 {t("Cancel" as any) || "Cancel"}

@@ -28,15 +28,15 @@ export const getSalesAndProfitReport = query({
     const enrichedSales = await Promise.all(
       salesInDateRange.map(async (sale) => {
         const vehicle = await ctx.db.get(sale.vehicleId);
-        
+
         // Fetch expenses for this vehicle
         const expenses = await ctx.db
           .query("expenses")
           .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", sale.vehicleId))
           .collect();
-          
+
         const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
-        
+
         const cost = (vehicle?.purchasePrice || 0) + totalExpenses;
         const profit = sale.salePrice - cost;
 
@@ -85,7 +85,7 @@ export const getInventoryReport = query({
     const activeInventory = vehicles.filter((v) => v.status === "AVAILABLE" || v.status === "RESERVED");
 
     let totalValue = 0;
-    
+
     const enrichedInventory = await Promise.all(
       activeInventory.map(async (vehicle) => {
         // Fetch expenses to get total investment
@@ -93,10 +93,10 @@ export const getInventoryReport = query({
           .query("expenses")
           .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", vehicle._id))
           .collect();
-          
+
         const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
         const totalInvestment = (vehicle.purchasePrice || 0) + totalExpenses;
-        
+
         totalValue += totalInvestment;
 
         return {
@@ -139,7 +139,7 @@ export const getExpensesReport = query({
       expensesInDateRange.map(async (exp) => {
         totalExpenses += exp.amount;
         let vehicleDesc = "General";
-        
+
         if (exp.vehicleId) {
           const vehicle = await ctx.db.get(exp.vehicleId);
           if (vehicle) {
@@ -197,7 +197,7 @@ export const getSalespersonPerformance = query({
       Object.entries(salesBySalesperson).map(async ([userId, userSales]) => {
         let totalRevenue = 0;
         let totalProfit = 0;
-        
+
         // Fetch user
         let userName = "Unknown";
         const user = await ctx.db.get(userId as any);
@@ -212,7 +212,7 @@ export const getSalespersonPerformance = query({
             .query("expenses")
             .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", sale.vehicleId))
             .collect();
-          
+
           const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
           const cost = ((vehicle as any)?.purchasePrice || 0) + totalExpenses;
           const profit = sale.salePrice - cost;

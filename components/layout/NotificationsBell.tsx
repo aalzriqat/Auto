@@ -39,6 +39,42 @@ export function NotificationsBell() {
   }, [dropdownRef]);
 
   const unreadCount = notifications?.filter(n => !n.isRead).length || 0;
+  const prevUnreadCountRef = useRef(unreadCount);
+
+  useEffect(() => {
+    if (unreadCount > prevUnreadCountRef.current) {
+      // Play an awesome notification chime
+      try {
+        const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+        const ctx = new AudioContext();
+
+        const playTone = (freq: number, startTime: number, duration: number) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          
+          osc.type = 'sine';
+          osc.frequency.setValueAtTime(freq, startTime);
+          
+          gain.gain.setValueAtTime(0, startTime);
+          gain.gain.linearRampToValueAtTime(0.4, startTime + 0.02);
+          gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
+          
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          
+          osc.start(startTime);
+          osc.stop(startTime + duration);
+        };
+
+        // Play a rising two-tone chime (A5 then C#6)
+        playTone(880.00, ctx.currentTime, 0.5); // A5
+        playTone(1108.73, ctx.currentTime + 0.12, 0.8); // C#6
+      } catch (e) {
+        console.error("Audio playback failed", e);
+      }
+    }
+    prevUnreadCountRef.current = unreadCount;
+  }, [unreadCount]);
 
   const handleMarkAsRead = async (id: Id<"notifications">) => {
     try {

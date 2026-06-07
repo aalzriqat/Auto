@@ -55,7 +55,7 @@ interface LeadDialogProps {
 export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  
+
   // Data for dropdowns
   const customers = useQuery(api.customers.list, activeOrgId ? { orgId: activeOrgId } : "skip");
   const vehicles = useQuery(api.vehicles.list, activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE" } : "skip");
@@ -258,9 +258,22 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
                     <FormLabel>{t("LeadSource" as any) || "Source"}</FormLabel>
-                    <FormControl>
-                      <Input placeholder={t("SourcePlaceholder" as any) || "e.g. Walk-in, Website, Facebook, Referral"} {...field} />
-                    </FormControl>
+                    <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder={t("SelectSource" as any) || "Select lead source"} />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="Walk-in">{t("WalkIn" as any) || "Walk-in"}</SelectItem>
+                        <SelectItem value="Website">{t("Website" as any) || "Website"}</SelectItem>
+                        <SelectItem value="Facebook">{t("Facebook" as any) || "Facebook"}</SelectItem>
+                        <SelectItem value="Instagram">{t("Instagram" as any) || "Instagram"}</SelectItem>
+                        <SelectItem value="Referral">{t("Referral" as any) || "Referral"}</SelectItem>
+                        <SelectItem value="Phone">{t("Phone" as any) || "Phone Call"}</SelectItem>
+                        <SelectItem value="Other">{t("Other" as any) || "Other"}</SelectItem>
+                      </SelectContent>
+                    </Select>
                     <FormMessage />
                   </FormItem>
                 )}

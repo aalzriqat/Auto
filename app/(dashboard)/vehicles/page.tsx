@@ -71,7 +71,7 @@ export default function VehiclesPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isVehicleDialogOpen, setIsVehicleDialogOpen] = useState(false);
   const [editingVehicle, setEditingVehicle] = useState<Doc<"vehicles"> | null>(null);
-  
+
   const [vehicleToDelete, setVehicleToDelete] = useState<Doc<"vehicles"> | null>(null);
   const [galleryVehicle, setGalleryVehicle] = useState<any | null>(null);
   const [historyVehicle, setHistoryVehicle] = useState<Doc<"vehicles"> | null>(null);
@@ -139,7 +139,7 @@ export default function VehiclesPage() {
     }
   };
 
-  const filteredVehicles = vehicles?.filter(v => 
+  const filteredVehicles = vehicles?.filter(v =>
     v.vin.toLowerCase().includes(searchQuery.toLowerCase()) ||
     v.make.toLowerCase().includes(searchQuery.toLowerCase()) ||
     v.model.toLowerCase().includes(searchQuery.toLowerCase())
@@ -181,15 +181,15 @@ export default function VehiclesPage() {
       const response = await fetch(url);
       const blob = await response.blob();
       const blobUrl = window.URL.createObjectURL(blob);
-      
+
       const a = document.createElement('a');
       a.style.display = 'none';
       a.href = blobUrl;
       a.download = `${galleryVehicle.make}-${galleryVehicle.model}-image-${index + 1}.jpg`.replace(/\s+/g, '-').toLowerCase();
-      
+
       document.body.appendChild(a);
       a.click();
-      
+
       window.URL.revokeObjectURL(blobUrl);
       document.body.removeChild(a);
     } catch (error) {
@@ -200,7 +200,7 @@ export default function VehiclesPage() {
 
   const handleDownloadAll = async () => {
     if (!galleryVehicle?.imageUrls) return;
-    
+
     try {
       const toastId = toast.loading("Downloading images...");
       for (let i = 0; i < galleryVehicle.imageUrls.length; i++) {
@@ -217,17 +217,11 @@ export default function VehiclesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight">{t("Vehicles")}</h2>
-          <p className="text-muted-foreground">
-            {t("ManageInventory" as any)}
-          </p>
-        </div>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
         <div className="flex gap-2">
           {canEdit && (
             <Button variant="outline" onClick={() => setIsApprovalsDialogOpen(true)}>
-              <ClipboardList className="me-2 h-4 w-4" /> 
+              <ClipboardList className="me-2 h-4 w-4" />
               {t("Approvals" as any)}
               {((pendingRequests?.length || 0) + (pendingEdits?.length || 0)) > 0 && (
                 <span className="ms-2 bg-red-500 text-white text-xs px-2 py-0.5 rounded-full">
@@ -282,7 +276,7 @@ export default function VehiclesPage() {
               </TableRow>
             ) : (
               filteredVehicles.map((vehicle) => (
-                <TableRow 
+                <TableRow
                   key={vehicle._id}
                   id={`row-${vehicle._id}`}
                   className={highlightId === vehicle._id ? "bg-primary/20 transition-all duration-1000" : ""}
@@ -294,11 +288,11 @@ export default function VehiclesPage() {
                   <TableCell>{vehicle.year}</TableCell>
                   <TableCell>{vehicle.sellingPrice.toLocaleString()} JOD</TableCell>
                   <TableCell>
-                    <button 
+                    <button
                       onClick={() => {
                         setStatusRequestVehicle(vehicle);
                         setSelectedStatus(vehicle.status);
-                      }} 
+                      }}
                       className="hover:opacity-80 transition-opacity flex flex-col items-start text-left gap-1"
                     >
                       <StatusBadge status={vehicle.status} t={t} />
@@ -355,7 +349,7 @@ export default function VehiclesPage() {
         onOpenChange={(open) => !open && setHistoryVehicle(null)}
       />
 
-      <VehicleDetailsDialog 
+      <VehicleDetailsDialog
         vehicle={detailsVehicle}
         open={!!detailsVehicle}
         onOpenChange={(open) => !open && setDetailsVehicle(null)}
@@ -368,7 +362,7 @@ export default function VehiclesPage() {
           <DialogHeader>
             <DialogTitle>{t("RemoveVehicle" as any)}</DialogTitle>
             <DialogDescription>
-              {t("RemoveVehicleConfirm" as any)} {vehicleToDelete?.year} {vehicleToDelete?.make} {vehicleToDelete?.model}? 
+              {t("RemoveVehicleConfirm" as any)} {vehicleToDelete?.year} {vehicleToDelete?.make} {vehicleToDelete?.model}?
               {t("RemoveVehicleWarning" as any)}
             </DialogDescription>
           </DialogHeader>
@@ -435,8 +429,8 @@ export default function VehiclesPage() {
           <DialogHeader>
             <DialogTitle>{t("ChangeStatus" as any)}</DialogTitle>
             <DialogDescription>
-              {canEdit 
-                ? t("UpdateStatusDesc" as any) 
+              {canEdit
+                ? t("UpdateStatusDesc" as any)
                 : t("RequestStatusDesc" as any)}
             </DialogDescription>
           </DialogHeader>
@@ -460,8 +454,8 @@ export default function VehiclesPage() {
             {!canEdit && (
               <div className="space-y-2">
                 <Label>{t("Notes" as any)} (Optional)</Label>
-                <Input 
-                  placeholder={t("ReasonForChange" as any)} 
+                <Input
+                  placeholder={t("ReasonForChange" as any)}
                   value={statusRequestNotes}
                   onChange={(e) => setStatusRequestNotes(e.target.value)}
                 />
@@ -520,7 +514,7 @@ export default function VehiclesPage() {
                     </div>
                   </div>
                 ))}
-                
+
                 {/* Status Requests */}
                 {pendingRequests?.map((req) => (
                   <div key={req._id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 border rounded-lg bg-card">

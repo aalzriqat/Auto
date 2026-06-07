@@ -51,17 +51,14 @@ export default function FinanceCompaniesPage() {
 
   return (
     <div className="flex-1 space-y-4 p-4 md:p-8 pt-6">
-      <div className="flex items-center justify-between space-y-2">
-        <h2 className="text-3xl font-bold tracking-tight">{t("Finance Companies" as any)}</h2>
-        <div className="flex items-center space-x-2">
-          <Button onClick={() => {
+      <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
+        <Button onClick={() => {
             setSelectedCompany(undefined);
             setIsDialogOpen(true);
           }}>
             <Plus className="mr-2 h-4 w-4" />
             {t("Add Company" as any)}
           </Button>
-        </div>
       </div>
 
       <Card>

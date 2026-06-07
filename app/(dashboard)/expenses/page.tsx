@@ -41,9 +41,9 @@ export default function ExpensesPage() {
 
   const filteredExpenses = expenses?.filter(e => {
     const q = searchQuery.toLowerCase();
-    return e.title.toLowerCase().includes(q) || 
-           (e.vehicleSummary && e.vehicleSummary.toLowerCase().includes(q)) ||
-           e.category.toLowerCase().includes(q);
+    return e.title.toLowerCase().includes(q) ||
+      (e.vehicleSummary && e.vehicleSummary.toLowerCase().includes(q)) ||
+      e.category.toLowerCase().includes(q);
   });
 
   const handleEdit = (expense: any) => {
@@ -78,13 +78,7 @@ export default function ExpensesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight">{t("Expenses" as any)}</h2>
-          <p className="text-muted-foreground">
-            {t("TrackExpenses" as any)}
-          </p>
-        </div>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
         <Button onClick={handleAddNew}>
           <Plus className="me-2 h-4 w-4" /> {t("RecordExpense" as any)}
         </Button>

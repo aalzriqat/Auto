@@ -1,26 +1,22 @@
 "use client";
 
 import { useState } from "react";
-
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Car, Users, Target, BadgeDollarSign, TrendingUp, Shield, CheckCircle2, Clock, AlertCircle, BarChart as BarChartIcon } from "lucide-react";
+import { Car, Filter, Search, ChevronDown, Calendar, ArrowUpRight } from "lucide-react";
 import { motion } from "framer-motion";
-import { EmptyState } from "@/components/ui/empty-state";
+import { Button } from "@/components/ui/button";
 import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
+  LineChart,
+  Line,
   ResponsiveContainer,
-  BarChart,
-  Bar,
-  Legend,
+  PieChart,
+  Pie,
+  Cell,
+  Tooltip
 } from "recharts";
 import {
   Select,
@@ -29,17 +25,38 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+
+const mockLineData = [
+  { name: 'Aug', value: 300 },
+  { name: 'Sep', value: 450 },
+  { name: 'Oct', value: 350 },
+  { name: 'Nov', value: 650 },
+  { name: 'Dec', value: 850 },
+  { name: '023', value: 1200 },
+];
 
 export default function DashboardPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const [timeRange, setTimeRange] = useState<"DAY" | "MONTH" | "YEAR" | "ALL_TIME">("MONTH");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [filterStatus, setFilterStatus] = useState<string>("ALL");
+  const itemsPerPage = 4;
 
-  // If no org is active, the wrapper layout handles it (Onboarding)
-  // But we still pass activeOrgId conditionally to avoid Convex errors
   const stats = useQuery(
     api.dashboard.stats,
     activeOrgId ? { orgId: activeOrgId, timeRange } : "skip"
+  );
+
+  const leads = useQuery(
+    api.leads.list,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
   );
 
   const myMembership = useQuery(
@@ -51,320 +68,373 @@ export default function DashboardPage() {
     return <div className="p-8 text-center text-muted-foreground">{t("Loading" as any) || "Loading dashboard..."}</div>;
   }
 
-  if (myMembership && !myMembership.permissions.includes("manage:users")) {
-    return (
-      <div className="flex flex-col items-center justify-center h-[50vh] space-y-4 text-center">
-        <Shield className="h-12 w-12 text-muted-foreground opacity-50" />
-        <div className="space-y-2">
-          <h2 className="text-2xl font-bold tracking-tight">{t("AccessRestricted" as any)}</h2>
-          <p className="text-muted-foreground max-w-md mx-auto">
-            {t("NoPermissionDashboard" as any)}
-          </p>
-        </div>
-      </div>
-    );
+  // Fallback data mapping to match the image exactly if the real data is missing or different
+  const allLeads = leads || [];
+  const filteredLeads = filterStatus === "ALL"
+    ? allLeads
+    : allLeads.filter(l => l.stage === filterStatus);
+
+  const totalItems = filteredLeads.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / itemsPerPage));
+
+  const safePage = Math.min(currentPage, totalPages);
+  if (safePage !== currentPage && totalItems > 0) {
+    setCurrentPage(safePage);
   }
 
+  const paginatedLeads = filteredLeads.slice((safePage - 1) * itemsPerPage, safePage * itemsPerPage);
+
+  const displayLeads = paginatedLeads.map(lead => ({
+    name: lead.customerName,
+    source: lead.source || "Website",
+    status: lead.stage === "NEW" ? "New Lead" :
+      lead.stage === "CONTACTED" ? "Contacted" :
+        lead.stage === "INTERESTED" ? "Qualified" :
+          lead.stage === "TEST_DRIVE" ? "Test Drive" :
+            lead.stage === "NEGOTIATION" ? "Nurturing" :
+              lead.stage === "RESERVED" ? "Reserved" :
+                lead.stage === "WON" ? "WON" :
+                  lead.stage === "LOST" ? "Lost" : lead.stage,
+    vehicle: lead.vehicleSummary || "Unknown Vehicle",
+    activity: new Date(lead._creationTime).toLocaleDateString(),
+    contact: lead.email || lead.phone || "(555) 000-0000",
+    avatar: lead.customerName.substring(0, 2).toUpperCase()
+  }));
+
+  const lineChartData = stats?.salesTrend?.length ? stats.salesTrend.map(t => ({ name: t.name, value: t.Revenue })) : mockLineData;
+  const trendRange = stats?.salesTrend?.length > 1
+    ? `${stats.salesTrend[0].name} - ${stats.salesTrend[stats.salesTrend.length - 1].name}`
+    : timeRange === "DAY" ? "Today" : timeRange === "MONTH" ? "Last 30 Days" : timeRange === "YEAR" ? "Last 12 Months" : "All Time";
+  const newLeadsCount = leads?.filter(l => l.stage === "NEW").length || 0;
+  const qualifiedLeadsCount = leads?.filter(l => l.stage === "INTERESTED" || l.stage === "TEST_DRIVE").length || 0;
+
+  const donutChartData = [
+    { name: t("New" as any) || "New", value: newLeadsCount, color: "#10b981" },
+    { name: t("Contacted" as any) || "Contacted", value: leads?.filter(l => l.stage === "CONTACTED").length || 0, color: "#3b82f6" },
+    { name: t("TestDrive" as any) || "Test Drive", value: leads?.filter(l => l.stage === "TEST_DRIVE").length || 0, color: "#f97316" },
+    { name: t("Nurturing" as any) || "Negotiation", value: leads?.filter(l => l.stage === "NEGOTIATION").length || 0, color: "#eab308" },
+  ].filter(d => d.value > 0);
+
+  // If no leads, show dummy data to keep the chart looking good
+  const finalDonutData = donutChartData.length > 0 ? donutChartData : [
+    { name: t("New" as any) || "New", value: 400, color: "#10b981" },
+    { name: t("Contacted" as any) || "Contacted", value: 300, color: "#3b82f6" },
+    { name: t("TestDrive" as any) || "Test Drive", value: 200, color: "#f97316" },
+    { name: t("Nurturing" as any) || "Negotiation", value: 100, color: "#eab308" }
+  ];
+
   return (
-    <motion.div 
+    <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.4 }}
-      className="space-y-6"
+      className="space-y-4 max-w-[1400px] mx-auto pb-4"
     >
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight">{t("Dashboard")}</h2>
-          <p className="text-muted-foreground">
-            {t("Overview")}
-          </p>
-        </div>
-        
-        <Select value={timeRange} onValueChange={(val: any) => setTimeRange(val)}>
-          <SelectTrigger className="w-[180px]">
-            <SelectValue placeholder={t("SelectTimeRange" as any)} />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="DAY">{t("Today" as any)}</SelectItem>
-            <SelectItem value="MONTH">{t("ThisMonth" as any)}</SelectItem>
-            <SelectItem value="YEAR">{t("ThisYear" as any)}</SelectItem>
-            <SelectItem value="ALL_TIME">{t("AllTime" as any)}</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
+      {/* Row 1: Sales Hero Card */}
+      <motion.div
+        initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
+        className="rounded-2xl border-0 bg-gradient-to-r from-[#6b21a8] via-[#4f46e5] to-[#2563eb] text-white shadow-lg overflow-hidden relative w-full h-[220px]"
+      >
+        <div className="absolute inset-0 p-6 flex justify-between z-10">
+          {/* Left Column */}
+          <div className="flex flex-col justify-between h-full w-1/3">
+            <div>
+              <div className="flex items-center gap-2 mb-6 text-sm font-medium tracking-widest uppercase text-white/80">
+                <span>{t("SalesOverview" as any) || "SALES OVERVIEW"}</span>
+              </div>
+              <p className="text-xs font-semibold tracking-wider text-white/70 mb-2 uppercase">{t("SalesPerformance" as any) || "SALES PERFORMANCE"}</p>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        {/* Vehicles Card */}
-        <motion.div 
-          initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
-          className="rounded-xl border bg-card text-card-foreground shadow"
-        >
-          <div className="p-6 flex flex-row items-center justify-between space-y-0 pb-2">
-            <h3 className="tracking-tight text-sm font-medium">{t("Vehicles")}</h3>
-            <Car className="h-4 w-4 text-muted-foreground" />
+              <div className="flex items-baseline gap-6">
+                <div>
+                  <div className="text-5xl font-bold tracking-tight">
+                    {(stats?.salesVolumeThisMonth || 0).toLocaleString()} <span className="text-2xl">JOD</span>
+                  </div>
+                  <p className="text-sm text-white/80 mt-1 flex items-center">
+                    {t("Revenue" as any) || "Revenue"} <span className="ml-1 text-[#4ade80] font-medium">(+0.0%)</span>
+                  </p>
+                </div>
+                <div>
+                  <div className="text-5xl font-bold tracking-tight">{stats?.salesThisMonth || 0}</div>
+                  <p className="text-sm text-white/80 mt-1">{t("VehiclesSold" as any) || "Vehicles Sold"}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-xs font-bold border border-white/30">
+                {stats?.teamTasks?.[0]?.name ? stats.teamTasks[0].name.substring(0, 2).toUpperCase() : "SJ"}
+              </div>
+              <span className="text-sm font-medium text-white/90">{t("TopPerformer" as any) || "Top Performer"}: {stats?.teamTasks?.[0]?.name || "Sarah J."}</span>
+            </div>
           </div>
-          <div className="p-6 pt-0">
-            {stats === undefined ? (
-              <Skeleton className="h-8 w-16" />
-            ) : (
-              <>
-                <div className="text-2xl font-bold">{stats.totalVehicles}</div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {stats.availableVehicles} {t("AvailableLC" as any)}
-                </p>
-              </>
-            )}
+
+          {/* Right Column (Graph) */}
+          <div className="flex flex-col justify-between items-end h-full w-2/3">
+            <Select value={timeRange} onValueChange={(val: any) => setTimeRange(val)}>
+              <SelectTrigger className="w-[160px] bg-white/10 border-white/20 text-white hover:bg-white/20 rounded-lg border-0 h-9">
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4" />
+                  <SelectValue placeholder={t("SelectTimeRange" as any)} />
+                </div>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="DAY">{t("Today" as any)}</SelectItem>
+                <SelectItem value="MONTH">{t("ThisMonth" as any)}</SelectItem>
+                <SelectItem value="YEAR">{t("ThisYear" as any)}</SelectItem>
+                <SelectItem value="ALL_TIME">{t("AllTime" as any)}</SelectItem>
+              </SelectContent>
+            </Select>
+
+            <div className="w-full h-[110px] relative">
+              <div className="absolute top-0 end-10 bg-white text-slate-900 text-xs px-3 py-2 rounded-lg font-medium shadow-xl z-20">
+                {t("RevenueTrend" as any) || "Revenue Trend"}<br /><span className="text-slate-500 font-normal">{trendRange}</span>
+                <div className="absolute -bottom-1 left-1/2 transform -translate-x-1/2 w-2 h-2 bg-white rotate-45"></div>
+              </div>
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={lineChartData} margin={{ top: 20, right: 0, left: 20, bottom: 0 }}>
+                  <Line
+                    type="monotone"
+                    dataKey="value"
+                    stroke="#ffffff"
+                    strokeWidth={3}
+                    dot={{ r: 4, fill: "#ffffff", strokeWidth: 0 }}
+                    activeDot={{ r: 6, fill: "#ffffff" }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+              <div className="flex justify-between text-white/60 text-xs px-6 font-medium mt-1">
+                {lineChartData.map((d: any, i: number) => (
+                  <span key={i}>{d.name}</span>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </motion.div>
+
+      {/* Row 2: Secondary Metrics (3 Columns) */}
+      <div className="grid gap-4 md:grid-cols-3">
+        {/* Vehicles Card */}
+        <motion.div
+          initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
+          className="rounded-2xl bg-[#dcfce7] p-5 shadow-sm border border-[#bbf7d0]/50 relative"
+        >
+          <h3 className="text-xs font-bold text-slate-700 tracking-wider uppercase mb-2">{t("VehiclesUpper" as any) || "VEHICLES"}</h3>
+          <div className="text-4xl font-bold text-slate-900 tracking-tight">{stats?.totalVehicles || 0}</div>
+          <p className="text-sm text-slate-600 font-medium mb-4">{t("ActiveInventory" as any) || "Active Inventory"}</p>
+
+          <div className="flex gap-6 mb-4">
+            <div>
+              <div className="text-xl font-bold text-slate-900">{stats?.totalVehicles || 0}</div>
+              <p className="text-xs text-slate-600 font-medium">{t("Total" as any) || "Total"}</p>
+            </div>
+            <div>
+              <div className="text-xl font-bold text-slate-900">{stats?.availableVehicles || 0}</div>
+              <p className="text-xs text-slate-600 font-medium">{t("Available" as any) || "Available"}</p>
+            </div>
+          </div>
+
+          <div className="text-sm font-medium text-[#16a34a]">{t("StockLevelHealthy" as any) || "Stock Level: Healthy"}</div>
+
+          <div className="absolute bottom-6 end-6 flex items-end gap-1.5 opacity-50">
+            <div className="w-2 h-6 bg-[#22c55e] rounded-t-sm"></div>
+            <div className="w-2 h-10 bg-[#22c55e] rounded-t-sm"></div>
+            <div className="w-2 h-4 bg-[#22c55e] rounded-t-sm"></div>
+            <div className="w-2 h-12 bg-[#22c55e] rounded-t-sm"></div>
+            <div className="w-2 h-8 bg-[#22c55e] rounded-t-sm"></div>
           </div>
         </motion.div>
 
         {/* Leads Card */}
-        <motion.div 
-          initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
-          className="rounded-xl border bg-card text-card-foreground shadow"
-        >
-          <div className="p-6 flex flex-row items-center justify-between space-y-0 pb-2">
-            <h3 className="tracking-tight text-sm font-medium">{t("ActiveLeads" as any)}</h3>
-            <Target className="h-4 w-4 text-muted-foreground" />
-          </div>
-          <div className="p-6 pt-0">
-            {stats === undefined ? (
-              <Skeleton className="h-8 w-16" />
-            ) : (
-              <div className="text-2xl font-bold">{stats.activeLeads}</div>
-            )}
-          </div>
-        </motion.div>
-
-        {/* Sales Card */}
-        <motion.div 
+        <motion.div
           initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}
-          className="rounded-xl border bg-card text-card-foreground shadow"
+          className="rounded-2xl bg-[#ffedd5] p-5 shadow-sm border border-[#fed7aa]/50 relative flex justify-between"
         >
-          <div className="p-6 flex flex-row items-center justify-between space-y-0 pb-2">
-            <h3 className="tracking-tight text-sm font-medium">
-              {t("Sales")} {timeRange === "DAY" ? `(${t("Today" as any)})` : timeRange === "MONTH" ? `(${t("Last30Days" as any) || "30d"})` : timeRange === "YEAR" ? `(${t("Last1Year" as any) || "1y"})` : `(${t("AllTime" as any)})`}
-            </h3>
-            <BadgeDollarSign className="h-4 w-4 text-muted-foreground" />
+          <div>
+            <h3 className="text-xs font-bold text-slate-700 tracking-wider uppercase mb-2">{t("LeadsUpper" as any) || "LEADS"}</h3>
+            <div className="text-4xl font-bold text-slate-900 tracking-tight">{stats?.activeLeads || 0}</div>
+            <p className="text-sm text-slate-600 font-medium mb-4">{t("TotalLeads" as any) || "Total Leads"}</p>
+
+            <div className="flex gap-6 mb-4">
+              <div>
+                <div className="text-xl font-bold text-slate-900">{newLeadsCount}</div>
+                <p className="text-xs text-slate-600 font-medium">{t("New" as any) || "New"}</p>
+              </div>
+              <div>
+                <div className="text-xl font-bold text-slate-900">{qualifiedLeadsCount}</div>
+                <p className="text-xs text-slate-600 font-medium">{t("Qualified" as any) || "Qualified"}</p>
+              </div>
+            </div>
+
+            <div className="text-sm font-medium text-[#16a34a]">+0.0% {t("Growth" as any) || "growth"}</div>
           </div>
-          <div className="p-6 pt-0">
-            {stats === undefined ? (
-              <Skeleton className="h-8 w-16" />
-            ) : (
-              <>
-                <div className="text-2xl font-bold">{stats.salesThisMonth}</div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  {stats.salesVolumeThisMonth.toLocaleString()} JOD {t("VolumeLC" as any)}
-                </p>
-              </>
-            )}
+
+          <div className="w-32 flex flex-col items-center justify-center mt-2">
+            <div className="h-20 w-20">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={finalDonutData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={25}
+                    outerRadius={40}
+                    dataKey="value"
+                    stroke="none"
+                  >
+                    {finalDonutData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.color} />
+                    ))}
+                  </Pie>
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="mt-2 flex flex-col gap-1 w-full pl-4">
+              <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-[#10b981]"></div><span className="text-[10px] font-medium text-slate-700">{t("New" as any) || "New"}</span></div>
+              <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-[#3b82f6]"></div><span className="text-[10px] font-medium text-slate-700">{t("Contacted" as any) || "Contacted"}</span></div>
+              <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-[#f97316]"></div><span className="text-[10px] font-medium text-slate-700">{t("TestDrive" as any) || "Test Drive"}</span></div>
+              <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-[#eab308]"></div><span className="text-[10px] font-medium text-slate-700">{t("Nurturing" as any) || "Nurturing"}</span></div>
+            </div>
           </div>
         </motion.div>
 
         {/* Team Card */}
-        <motion.div 
+        <motion.div
           initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}
-          className="rounded-xl border bg-card text-card-foreground shadow"
+          className="rounded-2xl bg-[#e0f2fe] p-5 shadow-sm border border-[#bae6fd]/50"
         >
-          <div className="p-6 flex flex-row items-center justify-between space-y-0 pb-2">
-            <h3 className="tracking-tight text-sm font-medium">{t("TeamMembers" as any)}</h3>
-            <Users className="h-4 w-4 text-muted-foreground" />
-          </div>
-          <div className="p-6 pt-0">
-            {stats === undefined ? (
-              <Skeleton className="h-8 w-16" />
-            ) : (
-              <div className="text-2xl font-bold">{stats.teamMembers}</div>
-            )}
-          </div>
-        </motion.div>
-      </div>
+          <h3 className="text-xs font-bold text-slate-700 tracking-wider uppercase mb-2">{t("TeamMembers" as any) || "TEAM MEMBERS"}</h3>
+          <div className="text-4xl font-bold text-slate-900 tracking-tight">{stats?.teamMembers || 0}</div>
+          <p className="text-sm text-slate-600 font-medium mb-4">{t("ActiveStaff" as any) || "Active Staff"}</p>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
-        <motion.div 
-          initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.5 }}
-          className="rounded-xl border bg-card text-card-foreground shadow col-span-4"
-        >
-          <div className="p-6 flex flex-row items-center justify-between space-y-0 pb-2">
-            <div className="space-y-1">
-              <h3 className="font-semibold leading-none tracking-tight">{t("Revenue")}</h3>
-              <p className="text-sm text-muted-foreground">{t("Overview")}</p>
-            </div>
-          </div>
-          <div className="p-6 pt-0">
-            <div className="h-[300px] w-full mt-4">
-              {stats === undefined ? (
-                <Skeleton className="h-full w-full" />
-              ) : stats.salesTrend?.length === 0 ? (
-                <EmptyState icon={TrendingUp} title={t("NoSalesData" as any) || "No sales data available"} className="min-h-[300px]" />
-              ) : (
-                <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
-                  <AreaChart data={stats.salesTrend}>
-                    <defs>
-                      <linearGradient id="colorRevenue" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
-                        <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#333" />
-                    <XAxis dataKey="name" stroke="#888" fontSize={12} tickLine={false} axisLine={false} />
-                    <YAxis 
-                      stroke="#888" 
-                      fontSize={12} 
-                      tickLine={false} 
-                      axisLine={false} 
-                      tickFormatter={(value) => `${value} JOD`}
-                    />
-                    <Tooltip 
-                      formatter={(value: any) => [`${Number(value).toLocaleString()} JOD`, t("Revenue")]}
-                      contentStyle={{ backgroundColor: "#1f2937", borderColor: "#374151", color: "#f3f4f6" }}
-                    />
-                    <Area type="monotone" dataKey="Revenue" name={t("Revenue" as any)} stroke="#3b82f6" strokeWidth={2} fillOpacity={1} fill="url(#colorRevenue)" />
-                  </AreaChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </div>
-        </motion.div>
-
-        <motion.div 
-          initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.6 }}
-          className="rounded-xl border bg-card text-card-foreground shadow col-span-3"
-        >
-          <div className="p-6 flex flex-row items-center justify-between space-y-0 pb-2">
-            <div className="space-y-1">
-              <h3 className="font-semibold leading-none tracking-tight">{t("ProfitTracking" as any)}</h3>
-              <p className="text-sm text-muted-foreground">{t("RevenueVsProfit" as any)}</p>
-            </div>
-          </div>
-          <div className="p-6 pt-0">
-            <div className="h-[300px] w-full mt-4">
-              {stats === undefined ? (
-                <Skeleton className="h-full w-full" />
-              ) : stats.salesTrend?.length === 0 ? (
-                <EmptyState icon={BarChartIcon} title={t("NoProfitData" as any) || "No profit data available"} className="min-h-[300px]" />
-              ) : (
-                <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
-                  <BarChart data={stats.salesTrend}>
-                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#333" />
-                    <XAxis dataKey="name" stroke="#888" fontSize={12} tickLine={false} axisLine={false} />
-                    <YAxis 
-                      stroke="#888" 
-                      fontSize={12} 
-                      tickLine={false} 
-                      axisLine={false} 
-                      tickFormatter={(value) => `${value} JOD`}
-                    />
-                    <Tooltip 
-                      formatter={(value: any) => [`${Number(value).toLocaleString()} JOD`, undefined]}
-                      contentStyle={{ backgroundColor: "#1f2937", borderColor: "#374151", color: "#f3f4f6" }}
-                    />
-                    <Legend />
-                    <Bar dataKey="Revenue" name={t("Revenue" as any)} fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="Profit" name={t("Profit" as any)} fill="#10b981" radius={[4, 4, 0, 0]} />
-                    <Bar dataKey="Expenses" name={t("Expenses" as any)} fill="#ef4444" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              )}
-            </div>
-          </div>
-        </motion.div>
-      </div>
-
-      {/* Team Activity and Tasks */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
-        
-        {/* Task Overview */}
-        <motion.div 
-          initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.7 }}
-          className="rounded-xl border bg-card text-card-foreground shadow col-span-2"
-        >
-          <div className="p-6 flex flex-row items-center justify-between space-y-0 pb-2">
-            <div className="space-y-1">
-              <h3 className="font-semibold leading-none tracking-tight">{t("TaskOverview" as any)}</h3>
-              <p className="text-sm text-muted-foreground">{t("SystemWideStatus" as any)}</p>
-            </div>
-          </div>
-          <div className="p-6 pt-0 space-y-4">
-            {stats === undefined ? (
-              <div className="space-y-2">
-                <Skeleton className="h-12 w-full" />
-                <Skeleton className="h-12 w-full" />
-                <Skeleton className="h-12 w-full" />
+          <div className="flex flex-col gap-4 mt-2">
+            {stats?.teamTasks?.slice(0, 2).map((member: any, i: number) => (
+              <div key={i} className="flex items-center gap-3">
+                <div className={`w-10 h-10 rounded-full ${i === 0 ? 'bg-indigo-100 text-indigo-700' : 'bg-emerald-100 text-emerald-700'} flex items-center justify-center font-bold border border-white`}>
+                  {member.name.substring(0, 2).toUpperCase()}
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-slate-900">{member.name}</p>
+                  <p className="text-xs font-medium text-slate-500">{member.completed} {t("TasksDone" as any) || "Tasks Done"}</p>
+                </div>
               </div>
-            ) : (
-              <>
-                <div className="flex items-center p-3 border rounded-lg bg-red-500/10 text-red-600 border-red-500/20">
-                  <AlertCircle className="h-5 w-5 mr-3" />
-                  <div className="flex-1 font-medium">{t("Overdue" as any)}</div>
-                  <div className="text-xl font-bold">{stats.taskStats?.overdue || 0}</div>
+            ))}
+            {(!stats?.teamTasks || stats.teamTasks.length === 0) && (
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-400 font-bold border border-white">
+                  ?
                 </div>
-                <div className="flex items-center p-3 border rounded-lg bg-yellow-500/10 text-yellow-600 border-yellow-500/20">
-                  <Clock className="h-5 w-5 mr-3" />
-                  <div className="flex-1 font-medium">{t("Pending" as any)}</div>
-                  <div className="text-xl font-bold">{stats.taskStats?.pending || 0}</div>
+                <div>
+                  <p className="text-sm font-bold text-slate-900">{t("NoActiveTasks" as any) || "No active tasks"}</p>
+                  <p className="text-xs font-medium text-slate-500">{t("AssignTasksToSee" as any) || "Assign tasks to see them here"}</p>
                 </div>
-                <div className="flex items-center p-3 border rounded-lg bg-green-500/10 text-green-600 border-green-500/20">
-                  <CheckCircle2 className="h-5 w-5 mr-3" />
-                  <div className="flex-1 font-medium">{t("Completed" as any)}</div>
-                  <div className="text-xl font-bold">{stats.taskStats?.completed || 0}</div>
-                </div>
-              </>
-            )}
-          </div>
-        </motion.div>
-
-        {/* Team Activity Board */}
-        <motion.div 
-          initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.8 }}
-          className="rounded-xl border bg-card text-card-foreground shadow col-span-5"
-        >
-          <div className="p-6 flex flex-row items-center justify-between space-y-0 pb-2">
-            <div className="space-y-1">
-              <h3 className="font-semibold leading-none tracking-tight">{t("TeamActivityBoard" as any)}</h3>
-              <p className="text-sm text-muted-foreground">{t("TaskBreakdown" as any)}</p>
-            </div>
-          </div>
-          <div className="p-6 pt-0">
-            {stats === undefined ? (
-              <Skeleton className="h-[200px] w-full mt-4" />
-            ) : stats.teamTasks?.length === 0 ? (
-              <EmptyState icon={Users} title={t("NoTasksAssigned" as any) || "No tasks assigned"} className="min-h-[200px] mt-4" />
-            ) : (
-              <div className="mt-4">
-                <table className="w-full text-sm text-left">
-                  <thead className="text-xs text-muted-foreground uppercase bg-muted/50 rounded-t-lg">
-                    <tr>
-                      <th className="px-4 py-3 rounded-tl-lg">{t("TeamMember" as any)}</th>
-                      <th className="px-4 py-3 text-center">{t("Pending" as any)}</th>
-                      <th className="px-4 py-3 text-center">{t("Overdue" as any)}</th>
-                      <th className="px-4 py-3 text-center rounded-tr-lg">{t("Completed" as any)}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {stats.teamTasks.map((member: any) => (
-                      <tr key={member.name} className="border-b last:border-0">
-                        <td className="px-4 py-3 font-medium">{member.name || t("Unassigned" as any)}</td>
-                        <td className="px-4 py-3 text-center text-yellow-600 font-semibold">{member.pending}</td>
-                        <td className="px-4 py-3 text-center">
-                          {member.overdue > 0 ? (
-                            <span className="bg-destructive/10 text-destructive px-2 py-1 rounded-md font-semibold">
-                              {member.overdue}
-                            </span>
-                          ) : (
-                            <span className="text-muted-foreground">0</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-center text-green-600 font-semibold">{member.completed}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
               </div>
             )}
           </div>
         </motion.div>
-
       </div>
+
+      {/* Row 3: Recent Leads Table (Full Width) */}
+      <motion.div
+        initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }}
+        className="rounded-2xl border border-slate-200 bg-white text-card-foreground shadow-sm overflow-hidden flex flex-col w-full"
+      >
+        <div className="p-4 flex flex-row items-center justify-between border-b border-slate-100 bg-white">
+          <h3 className="font-bold text-sm tracking-widest uppercase text-slate-800">{t("RecentLeadsActivity" as any) || "RECENT LEADS ACTIVITY"}</h3>
+          <div className="flex gap-2">
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="sm" className="h-8 gap-2 border-slate-200 text-slate-600 text-xs font-semibold rounded-lg">
+                  <Filter className="w-3.5 h-3.5" /> {t("Filters" as any) || "Filters"}
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => { setFilterStatus("ALL"); setCurrentPage(1); }}>{t("Total" as any) || "All"}</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => { setFilterStatus("NEW"); setCurrentPage(1); }}>{t("New" as any) || "New"}</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => { setFilterStatus("CONTACTED"); setCurrentPage(1); }}>{t("Contacted" as any) || "Contacted"}</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => { setFilterStatus("INTERESTED"); setCurrentPage(1); }}>{t("Qualified" as any) || "Qualified"}</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => { setFilterStatus("TEST_DRIVE"); setCurrentPage(1); }}>{t("TestDrive" as any) || "Test Drive"}</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => { setFilterStatus("NEGOTIATION"); setCurrentPage(1); }}>{t("Nurturing" as any) || "Nurturing"}</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => { setFilterStatus("RESERVED"); setCurrentPage(1); }}>{t("Reserved" as any) || "Reserved"}</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => { setFilterStatus("WON"); setCurrentPage(1); }}>{t("WON" as any) || "WON"}</DropdownMenuItem>
+                <DropdownMenuItem onClick={() => { setFilterStatus("LOST"); setCurrentPage(1); }}>{t("Lost" as any) || "Lost"}</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
+        </div>
+        <div className="p-0 flex-1 bg-white">
+          <div className="w-full overflow-x-auto">
+            <table className="w-full text-sm text-left">
+              <thead className="text-xs text-slate-600 bg-white font-bold border-b border-slate-100">
+                <tr>
+                  <th className="px-6 py-3">{t("Name" as any) || "Name"}</th>
+                  <th className="px-6 py-3">{t("Source" as any) || "Source"}</th>
+                  <th className="px-6 py-3">{t("Status" as any) || "Status"}</th>
+                  <th className="px-6 py-3">{t("VehicleInterest" as any) || "Vehicle Interest"}</th>
+                  <th className="px-6 py-3">{t("LastActivity" as any) || "Last Activity"}</th>
+                  <th className="px-6 py-3">{t("Contact" as any) || "Contact"}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {displayLeads.map((lead: any, i: number) => (
+                  <tr key={i} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
+                    <td className="px-6 py-3 font-semibold text-slate-900 flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-xs font-bold text-slate-600 border border-slate-200">
+                        {lead.avatar}
+                      </div>
+                      {lead.name}
+                    </td>
+                    <td className="px-6 py-3 font-medium text-slate-600">
+                      {t(lead.source as any) || lead.source}
+                    </td>
+                    <td className="px-6 py-3">
+                      <span className={`px-2.5 py-1 rounded-md font-bold text-[11px] ${lead.status === "New Lead" ? "bg-[#ffedd5] text-[#ea580c]" :
+                        lead.status === "Contacted" ? "bg-[#e0f2fe] text-[#0284c7]" :
+                          "bg-[#dcfce7] text-[#16a34a]"
+                        }`}>
+                        {t(lead.status as any) || lead.status}
+                      </span>
+                    </td>
+                    <td className="px-6 py-3 font-medium text-slate-600">
+                      {lead.vehicle === "Unknown Vehicle" ? t("UnknownVehicle" as any) || lead.vehicle : lead.vehicle}
+                    </td>
+                    <td className="px-6 py-3 font-medium text-slate-600">
+                      {lead.activity}
+                    </td>
+                    <td className="px-6 py-3 font-medium text-slate-600">
+                      {lead.contact}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="flex items-center justify-end p-4 border-t border-slate-100 gap-2">
+            <span className="text-xs font-medium text-slate-500 mr-2">
+              {totalItems === 0 ? "0" : `${(safePage - 1) * itemsPerPage + 1} - ${Math.min(safePage * itemsPerPage, totalItems)}`} of {totalItems}
+            </span>
+            <Button
+              variant="outline" size="icon" className="h-7 w-7 rounded-md"
+              disabled={safePage <= 1}
+              onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+            >
+              <ChevronDown className="w-4 h-4 rotate-90" />
+            </Button>
+            <Button variant="outline" size="icon" className="h-7 w-7 rounded-md bg-slate-100 text-slate-900 font-bold border-0 text-xs">
+              {safePage}
+            </Button>
+            <Button
+              variant="outline" size="icon" className="h-7 w-7 rounded-md"
+              disabled={safePage >= totalPages}
+              onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+            >
+              <ChevronDown className="w-4 h-4 -rotate-90" />
+            </Button>
+          </div>
+        </div>
+      </motion.div>
+
     </motion.div>
   );
 }

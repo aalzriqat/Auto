@@ -46,7 +46,7 @@ const saleSchema = z.object({
   salePrice: z.coerce.number().min(0, "Sale price must be positive"),
   saleDate: z.string().min(1, "Sale date is required"),
   status: z.enum(["PENDING", "COMPLETED", "CANCELLED"]),
-  
+
   // Deal Structuring
   taxRate: z.coerce.number().min(0).optional(),
   taxAmount: z.coerce.number().min(0).optional(),
@@ -60,7 +60,8 @@ const saleSchema = z.object({
   termMonths: z.coerce.number().min(0).optional(),
   warrantySold: z.coerce.number().min(0).optional(),
   gapSold: z.coerce.number().min(0).optional(),
-});
+
+});
 
 type SaleFormValues = z.infer<typeof saleSchema>;
 
@@ -73,7 +74,7 @@ interface SaleDialogProps {
 export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  
+
   // Queries for dropdowns
   const customers = useQuery(api.customers.list, activeOrgId ? { orgId: activeOrgId } : "skip");
   // Only fetch AVAILABLE vehicles if we're creating a new sale, or include the current one if editing
@@ -113,7 +114,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
   const watchAll = form.watch();
   const estimatedPayment = (() => {
     if (watchAll.financingType !== "FINANCED") return 0;
-    
+
     const price = Number(watchAll.salePrice) || 0;
     const taxes = Number(watchAll.taxAmount) || 0;
     const fees = Number(watchAll.dealerFees) || 0;
@@ -121,7 +122,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     const gap = Number(watchAll.gapSold) || 0;
     const downPayment = Number(watchAll.downPayment) || 0;
     const tradeIn = Number(watchAll.tradeInValue) || 0;
-    
+
     const principal = price + taxes + fees + warranty + gap - downPayment - tradeIn;
     const apr = Number(watchAll.apr) || 0;
     const months = Number(watchAll.termMonths) || 1;
@@ -181,7 +182,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     }
   }, [sale, open, form]);
 
-  
+
   const salePrice = form.watch("salePrice");
   const taxAmount = form.watch("taxAmount");
   const dealerFees = form.watch("dealerFees");
@@ -201,7 +202,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
     setIsSubmitting(true);
     try {
       const parsedDate = new Date(values.saleDate).getTime();
-      
+
       if (sale) {
         // Updating
         await updateSale({
@@ -263,15 +264,15 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
         <DialogHeader>
           <DialogTitle>{sale ? (t("EditSale" as any) || "Edit Sale") : (t("LogSale" as any) || "Log a Sale")}</DialogTitle>
           <DialogDescription>
-            {sale 
-              ? (t("UpdateSaleDesc" as any) || "Update sale details. If you cancel it, the vehicle will be marked as available again.") 
+            {sale
+              ? (t("UpdateSaleDesc" as any) || "Update sale details. If you cancel it, the vehicle will be marked as available again.")
               : (t("AddSaleDesc" as any) || "Record a new vehicle sale. This will automatically mark the vehicle as SOLD and close related leads.")}
           </DialogDescription>
         </DialogHeader>
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-            
+
             <div className="space-y-6">
               {/* Vehicle & Customer Section */}
               <div className="bg-muted/30 p-4 rounded-lg border space-y-4">
@@ -499,7 +500,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                       </FormItem>
                     )}
                   />
-                  
+
                   <FormField
                     control={form.control}
                     name="loanAmount"
@@ -515,7 +516,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                 </div>
               </div>
             </div>
-            
+
             {watchAll.financingType === "FINANCED" && (
               <div className="bg-muted p-4 rounded-lg space-y-4">
                 <h4 className="font-semibold">{t("DealStructuring" as any) || "F&I Deal Structuring"}</h4>
@@ -579,7 +580,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                 </div>
               </div>
             )}
-            
+
             <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 {t("Cancel" as any) || "Cancel"}

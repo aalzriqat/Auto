@@ -61,7 +61,7 @@ export const list = query({
           (vehicle.imageIds ?? []).map((id) => ctx.storage.getUrl(id))
         );
         const { purchasePrice, ...rest } = vehicle;
-        return { 
+        return {
           ...rest,
           ...(canViewCostPrice ? { purchasePrice } : {}),
           imageUrls,
@@ -94,10 +94,10 @@ export const get = query({
     );
 
     const { purchasePrice, ...rest } = vehicle;
-    return { 
+    return {
       ...rest,
       ...(canViewCostPrice ? { purchasePrice } : {}),
-      imageUrls 
+      imageUrls
     };
   },
 });
@@ -260,10 +260,10 @@ export const update = mutation({
     for (const [key, value] of Object.entries(updates)) {
       if (value !== undefined) {
         const newValue = key === "vin" ? (value as string).trim().toUpperCase()
-                   : key === "make" || key === "model" || key === "color"
-                     ? (value as string).trim()
-                   : value;
-        
+          : key === "make" || key === "model" || key === "color"
+            ? (value as string).trim()
+            : value;
+
         if (key === "imageIds") {
           const oldImages = JSON.stringify(vehicle.imageIds || []);
           const newImages = JSON.stringify(newValue || []);
@@ -278,7 +278,7 @@ export const update = mutation({
         }
       }
     }
-    
+
     if (Object.keys(patch).length > 0) {
       await ctx.db.insert("vehicleEdits", {
         orgId: args.orgId,

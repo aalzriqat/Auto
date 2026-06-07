@@ -43,7 +43,7 @@ export function CustomerDetailsDialog({
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const [activeTab, setActiveTab] = useState("overview");
-  
+
   const customer = useQuery(
     api.customers.get,
     activeOrgId && customerId
@@ -82,14 +82,14 @@ export function CustomerDetailsDialog({
           <Tabs defaultValue="overview" className="flex-1 flex flex-col min-h-0">
             <div className="px-6 border-b">
               <TabsList className="bg-transparent h-12 p-0 -mb-px">
-                <TabsTrigger 
-                  value="overview" 
+                <TabsTrigger
+                  value="overview"
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
                   {t("Overview" as any) || "Overview"}
                 </TabsTrigger>
-                <TabsTrigger 
-                  value="leads_sales" 
+                <TabsTrigger
+                  value="leads_sales"
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
                   {t("LeadsSales" as any) || "Leads & Sales"}
@@ -97,8 +97,8 @@ export function CustomerDetailsDialog({
                     <Badge variant="secondary" className="ml-2 text-xs px-1.5 py-0.5">{relations.leads.length + relations.sales.length}</Badge>
                   )}
                 </TabsTrigger>
-                <TabsTrigger 
-                  value="quotes" 
+                <TabsTrigger
+                  value="quotes"
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
                   {t("Quotes" as any) || "Quotes"}
@@ -106,8 +106,8 @@ export function CustomerDetailsDialog({
                     <Badge variant="secondary" className="ml-2 text-xs px-1.5 py-0.5">{relations.quotes.length}</Badge>
                   )}
                 </TabsTrigger>
-                <TabsTrigger 
-                  value="tasks" 
+                <TabsTrigger
+                  value="tasks"
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
                   {t("Tasks" as any) || "Tasks"}
@@ -115,8 +115,8 @@ export function CustomerDetailsDialog({
                     <Badge variant="secondary" className="ml-2 text-xs px-1.5 py-0.5">{relations.tasks.length}</Badge>
                   )}
                 </TabsTrigger>
-                <TabsTrigger 
-                  value="financials" 
+                <TabsTrigger
+                  value="financials"
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
                   {t("Financials" as any) || "Financials"}
@@ -237,15 +237,14 @@ export function CustomerDetailsDialog({
                             <span className="font-semibold text-base">{quote.vehicleDesc}</span>
                             <p className="text-xs text-muted-foreground">{quote.companyName}</p>
                           </div>
-                          <span className={`text-xs px-2 py-1 rounded-full font-medium ${
-                            quote.status === "ACCEPTED" ? "bg-green-100 text-green-800" :
-                            quote.status === "EXPIRED" ? "bg-red-100 text-red-800" :
-                            "bg-blue-100 text-blue-800"
-                          }`}>
+                          <span className={`text-xs px-2 py-1 rounded-full font-medium ${quote.status === "ACCEPTED" ? "bg-green-100 text-green-800" :
+                              quote.status === "EXPIRED" ? "bg-red-100 text-red-800" :
+                                "bg-blue-100 text-blue-800"
+                            }`}>
                             {quote.status}
                           </span>
                         </div>
-                        
+
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 bg-muted/50 p-3 rounded-md">
                           <div>
                             <p className="text-xs text-muted-foreground">{t("VehiclePrice" as any) || "Vehicle Price"}</p>
@@ -268,23 +267,23 @@ export function CustomerDetailsDialog({
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-4 border-t pt-3">
                           <div>
                             <p className="text-xs text-muted-foreground">{t("FinancedAmount" as any) || "Financed Amount"}</p>
-                            <p className="font-medium">{quote.totalFinancedAmount?.toLocaleString(undefined, {minimumFractionDigits: 2})} JOD</p>
+                            <p className="font-medium">{quote.totalFinancedAmount?.toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</p>
                           </div>
                           <div>
                             <p className="text-xs text-muted-foreground">{t("TotalProfit" as any) || "Total Profit"}</p>
-                            <p className="font-medium text-orange-600">{quote.totalProfit?.toLocaleString(undefined, {minimumFractionDigits: 2})} JOD</p>
+                            <p className="font-medium text-orange-600">{quote.totalProfit?.toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</p>
                           </div>
                           <div className="bg-primary/10 -m-2 p-2 rounded-md text-center">
                             <p className="text-xs text-primary font-medium">{t("MonthlyInstallment" as any) || "Monthly Installment"}</p>
-                            <p className="text-lg font-bold text-primary">{quote.monthlyInstallment?.toLocaleString(undefined, {minimumFractionDigits: 2})} <span className="text-xs font-normal">JOD</span></p>
+                            <p className="text-lg font-bold text-primary">{quote.monthlyInstallment?.toLocaleString(undefined, { minimumFractionDigits: 2 })} <span className="text-xs font-normal">JOD</span></p>
                           </div>
                         </div>
 
                         <div className="flex justify-between items-center text-xs text-muted-foreground pt-2">
                           <p>{t("Date" as any) || "Generated On"}: {format(quote.createdAt, "PP p")}</p>
-                          <Button 
-                            variant="ghost" 
-                            size="sm" 
+                          <Button
+                            variant="ghost"
+                            size="sm"
                             className="h-8 gap-1 text-primary hover:text-primary/80"
                             onClick={(e) => {
                               e.stopPropagation();
@@ -351,11 +350,10 @@ export function CustomerDetailsDialog({
                       <div key={task._id} className="bg-muted/30 p-3 rounded-lg border text-sm">
                         <div className="flex justify-between items-start mb-1">
                           <span className="font-medium">{task.title}</span>
-                          <span className={`text-xs px-2 py-0.5 rounded ${
-                            task.status === "COMPLETED" ? "bg-green-100 text-green-800" :
-                            task.status === "CANCELLED" ? "bg-red-100 text-red-800" :
-                            "bg-yellow-100 text-yellow-800"
-                          }`}>
+                          <span className={`text-xs px-2 py-0.5 rounded ${task.status === "COMPLETED" ? "bg-green-100 text-green-800" :
+                              task.status === "CANCELLED" ? "bg-red-100 text-red-800" :
+                                "bg-yellow-100 text-yellow-800"
+                            }`}>
                             {task.status}
                           </span>
                         </div>
@@ -369,7 +367,7 @@ export function CustomerDetailsDialog({
                   </div>
                 )}
               </TabsContent>
-              
+
               <TabsContent value="financials" className="m-0 focus-visible:outline-none p-4">
                 <CustomerFinancialsTab customer={customer} />
               </TabsContent>

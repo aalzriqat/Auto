@@ -50,9 +50,9 @@ export default function TasksPage() {
 
   const filteredTasks = tasks?.filter(t => {
     const q = searchQuery.toLowerCase();
-    return t.title.toLowerCase().includes(q) || 
-           (t.customerName && t.customerName.toLowerCase().includes(q)) ||
-           (t.assigneeName && t.assigneeName.toLowerCase().includes(q));
+    return t.title.toLowerCase().includes(q) ||
+      (t.customerName && t.customerName.toLowerCase().includes(q)) ||
+      (t.assigneeName && t.assigneeName.toLowerCase().includes(q));
   });
 
   const handleEdit = (task: any) => {
@@ -72,8 +72,8 @@ export default function TasksPage() {
       return;
     }
     try {
-      await updateTask({ 
-        orgId: activeOrgId, 
+      await updateTask({
+        orgId: activeOrgId,
         taskId: taskToCancel._id,
         status: "CANCELLED",
         statusNote: statusNote.trim()
@@ -98,8 +98,8 @@ export default function TasksPage() {
     }
     try {
       const parsedDate = newDueDate.getTime();
-      await updateTask({ 
-        orgId: activeOrgId, 
+      await updateTask({
+        orgId: activeOrgId,
         taskId: taskToReschedule._id,
         dueDate: parsedDate,
         statusNote: statusNote.trim()
@@ -135,9 +135,9 @@ export default function TasksPage() {
     if (status === "COMPLETED") {
       return <Badge variant="default" className="bg-green-600 hover:bg-green-700">{t("TaskCompleted" as any) || "Completed"}</Badge>;
     }
-    
+
     // Check if overdue
-    const isOverdue = dueDate < new Date().setHours(0,0,0,0);
+    const isOverdue = dueDate < new Date().setHours(0, 0, 0, 0);
     if (isOverdue) {
       return <Badge variant="destructive">{t("Overdue" as any) || "Overdue"}</Badge>;
     }
@@ -147,13 +147,7 @@ export default function TasksPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight">{t("TasksAndCRM" as any) || "Tasks & CRM"}</h2>
-          <p className="text-muted-foreground">
-            {t("TasksDesc" as any) || "Manage your daily tasks, follow-ups, and schedules."}
-          </p>
-        </div>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
         <Button onClick={handleAddNew}>
           <Plus className="me-2 h-4 w-4" /> {t("ScheduleTask" as any) || "Schedule Task"}
         </Button>
@@ -199,9 +193,9 @@ export default function TasksPage() {
               filteredTasks.map((task) => (
                 <TableRow key={task._id} className={task.status === "COMPLETED" ? "opacity-60" : ""}>
                   <TableCell>
-                    <Button 
-                      variant="ghost" 
-                      size="icon" 
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       className={`h-8 w-8 rounded-full ${task.status === "COMPLETED" ? "text-green-600" : "text-muted-foreground"}`}
                       onClick={() => handleToggleStatus(task)}
                     >
@@ -229,7 +223,7 @@ export default function TasksPage() {
                   <TableCell>
                     <div className="flex flex-col items-start gap-1">
                       {task.customerName && task.customerId ? (
-                        <button 
+                        <button
                           onClick={() => setSelectedCustomerId(task.customerId || null)}
                           className="text-sm text-blue-500 hover:text-blue-700 hover:underline transition-colors focus:outline-none"
                         >
@@ -238,7 +232,7 @@ export default function TasksPage() {
                       ) : (
                         <span className="text-sm text-muted-foreground italic">-</span>
                       )}
-                      
+
                       {task.communicationMethod && (
                         <div className="flex items-center text-xs text-muted-foreground mt-1">
                           {task.communicationMethod === "PHONE" && <Phone className="h-3 w-3 mr-1" />}
@@ -293,7 +287,7 @@ export default function TasksPage() {
             </DialogDescription>
           </DialogHeader>
           <div className="py-4">
-            <Input 
+            <Input
               placeholder={t("CancelReason" as any) || "Reason for cancellation..."}
               value={statusNote}
               onChange={(e) => setStatusNote(e.target.value)}
@@ -317,14 +311,14 @@ export default function TasksPage() {
           <div className="py-4 space-y-4">
             <div>
               <label className="text-sm font-medium mb-1 block">{t("DueDateTime" as any) || "New Due Date & Time"}</label>
-              <DateTimePicker 
-                value={newDueDate} 
+              <DateTimePicker
+                value={newDueDate}
                 onChange={(date) => setNewDueDate(date)}
               />
             </div>
             <div>
               <label className="text-sm font-medium mb-1 block">{t("NoteReason" as any) || "Reason"}</label>
-              <Input 
+              <Input
                 placeholder={t("RescheduleReason" as any) || "Why is it being rescheduled?"}
                 value={statusNote}
                 onChange={(e) => setStatusNote(e.target.value)}

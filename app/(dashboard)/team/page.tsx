@@ -63,13 +63,7 @@ export default function TeamPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight">{t("TeamManagement" as any) || "Team Management"}</h2>
-          <p className="text-muted-foreground">
-            {t("ManageDealershipStaff" as any) || "Manage your dealership staff and their access roles."}
-          </p>
-        </div>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
         {canManageUsers && (
           <Button onClick={() => setIsInviteOpen(true)}>
             <Plus className="me-2 h-4 w-4" /> {t("AddMember" as any) || "Add Member"}

@@ -20,7 +20,7 @@ export const stats = query({
       .query("vehicles")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .collect();
-    
+
     const availableVehicles = vehicles.filter(v => v.status === "AVAILABLE").length;
     const totalVehicles = vehicles.length;
 
@@ -29,7 +29,7 @@ export const stats = query({
       .query("leads")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .collect();
-      
+
     const activeLeads = leads.filter(l => l.stage !== "WON" && l.stage !== "LOST").length;
 
     // 4. Sales this period
@@ -37,10 +37,10 @@ export const stats = query({
       .query("sales")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .collect();
-      
+
     const now = Date.now();
     let filterStart = 0;
-    
+
     if (args.timeRange === "DAY") {
       filterStart = now - 24 * 60 * 60 * 1000;
     } else if (args.timeRange === "MONTH") {
@@ -66,7 +66,7 @@ export const stats = query({
     // Group sales by month for the chart
     const monthlySales: Record<string, number> = {};
     const monthlyProfits: Record<string, number> = {};
-    
+
     // Fetch all expenses to deduct from profit
     const allExpenses = await ctx.db
       .query("expenses")
@@ -82,7 +82,7 @@ export const stats = query({
       if (exp.date < filterStart) continue;
 
       const key = getChartKey(exp.date);
-      
+
       totalExpensesByMonth[key] = (totalExpensesByMonth[key] || 0) + exp.amount;
 
       if (exp.vehicleId) {
@@ -96,9 +96,9 @@ export const stats = query({
     const completedSales = periodSales.filter(s => s.status === "COMPLETED");
     for (const sale of completedSales) {
       const key = getChartKey(sale.saleDate);
-      
+
       monthlySales[key] = (monthlySales[key] || 0) + sale.salePrice;
-      
+
       // Calculate profit if purchase price is available
       const vehicle = await ctx.db.get(sale.vehicleId);
       if (vehicle && vehicle.purchasePrice !== undefined) {
@@ -118,7 +118,7 @@ export const stats = query({
 
     // Convert to array format for Recharts
     const allMonths = Array.from(new Set([
-      ...Object.keys(monthlySales), 
+      ...Object.keys(monthlySales),
       ...Object.keys(monthlyProfits),
       ...Object.keys(totalExpensesByMonth)
     ]));
@@ -145,8 +145,8 @@ export const stats = query({
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .collect();
 
-    const todayStart = new Date().setHours(0,0,0,0);
-    
+    const todayStart = new Date().setHours(0, 0, 0, 0);
+
     let totalTasks = 0;
     let pendingTasks = 0;
     let completedTasks = 0;
@@ -157,7 +157,7 @@ export const stats = query({
     for (const task of tasks) {
       totalTasks++;
       const isOverdue = task.status !== "COMPLETED" && task.dueDate < todayStart;
-      
+
       if (task.status === "COMPLETED") completedTasks++;
       else if (isOverdue) overdueTasks++;
       else pendingTasks++;

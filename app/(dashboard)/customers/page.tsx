@@ -94,13 +94,7 @@ export default function CustomersPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight">{t("Customers" as any) || "Customers"}</h2>
-          <p className="text-muted-foreground">
-            {t("CustomersDesc" as any) || "Manage your dealership's customers and their contact information."}
-          </p>
-        </div>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
         <Button onClick={handleAddNew}>
           <Plus className="me-2 h-4 w-4" /> {t("AddCustomer" as any) || "Add Customer"}
         </Button>

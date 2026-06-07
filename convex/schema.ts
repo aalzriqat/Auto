@@ -166,7 +166,7 @@ export default defineSchema({
     salePrice: v.number(),
     saleDate: v.number(), // timestamp
     status: v.union(v.literal("PENDING"), v.literal("COMPLETED"), v.literal("CANCELLED")),
-    
+
     // Deal Structuring Fields
     taxRate: v.optional(v.number()),
     taxAmount: v.optional(v.number()),
@@ -233,10 +233,10 @@ export default defineSchema({
     taskId: v.id("tasks"),
     userId: v.id("users"),
     action: v.union(
-      v.literal("CREATE"), 
-      v.literal("UPDATE"), 
-      v.literal("RESCHEDULE"), 
-      v.literal("CANCEL"), 
+      v.literal("CREATE"),
+      v.literal("UPDATE"),
+      v.literal("RESCHEDULE"),
+      v.literal("CANCEL"),
       v.literal("STATUS_CHANGE")
     ),
     details: v.string(),
@@ -336,18 +336,18 @@ export default defineSchema({
     customerId: v.id("customers"),
     vehicleId: v.id("vehicles"),
     companyId: v.optional(v.id("financeCompanies")), // Null if cash deal
-    
+
     // Core parameters
     vehiclePrice: v.number(),
     downPayment: v.number(),
     termMonths: v.number(),
-    
+
     // Financing Engine output
     totalFinancedAmount: v.optional(v.number()), // Principal + Insurance + Fees
     monthlyInstallment: v.optional(v.number()),
     profitRateApplied: v.optional(v.number()),
     totalProfit: v.optional(v.number()),
-    
+
     status: v.union(v.literal("DRAFT"), v.literal("SHARED"), v.literal("ACCEPTED"), v.literal("EXPIRED")),
     expiresAt: v.optional(v.number()),
     createdBy: v.id("users"),
@@ -365,7 +365,7 @@ export default defineSchema({
     vehicleId: v.id("vehicles"),
     companyId: v.optional(v.id("financeCompanies")),
     salespersonId: v.id("users"),
-    
+
     status: v.union(
       v.literal("DRAFT"),
       v.literal("PENDING_DOCS"),
@@ -374,7 +374,7 @@ export default defineSchema({
       v.literal("REJECTED"),
       v.literal("CLOSED")
     ),
-    
+
     notes: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),

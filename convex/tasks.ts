@@ -181,7 +181,7 @@ export const update = mutation({
       patch.communicationMethod = args.communicationMethod;
       changes.push(`Updated communication method to ${args.communicationMethod}.`);
     }
-    
+
     if (args.customerId !== undefined) {
       patch.customerId = args.customerId === null ? undefined : args.customerId;
       changes.push(args.customerId ? "Linked customer." : "Removed customer link.");

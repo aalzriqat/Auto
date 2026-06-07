@@ -45,10 +45,10 @@ export default function SalesPage() {
 
   const filteredSales = sales?.filter(s => {
     const q = searchQuery.toLowerCase();
-    return s.customerName.toLowerCase().includes(q) || 
-           s.vehicleSummary.toLowerCase().includes(q) ||
-           s.salespersonName.toLowerCase().includes(q) ||
-           s.vehicleVin.toLowerCase().includes(q);
+    return s.customerName.toLowerCase().includes(q) ||
+      s.vehicleSummary.toLowerCase().includes(q) ||
+      s.salespersonName.toLowerCase().includes(q) ||
+      s.vehicleVin.toLowerCase().includes(q);
   });
 
   const handleEdit = (sale: any) => {
@@ -83,13 +83,7 @@ export default function SalesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight">{t("SalesRecords" as any) || "Sales Records"}</h2>
-          <p className="text-muted-foreground">
-            {t("SalesRecordsDesc" as any) || "Log and manage vehicle sales and track revenue."}
-          </p>
-        </div>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => setIsQuoteDialogOpen(true)}>
             {t("Create Quote" as any) || "Create Quote"}
@@ -202,7 +196,7 @@ export default function SalesPage() {
           <DialogHeader>
             <DialogTitle>{t("DeleteSaleRecord" as any) || "Delete Sale Record"}</DialogTitle>
             <DialogDescription>
-              {t("DeleteSaleConfirm" as any) || "Are you sure you want to delete this sale? This action cannot be undone. If you just want to cancel the sale, use the Edit button to change its status to CANCELLED."} <br/>
+              {t("DeleteSaleConfirm" as any) || "Are you sure you want to delete this sale? This action cannot be undone. If you just want to cancel the sale, use the Edit button to change its status to CANCELLED."} <br />
               <span className="font-semibold text-foreground">{saleToDelete?.vehicleSummary}</span>
             </DialogDescription>
           </DialogHeader>

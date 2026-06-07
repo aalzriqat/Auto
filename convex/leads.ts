@@ -69,6 +69,8 @@ export const list = query({
           customerName: customer
             ? `${customer.firstName} ${customer.lastName}`
             : "Unknown",
+          email: customer?.email,
+          phone: customer?.phone,
           vehicleSummary: vehicle
             ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`
             : null,
