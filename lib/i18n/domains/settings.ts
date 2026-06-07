@@ -17,6 +17,12 @@ export const settingsEn = {
   Guarantors: "Guarantors",
   AddGuarantor: "Add Guarantor",
   FinanceApplications: "Finance Applications",
+  "Document Requirements": "Document Requirements",
+  "Add Rule": "Add Rule",
+  "Document Name": "Document Name",
+  "Applies To": "Applies To",
+  "Required": "Required",
+  "No document rules defined.": "No document rules defined.",
 
   // Branches
   BranchesManagement: "Branches Management",
@@ -85,6 +91,12 @@ export const settingsAr = {
   Guarantors: "الكفلاء",
   AddGuarantor: "إضافة كفيل",
   FinanceApplications: "طلبات التمويل",
+  "Document Requirements": "متطلبات المستندات",
+  "Add Rule": "إضافة شرط",
+  "Document Name": "اسم المستند",
+  "Applies To": "ينطبق على",
+  "Required": "مطلوب",
+  "No document rules defined.": "لم يتم تحديد أي شروط للمستندات.",
 
   // Branches
   BranchesManagement: "إدارة الفروع",

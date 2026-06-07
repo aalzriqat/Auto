@@ -140,11 +140,11 @@ export default function FinanceCompaniesPage() {
         <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
           <CardTitle className="flex items-center gap-2">
             <FileCheck className="h-5 w-5" />
-            Document Requirements
+            {t("Document Requirements" as any)}
           </CardTitle>
           <Button size="sm" onClick={() => setIsRuleDialogOpen(true)}>
             <Plus className="mr-2 h-4 w-4" />
-            Add Rule
+            {t("Add Rule" as any)}
           </Button>
         </CardHeader>
         <CardContent>
@@ -152,10 +152,10 @@ export default function FinanceCompaniesPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Document Name</TableHead>
-                  <TableHead>Applies To</TableHead>
-                  <TableHead>Required</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead>{t("Document Name" as any)}</TableHead>
+                  <TableHead>{t("Applies To" as any)}</TableHead>
+                  <TableHead>{t("Required" as any)}</TableHead>
+                  <TableHead className="text-right">{t("Actions" as any)}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -166,7 +166,7 @@ export default function FinanceCompaniesPage() {
                 ) : rules.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={4} className="text-center text-muted-foreground">
-                      No document rules defined.
+                      {t("No document rules defined." as any)}
                     </TableCell>
                   </TableRow>
                 ) : (

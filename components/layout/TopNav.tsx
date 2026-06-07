@@ -35,7 +35,7 @@ export function TopNav() {
   const { user } = useUser();
   const { t, isRtl } = useLanguage();
   const { activeOrgId } = useOrg();
-  const pathname = typeof window !== 'undefined' ? window.location.pathname : "";
+  const pathname = usePathname();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
