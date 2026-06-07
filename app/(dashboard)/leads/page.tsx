@@ -44,7 +44,7 @@ export default function LeadsPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const leads = useQuery(api.leads.list, activeOrgId ? { orgId: activeOrgId } : "skip");
-  const removeLead = useMutation(api.leads.remove);
+  const removeLead = useMutation(api.leads.softDelete);
 
   const [isLeadDialogOpen, setIsLeadDialogOpen] = useState(false);
   const [editingLead, setEditingLead] = useState<any>(null);

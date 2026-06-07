@@ -47,12 +47,12 @@ export const update = mutation({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const { orgId, equityId, ...updates } = args;
-    
+
     // Clean up undefined optional values
     const cleanedUpdates = Object.fromEntries(
       Object.entries(updates).filter(([_, v]) => v !== undefined)
     );
-    
+
     await ctx.db.patch(equityId, cleanedUpdates);
   },
 });

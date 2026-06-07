@@ -143,15 +143,15 @@ export function WorkOrderDialog({ open, onOpenChange, vehicleId, workOrder }: Wo
         <DialogHeader>
           <DialogTitle>{workOrder ? "Edit Work Order" : "New Work Order"}</DialogTitle>
           <DialogDescription>
-            {workOrder 
-              ? "Update tasks and status. Completing this will sync the total cost to expenses." 
+            {workOrder
+              ? "Update tasks and status. Completing this will sync the total cost to expenses."
               : "Track repairs, parts, and labor costs for this vehicle."}
           </DialogDescription>
         </DialogHeader>
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-            
+
             <div className="grid grid-cols-2 gap-4">
               <FormField
                 control={form.control}
@@ -254,7 +254,7 @@ export function WorkOrderDialog({ open, onOpenChange, vehicleId, workOrder }: Wo
               ))}
 
               <div className="flex justify-end pt-2">
-                <span className="font-semibold text-lg">Total Cost: <span className="text-primary">{totalCost.toLocaleString(undefined, {minimumFractionDigits: 2})} JOD</span></span>
+                <span className="font-semibold text-lg">Total Cost: <span className="text-primary">{totalCost.toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</span></span>
               </div>
             </div>
 
@@ -271,7 +271,7 @@ export function WorkOrderDialog({ open, onOpenChange, vehicleId, workOrder }: Wo
                 </FormItem>
               )}
             />
-            
+
             <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel

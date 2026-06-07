@@ -29,6 +29,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EditRoleDialog } from "@/components/team/EditRoleDialog";
 import { ChangeMemberRoleDialog } from "@/components/team/ChangeMemberRoleDialog";
+import { RoleGuard } from "@/components/auth/RoleGuard";
 
 export default function TeamPage() {
   const { activeOrgId } = useOrg();
@@ -62,8 +63,9 @@ export default function TeamPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
+    <RoleGuard permissions={["view:users"]}>
+      <div className="space-y-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
         {canManageUsers && (
           <Button onClick={() => setIsInviteOpen(true)}>
             <Plus className="me-2 h-4 w-4" /> {t("AddMember" as any) || "Add Member"}
@@ -248,5 +250,6 @@ export default function TeamPage() {
         </DialogContent>
       </Dialog>
     </div>
+    </RoleGuard>
   );
 }

@@ -23,7 +23,7 @@ export const PERMISSIONS = {
   EDIT_VEHICLES: "edit:vehicles",
   EDIT_VEHICLES_REQUEST: "edit:vehicles:request",
   DELETE_VEHICLES: "delete:vehicles",
-  
+
   // Vehicle Sub-tabs
   VIEW_VEHICLE_INFO: "view:vehicle_info",
   VIEW_VEHICLE_LEADS: "view:vehicle_leads",

@@ -60,7 +60,10 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
 
-  const vehicles = useQuery(api.vehicles.list, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const availableVehicles = useQuery(
+    api.vehicles.listAll,
+    activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE" } : "skip"
+  );
   const memberships = useQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId } : "skip");
 
   const createExpense = useMutation(api.expenses.create);
@@ -255,7 +258,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                       </FormControl>
                       <SelectContent>
                         <SelectItem value="none">{t("GeneralNoVehicle" as any)}</SelectItem>
-                        {vehicles?.map((v) => (
+                        {availableVehicles?.map((v) => (
                           <SelectItem key={v._id} value={v._id}>
                             {v.year} {v.make} {v.model} - {v.vin.slice(-6)}
                           </SelectItem>

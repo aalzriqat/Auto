@@ -51,17 +51,17 @@ export function NotificationsBell() {
         const playTone = (freq: number, startTime: number, duration: number) => {
           const osc = ctx.createOscillator();
           const gain = ctx.createGain();
-          
+
           osc.type = 'sine';
           osc.frequency.setValueAtTime(freq, startTime);
-          
+
           gain.gain.setValueAtTime(0, startTime);
           gain.gain.linearRampToValueAtTime(0.4, startTime + 0.02);
           gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration);
-          
+
           osc.connect(gain);
           gain.connect(ctx.destination);
-          
+
           osc.start(startTime);
           osc.stop(startTime + duration);
         };
@@ -104,7 +104,7 @@ export function NotificationsBell() {
   const formatTime = (ts: number) => {
     const rtf = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' });
     const diff = (ts - Date.now()) / 1000;
-    
+
     if (Math.abs(diff) < 60) return "Just now";
     if (Math.abs(diff) < 3600) return rtf.format(Math.round(diff / 60), 'minute');
     if (Math.abs(diff) < 86400) return rtf.format(Math.round(diff / 3600), 'hour');
@@ -116,15 +116,15 @@ export function NotificationsBell() {
       <Button variant="ghost" size="icon" className="relative" onClick={() => setOpen(!open)}>
         <Bell className="h-5 w-5 text-muted-foreground" />
         {unreadCount > 0 && (
-          <Badge 
-            variant="destructive" 
+          <Badge
+            variant="destructive"
             className="absolute -top-1 -end-1 h-5 w-5 flex items-center justify-center p-0 text-[10px]"
           >
             {unreadCount}
           </Badge>
         )}
       </Button>
-      
+
       {open && (
         <div className="absolute end-0 top-12 mt-2 w-80 bg-background border rounded-md shadow-lg z-50 overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b bg-card">
@@ -135,7 +135,7 @@ export function NotificationsBell() {
               </Button>
             )}
           </div>
-          
+
           <div className="max-h-80 overflow-y-auto">
             {notifications === undefined ? (
               <div className="p-4 text-center text-sm text-muted-foreground">{t("Loading")}</div>
@@ -144,8 +144,8 @@ export function NotificationsBell() {
             ) : (
               <div className="flex flex-col">
                 {notifications.map((notif) => (
-                  <div 
-                    key={notif._id} 
+                  <div
+                    key={notif._id}
                     className={`flex items-start gap-3 p-4 border-b last:border-0 hover:bg-muted/50 transition-colors ${!notif.isRead ? 'bg-blue-50/50 dark:bg-blue-950/20' : ''}`}
                   >
                     <div className="flex-1 space-y-1">
@@ -168,10 +168,10 @@ export function NotificationsBell() {
                       </p>
                     </div>
                     {!notif.isRead && (
-                      <Button 
-                        variant="ghost" 
-                        size="icon" 
-                        className="h-6 w-6 rounded-full shrink-0" 
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 rounded-full shrink-0"
                         onClick={(e) => { e.stopPropagation(); handleMarkAsRead(notif._id); }}
                       >
                         <Check className="h-3 w-3" />

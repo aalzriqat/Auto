@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
+import { rateLimiter } from "./rateLimit";
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
@@ -19,6 +20,7 @@ export const list = query({
     return await ctx.db
       .query("customers")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .filter((q) => q.neq(q.field("isDeleted"), true))
       .collect();
   },
 });
@@ -59,6 +61,7 @@ export const getByEmail = query({
       .withIndex("by_org_email", (q) =>
         q.eq("orgId", args.orgId).eq("email", args.email.toLowerCase().trim())
       )
+      .filter((q) => q.neq(q.field("isDeleted"), true))
       .unique();
   },
 });
@@ -80,7 +83,12 @@ export const create = mutation({
     address: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_CUSTOMERS]);
+    const statusLimit = await rateLimiter.limit(ctx, "create");
+    if (!statusLimit.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+    }
+
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_CUSTOMERS]);
 
     const normalizedEmail = args.email?.toLowerCase().trim() || undefined;
 
@@ -207,15 +215,15 @@ export const update = mutation({
 });
 
 /**
- * Deletes a customer. Fails if the customer has any associated leads or sales.
+ * Soft deletes a customer. Fails if the customer has any associated leads or sales.
  */
-export const remove = mutation({
+export const softDelete = mutation({
   args: {
     orgId: v.id("organizations"),
     customerId: v.id("customers"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_CUSTOMERS]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_CUSTOMERS]);
 
     const customer = await ctx.db.get(args.customerId);
     if (!customer || customer.orgId !== args.orgId) {
@@ -248,7 +256,11 @@ export const remove = mutation({
       );
     }
 
-    await ctx.db.delete(args.customerId);
+    await ctx.db.patch(args.customerId, {
+      isDeleted: true,
+      deletedAt: Date.now(),
+      deletedBy: user._id
+    });
 
     const actorName = await getActorName(ctx);
     await notifyManagers(

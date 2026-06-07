@@ -57,7 +57,7 @@ export function GeneralLedgerTab() {
                   </TableCell>
                   <TableCell>
                     <Badge variant={tx.type === "IN" ? "default" : "destructive"}
-                           className={tx.type === "IN" ? "bg-green-100 text-green-800 hover:bg-green-100" : ""}>
+                      className={tx.type === "IN" ? "bg-green-100 text-green-800 hover:bg-green-100" : ""}>
                       {tx.type}
                     </Badge>
                   </TableCell>

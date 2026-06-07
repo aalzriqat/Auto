@@ -22,8 +22,8 @@ export const add = mutation({
     amount: v.number(),
     date: v.number(),
     category: v.union(
-      v.literal("VEHICLE_SALE"), v.literal("VEHICLE_PURCHASE"), 
-      v.literal("EXPENSE"), v.literal("DEPOSIT"), 
+      v.literal("VEHICLE_SALE"), v.literal("VEHICLE_PURCHASE"),
+      v.literal("EXPENSE"), v.literal("DEPOSIT"),
       v.literal("PARTNER_DRAW"), v.literal("CAPITAL_INJECTION"),
       v.literal("CLAIM_PAYMENT"), v.literal("OTHER")
     ),
@@ -56,8 +56,8 @@ export const update = mutation({
     amount: v.optional(v.number()),
     date: v.optional(v.number()),
     category: v.optional(v.union(
-      v.literal("VEHICLE_SALE"), v.literal("VEHICLE_PURCHASE"), 
-      v.literal("EXPENSE"), v.literal("DEPOSIT"), 
+      v.literal("VEHICLE_SALE"), v.literal("VEHICLE_PURCHASE"),
+      v.literal("EXPENSE"), v.literal("DEPOSIT"),
       v.literal("PARTNER_DRAW"), v.literal("CAPITAL_INJECTION"),
       v.literal("CLAIM_PAYMENT"), v.literal("OTHER")
     )),
@@ -69,12 +69,12 @@ export const update = mutation({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const { orgId, transactionId, ...updates } = args;
-    
+
     // Clean up undefined optional values
     const cleanedUpdates = Object.fromEntries(
       Object.entries(updates).filter(([_, v]) => v !== undefined)
     );
-    
+
     await ctx.db.patch(transactionId, cleanedUpdates);
   },
 });

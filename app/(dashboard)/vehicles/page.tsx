@@ -70,7 +70,7 @@ export default function VehiclesPage() {
     activeOrgId ? { orgId: activeOrgId } : "skip",
     { initialNumItems: 20 }
   );
-  const removeVehicle = useMutation(api.vehicles.remove);
+  const removeVehicle = useMutation(api.vehicles.softDelete);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [isVehicleDialogOpen, setIsVehicleDialogOpen] = useState(false);

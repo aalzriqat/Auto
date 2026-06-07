@@ -78,7 +78,10 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
   // Queries for dropdowns
   const customers = useQuery(api.customers.list, activeOrgId ? { orgId: activeOrgId } : "skip");
   // Only fetch AVAILABLE vehicles if we're creating a new sale, or include the current one if editing
-  const availableVehicles = useQuery(api.vehicles.list, activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE" } : "skip");
+  const availableVehicles = useQuery(
+    api.vehicles.listAll,
+    activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE" } : "skip"
+  );
   const memberships = useQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId } : "skip");
 
   const createSale = useMutation(api.sales.create);

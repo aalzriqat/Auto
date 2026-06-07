@@ -37,7 +37,7 @@ export const getSalesAndProfitReport = query({
 
         const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
 
-        const cost = (vehicle?.purchasePrice || 0) + totalExpenses;
+        const cost = (vehicle?.purchasePrice ?? vehicle?.sellingPrice ?? 0) + totalExpenses;
         const profit = sale.salePrice - cost;
 
         totalRevenue += sale.salePrice;
@@ -50,7 +50,7 @@ export const getSalesAndProfitReport = query({
           vehicleModel: vehicle?.model,
           vehicleYear: vehicle?.year,
           vehicleVin: vehicle?.vin,
-          vehicleCost: vehicle?.purchasePrice || 0,
+          vehicleCost: vehicle?.purchasePrice ?? vehicle?.sellingPrice ?? 0,
           vehicleExpenses: totalExpenses,
           totalCost: cost,
           netProfit: profit,
@@ -82,7 +82,7 @@ export const getInventoryReport = query({
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .collect();
 
-    const activeInventory = vehicles.filter((v) => v.status === "AVAILABLE" || v.status === "RESERVED");
+    const activeInventory = vehicles.filter((v) => v.isDeleted !== true && (v.status === "AVAILABLE" || v.status === "RESERVED"));
 
     let totalValue = 0;
 
@@ -95,12 +95,14 @@ export const getInventoryReport = query({
           .collect();
 
         const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
-        const totalInvestment = (vehicle.purchasePrice || 0) + totalExpenses;
+        const basePrice = vehicle.purchasePrice ?? vehicle.sellingPrice ?? 0;
+        const totalInvestment = basePrice + totalExpenses;
 
         totalValue += totalInvestment;
 
         return {
           ...vehicle,
+          purchasePrice: basePrice,
           totalExpenses,
           totalInvestment,
         };

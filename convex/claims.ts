@@ -51,11 +51,11 @@ export const update = mutation({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const { orgId, claimId, ...updates } = args;
-    
+
     const cleanedUpdates = Object.fromEntries(
       Object.entries(updates).filter(([_, v]) => v !== undefined)
     );
-    
+
     await ctx.db.patch(claimId, cleanedUpdates);
   },
 });

@@ -35,7 +35,7 @@ export default function SalesPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const sales = useQuery(api.sales.list, activeOrgId ? { orgId: activeOrgId } : "skip");
-  const removeSale = useMutation(api.sales.remove);
+  const removeSale = useMutation(api.sales.softDelete);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [isSaleDialogOpen, setIsSaleDialogOpen] = useState(false);

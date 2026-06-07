@@ -37,7 +37,7 @@ export default function CustomersPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const customers = useQuery(api.customers.list, activeOrgId ? { orgId: activeOrgId } : "skip");
-  const removeCustomer = useMutation(api.customers.remove);
+  const removeCustomer = useMutation(api.customers.softDelete);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [isCustomerDialogOpen, setIsCustomerDialogOpen] = useState(false);

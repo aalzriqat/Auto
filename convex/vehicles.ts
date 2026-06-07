@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
+import { rateLimiter } from "./rateLimit";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -22,6 +23,7 @@ import { paginationOptsValidator } from "convex/server";
 /**
  * Lists all vehicles for an organization.
  * Optionally filters by status.
+ * This is paginated.
  */
 export const list = query({
   args: {
@@ -34,13 +36,14 @@ export const list = query({
     const canViewCostPrice = role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
 
     let q;
-    
+
     if (args.status) {
       q = ctx.db.query("vehicles").withIndex("by_org_status", (q) =>
         q.eq("orgId", args.orgId).eq("status", args.status!)
-      );
+      ).filter(q => q.neq(q.field("isDeleted"), true));
     } else {
-      q = ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", args.orgId));
+      q = ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .filter(q => q.neq(q.field("isDeleted"), true));
     }
 
     const pageResult = await q.order("desc").paginate(args.paginationOpts);
@@ -71,6 +74,64 @@ export const list = query({
     );
 
     return { ...pageResult, page };
+  },
+});
+
+/**
+ * Lists all vehicles for an organization without pagination (for dropdowns).
+ * Optionally filters by status.
+ */
+export const listAll = query({
+  args: {
+    orgId: v.id("organizations"),
+    status: v.optional(vehicleStatus),
+  },
+  handler: async (ctx, args) => {
+    const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+    const canViewCostPrice = role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
+
+    let q;
+
+    if (args.status) {
+      q = ctx.db.query("vehicles").withIndex("by_org_status", (q) =>
+        q.eq("orgId", args.orgId).eq("status", args.status!)
+      ).filter(q => q.neq(q.field("isDeleted"), true));
+    } else {
+      q = ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .filter(q => q.neq(q.field("isDeleted"), true));
+    }
+
+    const vehicles = await q.order("desc").collect();
+
+    const pendingRequests = await ctx.db
+      .query("vehicleStatusRequests")
+      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
+      .collect();
+
+    const pendingMap = new Map<string, string>();
+    for (const req of pendingRequests) {
+      pendingMap.set(req.vehicleId, req.requestedStatus);
+    }
+
+    return await Promise.all(
+      vehicles.map(async (vehicle) => {
+        const docUrls = await Promise.all(
+          (vehicle.imageIds || []).map((id) => ctx.storage.getUrl(id))
+        );
+
+        let purchasePrice = vehicle.purchasePrice;
+        if (!canViewCostPrice) {
+          purchasePrice = undefined;
+        }
+
+        return {
+          ...vehicle,
+          purchasePrice,
+          pendingStatusRequest: pendingMap.get(vehicle._id) || null,
+          imageUrls: docUrls,
+        };
+      })
+    );
   },
 });
 
@@ -148,6 +209,11 @@ export const create = mutation({
     imageIds: v.optional(v.array(v.id("_storage"))),
   },
   handler: async (ctx, args) => {
+    const statusLimit = await rateLimiter.limit(ctx, "create");
+    if (!statusLimit.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+    }
+
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
 
     const normalizedVin = args.vin.trim().toUpperCase();
@@ -310,15 +376,15 @@ export const update = mutation({
 });
 
 /**
- * Deletes a vehicle. Only vehicles with status AVAILABLE or ARCHIVED can be deleted.
+ * Soft deletes a vehicle. Only vehicles with status AVAILABLE or ARCHIVED can be deleted.
  */
-export const remove = mutation({
+export const softDelete = mutation({
   args: {
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_VEHICLES]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_VEHICLES]);
 
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.orgId !== args.orgId) {
@@ -331,12 +397,12 @@ export const remove = mutation({
       );
     }
 
-    // Delete associated images
-    for (const imageId of vehicle.imageIds ?? []) {
-      await ctx.storage.delete(imageId);
-    }
-
-    await ctx.db.delete(args.vehicleId);
+    // We no longer delete associated images, we just soft-delete the record
+    await ctx.db.patch(args.vehicleId, { 
+      isDeleted: true,
+      deletedAt: Date.now(),
+      deletedBy: user._id
+    });
 
     const actorName = await getActorName(ctx);
     await notifyManagers(
@@ -352,23 +418,28 @@ export const remove = mutation({
  * Generates an upload URL for uploading vehicle images.
  */
 export const generateUploadUrl = mutation({
-  args: { 
+  args: {
     orgId: v.id("organizations"),
     mimeType: v.string(),
     sizeInBytes: v.number(),
   },
   handler: async (ctx, args) => {
+    const statusLimit = await rateLimiter.limit(ctx, "upload");
+    if (!statusLimit.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+    }
+
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
-    
+
     // 5MB limit
     if (args.sizeInBytes > 5 * 1024 * 1024) {
       throw new ConvexError("File size exceeds 5MB limit.");
     }
-    
+
     if (!args.mimeType.startsWith("image/")) {
       throw new ConvexError("Only image files are allowed for vehicles.");
     }
-    
+
     return await ctx.storage.generateUploadUrl();
   },
 });

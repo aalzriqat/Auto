@@ -66,6 +66,9 @@ export default defineSchema({
     addedBy: v.optional(v.id("users")),
     updatedBy: v.optional(v.id("users")),
     updatedAt: v.optional(v.number()),
+    isDeleted: v.optional(v.boolean()),
+    deletedAt: v.optional(v.number()),
+    deletedBy: v.optional(v.id("users")),
   })
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])
@@ -98,7 +101,22 @@ export default defineSchema({
     vehicleId: v.optional(v.id("vehicles")), // Null means it's a creation request
     requestedBy: v.id("users"),
     type: v.union(v.literal("CREATE"), v.literal("UPDATE")),
-    payload: v.any(), // The full or partial vehicle data
+    payload: v.object({
+      vin: v.optional(v.string()),
+      make: v.optional(v.string()),
+      model: v.optional(v.string()),
+      year: v.optional(v.number()),
+      trim: v.optional(v.string()),
+      mileage: v.optional(v.number()),
+      color: v.optional(v.string()),
+      fuelType: v.optional(v.string()),
+      transmission: v.optional(v.string()),
+      purchasePrice: v.optional(v.number()),
+      sellingPrice: v.optional(v.number()),
+      status: v.optional(v.string()),
+      notes: v.optional(v.string()),
+      imageIds: v.optional(v.array(v.id("_storage"))),
+    }), // The partial vehicle data
     status: v.union(v.literal("PENDING"), v.literal("APPROVED"), v.literal("REJECTED")),
     resolvedBy: v.optional(v.id("users")),
     resolvedAt: v.optional(v.number()),
@@ -130,6 +148,9 @@ export default defineSchema({
         dbr: v.optional(v.number()), // Debt Burden Ratio
       })
     ),
+    isDeleted: v.optional(v.boolean()),
+    deletedAt: v.optional(v.number()),
+    deletedBy: v.optional(v.id("users")),
   })
     .index("by_org", ["orgId"])
     .index("by_org_email", ["orgId", "email"]),
@@ -152,6 +173,9 @@ export default defineSchema({
       v.literal("LOST")
     ),
     notes: v.optional(v.string()),
+    isDeleted: v.optional(v.boolean()),
+    deletedAt: v.optional(v.number()),
+    deletedBy: v.optional(v.id("users")),
   })
     .index("by_org", ["orgId"])
     .index("by_org_stage", ["orgId", "stage"])
@@ -180,6 +204,9 @@ export default defineSchema({
     termMonths: v.optional(v.number()),
     warrantySold: v.optional(v.number()),
     gapSold: v.optional(v.number()),
+    isDeleted: v.optional(v.boolean()),
+    deletedAt: v.optional(v.number()),
+    deletedBy: v.optional(v.id("users")),
   })
     .index("by_org", ["orgId"])
     .index("by_org_salesperson", ["orgId", "salespersonId"]),
@@ -439,8 +466,8 @@ export default defineSchema({
     amount: v.number(),
     date: v.number(), // Timestamp
     category: v.union(
-      v.literal("VEHICLE_SALE"), v.literal("VEHICLE_PURCHASE"), 
-      v.literal("EXPENSE"), v.literal("DEPOSIT"), 
+      v.literal("VEHICLE_SALE"), v.literal("VEHICLE_PURCHASE"),
+      v.literal("EXPENSE"), v.literal("DEPOSIT"),
       v.literal("PARTNER_DRAW"), v.literal("CAPITAL_INJECTION"),
       v.literal("CLAIM_PAYMENT"), v.literal("OTHER")
     ),

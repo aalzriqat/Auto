@@ -5,7 +5,7 @@ import { Permission, PERMISSIONS } from "@/convex/utils/permissions";
 
 export function usePermissions() {
   const { activeOrgId } = useOrg();
-  
+
   const membership = useQuery(
     api.memberships.getMyMembership,
     activeOrgId ? { orgId: activeOrgId } : "skip"

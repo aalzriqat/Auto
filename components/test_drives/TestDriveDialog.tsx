@@ -53,7 +53,7 @@ interface TestDriveDialogProps {
 
 export function TestDriveDialog({ open, onOpenChange, vehicleId, testDrive }: TestDriveDialogProps) {
   const { activeOrgId } = useOrg();
-  
+
   const customers = useQuery(api.customers.list, activeOrgId ? { orgId: activeOrgId } : "skip");
   const memberships = useQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId } : "skip");
 
@@ -129,8 +129,8 @@ export function TestDriveDialog({ open, onOpenChange, vehicleId, testDrive }: Te
         <DialogHeader>
           <DialogTitle>{testDrive ? "Complete Test Drive" : "Log Test Drive"}</DialogTitle>
           <DialogDescription>
-            {testDrive 
-              ? "Mark this test drive as completed." 
+            {testDrive
+              ? "Mark this test drive as completed."
               : "Record a new test drive for this vehicle."}
           </DialogDescription>
         </DialogHeader>
@@ -143,8 +143,8 @@ export function TestDriveDialog({ open, onOpenChange, vehicleId, testDrive }: Te
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>Customer</FormLabel>
-                  <Select 
-                    onValueChange={field.onChange} 
+                  <Select
+                    onValueChange={field.onChange}
                     value={field.value}
                     disabled={!!testDrive}
                   >
@@ -172,8 +172,8 @@ export function TestDriveDialog({ open, onOpenChange, vehicleId, testDrive }: Te
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>Salesperson</FormLabel>
-                  <Select 
-                    onValueChange={field.onChange} 
+                  <Select
+                    onValueChange={field.onChange}
                     value={field.value}
                     disabled={!!testDrive}
                   >
@@ -222,7 +222,7 @@ export function TestDriveDialog({ open, onOpenChange, vehicleId, testDrive }: Te
                 </FormItem>
               )}
             />
-            
+
             <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 Cancel

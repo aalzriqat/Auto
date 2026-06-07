@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
+import { rateLimiter } from "./rateLimit";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -34,11 +35,13 @@ export const list = query({
         .withIndex("by_org_salesperson", (q) =>
           q.eq("orgId", args.orgId).eq("salespersonId", args.salespersonId!)
         )
+        .filter((q) => q.neq(q.field("isDeleted"), true))
         .collect();
     } else {
       results = await ctx.db
         .query("sales")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .filter((q) => q.neq(q.field("isDeleted"), true))
         .collect();
     }
 
@@ -124,6 +127,11 @@ export const create = mutation({
     gapSold: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    const statusLimit = await rateLimiter.limit(ctx, "create");
+    if (!statusLimit.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+    }
+
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
 
     // Validate vehicle belongs to org and is available
@@ -299,16 +307,16 @@ export const update = mutation({
 });
 
 /**
- * Deletes a sale record. Only CANCELLED or PENDING sales can be deleted.
+ * Soft deletes a sale record. Only CANCELLED or PENDING sales can be deleted.
  * Restores the vehicle to AVAILABLE if it was marked SOLD.
  */
-export const remove = mutation({
+export const softDelete = mutation({
   args: {
     orgId: v.id("organizations"),
     saleId: v.id("sales"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_SALES]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_SALES]);
 
     const sale = await ctx.db.get(args.saleId);
     if (!sale || sale.orgId !== args.orgId) {
@@ -327,7 +335,11 @@ export const remove = mutation({
       await ctx.db.patch(sale.vehicleId, { status: "AVAILABLE" as const });
     }
 
-    await ctx.db.delete(args.saleId);
+    await ctx.db.patch(args.saleId, {
+      isDeleted: true,
+      deletedAt: Date.now(),
+      deletedBy: user._id
+    });
 
     const actorName = await getActorName(ctx);
     await notifyManagers(

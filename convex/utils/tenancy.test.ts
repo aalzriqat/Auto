@@ -71,11 +71,11 @@ describe("Tenancy Utilities", () => {
     it("throws if user lacks required permissions", async () => {
       const mockMembership = { _id: "m1", orgId: "org1", userId: "u1", roleId: "r1" };
       const mockRole = { _id: "r1", name: "SALES", permissions: ["view:vehicles"] };
-      
+
       const ctx = createMockCtx(mockIdentity, {
         get: { "org1": { _id: "org1" }, "r1": mockRole },
       });
-      
+
       ctx.db.query = vi.fn()
         .mockReturnValueOnce({ withIndex: () => ({ unique: () => Promise.resolve(mockUser) }) }) // user
         .mockReturnValueOnce({ withIndex: () => ({ unique: () => Promise.resolve(mockMembership) }) }); // membership
@@ -86,11 +86,11 @@ describe("Tenancy Utilities", () => {
     it("succeeds if user is a member and has permissions", async () => {
       const mockMembership = { _id: "m1", orgId: "org1", userId: "u1", roleId: "r1" };
       const mockRole = { _id: "r1", name: "SALES", permissions: ["view:vehicles", "edit:vehicles"] };
-      
+
       const ctx = createMockCtx(mockIdentity, {
         get: { "org1": { _id: "org1" }, "r1": mockRole },
       });
-      
+
       ctx.db.query = vi.fn()
         .mockReturnValueOnce({ withIndex: () => ({ unique: () => Promise.resolve(mockUser) }) }) // user
         .mockReturnValueOnce({ withIndex: () => ({ unique: () => Promise.resolve(mockMembership) }) }); // membership

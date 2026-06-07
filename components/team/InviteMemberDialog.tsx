@@ -53,10 +53,10 @@ interface InviteMemberDialogProps {
 export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogProps) {
   const { activeOrgId } = useOrg();
   const { isRtl: isRTL } = useLanguage();
-  
+
   const roles = useQuery(api.roles.list, activeOrgId ? { orgId: activeOrgId } : "skip");
   const createAccount = useAction(api.memberships.createAccount);
-  
+
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const form = useForm<CreateAccountFormValues>({
@@ -82,7 +82,7 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
         password: values.password,
         roleId: values.roleId as Id<"roles">,
       });
-      
+
       toast.success(isRTL ? "تم إنشاء الحساب بنجاح!" : "Account created successfully!");
       form.reset();
       onOpenChange(false);
@@ -99,7 +99,7 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
         <DialogHeader>
           <DialogTitle>{isRTL ? "إضافة عضو جديد" : "Add Team Member"}</DialogTitle>
           <DialogDescription>
-            {isRTL 
+            {isRTL
               ? "قم بإنشاء حساب جديد لعضو الفريق بإدخال الاسم، البريد الإلكتروني، وكلمة المرور."
               : "Create a new account for a team member by providing their name, email, and a password."}
           </DialogDescription>
@@ -193,8 +193,8 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
                 {isRTL ? "إلغاء" : "Cancel"}
               </Button>
               <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting 
-                  ? (isRTL ? "جاري الإنشاء..." : "Creating...") 
+                {isSubmitting
+                  ? (isRTL ? "جاري الإنشاء..." : "Creating...")
                   : (isRTL ? "إنشاء حساب" : "Create Account")}
               </Button>
             </div>

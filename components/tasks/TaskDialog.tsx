@@ -61,7 +61,7 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
 
   const memberships = useQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId } : "skip");
   const customers = useQuery(api.customers.list, activeOrgId ? { orgId: activeOrgId } : "skip");
-  const vehicles = useQuery(api.vehicles.list, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const vehicles = useQuery(api.vehicles.listAll, activeOrgId ? { orgId: activeOrgId } : "skip");
 
   const createTask = useMutation(api.tasks.create);
   const updateTask = useMutation(api.tasks.update);

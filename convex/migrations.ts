@@ -1,7 +1,7 @@
-import { mutation } from "./_generated/server";
+import { internalMutation } from "./_generated/server";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 
-export const backfillPermissions = mutation({
+export const backfillPermissions = internalMutation({
   args: {},
   handler: async (ctx) => {
     // Get all roles

@@ -1,0 +1,1 @@
+{"nodes": [], "edges": [{"source": "convex_quickstart_icon", "target": "convex_quickstart_icon", "relation": "semantically_similar_to", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": ".claude/skills/convex-quickstart/assets/icon.svg"}], "hyperedges": []}

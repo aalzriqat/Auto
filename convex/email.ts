@@ -3,6 +3,7 @@
 import { action, internalAction } from "./_generated/server";
 import { v } from "convex/values";
 import { Resend } from "resend";
+import { rateLimiter } from "./rateLimit";
 
 export const sendTaskAlarm = action({
   args: {
@@ -12,6 +13,10 @@ export const sendTaskAlarm = action({
     dueDate: v.number(),
   },
   handler: async (ctx, args) => {
+    const status = await rateLimiter.limit(ctx, "email");
+    if (!status.ok) {
+      throw new Error(`Rate limit exceeded. Try again in ${Math.ceil(status.retryAfter / 1000)}s`);
+    }
     const resendApiKey = process.env.RESEND_API_KEY;
 
     // Generate basic .ics file string
@@ -79,6 +84,10 @@ export const sendTeamInvite = internalAction({
     orgName: v.string(),
   },
   handler: async (ctx, args) => {
+    const status = await rateLimiter.limit(ctx, "email");
+    if (!status.ok) {
+      throw new Error(`Rate limit exceeded. Try again in ${Math.ceil(status.retryAfter / 1000)}s`);
+    }
     const resendApiKey = process.env.RESEND_API_KEY;
 
     // Use localhost for now, but remind user to update for prod

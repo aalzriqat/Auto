@@ -59,7 +59,7 @@ export function ClaimsTab() {
                   <TableCell>{claim.buyerName}</TableCell>
                   <TableCell>
                     <Badge variant={claim.status === "REJECTED" ? "destructive" : claim.status === "PENDING" ? "secondary" : "default"}
-                           className={claim.status === "PAID" ? "bg-green-100 text-green-800 hover:bg-green-100" : claim.status === "PENDING" ? "bg-yellow-100 text-yellow-800 hover:bg-yellow-100" : ""}>
+                      className={claim.status === "PAID" ? "bg-green-100 text-green-800 hover:bg-green-100" : claim.status === "PENDING" ? "bg-yellow-100 text-yellow-800 hover:bg-yellow-100" : ""}>
                       {claim.status}
                     </Badge>
                   </TableCell>

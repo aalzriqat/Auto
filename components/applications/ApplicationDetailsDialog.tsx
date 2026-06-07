@@ -14,11 +14,11 @@ import { toast } from "sonner";
 import { Separator } from "@/components/ui/separator";
 import { Upload, CheckCircle, XCircle, Clock } from "lucide-react";
 
-export function ApplicationDetailsDialog({ 
-  applicationId, 
-  open, 
-  onOpenChange 
-}: { 
+export function ApplicationDetailsDialog({
+  applicationId,
+  open,
+  onOpenChange
+}: {
   applicationId: Id<"financeApplications">;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -28,7 +28,7 @@ export function ApplicationDetailsDialog({
 
   const app = useQuery(api.applications.get, activeOrgId ? { orgId: activeOrgId, applicationId } : "skip");
   const documents = useQuery(api.documents.getForApplication, activeOrgId ? { orgId: activeOrgId, applicationId } : "skip");
-  
+
   const updateStatus = useMutation(api.applications.updateStatus);
   const finalizeDeal = useMutation(api.applications.finalizeDeal);
   const updateDocStatus = useMutation(api.documents.updateDocumentStatus);
@@ -38,7 +38,7 @@ export function ApplicationDetailsDialog({
   const handleUpload = async (docId: Id<"applicationDocuments">, file: File) => {
     if (!activeOrgId) return;
     try {
-      const postUrl = await generateUploadUrl({ 
+      const postUrl = await generateUploadUrl({
         orgId: activeOrgId,
         mimeType: file.type,
         sizeInBytes: file.size
@@ -127,21 +127,21 @@ export function ApplicationDetailsDialog({
                 <p><strong>{t("Company" as any) || "Company"}:</strong> {app.company?.name || "Direct"}</p>
                 <p><strong>{t("DownPayment" as any) || "Down Payment"}:</strong> {app.quote?.downPayment?.toLocaleString()} {t("JOD" as any) || "JOD"}</p>
                 <p><strong>{t("TermMonths" as any) || "Term"}:</strong> {app.quote?.termMonths} {t("Months" as any) || "Months"}</p>
-                <p><strong>{t("MonthlyInstallment" as any) || "Monthly Installment"}:</strong> <span className="font-semibold text-primary">{app.quote?.monthlyInstallment?.toLocaleString(undefined, {minimumFractionDigits: 2})} {t("JOD" as any) || "JOD"}</span></p>
+                <p><strong>{t("MonthlyInstallment" as any) || "Monthly Installment"}:</strong> <span className="font-semibold text-primary">{app.quote?.monthlyInstallment?.toLocaleString(undefined, { minimumFractionDigits: 2 })} {t("JOD" as any) || "JOD"}</span></p>
               </div>
             </div>
 
             <div>
               <h4 className="font-semibold text-sm mb-2">{t("AppActions" as any) || "Actions"}</h4>
               <div className="flex flex-col gap-2">
-                  <Button 
+                <Button
                   onClick={() => updateStatus({ orgId: activeOrgId!, applicationId, status: "UNDER_REVIEW" })}
                   variant="outline"
                   disabled={app.status !== "PENDING_DOCS"}
                 >
                   {t("MarkUnderReview" as any) || "Mark Under Review"}
                 </Button>
-                <Button 
+                <Button
                   onClick={handleApproveApp}
                   className="bg-green-600 hover:bg-green-700 text-white"
                   disabled={app.status === "APPROVED" || app.status === "CLOSED"}
@@ -149,14 +149,14 @@ export function ApplicationDetailsDialog({
                   {t("ApproveApplication" as any) || "Approve Application"}
                 </Button>
                 {app.status === "APPROVED" && (
-                  <Button 
+                  <Button
                     onClick={handleFinalizeDeal}
                     className="bg-blue-600 hover:bg-blue-700 text-white mt-2"
                   >
                     {t("FinalizeDealClose" as any) || "Finalize Deal (Close)"}
                   </Button>
                 )}
-                <Button 
+                <Button
                   onClick={() => updateStatus({ orgId: activeOrgId!, applicationId, status: "REJECTED" })}
                   variant="destructive"
                   disabled={app.status === "REJECTED" || app.status === "CLOSED"}
@@ -179,7 +179,7 @@ export function ApplicationDetailsDialog({
                   const status = doc.status;
                   const existingDoc = doc;
                   const rule = { _id: doc._id };
-                  const handleSimulateUpload = (ruleId: any) => {};
+                  const handleSimulateUpload = (ruleId: any) => { };
 
                   return (
                     <div key={doc._id} className="flex items-center justify-between p-3 border rounded-lg bg-card">
@@ -191,10 +191,10 @@ export function ApplicationDetailsDialog({
                           {status === "VERIFIED" && <CheckCircle className="h-4 w-4 text-green-500" />}
                           {status === "REJECTED" && <XCircle className="h-4 w-4 text-red-500" />}
                           <span className="text-sm font-medium">
-                            {status === "MISSING" ? (t("DocMissing" as any) || "Missing") : 
-                             status === "UPLOADED" ? (t("DocUploaded" as any) || "Uploaded") : 
-                             status === "VERIFIED" ? (t("DocVerified" as any) || "Verified") : 
-                             (t("DocRejected" as any) || "Rejected")}
+                            {status === "MISSING" ? (t("DocMissing" as any) || "Missing") :
+                              status === "UPLOADED" ? (t("DocUploaded" as any) || "Uploaded") :
+                                status === "VERIFIED" ? (t("DocVerified" as any) || "Verified") :
+                                  (t("DocRejected" as any) || "Rejected")}
                           </span>
                         </div>
                       </div>
@@ -204,8 +204,8 @@ export function ApplicationDetailsDialog({
                             <Button size="sm" variant="outline" asChild>
                               <a href={doc.fileUrl || "#"} target="_blank" rel="noreferrer">{t("ViewFile" as any) || "View File"}</a>
                             </Button>
-                            <Button 
-                              size="sm" 
+                            <Button
+                              size="sm"
                               variant="default"
                               onClick={() => updateDocStatus({ orgId: activeOrgId!, documentId: doc._id, status: "VERIFIED" })}
                               disabled={status === "VERIFIED"}
@@ -225,8 +225,8 @@ export function ApplicationDetailsDialog({
                               }}
                             />
                             <label htmlFor={`file-${doc._id}`}>
-                              <Button 
-                                size="sm" 
+                              <Button
+                                size="sm"
                                 asChild
                               >
                                 <span className="cursor-pointer">

@@ -58,7 +58,7 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
 
   // Data for dropdowns
   const customers = useQuery(api.customers.list, activeOrgId ? { orgId: activeOrgId } : "skip");
-  const vehicles = useQuery(api.vehicles.list, activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE" } : "skip");
+  const vehicles = useQuery(api.vehicles.listAll, activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE" } : "skip");
   const memberships = useQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId } : "skip");
 
   const createLead = useMutation(api.leads.create);

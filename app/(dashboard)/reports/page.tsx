@@ -38,6 +38,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { downloadCSV } from "@/lib/utils/export";
+import { RoleGuard } from "@/components/auth/RoleGuard";
 
 // Default date range (last 30 days)
 const defaultEndDate = new Date();
@@ -69,6 +70,7 @@ export default function ReportsPage() {
   };
 
   return (
+    <RoleGuard permissions={["view:reports"]}>
     <div className="flex-1 space-y-4 p-4 md:p-8 pt-6">
 
       <style dangerouslySetInnerHTML={{
@@ -556,6 +558,7 @@ export default function ReportsPage() {
         </TabsContent>
       </Tabs>
     </div>
+    </RoleGuard>
   );
 }
 

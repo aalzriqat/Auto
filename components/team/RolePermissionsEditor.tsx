@@ -115,7 +115,7 @@ export function RolePermissionsEditor({
 
   const handleActionChange = (actionId: string, requestId: string | undefined, value: "NONE" | "REQUEST" | "DIRECT") => {
     let newPerms = [...selectedPermissions];
-    
+
     // Remove both first
     newPerms = newPerms.filter(p => p !== actionId && p !== requestId);
 
@@ -124,7 +124,7 @@ export function RolePermissionsEditor({
     } else if (value === "REQUEST" && requestId) {
       newPerms.push(requestId);
     }
-    
+
     onChange(newPerms);
   };
 
@@ -132,23 +132,23 @@ export function RolePermissionsEditor({
     <Accordion type="multiple" className="w-full space-y-2">
       {PERMISSION_GROUPS.map((group) => {
         const hasBaseAccess = selectedPermissions.includes(group.baseView);
-        
+
         return (
           <AccordionItem key={group.id} value={group.id} className="border rounded-lg px-4 bg-card">
             <AccordionTrigger className="hover:no-underline py-3">
               <div className="flex items-center justify-between w-full pr-4">
                 <span className="font-semibold">{t(group.label as any) || group.label}</span>
-                <div 
-                  className="flex items-center space-x-2" 
+                <div
+                  className="flex items-center space-x-2"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <Label htmlFor={`base-${group.id}`} className="text-xs font-normal cursor-pointer">
                     {hasBaseAccess ? (t("Enabled" as any) || "Enabled") : (t("Disabled" as any) || "Disabled")}
                   </Label>
-                  <Switch 
-                    id={`base-${group.id}`} 
-                    checked={hasBaseAccess} 
-                    onCheckedChange={(c) => togglePermission(group.baseView, c)} 
+                  <Switch
+                    id={`base-${group.id}`}
+                    checked={hasBaseAccess}
+                    onCheckedChange={(c) => togglePermission(group.baseView, c)}
                   />
                 </div>
               </div>
@@ -159,7 +159,7 @@ export function RolePermissionsEditor({
                   {t("EnableModuleToggle" as any) || "Enable the module toggle above to configure specific actions and tabs."}
                 </div>
               )}
-              
+
               <div className={`space-y-6 ${!hasBaseAccess ? 'opacity-50 pointer-events-none' : ''}`}>
                 {/* Tabs Configuration */}
                 {group.tabs.length > 0 && (
@@ -168,8 +168,8 @@ export function RolePermissionsEditor({
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                       {group.tabs.map(tab => (
                         <div key={tab.id} className="flex items-center space-x-2 bg-muted/30 p-2 rounded border">
-                          <Checkbox 
-                            id={tab.id} 
+                          <Checkbox
+                            id={tab.id}
                             checked={selectedPermissions.includes(tab.id)}
                             onCheckedChange={(c) => togglePermission(tab.id, c === true)}
                           />
@@ -191,7 +191,7 @@ export function RolePermissionsEditor({
                         const actionRequest = (action as any).request;
                         const isDirect = selectedPermissions.includes(action.id);
                         const isRequest = actionRequest ? selectedPermissions.includes(actionRequest) : false;
-                        
+
                         let currentValue: "NONE" | "REQUEST" | "DIRECT" = "NONE";
                         if (isDirect) currentValue = "DIRECT";
                         else if (isRequest) currentValue = "REQUEST";

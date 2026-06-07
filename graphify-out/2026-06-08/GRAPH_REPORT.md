@@ -1,16 +1,16 @@
-# Graph Report - Auto  (2026-06-07)
+# Graph Report - Auto  (2026-06-08)
 
 ## Corpus Check
-- 194 files · ~181,363 words
+- 206 files · ~207,500 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1363 nodes · 2815 edges · 118 communities (102 shown, 16 thin omitted)
+- 1403 nodes · 2975 edges · 108 communities (92 shown, 16 thin omitted)
 - Extraction: 100% EXTRACTED · 0% INFERRED · 0% AMBIGUOUS · INFERRED: 5 edges (avg confidence: 0.84)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `326e6f6e`
+- Built from commit: `3372b280`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -95,20 +95,12 @@
 - [[_COMMUNITY_Community 78|Community 78]]
 - [[_COMMUNITY_Community 79|Community 79]]
 - [[_COMMUNITY_Community 80|Community 80]]
-- [[_COMMUNITY_Community 81|Community 81]]
 - [[_COMMUNITY_Community 82|Community 82]]
-- [[_COMMUNITY_Community 83|Community 83]]
-- [[_COMMUNITY_Community 84|Community 84]]
 - [[_COMMUNITY_Community 85|Community 85]]
 - [[_COMMUNITY_Community 86|Community 86]]
-- [[_COMMUNITY_Community 87|Community 87]]
 - [[_COMMUNITY_Community 88|Community 88]]
 - [[_COMMUNITY_Community 89|Community 89]]
-- [[_COMMUNITY_Community 90|Community 90]]
 - [[_COMMUNITY_Community 91|Community 91]]
-- [[_COMMUNITY_Community 92|Community 92]]
-- [[_COMMUNITY_Community 93|Community 93]]
-- [[_COMMUNITY_Community 94|Community 94]]
 - [[_COMMUNITY_Community 95|Community 95]]
 - [[_COMMUNITY_Community 96|Community 96]]
 - [[_COMMUNITY_Community 97|Community 97]]
@@ -120,25 +112,20 @@
 - [[_COMMUNITY_Community 108|Community 108]]
 - [[_COMMUNITY_Community 109|Community 109]]
 - [[_COMMUNITY_Community 110|Community 110]]
-- [[_COMMUNITY_Community 111|Community 111]]
-- [[_COMMUNITY_Community 112|Community 112]]
-- [[_COMMUNITY_Community 113|Community 113]]
-- [[_COMMUNITY_Community 114|Community 114]]
-- [[_COMMUNITY_Community 115|Community 115]]
 - [[_COMMUNITY_Community 116|Community 116]]
 - [[_COMMUNITY_Community 117|Community 117]]
 
 ## God Nodes (most connected - your core abstractions)
-1. `useOrg()` - 85 edges
-2. `useLanguage()` - 81 edges
-3. `api` - 45 edges
-4. `Button` - 44 edges
+1. `useOrg()` - 95 edges
+2. `useLanguage()` - 91 edges
+3. `api` - 49 edges
+4. `Button` - 45 edges
 5. `cn()` - 38 edges
 6. `DialogHeader()` - 31 edges
 7. `DialogContent` - 30 edges
 8. `DialogTitle` - 30 edges
-9. `Input` - 28 edges
-10. `PERMISSIONS` - 25 edges
+9. `PERMISSIONS` - 30 edges
+10. `requireTenantAuth()` - 29 edges
 
 ## Surprising Connections (you probably didn't know these)
 - `Onboarding()` --calls--> `useOrg()`  [EXTRACTED]
@@ -155,11 +142,11 @@
 ## Import Cycles
 - None detected.
 
-## Communities (118 total, 16 thin omitted)
+## Communities (108 total, 16 thin omitted)
 
 ### Community 0 - "Community 0"
-Cohesion: 0.08
-Nodes (51): ExpenseDialogProps, ExpenseFormValues, expenseSchema, LeadDialogProps, LeadFormValues, leadSchema, QuoteDialogProps, QuoteFormValues (+43 more)
+Cohesion: 0.05
+Nodes (150): AccountingClient(), ClaimsTab(), FixedAssetsTab(), GeneralLedgerTab(), PartnerEquityTab(), ApplicationDetailsDialog(), ApplicationClient(), BranchesClient() (+142 more)
 
 ### Community 1 - "Community 1"
 Cohesion: 0.05
@@ -175,7 +162,7 @@ Nodes (37): 1. Bound your reads, 2. Read smaller shapes, 3. Break large mutation
 
 ### Community 4 - "Community 4"
 Cohesion: 0.09
-Nodes (30): createFromQuote, finalizeDeal, get, list, updateStatus, crons, triggerAlarms, add (+22 more)
+Nodes (27): createFromQuote, finalizeDeal, get, list, updateStatus, create, expenseCategory, list (+19 more)
 
 ### Community 5 - "Community 5"
 Cohesion: 0.10
@@ -198,16 +185,16 @@ Cohesion: 0.09
 Nodes (22): Action guidelines, Authentication guidelines, Convex guidelines, Cron guidelines, File storage guidelines, Full text search guidelines, Function calling, Function guidelines (+14 more)
 
 ### Community 10 - "Community 10"
-Cohesion: 0.10
-Nodes (18): sendTaskAlarm, sendTeamInvite, http, add, createAccount, finalizeDirectAccount, getMyMembership, leave (+10 more)
+Cohesion: 0.09
+Nodes (19): stats, sendTaskAlarm, sendTeamInvite, http, add, createAccount, finalizeDirectAccount, getMyMembership (+11 more)
 
 ### Community 11 - "Community 11"
 Cohesion: 0.07
 Nodes (26): useIsMobile(), Sidebar, SidebarContent, SidebarContext, SidebarContextProps, SidebarFooter, SidebarGroup, SidebarGroupAction (+18 more)
 
 ### Community 12 - "Community 12"
-Cohesion: 0.12
-Nodes (19): stats, create, get, listMine, remove, update, getExpensesReport, getInventoryReport (+11 more)
+Cohesion: 0.16
+Nodes (13): create, get, listMine, remove, update, deleteUser, getMe, getUser (+5 more)
 
 ### Community 13 - "Community 13"
 Cohesion: 0.17
@@ -226,8 +213,8 @@ Cohesion: 0.11
 Nodes (17): aliases, components, hooks, lib, ui, utils, iconLibrary, rsc (+9 more)
 
 ### Community 17 - "Community 17"
-Cohesion: 0.40
-Nodes (4): add, list, migrateToDefaultBranch, update
+Cohesion: 0.10
+Nodes (17): add, list, migrateToDefaultBranch, update, crons, triggerAlarms, backfillPermissions, grantTaskPermissionsToAll (+9 more)
 
 ### Community 18 - "Community 18"
 Cohesion: 0.12
@@ -251,11 +238,11 @@ Nodes (15): 1. Scope the problem, 2. Trace the full read and write set, 3. Apply
 
 ### Community 23 - "Community 23"
 Cohesion: 0.20
-Nodes (10): mockLineData, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuShortcut() (+2 more)
+Nodes (9): DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuRadioItem, DropdownMenuSeparator, DropdownMenuShortcut(), DropdownMenuSubContent (+1 more)
 
 ### Community 24 - "Community 24"
-Cohesion: 0.21
-Nodes (14): 1. Push Filters To Storage, 3. Minimize Row Size, 4. Isolate Frequently-Updated Fields, 5. Match Consistency To Read Patterns, Check for redundant indexes, Consistency Rule, Contents, Core Principle (+6 more)
+Cohesion: 0.06
+Nodes (47): 1. Push Filters To Storage, 2. Minimize Data Sources, 3. Minimize Row Size, 4. Isolate Frequently-Updated Fields, 5. Match Consistency To Read Patterns, Aggregates, Backfills, Check for redundant indexes (+39 more)
 
 ### Community 25 - "Community 25"
 Cohesion: 0.16
@@ -266,16 +253,16 @@ Cohesion: 0.28
 Nodes (12): Checklist, Choose the Shape, Component Skeleton, Convex Create Component, Critical Rules, Default Approach, Reference Files, Validation (+4 more)
 
 ### Community 27 - "Community 27"
-Cohesion: 0.26
-Nodes (12): Adding a Required Field, Changing a Field Type, Cleaning Up Orphaned Documents, Deleting a Field, Dual Read, Dual Write (Preferred), Migration Patterns Reference, Small Table Shortcut (+4 more)
+Cohesion: 0.06
+Nodes (42): Checklist, Default Advice, Hybrid Convex Components, Risks, What This Means, Checklist, Default Layout, Local Convex Components (+34 more)
 
 ### Community 28 - "Community 28"
 Cohesion: 0.17
 Nodes (11): Adding a Required Field, Changing a Field Type, Cleaning Up Orphaned Documents, Deleting a Field, Dual Read, Dual Write (Preferred), Migration Patterns Reference, Small Table Shortcut (+3 more)
 
 ### Community 29 - "Community 29"
-Cohesion: 0.23
-Nodes (10): cn(), buttonVariants, Calendar(), CalendarProps, DateTimePicker(), DateTimePickerProps, EmptyState(), EmptyStateProps (+2 more)
+Cohesion: 0.19
+Nodes (12): cn(), buttonVariants, Calendar(), CalendarProps, DateTimePicker(), DateTimePickerProps, EmptyState(), EmptyStateProps (+4 more)
 
 ### Community 30 - "Community 30"
 Cohesion: 0.30
@@ -310,8 +297,8 @@ Cohesion: 0.18
 Nodes (10): create, deleteImage, generateUploadUrl, get, getByVin, getRelations, list, remove (+2 more)
 
 ### Community 38 - "Community 38"
-Cohesion: 0.21
-Nodes (10): navigation, TopNav(), SheetContent, SheetContentProps, SheetDescription, SheetFooter(), SheetHeader(), SheetOverlay (+2 more)
+Cohesion: 0.17
+Nodes (12): LanguageSwitcher(), OrgSwitcher(), navigation, TopNav(), SheetContent, SheetContentProps, SheetDescription, SheetFooter() (+4 more)
 
 ### Community 39 - "Community 39"
 Cohesion: 0.20
@@ -330,28 +317,28 @@ Cohesion: 0.20
 Nodes (8): DashboardWrapper(), Onboarding(), OrgProvider(), SidebarInset, SidebarProvider, SidebarTrigger, Toaster(), ToasterProps
 
 ### Community 43 - "Community 43"
-Cohesion: 0.18
-Nodes (11): devDependencies, @convex-dev/eslint-plugin, eslint, eslint-config-next, prettier, tailwindcss, @tailwindcss/postcss, @types/node (+3 more)
+Cohesion: 0.13
+Nodes (15): devDependencies, @convex-dev/eslint-plugin, convex-test, eslint, eslint-config-next, jsdom, prettier, tailwindcss (+7 more)
 
 ### Community 44 - "Community 44"
 Cohesion: 0.18
 Nodes (7): cairo, geistMono, geistSans, inter, metadata, convex, LanguageProvider()
 
 ### Community 45 - "Community 45"
-Cohesion: 0.24
-Nodes (7): fixExistingRoles, backfillPermissions, grantTaskPermissionsToAll, internalMutation, ALL_PERMISSIONS, DEFAULT_ROLE_TEMPLATES, Permission
+Cohesion: 0.15
+Nodes (12): Sheet1, Sheet2, اثاث وديكورات, ادارية وعمومية, ارباح وخسائر, التدفقات, السيارات , راسمال الشركاء (+4 more)
 
 ### Community 46 - "Community 46"
-Cohesion: 0.20
-Nodes (10): Convex Create Component Skill, Convex Migration Helper Skill, Convex Performance Audit Skill, Convex Quickstart Skill, Auth0 Reference, Clerk Reference, Convex Auth Reference, Convex Setup Auth Skill (+2 more)
+Cohesion: 0.29
+Nodes (6): getExpensesReport, getInventoryReport, getLeadConversionReport, getProfitAndLoss, getSalesAndProfitReport, getSalespersonPerformance
 
 ### Community 47 - "Community 47"
-Cohesion: 0.22
-Nodes (8): name, private, scripts, build, dev, lint, start, version
+Cohesion: 0.20
+Nodes (9): name, private, scripts, build, dev, lint, start, test (+1 more)
 
 ### Community 48 - "Community 48"
-Cohesion: 0.31
-Nodes (6): PERMISSION_GROUPS, AccordionContent, AccordionItem, AccordionTrigger, Checkbox, Switch
+Cohesion: 0.27
+Nodes (7): PERMISSION_GROUPS, RolePermissionsEditor(), AccordionContent, AccordionItem, AccordionTrigger, Checkbox, Switch
 
 ### Community 49 - "Community 49"
 Cohesion: 0.27
@@ -370,8 +357,8 @@ Cohesion: 0.25
 Nodes (7): create, get, getByEmail, getRelations, list, remove, update
 
 ### Community 53 - "Community 53"
-Cohesion: 0.25
-Nodes (7): addRule, generateUploadUrl, getForApplication, listRules, removeRule, saveDocumentFile, updateDocumentStatus
+Cohesion: 0.13
+Nodes (16): addRule, generateUploadUrl, getForApplication, listRules, removeRule, saveDocumentFile, updateDocumentStatus, fixExistingRoles (+8 more)
 
 ### Community 54 - "Community 54"
 Cohesion: 0.29
@@ -382,12 +369,12 @@ Cohesion: 0.29
 Nodes (6): create, get, list, remove, saleStatus, update
 
 ### Community 56 - "Community 56"
-Cohesion: 0.28
-Nodes (6): content, fs, content, fs, content, fs
+Cohesion: 0.33
+Nodes (5): getHistory, listPending, requestCreate, requestUpdate, resolve
 
 ### Community 57 - "Community 57"
-Cohesion: 0.33
-Nodes (6): Aggregates, Backfills, Convex-Specific Notes, Point-in-time reads, Reactive queries, Triggers and fan-out
+Cohesion: 0.40
+Nodes (4): add, list, remove, update
 
 ### Community 58 - "Community 58"
 Cohesion: 0.24
@@ -410,8 +397,8 @@ Cohesion: 0.33
 Nodes (5): Checklist, Default Layout, Local Convex Components, When to Choose This, Workflow Notes
 
 ### Community 63 - "Community 63"
-Cohesion: 0.33
-Nodes (6): Aggregates, Backfills, Convex-Specific Notes, Point-in-time reads, Reactive queries, Triggers and fan-out
+Cohesion: 0.40
+Nodes (4): add, list, remove, update
 
 ### Community 64 - "Community 64"
 Cohesion: 0.33
@@ -422,12 +409,12 @@ Cohesion: 0.47
 Nodes (6): Clerk Auth Integration, convex/auth.config.ts, Convex Auth (Native), convex/schema.ts, Convex Auth Configuration, WorkOS AuthKit Integration
 
 ### Community 66 - "Community 66"
-Cohesion: 0.17
-Nodes (25): CustomerDetailsDialog(), FinanceCompaniesPage(), components, defaultEndDate, defaultStartDate, DocumentRuleDialog(), FinanceCompanyDialog(), Card (+17 more)
+Cohesion: 0.40
+Nodes (4): add, list, remove, update
 
 ### Community 67 - "Community 67"
-Cohesion: 0.09
-Nodes (37): ApplicationDetailsDialog(), ApplicationClient(), BranchesClient(), CustomerFinancialsTab(), GuarantorDialog(), CustomersPage(), DashboardPage(), ExpenseDialog() (+29 more)
+Cohesion: 0.40
+Nodes (4): add, list, remove, update
 
 ### Community 68 - "Community 68"
 Cohesion: 0.33
@@ -441,21 +428,9 @@ Nodes (5): create, getHistory, list, remove, update
 Cohesion: 0.33
 Nodes (5): ActionCtx, DatabaseReader, DatabaseWriter, MutationCtx, QueryCtx
 
-### Community 71 - "Community 71"
-Cohesion: 0.33
-Nodes (3): fs, map, path
-
-### Community 72 - "Community 72"
-Cohesion: 0.14
-Nodes (21): CustomerDetailsDialogProps, NotificationsBell(), calculateDBR(), calculateUnifiedMurabaha(), LanguageContext, LanguageContextType, Badge(), BadgeProps (+13 more)
-
 ### Community 73 - "Community 73"
 Cohesion: 0.40
 Nodes (5): 1. Reduce read set size, 2. Split hot documents, 3. Move non-critical work to scheduled functions, 4. Combine competing writes, Fix Order
-
-### Community 74 - "Community 74"
-Cohesion: 0.29
-Nodes (13): GuarantorDialogProps, api, OrgContext, OrgContextType, DocumentRuleDialogProps, TaskHistoryDialogProps, DialogContent, DialogFooter() (+5 more)
 
 ### Community 75 - "Community 75"
 Cohesion: 0.40
@@ -477,21 +452,9 @@ Nodes (4): Convex + Next.js + Clerk App README, Convex Routing Skill, Convex Per
 Cohesion: 0.33
 Nodes (4): DataModel, Doc, Id, TableNames
 
-### Community 81 - "Community 81"
-Cohesion: 0.40
-Nodes (4): create, list, remove, update
-
 ### Community 82 - "Community 82"
 Cohesion: 0.40
 Nodes (4): Get started, Join the community, Learn more, Welcome to your Convex + Next.js + Clerk app
-
-### Community 83 - "Community 83"
-Cohesion: 0.50
-Nodes (4): 2. Minimize Data Sources, Fallback rule, No denormalized copy yet, When to denormalize
-
-### Community 84 - "Community 84"
-Cohesion: 0.50
-Nodes (4): 2. Minimize Data Sources, Fallback rule, No denormalized copy yet, When to denormalize
 
 ### Community 85 - "Community 85"
 Cohesion: 0.11
@@ -501,62 +464,34 @@ Nodes (17): computedHash, skillPath, source, sourceType, computedHash, skillPath
 Cohesion: 0.67
 Nodes (3): Convex AI Agents, Claude Convex Configuration, Convex AI Guidelines
 
-### Community 87 - "Community 87"
-Cohesion: 0.14
-Nodes (13): 1. Push Filters To Storage, 3. Minimize Row Size, 4. Isolate Frequently-Updated Fields, 5. Match Consistency To Read Patterns, Check for redundant indexes, Consistency Rule, Contents, Core Principle (+5 more)
-
 ### Community 88 - "Community 88"
-Cohesion: 0.20
-Nodes (8): listQuotesByCustomer, saveQuote, updateQuoteStatus, complete, create, list, remove, PERMISSIONS
-
-### Community 90 - "Community 90"
-Cohesion: 0.39
-Nodes (8): Build Flow, Checklist, Default Approach, Package Exports, Packaged Convex Components, Testing, When to Choose This, Packaged Convex Components
+Cohesion: 0.40
+Nodes (4): complete, create, list, remove
 
 ### Community 91 - "Community 91"
 Cohesion: 0.25
 Nodes (7): CompanyInfo, CustomerInfo, generateBillOfSale(), generateFinanceQuote(), generateQuote(), PricingInfo, VehicleInfo
-
-### Community 111 - "Community 111"
-Cohesion: 0.48
-Nodes (6): Checklist, Default Advice, Hybrid Convex Components, Risks, What This Means, Hybrid Convex Components
-
-### Community 112 - "Community 112"
-Cohesion: 0.48
-Nodes (6): Checklist, Default Layout, Local Convex Components, When to Choose This, Workflow Notes, Local Convex Components
-
-### Community 113 - "Community 113"
-Cohesion: 0.33
-Nodes (5): create, expenseCategory, list, remove, update
-
-### Community 114 - "Community 114"
-Cohesion: 0.40
-Nodes (4): create, listPending, resolve, vehicleStatus
-
-### Community 115 - "Community 115"
-Cohesion: 0.40
-Nodes (4): CustomerDialog(), CustomerDialogProps, CustomerFormValues, customerSchema
 
 ### Community 116 - "Community 116"
 Cohesion: 0.40
 Nodes (5): computedHash, skillPath, source, sourceType, convex-quickstart
 
 ## Knowledge Gaps
-- **715 isolated node(s):** `metadata`, `mockLineData`, `STAGES`, `defaultEndDate`, `defaultStartDate` (+710 more)
+- **741 isolated node(s):** `metadata`, `metadata`, `STAGES`, `defaultEndDate`, `defaultStartDate` (+736 more)
   These have ≤1 connection - possible missing edges or undocumented components.
 - **16 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `Convex Create Component Skill` connect `Community 46` to `Community 112`, `Community 2`, `Community 90`, `Community 111`?**
-  _High betweenness centrality (0.032) - this node is a cross-community bridge._
-- **Why does `Advanced Component Patterns` connect `Community 2` to `Community 46`?**
-  _High betweenness centrality (0.029) - this node is a cross-community bridge._
-- **What connects `metadata`, `mockLineData`, `STAGES` to the rest of the system?**
-  _715 weakly-connected nodes found - possible documentation gaps or missing edges._
+- **Why does `Convex Performance Audit Skill` connect `Community 27` to `Community 24`, `Community 49`, `Community 58`, `Community 3`?**
+  _High betweenness centrality (0.028) - this node is a cross-community bridge._
+- **Why does `Convex Create Component Skill` connect `Community 27` to `Community 2`?**
+  _High betweenness centrality (0.026) - this node is a cross-community bridge._
+- **What connects `metadata`, `metadata`, `STAGES` to the rest of the system?**
+  _741 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Community 0` be split into smaller, more focused modules?**
-  _Cohesion score 0.07589285714285714 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.05103359173126615 - nodes in this community are weakly interconnected._
 - **Should `Community 1` be split into smaller, more focused modules?**
   _Cohesion score 0.04878048780487805 - nodes in this community are weakly interconnected._
 - **Should `Community 2` be split into smaller, more focused modules?**

@@ -14,6 +14,7 @@ import type * as claims from "../claims.js";
 import type * as crons from "../crons.js";
 import type * as customers from "../customers.js";
 import type * as dashboard from "../dashboard.js";
+import type * as debug from "../debug.js";
 import type * as documents from "../documents.js";
 import type * as email from "../email.js";
 import type * as expenses from "../expenses.js";
@@ -29,6 +30,7 @@ import type * as notifications from "../notifications.js";
 import type * as organizations from "../organizations.js";
 import type * as partnerEquity from "../partnerEquity.js";
 import type * as quotes from "../quotes.js";
+import type * as rateLimit from "../rateLimit.js";
 import type * as reports from "../reports.js";
 import type * as roles from "../roles.js";
 import type * as sales from "../sales.js";
@@ -57,6 +59,7 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   customers: typeof customers;
   dashboard: typeof dashboard;
+  debug: typeof debug;
   documents: typeof documents;
   email: typeof email;
   expenses: typeof expenses;
@@ -72,6 +75,7 @@ declare const fullApi: ApiFromModules<{
   organizations: typeof organizations;
   partnerEquity: typeof partnerEquity;
   quotes: typeof quotes;
+  rateLimit: typeof rateLimit;
   reports: typeof reports;
   roles: typeof roles;
   sales: typeof sales;
@@ -114,4 +118,6 @@ export declare const internal: FilterApi<
   FunctionReference<any, "internal">
 >;
 
-export declare const components: {};
+export declare const components: {
+  rateLimiter: import("@convex-dev/rate-limiter/_generated/component.js").ComponentApi<"rateLimiter">;
+};

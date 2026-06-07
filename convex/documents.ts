@@ -2,6 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { rateLimiter } from "./rateLimit";
 
 // --- Rules ---
 
@@ -12,7 +13,7 @@ export const listRules = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SETTINGS]);
-    
+
     return await ctx.db
       .query("companyDocumentRules")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
@@ -30,7 +31,7 @@ export const addRule = mutation({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_SETTINGS]);
-    
+
     await ctx.db.insert("companyDocumentRules", {
       orgId: args.orgId,
       companyId: args.companyId,
@@ -48,7 +49,7 @@ export const removeRule = mutation({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_SETTINGS]);
-    
+
     const rule = await ctx.db.get(args.ruleId);
     if (!rule || rule.orgId !== args.orgId) throw new ConvexError("Rule not found.");
 
@@ -65,7 +66,7 @@ export const getForApplication = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
-    
+
     const docs = await ctx.db
       .query("applicationDocuments")
       .withIndex("by_application", (q) => q.eq("applicationId", args.applicationId))
@@ -91,24 +92,29 @@ export const getForApplication = query({
 });
 
 export const generateUploadUrl = mutation({
-  args: { 
+  args: {
     orgId: v.id("organizations"),
     mimeType: v.string(),
     sizeInBytes: v.number(),
   },
   handler: async (ctx, args) => {
+    const statusLimit = await rateLimiter.limit(ctx, "upload");
+    if (!statusLimit.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+    }
+
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_SALES]);
-    
+
     // 10MB limit for documents
     if (args.sizeInBytes > 10 * 1024 * 1024) {
       throw new ConvexError("File size exceeds 10MB limit.");
     }
-    
+
     const validMimeTypes = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
     if (!validMimeTypes.includes(args.mimeType)) {
       throw new ConvexError("Invalid file type. Only PDF and images are allowed.");
     }
-    
+
     return await ctx.storage.generateUploadUrl();
   },
 });
@@ -121,7 +127,7 @@ export const saveDocumentFile = mutation({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_SALES]);
-    
+
     const doc = await ctx.db.get(args.documentId);
     if (!doc || doc.orgId !== args.orgId) throw new ConvexError("Document not found");
 
@@ -148,7 +154,7 @@ export const updateDocumentStatus = mutation({
   },
   handler: async (ctx, args) => {
     const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_SETTINGS]);
-    
+
     const doc = await ctx.db.get(args.documentId);
     if (!doc || doc.orgId !== args.orgId) throw new ConvexError("Document not found");
 
