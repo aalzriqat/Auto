@@ -102,8 +102,8 @@ export default function DashboardPage() {
   }));
 
   const lineChartData = stats?.salesTrend?.length ? stats.salesTrend.map(t => ({ name: t.name, value: t.Revenue })) : mockLineData;
-  const trendRange = stats?.salesTrend?.length > 1
-    ? `${stats.salesTrend[0].name} - ${stats.salesTrend[stats.salesTrend.length - 1].name}`
+  const trendRange = (stats?.salesTrend?.length || 0) > 1
+    ? `${stats.salesTrend![0].name} - ${stats.salesTrend![stats.salesTrend!.length - 1].name}`
     : timeRange === "DAY" ? "Today" : timeRange === "MONTH" ? "Last 30 Days" : timeRange === "YEAR" ? "Last 12 Months" : "All Time";
   const newLeadsCount = leads?.filter(l => l.stage === "NEW").length || 0;
   const qualifiedLeadsCount = leads?.filter(l => l.stage === "INTERESTED" || l.stage === "TEST_DRIVE").length || 0;
