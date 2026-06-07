@@ -31,6 +31,14 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 
 const mockLineData = [
   { name: 'Aug', value: 300 },
@@ -97,7 +105,7 @@ export default function DashboardPage() {
                   lead.stage === "LOST" ? "Lost" : lead.stage,
     vehicle: lead.vehicleSummary || "Unknown Vehicle",
     activity: new Date(lead._creationTime).toLocaleDateString(),
-    contact: lead.email || lead.phone || "(555) 000-0000",
+    contact: lead.phone || lead.email || "(555) 000-0000",
     avatar: lead.customerName.substring(0, 2).toUpperCase()
   }));
 
@@ -363,51 +371,52 @@ export default function DashboardPage() {
           </div>
         </div>
         <div className="p-0 flex-1 bg-white">
-          <div className="w-full overflow-x-auto">
-            <table className="w-full text-sm text-left">
-              <thead className="text-xs text-slate-600 bg-white font-bold border-b border-slate-100">
-                <tr>
-                  <th className="px-6 py-3">{t("Name" as any) || "Name"}</th>
-                  <th className="px-6 py-3">{t("Source" as any) || "Source"}</th>
-                  <th className="px-6 py-3">{t("Status" as any) || "Status"}</th>
-                  <th className="px-6 py-3">{t("VehicleInterest" as any) || "Vehicle Interest"}</th>
-                  <th className="px-6 py-3">{t("LastActivity" as any) || "Last Activity"}</th>
-                  <th className="px-6 py-3">{t("Contact" as any) || "Contact"}</th>
-                </tr>
-              </thead>
-              <tbody>
+          <div className="w-full">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t("Name" as any) || "Name"}</TableHead>
+                  <TableHead>{t("Source" as any) || "Source"}</TableHead>
+                  <TableHead>{t("Status" as any) || "Status"}</TableHead>
+                  <TableHead>{t("VehicleInterest" as any) || "Vehicle Interest"}</TableHead>
+                  <TableHead>{t("LastActivity" as any) || "Last Activity"}</TableHead>
+                  <TableHead>{t("Contact" as any) || "Contact"}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {displayLeads.map((lead: any, i: number) => (
-                  <tr key={i} className="border-b border-slate-50 hover:bg-slate-50/50 transition-colors">
-                    <td className="px-6 py-3 font-semibold text-slate-900 flex items-center gap-3">
+                  <TableRow key={i}>
+                    <TableCell className="font-semibold text-slate-900 flex items-center gap-3">
                       <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-xs font-bold text-slate-600 border border-slate-200">
                         {lead.avatar}
                       </div>
                       {lead.name}
-                    </td>
-                    <td className="px-6 py-3 font-medium text-slate-600">
+                    </TableCell>
+                    <TableCell className="font-medium text-slate-600">
+
                       {t(lead.source as any) || lead.source}
-                    </td>
-                    <td className="px-6 py-3">
+                    </TableCell>
+                    <TableCell>
                       <span className={`px-2.5 py-1 rounded-md font-bold text-[11px] ${lead.status === "New Lead" ? "bg-[#ffedd5] text-[#ea580c]" :
                         lead.status === "Contacted" ? "bg-[#e0f2fe] text-[#0284c7]" :
                           "bg-[#dcfce7] text-[#16a34a]"
                         }`}>
                         {t(lead.status as any) || lead.status}
                       </span>
-                    </td>
-                    <td className="px-6 py-3 font-medium text-slate-600">
+                    </TableCell>
+                    <TableCell className="font-medium text-slate-600">
                       {lead.vehicle === "Unknown Vehicle" ? t("UnknownVehicle" as any) || lead.vehicle : lead.vehicle}
-                    </td>
-                    <td className="px-6 py-3 font-medium text-slate-600">
+                    </TableCell>
+                    <TableCell className="font-medium text-slate-600">
                       {lead.activity}
-                    </td>
-                    <td className="px-6 py-3 font-medium text-slate-600">
+                    </TableCell>
+                    <TableCell className="font-medium text-slate-600">
                       {lead.contact}
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </div>
 
           <div className="flex items-center justify-end p-4 border-t border-slate-100 gap-2">
