@@ -1,5 +1,5 @@
 /**
- * AutoFlow Permission System
+ * Bloom Cars Permission System
  *
  * Permissions are fine-grained strings following the pattern "action:resource".
  * Roles are database records containing an array of these permission strings.

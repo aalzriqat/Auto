@@ -16,7 +16,7 @@ const cairo = Cairo({
 });
 
 export const metadata: Metadata = {
-  title: "AutoFlow | Dealership Management",
+  title: "Bloom Cars | Dealership Management",
   description: "Modern dealership management platform.",
   icons: {
     icon: "/convex.svg",

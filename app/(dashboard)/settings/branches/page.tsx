@@ -1,7 +1,7 @@
 import { BranchesClient } from "./client";
 
 export const metadata = {
-  title: "Branches | AutoFlow",
+  title: "Branches | Bloom Cars",
   description: "Manage your physical branches",
 };
 

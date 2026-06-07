@@ -158,7 +158,7 @@ export default function SalesPage() {
                     <Button variant="ghost" size="icon" onClick={() => {
                       try {
                         generateBillOfSale(
-                          "AutoFlow Dealership",
+                          "Bloom Cars Dealership",
                           sale.customerName,
                           sale.vehicleSummary,
                           sale.vehicleVin,

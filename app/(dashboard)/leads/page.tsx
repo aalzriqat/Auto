@@ -161,7 +161,7 @@ export default function LeadsPage() {
                             e.stopPropagation();
                             try {
                               generateQuote(
-                                "AutoFlow Dealership",
+                                "Bloom Cars Dealership",
                                 lead.customerName,
                                 lead.vehicleSummary || "Unknown Vehicle",
                                 "TBD",

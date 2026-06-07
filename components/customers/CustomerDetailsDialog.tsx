@@ -290,7 +290,7 @@ export function CustomerDetailsDialog({
                               e.stopPropagation();
                               try {
                                 generateFinanceQuote(
-                                  "AutoFlow Dealership",
+                                  "Bloom Cars Dealership",
                                   `${customer.firstName} ${customer.lastName}`,
                                   quote.vehicleDesc,
                                   quote.companyName,

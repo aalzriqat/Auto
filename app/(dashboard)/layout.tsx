@@ -31,7 +31,7 @@ function Onboarding() {
     <div className="flex flex-col items-center justify-center min-h-screen bg-muted/50 p-4">
       <div className="max-w-md w-full bg-background p-8 rounded-xl border shadow-sm space-y-6 text-center">
         <div className="space-y-2">
-          <h1 className="text-2xl font-bold tracking-tight">Welcome to AutoFlow</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Welcome to Bloom Cars</h1>
           <p className="text-muted-foreground text-sm">
             Let's get started by creating your first dealership organization.
           </p>

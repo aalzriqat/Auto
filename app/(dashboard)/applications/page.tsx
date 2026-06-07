@@ -1,7 +1,7 @@
 import { ApplicationClient } from "./client";
 
 export const metadata = {
-  title: "Applications | AutoFlow",
+  title: "Applications | Bloom Cars",
   description: "Manage finance applications",
 };
 
