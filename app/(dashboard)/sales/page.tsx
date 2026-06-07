@@ -7,6 +7,7 @@ import { useOrg } from "@/components/providers/OrgProvider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SaleDialog } from "@/components/sales/SaleDialog";
+import { QuoteDialog } from "@/components/sales/QuoteDialog";
 import { Doc } from "@/convex/_generated/dataModel";
 import {
   Table,
@@ -38,6 +39,7 @@ export default function SalesPage() {
 
   const [searchQuery, setSearchQuery] = useState("");
   const [isSaleDialogOpen, setIsSaleDialogOpen] = useState(false);
+  const [isQuoteDialogOpen, setIsQuoteDialogOpen] = useState(false);
   const [editingSale, setEditingSale] = useState<any>(null);
   const [saleToDelete, setSaleToDelete] = useState<any>(null);
 
@@ -88,9 +90,14 @@ export default function SalesPage() {
             {t("SalesRecordsDesc" as any) || "Log and manage vehicle sales and track revenue."}
           </p>
         </div>
-        <Button onClick={handleAddNew}>
-          <Plus className="me-2 h-4 w-4" /> {t("LogSale" as any) || "Log Sale"}
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setIsQuoteDialogOpen(true)}>
+            {t("Create Quote" as any) || "Create Quote"}
+          </Button>
+          <Button onClick={handleAddNew}>
+            <Plus className="me-2 h-4 w-4" /> {t("LogSale" as any) || "Log Sale"}
+          </Button>
+        </div>
       </div>
 
       <div className="flex items-center w-full max-w-sm space-x-2">
@@ -183,6 +190,11 @@ export default function SalesPage() {
         open={isSaleDialogOpen}
         onOpenChange={setIsSaleDialogOpen}
         sale={editingSale}
+      />
+
+      <QuoteDialog
+        open={isQuoteDialogOpen}
+        onOpenChange={setIsQuoteDialogOpen}
       />
 
       <Dialog open={!!saleToDelete} onOpenChange={(open) => !open && setSaleToDelete(null)}>

@@ -8,11 +8,16 @@
  * @module
  */
 
+import type * as applications from "../applications.js";
+import type * as branches from "../branches.js";
 import type * as crons from "../crons.js";
 import type * as customers from "../customers.js";
 import type * as dashboard from "../dashboard.js";
+import type * as documents from "../documents.js";
 import type * as email from "../email.js";
 import type * as expenses from "../expenses.js";
+import type * as finance from "../finance.js";
+import type * as guarantors from "../guarantors.js";
 import type * as http from "../http.js";
 import type * as leads from "../leads.js";
 import type * as memberships from "../memberships.js";
@@ -20,6 +25,7 @@ import type * as migrateRoles from "../migrateRoles.js";
 import type * as migrations from "../migrations.js";
 import type * as notifications from "../notifications.js";
 import type * as organizations from "../organizations.js";
+import type * as quotes from "../quotes.js";
 import type * as reports from "../reports.js";
 import type * as roles from "../roles.js";
 import type * as sales from "../sales.js";
@@ -41,11 +47,16 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  applications: typeof applications;
+  branches: typeof branches;
   crons: typeof crons;
   customers: typeof customers;
   dashboard: typeof dashboard;
+  documents: typeof documents;
   email: typeof email;
   expenses: typeof expenses;
+  finance: typeof finance;
+  guarantors: typeof guarantors;
   http: typeof http;
   leads: typeof leads;
   memberships: typeof memberships;
@@ -53,6 +64,7 @@ declare const fullApi: ApiFromModules<{
   migrations: typeof migrations;
   notifications: typeof notifications;
   organizations: typeof organizations;
+  quotes: typeof quotes;
   reports: typeof reports;
   roles: typeof roles;
   sales: typeof sales;

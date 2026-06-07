@@ -4,6 +4,7 @@ import { vehiclesEn, vehiclesAr } from "./domains/vehicles";
 import { customersEn, customersAr } from "./domains/customers";
 import { leadsEn, leadsAr } from "./domains/leads";
 import { salesEn, salesAr } from "./domains/sales";
+import { settingsEn, settingsAr } from "./domains/settings";
 
 export type Locale = "en" | "ar";
 
@@ -14,6 +15,7 @@ const en = {
   ...customersEn,
   ...leadsEn,
   ...salesEn,
+  ...settingsEn,
 };
 
 const ar: typeof en = {
@@ -23,6 +25,7 @@ const ar: typeof en = {
   ...customersAr,
   ...leadsAr,
   ...salesAr,
+  ...settingsAr,
 };
 
 export const dictionaries = {

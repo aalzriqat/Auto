@@ -138,6 +138,20 @@ export const update = mutation({
     email: v.optional(v.string()),
     nationalId: v.optional(v.string()),
     address: v.optional(v.string()),
+    employment: v.optional(
+      v.object({
+        employer: v.string(),
+        title: v.optional(v.string()),
+        salary: v.number(),
+        hireDate: v.optional(v.number()),
+      })
+    ),
+    financials: v.optional(
+      v.object({
+        totalMonthlyDebt: v.number(),
+        dbr: v.optional(v.number()),
+      })
+    ),
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_CUSTOMERS]);
@@ -174,6 +188,8 @@ export const update = mutation({
     if (args.email !== undefined) patch.email = args.email.toLowerCase().trim();
     if (args.nationalId !== undefined) patch.nationalId = args.nationalId.trim();
     if (args.address !== undefined) patch.address = args.address.trim();
+    if (args.employment !== undefined) patch.employment = args.employment;
+    if (args.financials !== undefined) patch.financials = args.financials;
 
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(args.customerId, patch);
@@ -307,10 +323,30 @@ export const getRelations = query({
       })
     );
 
+    // 4. Fetch Quotes
+    const quotes = await ctx.db
+      .query("quotes")
+      .withIndex("by_customer", (q) => q.eq("customerId", args.customerId))
+      .filter((q) => q.eq(q.field("orgId"), args.orgId))
+      .collect();
+
+    const enrichedQuotes = await Promise.all(
+      quotes.map(async (quote) => {
+        const vehicle = await ctx.db.get(quote.vehicleId);
+        const company = quote.companyId ? await ctx.db.get(quote.companyId) : null;
+        return {
+          ...quote,
+          vehicleDesc: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
+          companyName: company ? company.name : "Cash Deal",
+        };
+      })
+    );
+
     return {
       sales: enrichedSales.sort((a, b) => b.saleDate - a.saleDate),
       leads: enrichedLeads.sort((a, b) => b._creationTime - a._creationTime),
       tasks: enrichedTasks.sort((a, b) => a.dueDate - b.dueDate),
+      quotes: enrichedQuotes.sort((a, b) => b.createdAt - a.createdAt),
     };
   },
 });

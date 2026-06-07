@@ -9,7 +9,8 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CustomerDialog } from "@/components/customers/CustomerDialog";
-import { Doc } from "@/convex/_generated/dataModel";
+import { CustomerDetailsDialog } from "@/components/customers/CustomerDetailsDialog";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 import {
   Table,
   TableBody,
@@ -40,7 +41,9 @@ export default function CustomersPage() {
 
   const [searchQuery, setSearchQuery] = useState("");
   const [isCustomerDialogOpen, setIsCustomerDialogOpen] = useState(false);
+  const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState<Doc<"customers"> | null>(null);
+  const [selectedCustomerId, setSelectedCustomerId] = useState<Id<"customers"> | null>(null);
   
   const [customerToDelete, setCustomerToDelete] = useState<Doc<"customers"> | null>(null);
 
@@ -61,9 +64,15 @@ export default function CustomersPage() {
     }
   }, [highlightId, customers]);
 
-  const handleEdit = (customer: Doc<"customers">) => {
+  const handleEdit = (customer: Doc<"customers">, e: React.MouseEvent) => {
+    e.stopPropagation();
     setEditingCustomer(customer);
     setIsCustomerDialogOpen(true);
+  };
+
+  const handleRowClick = (customerId: Id<"customers">) => {
+    setSelectedCustomerId(customerId);
+    setIsDetailsOpen(true);
   };
 
   const handleAddNew = () => {
@@ -71,7 +80,8 @@ export default function CustomersPage() {
     setIsCustomerDialogOpen(true);
   };
 
-  const handleDelete = async () => {
+  const handleDelete = async (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
     if (!activeOrgId || !customerToDelete) return;
     try {
       await removeCustomer({ orgId: activeOrgId, customerId: customerToDelete._id });
@@ -134,7 +144,8 @@ export default function CustomersPage() {
                 <TableRow 
                   key={customer._id}
                   id={`row-${customer._id}`}
-                  className={highlightId === customer._id ? "bg-primary/20 transition-all duration-1000" : ""}
+                  className={`cursor-pointer hover:bg-muted/50 ${highlightId === customer._id ? "bg-primary/20 transition-all duration-1000" : ""}`}
+                  onClick={() => handleRowClick(customer._id)}
                 >
                   <TableCell className="font-medium">
                     {customer.firstName} {customer.lastName}
@@ -160,10 +171,13 @@ export default function CustomersPage() {
                     {customer.nationalId || <span className="text-muted-foreground italic">{t("NA" as any) || "N/A"}</span>}
                   </TableCell>
                   <TableCell className="text-end">
-                    <Button variant="ghost" size="icon" onClick={() => handleEdit(customer)}>
+                    <Button variant="ghost" size="icon" onClick={(e) => handleEdit(customer, e)}>
                       <Pencil className="h-4 w-4 text-muted-foreground" />
                     </Button>
-                    <Button variant="ghost" size="icon" onClick={() => setCustomerToDelete(customer)}>
+                    <Button variant="ghost" size="icon" onClick={(e) => {
+                      e.stopPropagation();
+                      setCustomerToDelete(customer);
+                    }}>
                       <Trash2 className="h-4 w-4 text-red-500" />
                     </Button>
                   </TableCell>
@@ -178,6 +192,12 @@ export default function CustomersPage() {
         open={isCustomerDialogOpen}
         onOpenChange={setIsCustomerDialogOpen}
         customer={editingCustomer}
+      />
+
+      <CustomerDetailsDialog
+        open={isDetailsOpen}
+        onOpenChange={setIsDetailsOpen}
+        customerId={selectedCustomerId}
       />
 
       {/* Delete Confirmation Dialog */}

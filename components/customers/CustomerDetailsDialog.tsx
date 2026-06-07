@@ -1,10 +1,11 @@
 "use client";
 
-import { useQuery } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Id } from "@/convex/_generated/dataModel";
+import { useState } from "react";
 import { format } from "date-fns";
 import {
   Dialog,
@@ -22,6 +23,11 @@ import {
 } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Send, FileText, CheckCircle } from "lucide-react";
+import { CustomerFinancialsTab } from "@/components/customers/CustomerFinancialsTab";
+import { generateFinanceQuote } from "@/lib/pdf";
+import { toast } from "sonner";
 
 interface CustomerDetailsDialogProps {
   customerId: Id<"customers"> | null;
@@ -36,6 +42,7 @@ export function CustomerDetailsDialog({
 }: CustomerDetailsDialogProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  const [activeTab, setActiveTab] = useState("overview");
   
   const customer = useQuery(
     api.customers.get,
@@ -50,6 +57,8 @@ export function CustomerDetailsDialog({
       ? { orgId: activeOrgId, customerId: customerId }
       : "skip"
   );
+
+  const createApplication = useMutation(api.applications.createFromQuote);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -89,6 +98,15 @@ export function CustomerDetailsDialog({
                   )}
                 </TabsTrigger>
                 <TabsTrigger 
+                  value="quotes" 
+                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
+                >
+                  {t("Quotes" as any) || "Quotes"}
+                  {relations && relations.quotes?.length > 0 && (
+                    <Badge variant="secondary" className="ml-2 text-xs px-1.5 py-0.5">{relations.quotes.length}</Badge>
+                  )}
+                </TabsTrigger>
+                <TabsTrigger 
                   value="tasks" 
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
@@ -96,6 +114,12 @@ export function CustomerDetailsDialog({
                   {relations?.tasks && relations.tasks.length > 0 && (
                     <Badge variant="secondary" className="ml-2 text-xs px-1.5 py-0.5">{relations.tasks.length}</Badge>
                   )}
+                </TabsTrigger>
+                <TabsTrigger 
+                  value="financials" 
+                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
+                >
+                  {t("Financials" as any) || "Financials"}
                 </TabsTrigger>
               </TabsList>
             </div>
@@ -195,6 +219,124 @@ export function CustomerDetailsDialog({
                     </div>
                   )}
                 </div>
+
+              </TabsContent>
+
+              <TabsContent value="quotes" className="m-0 focus-visible:outline-none">
+                <h3 className="font-semibold text-sm mb-3">{t("GeneratedQuotes" as any) || "Generated Quotes"}</h3>
+                {!relations ? (
+                  <p className="text-sm text-muted-foreground">{t("Loading" as any) || "Loading..."}</p>
+                ) : !relations.quotes || relations.quotes.length === 0 ? (
+                  <p className="text-sm text-muted-foreground italic">{t("NoQuotesCustomer" as any) || "No quotes generated for this customer."}</p>
+                ) : (
+                  <div className="space-y-4">
+                    {relations.quotes.map((quote: any) => (
+                      <div key={quote._id} className="bg-card shadow-sm p-4 rounded-lg border text-sm flex flex-col space-y-3">
+                        <div className="flex justify-between items-start">
+                          <div>
+                            <span className="font-semibold text-base">{quote.vehicleDesc}</span>
+                            <p className="text-xs text-muted-foreground">{quote.companyName}</p>
+                          </div>
+                          <span className={`text-xs px-2 py-1 rounded-full font-medium ${
+                            quote.status === "ACCEPTED" ? "bg-green-100 text-green-800" :
+                            quote.status === "EXPIRED" ? "bg-red-100 text-red-800" :
+                            "bg-blue-100 text-blue-800"
+                          }`}>
+                            {quote.status}
+                          </span>
+                        </div>
+                        
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 bg-muted/50 p-3 rounded-md">
+                          <div>
+                            <p className="text-xs text-muted-foreground">{t("VehiclePrice" as any) || "Vehicle Price"}</p>
+                            <p className="font-medium">{quote.vehiclePrice?.toLocaleString()} JOD</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-muted-foreground">{t("DownPayment" as any) || "Down Payment"}</p>
+                            <p className="font-medium">{quote.downPayment?.toLocaleString()} JOD</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-muted-foreground">{t("Term" as any) || "Term"}</p>
+                            <p className="font-medium">{quote.termMonths} Months</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-muted-foreground">{t("ProfitRate" as any) || "Profit Rate"}</p>
+                            <p className="font-medium">{quote.profitRateApplied || 0}%</p>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 border-t pt-3">
+                          <div>
+                            <p className="text-xs text-muted-foreground">{t("FinancedAmount" as any) || "Financed Amount"}</p>
+                            <p className="font-medium">{quote.totalFinancedAmount?.toLocaleString(undefined, {minimumFractionDigits: 2})} JOD</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-muted-foreground">{t("TotalProfit" as any) || "Total Profit"}</p>
+                            <p className="font-medium text-orange-600">{quote.totalProfit?.toLocaleString(undefined, {minimumFractionDigits: 2})} JOD</p>
+                          </div>
+                          <div className="bg-primary/10 -m-2 p-2 rounded-md text-center">
+                            <p className="text-xs text-primary font-medium">{t("MonthlyInstallment" as any) || "Monthly Installment"}</p>
+                            <p className="text-lg font-bold text-primary">{quote.monthlyInstallment?.toLocaleString(undefined, {minimumFractionDigits: 2})} <span className="text-xs font-normal">JOD</span></p>
+                          </div>
+                        </div>
+
+                        <div className="flex justify-between items-center text-xs text-muted-foreground pt-2">
+                          <p>{t("Date" as any) || "Generated On"}: {format(quote.createdAt, "PP p")}</p>
+                          <Button 
+                            variant="ghost" 
+                            size="sm" 
+                            className="h-8 gap-1 text-primary hover:text-primary/80"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              try {
+                                generateFinanceQuote(
+                                  "AutoFlow Dealership",
+                                  `${customer.firstName} ${customer.lastName}`,
+                                  quote.vehicleDesc,
+                                  quote.companyName,
+                                  quote.vehiclePrice || 0,
+                                  quote.downPayment || 0,
+                                  quote.termMonths,
+                                  quote.profitRateApplied || 0,
+                                  quote.totalFinancedAmount || 0,
+                                  quote.totalProfit || 0,
+                                  quote.monthlyInstallment || 0
+                                );
+                                toast.success(t("QuotePDFGenerated" as any) || "Quote PDF generated successfully");
+                              } catch (err) {
+                                toast.error(t("FailedGeneratePDF" as any) || "Failed to generate PDF");
+                              }
+                            }}
+                          >
+                            <FileText className="w-4 h-4" />
+                            {t("DownloadPDF" as any) || "Download PDF"}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-8 gap-1 bg-primary text-primary-foreground hover:bg-primary/90"
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              try {
+                                const appId = await createApplication({
+                                  orgId: activeOrgId!,
+                                  quoteId: quote._id,
+                                });
+                                toast.success("Application created successfully!");
+                                // Might want to redirect to applications page or open application dialog here
+                              } catch (err: any) {
+                                toast.error(err.message || "Failed to create application");
+                              }
+                            }}
+                          >
+                            <Send className="w-4 h-4" />
+                            Submit Application
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </TabsContent>
 
               <TabsContent value="tasks" className="m-0 focus-visible:outline-none">
@@ -226,6 +368,10 @@ export function CustomerDetailsDialog({
                     ))}
                   </div>
                 )}
+              </TabsContent>
+              
+              <TabsContent value="financials" className="m-0 focus-visible:outline-none p-4">
+                <CustomerFinancialsTab customer={customer} />
               </TabsContent>
             </ScrollArea>
           </Tabs>

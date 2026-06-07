@@ -24,6 +24,7 @@ export default defineSchema({
     orgId: v.id("organizations"),
     userId: v.id("users"),
     roleId: v.id("roles"),
+    branchId: v.optional(v.id("branches")),
   })
     .index("by_user", ["userId"])
     .index("by_org", ["orgId"])
@@ -40,6 +41,7 @@ export default defineSchema({
 
   vehicles: defineTable({
     orgId: v.id("organizations"),
+    branchId: v.optional(v.id("branches")),
     vin: v.string(),
     make: v.string(),
     model: v.string(),
@@ -114,12 +116,27 @@ export default defineSchema({
     email: v.optional(v.string()),
     nationalId: v.optional(v.string()),
     address: v.optional(v.string()),
+    employment: v.optional(
+      v.object({
+        employer: v.string(),
+        title: v.optional(v.string()),
+        salary: v.number(),
+        hireDate: v.optional(v.number()),
+      })
+    ),
+    financials: v.optional(
+      v.object({
+        totalMonthlyDebt: v.number(),
+        dbr: v.optional(v.number()), // Debt Burden Ratio
+      })
+    ),
   })
     .index("by_org", ["orgId"])
     .index("by_org_email", ["orgId", "email"]),
 
   leads: defineTable({
     orgId: v.id("organizations"),
+    branchId: v.optional(v.id("branches")),
     customerId: v.id("customers"),
     assignedUserId: v.optional(v.id("users")),
     vehicleId: v.optional(v.id("vehicles")),
@@ -142,6 +159,7 @@ export default defineSchema({
 
   sales: defineTable({
     orgId: v.id("organizations"),
+    branchId: v.optional(v.id("branches")),
     vehicleId: v.id("vehicles"),
     customerId: v.id("customers"),
     salespersonId: v.id("users"),
@@ -168,6 +186,7 @@ export default defineSchema({
 
   expenses: defineTable({
     orgId: v.id("organizations"),
+    branchId: v.optional(v.id("branches")),
     vehicleId: v.optional(v.id("vehicles")), // Optional because there might be general expenses
     title: v.string(), // e.g., "Brake replacement", "Detailing", "Office supplies"
     amount: v.number(),
@@ -273,4 +292,137 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_org_vehicle", ["orgId", "vehicleId"]),
+
+  financeCompanies: defineTable({
+    orgId: v.id("organizations"),
+    name: v.string(),
+    profitRate: v.number(), // e.g. 5.5 for 5.5%
+    maxTermMonths: v.number(), // e.g. 72
+    gracePeriodMonths: v.number(), // e.g. 3
+    insuranceRate: v.optional(v.number()), // e.g. 3.5 for 3.5%
+    adminFees: v.optional(v.number()), // Processing Fees
+    commission: v.optional(v.number()), // Commission
+    includesCommissionInDebt: v.optional(v.boolean()),
+    maxFinancingLTV: v.optional(v.number()), // e.g. 85 for 85% Loan-to-Value
+    isActive: v.boolean(),
+  }).index("by_org", ["orgId"]),
+
+  vehicleValuations: defineTable({
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    companyId: v.id("financeCompanies"),
+    valuationAmount: v.number(),
+    expiresAt: v.optional(v.number()), // timestamp
+  })
+    .index("by_org", ["orgId"])
+    .index("by_vehicle", ["vehicleId"])
+    .index("by_company", ["companyId"]),
+
+  guarantors: defineTable({
+    orgId: v.id("organizations"),
+    customerId: v.id("customers"),
+    firstName: v.string(),
+    lastName: v.string(),
+    nationalId: v.string(),
+    phone: v.string(),
+    relationship: v.optional(v.string()),
+    income: v.optional(v.number()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_customer", ["customerId"]),
+
+  quotes: defineTable({
+    orgId: v.id("organizations"),
+    customerId: v.id("customers"),
+    vehicleId: v.id("vehicles"),
+    companyId: v.optional(v.id("financeCompanies")), // Null if cash deal
+    
+    // Core parameters
+    vehiclePrice: v.number(),
+    downPayment: v.number(),
+    termMonths: v.number(),
+    
+    // Financing Engine output
+    totalFinancedAmount: v.optional(v.number()), // Principal + Insurance + Fees
+    monthlyInstallment: v.optional(v.number()),
+    profitRateApplied: v.optional(v.number()),
+    totalProfit: v.optional(v.number()),
+    
+    status: v.union(v.literal("DRAFT"), v.literal("SHARED"), v.literal("ACCEPTED"), v.literal("EXPIRED")),
+    expiresAt: v.optional(v.number()),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_customer", ["customerId"])
+    .index("by_vehicle", ["vehicleId"])
+    .index("by_status", ["status"]),
+
+  financeApplications: defineTable({
+    orgId: v.id("organizations"),
+    quoteId: v.id("quotes"),
+    customerId: v.id("customers"),
+    vehicleId: v.id("vehicles"),
+    companyId: v.optional(v.id("financeCompanies")),
+    salespersonId: v.id("users"),
+    
+    status: v.union(
+      v.literal("DRAFT"),
+      v.literal("PENDING_DOCS"),
+      v.literal("UNDER_REVIEW"),
+      v.literal("APPROVED"),
+      v.literal("REJECTED"),
+      v.literal("CLOSED")
+    ),
+    
+    notes: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    approvedBy: v.optional(v.id("users")),
+    approvedAt: v.optional(v.number()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_customer", ["customerId"])
+    .index("by_vehicle", ["vehicleId"])
+    .index("by_status", ["status"])
+    .index("by_org_status", ["orgId", "status"]),
+
+  companyDocumentRules: defineTable({
+    orgId: v.id("organizations"),
+    companyId: v.optional(v.id("financeCompanies")), // Null means required for ALL deals (e.g., ID)
+    documentName: v.string(), // e.g., "Salary Certificate"
+    isRequired: v.boolean(),
+    description: v.optional(v.string()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_company", ["companyId"]),
+
+  applicationDocuments: defineTable({
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    ruleId: v.id("companyDocumentRules"),
+    fileId: v.optional(v.id("_storage")),
+    status: v.union(
+      v.literal("MISSING"),
+      v.literal("UPLOADED"),
+      v.literal("VERIFIED"),
+      v.literal("REJECTED")
+    ),
+    rejectionReason: v.optional(v.string()),
+    uploadedAt: v.optional(v.number()),
+    verifiedBy: v.optional(v.id("users")),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_application", ["applicationId"])
+    .index("by_rule", ["ruleId"]),
+
+  branches: defineTable({
+    orgId: v.id("organizations"),
+    name: v.string(),
+    address: v.optional(v.string()),
+    phone: v.optional(v.string()),
+    managerId: v.optional(v.id("users")),
+    isActive: v.boolean(),
+  })
+    .index("by_org", ["orgId"]),
 });

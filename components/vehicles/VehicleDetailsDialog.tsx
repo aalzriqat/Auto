@@ -28,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import { useState } from "react";
 import { TestDriveDialog } from "@/components/test_drives/TestDriveDialog";
 import { WorkOrderDialog } from "@/components/work_orders/WorkOrderDialog";
+import { VehicleValuationsTab } from "@/components/vehicles/VehicleValuationsTab";
 
 interface VehicleDetailsDialogProps {
   vehicle: Doc<"vehicles"> | null;
@@ -125,6 +126,12 @@ export function VehicleDetailsDialog({
                 {relations?.workOrders && relations.workOrders.length > 0 && (
                   <Badge variant="secondary" className="ml-2 text-xs px-1.5 py-0.5">{relations.workOrders.length}</Badge>
                 )}
+              </TabsTrigger>
+              <TabsTrigger 
+                value="valuations" 
+                className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
+              >
+                {t("Valuations" as any) || "Valuations"}
               </TabsTrigger>
             </TabsList>
           </div>
@@ -410,6 +417,9 @@ export function VehicleDetailsDialog({
                   ))}
                 </div>
               )}
+            </TabsContent>
+            <TabsContent value="valuations" className="m-0 focus-visible:outline-none p-4">
+              <VehicleValuationsTab vehicleId={vehicle._id} />
             </TabsContent>
           </ScrollArea>
         </Tabs>

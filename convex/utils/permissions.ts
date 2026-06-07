@@ -54,6 +54,10 @@ export const PERMISSIONS = {
 
   // Reports
   VIEW_REPORTS: "view:reports",
+
+  // Settings
+  VIEW_SETTINGS: "view:settings",
+  MANAGE_SETTINGS: "manage:settings",
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -100,6 +104,8 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.EDIT_TASKS,
       PERMISSIONS.DELETE_TASKS,
       PERMISSIONS.VIEW_REPORTS,
+      PERMISSIONS.VIEW_SETTINGS,
+      PERMISSIONS.MANAGE_SETTINGS,
     ],
   },
   {

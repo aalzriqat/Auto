@@ -1,6 +1,6 @@
 "use client";
 
-import { Car, Users, LayoutDashboard, Target, BadgeDollarSign, Shield, Receipt, ClipboardList, Menu, LineChart } from "lucide-react";
+import { Car, Users, LayoutDashboard, Target, BadgeDollarSign, Shield, Receipt, ClipboardList, Menu, LineChart, Settings, Store } from "lucide-react";
 import { UserButton, useUser } from "@clerk/nextjs";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
@@ -21,11 +21,14 @@ const navigation = [
   { name: "Vehicles", href: "/vehicles", icon: Car, permission: "view:vehicles" },
   { name: "Customers", href: "/customers", icon: Users, permission: "view:customers" },
   { name: "Leads", href: "/leads", icon: Target, permission: "view:leads" },
+  { name: "Applications", href: "/applications", icon: ClipboardList, permission: "view:sales" },
   { name: "Sales", href: "/sales", icon: BadgeDollarSign, permission: "view:sales" },
   { name: "Tasks", href: "/tasks", icon: ClipboardList, permission: "view:tasks" },
   { name: "Expenses", href: "/expenses", icon: Receipt, permission: "view:expenses" },
   { name: "Team", href: "/team", icon: Shield, permission: "manage:users" },
   { name: "Reports", href: "/reports", icon: LineChart, permission: "view:reports" },
+  { name: "Settings", href: "/settings/finance", icon: Settings, permission: "view:settings" },
+  { name: "Branches", href: "/settings/branches", icon: Store, permission: "manage:users" },
 ];
 
 export function TopNav() {
