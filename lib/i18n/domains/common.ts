@@ -42,6 +42,17 @@ export const commonEn = {
   On: "on",
   ByReq: "By:",
   NA: "N/A",
+  TeamManagement: "Team Management",
+  ManageDealershipStaff: "Manage your dealership staff and their access roles.",
+  AddMember: "Add Member",
+  Member: "Member",
+  Role: "Role",
+  RemoveMember: "Remove member",
+  RemoveTeamMember: "Remove Team Member",
+  YouCannotRemoveYourself: "You cannot remove yourself",
+  RemoveMemberConfirm: "Are you sure you want to remove {0} from the organization? They will lose all access immediately.",
+  LoadingTeam: "Loading team...",
+  NoTeamMembersFound: "No team members found.",
 };
 
 export const commonAr = {
@@ -88,4 +99,15 @@ export const commonAr = {
   On: "في",
   ByReq: "بواسطة:",
   NA: "غير متوفر",
+  TeamManagement: "إدارة فريق العمل",
+  ManageDealershipStaff: "إدارة موظفي المعرض وصلاحيات وصولهم.",
+  AddMember: "إضافة عضو",
+  Member: "العضو",
+  Role: "الدور",
+  RemoveMember: "إزالة العضو",
+  RemoveTeamMember: "إزالة عضو من الفريق",
+  YouCannotRemoveYourself: "لا يمكنك إزالة نفسك",
+  RemoveMemberConfirm: "هل أنت متأكد من أنك تريد إزالة {0} من المؤسسة؟ سيفقدون كل إمكانيات الوصول على الفور.",
+  LoadingTeam: "جاري تحميل فريق العمل...",
+  NoTeamMembersFound: "لم يتم العثور على أعضاء في الفريق.",
 };
