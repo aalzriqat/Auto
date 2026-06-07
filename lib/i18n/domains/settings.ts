@@ -23,6 +23,14 @@ export const settingsEn = {
   "Applies To": "Applies To",
   "Required": "Required",
   "No document rules defined.": "No document rules defined.",
+  "Add Document Rule": "Add Document Rule",
+  "e.g. Salary Certificate": "e.g. Salary Certificate",
+  "Select scope": "Select scope",
+  "All Finance Companies": "All Finance Companies",
+  "Description (Optional)": "Description (Optional)",
+  "Is this document strictly required?": "Is this document strictly required?",
+  "Saving...": "Saving...",
+  "Save": "Save",
 
   // Branches
   BranchesManagement: "Branches Management",
@@ -97,6 +105,14 @@ export const settingsAr = {
   "Applies To": "ينطبق على",
   "Required": "مطلوب",
   "No document rules defined.": "لم يتم تحديد أي شروط للمستندات.",
+  "Add Document Rule": "إضافة شرط مستند",
+  "e.g. Salary Certificate": "مثال: شهادة راتب",
+  "Select scope": "اختر النطاق",
+  "All Finance Companies": "جميع شركات التمويل",
+  "Description (Optional)": "الوصف (اختياري)",
+  "Is this document strictly required?": "هل هذا المستند إلزامي؟",
+  "Saving...": "جاري الحفظ...",
+  "Save": "حفظ",
 
   // Branches
   BranchesManagement: "إدارة الفروع",

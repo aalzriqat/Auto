@@ -73,30 +73,30 @@ export function DocumentRuleDialog({ open, onOpenChange }: DocumentRuleDialogPro
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[425px]">
         <DialogHeader>
-          <DialogTitle>Add Document Rule</DialogTitle>
+          <DialogTitle>{t("Add Document Rule" as any)}</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">
-            <Label>Document Name <span className="text-red-500">*</span></Label>
+            <Label>{t("Document Name" as any)} <span className="text-red-500">*</span></Label>
             <Input
               required
-              placeholder="e.g. Salary Certificate"
+              placeholder={t("e.g. Salary Certificate" as any)}
               value={formData.documentName}
               onChange={(e) => setFormData({ ...formData, documentName: e.target.value })}
             />
           </div>
 
           <div className="space-y-2">
-            <Label>Applies To</Label>
+            <Label>{t("Applies To" as any)}</Label>
             <Select
               value={formData.companyId}
               onValueChange={(value) => setFormData({ ...formData, companyId: value })}
             >
               <SelectTrigger>
-                <SelectValue placeholder="Select scope" />
+                <SelectValue placeholder={t("Select scope" as any)} />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="GLOBAL">All Finance Companies</SelectItem>
+                <SelectItem value="GLOBAL">{t("All Finance Companies" as any)}</SelectItem>
                 {companies?.map(c => (
                   <SelectItem key={c._id} value={c._id}>{c.name}</SelectItem>
                 ))}
@@ -105,7 +105,7 @@ export function DocumentRuleDialog({ open, onOpenChange }: DocumentRuleDialogPro
           </div>
 
           <div className="space-y-2">
-            <Label>Description (Optional)</Label>
+            <Label>{t("Description (Optional)" as any)}</Label>
             <Input
               value={formData.description}
               onChange={(e) => setFormData({ ...formData, description: e.target.value })}
@@ -120,15 +120,15 @@ export function DocumentRuleDialog({ open, onOpenChange }: DocumentRuleDialogPro
                 onChange={(e) => setFormData({ ...formData, isRequired: e.target.checked })}
                 className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
               />
-              <Label htmlFor="isRequired">Is this document strictly required?</Label>
+              <Label htmlFor="isRequired">{t("Is this document strictly required?" as any)}</Label>
             </div>
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
+              {t("Cancel" as any)}
             </Button>
             <Button type="submit" disabled={isSubmitting}>
-              {isSubmitting ? "Saving..." : "Save"}
+              {isSubmitting ? t("Saving..." as any) : t("Save" as any)}
             </Button>
           </DialogFooter>
         </form>
