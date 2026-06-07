@@ -188,8 +188,9 @@ export function RolePermissionsEditor({
                     <h4 className="text-sm font-medium mb-3 text-foreground/80">{t("ActionsAndApprovals" as any) || "Actions & Approvals"}</h4>
                     <div className="grid gap-3">
                       {group.actions.map(action => {
+                        const actionRequest = (action as any).request;
                         const isDirect = selectedPermissions.includes(action.id);
-                        const isRequest = action.request ? selectedPermissions.includes(action.request) : false;
+                        const isRequest = actionRequest ? selectedPermissions.includes(actionRequest) : false;
                         
                         let currentValue: "NONE" | "REQUEST" | "DIRECT" = "NONE";
                         if (isDirect) currentValue = "DIRECT";
@@ -201,15 +202,15 @@ export function RolePermissionsEditor({
                             <div className="flex bg-muted p-1 rounded-md">
                               <button
                                 type="button"
-                                onClick={() => handleActionChange(action.id, action.request, "NONE")}
+                                onClick={() => handleActionChange(action.id, actionRequest, "NONE")}
                                 className={`px-3 py-1 text-xs rounded-sm font-medium transition-colors ${currentValue === "NONE" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
                               >
                                 {t("NoAccess" as any) || "No Access"}
                               </button>
-                              {action.request && (
+                              {actionRequest && (
                                 <button
                                   type="button"
-                                  onClick={() => handleActionChange(action.id, action.request, "REQUEST")}
+                                  onClick={() => handleActionChange(action.id, actionRequest, "REQUEST")}
                                   className={`px-3 py-1 text-xs rounded-sm font-medium transition-colors ${currentValue === "REQUEST" ? "bg-yellow-500/20 text-yellow-700 dark:text-yellow-400 shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
                                 >
                                   {t("RequiresApproval" as any) || "Requires Approval"}
@@ -217,7 +218,7 @@ export function RolePermissionsEditor({
                               )}
                               <button
                                 type="button"
-                                onClick={() => handleActionChange(action.id, action.request, "DIRECT")}
+                                onClick={() => handleActionChange(action.id, actionRequest, "DIRECT")}
                                 className={`px-3 py-1 text-xs rounded-sm font-medium transition-colors ${currentValue === "DIRECT" ? "bg-green-500/20 text-green-700 dark:text-green-400 shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
                               >
                                 {t("DirectAccess" as any) || "Direct Access"}

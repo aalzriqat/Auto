@@ -68,7 +68,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const form = useForm<ExpenseFormValues>({
-    resolver: zodResolver(expenseSchema),
+    resolver: zodResolver(expenseSchema as any),
     defaultValues: {
       title: "",
       amount: 0,

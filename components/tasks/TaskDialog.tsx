@@ -67,8 +67,8 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
   const updateTask = useMutation(api.tasks.update);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const form = useForm<TaskFormValues>({
-    resolver: zodResolver(taskSchema),
+  const form = useForm<z.infer<typeof taskSchema>>({
+    resolver: zodResolver(taskSchema as any),
     defaultValues: {
       title: "",
       description: "",

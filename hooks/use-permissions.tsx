@@ -13,7 +13,7 @@ export function usePermissions() {
 
   const permissions = membership?.permissions || [];
   const isLoading = membership === undefined;
-  const isOwner = membership?.role === "OWNER";
+  const isOwner = membership?.roleName === "OWNER";
 
   const hasPermission = (permission: string) => {
     if (isOwner) return true;
@@ -37,7 +37,7 @@ export function usePermissions() {
     hasPermission,
     hasAnyPermission,
     hasAllPermissions,
-    role: membership?.role,
+    role: membership?.roleName,
     membership
   };
 }

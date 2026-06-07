@@ -20,7 +20,7 @@ const en = {
   ...expensesEn,
 };
 
-const ar: typeof en = {
+const ar = {
   ...commonAr,
   ...dashboardAr,
   ...vehiclesAr,
@@ -29,7 +29,7 @@ const ar: typeof en = {
   ...salesAr,
   ...settingsAr,
   ...expensesAr,
-};
+} as unknown as typeof en;
 
 export const dictionaries = {
   en,

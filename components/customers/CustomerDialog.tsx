@@ -54,7 +54,7 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const form = useForm<CustomerFormValues>({
-    resolver: zodResolver(customerSchema),
+    resolver: zodResolver(customerSchema as any),
     defaultValues: {
       firstName: "",
       lastName: "",

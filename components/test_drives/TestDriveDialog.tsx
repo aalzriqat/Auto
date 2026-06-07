@@ -61,8 +61,8 @@ export function TestDriveDialog({ open, onOpenChange, vehicleId, testDrive }: Te
   const completeTestDrive = useMutation(api.test_drives.complete);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const form = useForm<TestDriveFormValues>({
-    resolver: zodResolver(testDriveSchema),
+  const form = useForm<z.infer<typeof testDriveSchema>>({
+    resolver: zodResolver(testDriveSchema as any),
     defaultValues: {
       customerId: "",
       salespersonId: "",

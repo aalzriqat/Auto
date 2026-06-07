@@ -80,8 +80,8 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
   const [imageIds, setImageIds] = useState<string[]>([]);
   const [imageUrls, setImageUrls] = useState<string[]>([]);
 
-  const form = useForm<VehicleFormValues>({
-    resolver: zodResolver(vehicleSchema),
+  const form = useForm<z.infer<typeof vehicleSchema>>({
+    resolver: zodResolver(vehicleSchema as any),
     defaultValues: {
       vin: "",
       make: "",

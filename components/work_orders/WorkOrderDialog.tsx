@@ -69,7 +69,7 @@ export function WorkOrderDialog({ open, onOpenChange, vehicleId, workOrder }: Wo
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const form = useForm<WorkOrderFormValues>({
-    resolver: zodResolver(workOrderSchema),
+    resolver: zodResolver(workOrderSchema as any),
     defaultValues: {
       title: "",
       status: "OPEN",

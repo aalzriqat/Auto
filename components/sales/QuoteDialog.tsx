@@ -66,8 +66,8 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
   const saveQuote = useMutation(api.quotes.saveQuote);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const form = useForm<QuoteFormValues>({
-    resolver: zodResolver(quoteSchema),
+  const form = useForm<z.infer<typeof quoteSchema>>({
+    resolver: zodResolver(quoteSchema as any),
     defaultValues: {
       vehicleId: defaultVehicleId || "",
       customerId: defaultCustomerId || "",

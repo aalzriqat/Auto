@@ -60,7 +60,7 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const form = useForm<CreateAccountFormValues>({
-    resolver: zodResolver(createAccountSchema),
+    resolver: zodResolver(createAccountSchema as any),
     defaultValues: {
       name: "",
       username: "",

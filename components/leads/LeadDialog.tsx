@@ -66,7 +66,7 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const form = useForm<LeadFormValues>({
-    resolver: zodResolver(leadSchema),
+    resolver: zodResolver(leadSchema as any),
     defaultValues: {
       customerId: "",
       vehicleId: "",

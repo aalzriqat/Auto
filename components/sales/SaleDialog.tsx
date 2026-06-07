@@ -85,8 +85,8 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
   const updateSale = useMutation(api.sales.update);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const form = useForm<SaleFormValues>({
-    resolver: zodResolver(saleSchema),
+  const form = useForm<z.infer<typeof saleSchema>>({
+    resolver: zodResolver(saleSchema as any),
     defaultValues: {
 
       vehicleId: "",
