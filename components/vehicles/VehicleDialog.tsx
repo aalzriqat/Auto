@@ -153,7 +153,11 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
 
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        const postUrl = await generateUploadUrl({ orgId: activeOrgId });
+        const postUrl = await generateUploadUrl({ 
+          orgId: activeOrgId,
+          mimeType: file.type,
+          sizeInBytes: file.size
+        });
         const result = await fetch(postUrl, {
           method: "POST",
           headers: { "Content-Type": file.type },

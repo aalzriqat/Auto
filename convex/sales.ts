@@ -182,6 +182,17 @@ export const create = mutation({
     // Mark the vehicle as SOLD
     await ctx.db.patch(args.vehicleId, { status: "SOLD" as const });
 
+    // Log the transaction in the General Ledger
+    await ctx.db.insert("transactions", {
+      orgId: args.orgId,
+      type: "IN",
+      amount: args.salePrice,
+      date: args.saleDate,
+      category: "VEHICLE_SALE",
+      description: `Sale of vehicle ${vehicle.year} ${vehicle.make} ${vehicle.model} (VIN: ${vehicle.vin})`,
+      vehicleId: args.vehicleId,
+    });
+
     // Close any open leads for this vehicle+customer as WON
     const leads = await ctx.db
       .query("leads")

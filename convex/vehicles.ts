@@ -17,6 +17,8 @@ const vehicleStatus = v.union(
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
+import { paginationOptsValidator } from "convex/server";
+
 /**
  * Lists all vehicles for an organization.
  * Optionally filters by status.
@@ -25,25 +27,23 @@ export const list = query({
   args: {
     orgId: v.id("organizations"),
     status: v.optional(vehicleStatus),
+    paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
     const canViewCostPrice = role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
 
-    let vehicles;
+    let q;
+    
     if (args.status) {
-      vehicles = await ctx.db
-        .query("vehicles")
-        .withIndex("by_org_status", (q) =>
-          q.eq("orgId", args.orgId).eq("status", args.status!)
-        )
-        .collect();
+      q = ctx.db.query("vehicles").withIndex("by_org_status", (q) =>
+        q.eq("orgId", args.orgId).eq("status", args.status!)
+      );
     } else {
-      vehicles = await ctx.db
-        .query("vehicles")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .collect();
+      q = ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", args.orgId));
     }
+
+    const pageResult = await q.order("desc").paginate(args.paginationOpts);
 
     const pendingRequests = await ctx.db
       .query("vehicleStatusRequests")
@@ -55,8 +55,8 @@ export const list = query({
       pendingMap.set(req.vehicleId, req.requestedStatus);
     }
 
-    return Promise.all(
-      vehicles.map(async (vehicle) => {
+    const page = await Promise.all(
+      pageResult.page.map(async (vehicle) => {
         const imageUrls = await Promise.all(
           (vehicle.imageIds ?? []).map((id) => ctx.storage.getUrl(id))
         );
@@ -69,6 +69,8 @@ export const list = query({
         };
       })
     );
+
+    return { ...pageResult, page };
   },
 });
 
@@ -350,9 +352,23 @@ export const remove = mutation({
  * Generates an upload URL for uploading vehicle images.
  */
 export const generateUploadUrl = mutation({
-  args: { orgId: v.id("organizations") },
+  args: { 
+    orgId: v.id("organizations"),
+    mimeType: v.string(),
+    sizeInBytes: v.number(),
+  },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+    
+    // 5MB limit
+    if (args.sizeInBytes > 5 * 1024 * 1024) {
+      throw new ConvexError("File size exceeds 5MB limit.");
+    }
+    
+    if (!args.mimeType.startsWith("image/")) {
+      throw new ConvexError("Only image files are allowed for vehicles.");
+    }
+    
     return await ctx.storage.generateUploadUrl();
   },
 });

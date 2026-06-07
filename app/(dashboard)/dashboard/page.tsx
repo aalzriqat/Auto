@@ -40,14 +40,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-const mockLineData = [
-  { name: 'Aug', value: 300 },
-  { name: 'Sep', value: 450 },
-  { name: 'Oct', value: 350 },
-  { name: 'Nov', value: 650 },
-  { name: 'Dec', value: 850 },
-  { name: '023', value: 1200 },
-];
 
 export default function DashboardPage() {
   const { activeOrgId } = useOrg();
@@ -109,7 +101,7 @@ export default function DashboardPage() {
     avatar: lead.customerName.substring(0, 2).toUpperCase()
   }));
 
-  const lineChartData = stats?.salesTrend?.length ? stats.salesTrend.map(t => ({ name: t.name, value: t.Revenue })) : mockLineData;
+  const lineChartData = stats?.salesTrend?.length ? stats.salesTrend.map(t => ({ name: t.name, value: t.Revenue })) : [];
   const trendRange = (stats?.salesTrend?.length || 0) > 1
     ? `${stats!.salesTrend![0].name} - ${stats!.salesTrend![stats!.salesTrend!.length - 1].name}`
     : timeRange === "DAY" ? "Today" : timeRange === "MONTH" ? "Last 30 Days" : timeRange === "YEAR" ? "Last 12 Months" : "All Time";
@@ -123,13 +115,7 @@ export default function DashboardPage() {
     { name: t("Nurturing" as any) || "Negotiation", value: leads?.filter(l => l.stage === "NEGOTIATION").length || 0, color: "#eab308" },
   ].filter(d => d.value > 0);
 
-  // If no leads, show dummy data to keep the chart looking good
-  const finalDonutData = donutChartData.length > 0 ? donutChartData : [
-    { name: t("New" as any) || "New", value: 400, color: "#10b981" },
-    { name: t("Contacted" as any) || "Contacted", value: 300, color: "#3b82f6" },
-    { name: t("TestDrive" as any) || "Test Drive", value: 200, color: "#f97316" },
-    { name: t("Nurturing" as any) || "Negotiation", value: 100, color: "#eab308" }
-  ];
+  const finalDonutData = donutChartData;
 
   return (
     <motion.div

@@ -6,7 +6,8 @@
     "dev": "convex dev --start \"next dev -H 0.0.0.0\"",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test": "vitest run"
   },
   "dependencies": {
     "@base-ui/react": "^1.5.0",
@@ -53,13 +54,17 @@
   "devDependencies": {
     "@convex-dev/eslint-plugin": "^1.2.2",
     "@tailwindcss/postcss": "^4.2.2",
+    "@testing-library/react": "^16.3.2",
     "@types/node": "^24.12.2",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "convex-test": "^0.0.53",
     "eslint": "^9.39.4",
     "eslint-config-next": "^16.2.4",
+    "jsdom": "^29.1.1",
     "prettier": "^3.8.3",
     "tailwindcss": "^4.2.2",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
   }
 }

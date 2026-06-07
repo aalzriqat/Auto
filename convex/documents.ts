@@ -91,9 +91,24 @@ export const getForApplication = query({
 });
 
 export const generateUploadUrl = mutation({
-  args: { orgId: v.id("organizations") },
+  args: { 
+    orgId: v.id("organizations"),
+    mimeType: v.string(),
+    sizeInBytes: v.number(),
+  },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_SALES]);
+    
+    // 10MB limit for documents
+    if (args.sizeInBytes > 10 * 1024 * 1024) {
+      throw new ConvexError("File size exceeds 10MB limit.");
+    }
+    
+    const validMimeTypes = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
+    if (!validMimeTypes.includes(args.mimeType)) {
+      throw new ConvexError("Invalid file type. Only PDF and images are allowed.");
+    }
+    
     return await ctx.storage.generateUploadUrl();
   },
 });

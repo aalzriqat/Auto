@@ -198,8 +198,15 @@ export default defineSchema({
       v.literal("TRANSPORT"),
       v.literal("MARKETING"),
       v.literal("OFFICE"),
+      v.literal("SALARIES"),
+      v.literal("RENT"),
+      v.literal("UTILITIES"),
+      v.literal("FEES"),
+      v.literal("PREPAID"),
       v.literal("OTHER")
     ),
+    isPrepaid: v.optional(v.boolean()),
+    amortizationMonths: v.optional(v.number()),
     status: v.optional(v.union(v.literal("PENDING"), v.literal("PAID"))),
     vendor: v.optional(v.string()),
     payerId: v.optional(v.id("users")),
@@ -425,4 +432,59 @@ export default defineSchema({
     isActive: v.boolean(),
   })
     .index("by_org", ["orgId"]),
+
+  transactions: defineTable({
+    orgId: v.id("organizations"),
+    type: v.union(v.literal("IN"), v.literal("OUT")),
+    amount: v.number(),
+    date: v.number(), // Timestamp
+    category: v.union(
+      v.literal("VEHICLE_SALE"), v.literal("VEHICLE_PURCHASE"), 
+      v.literal("EXPENSE"), v.literal("DEPOSIT"), 
+      v.literal("PARTNER_DRAW"), v.literal("CAPITAL_INJECTION"),
+      v.literal("CLAIM_PAYMENT"), v.literal("OTHER")
+    ),
+    description: v.string(), // "البيان"
+    // Optional links to operational entities
+    vehicleId: v.optional(v.id("vehicles")),
+    userId: v.optional(v.id("users")), // For partner draws/salaries
+    expenseId: v.optional(v.id("expenses")),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_date", ["orgId", "date"])
+    .index("by_org_vehicle", ["orgId", "vehicleId"]),
+
+  fixedAssets: defineTable({
+    orgId: v.id("organizations"),
+    name: v.string(), // e.g., "أثاث مكتب"
+    purchaseValue: v.number(),
+    purchaseDate: v.number(), // Timestamp
+    notes: v.optional(v.string()),
+  })
+    .index("by_org", ["orgId"]),
+
+  partnerEquity: defineTable({
+    orgId: v.id("organizations"),
+    partnerName: v.string(), // e.g., "علاء جراد"
+    userId: v.optional(v.id("users")),
+    initialCapital: v.number(),
+    currentBalance: v.number(), // Automatically calculated: Capital - Draws + Profit Share
+    notes: v.optional(v.string()),
+  })
+    .index("by_org", ["orgId"]),
+
+  claims: defineTable({
+    orgId: v.id("organizations"),
+    vehicleId: v.optional(v.id("vehicles")),
+    saleId: v.optional(v.id("sales")),
+    financingEntity: v.string(), // "جهة التمويل"
+    buyerName: v.string(), // "اسم المشتري"
+    claimAmount: v.number(), // "المطالبة"
+    status: v.union(v.literal("PENDING"), v.literal("PAID"), v.literal("REJECTED"), v.literal("CANCELLED")),
+    claimDate: v.number(),
+    notes: v.optional(v.string()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_vehicle", ["orgId", "vehicleId"])
+    .index("by_org_status", ["orgId", "status"]),
 });

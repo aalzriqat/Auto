@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { Button } from "@/components/ui/button";
@@ -65,7 +65,11 @@ export default function VehiclesPage() {
   const highlightId = searchParams.get("highlightId");
 
   const { activeOrgId } = useOrg();
-  const vehicles = useQuery(api.vehicles.list, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const { results: vehicles, status: vehiclesStatus, loadMore: loadMoreVehicles } = usePaginatedQuery(
+    api.vehicles.list,
+    activeOrgId ? { orgId: activeOrgId } : "skip",
+    { initialNumItems: 20 }
+  );
   const removeVehicle = useMutation(api.vehicles.remove);
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -334,6 +338,14 @@ export default function VehiclesPage() {
           </TableBody>
         </Table>
       </div>
+
+      {vehiclesStatus === "CanLoadMore" && (
+        <div className="flex justify-center mt-4">
+          <Button variant="outline" onClick={() => loadMoreVehicles(20)}>
+            {t("LoadMore" as any) || "Load More"}
+          </Button>
+        </div>
+      )}
 
       <VehicleDialog
         open={isVehicleDialogOpen}

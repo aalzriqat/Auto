@@ -38,7 +38,11 @@ export function ApplicationDetailsDialog({
   const handleUpload = async (docId: Id<"applicationDocuments">, file: File) => {
     if (!activeOrgId) return;
     try {
-      const postUrl = await generateUploadUrl({ orgId: activeOrgId });
+      const postUrl = await generateUploadUrl({ 
+        orgId: activeOrgId,
+        mimeType: file.type,
+        sizeInBytes: file.size
+      });
       const result = await fetch(postUrl, {
         method: "POST",
         headers: { "Content-Type": file.type },

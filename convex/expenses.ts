@@ -13,6 +13,11 @@ const expenseCategory = v.union(
   v.literal("TRANSPORT"),
   v.literal("MARKETING"),
   v.literal("OFFICE"),
+  v.literal("SALARIES"),
+  v.literal("RENT"),
+  v.literal("UTILITIES"),
+  v.literal("FEES"),
+  v.literal("PREPAID"),
   v.literal("OTHER")
 );
 
@@ -109,6 +114,18 @@ export const create = mutation({
       vendor: args.vendor,
       payerId: args.payerId,
       notes: args.notes,
+    });
+
+    // Log the transaction in the General Ledger
+    await ctx.db.insert("transactions", {
+      orgId: args.orgId,
+      type: "OUT",
+      amount: args.amount,
+      date: args.date,
+      category: "EXPENSE",
+      description: `Expense: ${args.title} (${args.category})`,
+      vehicleId: args.vehicleId,
+      expenseId: id,
     });
 
     const actorName = await getActorName(ctx);

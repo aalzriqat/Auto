@@ -325,3 +325,51 @@ export const getLeadConversionReport = query({
     };
   },
 });
+
+export const getProfitAndLoss = query({
+  args: {
+    orgId: v.id("organizations"),
+    startDate: v.number(),
+    endDate: v.number(),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
+
+    const transactions = await ctx.db
+      .query("transactions")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+
+    const txInDateRange = transactions.filter(
+      (tx) => tx.date >= args.startDate && tx.date <= args.endDate
+    );
+
+    let totalRevenue = 0;
+    let costOfGoodsSold = 0;
+    let operatingExpenses = 0;
+
+    for (const tx of txInDateRange) {
+      if (tx.category === "VEHICLE_SALE" || tx.category === "DEPOSIT" || tx.type === "IN") {
+        if (tx.category !== "CAPITAL_INJECTION" && tx.category !== "PARTNER_DRAW") {
+          totalRevenue += tx.amount;
+        }
+      } else if (tx.category === "VEHICLE_PURCHASE" || (tx.category === "EXPENSE" && tx.vehicleId)) {
+        costOfGoodsSold += tx.amount;
+      } else if (tx.category === "EXPENSE" && !tx.vehicleId) {
+        operatingExpenses += tx.amount;
+      }
+    }
+
+    const grossProfit = totalRevenue - costOfGoodsSold;
+    const netProfit = grossProfit - operatingExpenses;
+
+    return {
+      totalRevenue,
+      costOfGoodsSold,
+      grossProfit,
+      operatingExpenses,
+      netProfit,
+      transactions: txInDateRange.sort((a, b) => b.date - a.date)
+    };
+  },
+});

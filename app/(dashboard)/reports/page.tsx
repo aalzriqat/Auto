@@ -61,6 +61,7 @@ export default function ReportsPage() {
   const expensesReport = useQuery(api.reports.getExpensesReport, activeOrgId ? { orgId: activeOrgId, startDate, endDate } : "skip");
   const performanceReport = useQuery(api.reports.getSalespersonPerformance, activeOrgId ? { orgId: activeOrgId, startDate, endDate } : "skip");
   const leadsReport = useQuery(api.reports.getLeadConversionReport, activeOrgId ? { orgId: activeOrgId, startDate, endDate } : "skip");
+  const plReport = useQuery(api.reports.getProfitAndLoss, activeOrgId ? { orgId: activeOrgId, startDate, endDate } : "skip");
 
   // Print function
   const handlePrint = () => {
@@ -85,6 +86,9 @@ export default function ReportsPage() {
         <TabsList className="no-print">
           <TabsTrigger value="sales" className="gap-2">
             <LineChart className="h-4 w-4" /> {t("SalesProfit" as any) || "Sales & Profit"}
+          </TabsTrigger>
+          <TabsTrigger value="pl" className="gap-2">
+            <BadgeDollarSignIcon className="h-4 w-4" /> Income Statement
           </TabsTrigger>
           <TabsTrigger value="inventory" className="gap-2">
             <Car className="h-4 w-4" /> {t("Inventory" as any) || "Inventory"}
@@ -194,6 +198,95 @@ export default function ReportsPage() {
                   <TableRow>
                     <TableCell colSpan={6} className="text-center py-6 text-muted-foreground">
                       {t("NoSalesFoundPeriod" as any) || "No sales found in this period."}
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </Card>
+        </TabsContent>
+
+        {/* P&L REPORT */}
+        <TabsContent value="pl" className="space-y-4 m-0">
+          <div className="flex items-center justify-between no-print">
+            <div>
+              <h3 className="text-lg font-medium">Income Statement (Profit & Loss)</h3>
+              <p className="text-sm text-muted-foreground">Showing data from {new Date(startDate).toLocaleDateString()} to {new Date(endDate).toLocaleDateString()}</p>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => plReport?.transactions && downloadCSV(plReport.transactions, "pl_report.csv")}>
+                <Download className="h-4 w-4 mr-2" /> Export CSV
+              </Button>
+              <Button onClick={handlePrint}>
+                <Printer className="h-4 w-4 mr-2" /> Print
+              </Button>
+            </div>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-4 mb-4">
+            <Card className="print-shadow-none border print:border-gray-200">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Total Revenue</CardTitle>
+                <LineChart className="h-4 w-4 text-muted-foreground no-print" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-green-600">{plReport?.totalRevenue?.toLocaleString() ?? 0} {t("JOD" as any) || "JOD"}</div>
+              </CardContent>
+            </Card>
+            <Card className="print-shadow-none border print:border-gray-200">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Cost of Goods Sold</CardTitle>
+                <Receipt className="h-4 w-4 text-muted-foreground no-print" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-red-600">{plReport?.costOfGoodsSold?.toLocaleString() ?? 0} {t("JOD" as any) || "JOD"}</div>
+              </CardContent>
+            </Card>
+            <Card className="print-shadow-none border print:border-gray-200">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Operating Expenses</CardTitle>
+                <Receipt className="h-4 w-4 text-muted-foreground no-print" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-red-600">{plReport?.operatingExpenses?.toLocaleString() ?? 0} {t("JOD" as any) || "JOD"}</div>
+              </CardContent>
+            </Card>
+            <Card className="print-shadow-none border print:border-gray-200">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Net Profit</CardTitle>
+                <BadgeDollarSignIcon className="h-4 w-4 text-green-500 no-print" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-green-600">{plReport?.netProfit?.toLocaleString() ?? 0} JOD</div>
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card className="print-shadow-none border print:border-gray-200">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Category</TableHead>
+                  <TableHead>Description</TableHead>
+                  <TableHead className="text-right">Amount</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {plReport?.transactions?.map((tx) => (
+                  <TableRow key={tx._id}>
+                    <TableCell>{new Date(tx.date).toLocaleDateString()}</TableCell>
+                    <TableCell>{tx.category.replace("_", " ")}</TableCell>
+                    <TableCell>{tx.description}</TableCell>
+                    <TableCell className={`text-right ${tx.type === 'IN' ? 'text-green-600' : 'text-red-600'}`}>
+                      {tx.type === "IN" ? "+" : "-"}{tx.amount.toLocaleString()} {t("JOD" as any) || "JOD"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {!plReport?.transactions?.length && (
+                  <TableRow>
+                    <TableCell colSpan={4} className="text-center py-6 text-muted-foreground">
+                      No transactions found in this period.
                     </TableCell>
                   </TableRow>
                 )}

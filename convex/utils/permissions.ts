@@ -78,6 +78,10 @@ export const PERMISSIONS = {
   VIEW_SETTINGS: "view:settings",
   MANAGE_SETTINGS: "manage:settings",
 
+  // Finance / Accounting
+  VIEW_FINANCE: "view:finance",
+  MANAGE_FINANCE: "manage:finance",
+
   // Financial — sensitive field visibility
   VIEW_COST_PRICE: "view:cost_price",
 } as const;
@@ -144,6 +148,7 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.VIEW_VEHICLE_LEADS,
       PERMISSIONS.VIEW_VEHICLE_TEST_DRIVES,
       PERMISSIONS.VIEW_VEHICLE_VALUATIONS,
+      PERMISSIONS.CREATE_VEHICLES_REQUEST, // Can request creation
       PERMISSIONS.EDIT_VEHICLES_REQUEST, // Can only request edits
       PERMISSIONS.VIEW_CUSTOMERS,
       PERMISSIONS.CREATE_CUSTOMERS,
@@ -186,6 +191,8 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.VIEW_SALES,
       PERMISSIONS.VIEW_EXPENSES,
       PERMISSIONS.VIEW_REPORTS,
+      PERMISSIONS.VIEW_FINANCE,
+      PERMISSIONS.MANAGE_FINANCE,
     ],
   },
 ];
