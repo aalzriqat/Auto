@@ -88,7 +88,7 @@ export function VehicleDetailsDialog({
               >
                 {t("LeadsSales" as any) || "Leads & Sales"}
                 {relations && (relations.leads.length > 0 || relations.sales.length > 0) && (
-                  <Badge variant="secondary" className="ml-2 text-xs px-1.5 py-0.5">{relations.leads.length + relations.sales.length}</Badge>
+                  <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.leads.length + relations.sales.length}</Badge>
                 )}
               </TabsTrigger>
               <TabsTrigger 
@@ -97,7 +97,7 @@ export function VehicleDetailsDialog({
               >
                 {t("Expenses" as any) || "Expenses"}
                 {relations?.expenses && relations.expenses.length > 0 && (
-                  <Badge variant="secondary" className="ml-2 text-xs px-1.5 py-0.5">{relations.expenses.length}</Badge>
+                  <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.expenses.length}</Badge>
                 )}
               </TabsTrigger>
               <TabsTrigger 
@@ -106,7 +106,7 @@ export function VehicleDetailsDialog({
               >
                 {t("Tasks" as any) || "Tasks"}
                 {relations?.tasks && relations.tasks.length > 0 && (
-                  <Badge variant="secondary" className="ml-2 text-xs px-1.5 py-0.5">{relations.tasks.length}</Badge>
+                  <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.tasks.length}</Badge>
                 )}
               </TabsTrigger>
               <TabsTrigger 
@@ -115,7 +115,7 @@ export function VehicleDetailsDialog({
               >
                 {t("TestDrives" as any) || "Test Drives"}
                 {relations?.testDrives && relations.testDrives.length > 0 && (
-                  <Badge variant="secondary" className="ml-2 text-xs px-1.5 py-0.5">{relations.testDrives.length}</Badge>
+                  <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.testDrives.length}</Badge>
                 )}
               </TabsTrigger>
               <TabsTrigger 
@@ -124,7 +124,7 @@ export function VehicleDetailsDialog({
               >
                 {t("WorkOrders" as any) || "Work Orders"}
                 {relations?.workOrders && relations.workOrders.length > 0 && (
-                  <Badge variant="secondary" className="ml-2 text-xs px-1.5 py-0.5">{relations.workOrders.length}</Badge>
+                  <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.workOrders.length}</Badge>
                 )}
               </TabsTrigger>
               <TabsTrigger 
@@ -241,7 +241,7 @@ export function VehicleDetailsDialog({
                         </div>
                         <div className="mt-3 flex justify-end border-t border-border/50 pt-2">
                           <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => window.open(`/sales/${sale._id}/print`, '_blank')}>
-                            <Printer className="h-3 w-3 mr-1" /> {t("PrintBillOfSale" as any) || "Print Bill of Sale"}
+                            <Printer className="h-3 w-3 me-1" /> {t("PrintBillOfSale" as any) || "Print Bill of Sale"}
                           </Button>
                         </div>
                       </div>
