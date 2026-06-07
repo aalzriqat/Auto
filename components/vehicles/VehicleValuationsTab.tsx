@@ -1,112 +1,117 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { format } from "date-fns";
 import { toast } from "sonner";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Building2, Save } from "lucide-react";
 
-export function VehicleValuationsTab({ vehicleId }: { vehicleId: Id<"vehicles"> }) {
+interface VehicleValuationsTabProps {
+  vehicleId: Id<"vehicles">;
+}
+
+export function VehicleValuationsTab({ vehicleId }: VehicleValuationsTabProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
 
+  const financeCompanies = useQuery(api.finance.listCompanies, activeOrgId ? { orgId: activeOrgId } : "skip");
   const valuations = useQuery(api.finance.listValuations, activeOrgId ? { orgId: activeOrgId, vehicleId } : "skip");
-  const companies = useQuery(api.finance.listCompanies, activeOrgId ? { orgId: activeOrgId } : "skip");
   const saveValuation = useMutation(api.finance.saveValuation);
 
-  const [companyId, setCompanyId] = useState<string>("");
-  const [valuationAmount, setValuationAmount] = useState<number>(0);
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [localValuations, setLocalValuations] = useState<Record<string, string>>({});
+  const [isSaving, setIsSaving] = useState(false);
 
-  const handleSave = async () => {
-    if (!activeOrgId || !companyId || valuationAmount <= 0) {
-      toast.error("Please select a company and enter a valid amount.");
-      return;
+  useEffect(() => {
+    if (valuations) {
+      const initial: Record<string, string> = {};
+      valuations.forEach(v => {
+        initial[v.companyId] = v.valuationAmount.toString();
+      });
+      setLocalValuations(initial);
     }
+  }, [valuations]);
 
-    setIsSubmitting(true);
+  const handleSave = async (companyId: Id<"financeCompanies">, amountStr: string) => {
+    if (!activeOrgId) return;
+    setIsSaving(true);
     try {
+      const amount = parseFloat(amountStr) || 0;
       await saveValuation({
         orgId: activeOrgId,
         vehicleId,
-        companyId: companyId as Id<"financeCompanies">,
-        valuationAmount,
+        companyId,
+        valuationAmount: amount,
       });
-      toast.success("Valuation saved successfully");
-      setCompanyId("");
-      setValuationAmount(0);
-    } catch (error: any) {
-      toast.error(error.message || "An error occurred");
+      toast.success(t("SavedSuccessfully" as any) || "Saved successfully");
+    } catch (error) {
+      toast.error(t("FailedToSave" as any) || "Failed to save");
     } finally {
-      setIsSubmitting(false);
+      setIsSaving(false);
     }
   };
 
-  if (!valuations || !companies) {
-    return <div className="text-sm text-muted-foreground">Loading...</div>;
-  }
+  if (!financeCompanies) return <div className="p-4">{t("Loading" as any) || "Loading..."}</div>;
+
+  const activeCompanies = financeCompanies.filter(c => c.isActive);
 
   return (
-    <div className="space-y-6">
-      <div className="bg-muted/30 p-4 rounded-lg border space-y-4">
-        <h3 className="font-semibold text-sm">{t("AddNewValuation" as any) || "Add New Valuation"}</h3>
-        <div className="grid grid-cols-2 gap-4">
-          <div className="space-y-2">
-            <Label>{t("Select Company" as any)}</Label>
-            <Select value={companyId} onValueChange={setCompanyId}>
-              <SelectTrigger>
-                <SelectValue placeholder={t("SelectBank" as any) || "Select a bank..."} />
-              </SelectTrigger>
-              <SelectContent>
-                {companies.map((c) => (
-                  <SelectItem key={c._id} value={c._id}>
-                    {c.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-2">
-            <Label>{t("Valuation Amount" as any)}</Label>
-            <Input
-              type="number"
-              placeholder="0.00"
-              value={valuationAmount || ""}
-              onChange={(e) => setValuationAmount(parseFloat(e.target.value) || 0)}
-            />
-          </div>
-        </div>
-        <Button onClick={handleSave} disabled={isSubmitting}>
-          {isSubmitting ? (t("Saving" as any) || "Saving...") : (t("SaveValuation" as any) || "Save Valuation")}
-        </Button>
+    <div className="space-y-4 pt-4">
+      <div className="flex flex-col space-y-1 mb-4">
+        <h3 className="text-lg font-medium">{t("BankValuations" as any) || "Bank Valuations"}</h3>
+        <p className="text-sm text-muted-foreground">
+          {t("BankValuationsDesc" as any) || "Enter the official valuation for this vehicle from each finance company. This determines maximum financing limits."}
+        </p>
       </div>
 
-      <div>
-        <h3 className="font-semibold text-sm mb-3">{t("ExistingValuations" as any) || "Existing Valuations"}</h3>
-        {valuations.length === 0 ? (
-          <p className="text-sm text-muted-foreground italic">{t("NoValuationsRecorded" as any) || "No valuations recorded yet."}</p>
-        ) : (
-          <div className="space-y-3">
-            {valuations.map((val) => {
-              const comp = companies.find((c) => c._id === val.companyId);
-              return (
-                <div key={val._id} className="flex justify-between items-center p-3 border rounded-lg">
-                  <div>
-                    <p className="font-medium">{comp?.name || t("UnknownCompany" as any) || "Unknown Company"}</p>
-                    {val.expiresAt && <p className="text-xs text-muted-foreground">{t("Expires" as any) || "Expires:"} {format(val.expiresAt, "PP")}</p>}
-                  </div>
-                  <p className="font-bold text-primary">{val.valuationAmount.toLocaleString()} JOD</p>
+      <div className="grid gap-4 sm:grid-cols-2">
+        {activeCompanies.map((company) => {
+          const val = localValuations[company._id] || "";
+          const originalVal = valuations?.find(v => v.companyId === company._id)?.valuationAmount?.toString() || "";
+          const isChanged = val !== originalVal;
+
+          return (
+            <Card key={company._id}>
+              <CardContent className="p-4 flex flex-col space-y-3">
+                <div className="flex items-center space-x-2">
+                  <Building2 className="w-4 h-4 text-primary" />
+                  <span className="font-semibold">{company.name}</span>
                 </div>
-              );
-            })}
-          </div>
-        )}
+                <div className="flex items-center space-x-2">
+                  <div className="relative flex-1">
+                    <span className="absolute left-3 top-2.5 text-muted-foreground text-sm">JOD</span>
+                    <Input 
+                      type="number"
+                      className="pl-10"
+                      placeholder="0.00"
+                      value={val}
+                      onChange={(e) => setLocalValuations(prev => ({...prev, [company._id]: e.target.value}))}
+                    />
+                  </div>
+                  {isChanged && (
+                    <Button 
+                      size="sm" 
+                      onClick={() => handleSave(company._id, val)}
+                      disabled={isSaving}
+                    >
+                      <Save className="w-4 h-4 ltr:mr-1 rtl:ml-1" />
+                      {t("Save" as any) || "Save"}
+                    </Button>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
       </div>
+      {activeCompanies.length === 0 && (
+        <div className="text-center p-8 text-muted-foreground border rounded-lg bg-muted/20">
+          {t("NoActiveFinanceCompanies" as any) || "No active finance companies found."}
+        </div>
+      )}
     </div>
   );
 }
