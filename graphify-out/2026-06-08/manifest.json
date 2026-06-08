@@ -85,14 +85,14 @@
     "semantic_hash": "46c2c30a33263553964db28a2763c6ec"
   },
   "E:\\Auto\\Auto\\next.config.ts": {
-    "mtime": 1780799947.260741,
-    "ast_hash": "e5e4977a1e6e6ffe1aa4aaa2b75066af",
-    "semantic_hash": "e5e4977a1e6e6ffe1aa4aaa2b75066af"
+    "mtime": 1780897820.9961762,
+    "ast_hash": "c1d24166387a6edb55ea342f94a8f7df",
+    "semantic_hash": "c1d24166387a6edb55ea342f94a8f7df"
   },
   "E:\\Auto\\Auto\\package.json": {
-    "mtime": 1780872817.7594776,
-    "ast_hash": "74d217df5d579e4a5c1f2850f62f7c6e",
-    "semantic_hash": "74d217df5d579e4a5c1f2850f62f7c6e"
+    "mtime": 1780897788.0018625,
+    "ast_hash": "6667e12ae2c7cdb691d7cf2259527055",
+    "semantic_hash": "6667e12ae2c7cdb691d7cf2259527055"
   },
   "E:\\Auto\\Auto\\postcss.config.mjs": {
     "mtime": 1780754849.5838437,
@@ -1030,9 +1030,9 @@
     "semantic_hash": "f9bf542fe09b15239e18dc7be3c5f81b"
   },
   "E:\\Auto\\Auto\\app\\error.tsx": {
-    "mtime": 1780819301.4332478,
-    "ast_hash": "2266da262aaa1f2fa931f1701ad8c3f1",
-    "semantic_hash": "2266da262aaa1f2fa931f1701ad8c3f1"
+    "mtime": 1780897832.8338156,
+    "ast_hash": "e6640b1e79425906dadb9481983af399",
+    "semantic_hash": "e6640b1e79425906dadb9481983af399"
   },
   "E:\\Auto\\Auto\\components\\layout\\Sidebar.tsx": {
     "mtime": 1780872669.6293337,
@@ -1055,9 +1055,9 @@
     "semantic_hash": "df71ebb47ce065856be5bc01243cf357"
   },
   "E:\\Auto\\Auto\\app\\(dashboard)\\error.tsx": {
-    "mtime": 1780872654.2343092,
-    "ast_hash": "cb0c7042dd55b71d3d5b74ea09312632",
-    "semantic_hash": "cb0c7042dd55b71d3d5b74ea09312632"
+    "mtime": 1780897845.3135185,
+    "ast_hash": "6ca924e1ac3dda59083903e9caf29068",
+    "semantic_hash": "6ca924e1ac3dda59083903e9caf29068"
   },
   "E:\\Auto\\Auto\\components\\accounting\\AccountingClient.tsx": {
     "mtime": 1780872668.1721194,
@@ -1178,5 +1178,30 @@
     "mtime": 1780873200.9401498,
     "ast_hash": "7448017b08adb94c16be3b0f8c9e9f48",
     "semantic_hash": "7448017b08adb94c16be3b0f8c9e9f48"
+  },
+  "E:\\Auto\\Auto\\instrumentation.ts": {
+    "mtime": 1780897853.9300911,
+    "ast_hash": "315e840ec6dc33cfc72bc61b0822ae61",
+    "semantic_hash": "315e840ec6dc33cfc72bc61b0822ae61"
+  },
+  "E:\\Auto\\Auto\\lib\\env.ts": {
+    "mtime": 1780897748.53625,
+    "ast_hash": "c1c14bfb009e819fec7f3cab0d859e3d",
+    "semantic_hash": "c1c14bfb009e819fec7f3cab0d859e3d"
+  },
+  "E:\\Auto\\Auto\\sentry.client.config.ts": {
+    "mtime": 1780897789.81804,
+    "ast_hash": "0abb1d7654f24e962520d50d4dc3e295",
+    "semantic_hash": "0abb1d7654f24e962520d50d4dc3e295"
+  },
+  "E:\\Auto\\Auto\\sentry.edge.config.ts": {
+    "mtime": 1780897805.0089896,
+    "ast_hash": "0abb1d7654f24e962520d50d4dc3e295",
+    "semantic_hash": "0abb1d7654f24e962520d50d4dc3e295"
+  },
+  "E:\\Auto\\Auto\\sentry.server.config.ts": {
+    "mtime": 1780897797.9309368,
+    "ast_hash": "0abb1d7654f24e962520d50d4dc3e295",
+    "semantic_hash": "0abb1d7654f24e962520d50d4dc3e295"
   }
 }

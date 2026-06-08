@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { AlertCircle, RefreshCcw, Home } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
+import * as Sentry from "@sentry/nextjs";
 
 export default function ErrorBoundary({
   error,
@@ -16,6 +17,7 @@ export default function ErrorBoundary({
   useEffect(() => {
     // Log the error to an error reporting service
     console.error("Unhandled Application Error:", error);
+    Sentry.captureException(error);
   }, [error]);
 
   return (

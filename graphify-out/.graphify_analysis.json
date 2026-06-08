@@ -9,16 +9,13 @@
       "app_error_errorboundary",
       "applications_applicationdetailsdialog",
       "applications_client",
-      "applications_client_applicationclient",
       "auth_roleguard",
       "branches_client",
-      "branches_client_branchesclient",
-      "convex_crons",
-      "convex_crons_crons",
-      "convex_crons_triggeralarms",
-      "convex_notifications_list",
-      "convex_notifications_markallasread",
-      "convex_notifications_markasread",
+      "convex_fixedassets",
+      "convex_fixedassets_add",
+      "convex_fixedassets_list",
+      "convex_fixedassets_remove",
+      "convex_fixedassets_update",
       "customers_customerdetailsdialog",
       "customers_customerdialog",
       "customers_customerdialog_customerformvalues",
@@ -29,10 +26,6 @@
       "customers_page_customerspage",
       "dashboard_error",
       "dashboard_error_dashboarderrorboundary",
-      "dashboard_layout",
-      "dashboard_layout_dashboardlayout",
-      "dashboard_layout_dashboardwrapper",
-      "dashboard_layout_onboarding",
       "dashboard_page",
       "dashboard_page_dashboardpage",
       "dashboard_page_mocklinedata",
@@ -48,12 +41,10 @@
       "generated_api_api",
       "hooks_use_permissions",
       "layout_languageswitcher",
+      "layout_orgswitcher",
       "layout_sidebar",
       "layout_sidebar_navigation",
       "layout_sidebar_sidebar",
-      "layout_topnav",
-      "layout_topnav_navigation",
-      "layout_topnav_topnav",
       "leads_leaddialog",
       "leads_leaddialog_leaddialogprops",
       "leads_leaddialog_leadformvalues",
@@ -88,8 +79,6 @@
       "sales_saledialog_saleschema",
       "settings_documentruledialog",
       "settings_financecompanydialog",
-      "settings_layout",
-      "settings_layout_settingslayout",
       "tasks_page",
       "tasks_page_taskspage",
       "tasks_taskdialog",
@@ -173,9 +162,9 @@
       "ui_tabs_tabscontent",
       "ui_tabs_tabslist",
       "ui_tabs_tabstrigger",
+      "ui_textarea_textarea",
       "utils_export",
       "utils_export_downloadcsv",
-      "utils_notifications",
       "vehicles_page",
       "vehicles_page_statusbadge",
       "vehicles_page_vehiclespage",
@@ -195,144 +184,6 @@
       "work_orders_workorderdialog_workorderschema"
     ],
     "1": [
-      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_1_push_filters_to_storage",
-      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_2_minimize_data_sources",
-      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_3_minimize_row_size",
-      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_4_isolate_frequently_updated_fields",
-      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_5_match_consistency_to_read_patterns",
-      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_aggregates",
-      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_backfills",
-      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_check_for_redundant_indexes",
-      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_consistency_rule",
-      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_contents",
-      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_convex_specific_notes",
-      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_core_principle",
-      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_fallback_rule",
-      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_high_read_high_write",
-      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_high_read_low_write",
-      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_migration_rule_for_indexes",
-      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_no_denormalized_copy_yet",
-      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_point_in_time_reads",
-      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_reactive_queries",
-      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_triggers_and_fan_out",
-      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_verification",
-      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_when_to_denormalize",
-      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_1_push_filters_to_storage",
-      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_2_minimize_data_sources",
-      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_3_minimize_row_size",
-      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_4_isolate_frequently_updated_fields",
-      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_5_match_consistency_to_read_patterns",
-      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_aggregates",
-      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_backfills",
-      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_check_for_redundant_indexes",
-      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_consistency_rule",
-      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_contents",
-      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_convex_specific_notes",
-      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_core_principle",
-      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_fallback_rule",
-      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_high_read_high_write",
-      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_high_read_low_write",
-      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_migration_rule_for_indexes",
-      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_no_denormalized_copy_yet",
-      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_point_in_time_reads",
-      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_reactive_queries",
-      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_triggers_and_fan_out",
-      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_verification",
-      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_when_to_denormalize",
-      "convex_performance_audit_hot_path_rules"
-    ],
-    "2": [
-      "agents_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns",
-      "agents_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns_adding_a_required_field",
-      "agents_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns_changing_a_field_type",
-      "agents_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns_cleaning_up_orphaned_documents",
-      "agents_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns_deleting_a_field",
-      "agents_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns_dual_read",
-      "agents_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns_dual_write_preferred",
-      "agents_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns_small_table_shortcut",
-      "agents_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns_splitting_nested_data_into_a_separate_table",
-      "agents_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns_verifying_a_migration",
-      "agents_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns_zero_downtime_strategies",
-      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_cancel_a_running_migration",
-      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_check_migration_status",
-      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_configuration_options",
-      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_custom_batch_size",
-      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_define_a_migration",
-      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_dry_run",
-      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_installation",
-      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_migrate_a_subset_using_an_index",
-      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_parallelize_within_a_batch",
-      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_restart_a_migration",
-      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_run_a_migration",
-      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_run_migrations_on_deploy",
-      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_run_multiple_migrations_in_order",
-      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_setup",
-      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_cancel_a_running_migration",
-      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_check_migration_status",
-      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_configuration_options",
-      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_custom_batch_size",
-      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_define_a_migration",
-      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_dry_run",
-      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_installation",
-      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_migrate_a_subset_using_an_index",
-      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_parallelize_within_a_batch",
-      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_restart_a_migration",
-      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_run_a_migration",
-      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_run_migrations_on_deploy",
-      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_run_multiple_migrations_in_order",
-      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_setup",
-      "convex_migration_helper_migration_patterns",
-      "convex_migration_helper_migrations_component",
-      "convex_migration_helper_skill",
-      "convex_migrations_pkg",
-      "migrations_component_md"
-    ],
-    "3": [
-      "advanced_patterns_md",
-      "agents_skills_convex_create_component_references_advanced_patterns_md_references_advanced_patterns_class_based_client_wrappers",
-      "agents_skills_convex_create_component_references_advanced_patterns_md_references_advanced_patterns_deriving_validators_from_schema",
-      "agents_skills_convex_create_component_references_advanced_patterns_md_references_advanced_patterns_function_handles_for_callbacks",
-      "agents_skills_convex_create_component_references_advanced_patterns_md_references_advanced_patterns_static_configuration_with_a_globals_table",
-      "agents_skills_convex_create_component_references_hybrid_components_md_references_hybrid_components",
-      "agents_skills_convex_create_component_references_hybrid_components_md_references_hybrid_components_checklist",
-      "agents_skills_convex_create_component_references_hybrid_components_md_references_hybrid_components_default_advice",
-      "agents_skills_convex_create_component_references_hybrid_components_md_references_hybrid_components_risks",
-      "agents_skills_convex_create_component_references_hybrid_components_md_references_hybrid_components_what_this_means",
-      "agents_skills_convex_create_component_references_local_components_md_references_local_components",
-      "agents_skills_convex_create_component_references_local_components_md_references_local_components_checklist",
-      "agents_skills_convex_create_component_references_local_components_md_references_local_components_default_layout",
-      "agents_skills_convex_create_component_references_local_components_md_references_local_components_when_to_choose_this",
-      "agents_skills_convex_create_component_references_local_components_md_references_local_components_workflow_notes",
-      "agents_skills_convex_create_component_references_packaged_components_md_references_packaged_components",
-      "agents_skills_convex_create_component_references_packaged_components_md_references_packaged_components_build_flow",
-      "agents_skills_convex_create_component_references_packaged_components_md_references_packaged_components_checklist",
-      "agents_skills_convex_create_component_references_packaged_components_md_references_packaged_components_default_approach",
-      "agents_skills_convex_create_component_references_packaged_components_md_references_packaged_components_package_exports",
-      "agents_skills_convex_create_component_references_packaged_components_md_references_packaged_components_testing",
-      "agents_skills_convex_create_component_references_packaged_components_md_references_packaged_components_when_to_choose_this",
-      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_advanced_patterns",
-      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_authentication_and_environment_access",
-      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_client_facing_api",
-      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_ids_across_the_boundary",
-      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_patterns",
-      "claude_skills_convex_create_component_references_advanced_patterns_md_references_advanced_patterns_class_based_client_wrappers",
-      "claude_skills_convex_create_component_references_advanced_patterns_md_references_advanced_patterns_deriving_validators_from_schema",
-      "claude_skills_convex_create_component_references_advanced_patterns_md_references_advanced_patterns_function_handles_for_callbacks",
-      "claude_skills_convex_create_component_references_advanced_patterns_md_references_advanced_patterns_static_configuration_with_a_globals_table",
-      "convex_create_component_advanced_patterns",
-      "convex_create_component_hybrid_components",
-      "convex_create_component_local_components",
-      "convex_create_component_packaged_components",
-      "convex_create_component_skill",
-      "convex_quickstart_skill",
-      "convex_setup_auth_auth0",
-      "convex_setup_auth_clerk",
-      "convex_setup_auth_convex_auth",
-      "convex_setup_auth_skill",
-      "convex_setup_auth_workos_authkit",
-      "convex_skill"
-    ],
-    "4": [
       "package_dependencies",
       "package_dependencies_base_ui_react",
       "package_dependencies_class_variance_authority",
@@ -369,6 +220,7 @@
       "package_dependencies_react_hook_form",
       "package_dependencies_recharts",
       "package_dependencies_resend",
+      "package_dependencies_sentry_nextjs",
       "package_dependencies_shadcn",
       "package_dependencies_sonner",
       "package_dependencies_svix",
@@ -376,42 +228,137 @@
       "package_dependencies_tailwindcss_animate",
       "package_dependencies_zod"
     ],
+    "2": [
+      "convex_applications",
+      "convex_applications_createfromquote",
+      "convex_applications_finalizedeal",
+      "convex_applications_get",
+      "convex_applications_list",
+      "convex_applications_updatestatus",
+      "convex_crons",
+      "convex_crons_crons",
+      "convex_crons_triggeralarms",
+      "convex_expenses",
+      "convex_expenses_create",
+      "convex_expenses_expensecategory",
+      "convex_expenses_list",
+      "convex_expenses_remove",
+      "convex_expenses_update",
+      "convex_guarantors",
+      "convex_guarantors_add",
+      "convex_guarantors_listbycustomer",
+      "convex_guarantors_remove",
+      "convex_guarantors_update",
+      "convex_notifications_list",
+      "convex_notifications_markallasread",
+      "convex_notifications_markasread",
+      "convex_vehicleedits",
+      "convex_vehicleedits_gethistory",
+      "convex_vehicleedits_listpending",
+      "convex_vehicleedits_requestcreate",
+      "convex_vehicleedits_requestupdate",
+      "convex_vehicleedits_resolve",
+      "generated_server_mutation",
+      "utils_notifications",
+      "utils_notifications_getactorname",
+      "utils_notifications_notifymanagers",
+      "utils_notifications_notifyuser"
+    ],
+    "3": [
+      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_cancel_a_running_migration",
+      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_check_migration_status",
+      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_configuration_options",
+      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_custom_batch_size",
+      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_define_a_migration",
+      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_dry_run",
+      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_installation",
+      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_migrate_a_subset_using_an_index",
+      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_parallelize_within_a_batch",
+      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_restart_a_migration",
+      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_run_a_migration",
+      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_run_migrations_on_deploy",
+      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_run_multiple_migrations_in_order",
+      "agents_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_setup",
+      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_cancel_a_running_migration",
+      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_check_migration_status",
+      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_configuration_options",
+      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_custom_batch_size",
+      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_define_a_migration",
+      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_dry_run",
+      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_installation",
+      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_migrate_a_subset_using_an_index",
+      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_parallelize_within_a_batch",
+      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_restart_a_migration",
+      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_run_a_migration",
+      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_run_migrations_on_deploy",
+      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_run_multiple_migrations_in_order",
+      "claude_skills_convex_migration_helper_references_migrations_component_md_references_migrations_component_setup",
+      "convex_migrations_pkg",
+      "migrations_component_md"
+    ],
+    "4": [
+      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill",
+      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_adding_index",
+      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_adding_new_table",
+      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_adding_optional_field",
+      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_breaking_changes_the_deployment_workflow",
+      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_common_migration_patterns",
+      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_common_pitfalls",
+      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_migration_checklist",
+      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_safe_changes_no_migration_needed",
+      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_using_the_migrations_component",
+      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_when_not_to_use",
+      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_when_to_use",
+      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill",
+      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_adding_index",
+      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_adding_new_table",
+      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_adding_optional_field",
+      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_breaking_changes_the_deployment_workflow",
+      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_common_migration_patterns",
+      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_common_pitfalls",
+      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_don_t_delete_data",
+      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_key_concepts",
+      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_migration_checklist",
+      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_online_migrations",
+      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_prefer_new_fields_over_changing_types",
+      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_safe_changes_no_migration_needed",
+      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_schema_validation_drives_the_workflow",
+      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_using_the_migrations_component",
+      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_when_not_to_use",
+      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_when_to_use",
+      "convex_migration_helper_icon"
+    ],
     "5": [
-      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_1_bound_your_reads",
-      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_2_read_smaller_shapes",
-      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_3_break_large_mutations_into_batches",
-      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_4_move_heavy_work_to_actions",
-      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_5_trim_return_values",
-      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_6_replace_ctx_runquery_and_ctx_runmutation_with_helper_functions",
-      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_7_avoid_unnecessary_runaction_calls",
-      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_common_causes",
-      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_core_principle",
-      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_fix_order",
-      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_large_document_reads_on_hot_paths",
-      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_limits_to_know",
-      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_mutation_doing_too_much_work",
-      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_returning_too_much_data_to_the_client",
-      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_symptoms",
-      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_unbounded_collection",
-      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_verification",
-      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_1_bound_your_reads",
-      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_2_read_smaller_shapes",
-      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_3_break_large_mutations_into_batches",
-      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_4_move_heavy_work_to_actions",
-      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_5_trim_return_values",
-      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_6_replace_ctx_runquery_and_ctx_runmutation_with_helper_functions",
-      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_7_avoid_unnecessary_runaction_calls",
-      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_common_causes",
-      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_core_principle",
-      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_fix_order",
-      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_large_document_reads_on_hot_paths",
-      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_limits_to_know",
-      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_mutation_doing_too_much_work",
-      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_returning_too_much_data_to_the_client",
-      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_symptoms",
-      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_unbounded_collection",
-      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_verification",
-      "function_budget_md"
+      "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill",
+      "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_agent_mode",
+      "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_checklist",
+      "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_development_vs_production",
+      "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_next_steps",
+      "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_verify_the_setup",
+      "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_when_not_to_use",
+      "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_when_to_use",
+      "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_workflow",
+      "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_writing_your_first_function",
+      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill",
+      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_agent_mode",
+      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_checklist",
+      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_development_vs_production",
+      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_next_steps",
+      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_verify_the_setup",
+      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_when_not_to_use",
+      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_when_to_use",
+      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_workflow",
+      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_writing_your_first_function",
+      "convex_quickstart_icon",
+      "convex_setup_auth_icon",
+      "skills_lock",
+      "skills_lock_convex_computedhash",
+      "skills_lock_convex_skillpath",
+      "skills_lock_convex_source",
+      "skills_lock_convex_sourcetype",
+      "skills_lock_skills",
+      "skills_lock_skills_convex",
+      "skills_lock_version"
     ],
     "6": [
       "domains_common",
@@ -445,90 +392,6 @@
       "i18n_dictionaries_locale"
     ],
     "7": [
-      "convex_applications",
-      "convex_applications_createfromquote",
-      "convex_applications_finalizedeal",
-      "convex_applications_get",
-      "convex_applications_list",
-      "convex_applications_updatestatus",
-      "convex_expenses",
-      "convex_expenses_create",
-      "convex_expenses_expensecategory",
-      "convex_expenses_list",
-      "convex_expenses_remove",
-      "convex_expenses_update",
-      "convex_guarantors",
-      "convex_guarantors_add",
-      "convex_guarantors_listbycustomer",
-      "convex_guarantors_remove",
-      "convex_guarantors_update",
-      "convex_leads",
-      "convex_leads_create",
-      "convex_leads_get",
-      "convex_leads_leadstage",
-      "convex_leads_list",
-      "convex_leads_remove",
-      "convex_leads_softdelete",
-      "convex_leads_update",
-      "utils_notifications_getactorname",
-      "utils_notifications_notifymanagers",
-      "utils_notifications_notifyuser"
-    ],
-    "8": [
-      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill",
-      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_agent_mode",
-      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_checklist",
-      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_convex_quickstart",
-      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_development_vs_production",
-      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_environment_variables",
-      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_install",
-      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_next_js_app_router",
-      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_next_steps",
-      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_other_frameworks",
-      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_path_1_new_project_recommended",
-      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_path_2_add_convex_to_an_existing_app",
-      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_pick_a_template",
-      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_provision_and_push",
-      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_provision_the_deployment_and_push_code",
-      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_react_vite",
-      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_scaffold_the_project",
-      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_start_the_dev_loop",
-      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_verify_the_setup",
-      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_what_you_get",
-      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_when_not_to_use",
-      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_when_to_use",
-      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_wire_up_the_provider",
-      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_workflow",
-      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_writing_your_first_function"
-    ],
-    "9": [
-      "convex_customers",
-      "convex_customers_create",
-      "convex_customers_get",
-      "convex_customers_getbyemail",
-      "convex_customers_getrelations",
-      "convex_customers_list",
-      "convex_customers_remove",
-      "convex_customers_softdelete",
-      "convex_customers_update",
-      "convex_documents",
-      "convex_documents_addrule",
-      "convex_documents_generateuploadurl",
-      "convex_documents_getforapplication",
-      "convex_documents_listrules",
-      "convex_documents_removerule",
-      "convex_documents_savedocumentfile",
-      "convex_documents_updatedocumentstatus",
-      "convex_email",
-      "convex_email_sendtaskalarm",
-      "convex_email_sendteaminvite",
-      "convex_ratelimit",
-      "convex_ratelimit_ratelimiter",
-      "generated_api_components",
-      "generated_api_d",
-      "generated_server_internalaction"
-    ],
-    "10": [
       "hooks_use_mobile",
       "hooks_use_mobile_useismobile",
       "ui_sidebar",
@@ -542,20 +405,149 @@
       "ui_sidebar_sidebargrouplabel",
       "ui_sidebar_sidebarheader",
       "ui_sidebar_sidebarinput",
-      "ui_sidebar_sidebarinset",
+      "ui_sidebar_sidebarmenu",
       "ui_sidebar_sidebarmenuaction",
       "ui_sidebar_sidebarmenubadge",
+      "ui_sidebar_sidebarmenubutton",
       "ui_sidebar_sidebarmenubuttonvariants",
+      "ui_sidebar_sidebarmenuitem",
       "ui_sidebar_sidebarmenuskeleton",
       "ui_sidebar_sidebarmenusub",
       "ui_sidebar_sidebarmenusubbutton",
       "ui_sidebar_sidebarmenusubitem",
-      "ui_sidebar_sidebarprovider",
       "ui_sidebar_sidebarrail",
       "ui_sidebar_sidebarseparator",
-      "ui_sidebar_sidebartrigger"
+      "ui_sidebar_usesidebar"
+    ],
+    "8": [
+      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill",
+      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_1_scope_the_problem",
+      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_2_trace_the_full_read_and_write_set",
+      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_3_apply_fixes_from_the_relevant_reference",
+      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_4_fix_sibling_functions_together",
+      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_5_verify_before_finishing",
+      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_checklist",
+      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_escalate_larger_fixes",
+      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_first_step_gather_signals",
+      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_guardrails",
+      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_reference_files",
+      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_signal_routing",
+      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_when_not_to_use",
+      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_when_to_use",
+      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_workflow",
+      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill",
+      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_checklist",
+      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_escalate_larger_fixes",
+      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_first_step_gather_signals",
+      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_guardrails",
+      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_reference_files",
+      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_signal_routing",
+      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_when_not_to_use",
+      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_when_to_use",
+      "convex_performance_audit_icon"
+    ],
+    "9": [
+      "convex_customers",
+      "convex_customers_create",
+      "convex_customers_get",
+      "convex_customers_getbyemail",
+      "convex_customers_getrelations",
+      "convex_customers_list",
+      "convex_customers_remove",
+      "convex_customers_softdelete",
+      "convex_customers_update",
+      "convex_email",
+      "convex_email_sendtaskalarm",
+      "convex_email_sendteaminvite",
+      "convex_ratelimit",
+      "convex_ratelimit_ratelimiter",
+      "convex_sales",
+      "convex_sales_create",
+      "convex_sales_get",
+      "convex_sales_list",
+      "convex_sales_remove",
+      "convex_sales_salestatus",
+      "convex_sales_softdelete",
+      "convex_sales_update",
+      "generated_api_components",
+      "generated_server_action",
+      "generated_server_internalaction"
+    ],
+    "10": [
+      "agents_skills_convex_create_component_skill_md_convex_create_component_skill",
+      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_checklist",
+      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_choose_the_shape",
+      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_component_skeleton",
+      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_critical_rules",
+      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_default_approach",
+      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_reference_files",
+      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_validation",
+      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_when_not_to_use",
+      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_when_to_use",
+      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_workflow",
+      "claude_skills_convex_create_component_skill_md_convex_create_component_skill",
+      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_checklist",
+      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_choose_the_shape",
+      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_component_skeleton",
+      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_critical_rules",
+      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_default_approach",
+      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_reference_files",
+      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_validation",
+      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_when_not_to_use",
+      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_when_to_use",
+      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_workflow",
+      "convex_create_component_icon"
     ],
     "11": [
+      "convex_organizations",
+      "convex_organizations_create",
+      "convex_organizations_get",
+      "convex_organizations_listmine",
+      "convex_organizations_remove",
+      "convex_organizations_update",
+      "convex_test_drives",
+      "convex_test_drives_complete",
+      "convex_test_drives_create",
+      "convex_test_drives_list",
+      "convex_test_drives_remove",
+      "convex_workorders",
+      "convex_workorders_create",
+      "convex_workorders_list",
+      "convex_workorders_remove",
+      "convex_workorders_update",
+      "utils_tenancy",
+      "utils_tenancy_requireauth",
+      "utils_tenancy_requireowner",
+      "utils_tenancy_requiretenantauth",
+      "utils_tenancy_tenantauthcontext",
+      "utils_tenancy_test",
+      "utils_tenancy_test_createmockctx"
+    ],
+    "12": [
+      "agents_skills_convex_create_component_references_local_components_md_references_local_components",
+      "agents_skills_convex_create_component_references_local_components_md_references_local_components_checklist",
+      "agents_skills_convex_create_component_references_local_components_md_references_local_components_default_layout",
+      "agents_skills_convex_create_component_references_local_components_md_references_local_components_when_to_choose_this",
+      "agents_skills_convex_create_component_references_local_components_md_references_local_components_workflow_notes",
+      "agents_skills_convex_create_component_references_packaged_components_md_references_packaged_components",
+      "agents_skills_convex_create_component_references_packaged_components_md_references_packaged_components_build_flow",
+      "agents_skills_convex_create_component_references_packaged_components_md_references_packaged_components_checklist",
+      "agents_skills_convex_create_component_references_packaged_components_md_references_packaged_components_default_approach",
+      "agents_skills_convex_create_component_references_packaged_components_md_references_packaged_components_package_exports",
+      "agents_skills_convex_create_component_references_packaged_components_md_references_packaged_components_testing",
+      "agents_skills_convex_create_component_references_packaged_components_md_references_packaged_components_when_to_choose_this",
+      "convex_create_component_local_components",
+      "convex_create_component_packaged_components",
+      "convex_create_component_skill",
+      "convex_quickstart_skill",
+      "convex_setup_auth_auth0",
+      "convex_setup_auth_clerk",
+      "convex_setup_auth_convex_auth",
+      "convex_setup_auth_skill",
+      "convex_setup_auth_workos_authkit",
+      "convex_skill"
+    ],
+    "13": [
       "agents_skills_convex_setup_auth_references_convex_auth_md_references_convex_auth",
       "agents_skills_convex_setup_auth_references_convex_auth_md_references_convex_auth_checklist",
       "agents_skills_convex_setup_auth_references_convex_auth_md_references_convex_auth_concrete_steps",
@@ -579,7 +571,7 @@
       "claude_skills_convex_setup_auth_references_convex_auth_md_references_convex_auth_what_to_do",
       "claude_skills_convex_setup_auth_references_convex_auth_md_references_convex_auth_workflow"
     ],
-    "12": [
+    "14": [
       "ai_guidelines",
       "ai_guidelines_action_guidelines",
       "ai_guidelines_authentication_guidelines",
@@ -603,7 +595,29 @@
       "convex_http_ts",
       "guidelines_http_endpoint"
     ],
-    "13": [
+    "15": [
+      "advanced_patterns_md",
+      "claude_skills_convex_create_component_references_advanced_patterns_md_references_advanced_patterns_class_based_client_wrappers",
+      "claude_skills_convex_create_component_references_advanced_patterns_md_references_advanced_patterns_deriving_validators_from_schema",
+      "claude_skills_convex_create_component_references_advanced_patterns_md_references_advanced_patterns_function_handles_for_callbacks",
+      "claude_skills_convex_create_component_references_advanced_patterns_md_references_advanced_patterns_static_configuration_with_a_globals_table",
+      "claude_skills_convex_create_component_references_hybrid_components_md_references_hybrid_components",
+      "claude_skills_convex_create_component_references_hybrid_components_md_references_hybrid_components_checklist",
+      "claude_skills_convex_create_component_references_hybrid_components_md_references_hybrid_components_default_advice",
+      "claude_skills_convex_create_component_references_hybrid_components_md_references_hybrid_components_risks",
+      "claude_skills_convex_create_component_references_hybrid_components_md_references_hybrid_components_what_this_means",
+      "claude_skills_convex_create_component_references_packaged_components_md_references_packaged_components",
+      "claude_skills_convex_create_component_references_packaged_components_md_references_packaged_components_build_flow",
+      "claude_skills_convex_create_component_references_packaged_components_md_references_packaged_components_checklist",
+      "claude_skills_convex_create_component_references_packaged_components_md_references_packaged_components_default_approach",
+      "claude_skills_convex_create_component_references_packaged_components_md_references_packaged_components_package_exports",
+      "claude_skills_convex_create_component_references_packaged_components_md_references_packaged_components_testing",
+      "claude_skills_convex_create_component_references_packaged_components_md_references_packaged_components_when_to_choose_this",
+      "convex_create_component_openai",
+      "hybrid_components_md",
+      "packaged_components_md"
+    ],
+    "16": [
       "agents_skills_convex_setup_auth_references_workos_authkit_md_references_workos_authkit",
       "agents_skills_convex_setup_auth_references_workos_authkit_md_references_workos_authkit_checklist",
       "agents_skills_convex_setup_auth_references_workos_authkit_md_references_workos_authkit_concrete_steps",
@@ -625,7 +639,29 @@
       "claude_skills_convex_setup_auth_references_workos_authkit_md_references_workos_authkit_what_to_do",
       "claude_skills_convex_setup_auth_references_workos_authkit_md_references_workos_authkit_workflow"
     ],
-    "14": [
+    "17": [
+      "convex_branches",
+      "convex_branches_add",
+      "convex_branches_list",
+      "convex_branches_migratetodefaultbranch",
+      "convex_branches_update",
+      "convex_dashboard",
+      "convex_dashboard_stats",
+      "convex_debug",
+      "convex_debug_inspect",
+      "convex_quotes",
+      "convex_quotes_listquotesbycustomer",
+      "convex_quotes_savequote",
+      "convex_quotes_updatequotestatus",
+      "convex_users",
+      "convex_users_deleteuser",
+      "convex_users_getme",
+      "convex_users_getuser",
+      "convex_users_updateorcreateuser",
+      "generated_api_d",
+      "generated_server_query"
+    ],
+    "18": [
       "tsconfig",
       "tsconfig_compileroptions",
       "tsconfig_compileroptions_allowjs",
@@ -647,68 +683,7 @@
       "tsconfig_include",
       "tsconfig_paths"
     ],
-    "15": [
-      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill",
-      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_checklist",
-      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_escalate_larger_fixes",
-      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_first_step_gather_signals",
-      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_guardrails",
-      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_reference_files",
-      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_signal_routing",
-      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_when_not_to_use",
-      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_when_to_use",
-      "convex_performance_audit_icon",
-      "convex_setup_auth_icon",
-      "skills_lock",
-      "skills_lock_convex_computedhash",
-      "skills_lock_convex_skillpath",
-      "skills_lock_convex_source",
-      "skills_lock_convex_sourcetype",
-      "skills_lock_skills",
-      "skills_lock_skills_convex",
-      "skills_lock_version"
-    ],
-    "16": [
-      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill",
-      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_adding_index",
-      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_adding_new_table",
-      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_adding_optional_field",
-      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_breaking_changes_the_deployment_workflow",
-      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_common_migration_patterns",
-      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_common_pitfalls",
-      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_don_t_delete_data",
-      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_key_concepts",
-      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_migration_checklist",
-      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_online_migrations",
-      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_prefer_new_fields_over_changing_types",
-      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_safe_changes_no_migration_needed",
-      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_schema_validation_drives_the_workflow",
-      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_using_the_migrations_component",
-      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_when_not_to_use",
-      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_when_to_use",
-      "convex_migration_helper_icon"
-    ],
-    "17": [
-      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill",
-      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_adding_index",
-      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_adding_new_table",
-      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_adding_optional_field",
-      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_breaking_changes_the_deployment_workflow",
-      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_common_migration_patterns",
-      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_common_pitfalls",
-      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_convex_migration_helper",
-      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_don_t_delete_data",
-      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_key_concepts",
-      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_migration_checklist",
-      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_online_migrations",
-      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_prefer_new_fields_over_changing_types",
-      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_safe_changes_no_migration_needed",
-      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_schema_validation_drives_the_workflow",
-      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_using_the_migrations_component",
-      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_when_not_to_use",
-      "claude_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_when_to_use"
-    ],
-    "18": [
+    "19": [
       "components",
       "components_aliases",
       "components_aliases_components",
@@ -728,46 +703,7 @@
       "components_tailwind_prefix",
       "components_tsx"
     ],
-    "19": [
-      "convex_branches",
-      "convex_branches_add",
-      "convex_branches_list",
-      "convex_branches_migratetodefaultbranch",
-      "convex_branches_update",
-      "convex_organizations",
-      "convex_organizations_create",
-      "convex_organizations_get",
-      "convex_organizations_listmine",
-      "convex_organizations_remove",
-      "convex_organizations_update",
-      "utils_tenancy",
-      "utils_tenancy_requireauth",
-      "utils_tenancy_requireowner",
-      "utils_tenancy_requiretenantauth",
-      "utils_tenancy_tenantauthcontext",
-      "utils_tenancy_test",
-      "utils_tenancy_test_createmockctx"
-    ],
     "20": [
-      "claude_skills_convex_create_component_skill_md_convex_create_component_skill",
-      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_advanced_patterns",
-      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_authentication_and_environment_access",
-      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_checklist",
-      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_choose_the_shape",
-      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_client_facing_api",
-      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_component_skeleton",
-      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_convex_create_component",
-      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_critical_rules",
-      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_default_approach",
-      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_ids_across_the_boundary",
-      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_patterns",
-      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_reference_files",
-      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_validation",
-      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_when_not_to_use",
-      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_when_to_use",
-      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_workflow"
-    ],
-    "21": [
       "convex_http",
       "convex_http_http",
       "convex_memberships",
@@ -783,10 +719,10 @@
       "convex_memberships_rollbackdirectaccount",
       "convex_memberships_updaterole",
       "generated_api_internal",
-      "generated_server_action",
+      "generated_server",
       "generated_server_httpaction"
     ],
-    "22": [
+    "21": [
       "convex_tsconfig",
       "convex_tsconfig_compileroptions",
       "convex_tsconfig_compileroptions_allowjs",
@@ -805,6 +741,24 @@
       "convex_tsconfig_exclude",
       "convex_tsconfig_include"
     ],
+    "22": [
+      "convex_migrateroles",
+      "convex_migrateroles_fixexistingroles",
+      "convex_migrations",
+      "convex_migrations_backfillpermissions",
+      "convex_migrations_granttaskpermissionstoall",
+      "convex_roles",
+      "convex_roles_create",
+      "convex_roles_get",
+      "convex_roles_list",
+      "convex_roles_remove",
+      "convex_roles_update",
+      "generated_server_internalmutation",
+      "utils_permissions",
+      "utils_permissions_all_permissions",
+      "utils_permissions_default_role_templates",
+      "utils_permissions_test"
+    ],
     "23": [
       "lib_utils",
       "lib_utils_cn",
@@ -819,100 +773,27 @@
       "ui_popover_popovercontent",
       "ui_skeleton",
       "ui_textarea",
-      "ui_textarea_textarea",
       "ui_textarea_textareaprops",
       "ui_tooltip",
       "ui_tooltip_tooltipcontent"
     ],
     "24": [
-      "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill",
-      "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_agent_mode",
-      "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_checklist",
-      "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_development_vs_production",
-      "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_next_steps",
-      "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_verify_the_setup",
-      "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_when_not_to_use",
-      "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_when_to_use",
-      "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_workflow",
-      "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_writing_your_first_function",
-      "convex_auth_config",
-      "convex_quickstart_icon",
-      "readme_convex_nextjs_clerk",
-      "skill_convex",
-      "skill_convex_performance_audit",
-      "skill_convex_setup_auth"
+      "agents_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns",
+      "agents_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns_adding_a_required_field",
+      "agents_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns_changing_a_field_type",
+      "agents_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns_cleaning_up_orphaned_documents",
+      "agents_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns_deleting_a_field",
+      "agents_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns_dual_read",
+      "agents_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns_dual_write_preferred",
+      "agents_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns_small_table_shortcut",
+      "agents_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns_splitting_nested_data_into_a_separate_table",
+      "agents_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns_verifying_a_migration",
+      "agents_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns_zero_downtime_strategies",
+      "convex_migration_helper_migration_patterns",
+      "convex_migration_helper_migrations_component",
+      "convex_migration_helper_skill"
     ],
     "25": [
-      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts",
-      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_1_reduce_read_set_size",
-      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_2_split_hot_documents",
-      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_3_move_non_critical_work_to_scheduled_functions",
-      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_4_combine_competing_writes",
-      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_broad_read_sets_causing_false_conflicts",
-      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_common_causes",
-      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_core_principle",
-      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_fan_out_from_triggers_or_cascading_writes",
-      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_fix_order",
-      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_hot_documents",
-      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_related_invalidation_scope",
-      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_symptoms",
-      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_verification",
-      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_write_then_read_chains",
-      "occ_conflicts_md"
-    ],
-    "26": [
-      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill",
-      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_1_scope_the_problem",
-      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_2_trace_the_full_read_and_write_set",
-      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_3_apply_fixes_from_the_relevant_reference",
-      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_4_fix_sibling_functions_together",
-      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_5_verify_before_finishing",
-      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_checklist",
-      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_convex_performance_audit",
-      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_escalate_larger_fixes",
-      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_first_step_gather_signals",
-      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_guardrails",
-      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_reference_files",
-      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_signal_routing",
-      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_when_not_to_use",
-      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_when_to_use",
-      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_workflow"
-    ],
-    "27": [
-      "convex_fixedassets",
-      "convex_fixedassets_add",
-      "convex_fixedassets_list",
-      "convex_fixedassets_remove",
-      "convex_fixedassets_update",
-      "convex_quotes",
-      "convex_quotes_listquotesbycustomer",
-      "convex_quotes_savequote",
-      "convex_quotes_updatequotestatus",
-      "convex_workorders",
-      "convex_workorders_create",
-      "convex_workorders_list",
-      "convex_workorders_remove",
-      "convex_workorders_update",
-      "generated_server_mutation"
-    ],
-    "28": [
-      "layout_orgswitcher",
-      "ui_dropdown_menu",
-      "ui_dropdown_menu_dropdownmenucheckboxitem",
-      "ui_dropdown_menu_dropdownmenucontent",
-      "ui_dropdown_menu_dropdownmenuitem",
-      "ui_dropdown_menu_dropdownmenulabel",
-      "ui_dropdown_menu_dropdownmenuradioitem",
-      "ui_dropdown_menu_dropdownmenuseparator",
-      "ui_dropdown_menu_dropdownmenushortcut",
-      "ui_dropdown_menu_dropdownmenusubcontent",
-      "ui_dropdown_menu_dropdownmenusubtrigger",
-      "ui_sidebar_sidebarmenu",
-      "ui_sidebar_sidebarmenubutton",
-      "ui_sidebar_sidebarmenuitem",
-      "ui_sidebar_usesidebar"
-    ],
-    "29": [
       "package_devdependencies",
       "package_devdependencies_convex_dev_eslint_plugin",
       "package_devdependencies_convex_test",
@@ -928,37 +809,22 @@
       "package_devdependencies_typescript",
       "package_devdependencies_vitest"
     ],
-    "30": [
-      "convex_claims",
-      "convex_claims_add",
-      "convex_claims_list",
-      "convex_claims_remove",
-      "convex_claims_update",
-      "convex_dashboard",
-      "convex_dashboard_stats",
-      "convex_vehiclerequests",
-      "convex_vehiclerequests_create",
-      "convex_vehiclerequests_listpending",
-      "convex_vehiclerequests_resolve",
-      "convex_vehiclerequests_vehiclestatus",
-      "generated_server"
+    "26": [
+      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_3_minimize_row_size",
+      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_4_isolate_frequently_updated_fields",
+      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_consistency_rule",
+      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_contents",
+      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_core_principle",
+      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_verification",
+      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_3_minimize_row_size",
+      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_4_isolate_frequently_updated_fields",
+      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_consistency_rule",
+      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_contents",
+      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_core_principle",
+      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_verification",
+      "convex_performance_audit_hot_path_rules"
     ],
-    "31": [
-      "convex_debug",
-      "convex_debug_inspect",
-      "convex_partnerequity",
-      "convex_partnerequity_add",
-      "convex_partnerequity_list",
-      "convex_partnerequity_remove",
-      "convex_partnerequity_update",
-      "convex_users",
-      "convex_users_deleteuser",
-      "convex_users_getme",
-      "convex_users_getuser",
-      "convex_users_updateorcreateuser",
-      "generated_server_query"
-    ],
-    "32": [
+    "27": [
       "convex_vehicles",
       "convex_vehicles_create",
       "convex_vehicles_deleteimage",
@@ -973,7 +839,7 @@
       "convex_vehicles_update",
       "convex_vehicles_vehiclestatus"
     ],
-    "33": [
+    "28": [
       "excel_data",
       "excel_data_sheet1",
       "excel_data_sheet2",
@@ -988,21 +854,7 @@
       "excel_data_\u0645_\u0645\u062f\u0641\u0648\u0639\u0629_\u0645\u0642\u062f\u0645\u0627",
       "excel_data_\u0645\u0637\u0627\u0644\u0628\u0627\u062a"
     ],
-    "34": [
-      "agents_skills_convex_create_component_skill_md_convex_create_component_skill",
-      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_checklist",
-      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_choose_the_shape",
-      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_component_skeleton",
-      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_critical_rules",
-      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_default_approach",
-      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_reference_files",
-      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_validation",
-      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_when_not_to_use",
-      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_when_to_use",
-      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_workflow",
-      "convex_create_component_icon"
-    ],
-    "35": [
+    "29": [
       "claude_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns",
       "claude_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns_adding_a_required_field",
       "claude_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns_changing_a_field_type",
@@ -1016,7 +868,21 @@
       "claude_skills_convex_migration_helper_references_migration_patterns_md_references_migration_patterns_zero_downtime_strategies",
       "migration_patterns_md"
     ],
-    "36": [
+    "30": [
+      "layout_topnav",
+      "layout_topnav_navigation",
+      "layout_topnav_topnav",
+      "ui_sheet",
+      "ui_sheet_sheetcontent",
+      "ui_sheet_sheetcontentprops",
+      "ui_sheet_sheetdescription",
+      "ui_sheet_sheetfooter",
+      "ui_sheet_sheetheader",
+      "ui_sheet_sheetoverlay",
+      "ui_sheet_sheettitle",
+      "ui_sheet_sheetvariants"
+    ],
+    "31": [
       "agents_skills_convex_setup_auth_references_auth0_md_references_auth0",
       "agents_skills_convex_setup_auth_references_auth0_md_references_auth0_auth0",
       "agents_skills_convex_setup_auth_references_auth0_md_references_auth0_checklist",
@@ -1029,7 +895,7 @@
       "agents_skills_convex_setup_auth_references_auth0_md_references_auth0_what_to_do",
       "agents_skills_convex_setup_auth_references_auth0_md_references_auth0_workflow"
     ],
-    "37": [
+    "32": [
       "agents_skills_convex_setup_auth_references_clerk_md_references_clerk",
       "agents_skills_convex_setup_auth_references_clerk_md_references_clerk_checklist",
       "agents_skills_convex_setup_auth_references_clerk_md_references_clerk_clerk",
@@ -1042,7 +908,7 @@
       "agents_skills_convex_setup_auth_references_clerk_md_references_clerk_what_to_do",
       "agents_skills_convex_setup_auth_references_clerk_md_references_clerk_workflow"
     ],
-    "38": [
+    "33": [
       "agents_skills_convex_setup_auth_skill_md_convex_setup_auth_skill",
       "agents_skills_convex_setup_auth_skill_md_convex_setup_auth_skill_after_choosing_a_provider",
       "agents_skills_convex_setup_auth_skill_md_convex_setup_auth_skill_checklist",
@@ -1055,7 +921,7 @@
       "agents_skills_convex_setup_auth_skill_md_convex_setup_auth_skill_when_to_use",
       "agents_skills_convex_setup_auth_skill_md_convex_setup_auth_skill_workflow"
     ],
-    "39": [
+    "34": [
       "claude_skills_convex_setup_auth_references_auth0_md_references_auth0",
       "claude_skills_convex_setup_auth_references_auth0_md_references_auth0_auth0",
       "claude_skills_convex_setup_auth_references_auth0_md_references_auth0_checklist",
@@ -1068,7 +934,7 @@
       "claude_skills_convex_setup_auth_references_auth0_md_references_auth0_what_to_do",
       "claude_skills_convex_setup_auth_references_auth0_md_references_auth0_workflow"
     ],
-    "40": [
+    "35": [
       "claude_skills_convex_setup_auth_references_clerk_md_references_clerk",
       "claude_skills_convex_setup_auth_references_clerk_md_references_clerk_checklist",
       "claude_skills_convex_setup_auth_references_clerk_md_references_clerk_clerk",
@@ -1081,7 +947,7 @@
       "claude_skills_convex_setup_auth_references_clerk_md_references_clerk_what_to_do",
       "claude_skills_convex_setup_auth_references_clerk_md_references_clerk_workflow"
     ],
-    "41": [
+    "36": [
       "claude_skills_convex_setup_auth_skill_md_convex_setup_auth_skill",
       "claude_skills_convex_setup_auth_skill_md_convex_setup_auth_skill_after_choosing_a_provider",
       "claude_skills_convex_setup_auth_skill_md_convex_setup_auth_skill_checklist",
@@ -1094,7 +960,19 @@
       "claude_skills_convex_setup_auth_skill_md_convex_setup_auth_skill_when_to_use",
       "claude_skills_convex_setup_auth_skill_md_convex_setup_auth_skill_workflow"
     ],
-    "42": [
+    "37": [
+      "agents_skills_convex_create_component_references_advanced_patterns_md_references_advanced_patterns_class_based_client_wrappers",
+      "agents_skills_convex_create_component_references_advanced_patterns_md_references_advanced_patterns_deriving_validators_from_schema",
+      "agents_skills_convex_create_component_references_advanced_patterns_md_references_advanced_patterns_function_handles_for_callbacks",
+      "agents_skills_convex_create_component_references_advanced_patterns_md_references_advanced_patterns_static_configuration_with_a_globals_table",
+      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_advanced_patterns",
+      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_authentication_and_environment_access",
+      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_client_facing_api",
+      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_ids_across_the_boundary",
+      "agents_skills_convex_create_component_skill_md_convex_create_component_skill_patterns",
+      "convex_create_component_advanced_patterns"
+    ],
+    "38": [
       "agents_skills_convex_performance_audit_references_subscription_cost_md_references_subscription_cost_1_use_point_in_time_reads_when_live_updates_are_not_valuable",
       "agents_skills_convex_performance_audit_references_subscription_cost_md_references_subscription_cost_2_batch_related_data_into_fewer_queries",
       "agents_skills_convex_performance_audit_references_subscription_cost_md_references_subscription_cost_3_use_skip_to_avoid_unnecessary_subscriptions",
@@ -1106,7 +984,7 @@
       "agents_skills_convex_performance_audit_references_subscription_cost_md_references_subscription_cost_9_separate_backend_cost_from_ui_churn",
       "agents_skills_convex_performance_audit_references_subscription_cost_md_references_subscription_cost_fix_order"
     ],
-    "43": [
+    "39": [
       "claude_skills_convex_performance_audit_references_subscription_cost_md_references_subscription_cost_1_use_point_in_time_reads_when_live_updates_are_not_valuable",
       "claude_skills_convex_performance_audit_references_subscription_cost_md_references_subscription_cost_2_batch_related_data_into_fewer_queries",
       "claude_skills_convex_performance_audit_references_subscription_cost_md_references_subscription_cost_3_use_skip_to_avoid_unnecessary_subscriptions",
@@ -1118,19 +996,19 @@
       "claude_skills_convex_performance_audit_references_subscription_cost_md_references_subscription_cost_9_separate_backend_cost_from_ui_churn",
       "claude_skills_convex_performance_audit_references_subscription_cost_md_references_subscription_cost_fix_order"
     ],
-    "44": [
-      "convex_migrateroles",
-      "convex_migrateroles_fixexistingroles",
-      "convex_migrations",
-      "convex_migrations_backfillpermissions",
-      "convex_migrations_granttaskpermissionstoall",
-      "generated_server_internalmutation",
-      "utils_permissions",
-      "utils_permissions_all_permissions",
-      "utils_permissions_default_role_templates",
-      "utils_permissions_test"
+    "40": [
+      "dashboard_layout",
+      "dashboard_layout_dashboardlayout",
+      "dashboard_layout_dashboardwrapper",
+      "dashboard_layout_onboarding",
+      "ui_sidebar_sidebarinset",
+      "ui_sidebar_sidebarprovider",
+      "ui_sidebar_sidebartrigger",
+      "ui_sonner",
+      "ui_sonner_toaster",
+      "ui_sonner_toasterprops"
     ],
-    "45": [
+    "41": [
       "lib_pdf",
       "lib_pdf_companyinfo",
       "lib_pdf_customerinfo",
@@ -1142,7 +1020,7 @@
       "lib_sanitize",
       "lib_sanitize_sanitizepdfinput"
     ],
-    "46": [
+    "42": [
       "package",
       "package_name",
       "package_private",
@@ -1154,7 +1032,30 @@
       "package_scripts_test",
       "package_version"
     ],
-    "47": [
+    "43": [
+      "ui_dropdown_menu",
+      "ui_dropdown_menu_dropdownmenucheckboxitem",
+      "ui_dropdown_menu_dropdownmenucontent",
+      "ui_dropdown_menu_dropdownmenuitem",
+      "ui_dropdown_menu_dropdownmenulabel",
+      "ui_dropdown_menu_dropdownmenuradioitem",
+      "ui_dropdown_menu_dropdownmenuseparator",
+      "ui_dropdown_menu_dropdownmenushortcut",
+      "ui_dropdown_menu_dropdownmenusubcontent",
+      "ui_dropdown_menu_dropdownmenusubtrigger"
+    ],
+    "44": [
+      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_core_principle",
+      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_limits_to_know",
+      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_symptoms",
+      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_verification",
+      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_core_principle",
+      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_limits_to_know",
+      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_symptoms",
+      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_verification",
+      "function_budget_md"
+    ],
+    "45": [
       "app_layout",
       "app_layout_cairo",
       "app_layout_geistmono",
@@ -1165,18 +1066,17 @@
       "components_convexclientprovider",
       "components_convexclientprovider_convex"
     ],
-    "48": [
-      "ui_sheet",
-      "ui_sheet_sheetcontent",
-      "ui_sheet_sheetcontentprops",
-      "ui_sheet_sheetdescription",
-      "ui_sheet_sheetfooter",
-      "ui_sheet_sheetheader",
-      "ui_sheet_sheetoverlay",
-      "ui_sheet_sheettitle",
-      "ui_sheet_sheetvariants"
+    "46": [
+      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_1_bound_your_reads",
+      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_2_read_smaller_shapes",
+      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_3_break_large_mutations_into_batches",
+      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_4_move_heavy_work_to_actions",
+      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_5_trim_return_values",
+      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_6_replace_ctx_runquery_and_ctx_runmutation_with_helper_functions",
+      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_7_avoid_unnecessary_runaction_calls",
+      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_fix_order"
     ],
-    "49": [
+    "47": [
       "agents_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts",
       "agents_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_core_principle",
       "agents_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_related_invalidation_scope",
@@ -1186,7 +1086,7 @@
       "convex_performance_audit_occ_conflicts",
       "convex_performance_audit_skill"
     ],
-    "50": [
+    "48": [
       "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_environment_variables",
       "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_install",
       "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_next_js_app_router",
@@ -1196,25 +1096,45 @@
       "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_react_vite",
       "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_wire_up_the_provider"
     ],
+    "49": [
+      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_1_bound_your_reads",
+      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_2_read_smaller_shapes",
+      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_3_break_large_mutations_into_batches",
+      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_4_move_heavy_work_to_actions",
+      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_5_trim_return_values",
+      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_6_replace_ctx_runquery_and_ctx_runmutation_with_helper_functions",
+      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_7_avoid_unnecessary_runaction_calls",
+      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_fix_order"
+    ],
+    "50": [
+      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_environment_variables",
+      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_install",
+      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_next_js_app_router",
+      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_other_frameworks",
+      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_path_2_add_convex_to_an_existing_app",
+      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_provision_and_push",
+      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_react_vite",
+      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_wire_up_the_provider"
+    ],
     "51": [
-      "claude_skills_convex_create_component_references_packaged_components_md_references_packaged_components",
-      "claude_skills_convex_create_component_references_packaged_components_md_references_packaged_components_build_flow",
-      "claude_skills_convex_create_component_references_packaged_components_md_references_packaged_components_checklist",
-      "claude_skills_convex_create_component_references_packaged_components_md_references_packaged_components_default_approach",
-      "claude_skills_convex_create_component_references_packaged_components_md_references_packaged_components_package_exports",
-      "claude_skills_convex_create_component_references_packaged_components_md_references_packaged_components_testing",
-      "claude_skills_convex_create_component_references_packaged_components_md_references_packaged_components_when_to_choose_this",
-      "packaged_components_md"
+      "convex_documents",
+      "convex_documents_addrule",
+      "convex_documents_generateuploadurl",
+      "convex_documents_getforapplication",
+      "convex_documents_listrules",
+      "convex_documents_removerule",
+      "convex_documents_savedocumentfile",
+      "convex_documents_updatedocumentstatus"
     ],
     "52": [
-      "convex_sales",
-      "convex_sales_create",
-      "convex_sales_get",
-      "convex_sales_list",
-      "convex_sales_remove",
-      "convex_sales_salestatus",
-      "convex_sales_softdelete",
-      "convex_sales_update"
+      "convex_leads",
+      "convex_leads_create",
+      "convex_leads_get",
+      "convex_leads_leadstage",
+      "convex_leads_list",
+      "convex_leads_remove",
+      "convex_leads_softdelete",
+      "convex_leads_update"
     ],
     "53": [
       "team_rolepermissionseditor",
@@ -1236,6 +1156,24 @@
       "convex_performance_audit_subscription_cost"
     ],
     "55": [
+      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts",
+      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_core_principle",
+      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_related_invalidation_scope",
+      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_symptoms",
+      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_verification",
+      "convex_performance_audit_openai",
+      "occ_conflicts_md"
+    ],
+    "56": [
+      "convex_auth_config",
+      "readme_convex_nextjs_clerk",
+      "skill_convex",
+      "skill_convex_create_component",
+      "skill_convex_performance_audit",
+      "skill_convex_quickstart",
+      "skill_convex_setup_auth"
+    ],
+    "57": [
       "convex_finance",
       "convex_finance_createcompany",
       "convex_finance_deletecompany",
@@ -1244,7 +1182,7 @@
       "convex_finance_savevaluation",
       "convex_finance_updatecompany"
     ],
-    "56": [
+    "58": [
       "convex_reports",
       "convex_reports_getexpensesreport",
       "convex_reports_getinventoryreport",
@@ -1253,7 +1191,23 @@
       "convex_reports_getsalesandprofitreport",
       "convex_reports_getsalespersonperformance"
     ],
-    "57": [
+    "59": [
+      "agents_skills_convex_create_component_references_hybrid_components_md_references_hybrid_components",
+      "agents_skills_convex_create_component_references_hybrid_components_md_references_hybrid_components_checklist",
+      "agents_skills_convex_create_component_references_hybrid_components_md_references_hybrid_components_default_advice",
+      "agents_skills_convex_create_component_references_hybrid_components_md_references_hybrid_components_risks",
+      "agents_skills_convex_create_component_references_hybrid_components_md_references_hybrid_components_what_this_means",
+      "convex_create_component_hybrid_components"
+    ],
+    "60": [
+      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_aggregates",
+      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_backfills",
+      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_convex_specific_notes",
+      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_point_in_time_reads",
+      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_reactive_queries",
+      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_triggers_and_fan_out"
+    ],
+    "61": [
       "agents_skills_convex_performance_audit_references_subscription_cost_md_references_subscription_cost_common_causes",
       "agents_skills_convex_performance_audit_references_subscription_cost_md_references_subscription_cost_frequently_updated_fields_on_widely_read_documents",
       "agents_skills_convex_performance_audit_references_subscription_cost_md_references_subscription_cost_overly_broad_queries",
@@ -1261,15 +1215,7 @@
       "agents_skills_convex_performance_audit_references_subscription_cost_md_references_subscription_cost_reactive_queries_on_low_freshness_flows",
       "agents_skills_convex_performance_audit_references_subscription_cost_md_references_subscription_cost_too_many_subscriptions_per_page"
     ],
-    "58": [
-      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_1_scope_the_problem",
-      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_2_trace_the_full_read_and_write_set",
-      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_3_apply_fixes_from_the_relevant_reference",
-      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_4_fix_sibling_functions_together",
-      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_5_verify_before_finishing",
-      "agents_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_workflow"
-    ],
-    "59": [
+    "62": [
       "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_path_1_new_project_recommended",
       "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_pick_a_template",
       "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_provision_the_deployment_and_push_code",
@@ -1277,7 +1223,7 @@
       "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_start_the_dev_loop",
       "agents_skills_convex_quickstart_skill_md_convex_quickstart_skill_what_you_get"
     ],
-    "60": [
+    "63": [
       "app_page",
       "app_page_content",
       "app_page_home",
@@ -1285,15 +1231,7 @@
       "app_page_resourcecard",
       "app_page_signinform"
     ],
-    "61": [
-      "claude_skills_convex_create_component_references_hybrid_components_md_references_hybrid_components",
-      "claude_skills_convex_create_component_references_hybrid_components_md_references_hybrid_components_checklist",
-      "claude_skills_convex_create_component_references_hybrid_components_md_references_hybrid_components_default_advice",
-      "claude_skills_convex_create_component_references_hybrid_components_md_references_hybrid_components_risks",
-      "claude_skills_convex_create_component_references_hybrid_components_md_references_hybrid_components_what_this_means",
-      "hybrid_components_md"
-    ],
-    "62": [
+    "64": [
       "claude_skills_convex_create_component_references_local_components_md_references_local_components",
       "claude_skills_convex_create_component_references_local_components_md_references_local_components_checklist",
       "claude_skills_convex_create_component_references_local_components_md_references_local_components_default_layout",
@@ -1301,7 +1239,15 @@
       "claude_skills_convex_create_component_references_local_components_md_references_local_components_workflow_notes",
       "local_components_md"
     ],
-    "63": [
+    "65": [
+      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_aggregates",
+      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_backfills",
+      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_convex_specific_notes",
+      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_point_in_time_reads",
+      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_reactive_queries",
+      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_triggers_and_fan_out"
+    ],
+    "66": [
       "claude_skills_convex_performance_audit_references_subscription_cost_md_references_subscription_cost_common_causes",
       "claude_skills_convex_performance_audit_references_subscription_cost_md_references_subscription_cost_frequently_updated_fields_on_widely_read_documents",
       "claude_skills_convex_performance_audit_references_subscription_cost_md_references_subscription_cost_overly_broad_queries",
@@ -1309,7 +1255,23 @@
       "claude_skills_convex_performance_audit_references_subscription_cost_md_references_subscription_cost_reactive_queries_on_low_freshness_flows",
       "claude_skills_convex_performance_audit_references_subscription_cost_md_references_subscription_cost_too_many_subscriptions_per_page"
     ],
-    "64": [
+    "67": [
+      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_1_scope_the_problem",
+      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_2_trace_the_full_read_and_write_set",
+      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_3_apply_fixes_from_the_relevant_reference",
+      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_4_fix_sibling_functions_together",
+      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_5_verify_before_finishing",
+      "claude_skills_convex_performance_audit_skill_md_convex_performance_audit_skill_workflow"
+    ],
+    "68": [
+      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_path_1_new_project_recommended",
+      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_pick_a_template",
+      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_provision_the_deployment_and_push_code",
+      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_scaffold_the_project",
+      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_start_the_dev_loop",
+      "claude_skills_convex_quickstart_skill_md_convex_quickstart_skill_what_you_get"
+    ],
+    "69": [
       "clerk_clerk",
       "convex_auth_config_ts",
       "convex_auth_convex_auth",
@@ -1317,15 +1279,7 @@
       "guidelines_auth_config",
       "workos_authkit_workos_authkit"
     ],
-    "65": [
-      "convex_roles",
-      "convex_roles_create",
-      "convex_roles_get",
-      "convex_roles_list",
-      "convex_roles_remove",
-      "convex_roles_update"
-    ],
-    "66": [
+    "70": [
       "convex_tasks",
       "convex_tasks_create",
       "convex_tasks_gethistory",
@@ -1333,15 +1287,7 @@
       "convex_tasks_remove",
       "convex_tasks_update"
     ],
-    "67": [
-      "convex_vehicleedits",
-      "convex_vehicleedits_gethistory",
-      "convex_vehicleedits_listpending",
-      "convex_vehicleedits_requestcreate",
-      "convex_vehicleedits_requestupdate",
-      "convex_vehicleedits_resolve"
-    ],
-    "68": [
+    "71": [
       "generated_server_d",
       "generated_server_d_actionctx",
       "generated_server_d_databasereader",
@@ -1349,235 +1295,343 @@
       "generated_server_d_mutationctx",
       "generated_server_d_queryctx"
     ],
-    "69": [
+    "72": [
+      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_don_t_delete_data",
+      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_key_concepts",
+      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_online_migrations",
+      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_prefer_new_fields_over_changing_types",
+      "agents_skills_convex_migration_helper_skill_md_convex_migration_helper_skill_schema_validation_drives_the_workflow"
+    ],
+    "73": [
+      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_common_causes",
+      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_large_document_reads_on_hot_paths",
+      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_mutation_doing_too_much_work",
+      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_returning_too_much_data_to_the_client",
+      "agents_skills_convex_performance_audit_references_function_budget_md_references_function_budget_unbounded_collection"
+    ],
+    "74": [
       "agents_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_1_reduce_read_set_size",
       "agents_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_2_split_hot_documents",
       "agents_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_3_move_non_critical_work_to_scheduled_functions",
       "agents_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_4_combine_competing_writes",
       "agents_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_fix_order"
     ],
-    "70": [
+    "75": [
       "agents_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_broad_read_sets_causing_false_conflicts",
       "agents_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_common_causes",
       "agents_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_fan_out_from_triggers_or_cascading_writes",
       "agents_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_hot_documents",
       "agents_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_write_then_read_chains"
     ],
-    "71": [
+    "76": [
       "agents_skills_convex_skill_md_convex_skill",
       "agents_skills_convex_skill_md_convex_skill_convex",
       "agents_skills_convex_skill_md_convex_skill_route_to_the_right_skill",
       "agents_skills_convex_skill_md_convex_skill_start_here",
       "agents_skills_convex_skill_md_convex_skill_when_not_to_use"
     ],
-    "72": [
+    "77": [
       "ai_ai_files_state",
       "ai_ai_files_state_agentskillssha",
       "ai_ai_files_state_agentsmdsectionhash",
       "ai_ai_files_state_claudemdhash",
       "ai_ai_files_state_guidelineshash"
     ],
-    "73": [
+    "78": [
+      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_advanced_patterns",
+      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_authentication_and_environment_access",
+      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_client_facing_api",
+      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_ids_across_the_boundary",
+      "claude_skills_convex_create_component_skill_md_convex_create_component_skill_patterns"
+    ],
+    "79": [
+      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_common_causes",
+      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_large_document_reads_on_hot_paths",
+      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_mutation_doing_too_much_work",
+      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_returning_too_much_data_to_the_client",
+      "claude_skills_convex_performance_audit_references_function_budget_md_references_function_budget_unbounded_collection"
+    ],
+    "80": [
+      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_1_reduce_read_set_size",
+      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_2_split_hot_documents",
+      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_3_move_non_critical_work_to_scheduled_functions",
+      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_4_combine_competing_writes",
+      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_fix_order"
+    ],
+    "81": [
+      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_broad_read_sets_causing_false_conflicts",
+      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_common_causes",
+      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_fan_out_from_triggers_or_cascading_writes",
+      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_hot_documents",
+      "claude_skills_convex_performance_audit_references_occ_conflicts_md_references_occ_conflicts_write_then_read_chains"
+    ],
+    "82": [
       "claude_skills_convex_skill_md_convex_skill",
       "claude_skills_convex_skill_md_convex_skill_convex",
       "claude_skills_convex_skill_md_convex_skill_route_to_the_right_skill",
       "claude_skills_convex_skill_md_convex_skill_start_here",
       "claude_skills_convex_skill_md_convex_skill_when_not_to_use"
     ],
-    "74": [
+    "83": [
+      "convex_claims",
+      "convex_claims_add",
+      "convex_claims_list",
+      "convex_claims_remove",
+      "convex_claims_update"
+    ],
+    "84": [
+      "convex_partnerequity",
+      "convex_partnerequity_add",
+      "convex_partnerequity_list",
+      "convex_partnerequity_remove",
+      "convex_partnerequity_update"
+    ],
+    "85": [
       "convex_schema",
       "generated_datamodel_d",
       "generated_datamodel_d_doc",
       "generated_datamodel_d_id",
       "generated_datamodel_d_tablenames"
     ],
-    "75": [
-      "convex_test_drives",
-      "convex_test_drives_complete",
-      "convex_test_drives_create",
-      "convex_test_drives_list",
-      "convex_test_drives_remove"
-    ],
-    "76": [
+    "86": [
       "convex_transactions",
       "convex_transactions_add",
       "convex_transactions_list",
       "convex_transactions_remove",
       "convex_transactions_update"
     ],
-    "77": [
+    "87": [
+      "convex_vehiclerequests",
+      "convex_vehiclerequests_create",
+      "convex_vehiclerequests_listpending",
+      "convex_vehiclerequests_resolve",
+      "convex_vehiclerequests_vehiclestatus"
+    ],
+    "88": [
       "readme",
       "readme_get_started",
       "readme_join_the_community",
       "readme_learn_more",
       "readme_welcome_to_your_convex_next_js_clerk_app"
     ],
-    "78": [
+    "89": [
+      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_2_minimize_data_sources",
+      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_fallback_rule",
+      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_no_denormalized_copy_yet",
+      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_when_to_denormalize"
+    ],
+    "90": [
+      "applications_client_applicationclient",
+      "applications_page",
+      "applications_page_applicationspage",
+      "applications_page_metadata"
+    ],
+    "91": [
+      "branches_client_branchesclient",
+      "branches_page",
+      "branches_page_branchespage",
+      "branches_page_metadata"
+    ],
+    "92": [
+      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_2_minimize_data_sources",
+      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_fallback_rule",
+      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_no_denormalized_copy_yet",
+      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_when_to_denormalize"
+    ],
+    "93": [
+      "lib_env",
+      "lib_env_env",
+      "lib_env_envschema",
+      "next_config"
+    ],
+    "94": [
       "lib_financing",
       "lib_financing_calculatedbr",
       "lib_financing_calculateunifiedmurabaha",
       "lib_financing_test"
     ],
-    "79": [
+    "95": [
       "accounting_page",
       "accounting_page_accountingpage",
       "accounting_page_metadata"
     ],
-    "80": [
+    "96": [
       "agents_convex",
       "claude_convex",
       "convex_generated_ai_guidelines"
     ],
-    "81": [
-      "applications_page",
-      "applications_page_applicationspage",
-      "applications_page_metadata"
+    "97": [
+      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_1_push_filters_to_storage",
+      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_check_for_redundant_indexes",
+      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_migration_rule_for_indexes"
     ],
-    "82": [
-      "branches_page",
-      "branches_page_branchespage",
-      "branches_page_metadata"
+    "98": [
+      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_5_match_consistency_to_read_patterns",
+      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_high_read_high_write",
+      "agents_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_high_read_low_write"
     ],
-    "83": [
+    "99": [
+      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_1_push_filters_to_storage",
+      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_check_for_redundant_indexes",
+      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_migration_rule_for_indexes"
+    ],
+    "100": [
+      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_5_match_consistency_to_read_patterns",
+      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_high_read_high_write",
+      "claude_skills_convex_performance_audit_references_hot_path_rules_md_references_hot_path_rules_high_read_low_write"
+    ],
+    "101": [
       "proxy",
       "proxy_config",
       "proxy_ispublicroute"
     ],
-    "84": [
-      "ui_sonner",
-      "ui_sonner_toaster",
-      "ui_sonner_toasterprops"
-    ],
-    "85": [
+    "102": [
       "auth0_md",
       "convex_setup_auth_openai"
     ],
-    "86": [
+    "103": [
       "convex_convex_config",
       "convex_convex_config_app"
     ],
-    "87": [
+    "104": [
       "convex_readme",
       "convex_readme_welcome_to_your_convex_functions_directory"
     ],
-    "88": [
+    "105": [
       "dashboard_mockup",
       "google_generative_ai"
     ],
-    "89": [
+    "106": [
+      "instrumentation",
+      "instrumentation_register"
+    ],
+    "107": [
       "logo_png",
       "openai_media_service"
     ],
-    "90": [
+    "108": [
       "postcss_config",
       "postcss_config_config"
     ],
-    "91": [
+    "109": [
       "rules_graphify",
       "rules_graphify_graphify"
     ],
-    "92": [
+    "110": [
+      "settings_layout",
+      "settings_layout_settingslayout"
+    ],
+    "111": [
       "sign_in_page",
       "sign_in_page_signinpage"
     ],
-    "93": [
+    "112": [
       "sign_up_page",
       "sign_up_page_signuppage"
     ],
-    "94": [
+    "113": [
       "workflows_graphify",
       "workflows_graphify_workflow_graphify"
     ],
-    "95": [
+    "114": [
       "agents"
     ],
-    "96": [
+    "115": [
       "claude"
     ],
-    "97": [
+    "116": [
       "convex_logo_main"
     ],
-    "98": [
+    "117": [
       "convex_quickstart_openai"
     ],
-    "99": [
+    "118": [
       "eslint_config"
     ],
-    "100": [
+    "119": [
       "extract_excel"
     ],
-    "101": [
+    "120": [
       "generated_server_internalquery"
     ],
-    "102": [
+    "121": [
       "guidelines_testing"
     ],
-    "103": [
+    "122": [
       "guidelines_validators"
     ],
-    "104": [
-      "next_config"
-    ],
-    "105": [
+    "123": [
       "readme_convex_functions"
     ],
-    "106": [
+    "124": [
+      "sentry_client_config"
+    ],
+    "125": [
+      "sentry_edge_config"
+    ],
+    "126": [
+      "sentry_server_config"
+    ],
+    "127": [
+      "sheet_names_file"
+    ],
+    "128": [
       "vitest_config"
     ],
-    "107": [
+    "129": [
       "vitest_setup"
     ]
   },
   "cohesion": {
-    "0": 0.05955497382198953,
-    "1": 0.044444444444444446,
-    "2": 0.045454545454545456,
-    "3": 0.046511627906976744,
-    "4": 0.047619047619047616,
-    "5": 0.05714285714285714,
+    "0": 0.06574585635359116,
+    "1": 0.046511627906976744,
+    "2": 0.0855614973262032,
+    "3": 0.06666666666666667,
+    "4": 0.06666666666666667,
+    "5": 0.08505747126436781,
     "6": 0.10837438423645321,
-    "7": 0.082010582010582,
+    "7": 0.08,
     "8": 0.08,
-    "9": 0.1,
-    "10": 0.08333333333333333,
-    "11": 0.09090909090909091,
+    "9": 0.09,
+    "10": 0.08695652173913043,
+    "11": 0.1225296442687747,
     "12": 0.09090909090909091,
-    "13": 0.1,
-    "14": 0.1,
-    "15": 0.15204678362573099,
-    "16": 0.1111111111111111,
-    "17": 0.1111111111111111,
-    "18": 0.1111111111111111,
-    "19": 0.16339869281045752,
-    "20": 0.11764705882352941,
+    "13": 0.09090909090909091,
+    "14": 0.09090909090909091,
+    "15": 0.1,
+    "16": 0.1,
+    "17": 0.12105263157894737,
+    "18": 0.1,
+    "19": 0.1111111111111111,
+    "20": 0.125,
     "21": 0.11764705882352941,
-    "22": 0.11764705882352941,
-    "23": 0.22058823529411764,
-    "24": 0.125,
-    "25": 0.125,
-    "26": 0.125,
-    "27": 0.13333333333333333,
-    "28": 0.17142857142857143,
-    "29": 0.14285714285714285,
-    "30": 0.15384615384615385,
-    "31": 0.15384615384615385,
-    "32": 0.15384615384615385,
-    "33": 0.15384615384615385,
-    "34": 0.16666666666666666,
-    "35": 0.16666666666666666,
+    "22": 0.16666666666666666,
+    "23": 0.24166666666666667,
+    "24": 0.14285714285714285,
+    "25": 0.14285714285714285,
+    "26": 0.15384615384615385,
+    "27": 0.15384615384615385,
+    "28": 0.15384615384615385,
+    "29": 0.16666666666666666,
+    "30": 0.21212121212121213,
+    "31": 0.18181818181818182,
+    "32": 0.18181818181818182,
+    "33": 0.18181818181818182,
+    "34": 0.18181818181818182,
+    "35": 0.18181818181818182,
     "36": 0.18181818181818182,
-    "37": 0.18181818181818182,
-    "38": 0.18181818181818182,
-    "39": 0.18181818181818182,
-    "40": 0.18181818181818182,
-    "41": 0.18181818181818182,
+    "37": 0.2,
+    "38": 0.2,
+    "39": 0.2,
+    "40": 0.2222222222222222,
+    "41": 0.28888888888888886,
     "42": 0.2,
     "43": 0.2,
-    "44": 0.3111111111111111,
-    "45": 0.28888888888888886,
-    "46": 0.2,
-    "47": 0.2222222222222222,
-    "48": 0.2222222222222222,
+    "44": 0.2222222222222222,
+    "45": 0.2222222222222222,
+    "46": 0.25,
+    "47": 0.25,
+    "48": 0.25,
     "49": 0.25,
     "50": 0.25,
     "51": 0.25,
@@ -1586,57 +1640,79 @@
     "54": 0.2857142857142857,
     "55": 0.2857142857142857,
     "56": 0.2857142857142857,
-    "57": 0.3333333333333333,
-    "58": 0.3333333333333333,
+    "57": 0.2857142857142857,
+    "58": 0.2857142857142857,
     "59": 0.3333333333333333,
     "60": 0.3333333333333333,
     "61": 0.3333333333333333,
     "62": 0.3333333333333333,
     "63": 0.3333333333333333,
-    "64": 0.4666666666666667,
+    "64": 0.3333333333333333,
     "65": 0.3333333333333333,
     "66": 0.3333333333333333,
     "67": 0.3333333333333333,
     "68": 0.3333333333333333,
-    "69": 0.4,
-    "70": 0.4,
-    "71": 0.4,
+    "69": 0.4666666666666667,
+    "70": 0.3333333333333333,
+    "71": 0.3333333333333333,
     "72": 0.4,
     "73": 0.4,
     "74": 0.4,
     "75": 0.4,
     "76": 0.4,
     "77": 0.4,
-    "78": 0.8333333333333334,
-    "79": 0.6666666666666666,
-    "80": 0.6666666666666666,
-    "81": 0.6666666666666666,
-    "82": 0.6666666666666666,
-    "83": 0.6666666666666666,
-    "84": 0.6666666666666666,
-    "85": 1.0,
-    "86": 1.0,
-    "87": 1.0,
-    "88": 1.0,
-    "89": 1.0,
-    "90": 1.0,
-    "91": 1.0,
-    "92": 1.0,
-    "93": 1.0,
-    "94": 1.0,
-    "95": 1.0,
-    "96": 1.0,
-    "97": 1.0,
-    "98": 1.0,
-    "99": 1.0,
-    "100": 1.0,
-    "101": 1.0,
+    "78": 0.4,
+    "79": 0.4,
+    "80": 0.4,
+    "81": 0.4,
+    "82": 0.4,
+    "83": 0.4,
+    "84": 0.4,
+    "85": 0.4,
+    "86": 0.4,
+    "87": 0.4,
+    "88": 0.4,
+    "89": 0.5,
+    "90": 0.5,
+    "91": 0.5,
+    "92": 0.5,
+    "93": 0.5,
+    "94": 0.8333333333333334,
+    "95": 0.6666666666666666,
+    "96": 0.6666666666666666,
+    "97": 0.6666666666666666,
+    "98": 0.6666666666666666,
+    "99": 0.6666666666666666,
+    "100": 0.6666666666666666,
+    "101": 0.6666666666666666,
     "102": 1.0,
     "103": 1.0,
     "104": 1.0,
     "105": 1.0,
     "106": 1.0,
-    "107": 1.0
+    "107": 1.0,
+    "108": 1.0,
+    "109": 1.0,
+    "110": 1.0,
+    "111": 1.0,
+    "112": 1.0,
+    "113": 1.0,
+    "114": 1.0,
+    "115": 1.0,
+    "116": 1.0,
+    "117": 1.0,
+    "118": 1.0,
+    "119": 1.0,
+    "120": 1.0,
+    "121": 1.0,
+    "122": 1.0,
+    "123": 1.0,
+    "124": 1.0,
+    "125": 1.0,
+    "126": 1.0,
+    "127": 1.0,
+    "128": 1.0,
+    "129": 1.0
   },
   "gods": [
     {
@@ -1660,9 +1736,19 @@
       "degree": 44
     },
     {
+      "id": "convex_create_component_icon",
+      "label": "Convex Create Component Icon",
+      "degree": 40
+    },
+    {
       "id": "lib_utils_cn",
       "label": "cn()",
       "degree": 35
+    },
+    {
+      "id": "convex_migration_helper_icon",
+      "label": "Convex Migration Helper Icon",
+      "degree": 34
     },
     {
       "id": "ui_dialog_dialogheader",
@@ -1670,24 +1756,14 @@
       "degree": 31
     },
     {
+      "id": "convex_quickstart_icon",
+      "label": "Convex Quickstart Icon",
+      "degree": 31
+    },
+    {
       "id": "ui_dialog_dialogcontent",
       "label": "DialogContent",
       "degree": 30
-    },
-    {
-      "id": "ui_dialog_dialogtitle",
-      "label": "DialogTitle",
-      "degree": 30
-    },
-    {
-      "id": "utils_tenancy_requiretenantauth",
-      "label": "requireTenantAuth()",
-      "degree": 29
-    },
-    {
-      "id": "ui_input_input",
-      "label": "Input",
-      "degree": 28
     }
   ],
   "surprises": [
@@ -1748,7 +1824,7 @@
     }
   ],
   "tokens": {
-    "input": 36116,
-    "output": 1259
+    "input": 323,
+    "output": 82
   }
 }

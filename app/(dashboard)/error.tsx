@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle } from "lucide-react";
+import * as Sentry from "@sentry/nextjs";
 
 export default function DashboardErrorBoundary({
   error,
@@ -14,6 +15,7 @@ export default function DashboardErrorBoundary({
   useEffect(() => {
     // Log the error to an error reporting service like Sentry (Phase 4)
     console.error("Dashboard error boundary caught error:", error);
+    Sentry.captureException(error);
   }, [error]);
 
   return (
