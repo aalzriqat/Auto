@@ -29,7 +29,7 @@ const navigation = [
   { name: "Team", href: "/team", icon: Shield, permission: "manage:users" },
   { name: "Accounting", href: "/accounting", icon: BadgeDollarSign, permission: "view:finance" },
   { name: "Reports", href: "/reports", icon: LineChart, permission: "view:reports" },
-  { name: "Finance Settings", href: "/settings/finance", icon: Settings, permission: "view:settings" },
+  { name: "FinanceSettings", href: "/settings/finance", icon: Settings, permission: "view:settings" },
   { name: "Branches", href: "/settings/branches", icon: Store, permission: "manage:users" },
 ];
 
@@ -57,7 +57,7 @@ export function TopNav() {
             <SheetTrigger asChild>
               <Button variant="ghost" size="icon" className="md:hidden shrink-0">
                 <Menu className="h-5 w-5" />
-                <span className="sr-only">Toggle navigation menu</span>
+                <span className="sr-only">{t("ToggleNavigationMenu" as any)}</span>
               </Button>
             </SheetTrigger>
             <SheetContent side={isRtl ? "right" : "left"} className="w-[280px] p-0">
@@ -99,7 +99,7 @@ export function TopNav() {
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-slate-400" />
               <input
                 type="text"
-                placeholder={t("Search" as any) || "Search..."}
+                placeholder={t("Search" as any)}
                 className="pl-9 pr-4 py-2 bg-slate-100 border-transparent rounded-lg text-sm w-full focus:bg-white focus:border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all"
               />
             </div>

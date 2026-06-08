@@ -4,10 +4,11 @@ import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -53,9 +54,18 @@ interface TestDriveDialogProps {
 
 export function TestDriveDialog({ open, onOpenChange, vehicleId, testDrive }: TestDriveDialogProps) {
   const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
 
-  const customers = useQuery(api.customers.list, activeOrgId ? { orgId: activeOrgId } : "skip");
-  const memberships = useQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const { results: customers } = usePaginatedQuery(
+    api.customers.list,
+    activeOrgId ? { orgId: activeOrgId } : "skip",
+    { initialNumItems: 100 }
+  );
+  const { results: memberships } = usePaginatedQuery(
+    api.memberships.list,
+    activeOrgId ? { orgId: activeOrgId } : "skip",
+    { initialNumItems: 100 }
+  );
 
   const createTestDrive = useMutation(api.test_drives.create);
   const completeTestDrive = useMutation(api.test_drives.complete);
@@ -101,7 +111,7 @@ export function TestDriveDialog({ open, onOpenChange, vehicleId, testDrive }: Te
           endTime: Date.now(),
           notes: values.notes,
         });
-        toast.success("Test drive completed successfully");
+        toast.success(t("TestDriveCompletedSuccess" as any));
       } else if (!testDrive) {
         // Create new
         await createTestDrive({
@@ -113,11 +123,11 @@ export function TestDriveDialog({ open, onOpenChange, vehicleId, testDrive }: Te
           demoPlateNumber: values.demoPlateNumber,
           notes: values.notes,
         });
-        toast.success("Test drive started successfully!");
+        toast.success(t("TestDriveStartedSuccess" as any));
       }
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || "Failed to save test drive");
+      toast.error(error.message || t("TestDriveSaveFail" as any));
     } finally {
       setIsSubmitting(false);
     }
@@ -127,11 +137,11 @@ export function TestDriveDialog({ open, onOpenChange, vehicleId, testDrive }: Te
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>{testDrive ? "Complete Test Drive" : "Log Test Drive"}</DialogTitle>
+          <DialogTitle>{testDrive ? (t("CompleteDrive" as any)) : (t("LogTestDrive" as any))}</DialogTitle>
           <DialogDescription>
             {testDrive
-              ? "Mark this test drive as completed."
-              : "Record a new test drive for this vehicle."}
+              ? (t("CompleteTestDriveDesc" as any))
+              : (t("LogTestDriveDesc" as any))}
           </DialogDescription>
         </DialogHeader>
 
@@ -142,7 +152,7 @@ export function TestDriveDialog({ open, onOpenChange, vehicleId, testDrive }: Te
               name="customerId"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Customer</FormLabel>
+                  <FormLabel>{t("Customer" as any)}</FormLabel>
                   <Select
                     onValueChange={field.onChange}
                     value={field.value}
@@ -150,7 +160,7 @@ export function TestDriveDialog({ open, onOpenChange, vehicleId, testDrive }: Te
                   >
                     <FormControl>
                       <SelectTrigger>
-                        <SelectValue placeholder="Select a customer" />
+                        <SelectValue placeholder={t("SelectACustomer" as any)} />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
@@ -171,7 +181,7 @@ export function TestDriveDialog({ open, onOpenChange, vehicleId, testDrive }: Te
               name="salespersonId"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Salesperson</FormLabel>
+                  <FormLabel>{t("Salesperson" as any)}</FormLabel>
                   <Select
                     onValueChange={field.onChange}
                     value={field.value}
@@ -179,7 +189,7 @@ export function TestDriveDialog({ open, onOpenChange, vehicleId, testDrive }: Te
                   >
                     <FormControl>
                       <SelectTrigger>
-                        <SelectValue placeholder="Select salesperson" />
+                        <SelectValue placeholder={t("SelectSalesperson" as any)} />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
@@ -200,9 +210,9 @@ export function TestDriveDialog({ open, onOpenChange, vehicleId, testDrive }: Te
               name="demoPlateNumber"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Demo Plate Number</FormLabel>
+                  <FormLabel>{t("DemoPlate" as any)}</FormLabel>
                   <FormControl>
-                    <Input placeholder="Optional" {...field} disabled={!!testDrive} />
+                    <Input placeholder={t("Optional" as any)} {...field} disabled={!!testDrive} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -214,9 +224,9 @@ export function TestDriveDialog({ open, onOpenChange, vehicleId, testDrive }: Te
               name="notes"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Notes</FormLabel>
+                  <FormLabel>{t("DescriptionNotes" as any)}</FormLabel>
                   <FormControl>
-                    <Textarea placeholder="Any issues reported during the drive?" {...field} />
+                    <Textarea placeholder={t("AnyIssuesReported" as any)} {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -225,10 +235,10 @@ export function TestDriveDialog({ open, onOpenChange, vehicleId, testDrive }: Te
 
             <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-                Cancel
+                {t("Cancel" as any)}
               </Button>
               <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? "Saving..." : testDrive ? "Complete Drive" : "Start Drive"}
+                {isSubmitting ? (t("Saving" as any)) : testDrive ? (t("CompleteDrive" as any)) : (t("StartDrive" as any))}
               </Button>
             </div>
           </form>

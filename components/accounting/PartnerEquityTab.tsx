@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "convex/react";
+import { useQuery, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 export function PartnerEquityTab() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const equities = useQuery(api.partnerEquity.list, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const { results: equities } = usePaginatedQuery(api.partnerEquity.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
 
   if (!equities) {
     return <div className="p-8 text-center text-slate-500">Loading partner equity...</div>;

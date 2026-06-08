@@ -1,5 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
@@ -13,6 +14,7 @@ import { rateLimiter } from "./rateLimit";
 export const list = query({
   args: {
     orgId: v.id("organizations"),
+    paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_CUSTOMERS]);
@@ -21,7 +23,7 @@ export const list = query({
       .query("customers")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .filter((q) => q.neq(q.field("isDeleted"), true))
-      .collect();
+      .paginate(args.paginationOpts);
   },
 });
 
@@ -37,7 +39,7 @@ export const get = query({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_CUSTOMERS]);
 
     const customer = await ctx.db.get(args.customerId);
-    if (!customer || customer.orgId !== args.orgId) {
+    if (!customer || customer.isDeleted || customer.orgId !== args.orgId) {
       throw new ConvexError("Customer not found in this organization.");
     }
 
@@ -165,7 +167,7 @@ export const update = mutation({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_CUSTOMERS]);
 
     const customer = await ctx.db.get(args.customerId);
-    if (!customer || customer.orgId !== args.orgId) {
+    if (!customer || customer.isDeleted || customer.orgId !== args.orgId) {
       throw new ConvexError("Customer not found in this organization.");
     }
 
@@ -217,6 +219,7 @@ export const update = mutation({
 /**
  * Soft deletes a customer. Fails if the customer has any associated leads or sales.
  */
+// TODO: Add admin recovery endpoint if needed
 export const softDelete = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -224,9 +227,11 @@ export const softDelete = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_CUSTOMERS]);
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new ConvexError("Unauthenticated");
 
     const customer = await ctx.db.get(args.customerId);
-    if (!customer || customer.orgId !== args.orgId) {
+    if (!customer || customer.isDeleted || customer.orgId !== args.orgId) {
       throw new ConvexError("Customer not found in this organization.");
     }
 
@@ -237,7 +242,7 @@ export const softDelete = mutation({
       .filter((q) => q.eq(q.field("customerId"), args.customerId))
       .first();
 
-    if (lead) {
+    if (lead && !lead.isDeleted) {
       throw new ConvexError(
         "Cannot delete this customer — they have associated leads. Delete the leads first."
       );
@@ -250,7 +255,7 @@ export const softDelete = mutation({
       .filter((q) => q.eq(q.field("customerId"), args.customerId))
       .first();
 
-    if (sale) {
+    if (sale && !sale.isDeleted) {
       throw new ConvexError(
         "Cannot delete this customer — they have associated sales records."
       );
@@ -259,7 +264,7 @@ export const softDelete = mutation({
     await ctx.db.patch(args.customerId, {
       isDeleted: true,
       deletedAt: Date.now(),
-      deletedBy: user._id
+      deletedBy: identity.subject
     });
 
     const actorName = await getActorName(ctx);

@@ -49,6 +49,11 @@ export const expensesEn = {
   AnyExtraDetails: "Any extra details...",
   Saving: "Saving...",
   SaveChanges: "Save Changes",
+  ExpenseDeletedSuccess: "Expense deleted successfully",
+  ExpenseDeleteFail: "Failed to delete expense",
+  ExpenseUpdatedSuccess: "Expense updated successfully",
+  ExpenseRecordedSuccess: "Expense recorded successfully!",
+  ExpenseSaveFail: "Failed to save expense",
 };
 
 export const expensesAr = {
@@ -102,4 +107,9 @@ export const expensesAr = {
   AnyExtraDetails: "أي تفاصيل إضافية...",
   Saving: "جاري الحفظ...",
   SaveChanges: "حفظ التغييرات",
+  ExpenseDeletedSuccess: "تم حذف المصروف بنجاح",
+  ExpenseDeleteFail: "فشل في حذف المصروف",
+  ExpenseUpdatedSuccess: "تم تحديث المصروف بنجاح",
+  ExpenseRecordedSuccess: "تم تسجيل المصروف بنجاح!",
+  ExpenseSaveFail: "فشل في حفظ المصروف",
 };

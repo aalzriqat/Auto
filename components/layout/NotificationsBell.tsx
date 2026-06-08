@@ -105,7 +105,7 @@ export function NotificationsBell() {
     const rtf = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' });
     const diff = (ts - Date.now()) / 1000;
 
-    if (Math.abs(diff) < 60) return "Just now";
+    if (Math.abs(diff) < 60) return t("JustNow" as any);
     if (Math.abs(diff) < 3600) return rtf.format(Math.round(diff / 60), 'minute');
     if (Math.abs(diff) < 86400) return rtf.format(Math.round(diff / 3600), 'hour');
     return new Date(ts).toLocaleDateString();

@@ -47,7 +47,7 @@ export function DocumentRuleDialog({ open, onOpenChange }: DocumentRuleDialogPro
     if (!activeOrgId) return;
 
     if (!formData.documentName) {
-      toast.error("Document name is required");
+      toast.error(t("DocumentNameRequired" as any));
       return;
     }
 
@@ -60,10 +60,10 @@ export function DocumentRuleDialog({ open, onOpenChange }: DocumentRuleDialogPro
         isRequired: formData.isRequired,
         description: formData.description,
       });
-      toast.success("Rule added successfully");
+      toast.success(t("RuleAddedSuccess" as any));
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || "Failed to add rule");
+      toast.error(error.message || t("RuleAddFail" as any));
     } finally {
       setIsSubmitting(false);
     }

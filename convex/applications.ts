@@ -1,5 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
@@ -8,26 +9,27 @@ export const list = query({
   args: {
     orgId: v.id("organizations"),
     status: v.optional(v.string()), // DRAFT, PENDING_DOCS, etc.
+    paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]); // Reusing sales permission for now
 
-    let applications;
+    let pageResult;
     if (args.status) {
-      applications = await ctx.db
+      pageResult = await ctx.db
         .query("financeApplications")
         .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", args.status as any))
-        .collect();
+        .paginate(args.paginationOpts);
     } else {
-      applications = await ctx.db
+      pageResult = await ctx.db
         .query("financeApplications")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .collect();
+        .paginate(args.paginationOpts);
     }
 
     // Enrich
-    return await Promise.all(
-      applications.map(async (app) => {
+    const page = await Promise.all(
+      pageResult.page.map(async (app) => {
         const customer = await ctx.db.get(app.customerId);
         const vehicle = await ctx.db.get(app.vehicleId);
         const company = app.companyId ? await ctx.db.get(app.companyId) : null;
@@ -45,6 +47,8 @@ export const list = query({
         };
       })
     );
+    
+    return { ...pageResult, page };
   },
 });
 

@@ -1,5 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query, action, internalMutation } from "./_generated/server";
+import { paginationOptsValidator } from "convex/server";
 import { internal } from "./_generated/api";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -12,17 +13,18 @@ import { PERMISSIONS } from "./utils/permissions";
 export const list = query({
   args: {
     orgId: v.id("organizations"),
+    paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_USERS]);
 
-    const memberships = await ctx.db
+    const pageResult = await ctx.db
       .query("memberships")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .collect();
+      .paginate(args.paginationOpts);
 
-    return await Promise.all(
-      memberships.map(async (m) => {
+    const page = await Promise.all(
+      pageResult.page.map(async (m) => {
         const user = await ctx.db.get(m.userId);
         const role = await ctx.db.get(m.roleId);
         return {
@@ -37,6 +39,8 @@ export const list = query({
         };
       })
     );
+    
+    return { ...pageResult, page };
   },
 });
 

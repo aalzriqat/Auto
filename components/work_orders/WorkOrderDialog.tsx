@@ -36,30 +36,8 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 
-const taskSchema = z.object({
-  id: z.string(),
-  description: z.string().min(1, "Description is required"),
-  partsCost: z.coerce.number().min(0),
-  laborCost: z.coerce.number().min(0),
-  mechanicName: z.string().optional(),
-  completed: z.boolean(),
-});
+import { workOrderSchema, WorkOrderFormValues, WorkOrderDialogProps } from "./work_order.schema";
 
-const workOrderSchema = z.object({
-  title: z.string().min(1, "Title is required"),
-  status: z.enum(["OPEN", "IN_PROGRESS", "COMPLETED"]),
-  tasks: z.array(taskSchema).min(1, "At least one task is required"),
-  notes: z.string().optional(),
-});
-
-type WorkOrderFormValues = z.infer<typeof workOrderSchema>;
-
-interface WorkOrderDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  vehicleId: Id<"vehicles">;
-  workOrder?: any | null;
-}
 
 export function WorkOrderDialog({ open, onOpenChange, vehicleId, workOrder }: WorkOrderDialogProps) {
   const { activeOrgId } = useOrg();

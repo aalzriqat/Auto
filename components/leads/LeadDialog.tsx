@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -35,31 +35,25 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-const leadSchema = z.object({
-  customerId: z.string().min(1, "Customer is required"),
-  vehicleId: z.string().optional().or(z.literal("")),
-  assignedUserId: z.string().optional().or(z.literal("")),
-  source: z.string().min(1, "Source is required"),
-  stage: z.enum(["NEW", "CONTACTED", "INTERESTED", "TEST_DRIVE", "NEGOTIATION", "RESERVED", "WON", "LOST"]),
-  notes: z.string().optional(),
-});
+import { leadSchema, LeadFormValues, LeadDialogProps } from "./lead.schema";
 
-type LeadFormValues = z.infer<typeof leadSchema>;
-
-interface LeadDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  lead?: (Doc<"leads"> & { customer: any, vehicle: any, assignedUser: any }) | null;
-}
 
 export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
 
   // Data for dropdowns
-  const customers = useQuery(api.customers.list, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const { results: customers } = usePaginatedQuery(
+    api.customers.list,
+    activeOrgId ? { orgId: activeOrgId } : "skip",
+    { initialNumItems: 100 }
+  );
   const vehicles = useQuery(api.vehicles.listAll, activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE" } : "skip");
-  const memberships = useQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const { results: memberships } = usePaginatedQuery(
+    api.memberships.list,
+    activeOrgId ? { orgId: activeOrgId } : "skip",
+    { initialNumItems: 100 }
+  );
 
   const createLead = useMutation(api.leads.create);
   const updateLead = useMutation(api.leads.update);
@@ -108,7 +102,7 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
         vehicleId: values.vehicleId && values.vehicleId !== "none" ? values.vehicleId as Id<"vehicles"> : undefined,
         assignedUserId: values.assignedUserId && values.assignedUserId !== "none" ? values.assignedUserId as Id<"users"> : undefined,
         source: values.source,
-        stage: values.stage,
+        stage: values.stage as any,
         notes: values.notes || undefined,
       };
 

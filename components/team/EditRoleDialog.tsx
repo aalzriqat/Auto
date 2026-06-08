@@ -53,10 +53,10 @@ export function EditRoleDialog({
         name: role.name === "OWNER" ? undefined : name,
         permissions,
       });
-      toast.success(t("RoleUpdated" as any) || "Role updated successfully");
+      toast.success(t("RoleUpdated" as any));
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || "Failed to update role");
+      toast.error(error.message || t("RoleUpdateFailed" as any));
     } finally {
       setIsSubmitting(false);
     }
@@ -66,13 +66,13 @@ export function EditRoleDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl h-[85vh] flex flex-col p-0 gap-0">
         <DialogHeader className="px-6 py-4 border-b">
-          <DialogTitle>{t("EditRole" as any) || "Edit Role"} - {t(role?.name as any) || role?.name}</DialogTitle>
+          <DialogTitle>{t("EditRole" as any)} - {t(role?.name as any) || role?.name}</DialogTitle>
         </DialogHeader>
         
         <ScrollArea className="flex-1 px-6 py-4">
           <div className="space-y-6">
             <div className="space-y-2">
-              <Label htmlFor="role-name">{t("RoleName" as any) || "Role Name"}</Label>
+              <Label htmlFor="role-name">{t("RoleName" as any)}</Label>
               <Input
                 id="role-name"
                 value={name}
@@ -80,12 +80,12 @@ export function EditRoleDialog({
                 disabled={role?.name === "OWNER"}
               />
               {role?.name === "OWNER" && (
-                <p className="text-xs text-muted-foreground">{t("OwnerRoleCannotBeRenamed" as any) || "The OWNER role cannot be renamed."}</p>
+                <p className="text-xs text-muted-foreground">{t("OwnerRoleCannotBeRenamed" as any)}</p>
               )}
             </div>
 
             <div className="space-y-2">
-              <Label>{t("Permissions" as any) || "Permissions"}</Label>
+              <Label>{t("Permissions" as any)}</Label>
               <RolePermissionsEditor 
                 selectedPermissions={permissions}
                 onChange={setPermissions}
@@ -96,10 +96,10 @@ export function EditRoleDialog({
 
         <DialogFooter className="px-6 py-4 border-t bg-muted/50">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
-            {t("Cancel" as any) || "Cancel"}
+            {t("Cancel" as any)}
           </Button>
           <Button onClick={handleSave} disabled={isSubmitting}>
-            {isSubmitting ? "Saving..." : (t("Save" as any) || "Save")}
+            {isSubmitting ? t("Saving" as any) : t("Save" as any)}
           </Button>
         </DialogFooter>
       </DialogContent>

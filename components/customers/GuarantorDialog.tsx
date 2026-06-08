@@ -61,7 +61,7 @@ export function GuarantorDialog({ open, onOpenChange, customerId, guarantor }: G
     if (!activeOrgId) return;
 
     if (!formData.firstName || !formData.lastName || !formData.nationalId || !formData.phone) {
-      toast.error("Please fill in all required fields.");
+      toast.error(t("FillRequiredFields" as any));
       return;
     }
 
@@ -78,7 +78,7 @@ export function GuarantorDialog({ open, onOpenChange, customerId, guarantor }: G
           relationship: formData.relationship,
           income: formData.income,
         });
-        toast.success("Guarantor updated successfully");
+        toast.success(t("GuarantorUpdatedSuccess" as any));
       } else {
         await addGuarantor({
           orgId: activeOrgId,
@@ -90,11 +90,11 @@ export function GuarantorDialog({ open, onOpenChange, customerId, guarantor }: G
           relationship: formData.relationship,
           income: formData.income,
         });
-        toast.success("Guarantor added successfully");
+        toast.success(t("GuarantorAddedSuccess" as any));
       }
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || "An error occurred");
+      toast.error(error.message || t("SomethingWentWrong" as any));
     } finally {
       setIsSubmitting(false);
     }
@@ -104,12 +104,12 @@ export function GuarantorDialog({ open, onOpenChange, customerId, guarantor }: G
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[425px]">
         <DialogHeader>
-          <DialogTitle>{guarantor ? "Edit Guarantor" : "Add Guarantor"}</DialogTitle>
+          <DialogTitle>{guarantor ? (t("EditGuarantor" as any)) : (t("AddGuarantor" as any))}</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>First Name <span className="text-red-500">*</span></Label>
+              <Label>{t("FirstName" as any)} <span className="text-red-500">*</span></Label>
               <Input
                 required
                 value={formData.firstName}
@@ -117,7 +117,7 @@ export function GuarantorDialog({ open, onOpenChange, customerId, guarantor }: G
               />
             </div>
             <div className="space-y-2">
-              <Label>Last Name <span className="text-red-500">*</span></Label>
+              <Label>{t("LastName" as any)} <span className="text-red-500">*</span></Label>
               <Input
                 required
                 value={formData.lastName}
@@ -127,7 +127,7 @@ export function GuarantorDialog({ open, onOpenChange, customerId, guarantor }: G
           </div>
           
           <div className="space-y-2">
-            <Label>National ID <span className="text-red-500">*</span></Label>
+            <Label>{t("NationalID" as any)} <span className="text-red-500">*</span></Label>
             <Input
               required
               value={formData.nationalId}
@@ -136,7 +136,7 @@ export function GuarantorDialog({ open, onOpenChange, customerId, guarantor }: G
           </div>
 
           <div className="space-y-2">
-            <Label>Phone Number <span className="text-red-500">*</span></Label>
+            <Label>{t("PhoneNumber" as any)} <span className="text-red-500">*</span></Label>
             <Input
               required
               value={formData.phone}
@@ -146,15 +146,15 @@ export function GuarantorDialog({ open, onOpenChange, customerId, guarantor }: G
 
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Relationship</Label>
+              <Label>{t("Relationship" as any)}</Label>
               <Input
-                placeholder="e.g. Brother, Friend"
+                placeholder={t("RelationshipEg" as any)}
                 value={formData.relationship}
                 onChange={(e) => setFormData({ ...formData, relationship: e.target.value })}
               />
             </div>
             <div className="space-y-2">
-              <Label>Income (JOD)</Label>
+              <Label>{t("IncomeJOD" as any)}</Label>
               <Input
                 type="number"
                 value={formData.income || ""}
@@ -165,10 +165,10 @@ export function GuarantorDialog({ open, onOpenChange, customerId, guarantor }: G
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
+              {t("Cancel" as any)}
             </Button>
             <Button type="submit" disabled={isSubmitting}>
-              {isSubmitting ? "Saving..." : "Save"}
+              {isSubmitting ? (t("Saving" as any)) : (t("Save" as any))}
             </Button>
           </DialogFooter>
         </form>

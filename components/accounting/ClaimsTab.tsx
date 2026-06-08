@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery } from "convex/react";
+import { useQuery, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -11,7 +11,7 @@ import { format } from "date-fns";
 export function ClaimsTab() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const claims = useQuery(api.claims.list, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const { results: claims } = usePaginatedQuery(api.claims.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
 
   if (!claims) {
     return <div className="p-8 text-center text-slate-500">Loading claims...</div>;

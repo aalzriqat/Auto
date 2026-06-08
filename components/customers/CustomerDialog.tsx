@@ -28,23 +28,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 
-const customerSchema = z.object({
-  firstName: z.string().min(1, "First name is required"),
-  lastName: z.string().min(1, "Last name is required"),
-  email: z.string().email("Invalid email format").optional().or(z.literal("")),
-  phone: z.string().optional(),
-  whatsapp: z.string().optional(),
-  nationalId: z.string().optional(),
-  address: z.string().optional(),
-});
+import { customerSchema, CustomerFormValues, CustomerDialogProps } from "./customer.schema";
 
-type CustomerFormValues = z.infer<typeof customerSchema>;
-
-interface CustomerDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  customer?: Doc<"customers"> | null;
-}
 
 export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogProps) {
   const { activeOrgId } = useOrg();
@@ -111,17 +96,17 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
           customerId: customer._id,
           ...payload,
         });
-        toast.success(t("CustomerUpdatedSuccess" as any) || "Customer updated successfully");
+        toast.success(t("CustomerUpdatedSuccess" as any));
       } else {
         await createCustomer({
           orgId: activeOrgId,
           ...payload,
         });
-        toast.success(t("CustomerAddedSuccess" as any) || "Customer added successfully");
+        toast.success(t("CustomerAddedSuccess" as any));
       }
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || "Something went wrong");
+      toast.error(error.message || t("SomethingWentWrong" as any));
     } finally {
       setIsSubmitting(false);
     }
@@ -131,9 +116,9 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{customer ? (t("EditCustomer" as any) || "Edit Customer") : (t("AddCustomer" as any) || "Add Customer")}</DialogTitle>
+          <DialogTitle>{customer ? (t("EditCustomer" as any)) : (t("AddCustomer" as any))}</DialogTitle>
           <DialogDescription>
-            {customer ? (t("UpdateCustomerDesc" as any) || "Update customer details below.") : (t("AddCustomerDesc" as any) || "Enter the details of the new customer.")}
+            {customer ? (t("UpdateCustomerDesc" as any)) : (t("AddCustomerDesc" as any))}
           </DialogDescription>
         </DialogHeader>
 
@@ -145,7 +130,7 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
                 name="firstName"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t("FirstName" as any) || "First Name"} <span className="text-red-500">*</span></FormLabel>
+                    <FormLabel>{t("FirstName" as any)} <span className="text-red-500">*</span></FormLabel>
                     <FormControl>
                       <Input placeholder="John" {...field} />
                     </FormControl>
@@ -158,7 +143,7 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
                 name="lastName"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t("LastName" as any) || "Last Name"} <span className="text-red-500">*</span></FormLabel>
+                    <FormLabel>{t("LastName" as any)} <span className="text-red-500">*</span></FormLabel>
                     <FormControl>
                       <Input placeholder="Doe" {...field} />
                     </FormControl>
@@ -171,7 +156,7 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
                 name="email"
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
-                    <FormLabel>{t("Email" as any) || "Email"}</FormLabel>
+                    <FormLabel>{t("Email" as any)}</FormLabel>
                     <FormControl>
                       <Input type="email" placeholder="john.doe@example.com" {...field} />
                     </FormControl>
@@ -184,7 +169,7 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
                 name="phone"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t("Phone" as any) || "Phone"}</FormLabel>
+                    <FormLabel>{t("Phone" as any)}</FormLabel>
                     <FormControl>
                       <Input placeholder="+1 234 567 8900" {...field} />
                     </FormControl>
@@ -197,7 +182,7 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
                 name="whatsapp"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t("WhatsApp" as any) || "WhatsApp"}</FormLabel>
+                    <FormLabel>{t("WhatsApp" as any)}</FormLabel>
                     <FormControl>
                       <Input placeholder="+1 234 567 8900" {...field} />
                     </FormControl>
@@ -210,7 +195,7 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
                 name="nationalId"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t("NationalIDPassport" as any) || "National ID / Passport"}</FormLabel>
+                    <FormLabel>{t("NationalIDPassport" as any)}</FormLabel>
                     <FormControl>
                       <Input placeholder="ID Number" {...field} />
                     </FormControl>
@@ -223,7 +208,7 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
                 name="address"
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
-                    <FormLabel>{t("Address" as any) || "Address"}</FormLabel>
+                    <FormLabel>{t("Address" as any)}</FormLabel>
                     <FormControl>
                       <Input placeholder="123 Main St, City, Country" {...field} />
                     </FormControl>
@@ -234,10 +219,10 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
             </div>
             <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-                {t("Cancel" as any) || "Cancel"}
+                {t("Cancel" as any)}
               </Button>
               <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? (t("Saving" as any) || "Saving...") : customer ? (t("SaveChanges" as any) || "Save Changes") : (t("AddCustomer" as any) || "Add Customer")}
+                {isSubmitting ? (t("Saving" as any)) : customer ? (t("SaveChanges" as any)) : (t("AddCustomer" as any))}
               </Button>
             </div>
           </form>

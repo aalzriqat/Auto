@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { RoleGuard } from "@/components/auth/RoleGuard";
+import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -31,7 +32,7 @@ import {
 export default function ExpensesPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const expenses = useQuery(api.expenses.list, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const { results: expenses } = usePaginatedQuery(api.expenses.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
   const removeExpense = useMutation(api.expenses.remove);
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -60,10 +61,10 @@ export default function ExpensesPage() {
     if (!activeOrgId || !expenseToDelete) return;
     try {
       await removeExpense({ orgId: activeOrgId, expenseId: expenseToDelete._id });
-      toast.success("Expense deleted successfully");
+      toast.success(t("ExpenseDeletedSuccess" as any));
       setExpenseToDelete(null);
     } catch (error: any) {
-      toast.error(error.message || "Failed to delete expense");
+      toast.error(error.message || t("ExpenseDeleteFail" as any));
     }
   };
 
@@ -77,7 +78,8 @@ export default function ExpensesPage() {
   };
 
   return (
-    <div className="space-y-6">
+    <RoleGuard permissions={["view:expenses"]}>
+      <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
         <Button onClick={handleAddNew}>
           <Plus className="me-2 h-4 w-4" /> {t("RecordExpense" as any)}
@@ -185,5 +187,6 @@ export default function ExpensesPage() {
         </DialogContent>
       </Dialog>
     </div>
+    </RoleGuard>
   );
 }

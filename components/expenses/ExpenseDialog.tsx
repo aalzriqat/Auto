@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -36,25 +36,8 @@ import {
 } from "@/components/ui/select";
 // removed Textarea import
 
-const expenseSchema = z.object({
-  title: z.string().min(1, "Title is required"),
-  amount: z.coerce.number().min(0, "Amount must be positive"),
-  date: z.string().min(1, "Date is required"),
-  category: z.enum(["REPAIR", "MAINTENANCE", "DETAILING", "TRANSPORT", "MARKETING", "OFFICE", "OTHER"]),
-  vehicleId: z.string().optional(),
-  status: z.enum(["PENDING", "PAID"]),
-  vendor: z.string().optional(),
-  payerId: z.string().optional(),
-  notes: z.string().optional(),
-});
+import { expenseSchema, ExpenseFormValues, ExpenseDialogProps } from "./expense.schema";
 
-type ExpenseFormValues = z.infer<typeof expenseSchema>;
-
-interface ExpenseDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  expense?: Doc<"expenses"> | null;
-}
 
 export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProps) {
   const { activeOrgId } = useOrg();
@@ -64,7 +47,11 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
     api.vehicles.listAll,
     activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE" } : "skip"
   );
-  const memberships = useQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const { results: memberships } = usePaginatedQuery(
+    api.memberships.list,
+    activeOrgId ? { orgId: activeOrgId } : "skip",
+    { initialNumItems: 100 }
+  );
 
   const createExpense = useMutation(api.expenses.create);
   const updateExpense = useMutation(api.expenses.update);
@@ -136,7 +123,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
           payerId: parsedPayerId === undefined ? null : parsedPayerId,
           notes: values.notes,
         });
-        toast.success("Expense updated successfully");
+        toast.success(t("ExpenseUpdatedSuccess" as any));
       } else {
         await createExpense({
           orgId: activeOrgId,
@@ -150,11 +137,11 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
           payerId: parsedPayerId,
           notes: values.notes,
         });
-        toast.success("Expense recorded successfully!");
+        toast.success(t("ExpenseRecordedSuccess" as any));
       }
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || "Failed to save expense");
+      toast.error(error.message || t("ExpenseSaveFail" as any));
     } finally {
       setIsSubmitting(false);
     }

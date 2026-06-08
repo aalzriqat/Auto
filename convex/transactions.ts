@@ -1,17 +1,21 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 
 export const list = query({
-  args: { orgId: v.id("organizations") },
+  args: { 
+    orgId: v.id("organizations"),
+    paginationOpts: paginationOptsValidator,
+  },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     return await ctx.db
       .query("transactions")
       .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId))
       .order("desc")
-      .collect();
+      .filter((q) => q.neq(q.field("isDeleted"), true)).paginate(args.paginationOpts);
   },
 });
 
@@ -79,6 +83,7 @@ export const update = mutation({
   },
 });
 
+// TODO: Add admin recovery endpoint if needed
 export const remove = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -86,6 +91,12 @@ export const remove = mutation({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    await ctx.db.delete(args.transactionId);
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Unauthenticated");
+    await ctx.db.patch(args.transactionId, {
+      isDeleted: true,
+      deletedAt: Date.now(),
+      deletedBy: identity.subject
+    });
   },
 });

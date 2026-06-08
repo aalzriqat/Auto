@@ -1,5 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
@@ -30,29 +31,30 @@ export const list = query({
   args: {
     orgId: v.id("organizations"),
     vehicleId: v.optional(v.id("vehicles")),
+    paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_EXPENSES]);
 
-    let expenses;
+    let pageResult;
 
     if (args.vehicleId) {
-      expenses = await ctx.db
+      pageResult = await ctx.db
         .query("expenses")
         .withIndex("by_org_vehicle", (q) =>
           q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId!)
         )
-        .collect();
+        .filter((q) => q.neq(q.field("isDeleted"), true)).paginate(args.paginationOpts);
     } else {
-      expenses = await ctx.db
+      pageResult = await ctx.db
         .query("expenses")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .collect();
+        .filter((q) => q.neq(q.field("isDeleted"), true)).paginate(args.paginationOpts);
     }
 
     // Hydrate vehicle info
-    return await Promise.all(
-      expenses.map(async (exp) => {
+    const page = await Promise.all(
+      pageResult.page.map(async (exp) => {
         let vehicle = null;
         if (exp.vehicleId) {
           vehicle = await ctx.db.get(exp.vehicleId);
@@ -72,6 +74,8 @@ export const list = query({
         };
       })
     );
+    
+    return { ...pageResult, page };
   },
 });
 
@@ -98,7 +102,7 @@ export const create = mutation({
 
     if (args.vehicleId) {
       const vehicle = await ctx.db.get(args.vehicleId);
-      if (!vehicle || vehicle.orgId !== args.orgId) {
+      if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
         throw new ConvexError("Vehicle not found in this organization.");
       }
     }
@@ -162,7 +166,7 @@ export const update = mutation({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_EXPENSES]);
 
     const expense = await ctx.db.get(args.expenseId);
-    if (!expense || expense.orgId !== args.orgId) {
+    if (!expense || expense.isDeleted || expense.orgId !== args.orgId) {
       throw new ConvexError("Expense not found.");
     }
 
@@ -171,7 +175,7 @@ export const update = mutation({
     if (args.vehicleId !== undefined) {
       if (args.vehicleId !== null) {
         const vehicle = await ctx.db.get(args.vehicleId);
-        if (!vehicle || vehicle.orgId !== args.orgId) {
+        if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
           throw new ConvexError("Vehicle not found in this organization.");
         }
       }
@@ -207,6 +211,7 @@ export const update = mutation({
 /**
  * Deletes an expense.
  */
+// TODO: Add admin recovery endpoint if needed
 export const remove = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -216,11 +221,17 @@ export const remove = mutation({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_EXPENSES]);
 
     const expense = await ctx.db.get(args.expenseId);
-    if (!expense || expense.orgId !== args.orgId) {
+    if (!expense || expense.isDeleted || expense.orgId !== args.orgId) {
       throw new ConvexError("Expense not found.");
     }
 
-    await ctx.db.delete(args.expenseId);
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Unauthenticated");
+    await ctx.db.patch(args.expenseId, {
+      isDeleted: true,
+      deletedAt: Date.now(),
+      deletedBy: identity.subject
+    });
 
     const actorName = await getActorName(ctx);
     await notifyManagers(

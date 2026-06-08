@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { RoleGuard } from "@/components/auth/RoleGuard";
+import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { Button } from "@/components/ui/button";
@@ -34,7 +35,11 @@ import {
 export default function SalesPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const sales = useQuery(api.sales.list, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const { results: sales, status: salesStatus, loadMore: loadMoreSales } = usePaginatedQuery(
+    api.sales.list,
+    activeOrgId ? { orgId: activeOrgId } : "skip",
+    { initialNumItems: 25 }
+  );
   const removeSale = useMutation(api.sales.softDelete);
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -65,31 +70,32 @@ export default function SalesPage() {
     if (!activeOrgId || !saleToDelete) return;
     try {
       await removeSale({ orgId: activeOrgId, saleId: saleToDelete._id });
-      toast.success(t("SaleRemovedSuccess" as any) || "Sale deleted successfully");
+      toast.success(t("SaleRemovedSuccess" as any));
       setSaleToDelete(null);
     } catch (error: any) {
-      toast.error(error.message || (t("SaleRemoveFail" as any) || "Failed to delete sale"));
+      toast.error(error.message || t("SaleRemoveFail" as any));
     }
   };
 
   const getStatusBadge = (status: string) => {
     switch (status) {
-      case "COMPLETED": return <Badge variant="default" className="bg-green-600 hover:bg-green-700">{t("Completed" as any) || "Completed"}</Badge>;
-      case "PENDING": return <Badge variant="secondary" className="bg-yellow-500/20 text-yellow-600 hover:bg-yellow-500/30">{t("Pending" as any) || "Pending"}</Badge>;
-      case "CANCELLED": return <Badge variant="destructive">{t("Cancelled" as any) || "Cancelled"}</Badge>;
+      case "COMPLETED": return <Badge variant="default" className="bg-green-600 hover:bg-green-700">{t("CompletedStatus" as any)}</Badge>;
+      case "PENDING": return <Badge variant="secondary" className="bg-yellow-500/20 text-yellow-600 hover:bg-yellow-500/30">{t("PendingStatus" as any)}</Badge>;
+      case "CANCELLED": return <Badge variant="destructive">{t("CancelledStatus" as any)}</Badge>;
       default: return <Badge variant="outline">{status}</Badge>;
     }
   };
 
   return (
-    <div className="space-y-6">
+    <RoleGuard permissions={["view:sales"]}>
+      <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => setIsQuoteDialogOpen(true)}>
-            {t("Create Quote" as any) || "Create Quote"}
+            {t("CreateQuote" as any)}
           </Button>
           <Button onClick={handleAddNew}>
-            <Plus className="me-2 h-4 w-4" /> {t("LogSale" as any) || "Log Sale"}
+            <Plus className="me-2 h-4 w-4" /> {t("LogSale" as any)}
           </Button>
         </div>
       </div>
@@ -97,7 +103,7 @@ export default function SalesPage() {
       <div className="flex items-center w-full max-w-sm space-x-2">
         <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
         <Input
-          placeholder={t("SearchSales" as any) || "Search by customer, vehicle, or salesperson..."}
+          placeholder={t("SearchSales" as any)}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           className="ps-9"
@@ -108,26 +114,26 @@ export default function SalesPage() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>{t("Date" as any) || "Date"}</TableHead>
-              <TableHead>{t("Customer" as any) || "Customer"}</TableHead>
-              <TableHead>{t("Vehicle" as any) || "Vehicle"}</TableHead>
-              <TableHead>{t("Salesperson" as any) || "Salesperson"}</TableHead>
-              <TableHead className="text-end">{t("Price" as any) || "Price"}</TableHead>
-              <TableHead>{t("Status" as any) || "Status"}</TableHead>
-              <TableHead className="text-end">{t("Actions" as any) || "Actions"}</TableHead>
+              <TableHead>{t("Date" as any)}</TableHead>
+              <TableHead>{t("Customer" as any)}</TableHead>
+              <TableHead>{t("Vehicle" as any)}</TableHead>
+              <TableHead>{t("Salesperson" as any)}</TableHead>
+              <TableHead className="text-end">{t("Price" as any)}</TableHead>
+              <TableHead>{t("Status" as any)}</TableHead>
+              <TableHead className="text-end">{t("Actions" as any)}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {filteredSales === undefined ? (
               <TableRow>
                 <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-                  {t("LoadingSales" as any) || "Loading sales..."}
+                  {t("LoadingSales" as any)}
                 </TableCell>
               </TableRow>
             ) : filteredSales.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-                  {t("NoSalesFound" as any) || "No sales found."}
+                  {t("NoSalesFound" as any)}
                 </TableCell>
               </TableRow>
             ) : (
@@ -159,9 +165,9 @@ export default function SalesPage() {
                           sale.salePrice,
                           sale.saleDate
                         );
-                        toast.success(t("BillOfSaleGenerated" as any) || "Bill of Sale generated");
+                        toast.success(t("BillOfSaleGenerated" as any));
                       } catch (err) {
-                        toast.error(t("FailedGeneratePDF" as any) || "Failed to generate PDF");
+                        toast.error(t("FailedGeneratePDF" as any));
                       }
                     }}>
                       <FileText className="h-4 w-4 text-blue-500" />
@@ -178,6 +184,13 @@ export default function SalesPage() {
             )}
           </TableBody>
         </Table>
+        {salesStatus === "CanLoadMore" && (
+          <div className="flex justify-center p-4">
+            <Button variant="outline" onClick={() => loadMoreSales(25)}>
+              {t("LoadMore" as any) || "Load More"}
+            </Button>
+          </div>
+        )}
       </div>
 
       <SaleDialog
@@ -194,18 +207,19 @@ export default function SalesPage() {
       <Dialog open={!!saleToDelete} onOpenChange={(open) => !open && setSaleToDelete(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{t("DeleteSaleRecord" as any) || "Delete Sale Record"}</DialogTitle>
+            <DialogTitle>{t("DeleteSaleRecord" as any)}</DialogTitle>
             <DialogDescription>
-              {t("DeleteSaleConfirm" as any) || "Are you sure you want to delete this sale? This action cannot be undone. If you just want to cancel the sale, use the Edit button to change its status to CANCELLED."} <br />
+              {t("DeleteSaleConfirm" as any)} <br />
               <span className="font-semibold text-foreground">{saleToDelete?.vehicleSummary}</span>
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setSaleToDelete(null)}>{t("Cancel" as any) || "Cancel"}</Button>
-            <Button variant="destructive" onClick={handleDelete}>{t("DeletePermanently" as any) || "Delete Permanently"}</Button>
+            <Button variant="outline" onClick={() => setSaleToDelete(null)}>{t("Cancel" as any)}</Button>
+            <Button variant="destructive" onClick={handleDelete}>{t("DeletePermanently" as any)}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
+    </RoleGuard>
   );
 }

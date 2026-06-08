@@ -19,7 +19,7 @@ export const list = query({
     return await ctx.db
       .query("roles")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .collect();
+      .filter((q) => q.neq(q.field("isDeleted"), true)).collect();
   },
 });
 
@@ -35,7 +35,7 @@ export const get = query({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_USERS]);
 
     const role = await ctx.db.get(args.roleId);
-    if (!role || role.orgId !== args.orgId) {
+    if (!role || role.isDeleted || role.orgId !== args.orgId) {
       throw new ConvexError("Role not found in this organization.");
     }
 
@@ -62,7 +62,7 @@ export const create = mutation({
     const existingRoles = await ctx.db
       .query("roles")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .collect();
+      .filter((q) => q.neq(q.field("isDeleted"), true)).collect();
 
     const duplicate = existingRoles.find(
       (r) => r.name.toUpperCase() === args.name.trim().toUpperCase()
@@ -95,7 +95,7 @@ export const update = mutation({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_ROLES]);
 
     const role = await ctx.db.get(args.roleId);
-    if (!role || role.orgId !== args.orgId) {
+    if (!role || role.isDeleted || role.orgId !== args.orgId) {
       throw new ConvexError("Role not found in this organization.");
     }
 
@@ -118,6 +118,7 @@ export const update = mutation({
  * Deletes a custom role. Cannot delete the OWNER role or any role
  * that is currently assigned to a membership.
  */
+// TODO: Add admin recovery endpoint if needed
 export const remove = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -127,7 +128,7 @@ export const remove = mutation({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_ROLES]);
 
     const role = await ctx.db.get(args.roleId);
-    if (!role || role.orgId !== args.orgId) {
+    if (!role || role.isDeleted || role.orgId !== args.orgId) {
       throw new ConvexError("Role not found in this organization.");
     }
 
@@ -148,6 +149,12 @@ export const remove = mutation({
       );
     }
 
-    await ctx.db.delete(args.roleId);
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Unauthenticated");
+    await ctx.db.patch(args.roleId, {
+      isDeleted: true,
+      deletedAt: Date.now(),
+      deletedBy: identity.subject
+    });
   },
 });

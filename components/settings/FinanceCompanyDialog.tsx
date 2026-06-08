@@ -76,17 +76,17 @@ export function FinanceCompanyDialog({
           orgId: activeOrgId,
           ...formData,
         });
-        toast.success("Company updated successfully");
+        toast.success(t("CompanyUpdatedSuccess" as any));
       } else {
         await createCompany({
           orgId: activeOrgId,
           ...formData,
         });
-        toast.success("Company created successfully");
+        toast.success(t("CompanyCreatedSuccess" as any));
       }
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || "An error occurred");
+      toast.error(error.message || t("AnErrorOccurred" as any));
     } finally {
       setIsLoading(false);
     }
@@ -160,7 +160,7 @@ export function FinanceCompanyDialog({
               />
             </div>
             <div className="grid gap-2">
-              <Label>{t("Max Financing LTV (%)" as any)}</Label>
+              <Label>{t("MaxFinancingLTV" as any)}</Label>
               <Input
                 type="number"
                 step="1"
@@ -178,7 +178,7 @@ export function FinanceCompanyDialog({
                 checked={formData.includesCommissionInDebt}
                 onChange={(e) => setFormData({ ...formData, includesCommissionInDebt: e.target.checked })}
               />
-              <Label htmlFor="includesCommissionInDebt">{t("Capitalizes Commission into Debt" as any)}</Label>
+              <Label htmlFor="includesCommissionInDebt">{t("CapitalizesCommissionIntoDebt" as any)}</Label>
             </div>
             <div className="flex items-center gap-2">
               <input
@@ -193,10 +193,10 @@ export function FinanceCompanyDialog({
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
+              {t("Cancel" as any)}
             </Button>
             <Button type="submit" disabled={isLoading}>
-              {isLoading ? "Saving..." : "Save"}
+              {isLoading ? t("Saving..." as any) : t("Save" as any)}
             </Button>
           </DialogFooter>
         </form>

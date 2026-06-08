@@ -137,13 +137,13 @@ export function RolePermissionsEditor({
           <AccordionItem key={group.id} value={group.id} className="border rounded-lg px-4 bg-card">
             <AccordionTrigger className="hover:no-underline py-3">
               <div className="flex items-center justify-between w-full pr-4">
-                <span className="font-semibold">{t(group.label as any) || group.label}</span>
+                <span className="font-semibold">{t(group.label as any)}</span>
                 <div
                   className="flex items-center space-x-2"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <Label htmlFor={`base-${group.id}`} className="text-xs font-normal cursor-pointer">
-                    {hasBaseAccess ? (t("Enabled" as any) || "Enabled") : (t("Disabled" as any) || "Disabled")}
+                    {hasBaseAccess ? t("Enabled" as any) : t("Disabled" as any)}
                   </Label>
                   <Switch
                     id={`base-${group.id}`}
@@ -156,7 +156,7 @@ export function RolePermissionsEditor({
             <AccordionContent className="pt-2 pb-4 space-y-6 border-t mt-2">
               {!hasBaseAccess && (
                 <div className="text-sm text-muted-foreground p-3 bg-muted rounded-md border border-dashed">
-                  {t("EnableModuleToggle" as any) || "Enable the module toggle above to configure specific actions and tabs."}
+                  {t("EnableModuleToggle" as any)}
                 </div>
               )}
 
@@ -164,7 +164,7 @@ export function RolePermissionsEditor({
                 {/* Tabs Configuration */}
                 {group.tabs.length > 0 && (
                   <div>
-                    <h4 className="text-sm font-medium mb-3 text-foreground/80">{t("TabVisibility" as any) || "Tab Visibility"}</h4>
+                    <h4 className="text-sm font-medium mb-3 text-foreground/80">{t("TabVisibility" as any)}</h4>
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
                       {group.tabs.map(tab => (
                         <div key={tab.id} className="flex items-center space-x-2 bg-muted/30 p-2 rounded border">
@@ -174,7 +174,7 @@ export function RolePermissionsEditor({
                             onCheckedChange={(c) => togglePermission(tab.id, c === true)}
                           />
                           <Label htmlFor={tab.id} className="text-xs cursor-pointer font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
-                            {t(tab.label.replace(/[\s&]+/g, "") as any) || tab.label}
+                            {t(tab.label.replace(/[\s&]+/g, "") as any)}
                           </Label>
                         </div>
                       ))}
@@ -185,7 +185,7 @@ export function RolePermissionsEditor({
                 {/* Actions Configuration */}
                 {group.actions.length > 0 && (
                   <div>
-                    <h4 className="text-sm font-medium mb-3 text-foreground/80">{t("ActionsAndApprovals" as any) || "Actions & Approvals"}</h4>
+                    <h4 className="text-sm font-medium mb-3 text-foreground/80">{t("ActionsAndApprovals" as any)}</h4>
                     <div className="grid gap-3">
                       {group.actions.map(action => {
                         const actionRequest = (action as any).request;
@@ -198,14 +198,14 @@ export function RolePermissionsEditor({
 
                         return (
                           <div key={action.id} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded border bg-muted/10">
-                            <Label className="text-sm font-medium mb-2 sm:mb-0">{t(action.label.replace(/[\s&]+/g, "") as any) || action.label}</Label>
+                            <Label className="text-sm font-medium mb-2 sm:mb-0">{t(action.label.replace(/[\s&]+/g, "") as any)}</Label>
                             <div className="flex bg-muted p-1 rounded-md">
                               <button
                                 type="button"
                                 onClick={() => handleActionChange(action.id, actionRequest, "NONE")}
                                 className={`px-3 py-1 text-xs rounded-sm font-medium transition-colors ${currentValue === "NONE" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
                               >
-                                {t("NoAccess" as any) || "No Access"}
+                                {t("NoAccess" as any)}
                               </button>
                               {actionRequest && (
                                 <button
@@ -213,7 +213,7 @@ export function RolePermissionsEditor({
                                   onClick={() => handleActionChange(action.id, actionRequest, "REQUEST")}
                                   className={`px-3 py-1 text-xs rounded-sm font-medium transition-colors ${currentValue === "REQUEST" ? "bg-yellow-500/20 text-yellow-700 dark:text-yellow-400 shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
                                 >
-                                  {t("RequiresApproval" as any) || "Requires Approval"}
+                                  {t("RequiresApproval" as any)}
                                 </button>
                               )}
                               <button
@@ -221,7 +221,7 @@ export function RolePermissionsEditor({
                                 onClick={() => handleActionChange(action.id, actionRequest, "DIRECT")}
                                 className={`px-3 py-1 text-xs rounded-sm font-medium transition-colors ${currentValue === "DIRECT" ? "bg-green-500/20 text-green-700 dark:text-green-400 shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
                               >
-                                {t("DirectAccess" as any) || "Direct Access"}
+                                {t("DirectAccess" as any)}
                               </button>
                             </div>
                           </div>

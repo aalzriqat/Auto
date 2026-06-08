@@ -16,7 +16,7 @@ export const listByCustomer = query({
       .query("guarantors")
       .withIndex("by_customer", (q) => q.eq("customerId", args.customerId))
       .filter((q) => q.eq(q.field("orgId"), args.orgId))
-      .collect();
+      .filter((q) => q.neq(q.field("isDeleted"), true)).collect();
   },
 });
 
@@ -35,7 +35,7 @@ export const add = mutation({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_CUSTOMERS]);
 
     const customer = await ctx.db.get(args.customerId);
-    if (!customer || customer.orgId !== args.orgId) {
+    if (!customer || customer.isDeleted || customer.orgId !== args.orgId) {
       throw new ConvexError("Customer not found in this organization.");
     }
 
@@ -78,7 +78,7 @@ export const update = mutation({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_CUSTOMERS]);
 
     const guarantor = await ctx.db.get(args.guarantorId);
-    if (!guarantor || guarantor.orgId !== args.orgId) {
+    if (!guarantor || guarantor.isDeleted || guarantor.orgId !== args.orgId) {
       throw new ConvexError("Guarantor not found in this organization.");
     }
 
@@ -96,6 +96,7 @@ export const update = mutation({
   },
 });
 
+// TODO: Add admin recovery endpoint if needed
 export const remove = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -105,10 +106,16 @@ export const remove = mutation({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_CUSTOMERS]);
 
     const guarantor = await ctx.db.get(args.guarantorId);
-    if (!guarantor || guarantor.orgId !== args.orgId) {
+    if (!guarantor || guarantor.isDeleted || guarantor.orgId !== args.orgId) {
       throw new ConvexError("Guarantor not found in this organization.");
     }
 
-    await ctx.db.delete(args.guarantorId);
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Unauthenticated");
+    await ctx.db.patch(args.guarantorId, {
+      isDeleted: true,
+      deletedAt: Date.now(),
+      deletedBy: identity.subject
+    });
   },
 });

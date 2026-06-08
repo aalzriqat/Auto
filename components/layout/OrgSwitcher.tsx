@@ -1,6 +1,7 @@
 "use client";
 
 import { useOrg } from "@/components/providers/OrgProvider";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { ChevronsUpDown, Plus, Edit2 } from "lucide-react";
@@ -29,6 +30,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 
 export function OrgSwitcher() {
+  const { t } = useLanguage();
   const { activeOrgId, setActiveOrgId } = useOrg();
   const orgs = useQuery(api.organizations.listMine);
   
@@ -48,9 +50,9 @@ export function OrgSwitcher() {
       setActiveOrgId(newId);
       setNewOrgName("");
       setDialogType(null);
-      toast.success("Organization created successfully");
+      toast.success(t("OrganizationCreated" as any));
     } catch (error: any) {
-      toast.error(error.message || "Failed to create organization");
+      toast.error(error.message || t("FailedToCreateOrg" as any));
     }
   };
 
@@ -62,9 +64,9 @@ export function OrgSwitcher() {
       await updateOrg({ orgId: activeOrgId, name: newOrgName.trim() });
       setNewOrgName("");
       setDialogType(null);
-      toast.success("Organization renamed successfully");
+      toast.success(t("OrganizationRenamed" as any));
     } catch (error: any) {
-      toast.error(error.message || "Failed to rename organization");
+      toast.error(error.message || t("FailedToRenameOrg" as any));
     }
   };
 
@@ -82,9 +84,9 @@ export function OrgSwitcher() {
             </div>
             <div className="grid flex-1 text-start text-sm leading-tight max-w-[120px] md:max-w-[150px]">
               <span className="truncate font-semibold">
-                {activeOrg?.name || "Loading..."}
+                {activeOrg?.name || t("Loading" as any)}
               </span>
-              <span className="truncate text-xs text-muted-foreground">Dealership</span>
+              <span className="truncate text-xs text-muted-foreground">{t("Dealership" as any)}</span>
             </div>
             <ChevronsUpDown className="size-4 shrink-0 opacity-50" />
           </Button>
@@ -96,7 +98,7 @@ export function OrgSwitcher() {
           sideOffset={8}
         >
           <DropdownMenuLabel className="text-xs text-muted-foreground">
-            Organizations
+            {t("Organizations" as any)}
           </DropdownMenuLabel>
           {orgs?.map((org: any) => (
             <DropdownMenuItem
@@ -116,7 +118,7 @@ export function OrgSwitcher() {
               <div className="flex size-6 items-center justify-center rounded-md border bg-background">
                 <Plus className="size-4" />
               </div>
-              <div className="font-medium text-muted-foreground">Add organization</div>
+              <div className="font-medium text-muted-foreground">{t("AddOrganization" as any)}</div>
             </DropdownMenuItem>
           </DialogTrigger>
           <DialogTrigger asChild>
@@ -124,7 +126,7 @@ export function OrgSwitcher() {
               <div className="flex size-6 items-center justify-center rounded-md border bg-background">
                 <Edit2 className="size-4" />
               </div>
-              <div className="font-medium text-muted-foreground">Rename current</div>
+              <div className="font-medium text-muted-foreground">{t("RenameCurrent" as any)}</div>
             </DropdownMenuItem>
           </DialogTrigger>
         </DropdownMenuContent>
@@ -132,31 +134,31 @@ export function OrgSwitcher() {
 
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{dialogType === "CREATE" ? "Create Organization" : "Rename Organization"}</DialogTitle>
+          <DialogTitle>{dialogType === "CREATE" ? t("CreateOrganization" as any) : t("RenameOrganization" as any)}</DialogTitle>
           <DialogDescription>
             {dialogType === "CREATE" 
-              ? "Add a new dealership to manage its inventory and customers."
-              : "Change the name of your current dealership."}
+              ? t("CreateOrgDescription" as any)
+              : t("RenameOrgDescription" as any)}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={dialogType === "CREATE" ? handleCreateOrg : handleRenameOrg}>
           <div className="grid gap-4 py-4">
             <div className="grid grid-cols-4 items-center gap-4">
               <Label htmlFor="name" className="text-end">
-                Name
+                {t("Name" as any)}
               </Label>
               <Input
                 id="name"
                 value={newOrgName}
                 onChange={(e) => setNewOrgName(e.target.value)}
-                placeholder="Acme Auto"
+                placeholder={t("AcmeAuto" as any)}
                 className="col-span-3"
                 autoFocus
               />
             </div>
           </div>
           <DialogFooter>
-            <Button type="submit" disabled={!newOrgName.trim()}>{dialogType === "CREATE" ? "Create" : "Save changes"}</Button>
+            <Button type="submit" disabled={!newOrgName.trim()}>{dialogType === "CREATE" ? t("Create" as any) : t("SaveChanges" as any)}</Button>
           </DialogFooter>
         </form>
       </DialogContent>

@@ -1,5 +1,6 @@
 import { AccountingClient } from "@/components/accounting/AccountingClient";
 import { Metadata } from "next";
+import { RoleGuard } from "@/components/auth/RoleGuard";
 
 export const metadata: Metadata = {
   title: "Accounting & Finance | AutoFlow",
@@ -7,5 +8,9 @@ export const metadata: Metadata = {
 };
 
 export default function AccountingPage() {
-  return <AccountingClient />;
+  return (
+    <RoleGuard permissions={["view:settings"]}>
+      <AccountingClient />
+    </RoleGuard>
+  );
 }

@@ -36,32 +36,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-const vehicleSchema = z.object({
-  vin: z.string().min(17, "VIN must be at least 17 characters").max(17, "VIN must be exactly 17 characters"),
-  make: z.string().min(1, "Make is required"),
-  model: z.string().min(1, "Model is required"),
-  year: z.coerce.number().min(1900).max(new Date().getFullYear() + 1),
-  trim: z.string().optional(),
-  mileage: z.coerce.number().min(0, "Mileage cannot be negative"),
-  color: z.string().min(1, "Color is required"),
-  fuelType: z.string().min(1, "Fuel Type is required"),
-  transmission: z.string().min(1, "Transmission is required"),
-  purchasePrice: z.coerce.number().min(0).optional(),
-  sellingPrice: z.coerce.number().min(0),
-  status: z.enum(["AVAILABLE", "RESERVED", "SOLD", "IN_INSPECTION", "IN_REPAIR", "ARCHIVED"]).optional(),
-  notes: z.string().optional(),
-  imageIds: z.array(z.string()).optional(),
-});
+import { vehicleSchema, VehicleFormValues, VehicleDialogProps } from "./vehicle.schema";
 
-type VehicleFormValues = z.infer<typeof vehicleSchema>;
-
-interface VehicleDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  vehicle?: Doc<"vehicles"> | null;
-  canCreate?: boolean;
-  canEdit?: boolean;
-}
 
 export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, canEdit = false }: VehicleDialogProps) {
   const { activeOrgId } = useOrg();
@@ -172,7 +148,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
       setImageUrls(newImageUrls);
       form.setValue("imageIds", newImageIds);
     } catch (error) {
-      toast.error("Failed to upload image");
+      toast.error(t("FailedToUploadImage" as any));
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -233,10 +209,10 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
           else if (fuel.includes("hybrid")) form.setValue("fuelType", "Hybrid");
         }
       } else {
-        toast.error("No data found for this VIN.");
+        toast.error(t("NoDataForVIN" as any));
       }
     } catch (error) {
-      toast.error("Failed to decode VIN. Please try again.");
+      toast.error(t("FailedToDecodeVIN" as any));
     } finally {
       setIsDecoding(false);
     }
@@ -275,7 +251,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
             ...restValues,
             imageIds: imageIds as Id<"_storage">[],
           });
-          toast.success("Vehicle updated successfully");
+          toast.success(t("VehicleUpdated" as any));
         } else {
           await requestUpdate({
             orgId: activeOrgId,
@@ -285,7 +261,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
               imageIds: imageIds as Id<"_storage">[],
             },
           });
-          toast.success("Update request submitted for approval");
+          toast.success(t("UpdateRequestSubmitted" as any));
         }
       } else {
         if (canCreate) {
@@ -294,7 +270,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
             ...restValues,
             imageIds: imageIds as Id<"_storage">[],
           });
-          toast.success("Vehicle added successfully");
+          toast.success(t("VehicleAdded" as any));
         } else {
           await requestCreate({
             orgId: activeOrgId,
@@ -303,12 +279,12 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
               imageIds: imageIds as Id<"_storage">[],
             },
           });
-          toast.success("Creation request submitted for approval");
+          toast.success(t("CreationRequestSubmitted" as any));
         }
       }
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || "Something went wrong");
+      toast.error(error.message || t("SomethingWentWrong" as any));
     } finally {
       setIsSubmitting(false);
     }
@@ -365,12 +341,12 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="AVAILABLE">{t("AvailableLC" as any) || "Available"}</SelectItem>
-                        <SelectItem value="IN_INSPECTION">{t("InInspection" as any) || "In Inspection"}</SelectItem>
-                        <SelectItem value="IN_REPAIR">{t("InRepair" as any) || "In Repair"}</SelectItem>
-                        <SelectItem value="RESERVED">{t("Reserved" as any) || "Reserved"}</SelectItem>
-                        <SelectItem value="SOLD">{t("Sold" as any) || "Sold"}</SelectItem>
-                        <SelectItem value="ARCHIVED">{t("Archived" as any) || "Archived"}</SelectItem>
+                        <SelectItem value="AVAILABLE">{t("StatusAvailable" as any)}</SelectItem>
+                        <SelectItem value="IN_INSPECTION">{t("StatusInInspection" as any)}</SelectItem>
+                        <SelectItem value="IN_REPAIR">{t("StatusInRepair" as any)}</SelectItem>
+                        <SelectItem value="RESERVED">{t("StatusReserved" as any)}</SelectItem>
+                        <SelectItem value="SOLD">{t("StatusSold" as any)}</SelectItem>
+                        <SelectItem value="ARCHIVED">{t("StatusArchived" as any)}</SelectItem>
                       </SelectContent>
                     </Select>
                     <FormMessage />

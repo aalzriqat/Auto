@@ -49,10 +49,10 @@ export function ChangeMemberRoleDialog({
         membershipId: member._id,
         newRoleId: selectedRoleId as any,
       });
-      toast.success(t("RoleUpdated" as any) || "Member's role updated successfully");
+      toast.success(t("RoleUpdatedSuccess" as any));
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || "Failed to update member's role");
+      toast.error(error.message || t("RoleUpdateFail" as any));
     } finally {
       setIsSubmitting(false);
     }
@@ -62,18 +62,18 @@ export function ChangeMemberRoleDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>{t("ChangeRole" as any) || "Change Role"} - {member?.userName}</DialogTitle>
+          <DialogTitle>{t("ChangeRole" as any)} - {member?.userName}</DialogTitle>
         </DialogHeader>
         
         <div className="space-y-4 py-4">
           <div className="space-y-2">
-            <Label>{t("SelectNewRole" as any) || "Select New Role"}</Label>
+            <Label>{t("SelectNewRole" as any)}</Label>
             <Select 
               value={selectedRoleId} 
               onValueChange={setSelectedRoleId}
             >
               <SelectTrigger>
-                <SelectValue placeholder="Select a role" />
+                <SelectValue placeholder={t("SelectARole" as any)} />
               </SelectTrigger>
               <SelectContent>
                 {roles?.map((role) => (
@@ -88,10 +88,10 @@ export function ChangeMemberRoleDialog({
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
-            {t("Cancel" as any) || "Cancel"}
+            {t("Cancel" as any)}
           </Button>
           <Button onClick={handleSave} disabled={isSubmitting || selectedRoleId === member?.roleId}>
-            {isSubmitting ? "Saving..." : (t("Save" as any) || "Save")}
+            {isSubmitting ? t("Saving" as any) : t("Save" as any)}
           </Button>
         </DialogFooter>
       </DialogContent>

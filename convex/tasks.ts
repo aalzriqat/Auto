@@ -1,5 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 
@@ -14,33 +15,24 @@ export const list = query({
     orgId: v.id("organizations"),
     assignedTo: v.optional(v.id("users")),
     status: v.optional(v.union(v.literal("PENDING"), v.literal("COMPLETED"))),
+    paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_TASKS]);
 
-    let results;
-
-    if (args.assignedTo) {
-      results = await ctx.db
-        .query("tasks")
-        .withIndex("by_org_assignedTo", (q) =>
-          q.eq("orgId", args.orgId).eq("assignedTo", args.assignedTo!)
+    const q = args.assignedTo
+      ? ctx.db.query("tasks").withIndex("by_org_assignedTo", (q2) =>
+          q2.eq("orgId", args.orgId).eq("assignedTo", args.assignedTo!)
         )
-        .collect();
-    } else {
-      results = await ctx.db
-        .query("tasks")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .collect();
-    }
+      : ctx.db.query("tasks").withIndex("by_org", (q2) => q2.eq("orgId", args.orgId));
 
-    if (args.status) {
-      results = results.filter((t) => t.status === args.status);
-    }
+    const finalQ = args.status ? q.filter((q2) => q2.eq(q2.field("status"), args.status)) : q;
+
+    const pageResult = await finalQ.filter((q) => q.neq(q.field("isDeleted"), true)).paginate(args.paginationOpts);
 
     // Hydrate associations
-    return await Promise.all(
-      results.map(async (task) => {
+    const page = await Promise.all(
+      pageResult.page.map(async (task) => {
         let assigneeName = "Unknown";
         const assignee = await ctx.db.get(task.assignedTo);
         if (assignee) {
@@ -62,6 +54,8 @@ export const list = query({
         };
       })
     );
+    
+    return { ...pageResult, page };
   },
 });
 
@@ -138,7 +132,7 @@ export const update = mutation({
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_TASKS]);
 
     const task = await ctx.db.get(args.taskId);
-    if (!task || task.orgId !== args.orgId) {
+    if (!task || task.isDeleted || task.orgId !== args.orgId) {
       throw new ConvexError("Task not found.");
     }
 

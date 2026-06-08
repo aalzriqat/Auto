@@ -16,12 +16,12 @@ export const list = query({
       results = await ctx.db
         .query("workOrders")
         .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId!))
-        .collect();
+        .filter((q) => q.neq(q.field("isDeleted"), true)).collect();
     } else {
       results = await ctx.db
         .query("workOrders")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .collect();
+        .filter((q) => q.neq(q.field("isDeleted"), true)).collect();
     }
 
     return await Promise.all(
@@ -110,7 +110,7 @@ export const update = mutation({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
 
     const wo = await ctx.db.get(args.workOrderId);
-    if (!wo || wo.orgId !== args.orgId) throw new ConvexError("Work Order not found");
+    if (!wo || wo.isDeleted || wo.orgId !== args.orgId) throw new ConvexError("Work Order not found");
 
     const totalCost = args.tasks.reduce((sum, task) => sum + task.partsCost + task.laborCost, 0);
 
@@ -149,6 +149,7 @@ export const update = mutation({
   },
 });
 
+// TODO: Add admin recovery endpoint if needed
 export const remove = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -158,12 +159,24 @@ export const remove = mutation({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
     
     const wo = await ctx.db.get(args.workOrderId);
-    if (!wo || wo.orgId !== args.orgId) throw new ConvexError("Work Order not found");
+    if (!wo || wo.isDeleted || wo.orgId !== args.orgId) throw new ConvexError("Work Order not found");
 
     if (wo.expenseId) {
-      await ctx.db.delete(wo.expenseId);
+      const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Unauthenticated");
+    await ctx.db.patch(wo.expenseId, {
+      isDeleted: true,
+      deletedAt: Date.now(),
+      deletedBy: identity.subject
+    });
     }
 
-    await ctx.db.delete(args.workOrderId);
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Unauthenticated");
+    await ctx.db.patch(args.workOrderId, {
+      isDeleted: true,
+      deletedAt: Date.now(),
+      deletedBy: identity.subject
+    });
   },
 });

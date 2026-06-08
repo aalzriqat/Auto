@@ -11,6 +11,7 @@
 import type * as applications from "../applications.js";
 import type * as branches from "../branches.js";
 import type * as claims from "../claims.js";
+import type * as constants from "../constants.js";
 import type * as crons from "../crons.js";
 import type * as customers from "../customers.js";
 import type * as dashboard from "../dashboard.js";
@@ -56,6 +57,7 @@ declare const fullApi: ApiFromModules<{
   applications: typeof applications;
   branches: typeof branches;
   claims: typeof claims;
+  constants: typeof constants;
   crons: typeof crons;
   customers: typeof customers;
   dashboard: typeof dashboard;

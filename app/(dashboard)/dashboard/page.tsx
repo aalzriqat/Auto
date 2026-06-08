@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery } from "convex/react";
+import { useQuery, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -39,6 +39,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { RoleGuard } from "@/components/auth/RoleGuard";
 
 
 export default function DashboardPage() {
@@ -54,9 +55,10 @@ export default function DashboardPage() {
     activeOrgId ? { orgId: activeOrgId, timeRange } : "skip"
   );
 
-  const leads = useQuery(
+  const { results: leads } = usePaginatedQuery(
     api.leads.list,
-    activeOrgId ? { orgId: activeOrgId } : "skip"
+    activeOrgId ? { orgId: activeOrgId } : "skip",
+    { initialNumItems: 100 }
   );
 
   const myMembership = useQuery(
@@ -64,8 +66,20 @@ export default function DashboardPage() {
     activeOrgId ? { orgId: activeOrgId } : "skip"
   );
 
-  if (myMembership === undefined) {
-    return <div className="p-8 text-center text-muted-foreground">{t("Loading" as any) || "Loading dashboard..."}</div>;
+  if (stats === undefined || leads === undefined || myMembership === undefined) {
+    return (
+      <RoleGuard permissions={[]}>
+        <div className="space-y-4 max-w-[1400px] mx-auto pb-4 pt-4">
+          <Skeleton className="w-full h-[220px] rounded-2xl" />
+          <div className="grid gap-4 md:grid-cols-3">
+            <Skeleton className="w-full h-[200px] rounded-2xl" />
+            <Skeleton className="w-full h-[200px] rounded-2xl" />
+            <Skeleton className="w-full h-[200px] rounded-2xl" />
+          </div>
+          <Skeleton className="w-full h-[300px] rounded-2xl" />
+        </div>
+      </RoleGuard>
+    );
   }
 
   // Fallback data mapping to match the image exactly if the real data is missing or different
@@ -118,6 +132,7 @@ export default function DashboardPage() {
   const finalDonutData = donutChartData;
 
   return (
+    <RoleGuard permissions={[]}>
     <motion.div
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
@@ -429,7 +444,7 @@ export default function DashboardPage() {
           </div>
         </div>
       </motion.div>
-
     </motion.div>
+    </RoleGuard>
   );
 }

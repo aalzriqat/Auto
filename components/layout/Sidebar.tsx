@@ -22,7 +22,7 @@ const navigation = [
   { name: "Team", href: "/team", icon: Shield, permission: "manage:users" },
   { name: "Accounting", href: "/accounting", icon: BadgeDollarSign, permission: "view:finance" },
   { name: "Reports", href: "/reports", icon: LineChart, permission: "view:reports" },
-  { name: "Finance Settings", href: "/settings/finance", icon: Settings, permission: "view:settings" },
+  { name: "FinanceSettings", href: "/settings/finance", icon: Settings, permission: "view:settings" },
   { name: "Branches", href: "/settings/branches", icon: Store, permission: "manage:users" },
 ];
 
@@ -72,8 +72,8 @@ export function Sidebar() {
 
       <div className="p-4 border-t border-slate-200/50">
         <div className="rounded-xl bg-slate-50 p-4 border border-slate-100">
-          <p className="text-xs font-medium text-slate-500 mb-1">AutoFlow PRO</p>
-          <p className="text-[10px] text-slate-400">Dealership Plan Active</p>
+          <p className="text-xs font-medium text-slate-500 mb-1">{t("AutoFlowPro" as any)}</p>
+          <p className="text-[10px] text-slate-400">{t("DealershipPlanActive" as any)}</p>
         </div>
       </div>
     </aside>

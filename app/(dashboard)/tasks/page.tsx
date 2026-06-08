@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { RoleGuard } from "@/components/auth/RoleGuard";
+import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { Id } from "@/convex/_generated/dataModel";
@@ -35,7 +36,7 @@ import {
 export default function TasksPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const tasks = useQuery(api.tasks.list, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const { results: tasks } = usePaginatedQuery(api.tasks.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
   const updateTask = useMutation(api.tasks.update);
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -146,7 +147,8 @@ export default function TasksPage() {
   };
 
   return (
-    <div className="space-y-6">
+    <RoleGuard permissions={["view:tasks"]}>
+      <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
         <Button onClick={handleAddNew}>
           <Plus className="me-2 h-4 w-4" /> {t("ScheduleTask" as any) || "Schedule Task"}
@@ -338,11 +340,14 @@ export default function TasksPage() {
         task={historyTask}
       />
 
-      <CustomerDetailsDialog
-        customerId={selectedCustomerId as Id<"customers">}
-        open={!!selectedCustomerId}
-        onOpenChange={(open) => !open && setSelectedCustomerId(null)}
-      />
+      <RoleGuard permissions={["view:customers"]}>
+        <CustomerDetailsDialog
+          customerId={selectedCustomerId as Id<"customers">}
+          open={!!selectedCustomerId}
+          onOpenChange={(open) => !open && setSelectedCustomerId(null)}
+        />
+      </RoleGuard>
     </div>
+    </RoleGuard>
   );
 }

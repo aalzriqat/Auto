@@ -66,18 +66,18 @@ export function CustomerDetailsDialog({
         <div className="p-6 pb-2">
           <DialogHeader>
             <DialogTitle className="text-xl">
-              {customer ? `${customer.firstName} ${customer.lastName}` : (t("CustomerDetails" as any) || "Customer Details")}
+              {customer ? `${customer.firstName} ${customer.lastName}` : (t("CustomerDetails" as any))}
             </DialogTitle>
             <DialogDescription>
-              {t("CustomerDetailsDialogDesc" as any) || "Contact information and full interaction history."}
+              {t("CustomerDetailsDialogDesc" as any)}
             </DialogDescription>
           </DialogHeader>
         </div>
 
         {customer === undefined ? (
-          <div className="py-8 text-center text-muted-foreground p-6">{t("Loading" as any) || "Loading..."}</div>
+          <div className="py-8 text-center text-muted-foreground p-6">{t("Loading" as any)}</div>
         ) : customer === null ? (
-          <div className="py-8 text-center text-muted-foreground p-6">{t("NoCustomers" as any) || "Customer not found."}</div>
+          <div className="py-8 text-center text-muted-foreground p-6">{t("NoCustomers" as any)}</div>
         ) : (
           <Tabs defaultValue="overview" className="flex-1 flex flex-col min-h-0">
             <div className="px-6 border-b">
@@ -86,13 +86,13 @@ export function CustomerDetailsDialog({
                   value="overview"
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
-                  {t("Overview" as any) || "Overview"}
+                  {t("Overview" as any)}
                 </TabsTrigger>
                 <TabsTrigger
                   value="leads_sales"
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
-                  {t("LeadsSales" as any) || "Leads & Sales"}
+                  {t("LeadsSales" as any)}
                   {relations && (relations.leads.length > 0 || relations.sales.length > 0) && (
                     <Badge variant="secondary" className="ml-2 text-xs px-1.5 py-0.5">{relations.leads.length + relations.sales.length}</Badge>
                   )}
@@ -101,7 +101,7 @@ export function CustomerDetailsDialog({
                   value="quotes"
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
-                  {t("Quotes" as any) || "Quotes"}
+                  {t("Quotes" as any)}
                   {relations && relations.quotes?.length > 0 && (
                     <Badge variant="secondary" className="ml-2 text-xs px-1.5 py-0.5">{relations.quotes.length}</Badge>
                   )}
@@ -110,7 +110,7 @@ export function CustomerDetailsDialog({
                   value="tasks"
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
-                  {t("Tasks" as any) || "Tasks"}
+                  {t("Tasks" as any)}
                   {relations?.tasks && relations.tasks.length > 0 && (
                     <Badge variant="secondary" className="ml-2 text-xs px-1.5 py-0.5">{relations.tasks.length}</Badge>
                   )}
@@ -119,7 +119,7 @@ export function CustomerDetailsDialog({
                   value="financials"
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
-                  {t("Financials" as any) || "Financials"}
+                  {t("Financials" as any)}
                 </TabsTrigger>
               </TabsList>
             </div>
@@ -129,11 +129,11 @@ export function CustomerDetailsDialog({
                 <div className="space-y-4">
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-1">
-                      <span className="text-sm font-medium text-muted-foreground">{t("FirstName" as any) || "First Name"}</span>
+                      <span className="text-sm font-medium text-muted-foreground">{t("FirstName" as any)}</span>
                       <p className="text-sm font-semibold">{customer.firstName}</p>
                     </div>
                     <div className="space-y-1">
-                      <span className="text-sm font-medium text-muted-foreground">{t("LastName" as any) || "Last Name"}</span>
+                      <span className="text-sm font-medium text-muted-foreground">{t("LastName" as any)}</span>
                       <p className="text-sm font-semibold">{customer.lastName}</p>
                     </div>
                   </div>
@@ -142,41 +142,41 @@ export function CustomerDetailsDialog({
 
                   <div className="grid grid-cols-2 gap-4">
                     <div className="space-y-1">
-                      <span className="text-sm font-medium text-muted-foreground">{t("Phone" as any) || "Phone"}</span>
-                      <p className="text-sm">{customer.phone || (t("NA" as any) || "N/A")}</p>
+                      <span className="text-sm font-medium text-muted-foreground">{t("Phone" as any)}</span>
+                      <p className="text-sm">{customer.phone || (t("NA" as any))}</p>
                     </div>
                     <div className="space-y-1">
-                      <span className="text-sm font-medium text-muted-foreground">{t("WhatsApp" as any) || "WhatsApp"}</span>
-                      <p className="text-sm">{customer.whatsapp || (t("NA" as any) || "N/A")}</p>
+                      <span className="text-sm font-medium text-muted-foreground">{t("WhatsApp" as any)}</span>
+                      <p className="text-sm">{customer.whatsapp || (t("NA" as any))}</p>
                     </div>
                   </div>
 
                   <div className="space-y-1">
-                    <span className="text-sm font-medium text-muted-foreground">{t("Email" as any) || "Email"}</span>
-                    <p className="text-sm">{customer.email || (t("NA" as any) || "N/A")}</p>
+                    <span className="text-sm font-medium text-muted-foreground">{t("Email" as any)}</span>
+                    <p className="text-sm">{customer.email || (t("NA" as any))}</p>
                   </div>
 
                   <Separator />
 
                   <div className="space-y-1">
-                    <span className="text-sm font-medium text-muted-foreground">{t("NationalIDPassport" as any) || "National ID"}</span>
-                    <p className="text-sm">{customer.nationalId || (t("NA" as any) || "N/A")}</p>
+                    <span className="text-sm font-medium text-muted-foreground">{t("NationalIDPassport" as any)}</span>
+                    <p className="text-sm">{customer.nationalId || (t("NA" as any))}</p>
                   </div>
 
                   <div className="space-y-1">
-                    <span className="text-sm font-medium text-muted-foreground">{t("Address" as any) || "Address"}</span>
-                    <p className="text-sm">{customer.address || (t("NA" as any) || "N/A")}</p>
+                    <span className="text-sm font-medium text-muted-foreground">{t("Address" as any)}</span>
+                    <p className="text-sm">{customer.address || (t("NA" as any))}</p>
                   </div>
                 </div>
               </TabsContent>
 
               <TabsContent value="leads_sales" className="m-0 focus-visible:outline-none space-y-6">
                 <div>
-                  <h3 className="font-semibold text-sm mb-3">{t("PastPurchases" as any) || "Past Purchases"}</h3>
+                  <h3 className="font-semibold text-sm mb-3">{t("PastPurchases" as any)}</h3>
                   {!relations ? (
-                    <p className="text-sm text-muted-foreground">{t("Loading" as any) || "Loading..."}</p>
+                    <p className="text-sm text-muted-foreground">{t("Loading" as any)}</p>
                   ) : relations.sales.length === 0 ? (
-                    <p className="text-sm text-muted-foreground italic">{t("NoSalesCustomer" as any) || "No sales recorded for this customer."}</p>
+                    <p className="text-sm text-muted-foreground italic">{t("NoSalesCustomer" as any)}</p>
                   ) : (
                     <div className="space-y-3">
                       {relations.sales.map((sale) => (
@@ -186,9 +186,9 @@ export function CustomerDetailsDialog({
                             <span className="text-xs bg-green-100 text-green-800 px-2 py-0.5 rounded">{sale.status}</span>
                           </div>
                           <div className="grid grid-cols-2 gap-2 text-muted-foreground text-xs">
-                            <p>{t("SaleDate" as any) || "Sale Date"}: {format(sale.saleDate, "PP")}</p>
-                            <p>{t("Price" as any) || "Price"}: <span className="font-medium text-foreground">{sale.salePrice.toLocaleString()} JOD</span></p>
-                            <p>{t("Salesperson" as any) || "Salesperson"}: {sale.salespersonName}</p>
+                            <p>{t("SaleDate" as any)}: {format(sale.saleDate, "PP")}</p>
+                            <p>{t("Price" as any)}: <span className="font-medium text-foreground">{sale.salePrice.toLocaleString()} JOD</span></p>
+                            <p>{t("Salesperson" as any)}: {sale.salespersonName}</p>
                           </div>
                         </div>
                       ))}
@@ -199,11 +199,11 @@ export function CustomerDetailsDialog({
                 <Separator />
 
                 <div>
-                  <h3 className="font-semibold text-sm mb-3">{t("ActivePastLeads" as any) || "Active & Past Leads"}</h3>
+                  <h3 className="font-semibold text-sm mb-3">{t("ActivePastLeads" as any)}</h3>
                   {!relations ? (
-                    <p className="text-sm text-muted-foreground">{t("Loading" as any) || "Loading..."}</p>
+                    <p className="text-sm text-muted-foreground">{t("Loading" as any)}</p>
                   ) : relations.leads.length === 0 ? (
-                    <p className="text-sm text-muted-foreground italic">{t("NoLeadsCustomer" as any) || "No leads associated with this customer."}</p>
+                    <p className="text-sm text-muted-foreground italic">{t("NoLeadsCustomer" as any)}</p>
                   ) : (
                     <div className="space-y-3">
                       {relations.leads.map((lead) => (
@@ -212,7 +212,7 @@ export function CustomerDetailsDialog({
                             <span className="font-medium">{lead.vehicleDesc}</span>
                             <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded">{lead.stage}</span>
                           </div>
-                          <p className="text-xs text-muted-foreground mb-2">{t("Source" as any) || "Source"}: {lead.source} • {t("Assigned" as any) || "Assigned"}: {lead.assignedUserName}</p>
+                          <p className="text-xs text-muted-foreground mb-2">{t("Source" as any)}: {lead.source} • {t("Assigned" as any)}: {lead.assignedUserName}</p>
                           {lead.notes && <p className="text-xs italic">"{lead.notes}"</p>}
                         </div>
                       ))}
@@ -223,11 +223,11 @@ export function CustomerDetailsDialog({
               </TabsContent>
 
               <TabsContent value="quotes" className="m-0 focus-visible:outline-none">
-                <h3 className="font-semibold text-sm mb-3">{t("GeneratedQuotes" as any) || "Generated Quotes"}</h3>
+                <h3 className="font-semibold text-sm mb-3">{t("GeneratedQuotes" as any)}</h3>
                 {!relations ? (
-                  <p className="text-sm text-muted-foreground">{t("Loading" as any) || "Loading..."}</p>
+                  <p className="text-sm text-muted-foreground">{t("Loading" as any)}</p>
                 ) : !relations.quotes || relations.quotes.length === 0 ? (
-                  <p className="text-sm text-muted-foreground italic">{t("NoQuotesCustomer" as any) || "No quotes generated for this customer."}</p>
+                  <p className="text-sm text-muted-foreground italic">{t("NoQuotesCustomer" as any)}</p>
                 ) : (
                   <div className="space-y-4">
                     {relations.quotes.map((quote: any) => (
@@ -247,40 +247,40 @@ export function CustomerDetailsDialog({
 
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 bg-muted/50 p-3 rounded-md">
                           <div>
-                            <p className="text-xs text-muted-foreground">{t("VehiclePrice" as any) || "Vehicle Price"}</p>
+                            <p className="text-xs text-muted-foreground">{t("VehiclePrice" as any)}</p>
                             <p className="font-medium">{quote.vehiclePrice?.toLocaleString()} JOD</p>
                           </div>
                           <div>
-                            <p className="text-xs text-muted-foreground">{t("DownPayment" as any) || "Down Payment"}</p>
+                            <p className="text-xs text-muted-foreground">{t("DownPayment" as any)}</p>
                             <p className="font-medium">{quote.downPayment?.toLocaleString()} JOD</p>
                           </div>
                           <div>
-                            <p className="text-xs text-muted-foreground">{t("Term" as any) || "Term"}</p>
+                            <p className="text-xs text-muted-foreground">{t("Term" as any)}</p>
                             <p className="font-medium">{quote.termMonths} Months</p>
                           </div>
                           <div>
-                            <p className="text-xs text-muted-foreground">{t("ProfitRate" as any) || "Profit Rate"}</p>
+                            <p className="text-xs text-muted-foreground">{t("ProfitRate" as any)}</p>
                             <p className="font-medium">{quote.profitRateApplied || 0}%</p>
                           </div>
                         </div>
 
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-4 border-t pt-3">
                           <div>
-                            <p className="text-xs text-muted-foreground">{t("FinancedAmount" as any) || "Financed Amount"}</p>
+                            <p className="text-xs text-muted-foreground">{t("FinancedAmount" as any)}</p>
                             <p className="font-medium">{quote.totalFinancedAmount?.toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</p>
                           </div>
                           <div>
-                            <p className="text-xs text-muted-foreground">{t("TotalProfit" as any) || "Total Profit"}</p>
+                            <p className="text-xs text-muted-foreground">{t("TotalProfit" as any)}</p>
                             <p className="font-medium text-orange-600">{quote.totalProfit?.toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</p>
                           </div>
                           <div className="bg-primary/10 -m-2 p-2 rounded-md text-center">
-                            <p className="text-xs text-primary font-medium">{t("MonthlyInstallment" as any) || "Monthly Installment"}</p>
+                            <p className="text-xs text-primary font-medium">{t("MonthlyInstallment" as any)}</p>
                             <p className="text-lg font-bold text-primary">{quote.monthlyInstallment?.toLocaleString(undefined, { minimumFractionDigits: 2 })} <span className="text-xs font-normal">JOD</span></p>
                           </div>
                         </div>
 
                         <div className="flex justify-between items-center text-xs text-muted-foreground pt-2">
-                          <p>{t("Date" as any) || "Generated On"}: {format(quote.createdAt, "PP p")}</p>
+                          <p>{t("GeneratedOn" as any)}: {format(quote.createdAt, "PP p")}</p>
                           <Button
                             variant="ghost"
                             size="sm"
@@ -301,14 +301,14 @@ export function CustomerDetailsDialog({
                                   quote.totalProfit || 0,
                                   quote.monthlyInstallment || 0
                                 );
-                                toast.success(t("QuotePDFGenerated" as any) || "Quote PDF generated successfully");
+                                toast.success(t("QuotePDFGenerated" as any));
                               } catch (err) {
-                                toast.error(t("FailedGeneratePDF" as any) || "Failed to generate PDF");
+                                toast.error(t("FailedGeneratePDF" as any));
                               }
                             }}
                           >
                             <FileText className="w-4 h-4" />
-                            {t("DownloadPDF" as any) || "Download PDF"}
+                            {t("DownloadPDF" as any)}
                           </Button>
                           <Button
                             variant="outline"
@@ -321,15 +321,14 @@ export function CustomerDetailsDialog({
                                   orgId: activeOrgId!,
                                   quoteId: quote._id,
                                 });
-                                toast.success("Application created successfully!");
-                                // Might want to redirect to applications page or open application dialog here
+                                toast.success(t("ApplicationCreatedSuccess" as any));
                               } catch (err: any) {
-                                toast.error(err.message || "Failed to create application");
+                                toast.error(err.message || t("ApplicationCreateFail" as any));
                               }
                             }}
                           >
                             <Send className="w-4 h-4" />
-                            Submit Application
+                            {t("SubmitApplication" as any)}
                           </Button>
                         </div>
                       </div>
@@ -339,11 +338,11 @@ export function CustomerDetailsDialog({
               </TabsContent>
 
               <TabsContent value="tasks" className="m-0 focus-visible:outline-none">
-                <h3 className="font-semibold text-sm mb-3">{t("AssociatedTasksComm" as any) || "Associated Tasks & Communication"}</h3>
+                <h3 className="font-semibold text-sm mb-3">{t("AssociatedTasksComm" as any)}</h3>
                 {!relations ? (
-                  <p className="text-sm text-muted-foreground">{t("Loading" as any) || "Loading..."}</p>
+                  <p className="text-sm text-muted-foreground">{t("Loading" as any)}</p>
                 ) : relations.tasks.length === 0 ? (
-                  <p className="text-sm text-muted-foreground italic">{t("NoTasksCustomer" as any) || "No tasks assigned for this customer."}</p>
+                  <p className="text-sm text-muted-foreground italic">{t("NoTasksCustomer" as any)}</p>
                 ) : (
                   <div className="space-y-3">
                     {relations.tasks.map((task) => (
@@ -358,8 +357,8 @@ export function CustomerDetailsDialog({
                           </span>
                         </div>
                         <div className="grid grid-cols-2 gap-1 text-xs text-muted-foreground mb-2">
-                          <p>{t("Due" as any) || "Due"}: {format(task.dueDate, "PP p")}</p>
-                          <p>{t("Assignee" as any) || "Assignee"}: {task.assignedUserName}</p>
+                          <p>{t("Due" as any)}: {format(task.dueDate, "PP p")}</p>
+                          <p>{t("Assignee" as any)}: {task.assignedUserName}</p>
                         </div>
                         {task.description && <p className="text-xs italic">"{task.description}"</p>}
                       </div>

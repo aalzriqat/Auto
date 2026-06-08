@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery } from "convex/react";
+import { useQuery, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -17,7 +17,7 @@ export function ApplicationClient() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
 
-  const applications = useQuery(api.applications.list, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const { results: applications } = usePaginatedQuery(api.applications.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
 
   const [selectedAppId, setSelectedAppId] = useState<any>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -29,7 +29,7 @@ export function ApplicationClient() {
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <FileText className="h-5 w-5" />
-            {t("ActiveApplications" as any) || "Active Applications"}
+            {t("ActiveApplications" as any)}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -37,24 +37,24 @@ export function ApplicationClient() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>{t("Customer" as any) || "Customer"}</TableHead>
-                  <TableHead>{t("Vehicle" as any) || "Vehicle"}</TableHead>
-                  <TableHead>{t("Company" as any) || "Company"}</TableHead>
-                  <TableHead>{t("Amount" as any) || "Amount"}</TableHead>
-                  <TableHead>{t("Status" as any) || "Status"}</TableHead>
-                  <TableHead>{t("Date" as any) || "Date"}</TableHead>
-                  <TableHead className="text-right">{t("Actions" as any) || "Actions"}</TableHead>
+                  <TableHead>{t("Customer" as any)}</TableHead>
+                  <TableHead>{t("Vehicle" as any)}</TableHead>
+                  <TableHead>{t("Company" as any)}</TableHead>
+                  <TableHead>{t("Amount" as any)}</TableHead>
+                  <TableHead>{t("Status" as any)}</TableHead>
+                  <TableHead>{t("Date" as any)}</TableHead>
+                  <TableHead className="text-right">{t("Actions" as any)}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {applications === undefined ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center">{t("LoadingApplications" as any) || "Loading..."}</TableCell>
+                    <TableCell colSpan={7} className="text-center">{t("LoadingApplications" as any)}</TableCell>
                   </TableRow>
                 ) : applications.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={7} className="text-center text-muted-foreground">
-                      {t("NoApplicationsFound" as any) || "No applications found."}
+                      {t("NoApplicationsFound" as any)}
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -63,7 +63,7 @@ export function ApplicationClient() {
                       <TableCell className="font-medium">{app.customerName}</TableCell>
                       <TableCell>{app.vehicleDesc}</TableCell>
                       <TableCell>{app.companyName}</TableCell>
-                      <TableCell>{app.financedAmount.toLocaleString()} {t("JOD" as any) || "JOD"}</TableCell>
+                      <TableCell>{app.financedAmount.toLocaleString()} {t("JOD" as any)}</TableCell>
                       <TableCell>
                         <Badge variant={
                           app.status === "APPROVED" ? "default" :
@@ -84,7 +84,7 @@ export function ApplicationClient() {
                           }}
                         >
                           <Eye className="h-4 w-4 mr-2" />
-                          {t("ReviewApp" as any) || "Review"}
+                          {t("ReviewApp" as any)}
                         </Button>
                       </TableCell>
                     </TableRow>

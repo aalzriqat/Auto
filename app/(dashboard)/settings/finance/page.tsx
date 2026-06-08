@@ -39,12 +39,12 @@ export default function FinanceCompaniesPage() {
 
   const handleDelete = async (id: Id<"financeCompanies">) => {
     if (!activeOrgId) return;
-    if (confirm("Are you sure you want to delete this company?")) {
+    if (confirm(t("DeleteCompanyConfirm" as any))) {
       try {
         await deleteCompany({ id, orgId: activeOrgId });
-        toast.success("Company deleted successfully");
+        toast.success(t("CompanyDeletedSuccess" as any));
       } catch (error: any) {
-        toast.error(error.message || "Failed to delete");
+        toast.error(error.message || t("DeleteFail" as any));
       }
     }
   };
@@ -78,18 +78,18 @@ export default function FinanceCompaniesPage() {
                   <TableHead>{t("Max Term (Months)" as any)}</TableHead>
                   <TableHead>{t("Grace Period (Months)" as any)}</TableHead>
                   <TableHead>{t("Status" as any)}</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead className="text-right">{t("Actions" as any)}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {companies === undefined ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center">Loading...</TableCell>
+                    <TableCell colSpan={6} className="text-center">{t("Loading" as any)}</TableCell>
                   </TableRow>
                 ) : companies.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={6} className="text-center text-muted-foreground">
-                      No finance companies found.
+                      {t("NoFinanceCompaniesFound" as any)}
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -101,7 +101,7 @@ export default function FinanceCompaniesPage() {
                       <TableCell>{company.gracePeriodMonths}</TableCell>
                       <TableCell>
                         <Badge variant={company.isActive ? "default" : "secondary"}>
-                          {company.isActive ? "Active" : "Inactive"}
+                          {company.isActive ? t("Active" as any) : t("Inactive" as any)}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
@@ -158,7 +158,7 @@ export default function FinanceCompaniesPage() {
               <TableBody>
                 {rules === undefined ? (
                   <TableRow>
-                    <TableCell colSpan={4} className="text-center">Loading...</TableCell>
+                    <TableCell colSpan={4} className="text-center">{t("Loading" as any)}</TableCell>
                   </TableRow>
                 ) : rules.length === 0 ? (
                   <TableRow>
@@ -174,14 +174,14 @@ export default function FinanceCompaniesPage() {
                         <TableCell className="font-medium">{rule.documentName}</TableCell>
                         <TableCell>
                           {rule.companyId ? (
-                            <Badge variant="outline">{company?.name || "Unknown Company"}</Badge>
+                            <Badge variant="outline">{company?.name || t("UnknownCompany" as any)}</Badge>
                           ) : (
-                            <Badge>All Companies</Badge>
+                            <Badge>{t("AllCompanies" as any)}</Badge>
                           )}
                         </TableCell>
                         <TableCell>
                           <Badge variant={rule.isRequired ? "default" : "secondary"}>
-                            {rule.isRequired ? "Yes" : "No"}
+                            {rule.isRequired ? t("YesText" as any) : t("NoText" as any)}
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right">
@@ -190,9 +190,9 @@ export default function FinanceCompaniesPage() {
                             size="icon"
                             className="text-red-500 hover:text-red-600"
                             onClick={async () => {
-                              if (confirm("Are you sure you want to remove this rule?")) {
+                              if (confirm(t("RemoveRuleConfirm" as any))) {
                                 await removeRule({ orgId: activeOrgId!, ruleId: rule._id });
-                                toast.success("Rule removed");
+                                toast.success(t("RuleRemovedSuccess" as any));
                               }
                             }}
                           >

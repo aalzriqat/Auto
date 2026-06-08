@@ -148,7 +148,7 @@ export const get = query({
     const canViewCostPrice = role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
 
     const vehicle = await ctx.db.get(args.vehicleId);
-    if (!vehicle || vehicle.orgId !== args.orgId) {
+    if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
       throw new ConvexError("Vehicle not found in this organization.");
     }
 
@@ -302,7 +302,7 @@ export const update = mutation({
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
 
     const vehicle = await ctx.db.get(args.vehicleId);
-    if (!vehicle || vehicle.orgId !== args.orgId) {
+    if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
       throw new ConvexError("Vehicle not found in this organization.");
     }
 
@@ -378,6 +378,7 @@ export const update = mutation({
 /**
  * Soft deletes a vehicle. Only vehicles with status AVAILABLE or ARCHIVED can be deleted.
  */
+// TODO: Add admin recovery endpoint if needed
 export const softDelete = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -385,9 +386,11 @@ export const softDelete = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_VEHICLES]);
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new ConvexError("Unauthenticated");
 
     const vehicle = await ctx.db.get(args.vehicleId);
-    if (!vehicle || vehicle.orgId !== args.orgId) {
+    if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
       throw new ConvexError("Vehicle not found in this organization.");
     }
 
@@ -401,7 +404,7 @@ export const softDelete = mutation({
     await ctx.db.patch(args.vehicleId, { 
       isDeleted: true,
       deletedAt: Date.now(),
-      deletedBy: user._id
+      deletedBy: identity.subject
     });
 
     const actorName = await getActorName(ctx);
@@ -457,7 +460,7 @@ export const deleteImage = mutation({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
 
     const vehicle = await ctx.db.get(args.vehicleId);
-    if (!vehicle || vehicle.orgId !== args.orgId) {
+    if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
       throw new ConvexError("Vehicle not found in this organization.");
     }
 

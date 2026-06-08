@@ -1,5 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
@@ -23,30 +24,31 @@ export const list = query({
   args: {
     orgId: v.id("organizations"),
     salespersonId: v.optional(v.id("users")),
+    paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
 
-    let results;
+    let pageResult;
 
     if (args.salespersonId) {
-      results = await ctx.db
+      pageResult = await ctx.db
         .query("sales")
         .withIndex("by_org_salesperson", (q) =>
           q.eq("orgId", args.orgId).eq("salespersonId", args.salespersonId!)
         )
         .filter((q) => q.neq(q.field("isDeleted"), true))
-        .collect();
+        .paginate(args.paginationOpts);
     } else {
-      results = await ctx.db
+      pageResult = await ctx.db
         .query("sales")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
         .filter((q) => q.neq(q.field("isDeleted"), true))
-        .collect();
+        .paginate(args.paginationOpts);
     }
 
-    return await Promise.all(
-      results.map(async (sale) => {
+    const page = await Promise.all(
+      pageResult.page.map(async (sale) => {
         const vehicle = await ctx.db.get(sale.vehicleId);
         const customer = await ctx.db.get(sale.customerId);
         const salesperson = await ctx.db.get(sale.salespersonId);
@@ -64,6 +66,8 @@ export const list = query({
         };
       })
     );
+    
+    return { ...pageResult, page };
   },
 });
 
@@ -79,7 +83,7 @@ export const get = query({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
 
     const sale = await ctx.db.get(args.saleId);
-    if (!sale || sale.orgId !== args.orgId) {
+    if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
       throw new ConvexError("Sale not found in this organization.");
     }
 
@@ -260,7 +264,7 @@ export const update = mutation({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_SALES]);
 
     const sale = await ctx.db.get(args.saleId);
-    if (!sale || sale.orgId !== args.orgId) {
+    if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
       throw new ConvexError("Sale not found in this organization.");
     }
 
@@ -310,6 +314,7 @@ export const update = mutation({
  * Soft deletes a sale record. Only CANCELLED or PENDING sales can be deleted.
  * Restores the vehicle to AVAILABLE if it was marked SOLD.
  */
+// TODO: Add admin recovery endpoint if needed
 export const softDelete = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -317,9 +322,11 @@ export const softDelete = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_SALES]);
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new ConvexError("Unauthenticated");
 
     const sale = await ctx.db.get(args.saleId);
-    if (!sale || sale.orgId !== args.orgId) {
+    if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
       throw new ConvexError("Sale not found in this organization.");
     }
 
@@ -338,7 +345,7 @@ export const softDelete = mutation({
     await ctx.db.patch(args.saleId, {
       isDeleted: true,
       deletedAt: Date.now(),
-      deletedBy: user._id
+      deletedBy: identity.subject
     });
 
     const actorName = await getActorName(ctx);

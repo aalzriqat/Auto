@@ -1,5 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, notifyUser, getActorName } from "./utils/notifications";
@@ -7,15 +8,17 @@ import { rateLimiter } from "./rateLimit";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
+import { LEAD_STAGES } from "./constants";
+
 const leadStage = v.union(
-  v.literal("NEW"),
-  v.literal("CONTACTED"),
-  v.literal("INTERESTED"),
-  v.literal("TEST_DRIVE"),
-  v.literal("NEGOTIATION"),
-  v.literal("RESERVED"),
-  v.literal("WON"),
-  v.literal("LOST")
+  v.literal(LEAD_STAGES[0]),
+  v.literal(LEAD_STAGES[1]),
+  v.literal(LEAD_STAGES[2]),
+  v.literal(LEAD_STAGES[3]),
+  v.literal(LEAD_STAGES[4]),
+  v.literal(LEAD_STAGES[5]),
+  v.literal(LEAD_STAGES[6]),
+  v.literal(LEAD_STAGES[7])
 );
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
@@ -29,39 +32,40 @@ export const list = query({
     orgId: v.id("organizations"),
     stage: v.optional(leadStage),
     assignedUserId: v.optional(v.id("users")),
+    paginationOpts: paginationOptsValidator,
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
 
-    let results;
+    let pageResult;
 
     if (args.stage) {
-      results = await ctx.db
+      pageResult = await ctx.db
         .query("leads")
         .withIndex("by_org_stage", (q) =>
           q.eq("orgId", args.orgId).eq("stage", args.stage!)
         )
         .filter((q) => q.neq(q.field("isDeleted"), true))
-        .collect();
+        .paginate(args.paginationOpts);
     } else if (args.assignedUserId) {
-      results = await ctx.db
+      pageResult = await ctx.db
         .query("leads")
         .withIndex("by_org_assigned", (q) =>
           q.eq("orgId", args.orgId).eq("assignedUserId", args.assignedUserId!)
         )
         .filter((q) => q.neq(q.field("isDeleted"), true))
-        .collect();
+        .paginate(args.paginationOpts);
     } else {
-      results = await ctx.db
+      pageResult = await ctx.db
         .query("leads")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
         .filter((q) => q.neq(q.field("isDeleted"), true))
-        .collect();
+        .paginate(args.paginationOpts);
     }
 
     // Hydrate with customer and vehicle names
-    return await Promise.all(
-      results.map(async (lead) => {
+    const page = await Promise.all(
+      pageResult.page.map(async (lead) => {
         const customer = await ctx.db.get(lead.customerId);
         const vehicle = lead.vehicleId ? await ctx.db.get(lead.vehicleId) : null;
         const assignedUser = lead.assignedUserId
@@ -82,6 +86,8 @@ export const list = query({
         };
       })
     );
+    
+    return { ...pageResult, page };
   },
 });
 
@@ -97,7 +103,7 @@ export const get = query({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
 
     const lead = await ctx.db.get(args.leadId);
-    if (!lead || lead.orgId !== args.orgId) {
+    if (!lead || lead.isDeleted || lead.orgId !== args.orgId) {
       throw new ConvexError("Lead not found in this organization.");
     }
 
@@ -222,7 +228,7 @@ export const update = mutation({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_LEADS]);
 
     const lead = await ctx.db.get(args.leadId);
-    if (!lead || lead.orgId !== args.orgId) {
+    if (!lead || lead.isDeleted || lead.orgId !== args.orgId) {
       throw new ConvexError("Lead not found in this organization.");
     }
 
@@ -294,6 +300,7 @@ export const update = mutation({
 /**
  * Soft deletes a lead.
  */
+// TODO: Add admin recovery endpoint if needed
 export const softDelete = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -301,16 +308,18 @@ export const softDelete = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_LEADS]);
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new ConvexError("Unauthenticated");
 
     const lead = await ctx.db.get(args.leadId);
-    if (!lead || lead.orgId !== args.orgId) {
+    if (!lead || lead.isDeleted || lead.orgId !== args.orgId) {
       throw new ConvexError("Lead not found in this organization.");
     }
 
     await ctx.db.patch(args.leadId, {
       isDeleted: true,
       deletedAt: Date.now(),
-      deletedBy: user._id
+      deletedBy: identity.subject
     });
 
     const actorName = await getActorName(ctx);

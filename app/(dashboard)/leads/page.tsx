@@ -1,7 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { RoleGuard } from "@/components/auth/RoleGuard";
+import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { Button } from "@/components/ui/button";
@@ -29,21 +30,17 @@ import {
   TableCell,
 } from "@/components/ui/table";
 
-const STAGES = [
-  "NEW",
-  "CONTACTED",
-  "INTERESTED",
-  "TEST_DRIVE",
-  "NEGOTIATION",
-  "RESERVED",
-  "WON",
-  "LOST",
-] as const;
+import { LEAD_STAGES } from "@/convex/constants";
+
 
 export default function LeadsPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const leads = useQuery(api.leads.list, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const { results: leads, status: leadsStatus, loadMore: loadMoreLeads } = usePaginatedQuery(
+    api.leads.list,
+    activeOrgId ? { orgId: activeOrgId } : "skip",
+    { initialNumItems: 25 }
+  );
   const removeLead = useMutation(api.leads.softDelete);
 
   const [isLeadDialogOpen, setIsLeadDialogOpen] = useState(false);
@@ -71,7 +68,7 @@ export default function LeadsPage() {
     }
   };
 
-  const leadsByStage = STAGES.reduce((acc, stage) => {
+  const leadsByStage = LEAD_STAGES.reduce((acc, stage) => {
     acc[stage] = leads?.filter((l) => l.stage === stage) || [];
     return acc;
   }, {} as Record<string, any[]>);
@@ -91,7 +88,8 @@ export default function LeadsPage() {
   };
 
   return (
-    <div className="space-y-6 flex flex-col h-full overflow-hidden">
+    <RoleGuard permissions={["view:leads"]}>
+      <div className="space-y-6 flex flex-col h-full overflow-hidden">
       <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
         <Button onClick={handleAddNew}>
           <Plus className="me-2 h-4 w-4" /> {t("AddLead" as any) || "Add Lead"}
@@ -219,6 +217,13 @@ export default function LeadsPage() {
             )}
           </TableBody>
         </Table>
+        {leadsStatus === "CanLoadMore" && (
+          <div className="flex justify-center p-4">
+            <Button variant="outline" onClick={() => loadMoreLeads(25)}>
+              {t("LoadMore" as any) || "Load More"}
+            </Button>
+          </div>
+        )}
       </div>
 
       <LeadDialog
@@ -243,5 +248,6 @@ export default function LeadsPage() {
         </DialogContent>
       </Dialog>
     </div>
+    </RoleGuard>
   );
 }

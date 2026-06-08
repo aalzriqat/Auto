@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -36,31 +36,23 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-const taskSchema = z.object({
-  title: z.string().min(1, "Title is required"),
-  description: z.string().optional(),
-  dueDate: z.date({ required_error: "Due date is required" }),
-  assignedTo: z.string().min(1, "Assignee is required"),
-  customerId: z.string().optional(),
-  vehicleId: z.string().optional(),
-  communicationMethod: z.enum(["PHONE", "EMAIL", "FAX", "none"]).optional(),
-  status: z.enum(["PENDING", "COMPLETED", "CANCELLED"]),
-});
+import { taskSchema, TaskFormValues, TaskDialogProps } from "./task.schema";
 
-type TaskFormValues = z.infer<typeof taskSchema>;
-
-interface TaskDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  task?: Doc<"tasks"> | null;
-}
 
 export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
 
-  const memberships = useQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId } : "skip");
-  const customers = useQuery(api.customers.list, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const { results: memberships } = usePaginatedQuery(
+    api.memberships.list,
+    activeOrgId ? { orgId: activeOrgId } : "skip",
+    { initialNumItems: 100 }
+  );
+  const { results: customers } = usePaginatedQuery(
+    api.customers.list,
+    activeOrgId ? { orgId: activeOrgId } : "skip",
+    { initialNumItems: 100 }
+  );
   const vehicles = useQuery(api.vehicles.listAll, activeOrgId ? { orgId: activeOrgId } : "skip");
 
   const createTask = useMutation(api.tasks.create);

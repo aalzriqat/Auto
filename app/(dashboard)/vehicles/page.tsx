@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { RoleGuard } from "@/components/auth/RoleGuard";
 import { useSearchParams } from "next/navigation";
 import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -104,7 +105,7 @@ export default function VehiclesPage() {
       if (canEdit) {
         // Manager can change directly
         await updateVehicle({ orgId: activeOrgId, vehicleId: statusRequestVehicle._id, status: selectedStatus });
-        toast.success("Vehicle status updated");
+        toast.success(t("VehicleStatusUpdated" as any));
       } else {
         // Sales/Reception requests it
         await createStatusRequest({
@@ -113,13 +114,13 @@ export default function VehiclesPage() {
           requestedStatus: selectedStatus,
           notes: statusRequestNotes,
         });
-        toast.success("Status change request submitted to your manager");
+        toast.success(t("StatusChangeRequested" as any));
       }
       setStatusRequestVehicle(null);
       setSelectedStatus("");
       setStatusRequestNotes("");
     } catch (error: any) {
-      toast.error(error.message || "Failed to submit request");
+      toast.error(error.message || t("FailedToSubmitRequest" as any));
     }
   };
 
@@ -172,10 +173,10 @@ export default function VehiclesPage() {
     if (!activeOrgId || !vehicleToDelete) return;
     try {
       await removeVehicle({ orgId: activeOrgId, vehicleId: vehicleToDelete._id });
-      toast.success("Vehicle removed successfully");
+      toast.success(t("VehicleRemoved" as any));
       setVehicleToDelete(null);
     } catch (error: any) {
-      toast.error(error.message || "Failed to remove vehicle");
+      toast.error(error.message || t("FailedToRemoveVehicle" as any));
     }
   };
 
@@ -198,7 +199,7 @@ export default function VehiclesPage() {
       document.body.removeChild(a);
     } catch (error) {
       console.error("Error downloading image:", error);
-      toast.error("Failed to download image.");
+      toast.error(t("FailedToDownloadImage" as any));
     }
   };
 
@@ -206,21 +207,22 @@ export default function VehiclesPage() {
     if (!galleryVehicle?.imageUrls) return;
 
     try {
-      const toastId = toast.loading("Downloading images...");
+      const toastId = toast.loading(t("DownloadingImages" as any));
       for (let i = 0; i < galleryVehicle.imageUrls.length; i++) {
         await handleDownloadSingle(galleryVehicle.imageUrls[i], i);
         // Small delay to prevent browser from blocking multiple rapid downloads
         await new Promise(resolve => setTimeout(resolve, 200));
       }
-      toast.success("All images downloaded successfully", { id: toastId });
+      toast.success(t("AllImagesDownloaded" as any), { id: toastId });
     } catch (error) {
       console.error("Error downloading images:", error);
-      toast.error("Failed to download some images.");
+      toast.error(t("FailedToDownloadImages" as any));
     }
   };
 
   return (
-    <div className="space-y-6">
+    <RoleGuard permissions={["view:vehicles"]}>
+      <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
         <div className="flex gap-2">
           {canEdit && (
@@ -303,7 +305,7 @@ export default function VehiclesPage() {
                       {vehicle.pendingStatusRequest && (
                         <span className="text-[10px] text-muted-foreground font-medium flex items-center mt-1">
                           <Hourglass className="h-3 w-3 mr-1 inline" />
-                          Pending: {vehicle.pendingStatusRequest}
+                          {t("Pending" as any)}: {vehicle.pendingStatusRequest}
                         </span>
                       )}
                     </button>
@@ -408,7 +410,7 @@ export default function VehiclesPage() {
                     <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                       <Button variant="secondary" size="sm" onClick={() => handleDownloadSingle(url, index)}>
                         <Download className="h-4 w-4 mr-2" />
-                        Download
+                        {t("Download" as any)}
                       </Button>
                     </div>
                   </div>
@@ -454,12 +456,12 @@ export default function VehiclesPage() {
                   <SelectValue placeholder={t("SelectStatus" as any)} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="AVAILABLE">Available</SelectItem>
-                  <SelectItem value="RESERVED">Reserved</SelectItem>
-                  <SelectItem value="SOLD">Sold</SelectItem>
-                  <SelectItem value="IN_INSPECTION">In Inspection</SelectItem>
-                  <SelectItem value="IN_REPAIR">In Repair</SelectItem>
-                  <SelectItem value="ARCHIVED">Archived</SelectItem>
+                  <SelectItem value="AVAILABLE">{t("StatusAvailable" as any)}</SelectItem>
+                  <SelectItem value="RESERVED">{t("StatusReserved" as any)}</SelectItem>
+                  <SelectItem value="SOLD">{t("StatusSold" as any)}</SelectItem>
+                  <SelectItem value="IN_INSPECTION">{t("StatusInInspection" as any)}</SelectItem>
+                  <SelectItem value="IN_REPAIR">{t("StatusInRepair" as any)}</SelectItem>
+                  <SelectItem value="ARCHIVED">{t("StatusArchived" as any)}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -569,5 +571,6 @@ export default function VehiclesPage() {
         </DialogContent>
       </Dialog>
     </div>
+    </RoleGuard>
   );
 }

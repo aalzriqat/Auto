@@ -91,7 +91,7 @@ export function VehicleDetailsDialog({
                   value="overview" 
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
-                  {t("Overview" as any) || "Overview"}
+                  {t("Overview" as any)}
                 </TabsTrigger>
               )}
               {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_LEADS)) && (
@@ -110,7 +110,7 @@ export function VehicleDetailsDialog({
                   value="expenses" 
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
-                  {t("Expenses" as any) || "Expenses"}
+                  {t("Expenses" as any)}
                   {relations?.expenses && relations.expenses.length > 0 && (
                     <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.expenses.length}</Badge>
                   )}
@@ -121,7 +121,7 @@ export function VehicleDetailsDialog({
                   value="tasks" 
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
-                  {t("Tasks" as any) || "Tasks"}
+                  {t("Tasks" as any)}
                   {relations?.tasks && relations.tasks.length > 0 && (
                     <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.tasks.length}</Badge>
                   )}
@@ -132,7 +132,7 @@ export function VehicleDetailsDialog({
                   value="test_drives" 
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
-                  {t("TestDrives" as any) || "Test Drives"}
+                  {t("TestDrives" as any)}
                   {relations?.testDrives && relations.testDrives.length > 0 && (
                     <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.testDrives.length}</Badge>
                   )}
@@ -143,7 +143,7 @@ export function VehicleDetailsDialog({
                   value="work_orders" 
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
-                  {t("WorkOrders" as any) || "Work Orders"}
+                  {t("WorkOrders" as any)}
                   {relations?.workOrders && relations.workOrders.length > 0 && (
                     <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.workOrders.length}</Badge>
                   )}
@@ -154,7 +154,7 @@ export function VehicleDetailsDialog({
                   value="valuations" 
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
-                  {t("Valuations" as any) || "Valuations"}
+                  {t("Valuations" as any)}
                 </TabsTrigger>
               )}
             </TabsList>
@@ -170,12 +170,12 @@ export function VehicleDetailsDialog({
                 <div className="space-y-1">
                   <span className="text-sm font-medium text-muted-foreground">{t("Status" as any)}</span>
                   <p className="text-sm font-semibold">
-                    {vehicle.status === "AVAILABLE" ? t("AvailableLC" as any) || "Available" :
-                     vehicle.status === "RESERVED" ? t("Reserved" as any) || "Reserved" :
-                     vehicle.status === "SOLD" ? t("Sold" as any) || "Sold" :
-                     vehicle.status === "IN_INSPECTION" ? t("InInspection" as any) || "Inspection" :
-                     vehicle.status === "IN_REPAIR" ? t("InRepair" as any) || "Repair" :
-                     vehicle.status === "ARCHIVED" ? t("Archived" as any) || "Archived" : vehicle.status}
+                    {vehicle.status === "AVAILABLE" ? t("StatusAvailable" as any) :
+                     vehicle.status === "RESERVED" ? t("StatusReserved" as any) :
+                     vehicle.status === "SOLD" ? t("StatusSold" as any) :
+                     vehicle.status === "IN_INSPECTION" ? t("StatusInInspection" as any) :
+                     vehicle.status === "IN_REPAIR" ? t("StatusInRepair" as any) :
+                     vehicle.status === "ARCHIVED" ? t("StatusArchived" as any) : vehicle.status}
                   </p>
                 </div>
 
@@ -263,8 +263,8 @@ export function VehicleDetailsDialog({
                         </div>
                         <div className="grid grid-cols-2 gap-2 text-muted-foreground text-xs mt-2">
                           <p>{t("SaleDate" as any) || "Sale Date"}: {format(sale.saleDate, "PP")}</p>
-                          <p>{t("Price" as any) || "Price"}: <span className="font-medium text-foreground">{sale.salePrice.toLocaleString()} JOD</span></p>
-                          <p>{t("Salesperson" as any) || "Salesperson"}: {sale.salespersonName}</p>
+                          <p>{t("Price" as any)}: <span className="font-medium text-foreground">{sale.salePrice.toLocaleString()} JOD</span></p>
+                          <p>{t("Salesperson" as any)}: {sale.salespersonName}</p>
                         </div>
                         <div className="mt-3 flex justify-end border-t border-border/50 pt-2">
                           <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => window.open(`/sales/${sale._id}/print`, '_blank')}>
@@ -404,7 +404,7 @@ export function VehicleDetailsDialog({
                         </span>
                       </div>
                       <div className="grid grid-cols-2 gap-2 text-muted-foreground text-xs">
-                        <p>Salesperson: {td.salespersonName}</p>
+                        <p>{t("Salesperson" as any)}: {td.salespersonName}</p>
                         <p>Demo Plate: {td.demoPlateNumber || "N/A"}</p>
                         <p>Started: {format(td.startTime, "PP p")}</p>
                         {td.endTime && <p>Ended: {format(td.endTime, "PP p")}</p>}
@@ -415,7 +415,7 @@ export function VehicleDetailsDialog({
                       {!td.endTime && (
                         <div className="mt-3 flex justify-end">
                           <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setSelectedTestDrive(td); setTestDriveOpen(true); }}>
-                            Complete Drive
+                            {t("CompleteDrive" as any)}
                           </Button>
                         </div>
                       )}
@@ -453,7 +453,7 @@ export function VehicleDetailsDialog({
                       
                       <div className="flex justify-between items-center mt-3 pt-3 border-t border-border/50">
                         <span className="text-muted-foreground text-xs">{wo.tasks.length} task{wo.tasks.length !== 1 && 's'}</span>
-                        <span className="font-semibold text-primary">Total: {wo.totalCost.toLocaleString(undefined, {minimumFractionDigits: 2})} JOD</span>
+                        <span className="font-semibold text-primary">{t("Total" as any)}: {wo.totalCost.toLocaleString(undefined, {minimumFractionDigits: 2})} JOD</span>
                       </div>
                     </div>
                   ))}

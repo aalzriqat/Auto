@@ -44,7 +44,7 @@ export function VehicleHistoryDialog({ open, onOpenChange, vehicle }: VehicleHis
 
         <ScrollArea className="flex-1 pr-4 -mr-4 mt-4">
           {history === undefined ? (
-            <div className="text-center py-8 text-muted-foreground">{t("Loading" as any) || "Loading history..."}</div>
+            <div className="text-center py-8 text-muted-foreground">{t("LoadingHistory" as any)}</div>
           ) : history.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">{t("NoEditHistory" as any) || "No edit history found for this vehicle."}</div>
           ) : (

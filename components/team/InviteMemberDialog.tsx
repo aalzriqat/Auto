@@ -52,7 +52,7 @@ interface InviteMemberDialogProps {
 
 export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogProps) {
   const { activeOrgId } = useOrg();
-  const { isRtl: isRTL } = useLanguage();
+  const { isRtl: isRTL, t } = useLanguage();
 
   const roles = useQuery(api.roles.list, activeOrgId ? { orgId: activeOrgId } : "skip");
   const createAccount = useAction(api.memberships.createAccount);
@@ -83,11 +83,11 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
         roleId: values.roleId as Id<"roles">,
       });
 
-      toast.success(isRTL ? "تم إنشاء الحساب بنجاح!" : "Account created successfully!");
+      toast.success(t("AccountCreatedSuccess" as any));
       form.reset();
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || (isRTL ? "فشل إنشاء الحساب" : "Failed to create account"));
+      toast.error(error.message || t("AccountCreatedFail" as any));
     } finally {
       setIsSubmitting(false);
     }
@@ -97,11 +97,9 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent dir={isRTL ? "rtl" : "ltr"}>
         <DialogHeader>
-          <DialogTitle>{isRTL ? "إضافة عضو جديد" : "Add Team Member"}</DialogTitle>
+          <DialogTitle>{t("AddTeamMember" as any)}</DialogTitle>
           <DialogDescription>
-            {isRTL
-              ? "قم بإنشاء حساب جديد لعضو الفريق بإدخال الاسم، البريد الإلكتروني، وكلمة المرور."
-              : "Create a new account for a team member by providing their name, email, and a password."}
+            {t("AddTeamMemberDesc" as any)}
           </DialogDescription>
         </DialogHeader>
 
@@ -112,9 +110,9 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
               name="name"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{isRTL ? "الاسم الكامل" : "Full Name"}</FormLabel>
+                  <FormLabel>{t("FullName" as any)}</FormLabel>
                   <FormControl>
-                    <Input placeholder={isRTL ? "الاسم الكامل" : "John Doe"} {...field} />
+                    <Input placeholder="John Doe" {...field} />
                   </FormControl>
                   <FormMessage />
                 </FormItem>
@@ -126,7 +124,7 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
               name="username"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{isRTL ? "اسم المستخدم" : "Username"}</FormLabel>
+                  <FormLabel>{t("Username" as any)}</FormLabel>
                   <FormControl>
                     <Input placeholder="johndoe" {...field} />
                   </FormControl>
@@ -140,7 +138,7 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
               name="email"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{isRTL ? "البريد الإلكتروني" : "Email Address"}</FormLabel>
+                  <FormLabel>{t("EmailAddress" as any)}</FormLabel>
                   <FormControl>
                     <Input type="email" placeholder="employee@dealership.com" {...field} />
                   </FormControl>
@@ -154,7 +152,7 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
               name="password"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{isRTL ? "كلمة المرور" : "Password"}</FormLabel>
+                  <FormLabel>{t("Password" as any)}</FormLabel>
                   <FormControl>
                     <Input type="password" placeholder="********" {...field} />
                   </FormControl>
@@ -168,11 +166,11 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
               name="roleId"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>{isRTL ? "تحديد الصلاحية" : "Assign Role"}</FormLabel>
+                  <FormLabel>{t("AssignRole" as any)}</FormLabel>
                   <Select onValueChange={field.onChange} defaultValue={field.value}>
                     <FormControl>
                       <SelectTrigger>
-                        <SelectValue placeholder={isRTL ? "اختر صلاحية" : "Select a role"} />
+                        <SelectValue placeholder={t("SelectARole" as any)} />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
@@ -190,12 +188,10 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
 
             <div className={`flex justify-end gap-2 pt-4 ${isRTL ? 'flex-row-reverse' : ''}`}>
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-                {isRTL ? "إلغاء" : "Cancel"}
+                {t("Cancel" as any)}
               </Button>
               <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting
-                  ? (isRTL ? "جاري الإنشاء..." : "Creating...")
-                  : (isRTL ? "إنشاء حساب" : "Create Account")}
+                {isSubmitting ? t("Creating" as any) : t("CreateAccount" as any)}
               </Button>
             </div>
           </form>

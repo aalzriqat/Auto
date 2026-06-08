@@ -18,17 +18,17 @@ export const list = query({
       testDrives = await ctx.db
         .query("test_drives")
         .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId!))
-        .collect();
+        .filter((q) => q.neq(q.field("isDeleted"), true)).collect();
     } else if (args.customerId) {
       testDrives = await ctx.db
         .query("test_drives")
         .withIndex("by_org_customer", (q) => q.eq("orgId", args.orgId).eq("customerId", args.customerId!))
-        .collect();
+        .filter((q) => q.neq(q.field("isDeleted"), true)).collect();
     } else {
       testDrives = await ctx.db
         .query("test_drives")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .collect();
+        .filter((q) => q.neq(q.field("isDeleted"), true)).collect();
     }
 
     // Hydrate
@@ -64,10 +64,10 @@ export const create = mutation({
     
     // Verify vehicle and customer exist
     const vehicle = await ctx.db.get(args.vehicleId);
-    if (!vehicle || vehicle.orgId !== args.orgId) throw new ConvexError("Vehicle not found");
+    if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) throw new ConvexError("Vehicle not found");
     
     const customer = await ctx.db.get(args.customerId);
-    if (!customer || customer.orgId !== args.orgId) throw new ConvexError("Customer not found");
+    if (!customer || customer.isDeleted || customer.orgId !== args.orgId) throw new ConvexError("Customer not found");
 
     return await ctx.db.insert("test_drives", {
       orgId: args.orgId,
@@ -92,7 +92,7 @@ export const complete = mutation({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_SALES]);
     
     const td = await ctx.db.get(args.testDriveId);
-    if (!td || td.orgId !== args.orgId) throw new ConvexError("Test drive not found");
+    if (!td || td.isDeleted || td.orgId !== args.orgId) throw new ConvexError("Test drive not found");
 
     await ctx.db.patch(args.testDriveId, {
       endTime: args.endTime,
@@ -101,6 +101,7 @@ export const complete = mutation({
   },
 });
 
+// TODO: Add admin recovery endpoint if needed
 export const remove = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -110,8 +111,14 @@ export const remove = mutation({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_SALES]);
     
     const td = await ctx.db.get(args.testDriveId);
-    if (!td || td.orgId !== args.orgId) throw new ConvexError("Test drive not found");
+    if (!td || td.isDeleted || td.orgId !== args.orgId) throw new ConvexError("Test drive not found");
 
-    await ctx.db.delete(args.testDriveId);
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Unauthenticated");
+    await ctx.db.patch(args.testDriveId, {
+      isDeleted: true,
+      deletedAt: Date.now(),
+      deletedBy: identity.subject
+    });
   },
 });

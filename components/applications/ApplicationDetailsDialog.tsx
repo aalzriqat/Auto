@@ -55,9 +55,9 @@ export function ApplicationDetailsDialog({
         documentId: docId,
         fileId: storageId,
       });
-      toast.success(t("UploadSuccess" as any) || "Document uploaded successfully");
+      toast.success(t("UploadSuccess" as any));
     } catch (err: any) {
-      toast.error(err.message || t("UploadFail" as any) || "Upload failed");
+      toast.error(err.message || t("UploadFail" as any));
     }
   };
 
@@ -65,7 +65,7 @@ export function ApplicationDetailsDialog({
     if (!activeOrgId) return;
     try {
       await updateStatus({ orgId: activeOrgId, applicationId, status: "APPROVED" });
-      toast.success(t("AppApprovedSuccess" as any) || "Application Approved!");
+      toast.success(t("AppApprovedSuccess" as any));
     } catch (err: any) {
       toast.error(err.message || "Failed to approve application");
     }
@@ -75,7 +75,7 @@ export function ApplicationDetailsDialog({
     if (!activeOrgId) return;
     try {
       await finalizeDeal({ orgId: activeOrgId, applicationId });
-      toast.success(t("DealFinalizedSuccess" as any) || "Deal Finalized successfully! Sale record created.");
+      toast.success(t("DealFinalizedSuccess" as any));
       onOpenChange(false);
     } catch (err: any) {
       toast.error(err.message || "Failed to finalize deal");
@@ -90,9 +90,9 @@ export function ApplicationDetailsDialog({
         <DialogHeader>
           <div className="flex justify-between items-start">
             <div>
-              <DialogTitle className="text-xl">{t("ApplicationDetails" as any) || "Application Details"}</DialogTitle>
+              <DialogTitle className="text-xl">{t("ApplicationDetails" as any)}</DialogTitle>
               <p className="text-sm text-muted-foreground mt-1">
-                {t("SubmittedOn" as any) || "Submitted on"} {format(app.createdAt, "PP")}
+                {t("SubmittedOn" as any)} {format(app.createdAt, "PP")}
               </p>
             </div>
             <Badge className="text-sm px-3 py-1">{app.status}</Badge>
@@ -102,58 +102,58 @@ export function ApplicationDetailsDialog({
         <div className="grid grid-cols-2 gap-6 my-4">
           <div className="space-y-4">
             <div>
-              <h4 className="font-semibold text-sm mb-2">{t("CustomerInfo" as any) || "Customer Info"}</h4>
+              <h4 className="font-semibold text-sm mb-2">{t("CustomerInfo" as any)}</h4>
               <div className="bg-muted/50 p-3 rounded-lg text-sm">
-                <p><strong>{t("Name" as any) || "Name"}:</strong> {app.customer?.firstName} {app.customer?.lastName}</p>
-                <p><strong>{t("NationalID" as any) || "National ID"}:</strong> {app.customer?.nationalId}</p>
-                <p><strong>{t("Phone" as any) || "Phone"}:</strong> {app.customer?.phone}</p>
+                <p><strong>{t("Name" as any)}:</strong> {app.customer?.firstName} {app.customer?.lastName}</p>
+                <p><strong>{t("NationalID" as any)}:</strong> {app.customer?.nationalId}</p>
+                <p><strong>{t("Phone" as any)}:</strong> {app.customer?.phone}</p>
               </div>
             </div>
 
             <div>
-              <h4 className="font-semibold text-sm mb-2">{t("VehicleInfo" as any) || "Vehicle Info"}</h4>
+              <h4 className="font-semibold text-sm mb-2">{t("VehicleInfo" as any)}</h4>
               <div className="bg-muted/50 p-3 rounded-lg text-sm">
-                <p><strong>{t("Vehicle" as any) || "Vehicle"}:</strong> {app.vehicle?.year} {app.vehicle?.make} {app.vehicle?.model}</p>
-                <p><strong>{t("VIN" as any) || "VIN"}:</strong> {app.vehicle?.vin}</p>
-                <p><strong>{t("Price" as any) || "Price"}:</strong> {app.quote?.vehiclePrice?.toLocaleString()} {t("JOD" as any) || "JOD"}</p>
+                <p><strong>{t("Vehicle" as any)}:</strong> {app.vehicle?.year} {app.vehicle?.make} {app.vehicle?.model}</p>
+                <p><strong>{t("VIN" as any)}:</strong> {app.vehicle?.vin}</p>
+                <p><strong>{t("Price" as any)}:</strong> {app.quote?.vehiclePrice?.toLocaleString()} {t("JOD" as any)}</p>
               </div>
             </div>
           </div>
 
           <div className="space-y-4">
             <div>
-              <h4 className="font-semibold text-sm mb-2">{t("FinancingDetails" as any) || "Financing Details"}</h4>
+              <h4 className="font-semibold text-sm mb-2">{t("FinancingDetails" as any)}</h4>
               <div className="bg-muted/50 p-3 rounded-lg text-sm">
-                <p><strong>{t("Company" as any) || "Company"}:</strong> {app.company?.name || "Direct"}</p>
-                <p><strong>{t("DownPayment" as any) || "Down Payment"}:</strong> {app.quote?.downPayment?.toLocaleString()} {t("JOD" as any) || "JOD"}</p>
-                <p><strong>{t("TermMonths" as any) || "Term"}:</strong> {app.quote?.termMonths} {t("Months" as any) || "Months"}</p>
-                <p><strong>{t("MonthlyInstallment" as any) || "Monthly Installment"}:</strong> <span className="font-semibold text-primary">{app.quote?.monthlyInstallment?.toLocaleString(undefined, { minimumFractionDigits: 2 })} {t("JOD" as any) || "JOD"}</span></p>
+                <p><strong>{t("Company" as any)}:</strong> {app.company?.name || (t("Direct" as any) || "Direct")}</p>
+                <p><strong>{t("DownPayment" as any)}:</strong> {app.quote?.downPayment?.toLocaleString()} {t("JOD" as any)}</p>
+                <p><strong>{t("TermMonths" as any)}:</strong> {app.quote?.termMonths} {t("Months" as any)}</p>
+                <p><strong>{t("MonthlyInstallment" as any)}:</strong> <span className="font-semibold text-primary">{app.quote?.monthlyInstallment?.toLocaleString(undefined, { minimumFractionDigits: 2 })} {t("JOD" as any)}</span></p>
               </div>
             </div>
 
             <div>
-              <h4 className="font-semibold text-sm mb-2">{t("AppActions" as any) || "Actions"}</h4>
+              <h4 className="font-semibold text-sm mb-2">{t("AppActions" as any)}</h4>
               <div className="flex flex-col gap-2">
                 <Button
                   onClick={() => updateStatus({ orgId: activeOrgId!, applicationId, status: "UNDER_REVIEW" })}
                   variant="outline"
                   disabled={app.status !== "PENDING_DOCS"}
                 >
-                  {t("MarkUnderReview" as any) || "Mark Under Review"}
+                  {t("MarkUnderReview" as any)}
                 </Button>
                 <Button
                   onClick={handleApproveApp}
                   className="bg-green-600 hover:bg-green-700 text-white"
                   disabled={app.status === "APPROVED" || app.status === "CLOSED"}
                 >
-                  {t("ApproveApplication" as any) || "Approve Application"}
+                  {t("ApproveApplication" as any)}
                 </Button>
                 {app.status === "APPROVED" && (
                   <Button
                     onClick={handleFinalizeDeal}
                     className="bg-blue-600 hover:bg-blue-700 text-white mt-2"
                   >
-                    {t("FinalizeDealClose" as any) || "Finalize Deal (Close)"}
+                    {t("FinalizeDealClose" as any)}
                   </Button>
                 )}
                 <Button
@@ -161,7 +161,7 @@ export function ApplicationDetailsDialog({
                   variant="destructive"
                   disabled={app.status === "REJECTED" || app.status === "CLOSED"}
                 >
-                  {t("RejectApplication" as any) || "Reject Application"}
+                  {t("RejectApplication" as any)}
                 </Button>
               </div>
             </div>
@@ -171,7 +171,7 @@ export function ApplicationDetailsDialog({
         <Separator />
 
         <div className="my-4">
-          <h4 className="font-semibold text-lg mb-4">{t("RequiredDocuments" as any) || "Required Documents"}</h4>
+          <h4 className="font-semibold text-lg mb-4">{t("RequiredDocuments" as any)}</h4>
           <div className="space-y-3">
             {documents && documents.length > 0 ? (
               <div className="space-y-3">
@@ -191,10 +191,10 @@ export function ApplicationDetailsDialog({
                           {status === "VERIFIED" && <CheckCircle className="h-4 w-4 text-green-500" />}
                           {status === "REJECTED" && <XCircle className="h-4 w-4 text-red-500" />}
                           <span className="text-sm font-medium">
-                            {status === "MISSING" ? (t("DocMissing" as any) || "Missing") :
-                              status === "UPLOADED" ? (t("DocUploaded" as any) || "Uploaded") :
-                                status === "VERIFIED" ? (t("DocVerified" as any) || "Verified") :
-                                  (t("DocRejected" as any) || "Rejected")}
+                            {status === "MISSING" ? (t("DocMissing" as any)) :
+                              status === "UPLOADED" ? (t("DocUploaded" as any)) :
+                                status === "VERIFIED" ? (t("DocVerified" as any)) :
+                                  (t("DocRejected" as any))}
                           </span>
                         </div>
                       </div>
@@ -202,7 +202,7 @@ export function ApplicationDetailsDialog({
                         {doc.fileUrl ? (
                           <div className="flex gap-2">
                             <Button size="sm" variant="outline" asChild>
-                              <a href={doc.fileUrl || "#"} target="_blank" rel="noreferrer">{t("ViewFile" as any) || "View File"}</a>
+                              <a href={doc.fileUrl || "#"} target="_blank" rel="noreferrer">{t("ViewFile" as any)}</a>
                             </Button>
                             <Button
                               size="sm"
@@ -210,7 +210,7 @@ export function ApplicationDetailsDialog({
                               onClick={() => updateDocStatus({ orgId: activeOrgId!, documentId: doc._id, status: "VERIFIED" })}
                               disabled={status === "VERIFIED"}
                             >
-                              {t("DocVerified" as any) || "Verify"}
+                              {t("Verify" as any)}
                             </Button>
                           </div>
                         ) : (
@@ -231,7 +231,7 @@ export function ApplicationDetailsDialog({
                               >
                                 <span className="cursor-pointer">
                                   <Upload className="h-4 w-4 mr-2" />
-                                  {t("Upload" as any) || "Upload"}
+                                  {t("Upload" as any)}
                                 </span>
                               </Button>
                             </label>
@@ -243,7 +243,7 @@ export function ApplicationDetailsDialog({
                 })}
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground">{t("NoDocsRequired" as any) || "No documents required for this application."}</p>
+              <p className="text-sm text-muted-foreground">{t("NoDocsRequired" as any)}</p>
             )}
           </div>
         </div>

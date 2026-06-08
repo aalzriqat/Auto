@@ -1,8 +1,9 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { RoleGuard } from "@/components/auth/RoleGuard";
 import { useSearchParams } from "next/navigation";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -36,7 +37,11 @@ export default function CustomersPage() {
 
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const customers = useQuery(api.customers.list, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const { results: customers, status: customersStatus, loadMore: loadMoreCustomers } = usePaginatedQuery(
+    api.customers.list,
+    activeOrgId ? { orgId: activeOrgId } : "skip",
+    { initialNumItems: 25 }
+  );
   const removeCustomer = useMutation(api.customers.softDelete);
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -85,25 +90,26 @@ export default function CustomersPage() {
     if (!activeOrgId || !customerToDelete) return;
     try {
       await removeCustomer({ orgId: activeOrgId, customerId: customerToDelete._id });
-      toast.success(t("CustomerRemovedSuccess" as any) || "Customer removed successfully");
+      toast.success(t("CustomerRemovedSuccess" as any));
       setCustomerToDelete(null);
     } catch (error: any) {
-      toast.error(error.message || t("CustomerRemoveFail" as any) || "Failed to remove customer");
+      toast.error(error.message || t("CustomerRemoveFail" as any));
     }
   };
 
   return (
-    <div className="space-y-6">
+    <RoleGuard permissions={["view:customers"]}>
+      <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
         <Button onClick={handleAddNew}>
-          <Plus className="me-2 h-4 w-4" /> {t("AddCustomer" as any) || "Add Customer"}
+          <Plus className="me-2 h-4 w-4" /> {t("AddCustomer" as any)}
         </Button>
       </div>
 
       <div className="flex items-center w-full max-w-sm space-x-2">
         <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
         <Input
-          placeholder={t("SearchCustomers" as any) || "Search by name, email, phone..."}
+          placeholder={t("SearchCustomers" as any)}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           className="ps-9"
@@ -114,23 +120,23 @@ export default function CustomersPage() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>{t("Name" as any) || "Name"}</TableHead>
-              <TableHead>{t("Contact" as any) || "Contact"}</TableHead>
-              <TableHead>{t("NationalID" as any) || "National ID"}</TableHead>
-              <TableHead className="text-end">{t("Actions" as any) || "Actions"}</TableHead>
+              <TableHead>{t("Name" as any)}</TableHead>
+              <TableHead>{t("Contact" as any)}</TableHead>
+              <TableHead>{t("NationalID" as any)}</TableHead>
+              <TableHead className="text-end">{t("Actions" as any)}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {filteredCustomers === undefined ? (
               <TableRow>
                 <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
-                  {t("LoadingCustomers" as any) || "Loading customers..."}
+                  {t("LoadingCustomers" as any)}
                 </TableCell>
               </TableRow>
             ) : filteredCustomers.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
-                  {t("NoCustomers" as any) || "No customers found."}
+                  {t("NoCustomers" as any)}
                 </TableCell>
               </TableRow>
             ) : (
@@ -157,12 +163,12 @@ export default function CustomersPage() {
                         </div>
                       )}
                       {!customer.email && !customer.phone && !customer.whatsapp && (
-                        <span className="italic text-xs">{t("NoContactInfo" as any) || "No contact info"}</span>
+                        <span className="italic text-xs">{t("NoContactInfo" as any)}</span>
                       )}
                     </div>
                   </TableCell>
                   <TableCell className="text-sm">
-                    {customer.nationalId || <span className="text-muted-foreground italic">{t("NA" as any) || "N/A"}</span>}
+                    {customer.nationalId || <span className="text-muted-foreground italic">{t("NA" as any)}</span>}
                   </TableCell>
                   <TableCell className="text-end">
                     <Button variant="ghost" size="icon" onClick={(e) => handleEdit(customer, e)}>
@@ -180,6 +186,13 @@ export default function CustomersPage() {
             )}
           </TableBody>
         </Table>
+        {customersStatus === "CanLoadMore" && (
+          <div className="flex justify-center p-4">
+            <Button variant="outline" onClick={() => loadMoreCustomers(25)}>
+              {t("LoadMore" as any)}
+            </Button>
+          </div>
+        )}
       </div>
 
       <CustomerDialog
@@ -198,17 +211,18 @@ export default function CustomersPage() {
       <Dialog open={!!customerToDelete} onOpenChange={(open) => !open && setCustomerToDelete(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{t("RemoveCustomer" as any) || "Remove Customer"}</DialogTitle>
+            <DialogTitle>{t("RemoveCustomer" as any)}</DialogTitle>
             <DialogDescription>
-              {t("RemoveCustomerConfirm" as any) || "Are you sure you want to remove this customer? This action cannot be undone. If they have associated sales or leads, this will fail."}
+              {t("RemoveCustomerConfirm" as any)}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setCustomerToDelete(null)}>{t("Cancel" as any) || "Cancel"}</Button>
-            <Button variant="destructive" onClick={handleDelete}>{t("Remove" as any) || "Remove"}</Button>
+            <Button variant="outline" onClick={() => setCustomerToDelete(null)}>{t("Cancel" as any)}</Button>
+            <Button variant="destructive" onClick={handleDelete}>{t("Remove" as any)}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
+    </RoleGuard>
   );
 }

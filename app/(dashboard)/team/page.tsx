@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useMutation, useAction } from "convex/react";
+import { useQuery, useMutation, useAction, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -35,7 +35,7 @@ export default function TeamPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
 
-  const memberships = useQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const { results: memberships } = usePaginatedQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
   const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
   const roles = useQuery(api.roles.list, activeOrgId ? { orgId: activeOrgId } : "skip");
 
@@ -55,10 +55,10 @@ export default function TeamPage() {
     if (!activeOrgId || !memberToDelete) return;
     try {
       await removeMember({ orgId: activeOrgId, membershipId: memberToDelete._id });
-      toast.success("Team member removed successfully");
+      toast.success(t("MemberRemovedSuccess" as any));
       setMemberToDelete(null);
     } catch (error: any) {
-      toast.error(error.message || "Failed to remove member");
+      toast.error(error.message || t("MemberRemoveFail" as any));
     }
   };
 
@@ -68,15 +68,15 @@ export default function TeamPage() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
         {canManageUsers && (
           <Button onClick={() => setIsInviteOpen(true)}>
-            <Plus className="me-2 h-4 w-4" /> {t("AddMember" as any) || "Add Member"}
+            <Plus className="me-2 h-4 w-4" /> {t("AddMember" as any)}
           </Button>
         )}
       </div>
 
       <Tabs defaultValue="members" className="w-full">
         <TabsList className="mb-4">
-          <TabsTrigger value="members">{t("Members" as any) || "Members"}</TabsTrigger>
-          {canManageUsers && <TabsTrigger value="roles">{t("RolesPermissions" as any) || "Roles & Permissions"}</TabsTrigger>}
+          <TabsTrigger value="members">{t("Members" as any)}</TabsTrigger>
+          {canManageUsers && <TabsTrigger value="roles">{t("RolesPermissions" as any)}</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="members">
@@ -84,22 +84,22 @@ export default function TeamPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>{t("Member" as any) || "Member"}</TableHead>
-                  <TableHead>{t("Role" as any) || "Role"}</TableHead>
-                  {canManageUsers && <TableHead className="text-end">{t("Actions" as any) || "Actions"}</TableHead>}
+                  <TableHead>{t("Member" as any)}</TableHead>
+                  <TableHead>{t("Role" as any)}</TableHead>
+                  {canManageUsers && <TableHead className="text-end">{t("Actions" as any)}</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {memberships === undefined ? (
                   <TableRow>
                     <TableCell colSpan={canManageUsers ? 3 : 2} className="text-center py-8 text-muted-foreground">
-                      {t("LoadingTeam" as any) || "Loading team..."}
+                      {t("LoadingTeam" as any)}
                     </TableCell>
                   </TableRow>
                 ) : memberships.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={canManageUsers ? 3 : 2} className="text-center py-8 text-muted-foreground">
-                      {t("NoTeamMembersFound" as any) || "No team members found."}
+                      {t("NoTeamMembersFound" as any)}
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -136,14 +136,14 @@ export default function TeamPage() {
                               onClick={() => setMemberToChangeRole(member)}
                               disabled={member.roleName === "OWNER" && member.userId === myMembership?.userId}
                             >
-                              {t("ChangeRole" as any) || "Change Role"}
+                              {t("ChangeRole" as any)}
                             </Button>
                             <Button
                               variant="ghost"
                               size="icon"
                               onClick={() => setMemberToDelete(member)}
                               disabled={member.roleName === "OWNER" && member.userId === myMembership?.userId}
-                              title={member.roleName === "OWNER" && member.userId === myMembership?.userId ? t("YouCannotRemoveYourself" as any) || "You cannot remove yourself" : t("RemoveMember" as any) || "Remove member"}
+                              title={member.roleName === "OWNER" && member.userId === myMembership?.userId ? t("YouCannotRemoveYourself" as any) : t("RemoveMember" as any)}
                             >
                               <Trash2 className={`h-4 w-4 ${member.roleName === "OWNER" && member.userId === myMembership?.userId ? "text-muted-foreground opacity-50" : "text-red-500"}`} />
                             </Button>
@@ -164,22 +164,22 @@ export default function TeamPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>{t("Role" as any) || "Role"}</TableHead>
-                    <TableHead>{t("PermissionsCount" as any) || "Permissions"}</TableHead>
-                    <TableHead className="text-end">{t("Actions" as any) || "Actions"}</TableHead>
+                    <TableHead>{t("Role" as any)}</TableHead>
+                    <TableHead>{t("PermissionsCount" as any)}</TableHead>
+                    <TableHead className="text-end">{t("Actions" as any)}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {roles === undefined ? (
                     <TableRow>
                       <TableCell colSpan={3} className="text-center py-8 text-muted-foreground">
-                        {t("LoadingRoles" as any) || "Loading roles..."}
+                        {t("LoadingRoles" as any)}
                       </TableCell>
                     </TableRow>
                   ) : roles.length === 0 ? (
                     <TableRow>
                       <TableCell colSpan={3} className="text-center py-8 text-muted-foreground">
-                        {t("NoRolesFound" as any) || "No roles found."}
+                        {t("NoRolesFound" as any)}
                       </TableCell>
                     </TableRow>
                   ) : (
@@ -189,7 +189,7 @@ export default function TeamPage() {
                           {t(role.name as any) || role.name}
                         </TableCell>
                         <TableCell>
-                          <Badge variant="outline">{role.permissions.length} {t("Allowed" as any) || "allowed"}</Badge>
+                          <Badge variant="outline">{role.permissions.length} {t("Allowed" as any)}</Badge>
                         </TableCell>
                         <TableCell className="text-end">
                           <Button
@@ -197,7 +197,7 @@ export default function TeamPage() {
                             size="sm"
                             onClick={() => setRoleToEdit(role)}
                           >
-                            {t("EditPermissions" as any) || "Edit Permissions"}
+                            {t("EditPermissions" as any)}
                           </Button>
                         </TableCell>
                       </TableRow>
@@ -234,17 +234,17 @@ export default function TeamPage() {
       <Dialog open={!!memberToDelete} onOpenChange={(open) => !open && setMemberToDelete(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{t("RemoveTeamMember" as any) || "Remove Team Member"}</DialogTitle>
+            <DialogTitle>{t("RemoveTeamMember" as any)}</DialogTitle>
             <DialogDescription>
-              {(t("RemoveMemberConfirm" as any) || "Are you sure you want to remove {0} from the organization? They will lose all access immediately.").replace("{0}", memberToDelete?.userName || "")}
+              {(t("RemoveMemberConfirm" as any)).replace("{0}", memberToDelete?.userName || "")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setMemberToDelete(null)}>
-              {t("Cancel" as any) || "Cancel"}
+              {t("Cancel" as any)}
             </Button>
             <Button variant="destructive" onClick={handleDelete}>
-              {t("Delete" as any) || "Remove"}
+              {t("Delete" as any)}
             </Button>
           </DialogFooter>
         </DialogContent>
