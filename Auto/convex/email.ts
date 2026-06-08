@@ -3,6 +3,7 @@
 import { action, internalAction } from "./_generated/server";
 import { v } from "convex/values";
 import { Resend } from "resend";
+import { rateLimiter } from "./rateLimit";
 
 export const sendTaskAlarm = action({
   args: {
@@ -12,6 +13,10 @@ export const sendTaskAlarm = action({
     dueDate: v.number(),
   },
   handler: async (ctx, args) => {
+    const status = await rateLimiter.limit(ctx, "email");
+    if (!status.ok) {
+      throw new Error(`Rate limit exceeded. Try again in ${Math.ceil(status.retryAfter / 1000)}s`);
+    }
     const resendApiKey = process.env.RESEND_API_KEY;
 
     // Generate basic .ics file string
@@ -25,7 +30,7 @@ export const sendTaskAlarm = action({
     const icsString = [
       'BEGIN:VCALENDAR',
       'VERSION:2.0',
-      'PRODID:-//AutoFlow CRM//Task Alarm//EN',
+      'PRODID:-//Bloom Cars CRM//Task Alarm//EN',
       'BEGIN:VEVENT',
       `UID:${args.dueDate}@autoflow.crm`,
       `DTSTAMP:${formatICSDate(new Date())}`,
@@ -41,7 +46,7 @@ export const sendTaskAlarm = action({
       <h1>Task Reminder: ${args.taskTitle}</h1>
       <p>This task is scheduled for ${new Date(args.dueDate).toLocaleString()}.</p>
       ${args.taskDescription ? `<p>Notes: ${args.taskDescription}</p>` : ''}
-      <p>Please check your AutoFlow dashboard for details.</p>
+      <p>Please check your Bloom Cars dashboard for details.</p>
     `;
 
     if (!resendApiKey) {
@@ -54,7 +59,7 @@ export const sendTaskAlarm = action({
 
     try {
       await resend.emails.send({
-        from: 'AutoFlow Tasks <onboarding@resend.dev>',
+        from: 'Bloom Cars Tasks <onboarding@resend.dev>',
         to: args.toEmail,
         subject: `Task Reminder: ${args.taskTitle}`,
         html: emailHtml,
@@ -79,6 +84,10 @@ export const sendTeamInvite = internalAction({
     orgName: v.string(),
   },
   handler: async (ctx, args) => {
+    const status = await rateLimiter.limit(ctx, "email");
+    if (!status.ok) {
+      throw new Error(`Rate limit exceeded. Try again in ${Math.ceil(status.retryAfter / 1000)}s`);
+    }
     const resendApiKey = process.env.RESEND_API_KEY;
 
     // Use localhost for now, but remind user to update for prod
@@ -86,7 +95,7 @@ export const sendTeamInvite = internalAction({
 
     const emailHtml = `
       <h1>You've been invited to join ${args.orgName}</h1>
-      <p>Your team at ${args.orgName} has invited you to join them on AutoFlow CRM.</p>
+      <p>Your team at ${args.orgName} has invited you to join them on Bloom Cars CRM.</p>
       <p>Click the link below to sign up and join your team automatically:</p>
       <p><a href="${inviteUrl}">Accept Invitation & Sign Up</a></p>
       <br />
@@ -102,9 +111,9 @@ export const sendTeamInvite = internalAction({
 
     try {
       await resend.emails.send({
-        from: 'AutoFlow Teams <onboarding@resend.dev>',
+        from: 'Bloom Cars Teams <onboarding@resend.dev>',
         to: args.toEmail,
-        subject: `You're invited to join ${args.orgName} on AutoFlow`,
+        subject: `You're invited to join ${args.orgName} on Bloom Cars`,
         html: emailHtml,
       });
       return { success: true, mock: false };

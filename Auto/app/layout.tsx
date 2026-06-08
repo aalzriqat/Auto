@@ -16,10 +16,10 @@ const cairo = Cairo({
 });
 
 export const metadata: Metadata = {
-  title: "AutoFlow | Dealership Management",
-  description: "Modern dealership management platform.",
+  title: "AutoFlow | The Modern Dealership OS",
+  description: "Ditch the spreadsheets. Manage your vehicle inventory, track sales pipelines, and generate professional PDF quotes instantly. Built for modern showrooms.",
   icons: {
-    icon: "/convex.svg",
+    icon: "/logo.png",
   },
 };
 
@@ -29,7 +29,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en">
       <body
         className={`${inter.variable} ${cairo.variable} font-inter antialiased`}
       >

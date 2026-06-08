@@ -1,0 +1,1 @@
+{"nodes": [], "edges": [{"source": "convex_create_component_icon", "target": "convex_create_component_icon", "relation": "semantically_similar_to", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": ".claude/skills/convex-create-component/assets/icon.svg"}], "hyperedges": []}

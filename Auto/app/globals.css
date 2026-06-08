@@ -5,20 +5,20 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --background: hsl(210 40% 98%); /* Soft gray background instead of pure white */
-  --foreground: hsl(222.2 47.4% 11.2%);
+  --background: hsl(40 20% 97%); /* Warm off-white for eye comfort */
+  --foreground: hsl(220 10% 25%); /* Soft charcoal to reduce contrast strain */
 
-  --muted: hsl(210 40% 96.1%);
-  --muted-foreground: hsl(215.4 16.3% 46.9%);
+  --muted: hsl(40 20% 93%);
+  --muted-foreground: hsl(220 10% 45%);
 
   --popover: hsl(0 0% 100%);
-  --popover-foreground: hsl(222.2 47.4% 11.2%);
+  --popover-foreground: hsl(220 10% 25%);
 
   --card: hsl(0 0% 100%);
-  --card-foreground: hsl(222.2 47.4% 11.2%);
+  --card-foreground: hsl(220 10% 25%);
 
-  --border: hsl(214.3 31.8% 91.4%);
-  --input: hsl(214.3 31.8% 91.4%);
+  --border: hsl(40 20% 90%);
+  --input: hsl(40 20% 90%);
 
   --primary: hsl(236 82% 58%); /* Vibrant Blue-Indigo */
   --primary-foreground: hsl(210 40% 98%);

@@ -3,7 +3,7 @@
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { ChevronsUpDown, Plus } from "lucide-react";
+import { ChevronsUpDown, Plus, Edit2 } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -33,10 +33,11 @@ export function OrgSwitcher() {
   const orgs = useQuery(api.organizations.listMine);
   
   const activeOrg = orgs?.find((o: any) => o._id === activeOrgId);
-  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [dialogType, setDialogType] = useState<"CREATE" | "RENAME" | null>(null);
   const [newOrgName, setNewOrgName] = useState("");
   
   const createOrg = useMutation(api.organizations.create);
+  const updateOrg = useMutation(api.organizations.update);
 
   const handleCreateOrg = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -46,15 +47,29 @@ export function OrgSwitcher() {
       const newId = await createOrg({ name: newOrgName.trim() });
       setActiveOrgId(newId);
       setNewOrgName("");
-      setIsDialogOpen(false);
+      setDialogType(null);
       toast.success("Organization created successfully");
     } catch (error: any) {
       toast.error(error.message || "Failed to create organization");
     }
   };
 
+  const handleRenameOrg = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeOrgId || !newOrgName.trim()) return;
+    
+    try {
+      await updateOrg({ orgId: activeOrgId, name: newOrgName.trim() });
+      setNewOrgName("");
+      setDialogType(null);
+      toast.success("Organization renamed successfully");
+    } catch (error: any) {
+      toast.error(error.message || "Failed to rename organization");
+    }
+  };
+
   return (
-    <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+    <Dialog open={!!dialogType} onOpenChange={(open) => { if (!open) setDialogType(null); }}>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
@@ -97,11 +112,19 @@ export function OrgSwitcher() {
           ))}
           <DropdownMenuSeparator />
           <DialogTrigger asChild>
-            <DropdownMenuItem className="gap-2 p-2 cursor-pointer">
+            <DropdownMenuItem className="gap-2 p-2 cursor-pointer" onClick={() => { setNewOrgName(""); setDialogType("CREATE"); }}>
               <div className="flex size-6 items-center justify-center rounded-md border bg-background">
                 <Plus className="size-4" />
               </div>
               <div className="font-medium text-muted-foreground">Add organization</div>
+            </DropdownMenuItem>
+          </DialogTrigger>
+          <DialogTrigger asChild>
+            <DropdownMenuItem className="gap-2 p-2 cursor-pointer" onClick={() => { setNewOrgName(activeOrg?.name || ""); setDialogType("RENAME"); }}>
+              <div className="flex size-6 items-center justify-center rounded-md border bg-background">
+                <Edit2 className="size-4" />
+              </div>
+              <div className="font-medium text-muted-foreground">Rename current</div>
             </DropdownMenuItem>
           </DialogTrigger>
         </DropdownMenuContent>
@@ -109,12 +132,14 @@ export function OrgSwitcher() {
 
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Create Organization</DialogTitle>
+          <DialogTitle>{dialogType === "CREATE" ? "Create Organization" : "Rename Organization"}</DialogTitle>
           <DialogDescription>
-            Add a new dealership to manage its inventory and customers.
+            {dialogType === "CREATE" 
+              ? "Add a new dealership to manage its inventory and customers."
+              : "Change the name of your current dealership."}
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={handleCreateOrg}>
+        <form onSubmit={dialogType === "CREATE" ? handleCreateOrg : handleRenameOrg}>
           <div className="grid gap-4 py-4">
             <div className="grid grid-cols-4 items-center gap-4">
               <Label htmlFor="name" className="text-end">
@@ -131,7 +156,7 @@ export function OrgSwitcher() {
             </div>
           </div>
           <DialogFooter>
-            <Button type="submit" disabled={!newOrgName.trim()}>Create</Button>
+            <Button type="submit" disabled={!newOrgName.trim()}>{dialogType === "CREATE" ? "Create" : "Save changes"}</Button>
           </DialogFooter>
         </form>
       </DialogContent>

@@ -1,0 +1,8 @@
+import { RateLimiter } from "@convex-dev/rate-limiter";
+import { components } from "./_generated/api";
+
+export const rateLimiter = new RateLimiter(components.rateLimiter, {
+  email: { kind: "token bucket", rate: 5, period: 60000, capacity: 5 }, // 5 emails per minute
+  create: { kind: "token bucket", rate: 30, period: 60000, capacity: 30 }, // 30 creates per minute
+  upload: { kind: "token bucket", rate: 10, period: 60000, capacity: 10 }, // 10 uploads per minute
+});

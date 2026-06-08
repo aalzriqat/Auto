@@ -8,6 +8,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -35,40 +36,34 @@ import {
 } from "@/components/ui/select";
 // removed Textarea import
 
-const expenseSchema = z.object({
-  title: z.string().min(1, "Title is required"),
-  amount: z.coerce.number().min(0, "Amount must be positive"),
-  date: z.string().min(1, "Date is required"),
-  category: z.enum(["REPAIR", "MAINTENANCE", "DETAILING", "TRANSPORT", "MARKETING", "OFFICE", "OTHER"]),
-  vehicleId: z.string().optional(),
-  notes: z.string().optional(),
-});
+import { expenseSchema, ExpenseFormValues, ExpenseDialogProps } from "./expense.schema";
 
-type ExpenseFormValues = z.infer<typeof expenseSchema>;
-
-interface ExpenseDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  expense?: Doc<"expenses"> | null;
-}
 
 export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProps) {
   const { activeOrgId } = useOrg();
-  
-  const vehicles = useQuery(api.vehicles.list, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const { t } = useLanguage();
+
+  const availableVehicles = useQuery(
+    api.vehicles.listAll,
+    activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE" } : "skip"
+  );
+  const memberships = useQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId } : "skip");
 
   const createExpense = useMutation(api.expenses.create);
   const updateExpense = useMutation(api.expenses.update);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const form = useForm<ExpenseFormValues>({
-    resolver: zodResolver(expenseSchema),
+    resolver: zodResolver(expenseSchema as any),
     defaultValues: {
       title: "",
       amount: 0,
       date: new Date().toISOString().split('T')[0],
       category: "OTHER",
       vehicleId: "none",
+      status: "PAID",
+      vendor: "",
+      payerId: "none",
       notes: "",
     },
   });
@@ -82,6 +77,9 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
         date: date.toISOString().split('T')[0],
         category: expense.category as any,
         vehicleId: expense.vehicleId || "none",
+        status: expense.status || "PAID",
+        vendor: expense.vendor || "",
+        payerId: expense.payerId || "none",
         notes: expense.notes || "",
       });
     } else if (open && !expense) {
@@ -91,6 +89,9 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
         date: new Date().toISOString().split('T')[0],
         category: "OTHER",
         vehicleId: "none",
+        status: "PAID",
+        vendor: "",
+        payerId: "none",
         notes: "",
       });
     }
@@ -102,6 +103,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
     try {
       const parsedDate = new Date(values.date).getTime();
       const parsedVehicleId = values.vehicleId === "none" ? undefined : (values.vehicleId as Id<"vehicles">);
+      const parsedPayerId = values.payerId === "none" ? undefined : (values.payerId as Id<"users">);
 
       if (expense) {
         await updateExpense({
@@ -112,6 +114,9 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
           date: parsedDate,
           category: values.category as any,
           vehicleId: parsedVehicleId === undefined ? null : parsedVehicleId,
+          status: values.status,
+          vendor: values.vendor,
+          payerId: parsedPayerId === undefined ? null : parsedPayerId,
           notes: values.notes,
         });
         toast.success("Expense updated successfully");
@@ -123,6 +128,9 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
           date: parsedDate,
           category: values.category as any,
           vehicleId: parsedVehicleId,
+          status: values.status,
+          vendor: values.vendor,
+          payerId: parsedPayerId,
           notes: values.notes,
         });
         toast.success("Expense recorded successfully!");
@@ -139,11 +147,11 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{expense ? "Edit Expense" : "Record Expense"}</DialogTitle>
+          <DialogTitle>{expense ? t("EditExpense" as any) : t("RecordExpense" as any)}</DialogTitle>
           <DialogDescription>
-            {expense 
-              ? "Update expense details." 
-              : "Log a new business expense. Link it to a vehicle to track its exact profit margin."}
+            {expense
+              ? t("UpdateExpenseDetails" as any)
+              : t("LogNewExpense" as any)}
           </DialogDescription>
         </DialogHeader>
 
@@ -155,7 +163,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                 name="title"
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
-                    <FormLabel>Title / Description <span className="text-red-500">*</span></FormLabel>
+                    <FormLabel>{t("TitleDesc" as any)} <span className="text-red-500">*</span></FormLabel>
                     <FormControl>
                       <Input placeholder="e.g. Brake pad replacement" {...field} />
                     </FormControl>
@@ -169,7 +177,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                 name="amount"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Amount ($) <span className="text-red-500">*</span></FormLabel>
+                    <FormLabel>{t("AmountUSD" as any)} <span className="text-red-500">*</span></FormLabel>
                     <FormControl>
                       <Input type="number" step="0.01" placeholder="250" {...field} />
                     </FormControl>
@@ -183,7 +191,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                 name="date"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Date <span className="text-red-500">*</span></FormLabel>
+                    <FormLabel>{t("Date" as any)} <span className="text-red-500">*</span></FormLabel>
                     <FormControl>
                       <Input type="date" {...field} />
                     </FormControl>
@@ -197,21 +205,21 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                 name="category"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Category</FormLabel>
+                    <FormLabel>{t("Category" as any)}</FormLabel>
                     <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
                       <FormControl>
                         <SelectTrigger>
-                          <SelectValue placeholder="Select category" />
+                          <SelectValue placeholder={t("SelectCategory" as any)} />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="REPAIR">Repair</SelectItem>
-                        <SelectItem value="MAINTENANCE">Maintenance</SelectItem>
-                        <SelectItem value="DETAILING">Detailing</SelectItem>
-                        <SelectItem value="TRANSPORT">Transport</SelectItem>
-                        <SelectItem value="MARKETING">Marketing</SelectItem>
-                        <SelectItem value="OFFICE">Office</SelectItem>
-                        <SelectItem value="OTHER">Other</SelectItem>
+                        <SelectItem value="REPAIR">{t("Repair" as any)}</SelectItem>
+                        <SelectItem value="MAINTENANCE">{t("Maintenance" as any)}</SelectItem>
+                        <SelectItem value="DETAILING">{t("Detailing" as any)}</SelectItem>
+                        <SelectItem value="TRANSPORT">{t("Transport" as any)}</SelectItem>
+                        <SelectItem value="MARKETING">{t("Marketing" as any)}</SelectItem>
+                        <SelectItem value="OFFICE">{t("Office" as any)}</SelectItem>
+                        <SelectItem value="OTHER">{t("Other" as any)}</SelectItem>
                       </SelectContent>
                     </Select>
                     <FormMessage />
@@ -224,18 +232,80 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                 name="vehicleId"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Associated Vehicle</FormLabel>
+                    <FormLabel>{t("AssociatedVehicle" as any)}</FormLabel>
                     <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
                       <FormControl>
                         <SelectTrigger>
-                          <SelectValue placeholder="Select vehicle" />
+                          <SelectValue placeholder={t("SelectVehicle" as any)} />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="none">-- General / No Vehicle --</SelectItem>
-                        {vehicles?.map((v) => (
+                        <SelectItem value="none">{t("GeneralNoVehicle" as any)}</SelectItem>
+                        {availableVehicles?.map((v) => (
                           <SelectItem key={v._id} value={v._id}>
                             {v.year} {v.make} {v.model} - {v.vin.slice(-6)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="status"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("PaymentStatus" as any)}</FormLabel>
+                    <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder={t("SelectStatus" as any)} />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="PAID">{t("Paid" as any)}</SelectItem>
+                        <SelectItem value="PENDING">{t("Pending" as any)}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="vendor"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("VendorPayee" as any)}</FormLabel>
+                    <FormControl>
+                      <Input placeholder="e.g. Joe's Repair Shop" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="payerId"
+                render={({ field }) => (
+                  <FormItem className="md:col-span-2">
+                    <FormLabel>{t("PaidByPerson" as any)}</FormLabel>
+                    <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder={t("SelectTeamMember" as any)} />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="none">{t("NotSpecified" as any)}</SelectItem>
+                        {memberships?.map((m) => (
+                          <SelectItem key={m.userId} value={m.userId}>
+                            {m.userName}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -250,12 +320,12 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                 name="notes"
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
-                    <FormLabel>Notes</FormLabel>
+                    <FormLabel>{t("Notes" as any)}</FormLabel>
                     <FormControl>
-                      <textarea 
+                      <textarea
                         className="flex min-h-[80px] w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
-                        placeholder="Any extra details..." 
-                        {...field} 
+                        placeholder={t("AnyExtraDetails" as any)}
+                        {...field}
                       />
                     </FormControl>
                     <FormMessage />
@@ -263,13 +333,13 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                 )}
               />
             </div>
-            
+
             <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-                Cancel
+                {t("Cancel" as any)}
               </Button>
               <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? "Saving..." : expense ? "Save Changes" : "Record Expense"}
+                {isSubmitting ? t("Saving" as any) : expense ? t("SaveChanges" as any) : t("RecordExpense" as any)}
               </Button>
             </div>
           </form>

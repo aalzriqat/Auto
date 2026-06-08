@@ -8,7 +8,22 @@ import { ConvexError } from "convex/values";
 export const requestCreate = mutation({
   args: {
     orgId: v.id("organizations"),
-    payload: v.any(), // The vehicle creation payload
+    payload: v.object({
+      vin: v.optional(v.string()),
+      make: v.optional(v.string()),
+      model: v.optional(v.string()),
+      year: v.optional(v.number()),
+      trim: v.optional(v.string()),
+      mileage: v.optional(v.number()),
+      color: v.optional(v.string()),
+      fuelType: v.optional(v.string()),
+      transmission: v.optional(v.string()),
+      purchasePrice: v.optional(v.number()),
+      sellingPrice: v.optional(v.number()),
+      status: v.optional(v.string()),
+      notes: v.optional(v.string()),
+      imageIds: v.optional(v.array(v.id("_storage"))),
+    }), // The vehicle creation payload
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId);
@@ -39,7 +54,22 @@ export const requestUpdate = mutation({
   args: {
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
-    payload: v.any(), // The vehicle update payload (patch)
+    payload: v.object({
+      vin: v.optional(v.string()),
+      make: v.optional(v.string()),
+      model: v.optional(v.string()),
+      year: v.optional(v.number()),
+      trim: v.optional(v.string()),
+      mileage: v.optional(v.number()),
+      color: v.optional(v.string()),
+      fuelType: v.optional(v.string()),
+      transmission: v.optional(v.string()),
+      purchasePrice: v.optional(v.number()),
+      sellingPrice: v.optional(v.number()),
+      status: v.optional(v.string()),
+      notes: v.optional(v.string()),
+      imageIds: v.optional(v.array(v.id("_storage"))),
+    }), // The vehicle update payload (patch)
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId);
@@ -148,7 +178,7 @@ export const resolve = mutation({
     if (args.status === "APPROVED") {
       if (request.type === "CREATE") {
         await ctx.db.insert("vehicles", {
-          ...request.payload,
+          ...(request.payload as any),
           orgId: args.orgId,
           addedBy: request.requestedBy,
           updatedBy: user._id, // Manager who approved it
@@ -156,7 +186,7 @@ export const resolve = mutation({
         });
       } else if (request.type === "UPDATE" && request.vehicleId) {
         await ctx.db.patch(request.vehicleId, {
-          ...request.payload,
+          ...(request.payload as any),
           updatedBy: user._id, // Manager who approved it
           updatedAt: Date.now(),
         });

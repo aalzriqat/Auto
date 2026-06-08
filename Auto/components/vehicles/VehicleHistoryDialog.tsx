@@ -4,6 +4,7 @@ import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id, Doc } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 import {
   Dialog,
   DialogContent,
@@ -23,6 +24,7 @@ interface VehicleHistoryDialogProps {
 
 export function VehicleHistoryDialog({ open, onOpenChange, vehicle }: VehicleHistoryDialogProps) {
   const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
   const history = useQuery(
     api.vehicleEdits.getHistory,
     activeOrgId && vehicle ? { orgId: activeOrgId, vehicleId: vehicle._id } : "skip"
@@ -34,7 +36,7 @@ export function VehicleHistoryDialog({ open, onOpenChange, vehicle }: VehicleHis
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[80vh] flex flex-col">
         <DialogHeader>
-          <DialogTitle>Vehicle Audit Trail</DialogTitle>
+          <DialogTitle>{t("VehicleAuditTrail" as any) || "Vehicle Audit Trail"}</DialogTitle>
           <DialogDescription>
             {vehicle?.year} {vehicle?.make} {vehicle?.model} (VIN: {vehicle?.vin})
           </DialogDescription>
@@ -42,9 +44,9 @@ export function VehicleHistoryDialog({ open, onOpenChange, vehicle }: VehicleHis
 
         <ScrollArea className="flex-1 pr-4 -mr-4 mt-4">
           {history === undefined ? (
-            <div className="text-center py-8 text-muted-foreground">Loading history...</div>
+            <div className="text-center py-8 text-muted-foreground">{t("Loading" as any) || "Loading history..."}</div>
           ) : history.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">No edit history found for this vehicle.</div>
+            <div className="text-center py-8 text-muted-foreground">{t("NoEditHistory" as any) || "No edit history found for this vehicle."}</div>
           ) : (
             <div className="space-y-6">
               {history.map((edit) => (
@@ -64,7 +66,7 @@ export function VehicleHistoryDialog({ open, onOpenChange, vehicle }: VehicleHis
                   </div>
 
                   <div className="bg-muted/30 p-3 rounded-md text-sm mb-3">
-                    <h4 className="font-medium text-xs text-muted-foreground mb-2 uppercase tracking-wider">Payload Changes</h4>
+                    <h4 className="font-medium text-xs text-muted-foreground mb-2 uppercase tracking-wider">{t("PayloadChanges" as any) || "Payload Changes"}</h4>
                     <ul className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
                       {Object.entries(edit.payload || {}).map(([key, value]) => {
                         if (key === "imageIds") return null;
@@ -90,7 +92,7 @@ export function VehicleHistoryDialog({ open, onOpenChange, vehicle }: VehicleHis
                     </Badge>
                     {edit.status !== "PENDING" && edit.resolvedByName && (
                       <span className="text-muted-foreground text-xs">
-                        by {edit.resolvedByName} on {rtfDate.format(new Date(edit.resolvedAt!))}
+                        {t("ByReq" as any) || "by"} {edit.resolvedByName} {t("On" as any) || "on"} {rtfDate.format(new Date(edit.resolvedAt!))}
                       </span>
                     )}
                   </div>

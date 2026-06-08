@@ -42,3 +42,8 @@ next-env.d.ts
 
 # clerk configuration (can include secrets)
 /.clerk/
+
+# project specific hack scripts
+fix_*.js
+update_*.js
+rtl-audit.js

@@ -1,6 +1,7 @@
 "use client";
 
 import { TopNav } from "@/components/layout/TopNav";
+import { Sidebar } from "@/components/layout/Sidebar";
 import { OrgProvider, useOrg } from "@/components/providers/OrgProvider";
 import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
@@ -31,7 +32,7 @@ function Onboarding() {
     <div className="flex flex-col items-center justify-center min-h-screen bg-muted/50 p-4">
       <div className="max-w-md w-full bg-background p-8 rounded-xl border shadow-sm space-y-6 text-center">
         <div className="space-y-2">
-          <h1 className="text-2xl font-bold tracking-tight">Welcome to AutoFlow</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Welcome to Bloom Cars</h1>
           <p className="text-muted-foreground text-sm">
             Let's get started by creating your first dealership organization.
           </p>
@@ -70,11 +71,14 @@ function DashboardWrapper({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex min-h-screen flex-col w-full bg-slate-50 dark:bg-zinc-950/40">
-      <TopNav />
-      <main className="flex-1 overflow-auto p-4 md:p-6 lg:p-8">
-        {children}
-      </main>
+    <div className="flex h-screen w-full overflow-hidden bg-slate-50 dark:bg-zinc-950/40">
+      <Sidebar />
+      <div className="flex flex-col flex-1 w-full overflow-hidden">
+        <TopNav />
+        <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 relative">
+          {children}
+        </main>
+      </div>
       <Toaster />
     </div>
   );

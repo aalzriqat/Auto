@@ -1,0 +1,1 @@
+{"nodes": [], "edges": [{"source": "convex_performance_audit_hot_path_rules", "target": "convex_migration_helper_skill", "relation": "references", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": ".claude/skills/convex-performance-audit/references/hot-path-rules.md", "source_location": null, "weight": 1.0}], "hyperedges": []}

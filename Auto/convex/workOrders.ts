@@ -1,0 +1,169 @@
+import { v, ConvexError } from "convex/values";
+import { mutation, query } from "./_generated/server";
+import { requireTenantAuth } from "./utils/tenancy";
+import { PERMISSIONS } from "./utils/permissions";
+
+export const list = query({
+  args: {
+    orgId: v.id("organizations"),
+    vehicleId: v.optional(v.id("vehicles")),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+
+    let results = [];
+    if (args.vehicleId) {
+      results = await ctx.db
+        .query("workOrders")
+        .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId!))
+        .collect();
+    } else {
+      results = await ctx.db
+        .query("workOrders")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .collect();
+    }
+
+    return await Promise.all(
+      results.map(async (wo) => {
+        const vehicle = await ctx.db.get(wo.vehicleId);
+        return {
+          ...wo,
+          vehicleSummary: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
+        };
+      })
+    );
+  },
+});
+
+export const create = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    title: v.string(),
+    status: v.union(v.literal("OPEN"), v.literal("IN_PROGRESS"), v.literal("COMPLETED")),
+    tasks: v.array(
+      v.object({
+        id: v.string(),
+        description: v.string(),
+        partsCost: v.number(),
+        laborCost: v.number(),
+        mechanicName: v.optional(v.string()),
+        completed: v.boolean(),
+      })
+    ),
+    notes: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+
+    const totalCost = args.tasks.reduce((sum, task) => sum + task.partsCost + task.laborCost, 0);
+
+    let expenseId = undefined;
+
+    // If creating a COMPLETED work order, sync to expenses
+    if (args.status === "COMPLETED" && totalCost > 0) {
+      expenseId = await ctx.db.insert("expenses", {
+        orgId: args.orgId,
+        vehicleId: args.vehicleId,
+        title: `Work Order: ${args.title}`,
+        amount: totalCost,
+        date: Date.now(),
+        category: "REPAIR",
+        status: "PAID",
+        notes: args.notes,
+      });
+    }
+
+    return await ctx.db.insert("workOrders", {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      title: args.title,
+      status: args.status,
+      totalCost,
+      tasks: args.tasks,
+      expenseId,
+      notes: args.notes,
+    });
+  },
+});
+
+export const update = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    workOrderId: v.id("workOrders"),
+    title: v.string(),
+    status: v.union(v.literal("OPEN"), v.literal("IN_PROGRESS"), v.literal("COMPLETED")),
+    tasks: v.array(
+      v.object({
+        id: v.string(),
+        description: v.string(),
+        partsCost: v.number(),
+        laborCost: v.number(),
+        mechanicName: v.optional(v.string()),
+        completed: v.boolean(),
+      })
+    ),
+    notes: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+
+    const wo = await ctx.db.get(args.workOrderId);
+    if (!wo || wo.orgId !== args.orgId) throw new ConvexError("Work Order not found");
+
+    const totalCost = args.tasks.reduce((sum, task) => sum + task.partsCost + task.laborCost, 0);
+
+    let expenseId = wo.expenseId;
+
+    // If changing status to COMPLETED and no expense exists, create it
+    if (args.status === "COMPLETED" && !expenseId && totalCost > 0) {
+      expenseId = await ctx.db.insert("expenses", {
+        orgId: args.orgId,
+        vehicleId: wo.vehicleId,
+        title: `Work Order: ${args.title}`,
+        amount: totalCost,
+        date: Date.now(),
+        category: "REPAIR",
+        status: "PAID",
+        notes: args.notes,
+      });
+    } 
+    // If expense already exists, update it
+    else if (expenseId) {
+      await ctx.db.patch(expenseId, {
+        title: `Work Order: ${args.title}`,
+        amount: totalCost,
+        notes: args.notes,
+      });
+    }
+
+    await ctx.db.patch(args.workOrderId, {
+      title: args.title,
+      status: args.status,
+      totalCost,
+      tasks: args.tasks,
+      notes: args.notes,
+      expenseId,
+    });
+  },
+});
+
+export const remove = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    workOrderId: v.id("workOrders"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+    
+    const wo = await ctx.db.get(args.workOrderId);
+    if (!wo || wo.orgId !== args.orgId) throw new ConvexError("Work Order not found");
+
+    if (wo.expenseId) {
+      await ctx.db.delete(wo.expenseId);
+    }
+
+    await ctx.db.delete(args.workOrderId);
+  },
+});

@@ -16,6 +16,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 import {
   Form,
   FormControl,
@@ -26,7 +27,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Upload, X } from "lucide-react";
+import { Upload, X, Search, Loader2 } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -35,50 +36,28 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
-const vehicleSchema = z.object({
-  vin: z.string().min(17, "VIN must be at least 17 characters").max(17, "VIN must be exactly 17 characters"),
-  make: z.string().min(1, "Make is required"),
-  model: z.string().min(1, "Model is required"),
-  year: z.coerce.number().min(1900).max(new Date().getFullYear() + 1),
-  trim: z.string().optional(),
-  mileage: z.coerce.number().min(0, "Mileage cannot be negative"),
-  color: z.string().min(1, "Color is required"),
-  fuelType: z.string().min(1, "Fuel Type is required"),
-  transmission: z.string().min(1, "Transmission is required"),
-  purchasePrice: z.coerce.number().min(0).optional(),
-  sellingPrice: z.coerce.number().min(0),
-  status: z.enum(["AVAILABLE", "RESERVED", "SOLD", "IN_INSPECTION", "IN_REPAIR", "ARCHIVED"]).optional(),
-  notes: z.string().optional(),
-  imageIds: z.array(z.string()).optional(),
-});
+import { vehicleSchema, VehicleFormValues, VehicleDialogProps } from "./vehicle.schema";
 
-type VehicleFormValues = z.infer<typeof vehicleSchema>;
-
-interface VehicleDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  vehicle?: Doc<"vehicles"> | null;
-  canCreate?: boolean;
-  canEdit?: boolean;
-}
 
 export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, canEdit = false }: VehicleDialogProps) {
   const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
   const createVehicle = useMutation(api.vehicles.create);
   const updateVehicle = useMutation(api.vehicles.update);
   const requestCreate = useMutation(api.vehicleEdits.requestCreate);
   const requestUpdate = useMutation(api.vehicleEdits.requestUpdate);
   const generateUploadUrl = useMutation(api.vehicles.generateUploadUrl);
   const deleteImage = useMutation(api.vehicles.deleteImage);
-  
+
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [isDecoding, setIsDecoding] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [imageIds, setImageIds] = useState<string[]>([]);
   const [imageUrls, setImageUrls] = useState<string[]>([]);
 
-  const form = useForm<VehicleFormValues>({
-    resolver: zodResolver(vehicleSchema),
+  const form = useForm<z.infer<typeof vehicleSchema>>({
+    resolver: zodResolver(vehicleSchema as any),
     defaultValues: {
       vin: "",
       make: "",
@@ -150,7 +129,11 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
 
       for (let i = 0; i < files.length; i++) {
         const file = files[i];
-        const postUrl = await generateUploadUrl({ orgId: activeOrgId });
+        const postUrl = await generateUploadUrl({
+          orgId: activeOrgId,
+          mimeType: file.type,
+          sizeInBytes: file.size
+        });
         const result = await fetch(postUrl, {
           method: "POST",
           headers: { "Content-Type": file.type },
@@ -169,6 +152,69 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const handleDecodeVIN = async () => {
+    const rawVin = form.getValues("vin");
+    const vin = rawVin.trim().toUpperCase();
+
+    // Update the form with the cleaned VIN
+    if (vin !== rawVin) {
+      form.setValue("vin", vin);
+    }
+
+    if (!vin || vin.length !== 17) {
+      toast.error(t("InvalidVIN" as any) || "Please enter a valid 17-character VIN");
+      return;
+    }
+
+    setIsDecoding(true);
+    try {
+      const response = await fetch(`https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/${vin}?format=json`);
+      const data = await response.json();
+
+      if (data.Results && data.Results.length > 0) {
+        const result = data.Results[0];
+
+        // NHTSA returns "0" or "0 - ..." for success
+        // Many valid international VINs fail the check digit test (ErrorCode 1, 5, 14, etc.)
+        // We shouldn't show a scary error if we still managed to decode the Make
+        if (result.Make) {
+          toast.success(t("VINDecodedSuccessfully" as any) || "VIN decoded successfully!");
+          if (result.ErrorCode && result.ErrorCode !== "0" && !result.ErrorCode.startsWith("0 -")) {
+            console.warn(`VIN Decode Warning: ${result.ErrorText}`);
+          }
+        } else if (result.ErrorCode && result.ErrorCode !== "0" && !result.ErrorCode.startsWith("0 -")) {
+          toast.error(`VIN Decode Warning: ${result.ErrorText}`);
+        } else {
+          toast.success(t("VINDecodedSuccessfully" as any) || "VIN decoded successfully!");
+        }
+
+        if (result.Make) form.setValue("make", result.Make.charAt(0).toUpperCase() + result.Make.slice(1).toLowerCase());
+
+        const decodedModel = result.Model || result.Series || "";
+        if (decodedModel) {
+          form.setValue("model", decodedModel.charAt(0).toUpperCase() + decodedModel.slice(1).toLowerCase());
+        }
+
+        if (result.ModelYear && !isNaN(parseInt(result.ModelYear))) form.setValue("year", parseInt(result.ModelYear));
+        if (result.Trim) form.setValue("trim", result.Trim);
+
+        if (result.FuelTypePrimary) {
+          const fuel = result.FuelTypePrimary.toLowerCase();
+          if (fuel.includes("gasoline")) form.setValue("fuelType", "Gasoline");
+          else if (fuel.includes("diesel")) form.setValue("fuelType", "Diesel");
+          else if (fuel.includes("electric")) form.setValue("fuelType", "Electric");
+          else if (fuel.includes("hybrid")) form.setValue("fuelType", "Hybrid");
+        }
+      } else {
+        toast.error("No data found for this VIN.");
+      }
+    } catch (error) {
+      toast.error("Failed to decode VIN. Please try again.");
+    } finally {
+      setIsDecoding(false);
     }
   };
 
@@ -248,9 +294,9 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{vehicle ? "Edit Vehicle" : "Add Vehicle"}</DialogTitle>
+          <DialogTitle>{vehicle ? t("EditVehicle" as any) : t("AddVehicle")}</DialogTitle>
           <DialogDescription>
-            {vehicle ? "Update vehicle details below." : "Enter the details of the new vehicle to add it to your inventory."}
+            {vehicle ? t("UpdateVehicleDesc" as any) || "Update vehicle details below." : t("AddVehicleDesc" as any) || "Enter the details of the new vehicle to add it to your inventory."}
           </DialogDescription>
         </DialogHeader>
 
@@ -262,9 +308,21 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 name="vin"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>VIN</FormLabel>
+                    <FormLabel>{t("VIN" as any)}</FormLabel>
                     <FormControl>
-                      <Input placeholder="17-character VIN" {...field} />
+                      <div className="flex gap-2">
+                        <Input placeholder="17-character VIN" {...field} />
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          onClick={handleDecodeVIN}
+                          disabled={isDecoding || field.value.length !== 17}
+                          className="shrink-0"
+                        >
+                          {isDecoding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4 me-2" />}
+                          {t("Decode" as any) || "Decode"}
+                        </Button>
+                      </div>
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -275,20 +333,20 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 name="status"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Status</FormLabel>
+                    <FormLabel>{t("Status" as any)}</FormLabel>
                     <Select onValueChange={field.onChange} defaultValue={field.value}>
                       <FormControl>
                         <SelectTrigger>
-                          <SelectValue placeholder="Select a status" />
+                          <SelectValue placeholder={t("SelectStatus" as any)} />
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="AVAILABLE">Available</SelectItem>
-                        <SelectItem value="IN_INSPECTION">In Inspection</SelectItem>
-                        <SelectItem value="IN_REPAIR">In Repair</SelectItem>
-                        <SelectItem value="RESERVED">Reserved</SelectItem>
-                        <SelectItem value="SOLD">Sold</SelectItem>
-                        <SelectItem value="ARCHIVED">Archived</SelectItem>
+                        <SelectItem value="AVAILABLE">{t("AvailableLC" as any) || "Available"}</SelectItem>
+                        <SelectItem value="IN_INSPECTION">{t("InInspection" as any) || "In Inspection"}</SelectItem>
+                        <SelectItem value="IN_REPAIR">{t("InRepair" as any) || "In Repair"}</SelectItem>
+                        <SelectItem value="RESERVED">{t("Reserved" as any) || "Reserved"}</SelectItem>
+                        <SelectItem value="SOLD">{t("Sold" as any) || "Sold"}</SelectItem>
+                        <SelectItem value="ARCHIVED">{t("Archived" as any) || "Archived"}</SelectItem>
                       </SelectContent>
                     </Select>
                     <FormMessage />
@@ -300,7 +358,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 name="make"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Make</FormLabel>
+                    <FormLabel>{t("Make" as any) || "Make"}</FormLabel>
                     <FormControl>
                       <Input placeholder="Toyota" {...field} />
                     </FormControl>
@@ -313,7 +371,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 name="model"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Model</FormLabel>
+                    <FormLabel>{t("Model" as any) || "Model"}</FormLabel>
                     <FormControl>
                       <Input placeholder="Camry" {...field} />
                     </FormControl>
@@ -326,7 +384,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 name="year"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Year</FormLabel>
+                    <FormLabel>{t("Year" as any)}</FormLabel>
                     <FormControl>
                       <Input type="number" {...field} />
                     </FormControl>
@@ -339,7 +397,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 name="trim"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Trim</FormLabel>
+                    <FormLabel>{t("Trim" as any) || "Trim"}</FormLabel>
                     <FormControl>
                       <Input placeholder="SE" {...field} />
                     </FormControl>
@@ -352,7 +410,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 name="color"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Color</FormLabel>
+                    <FormLabel>{t("Color" as any) || "Color"}</FormLabel>
                     <FormControl>
                       <Input placeholder="Silver" {...field} />
                     </FormControl>
@@ -365,7 +423,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 name="mileage"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Mileage</FormLabel>
+                    <FormLabel>{t("Mileage" as any) || "Mileage"}</FormLabel>
                     <FormControl>
                       <Input type="number" {...field} />
                     </FormControl>
@@ -378,7 +436,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 name="fuelType"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Fuel Type</FormLabel>
+                    <FormLabel>{t("FuelType" as any) || "Fuel Type"}</FormLabel>
                     <Select onValueChange={field.onChange} defaultValue={field.value}>
                       <FormControl>
                         <SelectTrigger>
@@ -401,7 +459,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 name="transmission"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Transmission</FormLabel>
+                    <FormLabel>{t("Transmission" as any) || "Transmission"}</FormLabel>
                     <Select onValueChange={field.onChange} defaultValue={field.value}>
                       <FormControl>
                         <SelectTrigger>
@@ -422,7 +480,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 name="purchasePrice"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Purchase Price ($)</FormLabel>
+                    <FormLabel>{t("PurchasePrice" as any) || "Purchase Price"} (JOD)</FormLabel>
                     <FormControl>
                       <Input type="number" {...field} />
                     </FormControl>
@@ -435,7 +493,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 name="sellingPrice"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Selling Price ($)</FormLabel>
+                    <FormLabel>{t("SellingPrice" as any) || "Selling Price"} (JOD)</FormLabel>
                     <FormControl>
                       <Input type="number" {...field} />
                     </FormControl>
@@ -448,7 +506,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 name="notes"
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
-                    <FormLabel>Notes</FormLabel>
+                    <FormLabel>{t("Notes" as any)}</FormLabel>
                     <FormControl>
                       <Input placeholder="Additional information..." {...field} />
                     </FormControl>
@@ -457,32 +515,32 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 )}
               />
             </div>
-            
+
             <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">Vehicle Images</label>
+                <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">{t("VehicleImages" as any) || "Vehicle Images"}</label>
                 <div>
-                  <input 
-                    type="file" 
-                    accept="image/*" 
-                    multiple 
-                    className="hidden" 
-                    ref={fileInputRef} 
-                    onChange={handleUpload} 
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    className="hidden"
+                    ref={fileInputRef}
+                    onChange={handleUpload}
                   />
-                  <Button 
-                    type="button" 
-                    variant="outline" 
-                    size="sm" 
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
                     onClick={() => fileInputRef.current?.click()}
                     disabled={isUploading}
                   >
                     <Upload className="w-4 h-4 mr-2" />
-                    {isUploading ? "Uploading..." : "Upload Images"}
+                    {isUploading ? t("Uploading" as any) || "Uploading..." : t("UploadImages" as any) || "Upload Images"}
                   </Button>
                 </div>
               </div>
-              
+
               {imageUrls.length > 0 ? (
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-2">
                   {imageUrls.map((url, index) => (
@@ -501,24 +559,24 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
               ) : (
                 <div className="border-2 border-dashed rounded-lg p-8 text-center text-muted-foreground bg-muted/20">
                   <Upload className="w-8 h-8 mx-auto mb-2 opacity-50" />
-                  <p>No images uploaded yet</p>
+                  <p>{t("NoImages" as any) || "No images uploaded yet"}</p>
                 </div>
               )}
             </div>
 
             <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-                Cancel
+                {t("Cancel")}
               </Button>
               <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting 
-                  ? "Saving..." 
-                  : vehicle 
-                    ? (canEdit ? "Save Changes" : "Submit for Approval") 
-                    : (canCreate ? "Add Vehicle" : "Submit for Approval")}
+                {isSubmitting
+                  ? t("Saving" as any) || "Saving..."
+                  : vehicle
+                    ? (canEdit ? t("SaveChanges" as any) || "Save Changes" : t("SubmitForApproval" as any) || "Submit for Approval")
+                    : (canCreate ? t("AddVehicle" as any) : t("SubmitForApproval" as any) || "Submit for Approval")}
               </Button>
             </div>
-            
+
             {vehicle && (vehicle.addedBy || vehicle.updatedBy) && (
               <div className="pt-4 border-t mt-6">
                 <AuditLog addedBy={vehicle.addedBy} updatedBy={vehicle.updatedBy} updatedAt={vehicle.updatedAt} />
@@ -534,21 +592,22 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
 function AuditLog({ addedBy, updatedBy, updatedAt }: { addedBy?: Id<"users">, updatedBy?: Id<"users">, updatedAt?: number }) {
   const addedByUser = useQuery(api.users.getUser, addedBy ? { userId: addedBy } : "skip");
   const updatedByUser = useQuery(api.users.getUser, updatedBy ? { userId: updatedBy } : "skip");
+  const { t } = useLanguage();
 
   const rtf = new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' });
 
   return (
     <div className="text-xs text-muted-foreground flex flex-col gap-1 bg-muted/30 p-3 rounded-md">
-      <h4 className="font-semibold text-foreground mb-1">Audit Trail</h4>
+      <h4 className="font-semibold text-foreground mb-1">{t("AuditTrail" as any) || "Audit Trail"}</h4>
       {addedBy && (
         <p>
-          <span className="font-medium">Added by:</span> {addedByUser === undefined ? "Loading..." : addedByUser?.name || "Unknown User"}
+          <span className="font-medium">{t("AddedBy" as any) || "Added by:"}</span> {addedByUser === undefined ? t("Loading" as any) || "Loading..." : addedByUser?.name || "Unknown User"}
         </p>
       )}
       {updatedBy && updatedAt && (
         <p>
-          <span className="font-medium">Last updated by:</span> {updatedByUser === undefined ? "Loading..." : updatedByUser?.name || "Unknown User"} 
-          {" "}on {rtf.format(new Date(updatedAt))}
+          <span className="font-medium">{t("LastUpdatedBy" as any) || "Last updated by:"}</span> {updatedByUser === undefined ? t("Loading" as any) || "Loading..." : updatedByUser?.name || "Unknown User"}
+          {" "}{t("On" as any) || "on"} {rtf.format(new Date(updatedAt))}
         </p>
       )}
     </div>

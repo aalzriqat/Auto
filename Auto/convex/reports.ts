@@ -28,16 +28,16 @@ export const getSalesAndProfitReport = query({
     const enrichedSales = await Promise.all(
       salesInDateRange.map(async (sale) => {
         const vehicle = await ctx.db.get(sale.vehicleId);
-        
+
         // Fetch expenses for this vehicle
         const expenses = await ctx.db
           .query("expenses")
           .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", sale.vehicleId))
           .collect();
-          
+
         const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
-        
-        const cost = (vehicle?.purchasePrice || 0) + totalExpenses;
+
+        const cost = (vehicle?.purchasePrice ?? vehicle?.sellingPrice ?? 0) + totalExpenses;
         const profit = sale.salePrice - cost;
 
         totalRevenue += sale.salePrice;
@@ -50,7 +50,7 @@ export const getSalesAndProfitReport = query({
           vehicleModel: vehicle?.model,
           vehicleYear: vehicle?.year,
           vehicleVin: vehicle?.vin,
-          vehicleCost: vehicle?.purchasePrice || 0,
+          vehicleCost: vehicle?.purchasePrice ?? vehicle?.sellingPrice ?? 0,
           vehicleExpenses: totalExpenses,
           totalCost: cost,
           netProfit: profit,
@@ -82,10 +82,10 @@ export const getInventoryReport = query({
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .collect();
 
-    const activeInventory = vehicles.filter((v) => v.status === "AVAILABLE" || v.status === "RESERVED");
+    const activeInventory = vehicles.filter((v) => v.isDeleted !== true && (v.status === "AVAILABLE" || v.status === "RESERVED"));
 
     let totalValue = 0;
-    
+
     const enrichedInventory = await Promise.all(
       activeInventory.map(async (vehicle) => {
         // Fetch expenses to get total investment
@@ -93,14 +93,16 @@ export const getInventoryReport = query({
           .query("expenses")
           .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", vehicle._id))
           .collect();
-          
+
         const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
-        const totalInvestment = (vehicle.purchasePrice || 0) + totalExpenses;
-        
+        const basePrice = vehicle.purchasePrice ?? vehicle.sellingPrice ?? 0;
+        const totalInvestment = basePrice + totalExpenses;
+
         totalValue += totalInvestment;
 
         return {
           ...vehicle,
+          purchasePrice: basePrice,
           totalExpenses,
           totalInvestment,
         };
@@ -139,7 +141,7 @@ export const getExpensesReport = query({
       expensesInDateRange.map(async (exp) => {
         totalExpenses += exp.amount;
         let vehicleDesc = "General";
-        
+
         if (exp.vehicleId) {
           const vehicle = await ctx.db.get(exp.vehicleId);
           if (vehicle) {
@@ -197,7 +199,7 @@ export const getSalespersonPerformance = query({
       Object.entries(salesBySalesperson).map(async ([userId, userSales]) => {
         let totalRevenue = 0;
         let totalProfit = 0;
-        
+
         // Fetch user
         let userName = "Unknown";
         const user = await ctx.db.get(userId as any);
@@ -212,7 +214,7 @@ export const getSalespersonPerformance = query({
             .query("expenses")
             .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", sale.vehicleId))
             .collect();
-          
+
           const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
           const cost = ((vehicle as any)?.purchasePrice || 0) + totalExpenses;
           const profit = sale.salePrice - cost;
@@ -322,6 +324,54 @@ export const getLeadConversionReport = query({
       overallConversionRate,
       stageCounts,
       salespersonMetrics,
+    };
+  },
+});
+
+export const getProfitAndLoss = query({
+  args: {
+    orgId: v.id("organizations"),
+    startDate: v.number(),
+    endDate: v.number(),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
+
+    const transactions = await ctx.db
+      .query("transactions")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+
+    const txInDateRange = transactions.filter(
+      (tx) => tx.date >= args.startDate && tx.date <= args.endDate
+    );
+
+    let totalRevenue = 0;
+    let costOfGoodsSold = 0;
+    let operatingExpenses = 0;
+
+    for (const tx of txInDateRange) {
+      if (tx.category === "VEHICLE_SALE" || tx.category === "DEPOSIT" || tx.type === "IN") {
+        if (tx.category !== "CAPITAL_INJECTION" && tx.category !== "PARTNER_DRAW") {
+          totalRevenue += tx.amount;
+        }
+      } else if (tx.category === "VEHICLE_PURCHASE" || (tx.category === "EXPENSE" && tx.vehicleId)) {
+        costOfGoodsSold += tx.amount;
+      } else if (tx.category === "EXPENSE" && !tx.vehicleId) {
+        operatingExpenses += tx.amount;
+      }
+    }
+
+    const grossProfit = totalRevenue - costOfGoodsSold;
+    const netProfit = grossProfit - operatingExpenses;
+
+    return {
+      totalRevenue,
+      costOfGoodsSold,
+      grossProfit,
+      operatingExpenses,
+      netProfit,
+      transactions: txInDateRange.sort((a, b) => b.date - a.date)
     };
   },
 });

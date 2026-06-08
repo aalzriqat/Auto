@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
+import { rateLimiter } from "./rateLimit";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -34,11 +35,13 @@ export const list = query({
         .withIndex("by_org_salesperson", (q) =>
           q.eq("orgId", args.orgId).eq("salespersonId", args.salespersonId!)
         )
+        .filter((q) => q.neq(q.field("isDeleted"), true))
         .collect();
     } else {
       results = await ctx.db
         .query("sales")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .filter((q) => q.neq(q.field("isDeleted"), true))
         .collect();
     }
 
@@ -120,8 +123,15 @@ export const create = mutation({
     loanAmount: v.optional(v.number()),
     apr: v.optional(v.number()),
     termMonths: v.optional(v.number()),
+    warrantySold: v.optional(v.number()),
+    gapSold: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    const statusLimit = await rateLimiter.limit(ctx, "create");
+    if (!statusLimit.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+    }
+
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
 
     // Validate vehicle belongs to org and is available
@@ -173,10 +183,23 @@ export const create = mutation({
       loanAmount: args.loanAmount,
       apr: args.apr,
       termMonths: args.termMonths,
+      warrantySold: args.warrantySold,
+      gapSold: args.gapSold,
     });
 
     // Mark the vehicle as SOLD
     await ctx.db.patch(args.vehicleId, { status: "SOLD" as const });
+
+    // Log the transaction in the General Ledger
+    await ctx.db.insert("transactions", {
+      orgId: args.orgId,
+      type: "IN",
+      amount: args.salePrice,
+      date: args.saleDate,
+      category: "VEHICLE_SALE",
+      description: `Sale of vehicle ${vehicle.year} ${vehicle.make} ${vehicle.model} (VIN: ${vehicle.vin})`,
+      vehicleId: args.vehicleId,
+    });
 
     // Close any open leads for this vehicle+customer as WON
     const leads = await ctx.db
@@ -230,6 +253,8 @@ export const update = mutation({
     loanAmount: v.optional(v.number()),
     apr: v.optional(v.number()),
     termMonths: v.optional(v.number()),
+    warrantySold: v.optional(v.number()),
+    gapSold: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_SALES]);
@@ -253,6 +278,8 @@ export const update = mutation({
     if (args.loanAmount !== undefined) patch.loanAmount = args.loanAmount;
     if (args.apr !== undefined) patch.apr = args.apr;
     if (args.termMonths !== undefined) patch.termMonths = args.termMonths;
+    if (args.warrantySold !== undefined) patch.warrantySold = args.warrantySold;
+    if (args.gapSold !== undefined) patch.gapSold = args.gapSold;
 
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(args.saleId, patch);
@@ -280,16 +307,16 @@ export const update = mutation({
 });
 
 /**
- * Deletes a sale record. Only CANCELLED or PENDING sales can be deleted.
+ * Soft deletes a sale record. Only CANCELLED or PENDING sales can be deleted.
  * Restores the vehicle to AVAILABLE if it was marked SOLD.
  */
-export const remove = mutation({
+export const softDelete = mutation({
   args: {
     orgId: v.id("organizations"),
     saleId: v.id("sales"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_SALES]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_SALES]);
 
     const sale = await ctx.db.get(args.saleId);
     if (!sale || sale.orgId !== args.orgId) {
@@ -308,7 +335,11 @@ export const remove = mutation({
       await ctx.db.patch(sale.vehicleId, { status: "AVAILABLE" as const });
     }
 
-    await ctx.db.delete(args.saleId);
+    await ctx.db.patch(args.saleId, {
+      isDeleted: true,
+      deletedAt: Date.now(),
+      deletedBy: user._id
+    });
 
     const actorName = await getActorName(ctx);
     await notifyManagers(

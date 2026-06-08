@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { TaskDialog } from "@/components/tasks/TaskDialog";
 import { TaskHistoryDialog } from "@/components/tasks/TaskHistoryDialog";
 import { CustomerDetailsDialog } from "@/components/customers/CustomerDetailsDialog";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 import {
   Table,
   TableBody,
@@ -33,8 +34,8 @@ import {
 
 export default function TasksPage() {
   const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
   const tasks = useQuery(api.tasks.list, activeOrgId ? { orgId: activeOrgId } : "skip");
-  const removeTask = useMutation(api.tasks.remove);
   const updateTask = useMutation(api.tasks.update);
 
   const [searchQuery, setSearchQuery] = useState("");
@@ -49,9 +50,9 @@ export default function TasksPage() {
 
   const filteredTasks = tasks?.filter(t => {
     const q = searchQuery.toLowerCase();
-    return t.title.toLowerCase().includes(q) || 
-           (t.customerName && t.customerName.toLowerCase().includes(q)) ||
-           (t.assigneeName && t.assigneeName.toLowerCase().includes(q));
+    return t.title.toLowerCase().includes(q) ||
+      (t.customerName && t.customerName.toLowerCase().includes(q)) ||
+      (t.assigneeName && t.assigneeName.toLowerCase().includes(q));
   });
 
   const handleEdit = (task: any) => {
@@ -67,48 +68,48 @@ export default function TasksPage() {
   const handleCancel = async () => {
     if (!activeOrgId || !taskToCancel) return;
     if (!statusNote.trim()) {
-      toast.error("Please provide a cancellation reason.");
+      toast.error(t("CancelReasonRequired" as any) || "Please provide a cancellation reason.");
       return;
     }
     try {
-      await updateTask({ 
-        orgId: activeOrgId, 
+      await updateTask({
+        orgId: activeOrgId,
         taskId: taskToCancel._id,
         status: "CANCELLED",
         statusNote: statusNote.trim()
       });
-      toast.success("Task cancelled successfully");
+      toast.success(t("TaskCancelledSuccess" as any) || "Task cancelled successfully");
       setTaskToCancel(null);
       setStatusNote("");
     } catch (error: any) {
-      toast.error(error.message || "Failed to cancel task");
+      toast.error(error.message || (t("TaskCancelFail" as any) || "Failed to cancel task"));
     }
   };
 
   const handleReschedule = async () => {
     if (!activeOrgId || !taskToReschedule) return;
     if (!statusNote.trim()) {
-      toast.error("Please provide a reschedule reason.");
+      toast.error(t("RescheduleReasonRequired" as any) || "Please provide a reschedule reason.");
       return;
     }
     if (!newDueDate) {
-      toast.error("Please select a new date.");
+      toast.error(t("NewDateRequired" as any) || "Please select a new date.");
       return;
     }
     try {
       const parsedDate = newDueDate.getTime();
-      await updateTask({ 
-        orgId: activeOrgId, 
+      await updateTask({
+        orgId: activeOrgId,
         taskId: taskToReschedule._id,
         dueDate: parsedDate,
         statusNote: statusNote.trim()
       });
-      toast.success("Task rescheduled successfully");
+      toast.success(t("TaskRescheduleSuccess" as any) || "Task rescheduled successfully");
       setTaskToReschedule(null);
       setStatusNote("");
       setNewDueDate(undefined);
     } catch (error: any) {
-      toast.error(error.message || "Failed to reschedule task");
+      toast.error(error.message || (t("TaskRescheduleFail" as any) || "Failed to reschedule task"));
     }
   };
 
@@ -121,7 +122,7 @@ export default function TasksPage() {
         taskId: task._id,
         status: newStatus,
       });
-      toast.success(`Task marked as ${newStatus.toLowerCase()}`);
+      toast.success(t("TaskMarkedStatus" as any) || `Task status updated`);
     } catch (error: any) {
       toast.error(error.message || "Failed to update task status");
     }
@@ -129,39 +130,33 @@ export default function TasksPage() {
 
   const getStatusBadge = (status: string, dueDate: number) => {
     if (status === "CANCELLED") {
-      return <Badge variant="secondary" className="bg-gray-200 text-gray-700">Cancelled</Badge>;
+      return <Badge variant="secondary" className="bg-gray-200 text-gray-700">{t("Cancelled" as any) || "Cancelled"}</Badge>;
     }
     if (status === "COMPLETED") {
-      return <Badge variant="default" className="bg-green-600 hover:bg-green-700">Completed</Badge>;
-    }
-    
-    // Check if overdue
-    const isOverdue = dueDate < new Date().setHours(0,0,0,0);
-    if (isOverdue) {
-      return <Badge variant="destructive">Overdue</Badge>;
+      return <Badge variant="default" className="bg-green-600 hover:bg-green-700">{t("TaskCompleted" as any) || "Completed"}</Badge>;
     }
 
-    return <Badge variant="secondary" className="bg-yellow-500/20 text-yellow-600 hover:bg-yellow-500/30">Pending</Badge>;
+    // Check if overdue
+    const isOverdue = dueDate < new Date().setHours(0, 0, 0, 0);
+    if (isOverdue) {
+      return <Badge variant="destructive">{t("Overdue" as any) || "Overdue"}</Badge>;
+    }
+
+    return <Badge variant="secondary" className="bg-yellow-500/20 text-yellow-600 hover:bg-yellow-500/30">{t("TaskPending" as any) || "Pending"}</Badge>;
   };
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h2 className="text-2xl font-bold tracking-tight">Tasks & CRM</h2>
-          <p className="text-muted-foreground">
-            Manage your daily tasks, follow-ups, and schedules.
-          </p>
-        </div>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
         <Button onClick={handleAddNew}>
-          <Plus className="me-2 h-4 w-4" /> Schedule Task
+          <Plus className="me-2 h-4 w-4" /> {t("ScheduleTask" as any) || "Schedule Task"}
         </Button>
       </div>
 
       <div className="flex items-center w-full max-w-sm space-x-2">
         <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
         <Input
-          placeholder="Search tasks..."
+          placeholder={t("SearchTasks" as any) || "Search tasks..."}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           className="ps-9"
@@ -173,34 +168,34 @@ export default function TasksPage() {
           <TableHeader>
             <TableRow>
               <TableHead className="w-12"></TableHead>
-              <TableHead>Task</TableHead>
-              <TableHead>Due Date</TableHead>
-              <TableHead>Assigned To</TableHead>
-              <TableHead>Related Customer</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead className="text-end">Actions</TableHead>
+              <TableHead>{t("Task" as any) || "Task"}</TableHead>
+              <TableHead>{t("DueDate" as any) || "Due Date"}</TableHead>
+              <TableHead>{t("AssignedTo" as any) || "Assigned To"}</TableHead>
+              <TableHead>{t("RelatedCustomer" as any) || "Related Customer"}</TableHead>
+              <TableHead>{t("Status" as any) || "Status"}</TableHead>
+              <TableHead className="text-end">{t("TaskActions" as any) || "Actions"}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {filteredTasks === undefined ? (
               <TableRow>
                 <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-                  Loading tasks...
+                  {t("LoadingTasks" as any) || "Loading tasks..."}
                 </TableCell>
               </TableRow>
             ) : filteredTasks.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-                  No tasks found.
+                  {t("NoTasksFound" as any) || "No tasks found."}
                 </TableCell>
               </TableRow>
             ) : (
               filteredTasks.map((task) => (
                 <TableRow key={task._id} className={task.status === "COMPLETED" ? "opacity-60" : ""}>
                   <TableCell>
-                    <Button 
-                      variant="ghost" 
-                      size="icon" 
+                    <Button
+                      variant="ghost"
+                      size="icon"
                       className={`h-8 w-8 rounded-full ${task.status === "COMPLETED" ? "text-green-600" : "text-muted-foreground"}`}
                       onClick={() => handleToggleStatus(task)}
                     >
@@ -228,8 +223,8 @@ export default function TasksPage() {
                   <TableCell>
                     <div className="flex flex-col items-start gap-1">
                       {task.customerName && task.customerId ? (
-                        <button 
-                          onClick={() => setSelectedCustomerId(task.customerId)}
+                        <button
+                          onClick={() => setSelectedCustomerId(task.customerId || null)}
                           className="text-sm text-blue-500 hover:text-blue-700 hover:underline transition-colors focus:outline-none"
                         >
                           {task.customerName}
@@ -237,7 +232,7 @@ export default function TasksPage() {
                       ) : (
                         <span className="text-sm text-muted-foreground italic">-</span>
                       )}
-                      
+
                       {task.communicationMethod && (
                         <div className="flex items-center text-xs text-muted-foreground mt-1">
                           {task.communicationMethod === "PHONE" && <Phone className="h-3 w-3 mr-1" />}
@@ -286,21 +281,21 @@ export default function TasksPage() {
       <Dialog open={!!taskToCancel} onOpenChange={(open) => !open && setTaskToCancel(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Cancel Task</DialogTitle>
+            <DialogTitle>{t("CancelTask" as any) || "Cancel Task"}</DialogTitle>
             <DialogDescription>
-              Please provide a reason for cancelling this task. It will remain in the database for historical purposes.
+              {t("CancelTaskDesc" as any) || "Please provide a reason for cancelling this task. It will remain in the database for historical purposes."}
             </DialogDescription>
           </DialogHeader>
           <div className="py-4">
-            <Input 
-              placeholder="Reason for cancellation..." 
+            <Input
+              placeholder={t("CancelReason" as any) || "Reason for cancellation..."}
               value={statusNote}
               onChange={(e) => setStatusNote(e.target.value)}
             />
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setTaskToCancel(null)}>Keep Task</Button>
-            <Button variant="destructive" onClick={handleCancel}>Cancel Task</Button>
+            <Button variant="outline" onClick={() => setTaskToCancel(null)}>{t("KeepTask" as any) || "Keep Task"}</Button>
+            <Button variant="destructive" onClick={handleCancel}>{t("CancelTask" as any) || "Cancel Task"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -308,31 +303,31 @@ export default function TasksPage() {
       <Dialog open={!!taskToReschedule} onOpenChange={(open) => !open && setTaskToReschedule(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Reschedule Task</DialogTitle>
+            <DialogTitle>{t("RescheduleTask" as any) || "Reschedule Task"}</DialogTitle>
             <DialogDescription>
-              Select a new date and provide a reason for rescheduling.
+              {t("RescheduleTaskDesc" as any) || "Select a new date and provide a reason for rescheduling."}
             </DialogDescription>
           </DialogHeader>
           <div className="py-4 space-y-4">
             <div>
-              <label className="text-sm font-medium mb-1 block">New Due Date & Time</label>
-              <DateTimePicker 
-                value={newDueDate} 
+              <label className="text-sm font-medium mb-1 block">{t("DueDateTime" as any) || "New Due Date & Time"}</label>
+              <DateTimePicker
+                value={newDueDate}
                 onChange={(date) => setNewDueDate(date)}
               />
             </div>
             <div>
-              <label className="text-sm font-medium mb-1 block">Reason</label>
-              <Input 
-                placeholder="Why is it being rescheduled?" 
+              <label className="text-sm font-medium mb-1 block">{t("NoteReason" as any) || "Reason"}</label>
+              <Input
+                placeholder={t("RescheduleReason" as any) || "Why is it being rescheduled?"}
                 value={statusNote}
                 onChange={(e) => setStatusNote(e.target.value)}
               />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setTaskToReschedule(null)}>Cancel</Button>
-            <Button onClick={handleReschedule}>Save Changes</Button>
+            <Button variant="outline" onClick={() => setTaskToReschedule(null)}>{t("Cancel" as any) || "Cancel"}</Button>
+            <Button onClick={handleReschedule}>{t("SaveChanges" as any) || "Save Changes"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

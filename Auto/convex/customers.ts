@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
+import { rateLimiter } from "./rateLimit";
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
@@ -19,6 +20,7 @@ export const list = query({
     return await ctx.db
       .query("customers")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .filter((q) => q.neq(q.field("isDeleted"), true))
       .collect();
   },
 });
@@ -59,6 +61,7 @@ export const getByEmail = query({
       .withIndex("by_org_email", (q) =>
         q.eq("orgId", args.orgId).eq("email", args.email.toLowerCase().trim())
       )
+      .filter((q) => q.neq(q.field("isDeleted"), true))
       .unique();
   },
 });
@@ -80,7 +83,12 @@ export const create = mutation({
     address: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_CUSTOMERS]);
+    const statusLimit = await rateLimiter.limit(ctx, "create");
+    if (!statusLimit.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+    }
+
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_CUSTOMERS]);
 
     const normalizedEmail = args.email?.toLowerCase().trim() || undefined;
 
@@ -138,6 +146,20 @@ export const update = mutation({
     email: v.optional(v.string()),
     nationalId: v.optional(v.string()),
     address: v.optional(v.string()),
+    employment: v.optional(
+      v.object({
+        employer: v.string(),
+        title: v.optional(v.string()),
+        salary: v.number(),
+        hireDate: v.optional(v.number()),
+      })
+    ),
+    financials: v.optional(
+      v.object({
+        totalMonthlyDebt: v.number(),
+        dbr: v.optional(v.number()),
+      })
+    ),
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_CUSTOMERS]);
@@ -174,10 +196,12 @@ export const update = mutation({
     if (args.email !== undefined) patch.email = args.email.toLowerCase().trim();
     if (args.nationalId !== undefined) patch.nationalId = args.nationalId.trim();
     if (args.address !== undefined) patch.address = args.address.trim();
+    if (args.employment !== undefined) patch.employment = args.employment;
+    if (args.financials !== undefined) patch.financials = args.financials;
 
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(args.customerId, patch);
-      
+
       const actorName = await getActorName(ctx);
       await notifyManagers(
         ctx,
@@ -191,15 +215,15 @@ export const update = mutation({
 });
 
 /**
- * Deletes a customer. Fails if the customer has any associated leads or sales.
+ * Soft deletes a customer. Fails if the customer has any associated leads or sales.
  */
-export const remove = mutation({
+export const softDelete = mutation({
   args: {
     orgId: v.id("organizations"),
     customerId: v.id("customers"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_CUSTOMERS]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_CUSTOMERS]);
 
     const customer = await ctx.db.get(args.customerId);
     if (!customer || customer.orgId !== args.orgId) {
@@ -232,7 +256,11 @@ export const remove = mutation({
       );
     }
 
-    await ctx.db.delete(args.customerId);
+    await ctx.db.patch(args.customerId, {
+      isDeleted: true,
+      deletedAt: Date.now(),
+      deletedBy: user._id
+    });
 
     const actorName = await getActorName(ctx);
     await notifyManagers(
@@ -241,5 +269,96 @@ export const remove = mutation({
       "Customer Deleted",
       `${actorName} deleted customer ${customer.firstName} ${customer.lastName}`
     );
+  },
+});
+
+export const getRelations = query({
+  args: {
+    orgId: v.id("organizations"),
+    customerId: v.id("customers"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_CUSTOMERS]);
+
+    // 1. Fetch Sales
+    const sales = await ctx.db
+      .query("sales")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .filter((q) => q.eq(q.field("customerId"), args.customerId))
+      .collect();
+
+    const enrichedSales = await Promise.all(
+      sales.map(async (sale) => {
+        const vehicle = await ctx.db.get(sale.vehicleId);
+        const salesperson = await ctx.db.get(sale.salespersonId as any);
+        return {
+          ...sale,
+          vehicleDesc: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
+          salespersonName: salesperson && "name" in salesperson ? salesperson.name : "Unknown",
+        };
+      })
+    );
+
+    // 2. Fetch Leads
+    const leads = await ctx.db
+      .query("leads")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .filter((q) => q.eq(q.field("customerId"), args.customerId))
+      .collect();
+
+    const enrichedLeads = await Promise.all(
+      leads.map(async (lead) => {
+        const vehicle = lead.vehicleId ? await ctx.db.get(lead.vehicleId) : null;
+        const assignedUser = lead.assignedUserId ? await ctx.db.get(lead.assignedUserId as any) : null;
+        return {
+          ...lead,
+          vehicleDesc: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Any",
+          assignedUserName: assignedUser && "name" in assignedUser ? assignedUser.name : "Unassigned",
+        };
+      })
+    );
+
+    // 3. Fetch Tasks
+    const tasks = await ctx.db
+      .query("tasks")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .filter((q) => q.eq(q.field("customerId"), args.customerId))
+      .collect();
+
+    const enrichedTasks = await Promise.all(
+      tasks.map(async (task) => {
+        const assignedUser = await ctx.db.get(task.assignedTo as any);
+        return {
+          ...task,
+          assignedUserName: assignedUser && "name" in assignedUser ? assignedUser.name : "Unknown",
+        };
+      })
+    );
+
+    // 4. Fetch Quotes
+    const quotes = await ctx.db
+      .query("quotes")
+      .withIndex("by_customer", (q) => q.eq("customerId", args.customerId))
+      .filter((q) => q.eq(q.field("orgId"), args.orgId))
+      .collect();
+
+    const enrichedQuotes = await Promise.all(
+      quotes.map(async (quote) => {
+        const vehicle = await ctx.db.get(quote.vehicleId);
+        const company = quote.companyId ? await ctx.db.get(quote.companyId) : null;
+        return {
+          ...quote,
+          vehicleDesc: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
+          companyName: company ? company.name : "Cash Deal",
+        };
+      })
+    );
+
+    return {
+      sales: enrichedSales.sort((a, b) => b.saleDate - a.saleDate),
+      leads: enrichedLeads.sort((a, b) => b._creationTime - a._creationTime),
+      tasks: enrichedTasks.sort((a, b) => a.dueDate - b.dueDate),
+      quotes: enrichedQuotes.sort((a, b) => b.createdAt - a.createdAt),
+    };
   },
 });

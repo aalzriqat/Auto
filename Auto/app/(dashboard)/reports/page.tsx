@@ -4,11 +4,12 @@ import { useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
-import { 
-  LineChart, 
-  Car, 
-  Receipt, 
-  Download, 
+import { useLanguage } from "@/components/providers/LanguageProvider";
+import {
+  LineChart,
+  Car,
+  Receipt,
+  Download,
   Printer,
   Users,
   Target
@@ -37,6 +38,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { downloadCSV } from "@/lib/utils/export";
+import { RoleGuard } from "@/components/auth/RoleGuard";
 
 // Default date range (last 30 days)
 const defaultEndDate = new Date();
@@ -45,7 +47,8 @@ defaultStartDate.setDate(defaultStartDate.getDate() - 30);
 
 export default function ReportsPage() {
   const { activeOrgId } = useOrg();
-  
+  const { t } = useLanguage();
+
   const [startDateStr, setStartDateStr] = useState(defaultStartDate.toISOString().split('T')[0]);
   const [endDateStr, setEndDateStr] = useState(defaultEndDate.toISOString().split('T')[0]);
 
@@ -59,6 +62,7 @@ export default function ReportsPage() {
   const expensesReport = useQuery(api.reports.getExpensesReport, activeOrgId ? { orgId: activeOrgId, startDate, endDate } : "skip");
   const performanceReport = useQuery(api.reports.getSalespersonPerformance, activeOrgId ? { orgId: activeOrgId, startDate, endDate } : "skip");
   const leadsReport = useQuery(api.reports.getLeadConversionReport, activeOrgId ? { orgId: activeOrgId, startDate, endDate } : "skip");
+  const plReport = useQuery(api.reports.getProfitAndLoss, activeOrgId ? { orgId: activeOrgId, startDate, endDate } : "skip");
 
   // Print function
   const handlePrint = () => {
@@ -66,12 +70,11 @@ export default function ReportsPage() {
   };
 
   return (
+    <RoleGuard permissions={["view:reports"]}>
     <div className="flex-1 space-y-4 p-4 md:p-8 pt-6">
-      <div className="flex items-center justify-between space-y-2 no-print">
-        <h2 className="text-3xl font-bold tracking-tight">Reports Hub</h2>
-      </div>
 
-      <style dangerouslySetInnerHTML={{__html: `
+      <style dangerouslySetInnerHTML={{
+        __html: `
         @media print {
           .no-print { display: none !important; }
           body { padding: 0; margin: 0; }
@@ -84,38 +87,41 @@ export default function ReportsPage() {
       <Tabs defaultValue="sales" className="space-y-4 print-full-width">
         <TabsList className="no-print">
           <TabsTrigger value="sales" className="gap-2">
-            <LineChart className="h-4 w-4" /> Sales & Profit
+            <LineChart className="h-4 w-4" /> {t("SalesProfit" as any) || "Sales & Profit"}
+          </TabsTrigger>
+          <TabsTrigger value="pl" className="gap-2">
+            <BadgeDollarSignIcon className="h-4 w-4" /> Income Statement
           </TabsTrigger>
           <TabsTrigger value="inventory" className="gap-2">
-            <Car className="h-4 w-4" /> Inventory
+            <Car className="h-4 w-4" /> {t("Inventory" as any) || "Inventory"}
           </TabsTrigger>
           <TabsTrigger value="expenses" className="gap-2">
-            <Receipt className="h-4 w-4" /> Expenses
+            <Receipt className="h-4 w-4" /> {t("Expenses" as any) || "Expenses"}
           </TabsTrigger>
           <TabsTrigger value="performance" className="gap-2">
-            <Users className="h-4 w-4" /> Performance
+            <Users className="h-4 w-4" /> {t("Performance" as any) || "Performance"}
           </TabsTrigger>
           <TabsTrigger value="leads" className="gap-2">
-            <Target className="h-4 w-4" /> Lead Conversion
+            <Target className="h-4 w-4" /> {t("LeadConversion" as any) || "Lead Conversion"}
           </TabsTrigger>
         </TabsList>
 
         {/* Date Filter - Visible for Sales and Expenses only */}
         <div className="flex items-end gap-4 no-print bg-card p-4 rounded-lg border shadow-sm">
           <div className="space-y-1">
-            <label className="text-sm font-medium">Start Date</label>
-            <Input 
-              type="date" 
-              value={startDateStr} 
-              onChange={(e) => setStartDateStr(e.target.value)} 
+            <label className="text-sm font-medium">{t("StartDate" as any) || "Start Date"}</label>
+            <Input
+              type="date"
+              value={startDateStr}
+              onChange={(e) => setStartDateStr(e.target.value)}
             />
           </div>
           <div className="space-y-1">
-            <label className="text-sm font-medium">End Date</label>
-            <Input 
-              type="date" 
-              value={endDateStr} 
-              onChange={(e) => setEndDateStr(e.target.value)} 
+            <label className="text-sm font-medium">{t("EndDate" as any) || "End Date"}</label>
+            <Input
+              type="date"
+              value={endDateStr}
+              onChange={(e) => setEndDateStr(e.target.value)}
             />
           </div>
         </div>
@@ -124,11 +130,93 @@ export default function ReportsPage() {
         <TabsContent value="sales" className="space-y-4 m-0">
           <div className="flex items-center justify-between no-print">
             <div>
-              <h3 className="text-lg font-medium">Sales & Profit Overview</h3>
-              <p className="text-sm text-muted-foreground">Showing data from {new Date(startDate).toLocaleDateString()} to {new Date(endDate).toLocaleDateString()}</p>
+              <h3 className="text-lg font-medium">{t("SalesProfitOverview" as any) || "Sales & Profit Overview"}</h3>
+              <p className="text-sm text-muted-foreground">{t("ShowingDataFrom" as any) || "Showing data from"} {new Date(startDate).toLocaleDateString()} {t("To" as any) || "to"} {new Date(endDate).toLocaleDateString()}</p>
             </div>
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => salesReport?.sales && downloadCSV(salesReport.sales, "sales_report.csv")}>
+                <Download className="h-4 w-4 mr-2" /> {t("ExportCSV" as any) || "Export CSV"}
+              </Button>
+              <Button onClick={handlePrint}>
+                <Printer className="h-4 w-4 mr-2" /> {t("Print" as any) || "Print"}
+              </Button>
+            </div>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-3 mb-4">
+            <Card className="print-shadow-none border print:border-gray-200">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">{t("TotalRevenue" as any) || "Total Revenue"}</CardTitle>
+                <LineChart className="h-4 w-4 text-muted-foreground no-print" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{salesReport?.totalRevenue?.toLocaleString() ?? 0} {t("JOD" as any) || "JOD"}</div>
+              </CardContent>
+            </Card>
+            <Card className="print-shadow-none border print:border-gray-200">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">{t("TotalCosts" as any) || "Total Costs"}</CardTitle>
+                <Receipt className="h-4 w-4 text-muted-foreground no-print" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{salesReport?.totalCost?.toLocaleString() ?? 0} {t("JOD" as any) || "JOD"}</div>
+              </CardContent>
+            </Card>
+            <Card className="print-shadow-none border print:border-gray-200">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">{t("NetProfit" as any) || "Net Profit"}</CardTitle>
+                <BadgeDollarSignIcon className="h-4 w-4 text-green-500 no-print" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-green-600">{salesReport?.totalProfit?.toLocaleString() ?? 0} JOD</div>
+              </CardContent>
+            </Card>
+          </div>
+
+          <Card className="print-shadow-none border print:border-gray-200">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t("Date" as any) || "Date"}</TableHead>
+                  <TableHead>{t("Vehicle" as any) || "Vehicle"}</TableHead>
+                  <TableHead>{t("VIN" as any) || "VIN"}</TableHead>
+                  <TableHead className="text-right">{t("SalePrice" as any) || "Sale Price"}</TableHead>
+                  <TableHead className="text-right">{t("TotalCost" as any) || "Total Cost"}</TableHead>
+                  <TableHead className="text-right">{t("NetProfit" as any) || "Net Profit"}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {salesReport?.sales?.map((sale) => (
+                  <TableRow key={sale._id}>
+                    <TableCell>{new Date(sale.saleDate).toLocaleDateString()}</TableCell>
+                    <TableCell>{sale.vehicleYear} {sale.vehicleMake} {sale.vehicleModel}</TableCell>
+                    <TableCell className="font-mono text-xs">{sale.vehicleVin || "-"}</TableCell>
+                    <TableCell className="text-right">{sale.salePrice.toLocaleString()} {t("JOD" as any) || "JOD"}</TableCell>
+                    <TableCell className="text-right">{sale.totalCost.toLocaleString()} {t("JOD" as any) || "JOD"}</TableCell>
+                    <TableCell className="text-right text-green-600 font-medium">{sale.netProfit.toLocaleString()} {t("JOD" as any) || "JOD"}</TableCell>
+                  </TableRow>
+                ))}
+                {!salesReport?.sales?.length && (
+                  <TableRow>
+                    <TableCell colSpan={6} className="text-center py-6 text-muted-foreground">
+                      {t("NoSalesFoundPeriod" as any) || "No sales found in this period."}
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </Card>
+        </TabsContent>
+
+        {/* P&L REPORT */}
+        <TabsContent value="pl" className="space-y-4 m-0">
+          <div className="flex items-center justify-between no-print">
+            <div>
+              <h3 className="text-lg font-medium">Income Statement (Profit & Loss)</h3>
+              <p className="text-sm text-muted-foreground">Showing data from {new Date(startDate).toLocaleDateString()} to {new Date(endDate).toLocaleDateString()}</p>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => plReport?.transactions && downloadCSV(plReport.transactions, "pl_report.csv")}>
                 <Download className="h-4 w-4 mr-2" /> Export CSV
               </Button>
               <Button onClick={handlePrint}>
@@ -137,23 +225,32 @@ export default function ReportsPage() {
             </div>
           </div>
 
-          <div className="grid gap-4 md:grid-cols-3 mb-4">
+          <div className="grid gap-4 md:grid-cols-4 mb-4">
             <Card className="print-shadow-none border print:border-gray-200">
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                 <CardTitle className="text-sm font-medium">Total Revenue</CardTitle>
                 <LineChart className="h-4 w-4 text-muted-foreground no-print" />
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">${salesReport?.totalRevenue?.toLocaleString() ?? 0}</div>
+                <div className="text-2xl font-bold text-green-600">{plReport?.totalRevenue?.toLocaleString() ?? 0} {t("JOD" as any) || "JOD"}</div>
               </CardContent>
             </Card>
             <Card className="print-shadow-none border print:border-gray-200">
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Total Costs</CardTitle>
+                <CardTitle className="text-sm font-medium">Cost of Goods Sold</CardTitle>
                 <Receipt className="h-4 w-4 text-muted-foreground no-print" />
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">${salesReport?.totalCost?.toLocaleString() ?? 0}</div>
+                <div className="text-2xl font-bold text-red-600">{plReport?.costOfGoodsSold?.toLocaleString() ?? 0} {t("JOD" as any) || "JOD"}</div>
+              </CardContent>
+            </Card>
+            <Card className="print-shadow-none border print:border-gray-200">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">Operating Expenses</CardTitle>
+                <Receipt className="h-4 w-4 text-muted-foreground no-print" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-red-600">{plReport?.operatingExpenses?.toLocaleString() ?? 0} {t("JOD" as any) || "JOD"}</div>
               </CardContent>
             </Card>
             <Card className="print-shadow-none border print:border-gray-200">
@@ -162,7 +259,7 @@ export default function ReportsPage() {
                 <BadgeDollarSignIcon className="h-4 w-4 text-green-500 no-print" />
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold text-green-600">${salesReport?.totalProfit?.toLocaleString() ?? 0}</div>
+                <div className="text-2xl font-bold text-green-600">{plReport?.netProfit?.toLocaleString() ?? 0} JOD</div>
               </CardContent>
             </Card>
           </div>
@@ -172,28 +269,26 @@ export default function ReportsPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Date</TableHead>
-                  <TableHead>Vehicle</TableHead>
-                  <TableHead>VIN</TableHead>
-                  <TableHead className="text-right">Sale Price</TableHead>
-                  <TableHead className="text-right">Total Cost</TableHead>
-                  <TableHead className="text-right">Net Profit</TableHead>
+                  <TableHead>Category</TableHead>
+                  <TableHead>Description</TableHead>
+                  <TableHead className="text-right">Amount</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {salesReport?.sales?.map((sale) => (
-                  <TableRow key={sale._id}>
-                    <TableCell>{new Date(sale.saleDate).toLocaleDateString()}</TableCell>
-                    <TableCell>{sale.vehicleYear} {sale.vehicleMake} {sale.vehicleModel}</TableCell>
-                    <TableCell className="font-mono text-xs">{sale.vehicleVin || "-"}</TableCell>
-                    <TableCell className="text-right">${sale.salePrice.toLocaleString()}</TableCell>
-                    <TableCell className="text-right">${sale.totalCost.toLocaleString()}</TableCell>
-                    <TableCell className="text-right text-green-600 font-medium">${sale.netProfit.toLocaleString()}</TableCell>
+                {plReport?.transactions?.map((tx) => (
+                  <TableRow key={tx._id}>
+                    <TableCell>{new Date(tx.date).toLocaleDateString()}</TableCell>
+                    <TableCell>{tx.category.replace("_", " ")}</TableCell>
+                    <TableCell>{tx.description}</TableCell>
+                    <TableCell className={`text-right ${tx.type === 'IN' ? 'text-green-600' : 'text-red-600'}`}>
+                      {tx.type === "IN" ? "+" : "-"}{tx.amount.toLocaleString()} {t("JOD" as any) || "JOD"}
+                    </TableCell>
                   </TableRow>
                 ))}
-                {!salesReport?.sales?.length && (
+                {!plReport?.transactions?.length && (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center py-6 text-muted-foreground">
-                      No sales found in this period.
+                    <TableCell colSpan={4} className="text-center py-6 text-muted-foreground">
+                      No transactions found in this period.
                     </TableCell>
                   </TableRow>
                 )}
@@ -231,11 +326,11 @@ export default function ReportsPage() {
             </Card>
             <Card className="print-shadow-none border print:border-gray-200">
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Total Asset Value</CardTitle>
+                <CardTitle className="text-sm font-medium">{t("InventoryValue" as any) || "Inventory Value"}</CardTitle>
                 <BadgeDollarSignIcon className="h-4 w-4 text-muted-foreground no-print" />
               </CardHeader>
               <CardContent>
-                <div className="text-2xl font-bold">${inventoryReport?.totalValue?.toLocaleString() ?? 0}</div>
+                <div className="text-2xl font-bold">{inventoryReport?.totalValue?.toLocaleString() ?? 0} {t("JOD" as any) || "JOD"}</div>
               </CardContent>
             </Card>
           </div>
@@ -244,12 +339,12 @@ export default function ReportsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Vehicle</TableHead>
-                  <TableHead>VIN</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Purchase Price</TableHead>
-                  <TableHead className="text-right">Expenses</TableHead>
-                  <TableHead className="text-right">Total Invested</TableHead>
+                  <TableHead>{t("Vehicle" as any) || "Vehicle"}</TableHead>
+                  <TableHead>{t("VIN" as any) || "VIN"}</TableHead>
+                  <TableHead>{t("Status" as any) || "Status"}</TableHead>
+                  <TableHead className="text-right">{t("PurchasePrice" as any) || "Purchase Price"}</TableHead>
+                  <TableHead className="text-right">{t("Expenses" as any) || "Expenses"}</TableHead>
+                  <TableHead className="text-right">{t("TotalInvested" as any) || "Total Invested"}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -258,14 +353,14 @@ export default function ReportsPage() {
                     <TableCell className="font-medium">{vehicle.year} {vehicle.make} {vehicle.model}</TableCell>
                     <TableCell className="font-mono text-xs">{vehicle.vin}</TableCell>
                     <TableCell>{vehicle.status}</TableCell>
-                    <TableCell className="text-right">${vehicle.purchasePrice.toLocaleString()}</TableCell>
-                    <TableCell className="text-right">${vehicle.totalExpenses.toLocaleString()}</TableCell>
-                    <TableCell className="text-right font-medium">${vehicle.totalInvestment.toLocaleString()}</TableCell>
+                    <TableCell className="text-right">{(vehicle.purchasePrice || 0).toLocaleString()} {t("JOD" as any) || "JOD"}</TableCell>
+                    <TableCell className="text-right">{(vehicle.totalExpenses || 0).toLocaleString()} {t("JOD" as any) || "JOD"}</TableCell>
+                    <TableCell className="text-right font-medium">{(vehicle.totalInvestment || 0).toLocaleString()} {t("JOD" as any) || "JOD"}</TableCell>
                   </TableRow>
                 ))}
                 {!inventoryReport?.vehicles?.length && (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center py-6 text-muted-foreground">
+                    <TableCell colSpan={4} className="text-center py-6 text-muted-foreground">
                       No active vehicles in inventory.
                     </TableCell>
                   </TableRow>
@@ -279,28 +374,30 @@ export default function ReportsPage() {
         <TabsContent value="expenses" className="space-y-4 m-0">
           <div className="flex items-center justify-between no-print">
             <div>
-              <h3 className="text-lg font-medium">Expenses Overview</h3>
-              <p className="text-sm text-muted-foreground">Showing data from {new Date(startDate).toLocaleDateString()} to {new Date(endDate).toLocaleDateString()}</p>
+              <h3 className="text-lg font-medium">{t("ExpensesOverview" as any) || "Expenses Overview"}</h3>
+              <p className="text-sm text-muted-foreground">{t("ShowingDataFrom" as any) || "Showing data from"} {new Date(startDate).toLocaleDateString()} {t("To" as any) || "to"} {new Date(endDate).toLocaleDateString()}</p>
             </div>
             <div className="flex gap-2">
               <Button variant="outline" onClick={() => expensesReport?.expenses && downloadCSV(expensesReport.expenses, "expenses_report.csv")}>
-                <Download className="h-4 w-4 mr-2" /> Export CSV
+                <Download className="h-4 w-4 mr-2" /> {t("ExportCSV" as any) || "Export CSV"}
               </Button>
               <Button onClick={handlePrint}>
-                <Printer className="h-4 w-4 mr-2" /> Print
+                <Printer className="h-4 w-4 mr-2" /> {t("Print" as any) || "Print"}
               </Button>
             </div>
           </div>
 
-          <Card className="print-shadow-none border print:border-gray-200 mb-4 max-w-sm">
-            <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-              <CardTitle className="text-sm font-medium">Total Expenses</CardTitle>
-              <Receipt className="h-4 w-4 text-muted-foreground no-print" />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">${expensesReport?.totalExpenses?.toLocaleString() ?? 0}</div>
-            </CardContent>
-          </Card>
+          <div className="grid gap-4 md:grid-cols-3 mb-4">
+            <Card className="print-shadow-none border print:border-gray-200">
+              <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                <CardTitle className="text-sm font-medium">{t("TotalExpenses" as any) || "Total Expenses"}</CardTitle>
+                <Receipt className="h-4 w-4 text-muted-foreground no-print" />
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-red-600">{expensesReport?.totalExpenses?.toLocaleString() ?? 0} {t("JOD" as any) || "JOD"}</div>
+              </CardContent>
+            </Card>
+          </div>
 
           <Card className="print-shadow-none border print:border-gray-200">
             <Table>
@@ -318,9 +415,9 @@ export default function ReportsPage() {
                   <TableRow key={exp._id}>
                     <TableCell>{new Date(exp.date).toLocaleDateString()}</TableCell>
                     <TableCell>{exp.category}</TableCell>
-                    <TableCell>{exp.description}</TableCell>
+                    <TableCell>{exp.notes || "-"}</TableCell>
                     <TableCell>{exp.vehicleDesc}</TableCell>
-                    <TableCell className="text-right font-medium">${exp.amount.toLocaleString()}</TableCell>
+                    <TableCell className="text-right font-medium">{exp.amount.toLocaleString()} JOD</TableCell>
                   </TableRow>
                 ))}
                 {!expensesReport?.expenses?.length && (
@@ -367,8 +464,8 @@ export default function ReportsPage() {
                   <TableRow key={perf.userId}>
                     <TableCell className="font-medium">{perf.userName}</TableCell>
                     <TableCell className="text-right">{perf.vehiclesSold}</TableCell>
-                    <TableCell className="text-right">${perf.totalRevenue.toLocaleString()}</TableCell>
-                    <TableCell className="text-right text-green-600 font-medium">${perf.totalProfit.toLocaleString()}</TableCell>
+                    <TableCell className="text-right">{perf.totalRevenue.toLocaleString()} JOD</TableCell>
+                    <TableCell className="text-right text-green-600 font-medium">{perf.totalProfit.toLocaleString()} JOD</TableCell>
                   </TableRow>
                 ))}
                 {!performanceReport?.length && (
@@ -387,23 +484,17 @@ export default function ReportsPage() {
         <TabsContent value="leads" className="space-y-4 m-0">
           <div className="flex items-center justify-between no-print">
             <div>
-              <h3 className="text-lg font-medium">Lead Conversion Report</h3>
-              <p className="text-sm text-muted-foreground">Showing data from {new Date(startDate).toLocaleDateString()} to {new Date(endDate).toLocaleDateString()}</p>
+              <h3 className="text-lg font-medium">{t("InventoryOverview" as any) || "Inventory Overview"}</h3>
             </div>
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => leadsReport?.salespersonMetrics && downloadCSV(leadsReport.salespersonMetrics, "lead_conversion.csv")}>
-                <Download className="h-4 w-4 mr-2" /> Export CSV
-              </Button>
-              <Button onClick={handlePrint}>
-                <Printer className="h-4 w-4 mr-2" /> Print
-              </Button>
-            </div>
+            <Button onClick={handlePrint}>
+              <Printer className="h-4 w-4 mr-2" /> {t("Print" as any) || "Print"}
+            </Button>
           </div>
 
           <div className="grid gap-4 md:grid-cols-3 mb-4">
             <Card className="print-shadow-none border print:border-gray-200">
               <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                <CardTitle className="text-sm font-medium">Total Leads</CardTitle>
+                <CardTitle className="text-sm font-medium">{t("TotalVehicles" as any) || "Total Vehicles"}</CardTitle>
                 <Target className="h-4 w-4 text-muted-foreground no-print" />
               </CardHeader>
               <CardContent>
@@ -467,6 +558,7 @@ export default function ReportsPage() {
         </TabsContent>
       </Tabs>
     </div>
+    </RoleGuard>
   );
 }
 

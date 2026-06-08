@@ -1,0 +1,1 @@
+{"nodes": [], "edges": [{"source": "convex_performance_audit_icon", "target": "convex_performance_audit_icon", "relation": "semantically_similar_to", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": ".claude/skills/convex-performance-audit/assets/icon.svg"}], "hyperedges": []}

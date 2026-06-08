@@ -8,6 +8,7 @@ import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -27,32 +28,18 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 
-const customerSchema = z.object({
-  firstName: z.string().min(1, "First name is required"),
-  lastName: z.string().min(1, "Last name is required"),
-  email: z.string().email("Invalid email format").optional().or(z.literal("")),
-  phone: z.string().optional(),
-  whatsapp: z.string().optional(),
-  nationalId: z.string().optional(),
-  address: z.string().optional(),
-});
+import { customerSchema, CustomerFormValues, CustomerDialogProps } from "./customer.schema";
 
-type CustomerFormValues = z.infer<typeof customerSchema>;
-
-interface CustomerDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  customer?: Doc<"customers"> | null;
-}
 
 export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogProps) {
   const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
   const createCustomer = useMutation(api.customers.create);
   const updateCustomer = useMutation(api.customers.update);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const form = useForm<CustomerFormValues>({
-    resolver: zodResolver(customerSchema),
+    resolver: zodResolver(customerSchema as any),
     defaultValues: {
       firstName: "",
       lastName: "",
@@ -109,13 +96,13 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
           customerId: customer._id,
           ...payload,
         });
-        toast.success("Customer updated successfully");
+        toast.success(t("CustomerUpdatedSuccess" as any) || "Customer updated successfully");
       } else {
         await createCustomer({
           orgId: activeOrgId,
           ...payload,
         });
-        toast.success("Customer added successfully");
+        toast.success(t("CustomerAddedSuccess" as any) || "Customer added successfully");
       }
       onOpenChange(false);
     } catch (error: any) {
@@ -129,9 +116,9 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{customer ? "Edit Customer" : "Add Customer"}</DialogTitle>
+          <DialogTitle>{customer ? (t("EditCustomer" as any) || "Edit Customer") : (t("AddCustomer" as any) || "Add Customer")}</DialogTitle>
           <DialogDescription>
-            {customer ? "Update customer details below." : "Enter the details of the new customer."}
+            {customer ? (t("UpdateCustomerDesc" as any) || "Update customer details below.") : (t("AddCustomerDesc" as any) || "Enter the details of the new customer.")}
           </DialogDescription>
         </DialogHeader>
 
@@ -143,7 +130,7 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
                 name="firstName"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>First Name <span className="text-red-500">*</span></FormLabel>
+                    <FormLabel>{t("FirstName" as any) || "First Name"} <span className="text-red-500">*</span></FormLabel>
                     <FormControl>
                       <Input placeholder="John" {...field} />
                     </FormControl>
@@ -156,7 +143,7 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
                 name="lastName"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Last Name <span className="text-red-500">*</span></FormLabel>
+                    <FormLabel>{t("LastName" as any) || "Last Name"} <span className="text-red-500">*</span></FormLabel>
                     <FormControl>
                       <Input placeholder="Doe" {...field} />
                     </FormControl>
@@ -169,7 +156,7 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
                 name="email"
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
-                    <FormLabel>Email</FormLabel>
+                    <FormLabel>{t("Email" as any) || "Email"}</FormLabel>
                     <FormControl>
                       <Input type="email" placeholder="john.doe@example.com" {...field} />
                     </FormControl>
@@ -182,7 +169,7 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
                 name="phone"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Phone</FormLabel>
+                    <FormLabel>{t("Phone" as any) || "Phone"}</FormLabel>
                     <FormControl>
                       <Input placeholder="+1 234 567 8900" {...field} />
                     </FormControl>
@@ -195,7 +182,7 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
                 name="whatsapp"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>WhatsApp</FormLabel>
+                    <FormLabel>{t("WhatsApp" as any) || "WhatsApp"}</FormLabel>
                     <FormControl>
                       <Input placeholder="+1 234 567 8900" {...field} />
                     </FormControl>
@@ -208,7 +195,7 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
                 name="nationalId"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>National ID / Passport</FormLabel>
+                    <FormLabel>{t("NationalIDPassport" as any) || "National ID / Passport"}</FormLabel>
                     <FormControl>
                       <Input placeholder="ID Number" {...field} />
                     </FormControl>
@@ -221,7 +208,7 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
                 name="address"
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
-                    <FormLabel>Address</FormLabel>
+                    <FormLabel>{t("Address" as any) || "Address"}</FormLabel>
                     <FormControl>
                       <Input placeholder="123 Main St, City, Country" {...field} />
                     </FormControl>
@@ -232,10 +219,10 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
             </div>
             <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-                Cancel
+                {t("Cancel" as any) || "Cancel"}
               </Button>
               <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? "Saving..." : customer ? "Save Changes" : "Add Customer"}
+                {isSubmitting ? (t("Saving" as any) || "Saving...") : customer ? (t("SaveChanges" as any) || "Save Changes") : (t("AddCustomer" as any) || "Add Customer")}
               </Button>
             </div>
           </form>

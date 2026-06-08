@@ -1,0 +1,1 @@
+{"nodes": [], "edges": [{"source": "convex_migration_helper_icon", "target": "convex_migration_helper_icon", "relation": "semantically_similar_to", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": ".claude/skills/convex-migration-helper/assets/icon.svg"}], "hyperedges": []}
