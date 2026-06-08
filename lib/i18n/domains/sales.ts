@@ -241,7 +241,7 @@ export const salesEn = {
   AppApprovedSuccess: "Application Approved!",
   UploadSuccess: "Document uploaded successfully",
   UploadFail: "Upload failed",
-  TermMonths: "Term",
+
 };
 
 export const salesAr = {
