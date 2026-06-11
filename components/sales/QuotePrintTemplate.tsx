@@ -37,6 +37,7 @@ export function QuotePrintTemplate({
 
   return (
     <div 
+      id="pdf-quote-content"
       className="hidden print:block absolute inset-0 bg-white w-[210mm] min-h-[297mm] mx-auto text-black p-10 font-sans" 
       dir="rtl"
     >

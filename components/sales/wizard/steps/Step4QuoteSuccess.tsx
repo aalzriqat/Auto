@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { PaymentType, WizardData } from "../types";
 import { Button } from "@/components/ui/button";
@@ -29,10 +30,49 @@ export function Step4QuoteSuccess({
   onClose,
 }: Step4QuoteSuccessProps) {
   const { t } = useLanguage();
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
 
-  const handleDownload = () => {
-    // We use standard browser print which will pick up the hidden @media print layout
-    window.print();
+  const handleDownload = async () => {
+    const element = document.getElementById('pdf-quote-content');
+    if (!element) return;
+    
+    setIsGeneratingPdf(true);
+    try {
+      // Temporarily show element off-screen for canvas rendering
+      element.classList.remove('hidden');
+      element.style.position = 'absolute';
+      element.style.left = '-9999px';
+      element.style.top = '-9999px';
+      element.style.display = 'block';
+      
+      const { default: html2canvas } = await import('html2canvas');
+      const { jsPDF } = await import('jspdf');
+
+      const canvas = await html2canvas(element, {
+        scale: 2, // Better quality
+        useCORS: true,
+      });
+
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+
+      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      pdf.save(`Quote_${selectedCustomer.firstName}.pdf`);
+
+    } catch (err) {
+      console.error('Failed to generate PDF', err);
+    } finally {
+      element.classList.remove('block');
+      element.style.display = '';
+      element.style.position = '';
+      element.style.left = '';
+      element.style.top = '';
+      element.classList.add('hidden');
+      setIsGeneratingPdf(false);
+    }
   };
 
   return (
@@ -58,11 +98,12 @@ export function Step4QuoteSuccess({
         <div className="pt-6 flex flex-col sm:flex-row gap-4 justify-center items-center">
           <Button
             onClick={handleDownload}
+            disabled={isGeneratingPdf}
             className="bg-indigo-600 hover:bg-indigo-700 min-w-[200px]"
             size="lg"
           >
             <FileDown className="w-4 h-4 mr-2" />
-            {t("PrintQuote" as any) || "Print / Save Quote"}
+            {isGeneratingPdf ? "Generating PDF..." : "Download PDF Quote"}
           </Button>
 
           <Button
