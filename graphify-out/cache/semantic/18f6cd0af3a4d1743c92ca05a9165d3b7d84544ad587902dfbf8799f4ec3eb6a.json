@@ -1,0 +1,1 @@
+{"nodes": [{"id": "dashboard_stats", "label": "Dashboard Stats", "file_type": "code", "source_file": "convex/dashboard.ts"}], "edges": [{"source": "dashboard_stats", "target": "schema_schema", "relation": "references", "confidence": "INFERRED", "confidence_score": 0.9, "source_file": "convex/dashboard.ts"}], "hyperedges": []}

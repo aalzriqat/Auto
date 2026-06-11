@@ -1,0 +1,1 @@
+{"nodes": [{"id": "accounting_page", "label": "AccountingPage", "file_type": "code", "source_file": "app/(dashboard)/accounting/page.tsx"}], "edges": [{"source": "accounting_page", "target": "role_guard", "relation": "implements", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "app/(dashboard)/accounting/page.tsx"}], "hyperedges": []}

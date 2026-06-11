@@ -1,0 +1,1 @@
+{"nodes": [{"id": "scroll_area_scrollarea", "label": "ScrollArea", "file_type": "code", "source_file": "components/ui/scroll-area.tsx"}], "edges": [{"source": "scroll_area_scrollarea", "target": "language_provider_uselanguage", "relation": "calls", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "components/ui/scroll-area.tsx"}], "hyperedges": []}

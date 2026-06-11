@@ -1,0 +1,1 @@
+{"nodes": [{"id": "sales_i18n", "label": "Sales Translations", "file_type": "code", "source_file": "lib/i18n/domains/sales.ts"}], "edges": [{"source": "sales_i18n", "target": "pdf_lib", "relation": "conceptually_related_to", "confidence": "INFERRED", "confidence_score": 0.8, "source_file": "lib/i18n/domains/sales.ts"}], "hyperedges": []}

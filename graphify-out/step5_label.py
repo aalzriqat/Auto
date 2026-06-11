@@ -1,0 +1,132 @@
+import sys, json
+from graphify.build import build_from_json
+from graphify.cluster import score_all
+from graphify.analyze import god_nodes, surprising_connections, suggest_questions
+from graphify.report import generate
+from pathlib import Path
+
+extraction = json.loads(Path('graphify-out/.graphify_extract.json').read_text(encoding='utf-8'))
+detection_path = Path('graphify-out/.graphify_detect.json')
+if detection_path.exists():
+    detection = json.loads(detection_path.read_text(encoding='utf-8'))
+else:
+    detection = {'total_files': 254, 'total_words': 0, 'files': {}}
+analysis   = json.loads(Path('graphify-out/.graphify_analysis.json').read_text(encoding='utf-8'))
+
+G = build_from_json(extraction)
+communities = {int(k): v for k, v in analysis['communities'].items()}
+cohesion = {int(k): v for k, v in analysis['cohesion'].items()}
+tokens = {'input': extraction.get('input_tokens', 0), 'output': extraction.get('output_tokens', 0)}
+
+labels = {
+    0: "Convex API Module",
+    1: "Accounting & Finance UI",
+    2: "Agent Skills & References",
+    3: "NPM Dependencies",
+    4: "Customer & Sales Convex",
+    5: "Branch Management",
+    6: "Dev Config & Tooling",
+    7: "i18n Translations",
+    8: "Mobile & Sidebar UI",
+    9: "Organization Management",
+    10: "Document Rules Engine",
+    11: "TypeScript Config",
+    12: "Shadcn Component Config",
+    13: "HTTP & Membership API",
+    14: "Data Migrations",
+    15: "Convex TypeScript Config",
+    16: "Lead Stages & Pipeline",
+    17: "UI Utilities & Styling",
+    18: "Community 18",
+    19: "Community 19",
+    20: "Vehicle Inventory Mutations",
+    21: "Navigation & Layout",
+    22: "PDF & Bill of Sale",
+    23: "Finance Applications",
+    24: "Reports & Analytics",
+    25: "Route Loading States",
+    26: "Vehicle Schemas",
+    27: "Role Permissions Editor",
+    28: "Dropdown Menu Components",
+    29: "App Root Layout",
+    30: "Finance Company Module",
+    31: "Customer & Quote Schemas",
+    32: "Role Management CRUD",
+    33: "Convex Server Types",
+    34: "Financing Calculations",
+    35: "Clerk Auth Pages",
+    36: "AI State Files",
+    37: "Convex Schema & Data Model",
+    38: "Task Management",
+    39: "Test Drive Module",
+    40: "Env Config & Validation",
+    41: "Dashboard Loading Pages",
+    42: "Sentry Instrumentation",
+    43: "Partner Equity Finance",
+    44: "User Webhook Sync",
+    45: "Vehicle Debug & Requests",
+    46: "Environment Variables",
+    47: "Task Schema",
+    48: "Vehicle Relations Query",
+    49: "Vehicle Edit Audit Trail",
+    50: "Agent & Claude Config",
+    51: "Convex Auth References",
+    52: "Auth Config & README",
+    53: "Convex App Config",
+    54: "Customer Queries",
+    55: "Dashboard Mockup & AI",
+    56: "Logo & Media Assets",
+    57: "Notification Queries",
+    58: "Org Permissions",
+    59: "Role Queries",
+    60: "Test Drive Mutations",
+    61: "Vitest Config",
+    62: "Work Order Mutations",
+    63: "Convex Callback Handles",
+    64: "Globals Configuration",
+    65: "Schema Validators",
+    66: "AI Guidelines",
+    67: "Application Queries",
+    68: "Claims Add",
+    69: "Claims Remove",
+    70: "Claims Update",
+    71: "WorkOS AuthKit",
+    72: "Auth Config File",
+    73: "Convex Config",
+    74: "HTTP Routes",
+    75: "Convex Logo",
+    76: "WorkOS Reference",
+    77: "Customer Relations",
+    78: "Dialog Component",
+    79: "Document Rules Query",
+    80: "Expense Create",
+    81: "Finance Company Create",
+    82: "Vehicle Valuation",
+    83: "Fixed Assets List",
+    84: "Internal Query",
+    85: "Graphify Workflow Docs",
+    86: "Hybrid Components Ref",
+    87: "Lead Create",
+    88: "Local Components Ref",
+    89: "Migrations Module",
+    90: "My Organizations",
+    91: "Popover Component",
+    92: "Quote Queries",
+    93: "Quote Status Mutation",
+    94: "Convex Functions Docs",
+    95: "Select Component",
+    96: "Sheet Names Config",
+    97: "User Query",
+    98: "UI Utilities",
+    99: "Vehicle Get Query",
+    100: "Vehicle List All",
+    101: "Vehicle Soft Delete",
+    102: "Vehicle Upload URL",
+    103: "Graphify Workflow",
+}
+
+questions = suggest_questions(G, communities, labels)
+report = generate(G, communities, cohesion, labels, analysis['gods'], analysis['surprises'], detection, tokens, '.', suggested_questions=questions)
+Path('graphify-out/GRAPH_REPORT.md').write_text(report, encoding='utf-8')
+Path('graphify-out/.graphify_labels.json').write_text(json.dumps({str(k): v for k, v in labels.items()}, ensure_ascii=False), encoding='utf-8')
+print('Report updated with community labels')

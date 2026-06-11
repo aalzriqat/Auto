@@ -27,7 +27,6 @@ import {
   TabsList,
   TabsTrigger,
 } from "@/components/ui/tabs";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -55,15 +54,15 @@ export function VehicleDetailsDialog({
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const { hasPermission, isLoading: permissionsLoading } = usePermissions();
-  
+
   const relations = useQuery(
     api.vehicles.getRelations,
     activeOrgId && vehicle ? { orgId: activeOrgId, vehicleId: vehicle._id } : "skip"
   );
-  
+
   const [testDriveOpen, setTestDriveOpen] = useState(false);
   const [selectedTestDrive, setSelectedTestDrive] = useState(null);
-  
+
   const [workOrderOpen, setWorkOrderOpen] = useState(false);
   const [selectedWorkOrder, setSelectedWorkOrder] = useState(null);
 
@@ -72,7 +71,7 @@ export function VehicleDetailsDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl max-h-[90vh] flex flex-col p-0">
-        <div className="p-6 pb-2">
+        <div className="p-6 pb-2 shrink-0">
           <DialogHeader>
             <DialogTitle className="text-xl">
               {vehicle.year} {vehicle.make} {vehicle.model}
@@ -84,19 +83,19 @@ export function VehicleDetailsDialog({
         </div>
 
         <Tabs defaultValue="overview" className="flex-1 flex flex-col min-h-0">
-          <div className="px-6 border-b">
-            <TabsList className="bg-transparent h-12 p-0 -mb-px">
+          <div className="px-6 border-b overflow-x-auto [&::-webkit-scrollbar]:hidden shrink-0">
+            <TabsList className="bg-transparent h-12 p-0 -mb-px flex w-max min-w-full justify-start">
               {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_INFO)) && (
-                <TabsTrigger 
-                  value="overview" 
+                <TabsTrigger
+                  value="overview"
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
                   {t("Overview" as any)}
                 </TabsTrigger>
               )}
               {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_LEADS)) && (
-                <TabsTrigger 
-                  value="leads_sales" 
+                <TabsTrigger
+                  value="leads_sales"
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
                   {t("LeadsSales" as any) || "Leads & Sales"}
@@ -106,8 +105,8 @@ export function VehicleDetailsDialog({
                 </TabsTrigger>
               )}
               {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_EXPENSES)) && (
-                <TabsTrigger 
-                  value="expenses" 
+                <TabsTrigger
+                  value="expenses"
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
                   {t("Expenses" as any)}
@@ -117,8 +116,8 @@ export function VehicleDetailsDialog({
                 </TabsTrigger>
               )}
               {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_TASKS)) && (
-                <TabsTrigger 
-                  value="tasks" 
+                <TabsTrigger
+                  value="tasks"
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
                   {t("Tasks" as any)}
@@ -128,8 +127,8 @@ export function VehicleDetailsDialog({
                 </TabsTrigger>
               )}
               {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_TEST_DRIVES)) && (
-                <TabsTrigger 
-                  value="test_drives" 
+                <TabsTrigger
+                  value="test_drives"
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
                   {t("TestDrives" as any)}
@@ -139,8 +138,8 @@ export function VehicleDetailsDialog({
                 </TabsTrigger>
               )}
               {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_WORK_ORDERS)) && (
-                <TabsTrigger 
-                  value="work_orders" 
+                <TabsTrigger
+                  value="work_orders"
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
                   {t("WorkOrders" as any)}
@@ -150,8 +149,8 @@ export function VehicleDetailsDialog({
                 </TabsTrigger>
               )}
               {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_VALUATIONS)) && (
-                <TabsTrigger 
-                  value="valuations" 
+                <TabsTrigger
+                  value="valuations"
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
                   {t("Valuations" as any)}
@@ -160,7 +159,7 @@ export function VehicleDetailsDialog({
             </TabsList>
           </div>
 
-          <ScrollArea className="flex-1 p-6">
+          <div className="flex-1 overflow-y-auto min-h-0 p-6">
             <TabsContent value="overview" className="m-0 focus-visible:outline-none">
               <div className="grid grid-cols-2 gap-x-6 gap-y-4">
                 <div className="space-y-1">
@@ -171,11 +170,11 @@ export function VehicleDetailsDialog({
                   <span className="text-sm font-medium text-muted-foreground">{t("Status" as any)}</span>
                   <p className="text-sm font-semibold">
                     {vehicle.status === "AVAILABLE" ? t("StatusAvailable" as any) :
-                     vehicle.status === "RESERVED" ? t("StatusReserved" as any) :
-                     vehicle.status === "SOLD" ? t("StatusSold" as any) :
-                     vehicle.status === "IN_INSPECTION" ? t("StatusInInspection" as any) :
-                     vehicle.status === "IN_REPAIR" ? t("StatusInRepair" as any) :
-                     vehicle.status === "ARCHIVED" ? t("StatusArchived" as any) : vehicle.status}
+                      vehicle.status === "RESERVED" ? t("StatusReserved" as any) :
+                        vehicle.status === "SOLD" ? t("StatusSold" as any) :
+                          vehicle.status === "IN_INSPECTION" ? t("StatusInInspection" as any) :
+                            vehicle.status === "IN_REPAIR" ? t("StatusInRepair" as any) :
+                              vehicle.status === "ARCHIVED" ? t("StatusArchived" as any) : vehicle.status}
                   </p>
                 </div>
 
@@ -363,11 +362,10 @@ export function VehicleDetailsDialog({
                     <div key={task._id} className="bg-muted/30 p-3 rounded-lg border text-sm">
                       <div className="flex justify-between items-start mb-1">
                         <span className="font-medium">{task.title}</span>
-                        <span className={`text-xs px-2 py-0.5 rounded ${
-                          task.status === "COMPLETED" ? "bg-green-100 text-green-800" :
-                          task.status === "CANCELLED" ? "bg-red-100 text-red-800" :
-                          "bg-yellow-100 text-yellow-800"
-                        }`}>
+                        <span className={`text-xs px-2 py-0.5 rounded ${task.status === "COMPLETED" ? "bg-green-100 text-green-800" :
+                            task.status === "CANCELLED" ? "bg-red-100 text-red-800" :
+                              "bg-yellow-100 text-yellow-800"
+                          }`}>
                           {task.status}
                         </span>
                       </div>
@@ -442,18 +440,17 @@ export function VehicleDetailsDialog({
                     <div key={wo._id} className="bg-muted/30 p-4 rounded-lg border text-sm hover:bg-muted/50 transition-colors cursor-pointer" onClick={() => { setSelectedWorkOrder(wo); setWorkOrderOpen(true); }}>
                       <div className="flex justify-between items-start mb-2">
                         <span className="font-semibold">{wo.title}</span>
-                        <span className={`text-xs px-2 py-0.5 rounded font-medium ${
-                          wo.status === 'COMPLETED' ? 'bg-green-100 text-green-800' : 
-                          wo.status === 'IN_PROGRESS' ? 'bg-amber-100 text-amber-800' : 
-                          'bg-gray-100 text-gray-800'
-                        }`}>
+                        <span className={`text-xs px-2 py-0.5 rounded font-medium ${wo.status === 'COMPLETED' ? 'bg-green-100 text-green-800' :
+                            wo.status === 'IN_PROGRESS' ? 'bg-amber-100 text-amber-800' :
+                              'bg-gray-100 text-gray-800'
+                          }`}>
                           {wo.status}
                         </span>
                       </div>
-                      
+
                       <div className="flex justify-between items-center mt-3 pt-3 border-t border-border/50">
                         <span className="text-muted-foreground text-xs">{wo.tasks.length} task{wo.tasks.length !== 1 && 's'}</span>
-                        <span className="font-semibold text-primary">{t("Total" as any)}: {wo.totalCost.toLocaleString(undefined, {minimumFractionDigits: 2})} JOD</span>
+                        <span className="font-semibold text-primary">{t("Total" as any)}: {wo.totalCost.toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</span>
                       </div>
                     </div>
                   ))}
@@ -463,22 +460,22 @@ export function VehicleDetailsDialog({
             <TabsContent value="valuations" className="m-0 focus-visible:outline-none p-4">
               <VehicleValuationsTab vehicleId={vehicle._id} />
             </TabsContent>
-          </ScrollArea>
+          </div>
         </Tabs>
       </DialogContent>
       {vehicle && (
         <>
-          <TestDriveDialog 
-            open={testDriveOpen} 
-            onOpenChange={setTestDriveOpen} 
-            vehicleId={vehicle._id} 
-            testDrive={selectedTestDrive} 
+          <TestDriveDialog
+            open={testDriveOpen}
+            onOpenChange={setTestDriveOpen}
+            vehicleId={vehicle._id}
+            testDrive={selectedTestDrive}
           />
-          <WorkOrderDialog 
-            open={workOrderOpen} 
-            onOpenChange={setWorkOrderOpen} 
-            vehicleId={vehicle._id} 
-            workOrder={selectedWorkOrder} 
+          <WorkOrderDialog
+            open={workOrderOpen}
+            onOpenChange={setWorkOrderOpen}
+            vehicleId={vehicle._id}
+            workOrder={selectedWorkOrder}
           />
         </>
       )}

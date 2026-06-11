@@ -1,0 +1,1 @@
+{"nodes": [{"id": "vehicle_schema_vehicleschema", "label": "vehicleSchema", "file_type": "code", "source_file": "components/vehicles/vehicle.schema.ts"}], "edges": [{"source": "vehicle_schema_vehicleschema", "target": "api_api", "relation": "references", "confidence": "INFERRED", "confidence_score": 0.8, "source_file": "components/vehicles/vehicle.schema.ts"}], "hyperedges": []}

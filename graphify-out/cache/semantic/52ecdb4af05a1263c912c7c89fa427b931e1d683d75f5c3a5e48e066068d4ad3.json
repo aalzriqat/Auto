@@ -1,0 +1,1 @@
+{"nodes": [{"id": "eslint_config_mjs", "label": "eslint.config.mjs", "file_type": "code", "source_file": "eslint.config.mjs"}], "edges": [{"source": "eslint_config_mjs", "target": "package_json", "relation": "references", "confidence": "INFERRED", "confidence_score": 0.9, "source_file": "eslint.config.mjs"}], "hyperedges": []}

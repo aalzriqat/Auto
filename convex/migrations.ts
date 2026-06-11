@@ -6,7 +6,7 @@ export const backfillPermissions = internalMutation({
   handler: async (ctx) => {
     // Get all roles
     const roles = await ctx.db.query("roles").collect();
-    
+
     for (const role of roles) {
       if (role.name === "OWNER") {
         // Owner gets all permissions
@@ -18,7 +18,7 @@ export const backfillPermissions = internalMutation({
         const permissions = new Set(role.permissions);
         permissions.add("view:settings");
         permissions.add("manage:settings");
-        
+
         await ctx.db.patch(role._id, {
           permissions: Array.from(permissions),
         });
@@ -27,7 +27,7 @@ export const backfillPermissions = internalMutation({
         // but we'll fix listCompanies to use a less restrictive permission instead.
       }
     }
-    
+
     return "Permissions backfilled successfully";
   },
 });

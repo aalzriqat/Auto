@@ -1,0 +1,1 @@
+{"nodes": [{"id": "guarantors_add", "label": "Add Guarantor", "file_type": "code", "source_file": "convex/guarantors.ts"}], "edges": [{"source": "guarantors_add", "target": "customers_list", "relation": "references", "confidence": "INFERRED", "confidence_score": 0.8, "source_file": "convex/guarantors.ts"}], "hyperedges": []}

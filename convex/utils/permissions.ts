@@ -161,6 +161,7 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.VIEW_TASKS,
       PERMISSIONS.CREATE_TASKS,
       PERMISSIONS.EDIT_TASKS,
+      PERMISSIONS.VIEW_SETTINGS,
     ],
   },
   {

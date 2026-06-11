@@ -1,0 +1,1 @@
+{"nodes": [{"id": "skills_lock_json", "label": "skills-lock.json", "file_type": "code", "source_file": "skills-lock.json"}], "edges": [{"source": "skills_lock_json", "target": "convex_skill_md", "relation": "references", "confidence": "INFERRED", "confidence_score": 0.7, "source_file": "skills-lock.json"}], "hyperedges": []}

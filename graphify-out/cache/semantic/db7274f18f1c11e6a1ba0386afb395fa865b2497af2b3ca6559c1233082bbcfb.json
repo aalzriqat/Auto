@@ -1,0 +1,1 @@
+{"nodes": [{"id": "agents_md", "label": "AGENTS.md", "file_type": "document", "source_file": "AGENTS.md"}], "edges": [{"source": "agents_md", "target": "claude_md", "relation": "semantically_similar_to", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "AGENTS.md"}], "hyperedges": []}

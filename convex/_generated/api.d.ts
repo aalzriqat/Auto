@@ -9,6 +9,7 @@
  */
 
 import type * as applications from "../applications.js";
+import type * as approvals from "../approvals.js";
 import type * as branches from "../branches.js";
 import type * as claims from "../claims.js";
 import type * as constants from "../constants.js";
@@ -35,6 +36,7 @@ import type * as rateLimit from "../rateLimit.js";
 import type * as reports from "../reports.js";
 import type * as roles from "../roles.js";
 import type * as sales from "../sales.js";
+import type * as seedDocuments from "../seedDocuments.js";
 import type * as tasks from "../tasks.js";
 import type * as test_drives from "../test_drives.js";
 import type * as transactions from "../transactions.js";
@@ -55,6 +57,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   applications: typeof applications;
+  approvals: typeof approvals;
   branches: typeof branches;
   claims: typeof claims;
   constants: typeof constants;
@@ -81,6 +84,7 @@ declare const fullApi: ApiFromModules<{
   reports: typeof reports;
   roles: typeof roles;
   sales: typeof sales;
+  seedDocuments: typeof seedDocuments;
   tasks: typeof tasks;
   test_drives: typeof test_drives;
   transactions: typeof transactions;

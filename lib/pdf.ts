@@ -53,7 +53,7 @@ export const generateBillOfSale = (
 
   doc.setFontSize(10);
   doc.text(`Date: ${dateStr}`, 15, 30);
-  
+
   // Dealership Info
   doc.setFontSize(12);
   doc.text("Seller Information", 15, 45);
@@ -69,13 +69,13 @@ export const generateBillOfSale = (
   // Vehicle Details
   doc.setFontSize(14);
   doc.text("Vehicle Description", 15, 80);
-  
+
   autoTable(doc, {
     startY: 85,
     head: [['Vehicle', 'VIN']],
     body: [
       [
-        safeVehicleSummary, 
+        safeVehicleSummary,
         safeVehicleVin
       ],
     ],
@@ -91,8 +91,8 @@ export const generateBillOfSale = (
   autoTable(doc, {
     startY: currentY + 5,
     body: [
-      ['Vehicle Price:', `$${salePrice.toLocaleString(undefined, {minimumFractionDigits: 2})}`],
-      ['Total Amount Paid:', `$${salePrice.toLocaleString(undefined, {minimumFractionDigits: 2})}`],
+      ['Vehicle Price:', `$${salePrice.toLocaleString(undefined, { minimumFractionDigits: 2 })}`],
+      ['Total Amount Paid:', `$${salePrice.toLocaleString(undefined, { minimumFractionDigits: 2 })}`],
     ],
     theme: 'plain',
     columnStyles: {
@@ -138,7 +138,7 @@ export const generateQuote = (
 
   doc.setFontSize(10);
   doc.text(`Date Valid: ${dateStr}`, 15, 30);
-  
+
   // Dealership Info
   doc.setFontSize(12);
   doc.text("Dealership Information", 15, 45);
@@ -154,13 +154,13 @@ export const generateQuote = (
   // Vehicle Details
   doc.setFontSize(14);
   doc.text("Vehicle Description", 15, 80);
-  
+
   autoTable(doc, {
     startY: 85,
     head: [['Vehicle', 'VIN']],
     body: [
       [
-        safeVehicleSummary, 
+        safeVehicleSummary,
         safeVehicleVin || 'TBD'
       ],
     ],
@@ -176,7 +176,7 @@ export const generateQuote = (
   autoTable(doc, {
     startY: currentY + 5,
     body: [
-      ['Estimated Total:', `$${(estimatedPrice || 0).toLocaleString(undefined, {minimumFractionDigits: 2})}`],
+      ['Estimated Total:', `$${(estimatedPrice || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })}`],
     ],
     theme: 'plain',
     columnStyles: {
@@ -203,7 +203,8 @@ export const generateFinanceQuote = (
   profitRate: number,
   financedAmount: number,
   totalProfit: number,
-  monthlyInstallment: number
+  monthlyInstallment: number,
+  vehicleVin: string
 ) => {
   const doc = new jsPDF();
   const dateStr = new Date().toLocaleDateString();
@@ -212,17 +213,16 @@ export const generateFinanceQuote = (
   const safeCustomerName = sanitizePdfInput(customerName);
   const safeVehicleSummary = sanitizePdfInput(vehicleSummary);
   const safeFinanceCompanyName = sanitizePdfInput(financeCompanyName);
+  const safeVehicleVin = sanitizePdfInput(vehicleVin);
 
   // Header
   doc.setFontSize(22);
-  doc.text("FINANCING QUOTE (عرض سعر تمويل)", 105, 20, { align: "center" });
+  doc.text("FINANCING QUOTE", 105, 20, { align: "center" });
 
   doc.setFontSize(10);
-  doc.text(`Date Valid: ${dateStr}`, 15, 30);
-  
+  doc.text(`Date: ${dateStr}`, 15, 30);
+
   // Dealership Info
-  doc.setFontSize(12);
-  doc.text("Dealership Information", 15, 45);
   doc.setFontSize(10);
   doc.text(`Company: ${safeCompanyName}`, 15, 52);
 
@@ -235,43 +235,43 @@ export const generateFinanceQuote = (
   // Vehicle & Financing Company
   doc.setFontSize(14);
   doc.text("Vehicle & Financing Details", 15, 75);
-  
+
   autoTable(doc, {
     startY: 80,
-    head: [['Vehicle Description', 'Financing Company']],
+    head: [['Vehicle Description', 'Price', 'VIN']],
     body: [
-      [safeVehicleSummary, safeFinanceCompanyName],
+      [safeVehicleSummary, `${vehiclePrice.toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD`, safeVehicleVin || 'TBD'],
     ],
     theme: 'grid',
     headStyles: { fillColor: [52, 73, 94] }
   });
 
-  // Pricing & Calculations
   const currentY = (doc as any).lastAutoTable.finalY + 15;
   doc.setFontSize(14);
-  doc.text("Calculation Breakdown", 15, currentY);
+  doc.text("Financing Breakdown", 15, currentY);
 
   autoTable(doc, {
     startY: currentY + 5,
     body: [
-      ['Vehicle Price:', `${vehiclePrice.toLocaleString(undefined, {minimumFractionDigits: 2})} JOD`],
-      ['Down Payment:', `${downPayment.toLocaleString(undefined, {minimumFractionDigits: 2})} JOD`],
-      ['Term Length:', `${termMonths} Months`],
+      ['Financing Company:', safeFinanceCompanyName],
+      ['Down Payment:', `${downPayment.toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD`],
+      ['Term (Months):', `${termMonths}`],
       ['Annual Profit Rate:', `${profitRate}%`],
-      ['Total Financed Amount:', `${financedAmount.toLocaleString(undefined, {minimumFractionDigits: 2})} JOD`],
-      ['Total Profit:', `${totalProfit.toLocaleString(undefined, {minimumFractionDigits: 2})} JOD`],
-      ['Monthly Installment:', `${monthlyInstallment.toLocaleString(undefined, {minimumFractionDigits: 2})} JOD`],
+      ['Total Financed Amount:', `${financedAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD`],
+      ['Total Profit:', `${totalProfit.toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD`],
+      ['Monthly Installment:', `${monthlyInstallment.toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD`],
     ],
-    theme: 'striped',
+    theme: 'plain',
     columnStyles: {
       0: { fontStyle: 'bold', cellWidth: 100 },
       1: { halign: 'right' }
     }
   });
 
+
   doc.setFontSize(9);
   doc.setTextColor(100);
-  doc.text("This quote is valid for 7 days. Calculations are estimates and subject to final approval by the financing company.", 15, (doc as any).lastAutoTable.finalY + 15);
+  doc.text("This quote is valid for 7 days.", 15, (doc as any).lastAutoTable.finalY + 15);
 
   doc.save(`Finance_Quote_${safeCustomerName.replace(/\s+/g, '_')}.pdf`);
 };

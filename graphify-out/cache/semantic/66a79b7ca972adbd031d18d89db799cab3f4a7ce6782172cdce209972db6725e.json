@@ -1,0 +1,1 @@
+{"nodes": [{"id": "dashboard_page", "label": "DashboardPage", "file_type": "code", "source_file": "app/(dashboard)/dashboard/page.tsx"}], "edges": [{"source": "dashboard_page", "target": "api_dashboard", "relation": "calls", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "app/(dashboard)/dashboard/page.tsx"}], "hyperedges": []}

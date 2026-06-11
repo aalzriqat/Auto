@@ -69,6 +69,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
       fuelType: "Gasoline",
       transmission: "Automatic",
       purchasePrice: 0,
+      minimumProfit: 0,
       sellingPrice: 0,
       status: "AVAILABLE",
       notes: "",
@@ -89,6 +90,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
         fuelType: vehicle.fuelType,
         transmission: vehicle.transmission,
         purchasePrice: vehicle.purchasePrice || 0,
+        minimumProfit: vehicle.minimumProfit || 0,
         sellingPrice: vehicle.sellingPrice,
         status: vehicle.status,
         notes: vehicle.notes || "",
@@ -108,6 +110,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
         fuelType: "Gasoline",
         transmission: "Automatic",
         purchasePrice: 0,
+        minimumProfit: 0,
         sellingPrice: 0,
         status: "AVAILABLE",
         notes: "",
@@ -481,6 +484,19 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>{t("PurchasePrice" as any) || "Purchase Price"} (JOD)</FormLabel>
+                    <FormControl>
+                      <Input type="number" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="minimumProfit"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("MinimumProfit" as any) || "Minimum Profit Requirement"} (JOD)</FormLabel>
                     <FormControl>
                       <Input type="number" {...field} />
                     </FormControl>

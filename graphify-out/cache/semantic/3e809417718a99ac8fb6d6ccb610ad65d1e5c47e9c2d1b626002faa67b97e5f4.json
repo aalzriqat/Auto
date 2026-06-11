@@ -1,0 +1,1 @@
+{"nodes": [{"id": "vehicles_page_vehiclespage", "label": "VehiclesPage", "file_type": "code", "source_file": "app/(dashboard)/vehicles/page.tsx"}], "edges": [{"source": "vehicles_page_vehiclespage", "target": "roleguard_roleguard", "relation": "calls", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "app/(dashboard)/vehicles/page.tsx"}], "hyperedges": []}

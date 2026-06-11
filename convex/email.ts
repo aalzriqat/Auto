@@ -90,14 +90,21 @@ export const sendTeamInvite = internalAction({
     }
     const resendApiKey = process.env.RESEND_API_KEY;
 
-    // Use localhost for now, but remind user to update for prod
-    const inviteUrl = "http://localhost:3000/sign-up";
+    // Build the invite URL from the environment — never hardcode localhost.
+    const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+    if (!appUrl) {
+      throw new Error(
+        "NEXT_PUBLIC_APP_URL environment variable is not set. " +
+        "Cannot send team invite with a valid link."
+      );
+    }
+    const inviteUrl = `${appUrl}/sign-up`;
 
     const emailHtml = `
       <h1>You've been invited to join ${args.orgName}</h1>
       <p>Your team at ${args.orgName} has invited you to join them on Bloom Cars CRM.</p>
       <p>Click the link below to sign up and join your team automatically:</p>
-      <p><a href="${inviteUrl}">Accept Invitation & Sign Up</a></p>
+      <p><a href="${inviteUrl}">Accept Invitation &amp; Sign Up</a></p>
       <br />
       <p>If the link doesn't work, copy and paste this into your browser: ${inviteUrl}</p>
     `;

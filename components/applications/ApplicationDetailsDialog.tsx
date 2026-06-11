@@ -13,6 +13,8 @@ import { format } from "date-fns";
 import { toast } from "sonner";
 import { Separator } from "@/components/ui/separator";
 import { Upload, CheckCircle, XCircle, Clock } from "lucide-react";
+import { usePermissions } from "@/hooks/use-permissions";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 
 export function ApplicationDetailsDialog({
   applicationId,
@@ -25,6 +27,8 @@ export function ApplicationDetailsDialog({
 }) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  const { hasPermission } = usePermissions();
+  const isManager = hasPermission(PERMISSIONS.MANAGE_SETTINGS);
 
   const app = useQuery(api.applications.get, activeOrgId ? { orgId: activeOrgId, applicationId } : "skip");
   const documents = useQuery(api.documents.getForApplication, activeOrgId ? { orgId: activeOrgId, applicationId } : "skip");
@@ -83,7 +87,13 @@ export function ApplicationDetailsDialog({
   };
 
   if (!app) return null;
-
+  const appStatusLabel =
+    app.status === "PENDING_DOCS" ? t("PendingDocs" as any) :
+      app.status === "UNDER_REVIEW" ? t("UnderReview" as any) :
+        app.status === "APPROVED" ? t("Approved" as any) :
+          app.status === "REJECTED" ? t("Rejected" as any) :
+            app.status === "CLOSED" ? t("Closed" as any) :
+              app.status;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
@@ -95,8 +105,9 @@ export function ApplicationDetailsDialog({
                 {t("SubmittedOn" as any)} {format(app.createdAt, "PP")}
               </p>
             </div>
-            <Badge className="text-sm px-3 py-1">{app.status}</Badge>
-          </div>
+            <Badge className="text-sm px-3 py-1">
+              {appStatusLabel}
+            </Badge>          </div>
         </DialogHeader>
 
         <div className="grid grid-cols-2 gap-6 my-4">
@@ -124,10 +135,19 @@ export function ApplicationDetailsDialog({
             <div>
               <h4 className="font-semibold text-sm mb-2">{t("FinancingDetails" as any)}</h4>
               <div className="bg-muted/50 p-3 rounded-lg text-sm">
-                <p><strong>{t("Company" as any)}:</strong> {app.company?.name || (t("Direct" as any) || "Direct")}</p>
-                <p><strong>{t("DownPayment" as any)}:</strong> {app.quote?.downPayment?.toLocaleString()} {t("JOD" as any)}</p>
-                <p><strong>{t("TermMonths" as any)}:</strong> {app.quote?.termMonths} {t("Months" as any)}</p>
-                <p><strong>{t("MonthlyInstallment" as any)}:</strong> <span className="font-semibold text-primary">{app.quote?.monthlyInstallment?.toLocaleString(undefined, { minimumFractionDigits: 2 })} {t("JOD" as any)}</span></p>
+                {app.company ? (
+                  <>
+                    <p><strong>{t("Company" as any)}:</strong> {app.company.name}</p>
+                    <p><strong>{t("DownPayment" as any)}:</strong> {app.quote?.downPayment?.toLocaleString()} {t("JOD" as any)}</p>
+                    <p><strong>{t("TermMonths" as any)}:</strong> {app.quote?.termMonths} {t("Months" as any)}</p>
+                    <p><strong>{t("MonthlyInstallment" as any)}:</strong> <span className="font-semibold text-primary">{app.quote?.monthlyInstallment?.toLocaleString(undefined, { minimumFractionDigits: 2 })} {t("JOD" as any)}</span></p>
+                  </>
+                ) : (
+                  <>
+                    <p><strong>{t("FinancingType" as any) || "Type"}:</strong> {t("CashDeal" as any) || "Cash Deal"}</p>
+                    <p><strong>{t("TotalAmount" as any) || "Total Amount"}:</strong> <span className="font-semibold text-primary">{app.quote?.vehiclePrice?.toLocaleString(undefined, { minimumFractionDigits: 2 })} {t("JOD" as any)}</span></p>
+                  </>
+                )}
               </div>
             </div>
 
@@ -141,13 +161,26 @@ export function ApplicationDetailsDialog({
                 >
                   {t("MarkUnderReview" as any)}
                 </Button>
-                <Button
-                  onClick={handleApproveApp}
-                  className="bg-green-600 hover:bg-green-700 text-white"
-                  disabled={app.status === "APPROVED" || app.status === "CLOSED"}
-                >
-                  {t("ApproveApplication" as any)}
-                </Button>
+
+                {isManager && (
+                  <>
+                    <Button
+                      onClick={handleApproveApp}
+                      className="bg-green-600 hover:bg-green-700 text-white"
+                      disabled={app.status === "APPROVED" || app.status === "CLOSED"}
+                    >
+                      {t("ApproveApplication" as any)}
+                    </Button>
+                    <Button
+                      onClick={() => updateStatus({ orgId: activeOrgId!, applicationId, status: "REJECTED" })}
+                      variant="destructive"
+                      disabled={app.status === "REJECTED" || app.status === "CLOSED"}
+                    >
+                      {t("RejectApplication" as any)}
+                    </Button>
+                  </>
+                )}
+
                 {app.status === "APPROVED" && (
                   <Button
                     onClick={handleFinalizeDeal}
@@ -156,13 +189,6 @@ export function ApplicationDetailsDialog({
                     {t("FinalizeDealClose" as any)}
                   </Button>
                 )}
-                <Button
-                  onClick={() => updateStatus({ orgId: activeOrgId!, applicationId, status: "REJECTED" })}
-                  variant="destructive"
-                  disabled={app.status === "REJECTED" || app.status === "CLOSED"}
-                >
-                  {t("RejectApplication" as any)}
-                </Button>
               </div>
             </div>
           </div>

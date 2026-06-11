@@ -20,7 +20,8 @@ export default defineSchema({
     permissions: v.array(v.string()),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
-    deletedBy: v.optional(v.string()),  }).index("by_org", ["orgId"]),
+    deletedBy: v.optional(v.string()),
+  }).index("by_org", ["orgId"]),
 
   memberships: defineTable({
     orgId: v.id("organizations"),
@@ -47,6 +48,7 @@ export default defineSchema({
     vin: v.string(),
     make: v.string(),
     model: v.string(),
+
     year: v.number(),
     trim: v.optional(v.string()),
     mileage: v.number(),
@@ -54,6 +56,7 @@ export default defineSchema({
     fuelType: v.string(),
     transmission: v.string(),
     purchasePrice: v.optional(v.number()), // Might be hidden from salespeople
+    minimumProfit: v.optional(v.number()), // Preset minimum profit required
     sellingPrice: v.number(),
     status: v.union(
       v.literal("AVAILABLE"),
@@ -242,7 +245,8 @@ export default defineSchema({
     notes: v.optional(v.string()),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
-    deletedBy: v.optional(v.string()),  })
+    deletedBy: v.optional(v.string()),
+  })
     .index("by_org", ["orgId"])
     .index("by_org_vehicle", ["orgId", "vehicleId"]),
 
@@ -262,7 +266,8 @@ export default defineSchema({
     vehicleId: v.optional(v.id("vehicles")),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
-    deletedBy: v.optional(v.string()),  })
+    deletedBy: v.optional(v.string()),
+  })
     .index("by_org", ["orgId"])
     .index("by_org_assignedTo", ["orgId", "assignedTo"])
     .index("by_org_status", ["orgId", "status"])
@@ -308,7 +313,8 @@ export default defineSchema({
     notes: v.optional(v.string()),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
-    deletedBy: v.optional(v.string()),  })
+    deletedBy: v.optional(v.string()),
+  })
     .index("by_org", ["orgId"])
     .index("by_org_vehicle", ["orgId", "vehicleId"])
     .index("by_org_customer", ["orgId", "customerId"]),
@@ -333,7 +339,8 @@ export default defineSchema({
     notes: v.optional(v.string()),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
-    deletedBy: v.optional(v.string()),  })
+    deletedBy: v.optional(v.string()),
+  })
     .index("by_org", ["orgId"])
     .index("by_org_vehicle", ["orgId", "vehicleId"]),
 
@@ -373,7 +380,8 @@ export default defineSchema({
     income: v.optional(v.number()),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
-    deletedBy: v.optional(v.string()),  })
+    deletedBy: v.optional(v.string()),
+  })
     .index("by_org", ["orgId"])
     .index("by_customer", ["customerId"]),
 
@@ -490,7 +498,8 @@ export default defineSchema({
     expenseId: v.optional(v.id("expenses")),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
-    deletedBy: v.optional(v.string()),  })
+    deletedBy: v.optional(v.string()),
+  })
     .index("by_org", ["orgId"])
     .index("by_org_date", ["orgId", "date"])
     .index("by_org_vehicle", ["orgId", "vehicleId"]),
@@ -503,7 +512,8 @@ export default defineSchema({
     notes: v.optional(v.string()),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
-    deletedBy: v.optional(v.string()),  })
+    deletedBy: v.optional(v.string()),
+  })
     .index("by_org", ["orgId"]),
 
   partnerEquity: defineTable({
@@ -515,7 +525,8 @@ export default defineSchema({
     notes: v.optional(v.string()),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
-    deletedBy: v.optional(v.string()),  })
+    deletedBy: v.optional(v.string()),
+  })
     .index("by_org", ["orgId"]),
 
   claims: defineTable({
@@ -530,8 +541,25 @@ export default defineSchema({
     notes: v.optional(v.string()),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
-    deletedBy: v.optional(v.string()),  })
+    deletedBy: v.optional(v.string()),
+  })
     .index("by_org", ["orgId"])
     .index("by_org_vehicle", ["orgId", "vehicleId"])
     .index("by_org_status", ["orgId", "status"]),
+
+  profitApprovalRequests: defineTable({
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    requestedProfit: v.number(),
+    minimumProfit: v.number(),
+    salespersonId: v.id("users"),
+    status: v.union(v.literal("PENDING"), v.literal("APPROVED"), v.literal("REJECTED")),
+    approvedBy: v.optional(v.id("users")),
+    notes: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_vehicle", ["vehicleId"])
+    .index("by_salesperson", ["salespersonId"])
+    .index("by_status", ["status"]),
 });

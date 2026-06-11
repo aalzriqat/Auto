@@ -21,6 +21,7 @@ const navigation = [
   { name: "Expenses", href: "/expenses", icon: Receipt, permission: "view:expenses" },
   { name: "Team", href: "/team", icon: Shield, permission: "manage:users" },
   { name: "Accounting", href: "/accounting", icon: BadgeDollarSign, permission: "view:finance" },
+  { name: "Approvals", href: "/approvals", icon: Shield, permission: "manage:users" },
   { name: "Reports", href: "/reports", icon: LineChart, permission: "view:reports" },
   { name: "FinanceSettings", href: "/settings/finance", icon: Settings, permission: "view:settings" },
   { name: "Branches", href: "/settings/branches", icon: Store, permission: "manage:users" },

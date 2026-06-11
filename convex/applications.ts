@@ -47,7 +47,7 @@ export const list = query({
         };
       })
     );
-    
+
     return { ...pageResult, page };
   },
 });
@@ -138,7 +138,7 @@ export const createFromQuote = mutation({
 
     const actorName = await getActorName(ctx);
     const customer = await ctx.db.get(quote.customerId);
-    
+
     await notifyManagers(
       ctx,
       args.orgId,
@@ -164,7 +164,11 @@ export const updateStatus = mutation({
     ),
   },
   handler: async (ctx, args) => {
-    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_SALES]);
+    const auth = await requireTenantAuth(ctx, args.orgId);
+    const hasView = auth.role.permissions.includes(PERMISSIONS.VIEW_SALES);
+    if (!hasView) {
+      throw new ConvexError("Forbidden: Missing required permissions.");
+    }
 
     const app = await ctx.db.get(args.applicationId);
     if (!app || app.orgId !== args.orgId) {
@@ -196,7 +200,11 @@ export const finalizeDeal = mutation({
     applicationId: v.id("financeApplications"),
   },
   handler: async (ctx, args) => {
-    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_SALES]);
+    const auth = await requireTenantAuth(ctx, args.orgId);
+    const hasView = auth.role.permissions.includes(PERMISSIONS.VIEW_SALES);
+    if (!hasView) {
+      throw new ConvexError("Forbidden: Missing required permissions.");
+    }
 
     const app = await ctx.db.get(args.applicationId);
     if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");

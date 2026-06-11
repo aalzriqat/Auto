@@ -1,0 +1,1 @@
+{"nodes": [{"id": "pdf_lib", "label": "PDF Generation Library", "file_type": "code", "source_file": "lib/pdf.ts"}], "edges": [{"source": "pdf_lib", "target": "sanitize_lib", "relation": "calls", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "lib/pdf.ts"}], "hyperedges": []}

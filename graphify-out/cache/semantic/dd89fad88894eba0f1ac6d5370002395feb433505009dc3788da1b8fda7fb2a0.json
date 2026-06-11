@@ -1,0 +1,1 @@
+{"nodes": [{"id": "team_page_teampage", "label": "TeamPage", "file_type": "code", "source_file": "app/(dashboard)/team/page.tsx"}], "edges": [{"source": "team_page_teampage", "target": "roleguard_roleguard", "relation": "calls", "confidence": "EXTRACTED", "confidence_score": 1.0, "source_file": "app/(dashboard)/team/page.tsx"}], "hyperedges": []}

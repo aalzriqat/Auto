@@ -43,7 +43,7 @@ export const list = query({
       ).filter(q => q.neq(q.field("isDeleted"), true));
     } else {
       q = ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter(q => q.neq(q.field("isDeleted"), true));
+        .filter(q => q.neq(q.field("isDeleted"), true));
     }
 
     const pageResult = await q.order("desc").paginate(args.paginationOpts);
@@ -98,7 +98,7 @@ export const listAll = query({
       ).filter(q => q.neq(q.field("isDeleted"), true));
     } else {
       q = ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter(q => q.neq(q.field("isDeleted"), true));
+        .filter(q => q.neq(q.field("isDeleted"), true));
     }
 
     const vehicles = await q.order("desc").collect();
@@ -203,6 +203,7 @@ export const create = mutation({
     fuelType: v.string(),
     transmission: v.string(),
     purchasePrice: v.optional(v.number()),
+    minimumProfit: v.optional(v.number()),
     sellingPrice: v.number(),
     status: v.optional(vehicleStatus),
     notes: v.optional(v.string()),
@@ -242,6 +243,7 @@ export const create = mutation({
       fuelType: args.fuelType,
       transmission: args.transmission,
       purchasePrice: args.purchasePrice,
+      minimumProfit: args.minimumProfit,
       sellingPrice: args.sellingPrice,
       status: args.status ?? "AVAILABLE",
       notes: args.notes,
@@ -293,6 +295,7 @@ export const update = mutation({
     fuelType: v.optional(v.string()),
     transmission: v.optional(v.string()),
     purchasePrice: v.optional(v.number()),
+    minimumProfit: v.optional(v.number()),
     sellingPrice: v.optional(v.number()),
     status: v.optional(vehicleStatus),
     notes: v.optional(v.string()),
@@ -401,7 +404,7 @@ export const softDelete = mutation({
     }
 
     // We no longer delete associated images, we just soft-delete the record
-    await ctx.db.patch(args.vehicleId, { 
+    await ctx.db.patch(args.vehicleId, {
       isDeleted: true,
       deletedAt: Date.now(),
       deletedBy: identity.subject

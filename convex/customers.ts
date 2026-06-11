@@ -351,10 +351,12 @@ export const getRelations = query({
       quotes.map(async (quote) => {
         const vehicle = await ctx.db.get(quote.vehicleId);
         const company = quote.companyId ? await ctx.db.get(quote.companyId) : null;
+        const createdByUser = await ctx.db.get(quote.createdBy as any);
         return {
           ...quote,
           vehicleDesc: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
           companyName: company ? company.name : "Cash Deal",
+          createdByUserName: createdByUser && "name" in createdByUser ? createdByUser.name : "Unknown",
         };
       })
     );

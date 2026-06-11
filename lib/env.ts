@@ -4,6 +4,9 @@ const envSchema = z.object({
   // Next.js client-side variables (must start with NEXT_PUBLIC_)
   NEXT_PUBLIC_CONVEX_URL: z.string().url(),
   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: z.string().min(1),
+  // The public base URL of this deployment (e.g. https://autoflowdealer.com/).
+  // Used in server-side email links. Must be set in all non-local environments.
+  NEXT_PUBLIC_APP_URL: z.string().url(),
   NEXT_PUBLIC_SENTRY_DSN: z.string().min(1).optional(),
   
   // Next.js server-side variables

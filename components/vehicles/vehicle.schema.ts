@@ -12,6 +12,7 @@ export const vehicleSchema = z.object({
   fuelType: z.string().min(1, "Fuel Type is required"),
   transmission: z.string().min(1, "Transmission is required"),
   purchasePrice: z.coerce.number().min(0).optional(),
+  minimumProfit: z.coerce.number().min(0).optional(),
   sellingPrice: z.coerce.number().min(0),
   status: z.enum(["AVAILABLE", "RESERVED", "SOLD", "IN_INSPECTION", "IN_REPAIR", "ARCHIVED"]).optional(),
   notes: z.string().optional(),
