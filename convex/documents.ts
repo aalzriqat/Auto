@@ -12,7 +12,13 @@ export const listRules = query({
     companyId: v.optional(v.id("financeCompanies")), // If not provided, returns global rules + company rules? Let's just return all for the org.
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SETTINGS]);
+    const { role } = await requireTenantAuth(ctx, args.orgId);
+    if (
+      !role.permissions.includes(PERMISSIONS.VIEW_SETTINGS) &&
+      !role.permissions.includes(PERMISSIONS.VIEW_SALES)
+    ) {
+      throw new ConvexError("Forbidden: Missing required permissions: view:settings or view:sales");
+    }
 
     return await ctx.db
       .query("companyDocumentRules")
