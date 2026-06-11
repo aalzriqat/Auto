@@ -2,224 +2,159 @@
 
 import { useState } from "react";
 import { RoleGuard } from "@/components/auth/RoleGuard";
-import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
+import { usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { SaleDialog } from "@/components/sales/SaleDialog";
-import { QuoteDialog } from "@/components/sales/QuoteDialog";
-import { Doc } from "@/convex/_generated/dataModel";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { Plus, Search, Pencil, Trash2, FileText } from "lucide-react";
-import { Badge } from "@/components/ui/badge";
+import { SalesWizard, PaymentType } from "@/components/sales/SalesWizard";
+import { Banknote, CreditCard, TrendingUp, ArrowRight } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { toast } from "sonner";
-import { generateBillOfSale } from "@/lib/pdf";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-} from "@/components/ui/dialog";
 
-export default function SalesPage() {
-  const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
-  const { results: sales, status: salesStatus, loadMore: loadMoreSales } = usePaginatedQuery(
-    api.sales.list,
-    activeOrgId ? { orgId: activeOrgId } : "skip",
-    { initialNumItems: 25 }
-  );
-  const removeSale = useMutation(api.sales.softDelete);
+export default function SalesHomePage() {
+    const { activeOrgId } = useOrg();
+    const { t, isRtl } = useLanguage();
+    const [activeWizard, setActiveWizard] = useState<PaymentType | null>(null);
 
-  const [searchQuery, setSearchQuery] = useState("");
-  const [isSaleDialogOpen, setIsSaleDialogOpen] = useState(false);
-  const [isQuoteDialogOpen, setIsQuoteDialogOpen] = useState(false);
-  const [editingSale, setEditingSale] = useState<any>(null);
-  const [saleToDelete, setSaleToDelete] = useState<any>(null);
+    const { results: recentSales } = usePaginatedQuery(
+        api.sales.list,
+        activeOrgId ? { orgId: activeOrgId } : "skip",
+        { initialNumItems: 5 }
+    );
 
-  const filteredSales = sales?.filter(s => {
-    const q = searchQuery.toLowerCase();
-    return s.customerName.toLowerCase().includes(q) ||
-      s.vehicleSummary.toLowerCase().includes(q) ||
-      s.salespersonName.toLowerCase().includes(q) ||
-      s.vehicleVin.toLowerCase().includes(q);
-  });
-
-  const handleEdit = (sale: any) => {
-    setEditingSale(sale);
-    setIsSaleDialogOpen(true);
-  };
-
-  const handleAddNew = () => {
-    setEditingSale(null);
-    setIsSaleDialogOpen(true);
-  };
-
-  const handleDelete = async () => {
-    if (!activeOrgId || !saleToDelete) return;
-    try {
-      await removeSale({ orgId: activeOrgId, saleId: saleToDelete._id });
-      toast.success(t("SaleRemovedSuccess" as any));
-      setSaleToDelete(null);
-    } catch (error: any) {
-      toast.error(error.message || t("SaleRemoveFail" as any));
+    // If wizard is active, render it full-width instead of the hero
+    if (activeWizard) {
+        return (
+            <RoleGuard permissions={["view:sales"]}>
+                <SalesWizard
+                    paymentType={activeWizard}
+                    onClose={() => setActiveWizard(null)}
+                />
+            </RoleGuard>
+        );
     }
-  };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "COMPLETED": return <Badge variant="default" className="bg-green-600 hover:bg-green-700">{t("CompletedStatus" as any)}</Badge>;
-      case "PENDING": return <Badge variant="secondary" className="bg-yellow-500/20 text-yellow-600 hover:bg-yellow-500/30">{t("PendingStatus" as any)}</Badge>;
-      case "CANCELLED": return <Badge variant="destructive">{t("CancelledStatus" as any)}</Badge>;
-      default: return <Badge variant="outline">{status}</Badge>;
-    }
-  };
+    return (
+        <RoleGuard permissions={["view:sales"]}>
+            <div className="space-y-10 pb-10">
 
-  return (
-    <RoleGuard permissions={["view:sales"]}>
-      <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => setIsQuoteDialogOpen(true)}>
-            {t("CreateQuote" as any)}
-          </Button>
-          <Button onClick={handleAddNew}>
-            <Plus className="me-2 h-4 w-4" /> {t("LogSale" as any)}
-          </Button>
-        </div>
-      </div>
+                {/* ─── Hero Section ─────────────────────────────────────────── */}
+                <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 border border-white/10 p-8 md:p-12">
+                    {/* Decorative blobs */}
+                    <div className="pointer-events-none absolute -top-20 -right-20 w-80 h-80 rounded-full bg-teal-500/10 blur-3xl" />
+                    <div className="pointer-events-none absolute -bottom-20 -left-20 w-80 h-80 rounded-full bg-indigo-500/10 blur-3xl" />
 
-      <div className="flex items-center w-full max-w-sm space-x-2">
-        <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
-        <Input
-          placeholder={t("SearchSales" as any)}
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="ps-9"
-        />
-      </div>
+                    <div className="relative z-10 flex flex-col items-center text-center">
+                        <div className="flex items-center justify-center gap-2 mb-2">
+                            <TrendingUp className="w-5 h-5 text-teal-400" />
+                            <span className="text-sm font-medium text-teal-400 uppercase tracking-wider">
+                                {t("SalesPortal" as any)}
+                            </span>
+                        </div>
+                        <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">
+                            {t("StartNewSale" as any)}
+                        </h1>
+                        <p className="text-slate-400 text-base mb-10 max-w-lg mx-auto">
+                            {t("ChoosePaymentType" as any)}
+                        </p>
 
-      <div className="rounded-md border">
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>{t("Date" as any)}</TableHead>
-              <TableHead>{t("Customer" as any)}</TableHead>
-              <TableHead>{t("Vehicle" as any)}</TableHead>
-              <TableHead>{t("Salesperson" as any)}</TableHead>
-              <TableHead className="text-end">{t("Price" as any)}</TableHead>
-              <TableHead>{t("Status" as any)}</TableHead>
-              <TableHead className="text-end">{t("Actions" as any)}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {filteredSales === undefined ? (
-              <TableRow>
-                <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-                  {t("LoadingSales" as any)}
-                </TableCell>
-              </TableRow>
-            ) : filteredSales.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
-                  {t("NoSalesFound" as any)}
-                </TableCell>
-              </TableRow>
-            ) : (
-              filteredSales.map((sale) => (
-                <TableRow key={sale._id}>
-                  <TableCell className="font-medium">
-                    {new Date(sale.saleDate).toLocaleDateString()}
-                  </TableCell>
-                  <TableCell>{sale.customerName}</TableCell>
-                  <TableCell>
-                    <div className="flex flex-col">
-                      <span>{sale.vehicleSummary}</span>
-                      <span className="text-xs text-muted-foreground">{sale.vehicleVin}</span>
+                        {/* Launch Buttons */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl w-full">
+                            {/* Cash */}
+                            <button
+                                id="btn-new-cash-sale"
+                                onClick={() => setActiveWizard("CASH")}
+                                className={cn(
+                                    "group relative flex flex-col items-start gap-4 rounded-xl border border-teal-500/30 bg-teal-500/10",
+                                    "hover:bg-teal-500/20 hover:border-teal-500/60 hover:shadow-lg hover:shadow-teal-500/10",
+                                    "transition-all duration-300 p-6 text-start cursor-pointer"
+                                )}
+                            >
+                                <div className="flex items-center justify-between w-full">
+                                    <div className="w-12 h-12 rounded-xl bg-teal-500/20 border border-teal-500/30 flex items-center justify-center group-hover:scale-110 transition-transform duration-300">
+                                        <Banknote className="w-6 h-6 text-teal-400" />
+                                    </div>
+                                    <ArrowRight className="w-5 h-5 text-teal-500/50 group-hover:text-teal-400 group-hover:translate-x-1 transition-all duration-300" />
+                                </div>
+                                <div>
+                                    <p className="text-white font-bold text-xl">{t("CashSale" as any)}</p>
+                                    <p className="text-slate-400 text-sm mt-1">
+                                        {t("FullPaymentUpfront" as any)}
+                                    </p>
+                                </div>
+                                <div className="text-xs font-medium text-teal-400 bg-teal-500/10 border border-teal-500/20 rounded-full px-3 py-1">
+                                    {t("ThreeStepWizard" as any)}
+                                </div>
+                            </button>
+
+                            {/* Installment */}
+                            <button
+                                id="btn-new-installment-sale"
+                                onClick={() => setActiveWizard("INSTALLMENT")}
+                                className={cn(
+                                    "group relative flex flex-col items-start gap-4 rounded-xl border border-indigo-500/30 bg-indigo-500/10",
+                                    "hover:bg-indigo-500/20 hover:border-indigo-500/60 hover:shadow-lg hover:shadow-indigo-500/10",
+                                    "transition-all duration-300 p-6 text-start cursor-pointer"
+                                )}
+                            >
+                                <div className="flex items-center justify-between w-full">
+                                    <div className="w-12 h-12 rounded-xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center group-hover:scale-110 transition-transform duration-300">
+                                        <CreditCard className="w-6 h-6 text-indigo-400" />
+                                    </div>
+                                    <ArrowRight className="w-5 h-5 text-indigo-500/50 group-hover:text-indigo-400 group-hover:translate-x-1 transition-all duration-300" />
+                                </div>
+                                <div>
+                                    <p className="text-white font-bold text-xl">{t("Installment" as any)}</p>
+                                    <p className="text-slate-400 text-sm mt-1">
+                                        {t("FinanceThroughBank" as any)}
+                                    </p>
+                                </div>
+                                <div className="text-xs font-medium text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 rounded-full px-3 py-1">
+                                    {t("ThreeStepWizard" as any)}
+                                </div>
+                            </button>
+                        </div>
                     </div>
-                  </TableCell>
-                  <TableCell>{sale.salespersonName}</TableCell>
-                  <TableCell className="text-end font-medium">
-                    {sale.salePrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} JOD
-                  </TableCell>
-                  <TableCell>{getStatusBadge(sale.status)}</TableCell>
-                  <TableCell className="text-end">
-                    <Button variant="ghost" size="icon" onClick={() => {
-                      try {
-                        generateBillOfSale(
-                          "Bloom Cars Dealership",
-                          sale.customerName,
-                          sale.vehicleSummary,
-                          sale.vehicleVin,
-                          sale.salePrice,
-                          sale.saleDate
-                        );
-                        toast.success(t("BillOfSaleGenerated" as any));
-                      } catch (err) {
-                        toast.error(t("FailedGeneratePDF" as any));
-                      }
-                    }}>
-                      <FileText className="h-4 w-4 text-blue-500" />
-                    </Button>
-                    <Button variant="ghost" size="icon" onClick={() => handleEdit(sale)}>
-                      <Pencil className="h-4 w-4 text-muted-foreground" />
-                    </Button>
-                    <Button variant="ghost" size="icon" onClick={() => setSaleToDelete(sale)}>
-                      <Trash2 className="h-4 w-4 text-red-500" />
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))
-            )}
-          </TableBody>
-        </Table>
-        {salesStatus === "CanLoadMore" && (
-          <div className="flex justify-center p-4">
-            <Button variant="outline" onClick={() => loadMoreSales(25)}>
-              {t("LoadMore" as any) || "Load More"}
-            </Button>
-          </div>
-        )}
-      </div>
+                </div>
 
-      <SaleDialog
-        open={isSaleDialogOpen}
-        onOpenChange={setIsSaleDialogOpen}
-        sale={editingSale}
-      />
-
-      <QuoteDialog
-        open={isQuoteDialogOpen}
-        onOpenChange={setIsQuoteDialogOpen}
-      />
-
-      <Dialog open={!!saleToDelete} onOpenChange={(open) => !open && setSaleToDelete(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t("DeleteSaleRecord" as any)}</DialogTitle>
-            <DialogDescription>
-              {t("DeleteSaleConfirm" as any)} <br />
-              <span className="font-semibold text-foreground">{saleToDelete?.vehicleSummary}</span>
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setSaleToDelete(null)}>{t("Cancel" as any)}</Button>
-            <Button variant="destructive" onClick={handleDelete}>{t("DeletePermanently" as any)}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
-    </RoleGuard>
-  );
+                {/* ─── Recent Sales ──────────────────────────────────────────── */}
+                {recentSales && recentSales.length > 0 && (
+                    <div>
+                        <h2 className="text-lg font-semibold mb-4 text-muted-foreground uppercase tracking-wider text-sm">
+                            {t("RecentSalesTitle" as any)}
+                        </h2>
+                        <div className="space-y-2">
+                            {recentSales.map((sale) => (
+                                <div
+                                    key={sale._id}
+                                    className="flex items-center justify-between rounded-lg border border-border bg-card px-4 py-3 hover:bg-muted/30 transition-colors"
+                                >
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center text-xs font-semibold text-muted-foreground">
+                                            {sale.customerName.charAt(0)}
+                                        </div>
+                                        <div>
+                                            <p className="text-sm font-medium">{sale.customerName}</p>
+                                            <p className="text-xs text-muted-foreground">{sale.vehicleSummary}</p>
+                                        </div>
+                                    </div>
+                                    <div className="text-end">
+                                        <p className="text-sm font-semibold">
+                                            {sale.salePrice.toLocaleString(undefined, {
+                                                minimumFractionDigits: 2,
+                                                maximumFractionDigits: 2,
+                                            })}{" "}
+                                            {t("JOD" as any)}
+                                        </p>
+                                        <p className="text-xs text-muted-foreground">
+                                            {new Date(sale.saleDate).toLocaleDateString()}
+                                        </p>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </div>
+        </RoleGuard>
+    );
 }

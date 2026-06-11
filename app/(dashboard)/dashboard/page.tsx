@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -40,11 +40,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { RoleGuard } from "@/components/auth/RoleGuard";
+import { useRouter } from "next/navigation";
 
 
 export default function DashboardPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  const router = useRouter();
   const [timeRange, setTimeRange] = useState<"DAY" | "MONTH" | "YEAR" | "ALL_TIME">("MONTH");
   const [currentPage, setCurrentPage] = useState(1);
   const [filterStatus, setFilterStatus] = useState<string>("ALL");
@@ -65,6 +67,15 @@ export default function DashboardPage() {
     api.memberships.getMyMembership,
     activeOrgId ? { orgId: activeOrgId } : "skip"
   );
+
+  useEffect(() => {
+    if (myMembership) {
+      const role = myMembership.roleName?.toUpperCase();
+      if (role === "SALES" || role === "SALESPERSON") {
+        window.location.href = "/sales";
+      }
+    }
+  }, [myMembership]);
 
   if (stats === undefined || leads === undefined || myMembership === undefined) {
     return (
