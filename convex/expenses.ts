@@ -6,6 +6,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { validateInput } from "./utils/validation";
 import { CreateExpenseSchema, UpdateExpenseSchema } from "./validations/expenses";
+import { rateLimiter } from "./rateLimit";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 

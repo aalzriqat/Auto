@@ -1,8 +1,8 @@
 import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
+import { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
-import { rateLimiter } from "./rateLimit";
 
 export const getSalesAndProfitReport = query({
   args: {
@@ -12,11 +12,6 @@ export const getSalesAndProfitReport = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
-
-    const statusLimit = await rateLimiter.limit(ctx, "heavyRead", { key: args.orgId });
-    if (!statusLimit.ok) {
-      throw new ConvexError(`Rate limit exceeded for reports. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
-    }
 
     const allSales = await ctx.db
       .query("sales")
@@ -93,11 +88,6 @@ export const getInventoryReport = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
 
-    const statusLimit = await rateLimiter.limit(ctx, "heavyRead", { key: args.orgId });
-    if (!statusLimit.ok) {
-      throw new ConvexError(`Rate limit exceeded for reports. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
-    }
-
     const vehicles = await ctx.db
       .query("vehicles")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
@@ -154,11 +144,6 @@ export const getExpensesReport = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
 
-    const statusLimit = await rateLimiter.limit(ctx, "heavyRead", { key: args.orgId });
-    if (!statusLimit.ok) {
-      throw new ConvexError(`Rate limit exceeded for reports. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
-    }
-
     const allExpenses = await ctx.db
       .query("expenses")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
@@ -170,7 +155,7 @@ export const getExpensesReport = query({
 
     let totalExpenses = 0;
 
-    const vehicleIds = Array.from(new Set(expensesInDateRange.map(e => e.vehicleId).filter(Boolean))) as any[];
+    const vehicleIds = Array.from(new Set(expensesInDateRange.map(e => e.vehicleId).filter(Boolean))) as Id<"vehicles">[];
     const vehicles = await Promise.all(vehicleIds.map(id => ctx.db.get(id)));
     const vehicleMap = new Map(vehicles.filter((v): v is NonNullable<typeof v> => v !== null).map(v => [v._id, v]));
 
@@ -210,11 +195,6 @@ export const getSalespersonPerformance = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
 
-    const statusLimit = await rateLimiter.limit(ctx, "heavyRead", { key: args.orgId });
-    if (!statusLimit.ok) {
-      throw new ConvexError(`Rate limit exceeded for reports. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
-    }
-
     const allSales = await ctx.db
       .query("sales")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
@@ -252,7 +232,7 @@ export const getSalespersonPerformance = query({
       expensesByVehicle.set(exp.vehicleId, existing);
     }
 
-    const userIds = Array.from(new Set(Object.keys(salesBySalesperson))) as any[];
+    const userIds = Array.from(new Set(Object.keys(salesBySalesperson))) as Id<"users">[];
     const users = await Promise.all(userIds.map(id => ctx.db.get(id)));
     const userMap = new Map(users.filter((u): u is NonNullable<typeof u> => u !== null).map(u => [u._id, u]));
 
@@ -300,11 +280,6 @@ export const getLeadConversionReport = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
-
-    const statusLimit = await rateLimiter.limit(ctx, "heavyRead", { key: args.orgId });
-    if (!statusLimit.ok) {
-      throw new ConvexError(`Rate limit exceeded for reports. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
-    }
 
     const allLeads = await ctx.db
       .query("leads")
@@ -354,7 +329,7 @@ export const getLeadConversionReport = query({
       }
     }
 
-    const userIds = Array.from(new Set(Object.keys(leadsBySalesperson))) as any[];
+    const userIds = Array.from(new Set(Object.keys(leadsBySalesperson))) as Id<"users">[];
     const users = await Promise.all(userIds.map(id => ctx.db.get(id)));
     const userMap = new Map(users.filter((u): u is NonNullable<typeof u> => u !== null).map(u => [u._id, u]));
 
@@ -397,11 +372,6 @@ export const getProfitAndLoss = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
-
-    const statusLimit = await rateLimiter.limit(ctx, "heavyRead", { key: args.orgId });
-    if (!statusLimit.ok) {
-      throw new ConvexError(`Rate limit exceeded for reports. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
-    }
 
     const transactions = await ctx.db
       .query("transactions")
