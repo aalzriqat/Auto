@@ -1,13 +1,12 @@
 import { AuthConfig } from "convex/server";
+import { getValidatedEnv } from "./utils/env";
 
-if (!process.env.CLERK_JWT_ISSUER_DOMAIN) {
-  throw new Error("CLERK_JWT_ISSUER_DOMAIN is not defined");
-}
+const env = getValidatedEnv();
 
 export default {
   providers: [
     {
-      domain: process.env.CLERK_JWT_ISSUER_DOMAIN,
+      domain: env.CLERK_JWT_ISSUER_DOMAIN,
       applicationID: "convex",
     },
   ],

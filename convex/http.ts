@@ -2,6 +2,7 @@ import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Webhook } from "svix";
+import { getValidatedEnv } from "./utils/env";
 
 const http = httpRouter();
 
@@ -9,10 +10,14 @@ http.route({
   path: "/clerk-webhook",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
-    const webhookSecret = process.env.CLERK_WEBHOOK_SECRET;
-    if (!webhookSecret) {
-      console.error("CLERK_WEBHOOK_SECRET environment variable not set");
-      return new Response("Webhook secret not set", { status: 500 });
+    let webhookSecret: string;
+    try {
+      const env = getValidatedEnv();
+      if (!env.CLERK_WEBHOOK_SECRET) throw new Error("CLERK_WEBHOOK_SECRET not set");
+      webhookSecret = env.CLERK_WEBHOOK_SECRET;
+    } catch (e) {
+      console.error(e);
+      return new Response("Webhook secret not set or invalid env", { status: 500 });
     }
 
     const svixId = request.headers.get("svix-id");

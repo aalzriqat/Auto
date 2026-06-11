@@ -4,6 +4,7 @@ import { action, internalAction } from "./_generated/server";
 import { v } from "convex/values";
 import { Resend } from "resend";
 import { rateLimiter } from "./rateLimit";
+import { getValidatedEnv } from "./utils/env";
 
 export const sendTaskAlarm = action({
   args: {
@@ -17,7 +18,8 @@ export const sendTaskAlarm = action({
     if (!status.ok) {
       throw new Error(`Rate limit exceeded. Try again in ${Math.ceil(status.retryAfter / 1000)}s`);
     }
-    const resendApiKey = process.env.RESEND_API_KEY;
+    const env = getValidatedEnv();
+    const resendApiKey = env.RESEND_API_KEY;
 
     // Generate basic .ics file string
     const dateStart = new Date(args.dueDate);
@@ -88,16 +90,11 @@ export const sendTeamInvite = internalAction({
     if (!status.ok) {
       throw new Error(`Rate limit exceeded. Try again in ${Math.ceil(status.retryAfter / 1000)}s`);
     }
-    const resendApiKey = process.env.RESEND_API_KEY;
+    const env = getValidatedEnv();
+    const resendApiKey = env.RESEND_API_KEY;
 
-    // Build the invite URL from the environment — never hardcode localhost.
-    const appUrl = process.env.NEXT_PUBLIC_APP_URL;
-    if (!appUrl) {
-      throw new Error(
-        "NEXT_PUBLIC_APP_URL environment variable is not set. " +
-        "Cannot send team invite with a valid link."
-      );
-    }
+    // Build the invite URL from the environment
+    const appUrl = env.NEXT_PUBLIC_APP_URL;
     const inviteUrl = `${appUrl}/sign-up`;
 
     const emailHtml = `
