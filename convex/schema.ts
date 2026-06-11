@@ -271,7 +271,8 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_assignedTo", ["orgId", "assignedTo"])
     .index("by_org_status", ["orgId", "status"])
-    .index("by_org_vehicle", ["orgId", "vehicleId"]),
+    .index("by_org_vehicle", ["orgId", "vehicleId"])
+    .index("by_status_alarm", ["status", "alarmTriggered"]),
 
   taskHistory: defineTable({
     orgId: v.id("organizations"),
