@@ -27,143 +27,139 @@ export function QuotePrintTemplate({
   const condition = (selectedVehicle?.mileage || 0) > 0 ? "مستعمل" : "جديد";
 
   // Extract Battery / Additions from notes
-  // If we can't parse it reliably, we just show the raw notes
   const rawNotes = selectedVehicle?.notes || "";
-  let batteryCapacity = "غير محدد";
   let additions = rawNotes || "لا يوجد";
-
-  // If notes look like "Battery: 60kWh | Additions: Leather seats"
-  // But without a strict schema, we just put it in additions.
 
   return (
     <div
       id="pdf-quote-content"
-      className="hidden print:block absolute inset-0 bg-[#ffffff] w-[210mm] min-h-[297mm] mx-auto text-[#000000] p-10 font-sans"
+      className="hidden print:block absolute inset-0 bg-[#ffffff] w-[210mm] h-[297mm] mx-auto text-[#000000] p-12 font-sans relative overflow-hidden box-border"
       dir="rtl"
+      style={{ boxSizing: "border-box" }}
     >
-      {/* Header with Logo */}
-      <div className="flex justify-between items-center border-b-2 border-[#1f2937] pb-6 mb-8">
-        <div className="flex items-center gap-4">
-          <img src="/BloomLogo.png" alt="Dealer Logo" className="h-20 object-contain" />
-          <div>
+      {/* Decorative Brand Background Patterns */}
+      <div className="absolute inset-0 pointer-events-none z-0 border-[6px] border-[#104f32] m-4" />
+      <div className="absolute inset-0 pointer-events-none z-0 border border-[#dc2626] m-[22px]" />
 
-            {/* <p className="text-[#4b5563] mt-1">{isCash ? "دفع نقدي" : "تقسيط"}</p> */}
+      {/* Faint Logo Watermark in Center */}
+      <div className="absolute inset-0 pointer-events-none z-0 flex items-center justify-center opacity-[0.03]">
+        <img src="/BloomLogo.png" alt="" className="w-[120mm] object-contain rotate-[-12deg]" />
+      </div>
+
+      {/* Top and Bottom Corner Accents */}
+      <div className="absolute top-0 right-0 w-24 h-24 pointer-events-none z-0 overflow-hidden">
+        <div className="absolute top-[-40px] right-[-40px] w-20 h-20 bg-[#104f32] rotate-45" />
+        <div className="absolute top-[-30px] right-[-30px] w-20 h-20 bg-[#dc2626] rotate-45" />
+      </div>
+      <div className="absolute bottom-0 left-0 w-24 h-24 pointer-events-none z-0 overflow-hidden">
+        <div className="absolute bottom-[-40px] left-[-40px] w-20 h-20 bg-[#104f32] rotate-45" />
+        <div className="absolute bottom-[-30px] left-[-30px] w-20 h-20 bg-[#dc2626] rotate-45" />
+      </div>
+
+      {/* Main Content Wrapper - relative to sit above background */}
+      <div className="relative z-10 flex flex-col justify-between h-full w-full">
+        <div>
+          {/* Header with Logo */}
+          <div className="flex justify-between items-center border-b border-[#d0e0d8] pb-4 mb-6">
+            <div className="flex items-center gap-4">
+              <img src="/BloomLogo.png" alt="Dealer Logo" className="h-16 object-contain" />
+              <div>
+              </div>
+            </div>
+            <div className="text-left text-xs text-[#4b5563] space-y-1">
+              <p className="font-bold text-[#104f32]">مؤسسة عصر الازدهار للسيارات</p>
+              <p>التاريخ: {dateStr}</p>
+            </div>
+          </div>
+
+          {/* Document Title - Centered */}
+          <div className="mb-4 flex justify-center">
+            <div className="text-center bg-[#104f32] text-[#ffffff] px-8 py-2 rounded-md font-bold text-lg">
+              عرض سعر مركبة
+            </div>
+          </div>
+
+          {/* Recipient info */}
+          <div className="mb-6">
+            <div className="flex items-baseline gap-2 mb-2">
+              <span className="text-sm font-semibold text-[#4b5563]">السادة /</span>
+              <span className="text-base font-bold text-[#104f32]">{recipientName} المحترمين</span>
+            </div>
+            {/* Centered Greeting */}
+            <div className="text-center my-2">
+              <p className="text-sm font-semibold text-[#4b5563] inline-block pb-1 px-8">تحية طيبة وبعد،،،</p>
+            </div>
+          </div>
+
+          {/* Vehicle Info */}
+          <div className="mb-6">
+            <h2 className="text-base font-bold text-[#104f32] border-r-4 border-[#dc2626] pr-2 mb-3">مواصفات المركبة</h2>
+            <table className="w-full text-xs border-collapse border border-[#e5e7eb]">
+              <tbody>
+                <tr className="border-b border-[#e5e7eb]">
+                  <td className="py-2.5 font-semibold text-[#374151] w-1/3 bg-[#f0f4f2] px-3 border-l border-[#e5e7eb]">نوع المركبة:</td>
+                  <td className="py-2.5 px-3 font-medium text-[#111827]">{selectedVehicle?.make || "غير محدد"} {selectedVehicle?.model}</td>
+                </tr>
+                <tr className="border-b border-[#e5e7eb]">
+                  <td className="py-2.5 font-semibold text-[#374151] bg-[#f0f4f2] px-3 border-l border-[#e5e7eb]">سنة الصنع:</td>
+                  <td className="py-2.5 px-3 font-medium text-[#111827]">{selectedVehicle?.year}</td>
+                </tr>
+                <tr className="border-b border-[#e5e7eb]">
+                  <td className="py-2.5 font-semibold text-[#374151] bg-[#f0f4f2] px-3 border-l border-[#e5e7eb]">سعة البطارية / نوع الوقود:</td>
+                  <td className="py-2.5 px-3 font-medium text-[#111827]">{selectedVehicle?.fuelType || "غير محدد"} {selectedVehicle?.trim ? `(${selectedVehicle.trim})` : ''}</td>
+                </tr>
+                <tr className="border-b border-[#e5e7eb]">
+                  <td className="py-2.5 font-semibold text-[#374151] bg-[#f0f4f2] px-3 border-l border-[#e5e7eb]">الحالة (جديد / مستعمل):</td>
+                  <td className="py-2.5 px-3 font-medium text-[#111827]">{condition}</td>
+                </tr>
+                <tr className="border-b border-[#e5e7eb]">
+                  <td className="py-2.5 font-semibold text-[#374151] bg-[#f0f4f2] px-3 border-l border-[#e5e7eb]">رقم الهيكل (VIN):</td>
+                  <td className="py-2.5 px-3 font-mono text-xs text-[#111827]">{selectedVehicle?.vin || "قيد الانتظار"}</td>
+                </tr>
+                <tr className="border-b border-[#e5e7eb]">
+                  <td className="py-2.5 font-semibold text-[#374151] bg-[#f0f4f2] px-3 border-l border-[#e5e7eb]">الإضافات / المواصفات:</td>
+                  <td className="py-2.5 px-3 text-[#374151] leading-relaxed">{additions}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {/* Pricing Info */}
+          <div className="mb-6">
+            <h2 className="text-base font-bold text-[#104f32] border-r-4 border-[#dc2626] pr-2 mb-3">التفاصيل المالية</h2>
+            <table className="w-full text-xs border-collapse border border-[#e5e7eb]">
+              <tbody>
+                <tr>
+                  <td className="py-3 font-semibold text-[#374151] w-1/3 bg-[#f0f4f2] px-3 border-l border-[#e5e7eb]">سعر المركبة الإجمالي:</td>
+                  <td className="py-3 px-3 font-bold text-base text-[#dc2626]">
+                    {selectedResult?.totalFinancedAmount?.toLocaleString(undefined, { minimumFractionDigits: 2 })} دينار أردني
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <br></br>
+            <p className="text-sm font-semibold text-[#4b5563] mt-2 text-center">وتفضلوا بقبول فائق الإحترام</p>
           </div>
         </div>
-        <div className="text-left text-sm text-[#4b5563] space-y-1">
 
+        {/* Bottom Section - Signature & Footer */}
+        <div>
+          {/* Signature Section */}
+          <div className="mb-16 flex justify-end">
+            <div className="text-center w-60">
+              <p className="font-bold text-[#104f32] text-sm">(مؤسسة عصر الازدهار للسيارات)</p>
+              <div className="mt-12 border-t border-dashed border-[#a0bfad] pt-2">
+                <p className="text-xs text-[#6b7280]">الختم والتوقيع</p>
+              </div>
+            </div>
+          </div>
 
-        </div>
-      </div>
-
-      {/* Recipient info */}
-      <div className="mb-8">
-        <h1 className="text-center mb-6 text-2xl font-bold text-[#111827]">عرض سعر مركبة</h1>
-        <p className="text-lg font-bold text-[#1f2937] mb-2">التاريخ: {dateStr}</p>
-        <h2 className="text-lg font-bold text-[#1f2937] mb-2">موجه إلى السادة:</h2>
-        <p className="text-xl font-semibold">{recipientName}</p>
-      </div>
-
-      {/* Vehicle Info */}
-      <div className="mb-8">
-        <h2 className="text-xl font-bold text-[#1f2937] border-b pb-2 mb-4">مواصفات المركبة</h2>
-        <table className="w-full text-sm border-collapse">
-          <tbody>
-            <tr className="border-b">
-              <td className="py-3 font-semibold text-[#374151] w-1/3 bg-[#f9fafb] px-3">نوع المركبة:</td>
-              <td className="py-3 px-3">{selectedVehicle?.make || "غير محدد"} {selectedVehicle?.model}</td>
-            </tr>
-            <tr className="border-b">
-              <td className="py-3 font-semibold text-[#374151] bg-[#f9fafb] px-3">سنة الصنع:</td>
-              <td className="py-3 px-3">{selectedVehicle?.year}</td>
-            </tr>
-            <tr className="border-b">
-              <td className="py-3 font-semibold text-[#374151] bg-[#f9fafb] px-3">سعة البطارية / نوع الوقود:</td>
-              <td className="py-3 px-3">{selectedVehicle?.fuelType || "غير محدد"} {selectedVehicle?.trim ? `(${selectedVehicle.trim})` : ''}</td>
-            </tr>
-            <tr className="border-b">
-              <td className="py-3 font-semibold text-[#374151] bg-[#f9fafb] px-3">الحالة (جديد / مستعمل):</td>
-              <td className="py-3 px-3">{condition}</td>
-            </tr>
-            <tr className="border-b">
-              <td className="py-3 font-semibold text-[#374151] bg-[#f9fafb] px-3">رقم الهيكل (VIN):</td>
-              <td className="py-3 px-3 font-mono text-xs">{selectedVehicle?.vin || "قيد الانتظار"}</td>
-            </tr>
-            <tr className="border-b">
-              <td className="py-3 font-semibold text-[#374151] bg-[#f9fafb] px-3">الإضافات / المواصفات:</td>
-              <td className="py-3 px-3">{additions}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      {/* Pricing Info */}
-      <div className="mb-12">
-        <h2 className="text-xl font-bold text-[#1f2937] border-b pb-2 mb-4">التفاصيل المالية</h2>
-
-
-        <table className="w-full text-sm border-collapse">
-          <tbody>
-            <tr className="border-b">
-              <td className="py-3 font-semibold text-[#374151] w-1/3 bg-[#f9fafb] px-3">سعر المركبة (دينار):</td>
-              <td className="py-3 px-3 font-bold text-lg">{selectedResult?.totalFinancedAmount?.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-            </tr>
-            {/* <tr className="border-b">
-                <td className="py-3 font-semibold text-[#374151] bg-[#f9fafb] px-3">الإجمالي للدفع:</td>
-                <td className="py-3 px-3 font-bold text-lg">{selectedResult?.totalFinancedAmount?.toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-              </tr> */}
-          </tbody>
-        </table>
-        {/* ) //(
-        //   <table className="w-full text-sm border-collapse">
-        //     <tbody>
-        //       <tr className="border-b">
-        //         <td className="py-3 font-semibold text-[#374151] w-1/3 bg-[#f9fafb] px-3">سعر المركبة (دينار):</td>
-        //         <td className="py-3 px-3 font-bold">{(wizardData.vehiclePrice + (wizardData.desiredProfit || 0)).toLocaleString(undefined, { minimumFractionDigits: 2 })}</td>
-        //       </tr>
-        //       <tr className="border-b">
-        //         <td className="py-3 font-semibold text-[#374151] bg-[#f9fafb] px-3">جهة التمويل:</td>
-        //         <td className="py-3 px-3 font-bold">{selectedCompany?.name || "غير محدد"}</td>
-        //       </tr>
-        //       <tr className="border-b">
-        //         <td className="py-3 font-semibold text-[#374151] bg-[#f9fafb] px-3">الدفعة المقدمة:</td>
-        //         <td className="py-3 px-3">{wizardData.downPayment?.toLocaleString()} دينار</td>
-        //       </tr>
-        //       <tr className="border-b">
-        //         <td className="py-3 font-semibold text-[#374151] bg-[#f9fafb] px-3">المدة (أشهر):</td>
-        //         <td className="py-3 px-3">{wizardData.termMonths} شهر</td>
-        //       </tr>
-        //       <tr className="border-b">
-        //         <td className="py-3 font-semibold text-[#374151] bg-[#f9fafb] px-3">نسبة الربح السنوية:</td>
-        //         <td className="py-3 px-3">{selectedResult?.profitRateApplied}%</td>
-        //       </tr>
-        //       <tr className="border-b">
-        //         <td className="py-3 font-semibold text-[#374151] bg-[#f9fafb] px-3">إجمالي التمويل:</td>
-        //         <td className="py-3 px-3">{selectedResult?.totalFinancedAmount?.toLocaleString(undefined, { minimumFractionDigits: 2 })} دينار</td>
-        //       </tr>
-        //       <tr>
-        //         <td className="py-4 font-bold text-[#111827] bg-[#f3f4f6] px-3 text-lg">القسط الشهري:</td>
-        //         <td className="py-4 px-3 font-bold text-xl text-[#4338ca]">{selectedResult?.monthlyInstallment?.toLocaleString(undefined, { minimumFractionDigits: 2 })} دينار</td>
-        //       </tr>
-        //     </tbody>
-        //   </table>
-        // )} */}
-      </div>
-
-      {/* Signature Section */}
-      <div className="mt-24 mb-12 flex justify-end">
-        <div className="text-center w-64">
-          <p className="font-bold text-[#1f2937] text-lg">(مؤسسة عصر الازدهار للسيارات)</p>
-          <div className="mt-16 border-t border-[#1f2937] pt-2">
-            <p className="text-sm text-[#4b5563]">الختم والتوقيع</p>
+          {/* Footer */}
+          <div className="pt-4 border-t border-[#e5e7eb] text-xs text-[#4b5563] text-center space-y-1">
+            <p className="font-semibold text-[#104f32]">عمان - وادي صقره- قرب صندوق الائتمان العسكري</p>
+            <p dir="ltr" className="font-mono text-[#dc2626] font-bold">0790888360 | 0790888360</p>
           </div>
         </div>
-      </div>
-
-      {/* Footer */}
-      <div className="mt-auto pt-8 border-t border-[#e5e7eb] text-sm text-[#6b7280] text-center space-y-1">
-        <p>عمان - وادي صقره- قرب صندوق الائتمان العسكري</p>
-        <p dir="ltr" className="inline-block">0790888360 | 07 9088 8360</p>
       </div>
     </div>
   );
