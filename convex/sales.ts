@@ -5,6 +5,8 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { rateLimiter } from "./rateLimit";
+import { validateInput } from "./utils/validation";
+import { CreateSaleSchema, UpdateSaleSchema } from "./validations/sales";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -138,6 +140,8 @@ export const create = mutation({
 
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
 
+    validateInput(CreateSaleSchema, args);
+
     // Validate vehicle belongs to org and is available
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.orgId !== args.orgId) {
@@ -262,6 +266,8 @@ export const update = mutation({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_SALES]);
+
+    validateInput(UpdateSaleSchema, args);
 
     const sale = await ctx.db.get(args.saleId);
     if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {

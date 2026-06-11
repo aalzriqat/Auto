@@ -5,6 +5,8 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { rateLimiter } from "./rateLimit";
+import { validateInput } from "./utils/validation";
+import { CreateCustomerSchema, UpdateCustomerSchema } from "./validations/customers";
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
@@ -92,6 +94,8 @@ export const create = mutation({
 
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_CUSTOMERS]);
 
+    validateInput(CreateCustomerSchema, args);
+
     const normalizedEmail = args.email?.toLowerCase().trim() || undefined;
 
     // If email is provided, check for duplicates within the org
@@ -165,6 +169,8 @@ export const update = mutation({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_CUSTOMERS]);
+
+    validateInput(UpdateCustomerSchema, args);
 
     const customer = await ctx.db.get(args.customerId);
     if (!customer || customer.isDeleted || customer.orgId !== args.orgId) {

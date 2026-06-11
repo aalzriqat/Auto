@@ -4,6 +4,8 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { rateLimiter } from "./rateLimit";
+import { validateInput } from "./utils/validation";
+import { CreateVehicleSchema, UpdateVehicleSchema } from "./validations/vehicles";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -217,6 +219,8 @@ export const create = mutation({
 
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
 
+    validateInput(CreateVehicleSchema, args);
+
     const normalizedVin = args.vin.trim().toUpperCase();
 
     // Check for duplicate VIN within the org
@@ -303,6 +307,8 @@ export const update = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+
+    validateInput(UpdateVehicleSchema, args);
 
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
