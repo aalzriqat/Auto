@@ -167,6 +167,11 @@ export const update = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const statusLimit = await rateLimiter.limit(ctx, "standardApi");
+    if (!statusLimit.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+    }
+
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_EXPENSES]);
 
     // Note: Zod schema might not expect `null` for vehicleId or payerId directly if not configured,
@@ -234,6 +239,11 @@ export const remove = mutation({
     expenseId: v.id("expenses"),
   },
   handler: async (ctx, args) => {
+    const statusLimit = await rateLimiter.limit(ctx, "standardApi");
+    if (!statusLimit.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+    }
+
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_EXPENSES]);
 
     const expense = await ctx.db.get(args.expenseId);

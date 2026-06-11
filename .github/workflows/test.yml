@@ -21,5 +21,10 @@ jobs:
     - name: Install dependencies
       run: npm install -g pnpm && pnpm install
 
+    - name: Set up Convex for testing
+      run: npx convex dev --once --configure=new
+      env:
+        CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+
     - name: Run Tests
       run: pnpm test

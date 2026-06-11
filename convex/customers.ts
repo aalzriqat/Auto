@@ -168,6 +168,11 @@ export const update = mutation({
     ),
   },
   handler: async (ctx, args) => {
+    const statusLimit = await rateLimiter.limit(ctx, "standardApi");
+    if (!statusLimit.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+    }
+
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_CUSTOMERS]);
 
     validateInput(UpdateCustomerSchema, args);
@@ -232,6 +237,11 @@ export const softDelete = mutation({
     customerId: v.id("customers"),
   },
   handler: async (ctx, args) => {
+    const statusLimit = await rateLimiter.limit(ctx, "standardApi");
+    if (!statusLimit.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+    }
+
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_CUSTOMERS]);
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new ConvexError("Unauthenticated");
