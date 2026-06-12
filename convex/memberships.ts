@@ -259,14 +259,22 @@ export const remove = action({
       const clerkSecret = process.env.CLERK_SECRET_KEY;
       if (clerkSecret) {
         try {
-          await fetch(`https://api.clerk.com/v1/users/${clerkId}`, {
+          const res = await fetch(`https://api.clerk.com/v1/users/${clerkId}`, {
             method: "DELETE",
             headers: {
               "Authorization": `Bearer ${clerkSecret}`
             }
           });
+          
+          if (!res.ok) {
+            const errorText = await res.text();
+            console.error("Clerk deletion failed, but Convex user was deleted. Manual cleanup required:", errorText);
+            throw new ConvexError("User removed from DB, but failed to remove from authentication provider.");
+          }
         } catch (error) {
           console.error("Failed to delete user from Clerk:", error);
+          if (error instanceof ConvexError) throw error;
+          throw new ConvexError("Failed to connect to authentication provider to remove user.");
         }
       }
     }
@@ -396,7 +404,7 @@ export const createAccount = action({
     try {
       // 2. Call Clerk API to create the user
       const clerkSecret = process.env.CLERK_SECRET_KEY;
-      if (!clerkSecret) throw new Error("CLERK_SECRET_KEY is not set.");
+      if (!clerkSecret) throw new ConvexError("CLERK_SECRET_KEY is not set.");
 
       const response = await fetch("https://api.clerk.com/v1/users", {
         method: "POST",
@@ -418,7 +426,7 @@ export const createAccount = action({
       if (!response.ok) {
         const errorData = await response.json();
         console.error("Clerk user creation failed:", errorData);
-        throw new Error(errorData.errors?.[0]?.message || "Failed to create user in Clerk");
+        throw new ConvexError(errorData.errors?.[0]?.message || "Failed to create user in Clerk");
       }
 
       // Parse Clerk API response

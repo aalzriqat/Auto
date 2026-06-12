@@ -1,3 +1,4 @@
+import { ConvexError } from "convex/values";
 import { z } from "zod";
 
 const backendEnvSchema = z.object({
@@ -22,7 +23,7 @@ export function getValidatedEnv() {
     const errorMsg = "Backend Environment Variables Missing/Invalid: " + 
       result.error.errors.map(e => `${e.path.join('.')}`).join(', ');
     console.error(errorMsg);
-    throw new Error(errorMsg); // This will crash the action/mutation predictably
+    throw new ConvexError(errorMsg); // This will crash the action/mutation predictably
   }
   
   return result.data;

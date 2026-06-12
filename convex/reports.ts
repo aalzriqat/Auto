@@ -241,7 +241,7 @@ export const getSalespersonPerformance = query({
       let totalProfit = 0;
 
       let userName = "Unknown";
-      const user = userMap.get(userId as any);
+      const user = userMap.get(userId as Id<"users">);
       if (user && "name" in user) {
         userName = user.name || "Unknown";
       }
@@ -251,7 +251,7 @@ export const getSalespersonPerformance = query({
         const expenses = expensesByVehicle.get(sale.vehicleId) || [];
 
         const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
-        const cost = ((vehicle as any)?.purchasePrice || 0) + totalExpenses;
+        const cost = (vehicle?.purchasePrice || 0) + totalExpenses;
         const profit = sale.salePrice - cost;
 
         totalRevenue += sale.salePrice;
@@ -335,7 +335,7 @@ export const getLeadConversionReport = query({
 
     const salespersonMetrics = Object.entries(leadsBySalesperson).map(([userId, stats]) => {
       let userName = "Unknown";
-      const user = userMap.get(userId as any);
+      const user = userMap.get(userId as Id<"users">);
       if (user && "name" in user) {
         userName = user.name || "Unknown";
       }

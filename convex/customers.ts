@@ -311,7 +311,7 @@ export const getRelations = query({
     const enrichedSales = await Promise.all(
       sales.map(async (sale) => {
         const vehicle = await ctx.db.get(sale.vehicleId);
-        const salesperson = await ctx.db.get(sale.salespersonId as any);
+        const salesperson = await ctx.db.get(sale.salespersonId);
         return {
           ...sale,
           vehicleDesc: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
@@ -330,7 +330,7 @@ export const getRelations = query({
     const enrichedLeads = await Promise.all(
       leads.map(async (lead) => {
         const vehicle = lead.vehicleId ? await ctx.db.get(lead.vehicleId) : null;
-        const assignedUser = lead.assignedUserId ? await ctx.db.get(lead.assignedUserId as any) : null;
+        const assignedUser = lead.assignedUserId ? await ctx.db.get(lead.assignedUserId) : null;
         return {
           ...lead,
           vehicleDesc: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Any",
@@ -348,7 +348,7 @@ export const getRelations = query({
 
     const enrichedTasks = await Promise.all(
       tasks.map(async (task) => {
-        const assignedUser = await ctx.db.get(task.assignedTo as any);
+        const assignedUser = await ctx.db.get(task.assignedTo);
         return {
           ...task,
           assignedUserName: assignedUser && "name" in assignedUser ? assignedUser.name : "Unknown",
@@ -367,7 +367,7 @@ export const getRelations = query({
       quotes.map(async (quote) => {
         const vehicle = await ctx.db.get(quote.vehicleId);
         const company = quote.companyId ? await ctx.db.get(quote.companyId) : null;
-        const createdByUser = await ctx.db.get(quote.createdBy as any);
+        const createdByUser = await ctx.db.get(quote.createdBy);
         return {
           ...quote,
           vehicleDesc: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",

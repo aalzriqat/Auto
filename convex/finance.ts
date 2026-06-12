@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -58,7 +58,7 @@ export const updateCompany = mutation({
     const { id, orgId, ...updates } = args;
     
     const existing = await ctx.db.get(id);
-    if (!existing || existing.orgId !== orgId) throw new Error("Not found");
+    if (!existing || existing.orgId !== orgId) throw new ConvexError("Not found");
     
     await ctx.db.patch(id, updates);
   },
@@ -72,7 +72,7 @@ export const deleteCompany = mutation({
   handler: async (ctx, { id, orgId }) => {
     await requireTenantAuth(ctx, orgId, [PERMISSIONS.MANAGE_SETTINGS]);
     const existing = await ctx.db.get(id);
-    if (!existing || existing.orgId !== orgId) throw new Error("Not found");
+    if (!existing || existing.orgId !== orgId) throw new ConvexError("Not found");
     await ctx.db.delete(id);
   },
 });

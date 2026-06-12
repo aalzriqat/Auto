@@ -1,3 +1,4 @@
+import { ConvexError } from "convex/values";
 import { httpRouter } from "convex/server";
 import { httpAction } from "./_generated/server";
 import { internal } from "./_generated/api";
@@ -13,7 +14,7 @@ http.route({
     let webhookSecret: string;
     try {
       const env = getValidatedEnv();
-      if (!env.CLERK_WEBHOOK_SECRET) throw new Error("CLERK_WEBHOOK_SECRET not set");
+      if (!env.CLERK_WEBHOOK_SECRET) throw new ConvexError("CLERK_WEBHOOK_SECRET not set");
       webhookSecret = env.CLERK_WEBHOOK_SECRET;
     } catch (e) {
       console.error(e);

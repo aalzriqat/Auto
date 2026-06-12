@@ -510,7 +510,7 @@ export const getRelations = query({
     const enrichedSales = await Promise.all(
       sales.map(async (sale) => {
         const customer = await ctx.db.get(sale.customerId);
-        const salesperson = await ctx.db.get(sale.salespersonId as any);
+        const salesperson = await ctx.db.get(sale.salespersonId);
         return {
           ...sale,
           customerName: customer ? `${customer.firstName} ${customer.lastName}` : "Unknown",
@@ -529,7 +529,7 @@ export const getRelations = query({
     const enrichedLeads = await Promise.all(
       leads.map(async (lead) => {
         const customer = await ctx.db.get(lead.customerId);
-        const assignedUser = lead.assignedUserId ? await ctx.db.get(lead.assignedUserId as any) : null;
+        const assignedUser = lead.assignedUserId ? await ctx.db.get(lead.assignedUserId) : null;
         return {
           ...lead,
           customerName: customer ? `${customer.firstName} ${customer.lastName}` : "Unknown",
@@ -563,7 +563,7 @@ export const getRelations = query({
 
     const enrichedTasks = await Promise.all(
       tasks.map(async (task) => {
-        const assignedUser = await ctx.db.get(task.assignedTo as any);
+        const assignedUser = await ctx.db.get(task.assignedTo);
         return {
           ...task,
           assignedUserName: assignedUser && "name" in assignedUser ? assignedUser.name : "Unknown",
@@ -580,7 +580,7 @@ export const getRelations = query({
     const enrichedTestDrives = await Promise.all(
       testDrives.map(async (td) => {
         const customer = await ctx.db.get(td.customerId);
-        const salesperson = await ctx.db.get(td.salespersonId as any);
+        const salesperson = await ctx.db.get(td.salespersonId);
         return {
           ...td,
           customerName: customer ? `${customer.firstName} ${customer.lastName}` : "Unknown",

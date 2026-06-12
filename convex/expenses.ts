@@ -253,7 +253,7 @@ export const remove = mutation({
     }
 
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Unauthenticated");
+    if (!identity) throw new ConvexError("Unauthenticated");
     await ctx.db.patch(args.expenseId, {
       isDeleted: true,
       deletedAt: Date.now(),

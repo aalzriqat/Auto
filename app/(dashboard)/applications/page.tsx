@@ -2,7 +2,7 @@ import { ApplicationClient } from "./client";
 import { RoleGuard } from "@/components/auth/RoleGuard";
 
 export const metadata = {
-  title: "Applications | Bloom Cars",
+  title: "Applications | AutoFlow",
   description: "Manage finance applications",
 };
 

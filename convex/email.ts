@@ -1,7 +1,7 @@
 "use node";
 
 import { internalAction } from "./_generated/server";
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { Resend } from "resend";
 import { rateLimiter } from "./rateLimit";
 import { getValidatedEnv } from "./utils/env";
@@ -26,7 +26,7 @@ export const sendTaskAlarm = internalAction({
   handler: async (ctx, args) => {
     const status = await rateLimiter.limit(ctx, "email");
     if (!status.ok) {
-      throw new Error(`Rate limit exceeded. Try again in ${Math.ceil(status.retryAfter / 1000)}s`);
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(status.retryAfter / 1000)}s`);
     }
     const env = getValidatedEnv();
     const resendApiKey = env.RESEND_API_KEY;
@@ -42,7 +42,7 @@ export const sendTaskAlarm = internalAction({
     const icsString = [
       'BEGIN:VCALENDAR',
       'VERSION:2.0',
-      'PRODID:-//Bloom Cars CRM//Task Alarm//EN',
+      'PRODID:-//AutoFlow CRM//Task Alarm//EN',
       'BEGIN:VEVENT',
       `UID:${args.dueDate}@autoflow.crm`,
       `DTSTAMP:${formatICSDate(new Date())}`,
@@ -98,7 +98,7 @@ export const sendTeamInvite = internalAction({
   handler: async (ctx, args) => {
     const status = await rateLimiter.limit(ctx, "email");
     if (!status.ok) {
-      throw new Error(`Rate limit exceeded. Try again in ${Math.ceil(status.retryAfter / 1000)}s`);
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(status.retryAfter / 1000)}s`);
     }
     const env = getValidatedEnv();
     const resendApiKey = env.RESEND_API_KEY;

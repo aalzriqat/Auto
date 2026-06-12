@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -77,7 +77,7 @@ export const update = mutation({
     // Verify the transaction belongs to this org
     const transaction = await ctx.db.get(transactionId);
     if (!transaction || transaction.orgId !== orgId) {
-      throw new Error("Transaction not found in this organization.");
+      throw new ConvexError("Transaction not found in this organization.");
     }
 
     // Clean up undefined optional values
@@ -98,7 +98,7 @@ export const remove = mutation({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Unauthenticated");
+    if (!identity) throw new ConvexError("Unauthenticated");
     await ctx.db.patch(args.transactionId, {
       isDeleted: true,
       deletedAt: Date.now(),

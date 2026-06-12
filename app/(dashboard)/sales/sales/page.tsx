@@ -160,7 +160,7 @@ export default function SalesPage() {
                         try {
                           console.log("SALE RECORD", sale);
                           generateBillOfSale(
-                            "Bloom Cars Dealership",
+                            "AutoFlow Dealership",
                             sale.customerName,
                             sale.vehicleSummary,
                             sale.vehicleVin,

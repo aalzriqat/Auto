@@ -33,7 +33,7 @@ export const list = query({
         const customer = await ctx.db.get(app.customerId);
         const vehicle = await ctx.db.get(app.vehicleId);
         const company = app.companyId ? await ctx.db.get(app.companyId) : null;
-        const salesperson = await ctx.db.get(app.salespersonId as any);
+        const salesperson = await ctx.db.get(app.salespersonId);
         const quote = await ctx.db.get(app.quoteId);
 
         return {
@@ -66,7 +66,7 @@ export const get = query({
     const customer = await ctx.db.get(app.customerId);
     const vehicle = await ctx.db.get(app.vehicleId);
     const company = app.companyId ? await ctx.db.get(app.companyId) : null;
-    const salesperson = await ctx.db.get(app.salespersonId as any);
+    const salesperson = await ctx.db.get(app.salespersonId);
     const quote = await ctx.db.get(app.quoteId);
 
     return {
