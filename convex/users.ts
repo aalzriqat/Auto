@@ -17,10 +17,12 @@ export const getMe = query({
 
 /**
  * Returns a specific user's basic info by their ID (for audit logs).
+ * Requires authentication to prevent user enumeration.
  */
 export const getUser = query({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
+    await requireAuth(ctx);
     const user = await ctx.db.get(args.userId);
     if (!user) return null;
     return { name: user.name || "Unknown User" };

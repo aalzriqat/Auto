@@ -1,5 +1,5 @@
-import { query } from "./_generated/server";
-export const inspect = query({
+import { internalQuery } from "./_generated/server";
+export const inspect = internalQuery({
   args: {},
   handler: async (ctx) => {
     const vehicles = await ctx.db.query("vehicles").collect();

@@ -74,6 +74,12 @@ export const update = mutation({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const { orgId, transactionId, ...updates } = args;
 
+    // Verify the transaction belongs to this org
+    const transaction = await ctx.db.get(transactionId);
+    if (!transaction || transaction.orgId !== orgId) {
+      throw new Error("Transaction not found in this organization.");
+    }
+
     // Clean up undefined optional values
     const cleanedUpdates = Object.fromEntries(
       Object.entries(updates).filter(([_, v]) => v !== undefined)

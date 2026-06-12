@@ -1,12 +1,22 @@
 "use node";
 
-import { action, internalAction } from "./_generated/server";
+import { internalAction } from "./_generated/server";
 import { v } from "convex/values";
 import { Resend } from "resend";
 import { rateLimiter } from "./rateLimit";
 import { getValidatedEnv } from "./utils/env";
 
-export const sendTaskAlarm = action({
+/** Escape user input before interpolating into HTML to prevent XSS/injection. */
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+export const sendTaskAlarm = internalAction({
   args: {
     toEmail: v.string(),
     taskTitle: v.string(),
@@ -45,10 +55,10 @@ export const sendTaskAlarm = action({
     ].join('\r\n');
 
     const emailHtml = `
-      <h1>Task Reminder: ${args.taskTitle}</h1>
+      <h1>Task Reminder: ${escapeHtml(args.taskTitle)}</h1>
       <p>This task is scheduled for ${new Date(args.dueDate).toLocaleString()}.</p>
-      ${args.taskDescription ? `<p>Notes: ${args.taskDescription}</p>` : ''}
-      <p>Please check your Bloom Cars dashboard for details.</p>
+      ${args.taskDescription ? `<p>Notes: ${escapeHtml(args.taskDescription)}</p>` : ''}
+      <p>Please check your AutoFlow dashboard for details.</p>
     `;
 
     if (!resendApiKey) {
@@ -61,7 +71,7 @@ export const sendTaskAlarm = action({
 
     try {
       await resend.emails.send({
-        from: 'Bloom Cars Tasks <onboarding@resend.dev>',
+        from: 'AutoFlow Tasks <onboarding@resend.dev>',
         to: args.toEmail,
         subject: `Task Reminder: ${args.taskTitle}`,
         html: emailHtml,
@@ -97,9 +107,10 @@ export const sendTeamInvite = internalAction({
     const appUrl = env.NEXT_PUBLIC_APP_URL;
     const inviteUrl = `${appUrl}/sign-up`;
 
+    const safeOrgName = escapeHtml(args.orgName);
     const emailHtml = `
-      <h1>You've been invited to join ${args.orgName}</h1>
-      <p>Your team at ${args.orgName} has invited you to join them on Bloom Cars CRM.</p>
+      <h1>You've been invited to join ${safeOrgName}</h1>
+      <p>Your team at ${safeOrgName} has invited you to join them on AutoFlow.</p>
       <p>Click the link below to sign up and join your team automatically:</p>
       <p><a href="${inviteUrl}">Accept Invitation &amp; Sign Up</a></p>
       <br />
@@ -115,9 +126,9 @@ export const sendTeamInvite = internalAction({
 
     try {
       await resend.emails.send({
-        from: 'Bloom Cars Teams <onboarding@resend.dev>',
+        from: 'AutoFlow Teams <onboarding@resend.dev>',
         to: args.toEmail,
-        subject: `You're invited to join ${args.orgName} on Bloom Cars`,
+        subject: `You're invited to join ${args.orgName} on AutoFlow`,
         html: emailHtml,
       });
       return { success: true, mock: false };

@@ -11,7 +11,12 @@ const backendEnvSchema = z.object({
 });
 
 export function getValidatedEnv() {
-  const result = backendEnvSchema.safeParse(process.env);
+  const result = backendEnvSchema.safeParse({
+    CLERK_JWT_ISSUER_DOMAIN: process.env.CLERK_JWT_ISSUER_DOMAIN,
+    NEXT_PUBLIC_APP_URL: process.env.NEXT_PUBLIC_APP_URL,
+    RESEND_API_KEY: process.env.RESEND_API_KEY,
+    CLERK_WEBHOOK_SECRET: process.env.CLERK_WEBHOOK_SECRET,
+  });
   
   if (!result.success) {
     const errorMsg = "Backend Environment Variables Missing/Invalid: " + 

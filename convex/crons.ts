@@ -1,6 +1,6 @@
 import { cronJobs } from "convex/server";
-import { mutation } from "./_generated/server";
-import { api } from "./_generated/api";
+import { internalMutation } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { notifyManagers } from "./utils/notifications";
 
 const crons = cronJobs();
@@ -9,12 +9,12 @@ const crons = cronJobs();
 crons.interval(
   "check-upcoming-tasks",
   { minutes: 5 }, // Every 5 minutes
-  api.crons.triggerAlarms
+  internal.crons.triggerAlarms
 );
 
 export default crons;
 
-export const triggerAlarms = mutation({
+export const triggerAlarms = internalMutation({
   args: {},
   handler: async (ctx) => {
     const now = Date.now();
@@ -60,7 +60,7 @@ export const triggerAlarms = mutation({
         );
 
         if (email) {
-          await ctx.scheduler.runAfter(0, api.email.sendTaskAlarm, {
+          await ctx.scheduler.runAfter(0, internal.email.sendTaskAlarm, {
             toEmail: email,
             taskTitle: task.title,
             taskDescription: task.description,

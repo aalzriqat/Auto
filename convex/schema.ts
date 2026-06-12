@@ -7,7 +7,8 @@ export default defineSchema({
     email: v.string(),
     name: v.optional(v.string()),
     imageUrl: v.optional(v.string()),
-  }).index("by_clerkId", ["clerkId"]),
+  }).index("by_clerkId", ["clerkId"])
+    .index("by_email", ["email"]),
 
   organizations: defineTable({
     name: v.string(),
@@ -214,7 +215,8 @@ export default defineSchema({
     deletedBy: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
-    .index("by_org_salesperson", ["orgId", "salespersonId"]),
+    .index("by_org_salesperson", ["orgId", "salespersonId"])
+    .index("by_org_saleDate", ["orgId", "saleDate"]),
 
   expenses: defineTable({
     orgId: v.id("organizations"),
@@ -248,7 +250,8 @@ export default defineSchema({
     deletedBy: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
-    .index("by_org_vehicle", ["orgId", "vehicleId"]),
+    .index("by_org_vehicle", ["orgId", "vehicleId"])
+    .index("by_org_date", ["orgId", "date"]),
 
   tasks: defineTable({
     orgId: v.id("organizations"),
