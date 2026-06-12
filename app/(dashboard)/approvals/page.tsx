@@ -21,6 +21,7 @@ export default function ApprovalsPage() {
   const handleRespond = async (requestId: Id<"profitApprovalRequests">, status: "APPROVED" | "REJECTED") => {
     try {
       await respondToApproval({
+        orgId: activeOrgId!,
         requestId,
         status,
       });
