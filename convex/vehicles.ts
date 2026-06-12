@@ -103,7 +103,7 @@ export const listAll = query({
         .filter(q => q.neq(q.field("isDeleted"), true));
     }
 
-    const vehicles = await q.order("desc").collect();
+    const vehicles = await q.order("desc").take(200);
 
     const pendingRequests = await ctx.db
       .query("vehicleStatusRequests")
