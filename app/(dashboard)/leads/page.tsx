@@ -8,7 +8,7 @@ import { useOrg } from "@/components/providers/OrgProvider";
 import { Button } from "@/components/ui/button";
 import { LeadDialog } from "@/components/leads/LeadDialog";
 import { Doc } from "@/convex/_generated/dataModel";
-import { Plus, User, Car, Calendar, Trash2, FileText } from "lucide-react";
+import { Plus, User, Car, Trash2, FileText, LayoutList, Kanban } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { toast } from "@/components/ui/sonner";
@@ -32,6 +32,16 @@ import {
 
 import { LEAD_STAGES } from "@/convex/constants";
 
+const STAGE_LABELS: Record<string, string> = {
+  NEW: "New",
+  CONTACTED: "Contacted",
+  INTERESTED: "Interested",
+  TEST_DRIVE: "Test Drive",
+  NEGOTIATION: "Negotiation",
+  RESERVED: "Reserved",
+  WON: "Won",
+  LOST: "Lost",
+};
 
 export default function LeadsPage() {
   const { activeOrgId } = useOrg();
@@ -46,6 +56,7 @@ export default function LeadsPage() {
   const [isLeadDialogOpen, setIsLeadDialogOpen] = useState(false);
   const [editingLead, setEditingLead] = useState<any>(null);
   const [leadToDelete, setLeadToDelete] = useState<any>(null);
+  const [view, setView] = useState<"table" | "kanban">("table");
 
   const handleEdit = (lead: any) => {
     setEditingLead(lead);
@@ -87,167 +98,234 @@ export default function LeadsPage() {
     }
   };
 
+  const getStageBorderColor = (stage: string) => {
+    switch (stage) {
+      case "NEW": return "border-t-blue-400";
+      case "CONTACTED": return "border-t-purple-400";
+      case "INTERESTED": return "border-t-indigo-400";
+      case "TEST_DRIVE": return "border-t-orange-400";
+      case "NEGOTIATION": return "border-t-yellow-400";
+      case "RESERVED": return "border-t-teal-400";
+      case "WON": return "border-t-green-400";
+      case "LOST": return "border-t-red-400";
+      default: return "border-t-gray-400";
+    }
+  };
+
+  const translateStage = (stage: string) => {
+    const keyMap: Record<string, string> = {
+      NEW: "StageNew", CONTACTED: "StageContacted", INTERESTED: "Interested",
+      TEST_DRIVE: "StageTestDrive", NEGOTIATION: "StageNegotiation",
+      RESERVED: "Reserved", WON: "StageWon", LOST: "Lost",
+    };
+    return t(keyMap[stage] as any) || STAGE_LABELS[stage] || stage;
+  };
+
   return (
     <RoleGuard permissions={["view:leads"]}>
       <div className="space-y-6 flex flex-col h-full overflow-hidden">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
-        <Button onClick={handleAddNew}>
-          <Plus className="me-2 h-4 w-4" /> {t("AddLead" as any) || "Add Lead"}
-        </Button>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 flex-shrink-0">
-        <div className="bg-card border-0 ring-1 ring-slate-100 dark:ring-zinc-800 rounded-xl p-6 shadow-sm flex flex-col justify-center">
-          <h3 className="text-sm font-medium text-muted-foreground">{t("TotalLeads" as any) || "Total Leads"}</h3>
-          <p className="text-3xl font-bold mt-2 text-foreground">{leads?.length || 0}</p>
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          {/* View toggle */}
+          <div className="flex items-center gap-1 rounded-lg border bg-muted/30 p-1 w-fit">
+            <button
+              onClick={() => setView("table")}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${view === "table" ? "bg-white shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              <LayoutList className="h-3.5 w-3.5" /> List
+            </button>
+            <button
+              onClick={() => setView("kanban")}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all ${view === "kanban" ? "bg-white shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              <Kanban className="h-3.5 w-3.5" /> Board
+            </button>
+          </div>
+          <Button onClick={handleAddNew}>
+            <Plus className="me-2 h-4 w-4" /> {t("AddLead" as any) || "Add Lead"}
+          </Button>
         </div>
-        <div className="bg-card border-0 ring-1 ring-slate-100 dark:ring-zinc-800 rounded-xl p-6 shadow-sm flex flex-col justify-center">
-          <h3 className="text-sm font-medium text-muted-foreground">{t("ActiveLeads" as any) || "Active Leads"}</h3>
-          <p className="text-3xl font-bold mt-2 text-blue-600">{leads?.filter(l => l.stage !== "WON" && l.stage !== "LOST").length || 0}</p>
-        </div>
-        <div className="bg-card border-0 ring-1 ring-slate-100 dark:ring-zinc-800 rounded-xl p-6 shadow-sm flex flex-col justify-center">
-          <h3 className="text-sm font-medium text-muted-foreground">{t("WonLeads" as any) || "Leads Won"}</h3>
-          <p className="text-3xl font-bold mt-2 text-emerald-600">{leads?.filter(l => l.stage === "WON").length || 0}</p>
-        </div>
-      </div>
 
-      <div className="flex-1 overflow-auto bg-card rounded-xl border-0 ring-1 ring-slate-100 dark:ring-zinc-800 shadow-sm">
-        <Table>
-          <TableHeader>
-            <TableRow className="bg-slate-50/50 dark:bg-zinc-900/50 hover:bg-slate-50/50 dark:hover:bg-zinc-900/50">
-              <TableHead className="py-4 px-6 font-medium">{t("Customer" as any) || "Customer"}</TableHead>
-              <TableHead className="py-4 px-6 font-medium">{t("Vehicle" as any) || "Vehicle"}</TableHead>
-              <TableHead className="py-4 px-6 font-medium">{t("Stage" as any) || "Stage"}</TableHead>
-              <TableHead className="py-4 px-6 font-medium">{t("AssignedTo" as any) || "Assigned To"}</TableHead>
-              <TableHead className="py-4 px-6 font-medium text-end">{t("Actions" as any) || "Actions"}</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {leads?.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={5} className="text-center py-12 text-muted-foreground">
-                  {t("Empty" as any) || "No leads found. Add a new lead to get started."}
-                </TableCell>
-              </TableRow>
-            ) : (
-              leads?.map((lead) => {
-                let stageTranslationKey: string = lead.stage;
-                if (lead.stage === "NEW") stageTranslationKey = "StageNew";
-                if (lead.stage === "CONTACTED") stageTranslationKey = "StageContacted";
-                if (lead.stage === "INTERESTED") stageTranslationKey = "Interested";
-                if (lead.stage === "TEST_DRIVE") stageTranslationKey = "StageTestDrive";
-                if (lead.stage === "NEGOTIATION") stageTranslationKey = "StageNegotiation";
-                if (lead.stage === "RESERVED") stageTranslationKey = "Reserved";
-                if (lead.stage === "WON") stageTranslationKey = "StageWon";
-                if (lead.stage === "LOST") stageTranslationKey = "Lost";
+        {/* Stats */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 flex-shrink-0">
+          <div className="bg-card border-0 ring-1 ring-slate-100 dark:ring-zinc-800 rounded-xl p-6 shadow-sm flex flex-col justify-center">
+            <h3 className="text-sm font-medium text-muted-foreground">{t("TotalLeads" as any) || "Total Leads"}</h3>
+            <p className="text-3xl font-bold mt-2 text-foreground">{leads?.length || 0}</p>
+          </div>
+          <div className="bg-card border-0 ring-1 ring-slate-100 dark:ring-zinc-800 rounded-xl p-6 shadow-sm flex flex-col justify-center">
+            <h3 className="text-sm font-medium text-muted-foreground">{t("ActiveLeads" as any) || "Active Leads"}</h3>
+            <p className="text-3xl font-bold mt-2 text-blue-600">{leads?.filter(l => l.stage !== "WON" && l.stage !== "LOST").length || 0}</p>
+          </div>
+          <div className="bg-card border-0 ring-1 ring-slate-100 dark:ring-zinc-800 rounded-xl p-6 shadow-sm flex flex-col justify-center">
+            <h3 className="text-sm font-medium text-muted-foreground">{t("WonLeads" as any) || "Leads Won"}</h3>
+            <p className="text-3xl font-bold mt-2 text-emerald-600">{leads?.filter(l => l.stage === "WON").length || 0}</p>
+          </div>
+        </div>
 
-                return (
-                  <TableRow key={lead._id} className="cursor-pointer group hover:bg-slate-50/50 dark:hover:bg-zinc-900/50 transition-colors" onClick={() => handleEdit(lead)}>
-                    <TableCell className="py-4 px-6 font-medium">
-                      <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-slate-100 dark:bg-zinc-800 flex items-center justify-center text-slate-500 font-medium text-xs flex-shrink-0">
-                          {lead.customerName ? lead.customerName.charAt(0).toUpperCase() : "?"}
-                        </div>
-                        <span className="truncate max-w-[200px]">{lead.customerName}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell className="py-4 px-6">
-                      {lead.vehicleSummary ? (
-                        <div className="flex items-center gap-2 text-muted-foreground">
-                          <Car className="w-4 h-4 flex-shrink-0" />
-                          <span className="truncate max-w-[200px]">{lead.vehicleSummary}</span>
-                        </div>
-                      ) : (
-                        <span className="text-muted-foreground/50">-</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="py-4 px-6">
-                      <Badge variant="outline" className={`text-[10px] uppercase font-semibold ${getStageColor(lead.stage)} border-transparent px-2 py-0.5 rounded-full`}>
-                        {t(stageTranslationKey as any) || lead.stage.replace("_", " ")}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="py-4 px-6">
-                      {lead.assignedUserName ? (
-                        <div className="flex items-center gap-2 text-muted-foreground">
-                          <User className="w-4 h-4 flex-shrink-0" />
-                          <span className="truncate max-w-[150px]">{lead.assignedUserName}</span>
-                        </div>
-                      ) : (
-                        <span className="text-muted-foreground/50">-</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="py-4 px-6 text-end">
-                      <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            try {
-                              generateQuote(
-                                "AutoFlow Dealership",
-                                lead.customerName,
-                                lead.vehicleSummary || "Unknown Vehicle",
-                                "TBD",
-                                0
-                              );
-                              toast.success(t("QuoteGenerated" as any) || "Quote generated");
-                            } catch (err) {
-                              toast.error(t("FailedGenerateQuote" as any) || "Failed to generate Quote");
-                            }
-                          }}
-                          className="p-2 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-md text-muted-foreground hover:text-blue-600 transition-colors"
-                          title={t("GenerateQuote" as any) || "Generate Quote"}
-                        >
-                          <FileText className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setLeadToDelete(lead);
-                          }}
-                          className="p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md text-muted-foreground hover:text-red-600 transition-colors"
-                          title={t("RemoveLead" as any) || "Delete Lead"}
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
+        {/* TABLE VIEW */}
+        {view === "table" && (
+          <div className="flex-1 overflow-auto bg-card rounded-xl border-0 ring-1 ring-slate-100 dark:ring-zinc-800 shadow-sm">
+            <Table>
+              <TableHeader>
+                <TableRow className="bg-slate-50/50 dark:bg-zinc-900/50 hover:bg-slate-50/50 dark:hover:bg-zinc-900/50">
+                  <TableHead className="py-4 px-6 font-medium">{t("Customer" as any) || "Customer"}</TableHead>
+                  <TableHead className="py-4 px-6 font-medium">{t("Vehicle" as any) || "Vehicle"}</TableHead>
+                  <TableHead className="py-4 px-6 font-medium">{t("Stage" as any) || "Stage"}</TableHead>
+                  <TableHead className="py-4 px-6 font-medium">{t("AssignedTo" as any) || "Assigned To"}</TableHead>
+                  <TableHead className="py-4 px-6 font-medium text-end">{t("Actions" as any) || "Actions"}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {leads?.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={5} className="text-center py-12 text-muted-foreground">
+                      {t("Empty" as any) || "No leads found. Add a new lead to get started."}
                     </TableCell>
                   </TableRow>
-                );
-              })
+                ) : (
+                  leads?.map((lead) => (
+                    <TableRow key={lead._id} className="cursor-pointer group hover:bg-slate-50/50 dark:hover:bg-zinc-900/50 transition-colors" onClick={() => handleEdit(lead)}>
+                      <TableCell className="py-4 px-6 font-medium">
+                        <div className="flex items-center gap-3">
+                          <div className="w-8 h-8 rounded-full bg-slate-100 dark:bg-zinc-800 flex items-center justify-center text-slate-500 font-medium text-xs flex-shrink-0">
+                            {lead.customerName ? lead.customerName.charAt(0).toUpperCase() : "?"}
+                          </div>
+                          <span className="truncate max-w-[200px]">{lead.customerName}</span>
+                        </div>
+                      </TableCell>
+                      <TableCell className="py-4 px-6">
+                        {lead.vehicleSummary ? (
+                          <div className="flex items-center gap-2 text-muted-foreground">
+                            <Car className="w-4 h-4 flex-shrink-0" />
+                            <span className="truncate max-w-[200px]">{lead.vehicleSummary}</span>
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground/50">-</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="py-4 px-6">
+                        <Badge variant="outline" className={`text-[10px] uppercase font-semibold ${getStageColor(lead.stage)} border-transparent px-2 py-0.5 rounded-full`}>
+                          {translateStage(lead.stage)}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="py-4 px-6">
+                        {lead.assignedUserName ? (
+                          <div className="flex items-center gap-2 text-muted-foreground">
+                            <User className="w-4 h-4 flex-shrink-0" />
+                            <span className="truncate max-w-[150px]">{lead.assignedUserName}</span>
+                          </div>
+                        ) : (
+                          <span className="text-muted-foreground/50">-</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="py-4 px-6 text-end">
+                        <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); try { generateQuote("AutoFlow Dealership", lead.customerName, lead.vehicleSummary || "Unknown Vehicle", "TBD", 0); toast.success(t("QuoteGenerated" as any) || "Quote generated"); } catch { toast.error(t("FailedGenerateQuote" as any) || "Failed to generate Quote"); } }}
+                            className="p-2 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-md text-muted-foreground hover:text-blue-600 transition-colors"
+                          >
+                            <FileText className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); setLeadToDelete(lead); }}
+                            className="p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-md text-muted-foreground hover:text-red-600 transition-colors"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+            {leadsStatus === "CanLoadMore" && (
+              <div className="flex justify-center p-4">
+                <Button variant="outline" onClick={() => loadMoreLeads(25)}>{t("LoadMore" as any) || "Load More"}</Button>
+              </div>
             )}
-          </TableBody>
-        </Table>
-        {leadsStatus === "CanLoadMore" && (
-          <div className="flex justify-center p-4">
-            <Button variant="outline" onClick={() => loadMoreLeads(25)}>
-              {t("LoadMore" as any) || "Load More"}
-            </Button>
           </div>
         )}
+
+        {/* KANBAN VIEW */}
+        {view === "kanban" && (
+          <div className="flex-1 overflow-x-auto pb-4">
+            <div className="flex gap-3 h-full min-w-max">
+              {LEAD_STAGES.map((stage) => {
+                const stageLeads = leadsByStage[stage] || [];
+                return (
+                  <div key={stage} className={`flex flex-col w-60 flex-shrink-0 bg-slate-50 dark:bg-zinc-900/40 rounded-xl border border-t-4 ${getStageBorderColor(stage)}`}>
+                    {/* Column header */}
+                    <div className="px-3 py-3 flex items-center justify-between">
+                      <span className="text-xs font-semibold text-slate-600 uppercase tracking-wide">
+                        {translateStage(stage)}
+                      </span>
+                      <span className="text-xs bg-white dark:bg-zinc-800 border rounded-full px-2 py-0.5 font-medium text-slate-500">
+                        {stageLeads.length}
+                      </span>
+                    </div>
+
+                    {/* Cards */}
+                    <div className="flex-1 overflow-y-auto px-2 pb-2 space-y-2 min-h-[120px]">
+                      {stageLeads.length === 0 ? (
+                        <div className="text-center py-6 text-xs text-muted-foreground/50">Empty</div>
+                      ) : (
+                        stageLeads.map((lead) => (
+                          <div
+                            key={lead._id}
+                            onClick={() => handleEdit(lead)}
+                            className="bg-white dark:bg-zinc-800 rounded-lg p-3 shadow-sm border border-slate-100 dark:border-zinc-700 cursor-pointer hover:shadow-md transition-shadow group"
+                          >
+                            <div className="flex items-center gap-2 mb-2">
+                              <div className="w-6 h-6 rounded-full bg-slate-100 dark:bg-zinc-700 flex items-center justify-center text-[10px] font-medium flex-shrink-0">
+                                {lead.customerName?.charAt(0)?.toUpperCase() ?? "?"}
+                              </div>
+                              <span className="text-sm font-medium truncate">{lead.customerName}</span>
+                            </div>
+                            {lead.vehicleSummary && (
+                              <div className="flex items-center gap-1 text-[11px] text-muted-foreground truncate">
+                                <Car className="w-3 h-3 flex-shrink-0" />
+                                <span className="truncate">{lead.vehicleSummary}</span>
+                              </div>
+                            )}
+                            {lead.assignedUserName && (
+                              <div className="flex items-center gap-1 text-[11px] text-muted-foreground mt-1 truncate">
+                                <User className="w-3 h-3 flex-shrink-0" />
+                                <span className="truncate">{lead.assignedUserName}</span>
+                              </div>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <LeadDialog
+          open={isLeadDialogOpen}
+          onOpenChange={setIsLeadDialogOpen}
+          lead={editingLead}
+        />
+
+        <Dialog open={!!leadToDelete} onOpenChange={(open) => !open && setLeadToDelete(null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{t("RemoveLead" as any) || "Delete Lead"}</DialogTitle>
+              <DialogDescription>
+                {t("RemoveLeadConfirm" as any) || "Are you sure you want to delete this lead?"} <br />
+                <span className="font-semibold text-foreground">{leadToDelete?.customerName}</span>
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setLeadToDelete(null)}>{t("Cancel" as any)}</Button>
+              <Button variant="destructive" onClick={handleDelete}>{t("Delete" as any)}</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
-
-      <LeadDialog
-        open={isLeadDialogOpen}
-        onOpenChange={setIsLeadDialogOpen}
-        lead={editingLead}
-      />
-
-      <Dialog open={!!leadToDelete} onOpenChange={(open) => !open && setLeadToDelete(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t("RemoveLead" as any) || "Delete Lead"}</DialogTitle>
-            <DialogDescription>
-              {t("RemoveLeadConfirm" as any) || "Are you sure you want to delete this lead? This action cannot be undone."} <br />
-              <span className="font-semibold text-foreground">{leadToDelete?.customerName}</span>
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setLeadToDelete(null)}>{t("Cancel" as any) || "Cancel"}</Button>
-            <Button variant="destructive" onClick={handleDelete}>{t("Delete" as any) || "Delete"}</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
     </RoleGuard>
   );
 }

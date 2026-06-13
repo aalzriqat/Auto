@@ -109,6 +109,19 @@ export const respondToApproval = mutation({
   },
 });
 
+export const countPending = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_SETTINGS]);
+    const requests = await ctx.db
+      .query("profitApprovalRequests")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .filter((q) => q.eq(q.field("status"), "PENDING"))
+      .collect();
+    return requests.length;
+  },
+});
+
 export const listPendingApprovals = query({
   args: {
     orgId: v.id("organizations"),

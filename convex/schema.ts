@@ -210,6 +210,7 @@ export default defineSchema({
     termMonths: v.optional(v.number()),
     warrantySold: v.optional(v.number()),
     gapSold: v.optional(v.number()),
+    applicationId: v.optional(v.id("financeApplications")),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
     deletedBy: v.optional(v.string()),
@@ -260,6 +261,7 @@ export default defineSchema({
     description: v.optional(v.string()),
     dueDate: v.number(), // Timestamp for the deadline/schedule
     status: v.union(v.literal("PENDING"), v.literal("COMPLETED"), v.literal("CANCELLED")),
+    priority: v.optional(v.union(v.literal("HIGH"), v.literal("MEDIUM"), v.literal("LOW"))),
     statusNote: v.optional(v.string()), // Notes when cancelled or rescheduled
     communicationMethod: v.optional(v.union(v.literal("PHONE"), v.literal("EMAIL"), v.literal("FAX"))),
     alarmTriggered: v.optional(v.boolean()), // Track if the cron has sent the notification

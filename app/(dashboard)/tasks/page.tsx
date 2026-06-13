@@ -21,6 +21,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Plus, Search, Pencil, Calendar, CheckSquare, XCircle, Clock, History, Phone, Mail, Printer } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { DateTimePicker } from "@/components/ui/datetime-picker";
 import { toast } from "@/components/ui/sonner";
@@ -40,6 +47,7 @@ export default function TasksPage() {
   const updateTask = useMutation(api.tasks.update);
 
   const [searchQuery, setSearchQuery] = useState("");
+  const [priorityFilter, setPriorityFilter] = useState<"all" | "HIGH" | "MEDIUM" | "LOW">("all");
   const [isTaskDialogOpen, setIsTaskDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<any>(null);
   const [taskToCancel, setTaskToCancel] = useState<any>(null);
@@ -51,9 +59,11 @@ export default function TasksPage() {
 
   const filteredTasks = tasks?.filter(t => {
     const q = searchQuery.toLowerCase();
-    return t.title.toLowerCase().includes(q) ||
+    const matchesSearch = t.title.toLowerCase().includes(q) ||
       (t.customerName && t.customerName.toLowerCase().includes(q)) ||
       (t.assigneeName && t.assigneeName.toLowerCase().includes(q));
+    const matchesPriority = priorityFilter === "all" || (t as any).priority === priorityFilter;
+    return matchesSearch && matchesPriority;
   });
 
   const handleEdit = (task: any) => {
@@ -146,6 +156,15 @@ export default function TasksPage() {
     return <Badge variant="secondary" className="bg-yellow-500/20 text-yellow-600 hover:bg-yellow-500/30">{t("TaskPending" as any) || "Pending"}</Badge>;
   };
 
+  const getPriorityBadge = (priority?: string) => {
+    switch (priority) {
+      case "HIGH": return <Badge variant="outline" className="bg-red-50 text-red-600 border-red-200 text-[10px] px-1.5">High</Badge>;
+      case "MEDIUM": return <Badge variant="outline" className="bg-yellow-50 text-yellow-600 border-yellow-200 text-[10px] px-1.5">Med</Badge>;
+      case "LOW": return <Badge variant="outline" className="bg-slate-50 text-slate-500 border-slate-200 text-[10px] px-1.5">Low</Badge>;
+      default: return null;
+    }
+  };
+
   return (
     <RoleGuard permissions={["view:tasks"]}>
       <div className="space-y-6">
@@ -155,14 +174,27 @@ export default function TasksPage() {
         </Button>
       </div>
 
-      <div className="flex items-center w-full max-w-sm space-x-2">
-        <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
-        <Input
-          placeholder={t("SearchTasks" as any) || "Search tasks..."}
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="ps-9"
-        />
+      <div className="flex items-center gap-3 flex-wrap">
+        <div className="relative w-full max-w-sm">
+          <Search className="h-4 w-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+          <Input
+            placeholder={t("SearchTasks" as any) || "Search tasks..."}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="ps-9"
+          />
+        </div>
+        <Select value={priorityFilter} onValueChange={(v) => setPriorityFilter(v as any)}>
+          <SelectTrigger className="w-[140px]">
+            <SelectValue placeholder="Priority" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All priorities</SelectItem>
+            <SelectItem value="HIGH">High</SelectItem>
+            <SelectItem value="MEDIUM">Medium</SelectItem>
+            <SelectItem value="LOW">Low</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       <div className="rounded-md border">
@@ -170,6 +202,7 @@ export default function TasksPage() {
           <TableHeader>
             <TableRow>
               <TableHead className="w-12"></TableHead>
+              <TableHead className="w-16">Priority</TableHead>
               <TableHead>{t("Task" as any) || "Task"}</TableHead>
               <TableHead>{t("DueDate" as any) || "Due Date"}</TableHead>
               <TableHead>{t("AssignedTo" as any) || "Assigned To"}</TableHead>
@@ -181,13 +214,13 @@ export default function TasksPage() {
           <TableBody>
             {filteredTasks === undefined ? (
               <TableRow>
-                <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
                   {t("LoadingTasks" as any) || "Loading tasks..."}
                 </TableCell>
               </TableRow>
             ) : filteredTasks.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={8} className="text-center py-8 text-muted-foreground">
                   {t("NoTasksFound" as any) || "No tasks found."}
                 </TableCell>
               </TableRow>
@@ -203,6 +236,9 @@ export default function TasksPage() {
                     >
                       <CheckSquare className="h-5 w-5" />
                     </Button>
+                  </TableCell>
+                  <TableCell>
+                    {getPriorityBadge((task as any).priority)}
                   </TableCell>
                   <TableCell>
                     <div className="font-medium flex items-center gap-2">

@@ -232,7 +232,7 @@ export const finalizeDeal = mutation({
     // Create the sale record
     await ctx.db.insert("sales", {
       orgId: args.orgId,
-      branchId: vehicle.branchId, // Associate sale with the vehicle's branch
+      branchId: vehicle.branchId,
       vehicleId: app.vehicleId,
       customerId: app.customerId,
       salespersonId: app.salespersonId,
@@ -243,6 +243,7 @@ export const finalizeDeal = mutation({
       financingType: app.companyId ? "FINANCED" : "CASH",
       loanAmount: quote.totalFinancedAmount,
       termMonths: quote.termMonths,
+      applicationId: args.applicationId,
     });
 
     return true;

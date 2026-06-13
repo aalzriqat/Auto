@@ -5,17 +5,31 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 
 export const list = query({
-  args: { 
+  args: {
     orgId: v.id("organizations"),
     paginationOpts: paginationOptsValidator,
+    startDate: v.optional(v.number()),
+    endDate: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
-    return await ctx.db
+    let q = ctx.db
       .query("transactions")
       .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId))
-      .order("desc")
-      .filter((q) => q.neq(q.field("isDeleted"), true)).paginate(args.paginationOpts);
+      .order("desc");
+    return await q
+      .filter((q) => {
+        const notDeleted = q.neq(q.field("isDeleted"), true);
+        if (args.startDate && args.endDate) {
+          return q.and(
+            notDeleted,
+            q.gte(q.field("date"), args.startDate),
+            q.lte(q.field("date"), args.endDate)
+          );
+        }
+        return notDeleted;
+      })
+      .paginate(args.paginationOpts);
   },
 });
 

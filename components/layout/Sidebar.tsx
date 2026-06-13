@@ -1,6 +1,6 @@
 "use client";
 
-import { Car, Users, LayoutDashboard, Target, BadgeDollarSign, Shield, Receipt, ClipboardList, LineChart, Settings, Store } from "lucide-react";
+import { Car, Users, LayoutDashboard, Target, BadgeDollarSign, Shield, Receipt, ClipboardList, LineChart, Settings, Store, BookOpen } from "lucide-react";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
@@ -15,14 +15,17 @@ const navigation = [
   { name: "Vehicles", href: "/vehicles", icon: Car, permission: "view:vehicles" },
   { name: "Customers", href: "/customers", icon: Users, permission: "view:customers" },
   { name: "Leads", href: "/leads", icon: Target, permission: "view:leads" },
-  { name: "Applications", href: "/applications", icon: ClipboardList, permission: "view:sales" },
+  { name: "FinanceApplications", href: "/applications", icon: ClipboardList, permission: "view:sales" },
   { name: "Sales", href: "/sales", icon: BadgeDollarSign, permission: "view:sales" },
   { name: "Tasks", href: "/tasks", icon: ClipboardList, permission: "view:tasks" },
   { name: "Expenses", href: "/expenses", icon: Receipt, permission: "view:expenses" },
-  { name: "Team", href: "/team", icon: Shield, permission: "manage:users" },
-  { name: "Accounting", href: "/accounting", icon: BadgeDollarSign, permission: "view:finance" },
-  { name: "Approvals", href: "/approvals", icon: Shield, permission: "manage:users" },
+  { name: "Accounting", href: "/accounting", icon: BookOpen, permission: "view:finance" },
   { name: "Reports", href: "/reports", icon: LineChart, permission: "view:reports" },
+  { name: "Approvals", href: "/approvals", icon: Shield, permission: "manage:users" },
+];
+
+const settingsNavigation = [
+  { name: "Team", href: "/team", icon: Users, permission: "manage:users" },
   { name: "FinanceSettings", href: "/settings/finance", icon: Settings, permission: "view:settings" },
   { name: "Branches", href: "/settings/branches", icon: Store, permission: "manage:users" },
 ];
@@ -35,10 +38,47 @@ export function Sidebar() {
   const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
   const permissions = myMembership?.permissions || [];
 
-  const visibleNavigation = navigation.filter(item => {
+  const canSeeApprovals = permissions.includes("manage:users");
+  const pendingCount = useQuery(
+    api.approvals.countPending,
+    activeOrgId && canSeeApprovals ? { orgId: activeOrgId } : "skip"
+  );
+
+  const visibleNav = navigation.filter(item => {
     if (!item.permission) return true;
     return permissions.includes(item.permission);
   });
+
+  const visibleSettings = settingsNavigation.filter(item => {
+    if (!item.permission) return true;
+    return permissions.includes(item.permission);
+  });
+
+  const renderNavItem = (item: typeof navigation[0]) => {
+    const isActive = pathname.startsWith(item.href);
+    const isApprovals = item.name === "Approvals";
+
+    return (
+      <Link
+        key={item.name}
+        href={item.href}
+        className={cn(
+          "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all",
+          isActive
+            ? "bg-primary/10 text-primary"
+            : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+        )}
+      >
+        <item.icon className={cn("h-4 w-4 shrink-0", isActive ? "text-primary" : "text-slate-400")} />
+        <span className="flex-1">{t(item.name as any)}</span>
+        {isApprovals && pendingCount != null && pendingCount > 0 && (
+          <span className="bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
+            {pendingCount}
+          </span>
+        )}
+      </Link>
+    );
+  };
 
   return (
     <aside className="hidden md:flex flex-col w-64 border-e border-slate-200/50 bg-white shadow-sm shrink-0">
@@ -48,27 +88,21 @@ export function Sidebar() {
         </Link>
       </div>
 
-      <div className="flex-1 overflow-y-auto py-6 px-3">
+      <div className="flex-1 overflow-y-auto py-4 px-3 flex flex-col gap-1">
         <nav className="flex flex-col gap-1">
-          {visibleNavigation.map((item) => {
-            const isActive = pathname.startsWith(item.href);
-            return (
-              <Link
-                key={item.name}
-                href={item.href}
-                className={cn(
-                  "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all",
-                  isActive
-                    ? "bg-primary/10 text-primary"
-                    : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
-                )}
-              >
-                <item.icon className={cn("h-4 w-4", isActive ? "text-primary" : "text-slate-400")} />
-                {t(item.name as any)}
-              </Link>
-            );
-          })}
+          {visibleNav.map(renderNavItem)}
         </nav>
+
+        {visibleSettings.length > 0 && (
+          <div className="mt-4">
+            <p className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+              {t("Settings" as any)}
+            </p>
+            <nav className="flex flex-col gap-1 mt-1">
+              {visibleSettings.map(renderNavItem)}
+            </nav>
+          </div>
+        )}
       </div>
 
       <div className="p-4 border-t border-slate-200/50">

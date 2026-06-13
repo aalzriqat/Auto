@@ -9,6 +9,7 @@ export const taskSchema = z.object({
   customerId: z.string().optional(),
   vehicleId: z.string().optional(),
   communicationMethod: z.enum(["PHONE", "EMAIL", "FAX", "none"]).optional(),
+  priority: z.enum(["HIGH", "MEDIUM", "LOW", "none"]).optional(),
   status: z.enum(["PENDING", "COMPLETED", "CANCELLED"]),
 });
 

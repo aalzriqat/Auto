@@ -261,6 +261,8 @@ export default function VehiclesPage() {
               <TableHead>{t("Vehicle")}</TableHead>
               <TableHead>{t("VIN" as any)}</TableHead>
               <TableHead>{t("Year" as any)}</TableHead>
+              <TableHead>Mileage</TableHead>
+              <TableHead>Trans.</TableHead>
               <TableHead>{t("Price" as any)}</TableHead>
               <TableHead>{t("Status" as any)}</TableHead>
               <TableHead>{t("Notes" as any)}</TableHead>
@@ -270,13 +272,13 @@ export default function VehiclesPage() {
           <TableBody>
             {filteredVehicles === undefined ? (
               <TableRow>
-                <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
                   {t("LoadingInventory" as any)}
                 </TableCell>
               </TableRow>
             ) : filteredVehicles.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
                   {t("NoVehiclesFound" as any)}
                 </TableCell>
               </TableRow>
@@ -292,6 +294,12 @@ export default function VehiclesPage() {
                   </TableCell>
                   <TableCell className="font-mono text-xs">{vehicle.vin}</TableCell>
                   <TableCell>{vehicle.year}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {vehicle.mileage != null ? vehicle.mileage.toLocaleString() : "-"} km
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {vehicle.transmission ? vehicle.transmission.charAt(0) + vehicle.transmission.slice(1).toLowerCase() : "-"}
+                  </TableCell>
                   <TableCell>{vehicle.sellingPrice.toLocaleString()} JOD</TableCell>
                   <TableCell>
                     <button

@@ -9,7 +9,7 @@ export const metadata: Metadata = {
 
 export default function AccountingPage() {
   return (
-    <RoleGuard permissions={["view:settings"]}>
+    <RoleGuard permissions={["view:finance"]}>
       <AccountingClient />
     </RoleGuard>
   );

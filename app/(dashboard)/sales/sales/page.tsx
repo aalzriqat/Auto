@@ -18,8 +18,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, Search, Pencil, Trash2, FileText } from "lucide-react";
+import { Search, Pencil, Trash2, FileText, ExternalLink } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
+import Link from "next/link";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { toast } from "@/components/ui/sonner";
 import { generateBillOfSale } from "@/lib/pdf";
@@ -61,11 +62,6 @@ export default function SalesPage() {
     setIsSaleDialogOpen(true);
   };
 
-  const handleAddNew = () => {
-    setEditingSale(null);
-    setIsSaleDialogOpen(true);
-  };
-
   const handleDelete = async () => {
     if (!activeOrgId || !saleToDelete) return;
     try {
@@ -93,9 +89,6 @@ export default function SalesPage() {
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => setIsQuoteDialogOpen(true)}>
               {t("CreateQuote" as any)}
-            </Button>
-            <Button onClick={handleAddNew}>
-              <Plus className="me-2 h-4 w-4" /> {t("LogSale" as any)}
             </Button>
           </div>
         </div>
@@ -149,7 +142,16 @@ export default function SalesPage() {
                         <span className="text-xs text-muted-foreground">{sale.vehicleVin}</span>
                       </div>
                     </TableCell>
-                    <TableCell>{sale.salespersonName}</TableCell>
+                    <TableCell>
+                      <div className="flex flex-col gap-1">
+                        <span>{sale.salespersonName}</span>
+                        {(sale as any).applicationId && (
+                          <Link href="/applications" className="flex items-center gap-1 text-[10px] text-blue-500 hover:underline">
+                            <ExternalLink className="h-2.5 w-2.5" /> Finance app
+                          </Link>
+                        )}
+                      </div>
+                    </TableCell>
                     <TableCell className="text-end font-medium">
                       {sale.salePrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} JOD
                     </TableCell>
