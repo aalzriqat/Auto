@@ -66,7 +66,7 @@ export const stats = query({
         .query("sales")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
         .filter(q => q.neq(q.field("status"), "CANCELLED"))
-        .collect();
+        .take(5000);
     }
 
     const salesVolume = periodSales.reduce((acc, sale) => acc + sale.salePrice, 0);
@@ -97,7 +97,7 @@ export const stats = query({
       allExpenses = await ctx.db
         .query("expenses")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .collect();
+        .take(5000);
     }
 
     const vehicleExpenses: Record<string, number> = {};
@@ -162,7 +162,7 @@ export const stats = query({
     const members = await ctx.db
       .query("memberships")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .collect();
+      .take(500);
 
     // 6. Tasks and Team Activity
     // Limit to 1000 most recent to prevent dashboard timeouts on massive orgs

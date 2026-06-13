@@ -1,0 +1,67 @@
+import { MutationCtx } from "../_generated/server";
+import { Id } from "../_generated/dataModel";
+import { Doc } from "../_generated/dataModel";
+
+export async function markVehicleAsSold(
+  ctx: MutationCtx,
+  vehicleId: Id<"vehicles">
+): Promise<void> {
+  await ctx.db.patch(vehicleId, { status: "SOLD" as const });
+}
+
+export async function restoreVehicleToAvailable(
+  ctx: MutationCtx,
+  vehicleId: Id<"vehicles">
+): Promise<void> {
+  const vehicle = await ctx.db.get(vehicleId);
+  if (vehicle && vehicle.status === "SOLD") {
+    await ctx.db.patch(vehicleId, { status: "AVAILABLE" as const });
+  }
+}
+
+export async function createSaleTransaction(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    salePrice: number;
+    saleDate: number;
+    vehicle: Doc<"vehicles">;
+  }
+): Promise<void> {
+  await ctx.db.insert("transactions", {
+    orgId: args.orgId,
+    type: "IN",
+    amount: args.salePrice,
+    date: args.saleDate,
+    category: "VEHICLE_SALE",
+    description: `Sale of vehicle ${args.vehicle.year} ${args.vehicle.make} ${args.vehicle.model} (VIN: ${args.vehicle.vin})`,
+    vehicleId: args.vehicleId,
+  });
+}
+
+export async function closeLeadsAsWon(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    customerId: Id<"customers">;
+    vehicleId: Id<"vehicles">;
+  }
+): Promise<void> {
+  const leads = await ctx.db
+    .query("leads")
+    .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+    .filter((q) =>
+      q.and(
+        q.eq(q.field("customerId"), args.customerId),
+        q.eq(q.field("vehicleId"), args.vehicleId),
+        q.neq(q.field("stage"), "WON"),
+        q.neq(q.field("stage"), "LOST")
+      )
+    )
+    .collect();
+
+  for (const lead of leads) {
+    await ctx.db.patch(lead._id, { stage: "WON" as const });
+  }
+}

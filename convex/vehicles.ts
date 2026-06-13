@@ -500,12 +500,12 @@ export const getRelations = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
 
-    // 1. Fetch Sales
+    // 1. Fetch Sales (a vehicle has at most a handful of sales)
     const sales = await ctx.db
       .query("sales")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .filter((q) => q.eq(q.field("vehicleId"), args.vehicleId))
-      .collect();
+      .take(20);
 
     const enrichedSales = await Promise.all(
       sales.map(async (sale) => {
@@ -524,7 +524,7 @@ export const getRelations = query({
       .query("leads")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .filter((q) => q.eq(q.field("vehicleId"), args.vehicleId))
-      .collect();
+      .take(50);
 
     const enrichedLeads = await Promise.all(
       leads.map(async (lead) => {
@@ -542,7 +542,7 @@ export const getRelations = query({
     const expenses = await ctx.db
       .query("expenses")
       .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
-      .collect();
+      .take(200);
 
     const enrichedExpenses = await Promise.all(
       expenses.map(async (exp) => {
@@ -559,7 +559,7 @@ export const getRelations = query({
     const tasks = await ctx.db
       .query("tasks")
       .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
-      .collect();
+      .take(200);
 
     const enrichedTasks = await Promise.all(
       tasks.map(async (task) => {

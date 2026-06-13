@@ -1,4 +1,4 @@
-import { v, ConvexError } from "convex/values";
+import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -7,6 +7,13 @@ import { notifyManagers, getActorName } from "./utils/notifications";
 import { rateLimiter } from "./rateLimit";
 import { validateInput } from "./utils/validation";
 import { CreateSaleSchema, UpdateSaleSchema } from "./validations/sales";
+import {
+  markVehicleAsSold,
+  restoreVehicleToAvailable,
+  createSaleTransaction,
+  closeLeadsAsWon,
+} from "./utils/saleHelpers";
+import { throwAppError, AppErrorCode } from "./utils/errors";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -86,7 +93,7 @@ export const get = query({
 
     const sale = await ctx.db.get(args.saleId);
     if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
-      throw new ConvexError("Sale not found in this organization.");
+      throwAppError(AppErrorCode.SALE_NOT_FOUND, "Sale not found in this organization.");
     }
 
     const vehicle = await ctx.db.get(sale.vehicleId);
@@ -135,7 +142,7 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const statusLimit = await rateLimiter.limit(ctx, "create");
     if (!statusLimit.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+      throwAppError(AppErrorCode.RATE_LIMIT_EXCEEDED, `Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
     }
 
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
@@ -145,19 +152,19 @@ export const create = mutation({
     // Validate vehicle belongs to org and is available
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.orgId !== args.orgId) {
-      throw new ConvexError("Vehicle not found in this organization.");
+      throwAppError(AppErrorCode.VEHICLE_NOT_FOUND, "Vehicle not found in this organization.");
     }
     if (vehicle.status === "SOLD") {
-      throw new ConvexError("This vehicle has already been sold.");
+      throwAppError(AppErrorCode.VEHICLE_ALREADY_SOLD, "This vehicle has already been sold.");
     }
     if (vehicle.status === "ARCHIVED") {
-      throw new ConvexError("Cannot sell an archived vehicle. Restore it first.");
+      throwAppError(AppErrorCode.VEHICLE_ARCHIVED, "Cannot sell an archived vehicle. Restore it first.");
     }
 
     // Validate customer belongs to org
     const customer = await ctx.db.get(args.customerId);
     if (!customer || customer.orgId !== args.orgId) {
-      throw new ConvexError("Customer not found in this organization.");
+      throwAppError(AppErrorCode.CUSTOMER_NOT_FOUND, "Customer not found in this organization.");
     }
 
     // Validate salesperson is a member of the org
@@ -169,7 +176,7 @@ export const create = mutation({
       .unique();
 
     if (!membership) {
-      throw new ConvexError("Salesperson is not a member of this organization.");
+      throwAppError(AppErrorCode.SALESPERSON_NOT_MEMBER, "Salesperson is not a member of this organization.");
     }
 
     // Create the sale
@@ -195,37 +202,19 @@ export const create = mutation({
       gapSold: args.gapSold,
     });
 
-    // Mark the vehicle as SOLD
-    await ctx.db.patch(args.vehicleId, { status: "SOLD" as const });
-
-    // Log the transaction in the General Ledger
-    await ctx.db.insert("transactions", {
+    await markVehicleAsSold(ctx, args.vehicleId);
+    await createSaleTransaction(ctx, {
       orgId: args.orgId,
-      type: "IN",
-      amount: args.salePrice,
-      date: args.saleDate,
-      category: "VEHICLE_SALE",
-      description: `Sale of vehicle ${vehicle.year} ${vehicle.make} ${vehicle.model} (VIN: ${vehicle.vin})`,
+      vehicleId: args.vehicleId,
+      salePrice: args.salePrice,
+      saleDate: args.saleDate,
+      vehicle,
+    });
+    await closeLeadsAsWon(ctx, {
+      orgId: args.orgId,
+      customerId: args.customerId,
       vehicleId: args.vehicleId,
     });
-
-    // Close any open leads for this vehicle+customer as WON
-    const leads = await ctx.db
-      .query("leads")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) =>
-        q.and(
-          q.eq(q.field("customerId"), args.customerId),
-          q.eq(q.field("vehicleId"), args.vehicleId),
-          q.neq(q.field("stage"), "WON"),
-          q.neq(q.field("stage"), "LOST")
-        )
-      )
-      .collect();
-
-    for (const lead of leads) {
-      await ctx.db.patch(lead._id, { stage: "WON" as const });
-    }
 
     const actorName = await getActorName(ctx);
     await notifyManagers(
@@ -267,7 +256,7 @@ export const update = mutation({
   handler: async (ctx, args) => {
     const statusLimit = await rateLimiter.limit(ctx, "standardApi");
     if (!statusLimit.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+      throwAppError(AppErrorCode.RATE_LIMIT_EXCEEDED, `Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
     }
 
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_SALES]);
@@ -276,7 +265,7 @@ export const update = mutation({
 
     const sale = await ctx.db.get(args.saleId);
     if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
-      throw new ConvexError("Sale not found in this organization.");
+      throwAppError(AppErrorCode.SALE_NOT_FOUND, "Sale not found in this organization.");
     }
 
     const patch: Record<string, unknown> = {};
@@ -300,12 +289,8 @@ export const update = mutation({
       await ctx.db.patch(args.saleId, patch);
     }
 
-    // If sale is cancelled, restore the vehicle to AVAILABLE
     if (args.status === "CANCELLED" && sale.status !== "CANCELLED") {
-      const vehicle = await ctx.db.get(sale.vehicleId);
-      if (vehicle && vehicle.status === "SOLD") {
-        await ctx.db.patch(sale.vehicleId, { status: "AVAILABLE" as const });
-      }
+      await restoreVehicleToAvailable(ctx, sale.vehicleId);
     }
 
     if (Object.keys(patch).length > 0) {
@@ -334,29 +319,23 @@ export const softDelete = mutation({
   handler: async (ctx, args) => {
     const statusLimit = await rateLimiter.limit(ctx, "standardApi");
     if (!statusLimit.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+      throwAppError(AppErrorCode.RATE_LIMIT_EXCEEDED, `Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
     }
 
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_SALES]);
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new ConvexError("Unauthenticated");
+    if (!identity) throwAppError(AppErrorCode.UNAUTHENTICATED, "Unauthenticated");
 
     const sale = await ctx.db.get(args.saleId);
     if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
-      throw new ConvexError("Sale not found in this organization.");
+      throwAppError(AppErrorCode.SALE_NOT_FOUND, "Sale not found in this organization.");
     }
 
     if (sale.status === "COMPLETED") {
-      throw new ConvexError(
-        "Cannot delete a completed sale. Cancel it first."
-      );
+      throwAppError(AppErrorCode.SALE_ALREADY_COMPLETED, "Cannot delete a completed sale. Cancel it first.");
     }
 
-    // Restore vehicle status if it was marked SOLD from this sale
-    const vehicle = await ctx.db.get(sale.vehicleId);
-    if (vehicle && vehicle.status === "SOLD") {
-      await ctx.db.patch(sale.vehicleId, { status: "AVAILABLE" as const });
-    }
+    await restoreVehicleToAvailable(ctx, sale.vehicleId);
 
     await ctx.db.patch(args.saleId, {
       isDeleted: true,

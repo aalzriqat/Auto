@@ -236,13 +236,20 @@ export const removeMembershipInternal = internalMutation({
 
     await ctx.db.delete(args.membershipId);
 
-    // Also remove the user record entirely from the database
-    // since accounts are strictly tied to orgs in this setup
+    // Only delete the Convex user record and Clerk account if this was
+    // their last org membership. Multi-org users must not be evicted globally.
     if (user) {
-      await ctx.db.delete(user._id);
-      return user.clerkId;
+      const remaining = await ctx.db
+        .query("memberships")
+        .withIndex("by_user", (q) => q.eq("userId", user._id))
+        .collect();
+
+      if (remaining.length === 0) {
+        await ctx.db.delete(user._id);
+        return user.clerkId;
+      }
     }
-    
+
     return null;
   },
 });
@@ -388,9 +395,9 @@ export const createAccount = action({
   args: {
     orgId: v.id("organizations"),
     name: v.string(),
-    username: v.string(),
+    username: v.optional(v.string()),
     email: v.string(),
-    password: v.string(),
+    password: v.optional(v.string()),
     roleId: v.id("roles"),
   },
   handler: async (ctx, args) => {
@@ -402,48 +409,71 @@ export const createAccount = action({
     });
 
     try {
-      // 2. Call Clerk API to create the user
       const clerkSecret = process.env.CLERK_SECRET_KEY;
       if (!clerkSecret) throw new ConvexError("CLERK_SECRET_KEY is not set.");
 
-      const response = await fetch("https://api.clerk.com/v1/users", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${clerkSecret}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          email_address: [args.email.toLowerCase().trim()],
-          password: args.password,
-          username: args.username,
-          first_name: args.name.split(" ")[0],
-          last_name: args.name.split(" ").slice(1).join(" ") || undefined,
-          skip_password_checks: false,
-          skip_password_requirement: false,
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        console.error("Clerk user creation failed:", errorData);
-        const firstError = errorData.errors?.[0];
-        if (firstError) {
-          if (firstError.code === "form_data_missing" && firstError.meta?.param_names?.includes("last_name")) {
-            throw new ConvexError("Family name is required. Please enter both first and last name.");
-          }
-          throw new ConvexError(firstError.long_message || firstError.message || "Failed to create user in Clerk");
+      // 2. Check if a Clerk user already exists with this email
+      const lookupResponse = await fetch(
+        `https://api.clerk.com/v1/users?email_address=${encodeURIComponent(args.email.toLowerCase().trim())}`,
+        {
+          method: "GET",
+          headers: { "Authorization": `Bearer ${clerkSecret}` },
         }
-        throw new ConvexError("Failed to create user in Clerk");
+      );
+
+      let clerkId: string | null = null;
+
+      if (lookupResponse.ok) {
+        const existingUsers = await lookupResponse.json();
+        if (Array.isArray(existingUsers) && existingUsers.length > 0) {
+          // User already has a Clerk account — reuse it, no need to create
+          clerkId = existingUsers[0].id;
+        }
       }
 
-      // Parse Clerk API response
-      const clerkUser = await response.json();
-      const clerkId = clerkUser.id;
+      if (!clerkId) {
+        // 3a. No existing Clerk account — create a new one
+        if (!args.password) {
+          throw new ConvexError("Password is required when creating a new account.");
+        }
 
-      // 3. Finalize: Instantly create the user and membership in Convex
-      // This bypasses the webhook delay ensuring immediate access.
+        const response = await fetch("https://api.clerk.com/v1/users", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${clerkSecret}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            email_address: [args.email.toLowerCase().trim()],
+            password: args.password,
+            username: args.username,
+            first_name: args.name.split(" ")[0],
+            last_name: args.name.split(" ").slice(1).join(" ") || undefined,
+            skip_password_checks: false,
+            skip_password_requirement: false,
+          }),
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json();
+          console.error("Clerk user creation failed:", errorData);
+          const firstError = errorData.errors?.[0];
+          if (firstError) {
+            if (firstError.code === "form_data_missing" && firstError.meta?.param_names?.includes("last_name")) {
+              throw new ConvexError("Family name is required. Please enter both first and last name.");
+            }
+            throw new ConvexError(firstError.long_message || firstError.message || "Failed to create user in Clerk");
+          }
+          throw new ConvexError("Failed to create user in Clerk");
+        }
+
+        const clerkUser = await response.json();
+        clerkId = clerkUser.id;
+      }
+
+      // 3b. Finalize: Create Convex user record + membership (idempotent)
       await ctx.runMutation(internal.memberships.finalizeDirectAccount, {
-        clerkId,
+        clerkId: clerkId!,
         email: args.email,
         name: args.name,
         orgId: args.orgId,
@@ -453,12 +483,46 @@ export const createAccount = action({
 
       return { success: true };
     } catch (error: any) {
-      // 3. Rollback: Delete the invitation if Clerk creation failed
+      // Rollback: Delete the invitation if anything failed
       await ctx.runMutation(internal.memberships.rollbackDirectAccount, { inviteId });
       throw new ConvexError(error.message || "An unexpected error occurred during user creation.");
     }
   }
 });
+
+/**
+ * Check whether an email address already has a Clerk account.
+ * Returns exists flag and the user's display name if found.
+ * Used by the frontend to decide whether to show the username/password/name fields.
+ */
+export const checkEmailExists = action({
+  args: { email: v.string() },
+  handler: async (ctx, args): Promise<{ exists: boolean; name?: string }> => {
+    const clerkSecret = process.env.CLERK_SECRET_KEY;
+    if (!clerkSecret) return { exists: false };
+
+    const response = await fetch(
+      `https://api.clerk.com/v1/users?email_address=${encodeURIComponent(args.email.toLowerCase().trim())}`,
+      {
+        method: "GET",
+        headers: { "Authorization": `Bearer ${clerkSecret}` },
+      }
+    );
+
+    if (!response.ok) return { exists: false };
+
+    const users = await response.json();
+    if (!Array.isArray(users) || users.length === 0) return { exists: false };
+
+    const clerkUser = users[0];
+    const firstName = clerkUser.first_name || "";
+    const lastName = clerkUser.last_name || "";
+    const fullName = [firstName, lastName].filter(Boolean).join(" ") || clerkUser.username || "";
+
+    return { exists: true, name: fullName || undefined };
+  }
+});
+
 
 export const finalizeDirectAccount = internalMutation({
   args: {
@@ -478,10 +542,14 @@ export const finalizeDirectAccount = internalMutation({
 
     let userId;
     if (existingUser) {
-      await ctx.db.patch(existingUser._id, {
-        email: args.email,
-        name: args.name,
-      });
+      // Only update fields that are blank — don't overwrite an existing user's
+      // real name/email with whatever the admin typed in the invite form.
+      const patch: Record<string, string> = {};
+      if (!existingUser.name && args.name) patch.name = args.name;
+      if (!existingUser.email && args.email) patch.email = args.email;
+      if (Object.keys(patch).length > 0) {
+        await ctx.db.patch(existingUser._id, patch);
+      }
       userId = existingUser._id;
     } else {
       userId = await ctx.db.insert("users", {

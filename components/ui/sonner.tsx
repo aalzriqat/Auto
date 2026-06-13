@@ -2,6 +2,7 @@
 
 import { useTheme } from "next-themes"
 import { Toaster as Sonner, toast as originalToast } from "sonner"
+import * as Sentry from "@sentry/nextjs"
 
 type ToasterProps = React.ComponentProps<typeof Sonner>
 
@@ -28,6 +29,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
   )
 }
 
+// Global user-friendly error formatting utility
 function formatFriendlyError(error: any, locale: string): string {
   if (!error) {
     return locale === "ar" 
@@ -44,16 +46,17 @@ function formatFriendlyError(error: any, locale: string): string {
     rawMessage = error.message || error.error || JSON.stringify(error);
   }
 
-  // Split lines to discard stack traces (take only the primary message line)
-  let cleanedMessage = rawMessage.split("\n")[0].trim();
+  // Strip common framework prefixes (including nested "Uncaught ConvexError:" chains)
+  rawMessage = rawMessage.replace(/(?:Uncaught\s+)?ConvexError:\s*/gi, "").trim();
 
-  // Clean up all common runtime/framework wrapper prefixes recursively
-  let previous = "";
-  while (cleanedMessage !== previous) {
-    previous = cleanedMessage;
-    cleanedMessage = cleanedMessage
-      .replace(/^(Uncaught\s+)?(in\s+promise\s+)?(Convex)?Error:\s*/i, "")
-      .trim();
+  // Unwrap structured AppError JSON: {"code":"VEHICLE_NOT_FOUND","message":"..."}
+  try {
+    const parsed = JSON.parse(rawMessage);
+    if (parsed && typeof parsed === "object" && typeof parsed.message === "string") {
+      rawMessage = parsed.message;
+    }
+  } catch {
+    // Not JSON — use rawMessage as-is
   }
 
   // Standard user-friendly keys and mappings
@@ -62,11 +65,12 @@ function formatFriendlyError(error: any, locale: string): string {
     "last_name": "Please enter both first and last name (Family Name is required).",
     "last name": "Please enter both first and last name (Family Name is required).",
     "email_address is already in use": "This email address is already in use by another account.",
-    "username is already in use": "This username is already in use.",
-    "already a member of this organization": "This user is already a member of this organization.",
-    "already a member": "This user is already a member of this organization.",
+    "that email address is taken": "This email address already has an account. Use the \"Add to Organization\" flow instead.",
+    "username is already in use": "This username is already in use. Please choose a different one.",
     "missing data": "Required profile data is missing or invalid. Please check all fields.",
     "accountcreatedfail": "Failed to create account. Please verify input fields.",
+    "password is required when creating": "A password is required when creating a new account.",
+    "family name is required": "Family name is required. Please enter both first and last name.",
     
     // Auth & Permissions
     "unauthenticated": "You must be logged in to perform this action.",
@@ -94,6 +98,27 @@ function formatFriendlyError(error: any, locale: string): string {
     "assigned user is not a member": "The assigned employee is not active in this organization.",
     "owner role cannot be renamed": "The Owner role is system-locked and cannot be renamed.",
     "owner role cannot be deleted": "The Owner role is system-locked and cannot be deleted.",
+    "already a member of this organization": "This user is already a member of this organization.",
+    "already an admin": "This user already has administrator privileges in this organization.",
+    "member not found": "The specified member could not be found in this organization.",
+    "cannot remove owner": "The organization owner cannot be removed from the organization.",
+    "cannot change owner role": "The organization owner's role cannot be changed.",
+    "role is in use": "This role is currently assigned to one or more members and cannot be deleted.",
+    "permission denied": "You do not have the required permissions for this action.",
+    "duplicate entry": "A record with this information already exists.",
+    "already exists": "A record with this information already exists.",
+    "test drive not found": "The requested test drive record could not be found.",
+    "sale not found": "The requested sale record could not be found.",
+    "financing application not found": "The financing application could not be found.",
+    "document not found": "The requested document could not be found.",
+    "image not found": "The requested image could not be found.",
+    "quote not found": "The requested quote could not be found.",
+    "cannot delete": "This record cannot be deleted because it is referenced by other records.",
+    "invalid date": "Please enter a valid date.",
+    "invalid price": "Please enter a valid price amount.",
+    "invalid amount": "Please enter a valid amount.",
+    "invalid phone": "Please enter a valid phone number.",
+    "required field": "One or more required fields are missing. Please fill in all required fields.",
     
     // Media & Files
     "exceeds 5mb limit": "File size exceeds the 5MB upload limit.",
@@ -125,11 +150,12 @@ function formatFriendlyError(error: any, locale: string): string {
     "last_name": "يرجى إدخال الاسم الأول والأخير (اسم العائلة مطلوب).",
     "last name": "يرجى إدخال الاسم الأول والأخير (اسم العائلة مطلوب).",
     "email_address is already in use": "البريد الإلكتروني مستخدم بالفعل في حساب آخر.",
-    "username is already in use": "اسم المستخدم هذا مستخدم بالفعل.",
-    "already a member of this organization": "هذا المستخدم عضو بالفعل في هذا المعرض.",
-    "already a member": "هذا المستخدم عضو بالفعل في هذا المعرض.",
+    "that email address is taken": "هذا البريد الإلكتروني مرتبط بحساب موجود. استخدم خيار \"الإضافة إلى المعرض\" بدلاً من ذلك.",
+    "username is already in use": "اسم المستخدم هذا مستخدم بالفعل. يرجى اختيار اسم آخر.",
     "missing data": "البيانات المطلوبة مفقودة أو غير صالحة. يرجى التحقق من الحقول.",
     "accountcreatedfail": "فشل إنشاء الحساب. يرجى التحقق من الحقول المدخلة.",
+    "password is required when creating": "كلمة المرور مطلوبة عند إنشاء حساب جديد.",
+    "family name is required": "اسم العائلة مطلوب. يرجى إدخال الاسم الأول والأخير.",
     
     // Auth & Permissions
     "unauthenticated": "يجب تسجيل الدخول لإتمام هذا الإجراء.",
@@ -157,6 +183,27 @@ function formatFriendlyError(error: any, locale: string): string {
     "assigned user is not a member": "الموظف المعين ليس عضواً نشطاً في هذا المعرض.",
     "owner role cannot be renamed": "دور المالك مغلق من النظام ولا يمكن إعادة تسميته.",
     "owner role cannot be deleted": "دور المالك مغلق من النظام ولا يمكن حذفه.",
+    "already a member of this organization": "هذا المستخدم عضو بالفعل في هذا المعرض.",
+    "already an admin": "يمتلك هذا المستخدم صلاحيات مسؤول بالفعل في هذا المعرض.",
+    "member not found": "العضو المحدد غير موجود في هذا المعرض.",
+    "cannot remove owner": "لا يمكن إزالة مالك المعرض من المعرض.",
+    "cannot change owner role": "لا يمكن تغيير دور مالك المعرض.",
+    "role is in use": "هذا الدور مخصص لأحد الأعضاء حالياً ولا يمكن حذفه.",
+    "permission denied": "ليس لديك الصلاحيات اللازمة لتنفيذ هذا الإجراء.",
+    "duplicate entry": "يوجد سجل بهذه المعلومات بالفعل.",
+    "already exists": "يوجد سجل بهذه المعلومات بالفعل.",
+    "test drive not found": "سجل تجربة القيادة المطلوب غير موجود.",
+    "sale not found": "سجل عملية البيع المطلوب غير موجود.",
+    "financing application not found": "طلب التمويل غير موجود.",
+    "document not found": "المستند المطلوب غير موجود.",
+    "image not found": "الصورة المطلوبة غير موجودة.",
+    "quote not found": "عرض السعر المطلوب غير موجود.",
+    "cannot delete": "لا يمكن حذف هذا السجل لأنه مرتبط بسجلات أخرى.",
+    "invalid date": "يرجى إدخال تاريخ صالح.",
+    "invalid price": "يرجى إدخال مبلغ سعر صالح.",
+    "invalid amount": "يرجى إدخال مبلغ صالح.",
+    "invalid phone": "يرجى إدخال رقم هاتف صالح.",
+    "required field": "حقل واحد أو أكثر مطلوب. يرجى ملء جميع الحقول الإلزامية.",
     
     // Media & Files
     "exceeds 5mb limit": "حجم الملف يتجاوز الحد الأقصى المسموح به (5 ميجابايت).",
@@ -183,7 +230,7 @@ function formatFriendlyError(error: any, locale: string): string {
     "failed to rename org": "فشل إعادة تسمية المعرض.",
   };
 
-  const lowerMessage = cleanedMessage.toLowerCase();
+  const lowerMessage = rawMessage.toLowerCase();
 
   // Search for partial matches
   for (const [key, value] of Object.entries(enTranslations)) {
@@ -199,9 +246,9 @@ function formatFriendlyError(error: any, locale: string): string {
       : "Account registry error. Please ensure all required form fields are completed correctly.";
   }
 
-  // Return formatted cleaned message if not developer-heavy, otherwise generic
-  if (cleanedMessage.length > 0 && !lowerMessage.includes("error:") && !lowerMessage.includes("uncaught") && !lowerMessage.includes("exception")) {
-    return cleanedMessage;
+  // Return formatted raw message if not developer-heavy, otherwise generic
+  if (rawMessage.length > 0 && !lowerMessage.includes("error:") && !lowerMessage.includes("uncaught") && !lowerMessage.includes("exception")) {
+    return rawMessage;
   }
 
   return locale === "ar"
@@ -213,8 +260,11 @@ function formatFriendlyError(error: any, locale: string): string {
 export const toast = {
   ...originalToast,
   error: (message: any, options?: any) => {
-    const locale = typeof window !== "undefined" 
-      ? (localStorage.getItem("autoflow-locale") || "en") 
+    if (message instanceof Error) {
+      Sentry.captureException(message, { tags: { source: "toast" } });
+    }
+    const locale = typeof window !== "undefined"
+      ? (localStorage.getItem("autoflow-locale") || "en")
       : "en";
     const friendlyMessage = formatFriendlyError(message, locale);
     return originalToast.error(friendlyMessage, options);

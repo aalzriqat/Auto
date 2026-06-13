@@ -1,7 +1,7 @@
 import { QueryCtx, MutationCtx } from "../_generated/server";
 import { Id, Doc } from "../_generated/dataModel";
-import { ConvexError } from "convex/values";
 import { Permission } from "./permissions";
+import { throwAppError, AppErrorCode } from "./errors";
 
 /**
  * Result returned by all auth helpers so callers have typed access
@@ -23,7 +23,7 @@ export interface TenantAuthContext {
 export async function requireAuth(ctx: QueryCtx | MutationCtx): Promise<Doc<"users">> {
   const identity = await ctx.auth.getUserIdentity();
   if (!identity) {
-    throw new ConvexError("Unauthenticated: You must be logged in.");
+    throwAppError(AppErrorCode.UNAUTHENTICATED, "Unauthenticated: You must be logged in.");
   }
 
   const user = await ctx.db
@@ -32,7 +32,7 @@ export async function requireAuth(ctx: QueryCtx | MutationCtx): Promise<Doc<"use
     .unique();
 
   if (!user) {
-    throw new ConvexError("User not found in the database. Please contact support.");
+    throwAppError(AppErrorCode.USER_NOT_FOUND, "User not found in the database. Please contact support.");
   }
 
   return user;
@@ -58,7 +58,7 @@ export async function requireTenantAuth(
   // Verify the org itself exists
   const org = await ctx.db.get(orgId);
   if (!org) {
-    throw new ConvexError("Organization not found.");
+    throwAppError(AppErrorCode.ORG_NOT_FOUND, "Organization not found.");
   }
 
   const membership = await ctx.db
@@ -67,18 +67,19 @@ export async function requireTenantAuth(
     .unique();
 
   if (!membership) {
-    throw new ConvexError("Unauthorized: You are not a member of this organization.");
+    throwAppError(AppErrorCode.UNAUTHORIZED, "Unauthorized: You are not a member of this organization.");
   }
 
   const role = await ctx.db.get(membership.roleId);
   if (!role) {
-    throw new ConvexError("Membership role not found or corrupted.");
+    throwAppError(AppErrorCode.ROLE_NOT_FOUND, "Membership role not found or corrupted.");
   }
 
   if (requiredPermissions.length > 0) {
     const missing = requiredPermissions.filter((p) => !role.permissions.includes(p));
     if (missing.length > 0) {
-      throw new ConvexError(
+      throwAppError(
+        AppErrorCode.FORBIDDEN,
         `Forbidden: Missing required permissions: ${missing.join(", ")}`
       );
     }
@@ -99,7 +100,7 @@ export async function requireOwner(
 ): Promise<TenantAuthContext> {
   const authCtx = await requireTenantAuth(ctx, orgId);
   if (authCtx.role.name !== "OWNER") {
-    throw new ConvexError("Forbidden: Only the organization owner can perform this action.");
+    throwAppError(AppErrorCode.FORBIDDEN, "Forbidden: Only the organization owner can perform this action.");
   }
   return authCtx;
 }
