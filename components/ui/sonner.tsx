@@ -28,7 +28,6 @@ const Toaster = ({ ...props }: ToasterProps) => {
   )
 }
 
-// Global user-friendly error formatting utility
 function formatFriendlyError(error: any, locale: string): string {
   if (!error) {
     return locale === "ar" 
@@ -45,8 +44,17 @@ function formatFriendlyError(error: any, locale: string): string {
     rawMessage = error.message || error.error || JSON.stringify(error);
   }
 
-  // Strip common framework prefixes
-  rawMessage = rawMessage.replace(/^ConvexError:\s*/i, "").trim();
+  // Split lines to discard stack traces (take only the primary message line)
+  let cleanedMessage = rawMessage.split("\n")[0].trim();
+
+  // Clean up all common runtime/framework wrapper prefixes recursively
+  let previous = "";
+  while (cleanedMessage !== previous) {
+    previous = cleanedMessage;
+    cleanedMessage = cleanedMessage
+      .replace(/^(Uncaught\s+)?(in\s+promise\s+)?(Convex)?Error:\s*/i, "")
+      .trim();
+  }
 
   // Standard user-friendly keys and mappings
   const enTranslations: Record<string, string> = {
@@ -55,6 +63,8 @@ function formatFriendlyError(error: any, locale: string): string {
     "last name": "Please enter both first and last name (Family Name is required).",
     "email_address is already in use": "This email address is already in use by another account.",
     "username is already in use": "This username is already in use.",
+    "already a member of this organization": "This user is already a member of this organization.",
+    "already a member": "This user is already a member of this organization.",
     "missing data": "Required profile data is missing or invalid. Please check all fields.",
     "accountcreatedfail": "Failed to create account. Please verify input fields.",
     
@@ -116,6 +126,8 @@ function formatFriendlyError(error: any, locale: string): string {
     "last name": "يرجى إدخال الاسم الأول والأخير (اسم العائلة مطلوب).",
     "email_address is already in use": "البريد الإلكتروني مستخدم بالفعل في حساب آخر.",
     "username is already in use": "اسم المستخدم هذا مستخدم بالفعل.",
+    "already a member of this organization": "هذا المستخدم عضو بالفعل في هذا المعرض.",
+    "already a member": "هذا المستخدم عضو بالفعل في هذا المعرض.",
     "missing data": "البيانات المطلوبة مفقودة أو غير صالحة. يرجى التحقق من الحقول.",
     "accountcreatedfail": "فشل إنشاء الحساب. يرجى التحقق من الحقول المدخلة.",
     
@@ -171,7 +183,7 @@ function formatFriendlyError(error: any, locale: string): string {
     "failed to rename org": "فشل إعادة تسمية المعرض.",
   };
 
-  const lowerMessage = rawMessage.toLowerCase();
+  const lowerMessage = cleanedMessage.toLowerCase();
 
   // Search for partial matches
   for (const [key, value] of Object.entries(enTranslations)) {
@@ -187,9 +199,9 @@ function formatFriendlyError(error: any, locale: string): string {
       : "Account registry error. Please ensure all required form fields are completed correctly.";
   }
 
-  // Return formatted raw message if not developer-heavy, otherwise generic
-  if (rawMessage.length > 0 && !lowerMessage.includes("error:") && !lowerMessage.includes("uncaught") && !lowerMessage.includes("exception")) {
-    return rawMessage;
+  // Return formatted cleaned message if not developer-heavy, otherwise generic
+  if (cleanedMessage.length > 0 && !lowerMessage.includes("error:") && !lowerMessage.includes("uncaught") && !lowerMessage.includes("exception")) {
+    return cleanedMessage;
   }
 
   return locale === "ar"
