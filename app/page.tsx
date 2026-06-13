@@ -302,7 +302,7 @@ export default function CreativeMarketingPage() {
   const [pipelineData, setPipelineData] = useState({
     client: "Sarah Jenkins",
     vehicle: "2024 Porsche 911 Carrera S",
-    price: "$134,200",
+    price: "95,000 JOD",
     creditScore: "785 (Excellent)",
     terms: "60 mo @ 4.9% APR",
     status: "New Lead Captured"
@@ -638,7 +638,7 @@ export default function CreativeMarketingPage() {
                 {/* Live mock screen display */}
                 <div className="relative w-full h-[calc(100%-3rem)] bg-[#030014] select-none overflow-hidden">
                   <Image 
-                    src="/dashboard-mockup-v2.png" 
+                    src="/dashboard.png" 
                     alt="AutoFlow Enterprise Dashboard Interface Preview" 
                     fill
                     priority
@@ -692,9 +692,9 @@ export default function CreativeMarketingPage() {
                   {/* Mock Inventory List */}
                   <div className="space-y-2.5 my-4">
                     {[
-                      { name: "Porsche 911 GT3 RS", vin: "WP0AC2A98HS12", status: "Reserved", statusAr: "محجوزة", color: "text-amber-400 bg-amber-400/5 border-amber-400/20", price: "$223,800" },
-                      { name: "Mercedes-AMG GT Black Series", vin: "WDDJK9FB2HA04", status: "Available", statusAr: "متوفرة", color: "text-emerald-400 bg-emerald-400/5 border-emerald-400/20", price: "$325,000" },
-                      { name: "Ferrari 296 GTB", vin: "ZFF89LHB7KS09", status: "Sold", statusAr: "مباعة", color: "text-indigo-400 bg-indigo-400/5 border-indigo-400/20", price: "$318,500" }
+                      { name: "Porsche 911 GT3 RS", vin: "WP0AC2A98HS12", status: "Reserved", statusAr: "محجوزة", color: "text-amber-400 bg-amber-400/5 border-amber-400/20", price: locale === "ar" ? "160,000 د.أ" : "160,000 JOD" },
+                      { name: "Mercedes-AMG GT Black Series", vin: "WDDJK9FB2HA04", status: "Available", statusAr: "متوفرة", color: "text-emerald-400 bg-emerald-400/5 border-emerald-400/20", price: locale === "ar" ? "230,000 د.أ" : "230,000 JOD" },
+                      { name: "Ferrari 296 GTB", vin: "ZFF89LHB7KS09", status: "Sold", statusAr: "مباعة", color: "text-indigo-400 bg-indigo-400/5 border-indigo-400/20", price: locale === "ar" ? "225,000 د.أ" : "225,000 JOD" }
                     ].map((car, idx) => (
                       <div 
                         key={idx} 
@@ -840,7 +840,7 @@ export default function CreativeMarketingPage() {
                   <div className="flex justify-between items-center text-sm">
                     <span className="font-bold text-white/75">{t.calcVal}</span>
                     <span className="font-black text-indigo-400 text-lg" style={{ direction: "ltr" }}>
-                      {locale === "ar" ? "" : "$"}{carPrice.toLocaleString()}{locale === "ar" ? " دولار" : ""}
+                      {carPrice.toLocaleString()} {locale === "ar" ? "د.أ" : "JOD"}
                     </span>
                   </div>
                   <input 
@@ -853,8 +853,8 @@ export default function CreativeMarketingPage() {
                     className="w-full accent-indigo-500 h-1.5 bg-white/5 rounded-lg cursor-pointer"
                   />
                   <div className="flex justify-between text-[10px] text-white/20 font-bold" style={{ direction: "ltr" }}>
-                    <span>$15,000</span>
-                    <span>$250,000</span>
+                    <span>15,000 JOD</span>
+                    <span>250,000 JOD</span>
                   </div>
                 </div>
 
@@ -863,7 +863,7 @@ export default function CreativeMarketingPage() {
                   <div className="flex justify-between items-center text-sm">
                     <span className="font-bold text-white/75">{t.calcDown}</span>
                     <span className="font-black text-indigo-400 text-lg" style={{ direction: "ltr" }}>
-                      {locale === "ar" ? "" : "$"}{downPayment.toLocaleString()}{locale === "ar" ? " دولار" : ""}
+                      {downPayment.toLocaleString()} {locale === "ar" ? "د.أ" : "JOD"}
                     </span>
                   </div>
                   <input 
@@ -876,8 +876,8 @@ export default function CreativeMarketingPage() {
                     className="w-full accent-indigo-500 h-1.5 bg-white/5 rounded-lg cursor-pointer"
                   />
                   <div className="flex justify-between text-[10px] text-white/20 font-bold" style={{ direction: "ltr" }}>
-                    <span>$0</span>
-                    <span>Max ({carPrice ? `$${carPrice.toLocaleString()}` : ""})</span>
+                    <span>0 JOD</span>
+                    <span>Max ({carPrice ? `${carPrice.toLocaleString()} JOD` : ""})</span>
                   </div>
                 </div>
 
@@ -934,7 +934,7 @@ export default function CreativeMarketingPage() {
                 <div className="text-center relative z-10">
                   <span className="text-[10px] font-extrabold tracking-widest text-white/30 uppercase">{t.calcMonthly}</span>
                   <div className="text-4xl sm:text-5xl font-black text-white mt-1 mb-2" style={{ direction: "ltr" }}>
-                    {locale === "ar" ? "" : "$"}{Math.round(monthlyInstallment).toLocaleString()}{locale === "ar" ? " دولار" : ""}
+                    {Math.round(monthlyInstallment).toLocaleString()} <span className="text-xl font-bold">{locale === "ar" ? "د.أ" : "JOD"}</span>
                     <span className="text-sm font-light text-white/40 tracking-wider"> / {locale === "ar" ? "شهرياً" : "mo"}</span>
                   </div>
                 </div>
@@ -977,19 +977,19 @@ export default function CreativeMarketingPage() {
                   <div className="flex justify-between items-center text-xs">
                     <span className="text-white/40 font-bold">{t.calcPrinc}</span>
                     <span className="text-white font-extrabold" style={{ direction: "ltr" }}>
-                      {locale === "ar" ? "" : "$"}{principal.toLocaleString()}{locale === "ar" ? " دولار" : ""}
+                      {principal.toLocaleString()} {locale === "ar" ? "د.أ" : "JOD"}
                     </span>
                   </div>
                   <div className="flex justify-between items-center text-xs">
                     <span className="text-white/40 font-bold">{t.calcInterest}</span>
                     <span className="text-purple-400 font-extrabold" style={{ direction: "ltr" }}>
-                      {locale === "ar" ? "" : "$"}{Math.round(totalInterest).toLocaleString()}{locale === "ar" ? " دولار" : ""}
+                      {Math.round(totalInterest).toLocaleString()} {locale === "ar" ? "د.أ" : "JOD"}
                     </span>
                   </div>
                   <div className="flex justify-between items-center text-xs border-t border-white/5 pt-3">
                     <span className="text-white/40 font-bold">{t.calcTotalPaid}</span>
                     <span className="text-white font-black text-sm" style={{ direction: "ltr" }}>
-                      {locale === "ar" ? "" : "$"}{Math.round(totalPaid).toLocaleString()}{locale === "ar" ? " دولار" : ""}
+                      {Math.round(totalPaid).toLocaleString()} {locale === "ar" ? "د.أ" : "JOD"}
                     </span>
                   </div>
                 </div>
@@ -1160,7 +1160,7 @@ export default function CreativeMarketingPage() {
 
                   <div className="bg-white/[0.02] border border-white/5 rounded-2xl p-5">
                     <div className="text-2xl sm:text-3xl font-black text-white mb-1" style={{ direction: "ltr" }}>
-                      {locale === "ar" ? "" : "$"}{annualSavingsDollars.toLocaleString()}{locale === "ar" ? " دولار" : ""}
+                      {annualSavingsDollars.toLocaleString()} {locale === "ar" ? "د.أ" : "JOD"}
                     </div>
                     <div className="text-[10px] text-indigo-400 font-extrabold uppercase tracking-wide mb-1">
                       {t.roiSavings}
@@ -1228,10 +1228,11 @@ export default function CreativeMarketingPage() {
 
                 <h3 className="text-xl sm:text-2xl font-black text-white mb-4">{t.pricingBadge}</h3>
                 
-                <div className="flex items-baseline justify-center gap-1.5 mb-10" style={{ direction: "ltr" }}>
+                <div className="flex items-baseline justify-center gap-1.5 mb-10" style={{ direction: isRtl ? "rtl" : "ltr" }}>
                   <span className="text-5xl sm:text-6xl font-black text-white">
-                    {billingPeriod === "annual" ? "$119" : "$149"}
+                    {billingPeriod === "annual" ? "119" : "149"}
                   </span>
+                  <span className="text-white/80 font-bold text-lg mx-1">{locale === "ar" ? "د.أ" : "JOD"}</span>
                   <span className="text-white/30 tracking-widest text-xs">/ {locale === "ar" ? "شهرياً" : "mo"}</span>
                 </div>
                 
