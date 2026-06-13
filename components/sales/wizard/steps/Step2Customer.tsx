@@ -15,7 +15,7 @@ import  CustomerSearch  from "../components/CustomerSearch";
 import { CustomerCreateForm } from "../components/CustomerCreateForm";
 import { CustomerBanner } from "../components/CustomerBanner";
 
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 
 // ─────────────────────────────────────────────
 // Props

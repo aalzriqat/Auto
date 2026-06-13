@@ -17,7 +17,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Building2, Plus, Pencil, Trash2 } from "lucide-react";
 import { FinanceCompanyDialog } from "@/components/settings/FinanceCompanyDialog";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 import { Badge } from "@/components/ui/badge";
 import { Id } from "@/convex/_generated/dataModel";
 import { DocumentRuleDialog } from "@/components/settings/DocumentRuleDialog";

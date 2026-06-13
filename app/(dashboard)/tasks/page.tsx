@@ -23,7 +23,7 @@ import {
 import { Plus, Search, Pencil, Calendar, CheckSquare, XCircle, Clock, History, Phone, Mail, Printer } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { DateTimePicker } from "@/components/ui/datetime-picker";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 import {
   Dialog,
   DialogContent,

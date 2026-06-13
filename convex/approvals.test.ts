@@ -1,3 +1,8 @@
+declare global {
+  interface ImportMeta {
+    glob: any;
+  }
+}
 import { describe, it, expect, vi } from "vitest";
 import { convexTest } from "convex-test";
 import schema from "./schema";

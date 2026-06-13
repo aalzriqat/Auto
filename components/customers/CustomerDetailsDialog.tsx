@@ -26,7 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Send, FileText, CheckCircle } from "lucide-react";
 import { CustomerFinancialsTab } from "@/components/customers/CustomerFinancialsTab";
 import { generateFinanceQuote } from "@/lib/pdf";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 
 interface CustomerDetailsDialogProps {
   customerId: Id<"customers"> | null;

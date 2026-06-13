@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { format } from "date-fns";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 import { Separator } from "@/components/ui/separator";
 import { Upload, CheckCircle, XCircle, Clock, Eye, X, Download } from "lucide-react";
 import { usePermissions } from "@/hooks/use-permissions";

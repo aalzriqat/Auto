@@ -11,7 +11,7 @@ import { Doc } from "@/convex/_generated/dataModel";
 import { Plus, User, Car, Calendar, Trash2, FileText } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 import { generateQuote } from "@/lib/pdf";
 import {
   Dialog,

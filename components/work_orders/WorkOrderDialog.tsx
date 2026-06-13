@@ -8,7 +8,7 @@ import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 import { Plus, Trash2 } from "lucide-react";
 import {
   Dialog,

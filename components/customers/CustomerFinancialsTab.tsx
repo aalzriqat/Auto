@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 import { calculateDBR } from "@/lib/financing";
 import { GuarantorDialog } from "./GuarantorDialog";
 import { Trash2, Edit } from "lucide-react";
