@@ -1,16 +1,16 @@
 # Graph Report - Auto  (2026-06-13)
 
 ## Corpus Check
-- 275 files · ~245,538 words
+- 275 files · ~246,048 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1791 nodes · 3780 edges · 182 communities (119 shown, 63 thin omitted)
+- 1793 nodes · 3851 edges · 171 communities (113 shown, 58 thin omitted)
 - Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 50 edges (avg confidence: 0.85)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `85363eda`
+- Built from commit: `5998fa6c`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -33,20 +33,16 @@
 - [[_COMMUNITY_Convex TypeScript Config|Convex TypeScript Config]]
 - [[_COMMUNITY_Lead Stages & Pipeline|Lead Stages & Pipeline]]
 - [[_COMMUNITY_UI Utilities & Styling|UI Utilities & Styling]]
-- [[_COMMUNITY_Community 18|Community 18]]
 - [[_COMMUNITY_Community 19|Community 19]]
 - [[_COMMUNITY_Vehicle Inventory Mutations|Vehicle Inventory Mutations]]
-- [[_COMMUNITY_Navigation & Layout|Navigation & Layout]]
 - [[_COMMUNITY_PDF & Bill of Sale|PDF & Bill of Sale]]
 - [[_COMMUNITY_Finance Applications|Finance Applications]]
 - [[_COMMUNITY_Reports & Analytics|Reports & Analytics]]
 - [[_COMMUNITY_Route Loading States|Route Loading States]]
-- [[_COMMUNITY_Vehicle Schemas|Vehicle Schemas]]
 - [[_COMMUNITY_Role Permissions Editor|Role Permissions Editor]]
 - [[_COMMUNITY_Dropdown Menu Components|Dropdown Menu Components]]
 - [[_COMMUNITY_App Root Layout|App Root Layout]]
 - [[_COMMUNITY_Finance Company Module|Finance Company Module]]
-- [[_COMMUNITY_Customer & Quote Schemas|Customer & Quote Schemas]]
 - [[_COMMUNITY_Role Management CRUD|Role Management CRUD]]
 - [[_COMMUNITY_Convex Server Types|Convex Server Types]]
 - [[_COMMUNITY_Financing Calculations|Financing Calculations]]
@@ -144,9 +140,7 @@
 - [[_COMMUNITY_Community 130|Community 130]]
 - [[_COMMUNITY_Community 131|Community 131]]
 - [[_COMMUNITY_Community 132|Community 132]]
-- [[_COMMUNITY_Community 133|Community 133]]
 - [[_COMMUNITY_Community 134|Community 134]]
-- [[_COMMUNITY_Community 135|Community 135]]
 - [[_COMMUNITY_Community 136|Community 136]]
 - [[_COMMUNITY_Community 137|Community 137]]
 - [[_COMMUNITY_Community 138|Community 138]]
@@ -168,8 +162,6 @@
 - [[_COMMUNITY_Community 154|Community 154]]
 - [[_COMMUNITY_Community 155|Community 155]]
 - [[_COMMUNITY_Community 156|Community 156]]
-- [[_COMMUNITY_Community 157|Community 157]]
-- [[_COMMUNITY_Community 158|Community 158]]
 - [[_COMMUNITY_Community 159|Community 159]]
 - [[_COMMUNITY_Community 160|Community 160]]
 - [[_COMMUNITY_Community 161|Community 161]]
@@ -182,12 +174,9 @@
 - [[_COMMUNITY_Community 168|Community 168]]
 - [[_COMMUNITY_Community 169|Community 169]]
 - [[_COMMUNITY_Community 170|Community 170]]
-- [[_COMMUNITY_Community 172|Community 172]]
 - [[_COMMUNITY_Community 173|Community 173]]
-- [[_COMMUNITY_Community 174|Community 174]]
 - [[_COMMUNITY_Community 175|Community 175]]
 - [[_COMMUNITY_Community 177|Community 177]]
-- [[_COMMUNITY_Community 181|Community 181]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `useLanguage()` - 125 edges
@@ -195,11 +184,11 @@
 3. `cn()` - 64 edges
 4. `api` - 63 edges
 5. `Button` - 54 edges
-6. `Require Tenant Auth` - 33 edges
-7. `DialogHeader()` - 32 edges
-8. `PERMISSIONS` - 32 edges
-9. `DialogContent` - 32 edges
-10. `DialogTitle` - 31 edges
+6. `toast` - 36 edges
+7. `Require Tenant Auth` - 33 edges
+8. `DialogHeader()` - 32 edges
+9. `PERMISSIONS` - 32 edges
+10. `DialogContent` - 32 edges
 
 ## Surprising Connections (you probably didn't know these)
 - `Claude Convex Migration Helper Skill` --semantically_similar_to--> `Convex Migration Helper Skill`  [INFERRED] [semantically similar]
@@ -210,8 +199,8 @@
   SKILL.md → convex-setup-auth/references/convex-auth.md
 - `Claude Convex Auth Reference` --semantically_similar_to--> `Convex Auth Setup Reference`  [INFERRED] [semantically similar]
   .claude/skills/convex-setup-auth/references/convex-auth.md → .agents/skills/convex-setup-auth/references/convex-auth.md
-- `SalesHomePage()` --calls--> `useLanguage()`  [INFERRED]
-  app/(dashboard)/sales/page.tsx → components/providers/LanguageProvider.tsx
+- `SalesHomePage()` --calls--> `cn()`  [INFERRED]
+  app/(dashboard)/sales/page.tsx → lib/utils.ts
 
 ## Import Cycles
 - None detected.
@@ -225,15 +214,15 @@
 - **Dashboard Route Loading States** — app_dashboard_loading, app_leads_loading, app_sales_loading, app_vehicles_loading [INFERRED 0.95]
 - **Backend Test Suite Collection** — utils_permissions_test, utils_tenancy_test, lib_financing_test [INFERRED 0.85]
 
-## Communities (182 total, 63 thin omitted)
+## Communities (171 total, 58 thin omitted)
 
 ### Community 0 - "Convex API Module"
 Cohesion: 0.05
-Nodes (167): AccountingClient(), ClaimsTab(), FixedAssetsTab(), GeneralLedgerTab(), metadata, PartnerEquityTab(), api.applications, api.customers (+159 more)
+Nodes (127): AccountingClient(), ClaimsTab(), FixedAssetsTab(), GeneralLedgerTab(), metadata, PartnerEquityTab(), api.applications, api.customers (+119 more)
 
 ### Community 1 - "Accounting & Finance UI"
-Cohesion: 0.17
-Nodes (9): CustomerDialogProps, CustomerFormValues, customerSchema, QuoteDialogProps, QuoteFormValues, quoteSchema, SaleDialogProps, SaleFormValues (+1 more)
+Cohesion: 0.07
+Nodes (79): api, newCustomerSchema, NewCustomerValues, CustomerDialogProps, CustomerFormValues, customerSchema, GuarantorDialog(), GuarantorDialogProps (+71 more)
 
 ### Community 2 - "Agent Skills & References"
 Cohesion: 0.24
@@ -244,12 +233,12 @@ Cohesion: 0.05
 Nodes (43): dependencies, class-variance-authority, clerk, @clerk/nextjs, clsx, convex, @convex-dev/rate-limiter, date-fns (+35 more)
 
 ### Community 4 - "Customer & Sales Convex"
-Cohesion: 0.07
-Nodes (35): create, get, getByEmail, getRelations, list, softDelete, update, add (+27 more)
+Cohesion: 0.08
+Nodes (35): Finalize Deal, createFromQuote, finalizeDeal, get, list, updateStatus, crons, triggerAlarms (+27 more)
 
 ### Community 5 - "Branch Management"
 Cohesion: 0.08
-Nodes (29): List Claims, add, list, remove, update, add, list, remove (+21 more)
+Nodes (29): List Claims, add, list, remove, update, stats, create, get (+21 more)
 
 ### Community 6 - "Dev Config & Tooling"
 Cohesion: 0.13
@@ -260,16 +249,16 @@ Cohesion: 0.10
 Nodes (20): commonAr, commonEn, customersAr, customersEn, dashboardAr, dashboardEn, expensesAr, expensesEn (+12 more)
 
 ### Community 8 - "Mobile & Sidebar UI"
-Cohesion: 0.07
-Nodes (26): Sidebar, SidebarContent, SidebarContext, SidebarContextProps, SidebarFooter, SidebarGroup, SidebarGroupAction, SidebarGroupContent (+18 more)
+Cohesion: 0.06
+Nodes (36): useIsMobile(), SheetContent, SheetContentProps, SheetDescription, SheetFooter(), SheetHeader(), SheetOverlay, SheetTitle (+28 more)
 
 ### Community 9 - "Organization Management"
-Cohesion: 0.07
-Nodes (30): checkPendingApproval, listPendingApprovals, requestProfitApproval, respondToApproval, stats, inspect, list, markAllAsRead (+22 more)
+Cohesion: 0.09
+Nodes (23): checkPendingApproval, listPendingApprovals, requestProfitApproval, respondToApproval, fixExistingRoles, backfillPermissions, create, get (+15 more)
 
 ### Community 10 - "Document Rules Engine"
-Cohesion: 0.22
-Nodes (8): addRule, generateUploadUrl, getForApplication, listRules, removeRule, saveDocumentFile, updateDocumentStatus, Generate Upload URL
+Cohesion: 0.17
+Nodes (12): addRule, generateUploadUrl, getForApplication, listRules, removeRule, saveDocumentFile, updateDocumentStatus, Generate Upload URL (+4 more)
 
 ### Community 11 - "TypeScript Config"
 Cohesion: 0.10
@@ -281,11 +270,11 @@ Nodes (17): aliases, components, hooks, lib, ui, utils, iconLibrary, rsc (+9 mor
 
 ### Community 13 - "HTTP & Membership API"
 Cohesion: 0.08
-Nodes (24): env, sendTaskAlarm, sendTeamInvite, http, add, createAccount, finalizeDirectAccount, getMyMembership (+16 more)
+Nodes (23): env, sendTaskAlarm, sendTeamInvite, http, add, createAccount, finalizeDirectAccount, getMyMembership (+15 more)
 
 ### Community 14 - "Data Migrations"
-Cohesion: 0.10
-Nodes (18): Finalize Deal, createFromQuote, finalizeDeal, get, list, updateStatus, crons, triggerAlarms (+10 more)
+Cohesion: 0.31
+Nodes (6): buttonVariants, Calendar(), CalendarProps, DateTimePicker(), DateTimePickerProps, PopoverContent
 
 ### Community 15 - "Convex TypeScript Config"
 Cohesion: 0.12
@@ -296,12 +285,8 @@ Cohesion: 0.24
 Nodes (8): Lead Stages, LEAD_STAGES, LeadStage, Soft Delete Customer, LeadDialogProps, LeadFormValues, leadSchema, List Leads
 
 ### Community 17 - "UI Utilities & Styling"
-Cohesion: 0.12
-Nodes (19): ReviewCustomerCard(), ReviewCustomerCardProps, ReviewVehicleCard(), ReviewVehicleCardProps, VehiclePicker(), cn(), SalesHomePage(), SalesWizard() (+11 more)
-
-### Community 18 - "Community 18"
-Cohesion: 0.18
-Nodes (9): api, VehicleDialogProps, VehicleFormValues, vehicleSchema, workOrderSchema, taskSchema, WorkOrderDialogProps, WorkOrderFormValues (+1 more)
+Cohesion: 0.13
+Nodes (17): CustomerBanner(), CustomerCreateForm(), Customer, CustomerSearchProps, ReviewCustomerCard(), ReviewCustomerCardProps, CompanyDoc, DOC_TRANSLATIONS (+9 more)
 
 ### Community 19 - "Community 19"
 Cohesion: 0.17
@@ -310,10 +295,6 @@ Nodes (12): Common Translations, Customers Translations, Dashboard Translations,
 ### Community 20 - "Vehicle Inventory Mutations"
 Cohesion: 0.15
 Nodes (13): create, deleteImage, generateUploadUrl, get, getByVin, getRelations, list, listAll (+5 more)
-
-### Community 21 - "Navigation & Layout"
-Cohesion: 0.22
-Nodes (8): SheetContent, SheetContentProps, SheetDescription, SheetFooter(), SheetHeader(), SheetOverlay, SheetTitle, sheetVariants
 
 ### Community 22 - "PDF & Bill of Sale"
 Cohesion: 0.29
@@ -324,8 +305,8 @@ Cohesion: 0.33
 Nodes (4): copy, CreativeMarketingPage(), LocalCopy, MarketingPage
 
 ### Community 24 - "Reports & Analytics"
-Cohesion: 0.20
-Nodes (9): getExpensesReport, getInventoryReport, getLeadConversionReport, getProfitAndLoss, getSalesAndProfitReport, getSalespersonPerformance, Get Profit and Loss, Get Sales and Profit Report (+1 more)
+Cohesion: 0.18
+Nodes (10): getExpensesReport, getInventoryReport, getLeadConversionReport, getProfitAndLoss, getSalesAndProfitReport, getSalespersonPerformance, Get Profit and Loss, Get Sales and Profit Report (+2 more)
 
 ### Community 27 - "Role Permissions Editor"
 Cohesion: 0.26
@@ -340,12 +321,8 @@ Cohesion: 0.22
 Nodes (6): cairo, inter, metadata, convex, RootLayout, LanguageProvider()
 
 ### Community 30 - "Finance Company Module"
-Cohesion: 0.09
-Nodes (22): createCompany, deleteCompany, listCompanies, listValuations, saveValuation, updateCompany, fixExistingRoles, add (+14 more)
-
-### Community 31 - "Customer & Quote Schemas"
-Cohesion: 0.50
-Nodes (3): Toaster, Toaster(), ToasterProps
+Cohesion: 0.06
+Nodes (28): inspect, createCompany, deleteCompany, listCompanies, listValuations, saveValuation, updateCompany, add (+20 more)
 
 ### Community 32 - "Role Management CRUD"
 Cohesion: 0.08
@@ -356,8 +333,8 @@ Cohesion: 0.33
 Nodes (5): ActionCtx, DatabaseReader, DatabaseWriter, MutationCtx, QueryCtx
 
 ### Community 34 - "Financing Calculations"
-Cohesion: 0.26
-Nodes (9): DESC_TRANSLATIONS, DOC_TRANSLATIONS, FinanceCompanyCard(), FinanceCompanyCardProps, FinancePanel(), FinancePanelProps, FinanceComparisonResult, useFinanceComparison() (+1 more)
+Cohesion: 0.17
+Nodes (14): DESC_TRANSLATIONS, DOC_TRANSLATIONS, FinanceCompanyCard(), FinanceCompanyCardProps, FinancePanel(), FinancePanelProps, FinanceComparisonResult, useFinanceComparison() (+6 more)
 
 ### Community 35 - "Clerk Auth Pages"
 Cohesion: 0.33
@@ -368,8 +345,8 @@ Cohesion: 0.40
 Nodes (4): agentSkillsSha, agentsMdSectionHash, claudeMdHash, guidelinesHash
 
 ### Community 37 - "Convex Schema & Data Model"
-Cohesion: 0.29
-Nodes (4): DataModel, Doc, Id, TableNames
+Cohesion: 0.25
+Nodes (5): ImportMeta, DataModel, Doc, Id, TableNames
 
 ### Community 38 - "Task Management"
 Cohesion: 0.08
@@ -400,8 +377,8 @@ Cohesion: 0.67
 Nodes (3): NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY Env Var, NEXT_PUBLIC_CONVEX_URL Env Var, env Schema (Zod Validation)
 
 ### Community 47 - "Task Schema"
-Cohesion: 0.12
-Nodes (17): create, expenseCategory, list, remove, update, create, get, list (+9 more)
+Cohesion: 0.09
+Nodes (28): create, get, getByEmail, getRelations, list, softDelete, update, create (+20 more)
 
 ### Community 48 - "Vehicle Relations Query"
 Cohesion: 0.67
@@ -420,8 +397,8 @@ Cohesion: 0.10
 Nodes (20): Action guidelines, Authentication guidelines, Convex guidelines, Cron guidelines, File storage guidelines, Full text search guidelines, Function calling, Function guidelines (+12 more)
 
 ### Community 104 - "Community 104"
-Cohesion: 0.18
-Nodes (16): CustomerBanner(), CustomerBannerProps, CustomerCreateForm(), CustomerCreateFormProps, StepConfig, StepIndicator(), StepIndicatorProps, QuotePrintTemplate() (+8 more)
+Cohesion: 0.20
+Nodes (14): CustomerBannerProps, CustomerCreateFormProps, StepConfig, StepIndicator(), StepIndicatorProps, QuotePrintTemplate(), QuotePrintTemplateProps, SalesWizard() (+6 more)
 
 ### Community 105 - "Community 105"
 Cohesion: 0.10
@@ -539,10 +516,6 @@ Nodes (10): After Choosing a Provider, Checklist, Convex Authentication Setup, C
 Cohesion: 0.23
 Nodes (9): CUSTOMER_STATUS_OPTIONS, Step1QuoteSetup(), Step1Values, Alert, AlertDescription, AlertTitle, alertVariants, newCustomerSchema (+1 more)
 
-### Community 135 - "Community 135"
-Cohesion: 0.50
-Nodes (3): ExpenseDialogProps, ExpenseFormValues, expenseSchema
-
 ### Community 136 - "Community 136"
 Cohesion: 0.22
 Nodes (8): 1. Create a Central Validation Library, 2. Implement a Validation Middleware/Helper, 3. Integrate Validation into Mutations, Definition of Done, How to Test This Phase, Objective, Phase 2 — Input Validation Layer, Step-by-Step Instructions
@@ -627,14 +600,6 @@ Nodes (4): Convex, Route to the Right Skill, Start Here, When Not to Use
 Cohesion: 0.40
 Nodes (4): Convex, Route to the Right Skill, Start Here, When Not to Use
 
-### Community 157 - "Community 157"
-Cohesion: 0.20
-Nodes (10): CompanyDoc, DOC_TRANSLATIONS, ReviewFinanceSummary(), ReviewFinanceSummaryProps, calculateDBR(), calculateUnifiedMurabaha(), calculateDBR Function, calculateUnifiedMurabaha Function (+2 more)
-
-### Community 158 - "Community 158"
-Cohesion: 0.50
-Nodes (3): TaskDialogProps, TaskFormValues, taskSchema
-
 ### Community 159 - "Community 159"
 Cohesion: 0.40
 Nodes (4): Get started, Join the community, Learn more, Welcome to your Convex + Next.js + Clerk app
@@ -674,22 +639,22 @@ Nodes (3): PaymentType, SalesWizardProps, WizardData
 ## Knowledge Gaps
 - **1049 isolated node(s):** `metadata`, `metadata`, `defaultEndDate`, `defaultStartDate`, `metadata` (+1044 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **63 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **58 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
 - **What is the exact relationship between `Remove Member Action` and `Rate Limiter`?**
   _Edge tagged AMBIGUOUS (relation: references) - confidence is low._
-- **Why does `useLanguage()` connect `Convex API Module` to `Financing Calculations`, `Customer & Sales Convex`, `Branch Management`, `Community 134`, `Community 104`, `UI Utilities & Styling`, `Navigation & Layout`, `Finance Applications`, `Role Permissions Editor`, `Community 157`, `Finance Company Module`?**
-  _High betweenness centrality (0.029) - this node is a cross-community bridge._
-- **Why does `useOrg()` connect `Convex API Module` to `Financing Calculations`, `Customer & Sales Convex`, `Branch Management`, `Community 134`, `Community 104`, `UI Utilities & Styling`, `Community 157`, `Finance Company Module`?**
-  _High betweenness centrality (0.020) - this node is a cross-community bridge._
-- **Why does `PERMISSIONS` connect `Finance Company Module` to `Convex API Module`, `Customer & Sales Convex`, `Branch Management`, `Organization Management`, `Document Rules Engine`, `HTTP & Membership API`, `Data Migrations`, `Task Schema`, `Vehicle Inventory Mutations`, `Community 150`, `Reports & Analytics`, `Role Permissions Editor`?**
-  _High betweenness centrality (0.011) - this node is a cross-community bridge._
+- **Why does `useLanguage()` connect `Convex API Module` to `Accounting & Finance UI`, `Financing Calculations`, `Customer & Sales Convex`, `Community 134`, `Community 104`, `Mobile & Sidebar UI`, `UI Utilities & Styling`, `Finance Applications`, `Role Permissions Editor`, `Finance Company Module`?**
+  _High betweenness centrality (0.025) - this node is a cross-community bridge._
+- **Why does `useOrg()` connect `Convex API Module` to `Accounting & Finance UI`, `Financing Calculations`, `Customer & Sales Convex`, `Community 134`, `UI Utilities & Styling`, `Finance Company Module`?**
+  _High betweenness centrality (0.018) - this node is a cross-community bridge._
+- **Why does `api` connect `Convex API Module` to `Accounting & Finance UI`, `Financing Calculations`, `Customer & Sales Convex`, `Convex Schema & Data Model`, `Community 134`, `UI Utilities & Styling`?**
+  _High betweenness centrality (0.010) - this node is a cross-community bridge._
 - **What connects `metadata`, `metadata`, `defaultEndDate` to the rest of the system?**
   _1049 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Convex API Module` be split into smaller, more focused modules?**
-  _Cohesion score 0.05082123695730884 - nodes in this community are weakly interconnected._
-- **Should `NPM Dependencies` be split into smaller, more focused modules?**
-  _Cohesion score 0.046511627906976744 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.05099882491186839 - nodes in this community are weakly interconnected._
+- **Should `Accounting & Finance UI` be split into smaller, more focused modules?**
+  _Cohesion score 0.07083876575402 - nodes in this community are weakly interconnected._

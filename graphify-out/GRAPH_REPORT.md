@@ -1,16 +1,16 @@
 # Graph Report - Auto  (2026-06-13)
 
 ## Corpus Check
-- 275 files · ~246,048 words
+- 275 files · ~246,179 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 1793 nodes · 3851 edges · 171 communities (113 shown, 58 thin omitted)
+- 1793 nodes · 3851 edges · 174 communities (116 shown, 58 thin omitted)
 - Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 50 edges (avg confidence: 0.85)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `5998fa6c`
+- Built from commit: `7c18466a`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -33,12 +33,15 @@
 - [[_COMMUNITY_Convex TypeScript Config|Convex TypeScript Config]]
 - [[_COMMUNITY_Lead Stages & Pipeline|Lead Stages & Pipeline]]
 - [[_COMMUNITY_UI Utilities & Styling|UI Utilities & Styling]]
+- [[_COMMUNITY_Community 18|Community 18]]
 - [[_COMMUNITY_Community 19|Community 19]]
 - [[_COMMUNITY_Vehicle Inventory Mutations|Vehicle Inventory Mutations]]
+- [[_COMMUNITY_Community 21|Community 21]]
 - [[_COMMUNITY_PDF & Bill of Sale|PDF & Bill of Sale]]
 - [[_COMMUNITY_Finance Applications|Finance Applications]]
 - [[_COMMUNITY_Reports & Analytics|Reports & Analytics]]
 - [[_COMMUNITY_Route Loading States|Route Loading States]]
+- [[_COMMUNITY_Community 26|Community 26]]
 - [[_COMMUNITY_Role Permissions Editor|Role Permissions Editor]]
 - [[_COMMUNITY_Dropdown Menu Components|Dropdown Menu Components]]
 - [[_COMMUNITY_App Root Layout|App Root Layout]]
@@ -214,7 +217,7 @@
 - **Dashboard Route Loading States** — app_dashboard_loading, app_leads_loading, app_sales_loading, app_vehicles_loading [INFERRED 0.95]
 - **Backend Test Suite Collection** — utils_permissions_test, utils_tenancy_test, lib_financing_test [INFERRED 0.85]
 
-## Communities (171 total, 58 thin omitted)
+## Communities (174 total, 58 thin omitted)
 
 ### Community 0 - "Convex API Module"
 Cohesion: 0.05
@@ -238,7 +241,7 @@ Nodes (35): Finalize Deal, createFromQuote, finalizeDeal, get, list, updateStatu
 
 ### Community 5 - "Branch Management"
 Cohesion: 0.08
-Nodes (29): List Claims, add, list, remove, update, stats, create, get (+21 more)
+Nodes (30): List Claims, stats, create, get, listMine, remove, update, create (+22 more)
 
 ### Community 6 - "Dev Config & Tooling"
 Cohesion: 0.13
@@ -254,11 +257,11 @@ Nodes (36): useIsMobile(), SheetContent, SheetContentProps, SheetDescription, Sh
 
 ### Community 9 - "Organization Management"
 Cohesion: 0.09
-Nodes (23): checkPendingApproval, listPendingApprovals, requestProfitApproval, respondToApproval, fixExistingRoles, backfillPermissions, create, get (+15 more)
+Nodes (22): checkPendingApproval, listPendingApprovals, requestProfitApproval, respondToApproval, createCompany, deleteCompany, listCompanies, listValuations (+14 more)
 
 ### Community 10 - "Document Rules Engine"
-Cohesion: 0.17
-Nodes (12): addRule, generateUploadUrl, getForApplication, listRules, removeRule, saveDocumentFile, updateDocumentStatus, Generate Upload URL (+4 more)
+Cohesion: 0.11
+Nodes (19): addRule, generateUploadUrl, getForApplication, listRules, removeRule, saveDocumentFile, updateDocumentStatus, sendTaskAlarm (+11 more)
 
 ### Community 11 - "TypeScript Config"
 Cohesion: 0.10
@@ -269,8 +272,8 @@ Cohesion: 0.11
 Nodes (17): aliases, components, hooks, lib, ui, utils, iconLibrary, rsc (+9 more)
 
 ### Community 13 - "HTTP & Membership API"
-Cohesion: 0.08
-Nodes (23): env, sendTaskAlarm, sendTeamInvite, http, add, createAccount, finalizeDirectAccount, getMyMembership (+15 more)
+Cohesion: 0.10
+Nodes (18): env, http, add, createAccount, finalizeDirectAccount, getMyMembership, leave, list (+10 more)
 
 ### Community 14 - "Data Migrations"
 Cohesion: 0.31
@@ -288,6 +291,10 @@ Nodes (8): Lead Stages, LEAD_STAGES, LeadStage, Soft Delete Customer, LeadDialog
 Cohesion: 0.13
 Nodes (17): CustomerBanner(), CustomerCreateForm(), Customer, CustomerSearchProps, ReviewCustomerCard(), ReviewCustomerCardProps, CompanyDoc, DOC_TRANSLATIONS (+9 more)
 
+### Community 18 - "Community 18"
+Cohesion: 0.12
+Nodes (14): add, list, remove, update, inspect, create, get, list (+6 more)
+
 ### Community 19 - "Community 19"
 Cohesion: 0.17
 Nodes (12): Common Translations, Customers Translations, Dashboard Translations, I18n Dictionaries, Expenses Translations, Data Export Utilities, Leads Translations, PDF Generation Library (+4 more)
@@ -295,6 +302,10 @@ Nodes (12): Common Translations, Customers Translations, Dashboard Translations,
 ### Community 20 - "Vehicle Inventory Mutations"
 Cohesion: 0.15
 Nodes (13): create, deleteImage, generateUploadUrl, get, getByVin, getRelations, list, listAll (+5 more)
+
+### Community 21 - "Community 21"
+Cohesion: 0.22
+Nodes (9): create, get, list, saleStatus, softDelete, update, BaseSaleSchema, CreateSaleSchema (+1 more)
 
 ### Community 22 - "PDF & Bill of Sale"
 Cohesion: 0.29
@@ -307,6 +318,10 @@ Nodes (4): copy, CreativeMarketingPage(), LocalCopy, MarketingPage
 ### Community 24 - "Reports & Analytics"
 Cohesion: 0.18
 Nodes (10): getExpensesReport, getInventoryReport, getLeadConversionReport, getProfitAndLoss, getSalesAndProfitReport, getSalespersonPerformance, Get Profit and Loss, Get Sales and Profit Report (+2 more)
+
+### Community 26 - "Community 26"
+Cohesion: 0.40
+Nodes (4): add, list, remove, update
 
 ### Community 27 - "Role Permissions Editor"
 Cohesion: 0.26
@@ -321,8 +336,8 @@ Cohesion: 0.22
 Nodes (6): cairo, inter, metadata, convex, RootLayout, LanguageProvider()
 
 ### Community 30 - "Finance Company Module"
-Cohesion: 0.06
-Nodes (28): inspect, createCompany, deleteCompany, listCompanies, listValuations, saveValuation, updateCompany, add (+20 more)
+Cohesion: 0.16
+Nodes (10): fixExistingRoles, seedMutakhasisa, deleteUser, getMe, getUser, updateOrCreateUser, internalMutation, roles.create Mutation (+2 more)
 
 ### Community 32 - "Role Management CRUD"
 Cohesion: 0.08
@@ -377,8 +392,8 @@ Cohesion: 0.67
 Nodes (3): NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY Env Var, NEXT_PUBLIC_CONVEX_URL Env Var, env Schema (Zod Validation)
 
 ### Community 47 - "Task Schema"
-Cohesion: 0.09
-Nodes (28): create, get, getByEmail, getRelations, list, softDelete, update, create (+20 more)
+Cohesion: 0.13
+Nodes (17): create, get, getByEmail, getRelations, list, softDelete, update, create (+9 more)
 
 ### Community 48 - "Vehicle Relations Query"
 Cohesion: 0.67
@@ -646,9 +661,9 @@ _Questions this graph is uniquely positioned to answer:_
 
 - **What is the exact relationship between `Remove Member Action` and `Rate Limiter`?**
   _Edge tagged AMBIGUOUS (relation: references) - confidence is low._
-- **Why does `useLanguage()` connect `Convex API Module` to `Accounting & Finance UI`, `Financing Calculations`, `Customer & Sales Convex`, `Community 134`, `Community 104`, `Mobile & Sidebar UI`, `UI Utilities & Styling`, `Finance Applications`, `Role Permissions Editor`, `Finance Company Module`?**
+- **Why does `useLanguage()` connect `Convex API Module` to `Accounting & Finance UI`, `Financing Calculations`, `Customer & Sales Convex`, `Community 134`, `Community 104`, `Mobile & Sidebar UI`, `UI Utilities & Styling`, `Finance Applications`, `Community 26`, `Role Permissions Editor`?**
   _High betweenness centrality (0.025) - this node is a cross-community bridge._
-- **Why does `useOrg()` connect `Convex API Module` to `Accounting & Finance UI`, `Financing Calculations`, `Customer & Sales Convex`, `Community 134`, `UI Utilities & Styling`, `Finance Company Module`?**
+- **Why does `useOrg()` connect `Convex API Module` to `Accounting & Finance UI`, `Financing Calculations`, `Customer & Sales Convex`, `Community 134`, `UI Utilities & Styling`, `Community 26`?**
   _High betweenness centrality (0.018) - this node is a cross-community bridge._
 - **Why does `api` connect `Convex API Module` to `Accounting & Finance UI`, `Financing Calculations`, `Customer & Sales Convex`, `Convex Schema & Data Model`, `Community 134`, `UI Utilities & Styling`?**
   _High betweenness centrality (0.010) - this node is a cross-community bridge._

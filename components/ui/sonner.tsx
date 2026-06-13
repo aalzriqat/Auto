@@ -50,6 +50,10 @@ function formatFriendlyError(error: any, locale: string): string {
 
   // Standard user-friendly keys and mappings
   const enTranslations: Record<string, string> = {
+    "last_name": "Please enter both first and last name (Family Name is required).",
+    "last name": "Please enter both first and last name (Family Name is required).",
+    "email_address is already in use": "This email address is already in use by another account.",
+    "username is already in use": "This username is already in use.",
     "missing data": "Required profile data is missing or invalid. Please check all fields.",
     "unauthenticated": "You must be logged in to perform this action.",
     "unauthorized": "You do not have permission to perform this action.",
@@ -64,6 +68,10 @@ function formatFriendlyError(error: any, locale: string): string {
   };
 
   const arTranslations: Record<string, string> = {
+    "last_name": "يرجى إدخال الاسم الأول والأخير (اسم العائلة مطلوب).",
+    "last name": "يرجى إدخال الاسم الأول والأخير (اسم العائلة مطلوب).",
+    "email_address is already in use": "البريد الإلكتروني مستخدم بالفعل في حساب آخر.",
+    "username is already in use": "اسم المستخدم هذا مستخدم بالفعل.",
     "missing data": "البيانات المطلوبة مفقودة أو غير صالحة. يرجى التحقق من الحقول.",
     "unauthenticated": "يجب تسجيل الدخول لإتمام هذا الإجراء.",
     "unauthorized": "ليس لديك الصلاحية لإتمام هذا الإجراء.",

@@ -426,7 +426,14 @@ export const createAccount = action({
       if (!response.ok) {
         const errorData = await response.json();
         console.error("Clerk user creation failed:", errorData);
-        throw new ConvexError(errorData.errors?.[0]?.message || "Failed to create user in Clerk");
+        const firstError = errorData.errors?.[0];
+        if (firstError) {
+          if (firstError.code === "form_data_missing" && firstError.meta?.param_names?.includes("last_name")) {
+            throw new ConvexError("Family name is required. Please enter both first and last name.");
+          }
+          throw new ConvexError(firstError.long_message || firstError.message || "Failed to create user in Clerk");
+        }
+        throw new ConvexError("Failed to create user in Clerk");
       }
 
       // Parse Clerk API response
