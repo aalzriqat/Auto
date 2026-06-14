@@ -310,7 +310,7 @@ export const getLeadConversionReport = query({
       NEGOTIATION: 0, RESERVED: 0, WON: 0, LOST: 0,
     };
 
-    let totalLeads = leadsInDateRange.length;
+    const totalLeads = leadsInDateRange.length;
     let wonLeads = 0;
 
     for (const lead of leadsInDateRange) {

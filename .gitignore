@@ -48,3 +48,5 @@ next-env.d.ts
 fix_*.js
 update_*.js
 rtl-audit.js
+
+testsprite_tests\tmp\config.json

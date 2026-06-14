@@ -16,7 +16,6 @@ import type * as constants from "../constants.js";
 import type * as crons from "../crons.js";
 import type * as customers from "../customers.js";
 import type * as dashboard from "../dashboard.js";
-import type * as debug from "../debug.js";
 import type * as documents from "../documents.js";
 import type * as email from "../email.js";
 import type * as expenses from "../expenses.js";
@@ -42,8 +41,10 @@ import type * as test_drives from "../test_drives.js";
 import type * as transactions from "../transactions.js";
 import type * as users from "../users.js";
 import type * as utils_env from "../utils/env.js";
+import type * as utils_errors from "../utils/errors.js";
 import type * as utils_notifications from "../utils/notifications.js";
 import type * as utils_permissions from "../utils/permissions.js";
+import type * as utils_saleHelpers from "../utils/saleHelpers.js";
 import type * as utils_tenancy from "../utils/tenancy.js";
 import type * as utils_validation from "../utils/validation.js";
 import type * as validations_customers from "../validations/customers.js";
@@ -53,6 +54,7 @@ import type * as validations_vehicles from "../validations/vehicles.js";
 import type * as vehicleEdits from "../vehicleEdits.js";
 import type * as vehicleRequests from "../vehicleRequests.js";
 import type * as vehicles from "../vehicles.js";
+import type * as wizardDrafts from "../wizardDrafts.js";
 import type * as workOrders from "../workOrders.js";
 
 import type {
@@ -70,7 +72,6 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   customers: typeof customers;
   dashboard: typeof dashboard;
-  debug: typeof debug;
   documents: typeof documents;
   email: typeof email;
   expenses: typeof expenses;
@@ -96,8 +97,10 @@ declare const fullApi: ApiFromModules<{
   transactions: typeof transactions;
   users: typeof users;
   "utils/env": typeof utils_env;
+  "utils/errors": typeof utils_errors;
   "utils/notifications": typeof utils_notifications;
   "utils/permissions": typeof utils_permissions;
+  "utils/saleHelpers": typeof utils_saleHelpers;
   "utils/tenancy": typeof utils_tenancy;
   "utils/validation": typeof utils_validation;
   "validations/customers": typeof validations_customers;
@@ -107,6 +110,7 @@ declare const fullApi: ApiFromModules<{
   vehicleEdits: typeof vehicleEdits;
   vehicleRequests: typeof vehicleRequests;
   vehicles: typeof vehicles;
+  wizardDrafts: typeof wizardDrafts;
   workOrders: typeof workOrders;
 }>;
 

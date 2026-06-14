@@ -36,6 +36,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 
 import { saleSchema, SaleFormValues, SaleDialogProps } from "./sale.schema";
 
@@ -266,24 +267,24 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                         render={({ field }) => (
                           <FormItem className="md:col-span-2">
                             <FormLabel>{t("Vehicle" as any)} <span className="text-red-500">*</span></FormLabel>
-                            <Select onValueChange={(val) => {
-                              field.onChange(val);
-                              const v = availableVehicles?.find(v => v._id === val);
-                              if (v && form.getValues("salePrice") === 0) {
-                                form.setValue("salePrice", v.sellingPrice);
-                              }
-                            }} defaultValue={field.value} value={field.value}>
-                              <FormControl>
-                                <SelectTrigger><SelectValue placeholder={t("SelectVehicle" as any)} /></SelectTrigger>
-                              </FormControl>
-                              <SelectContent>
-                                {availableVehicles?.map((v) => (
-                                  <SelectItem key={v._id} value={v._id}>
-                                    {v.year} {v.make} {v.model} - {v.vin} ({v.sellingPrice.toLocaleString()} JOD)
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
+                            <FormControl>
+                              <SearchableSelect
+                                value={field.value}
+                                onValueChange={(val) => {
+                                  field.onChange(val);
+                                  const v = availableVehicles?.find(v => v._id === val);
+                                  if (v && form.getValues("salePrice") === 0) {
+                                    form.setValue("salePrice", v.sellingPrice);
+                                  }
+                                }}
+                                placeholder={t("SelectVehicle" as any)}
+                                options={availableVehicles?.map((v) => ({
+                                  value: v._id,
+                                  label: `${v.year} ${v.make} ${v.model}`,
+                                  subLabel: `${v.vin} · ${v.sellingPrice.toLocaleString()} JOD`,
+                                })) ?? []}
+                              />
+                            </FormControl>
                             <FormMessage />
                           </FormItem>
                         )}
@@ -294,18 +295,18 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                         render={({ field }) => (
                           <FormItem>
                             <FormLabel>{t("Customer" as any)} <span className="text-red-500">*</span></FormLabel>
-                            <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
-                              <FormControl>
-                                <SelectTrigger><SelectValue placeholder={t("SelectCustomer" as any)} /></SelectTrigger>
-                              </FormControl>
-                              <SelectContent>
-                                {customers?.map((c) => (
-                                  <SelectItem key={c._id} value={c._id}>
-                                    {c.firstName} {c.lastName}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
+                            <FormControl>
+                              <SearchableSelect
+                                value={field.value}
+                                onValueChange={field.onChange}
+                                placeholder={t("SelectCustomer" as any)}
+                                options={customers?.map((c) => ({
+                                  value: c._id,
+                                  label: `${c.firstName} ${c.lastName}`,
+                                  subLabel: c.phone || c.email || undefined,
+                                })) ?? []}
+                              />
+                            </FormControl>
                             <FormMessage />
                           </FormItem>
                         )}
@@ -316,18 +317,18 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                         render={({ field }) => (
                           <FormItem>
                             <FormLabel>{t("Salesperson" as any)} <span className="text-red-500">*</span></FormLabel>
-                            <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
-                              <FormControl>
-                                <SelectTrigger><SelectValue placeholder={t("SelectSalesperson" as any)} /></SelectTrigger>
-                              </FormControl>
-                              <SelectContent>
-                                {memberships?.map((m) => (
-                                  <SelectItem key={m.userId} value={m.userId}>
-                                    {m.userName}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
+                            <FormControl>
+                              <SearchableSelect
+                                value={field.value}
+                                onValueChange={field.onChange}
+                                placeholder={t("SelectSalesperson" as any)}
+                                options={memberships?.map((m) => ({
+                                  value: m.userId,
+                                  label: m.userName,
+                                  subLabel: m.roleName || undefined,
+                                })) ?? []}
+                              />
+                            </FormControl>
                             <FormMessage />
                           </FormItem>
                         )}
@@ -420,19 +421,19 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>{t("TradeInVehicle" as any)}</FormLabel>
-                        <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
-                          <FormControl>
-                            <SelectTrigger><SelectValue placeholder={t("SelectTradeIn" as any)} /></SelectTrigger>
-                          </FormControl>
-                          <SelectContent>
-                            <SelectItem value="none">{t("None" as any)}</SelectItem>
-                            {availableVehicles?.map((v) => (
-                              <SelectItem key={v._id} value={v._id}>
-                                {v.year} {v.make} {v.model} - {v.vin}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                        <FormControl>
+                          <SearchableSelect
+                            value={field.value}
+                            onValueChange={field.onChange}
+                            placeholder={t("SelectTradeIn" as any)}
+                            noneLabel={t("None" as any)}
+                            options={availableVehicles?.map((v) => ({
+                              value: v._id,
+                              label: `${v.year} ${v.make} ${v.model}`,
+                              subLabel: v.vin,
+                            })) ?? []}
+                          />
+                        </FormControl>
                         <p className="text-xs text-muted-foreground">{t("VehicleMustBeAdded" as any)}</p>
                         <FormMessage />
                       </FormItem>

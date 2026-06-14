@@ -63,7 +63,7 @@ export function TaskHistoryDialog({ open, onOpenChange, task }: TaskHistoryDialo
             ) : history.length === 0 ? (
               <div className="text-center py-8 text-muted-foreground">{t("NoHistoryFound" as any) || "No history found for this task."}</div>
             ) : (
-              <div className="relative border-l ml-3 pl-6 space-y-8">
+              <div className="relative border-s ms-3 ps-6 space-y-8">
                 {history.map((entry: any) => (
                   <div key={entry._id} className="relative">
                     {/* Timeline dot */}

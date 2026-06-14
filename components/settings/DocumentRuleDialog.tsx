@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { toast } from "@/components/ui/sonner";
 
 interface DocumentRuleDialogProps {
@@ -88,20 +88,15 @@ export function DocumentRuleDialog({ open, onOpenChange }: DocumentRuleDialogPro
 
           <div className="space-y-2">
             <Label>{t("Applies To" as any)}</Label>
-            <Select
+            <SearchableSelect
               value={formData.companyId}
               onValueChange={(value) => setFormData({ ...formData, companyId: value })}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder={t("Select scope" as any)} />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="GLOBAL">{t("All Finance Companies" as any)}</SelectItem>
-                {companies?.map(c => (
-                  <SelectItem key={c._id} value={c._id}>{c.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              placeholder={t("Select scope" as any)}
+              options={[
+                { value: "GLOBAL", label: t("All Finance Companies" as any) },
+                ...(companies?.map(c => ({ value: c._id, label: c.name })) ?? []),
+              ]}
+            />
           </div>
 
           <div className="space-y-2">

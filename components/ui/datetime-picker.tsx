@@ -77,7 +77,7 @@ export function DateTimePicker({ value, onChange, className }: DateTimePickerPro
             className
           )}
         >
-          <CalendarIcon className="mr-2 h-4 w-4" />
+          <CalendarIcon className="me-2 h-4 w-4" />
           {date ? format(date, "PPP p") : <span>Pick a date and time</span>}
         </Button>
       </PopoverTrigger>

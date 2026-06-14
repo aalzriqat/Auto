@@ -1,6 +1,6 @@
 "use client";
 
-import { Car, Users, LayoutDashboard, Target, BadgeDollarSign, Shield, Receipt, ClipboardList, LineChart, Settings, Store, BookOpen } from "lucide-react";
+import { Car, Users, LayoutDashboard, Target, BadgeDollarSign, Shield, Receipt, ClipboardList, LineChart, Settings, Store, BookOpen, TrendingUp } from "lucide-react";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
@@ -17,6 +17,7 @@ const navigation = [
   { name: "Leads", href: "/leads", icon: Target, permission: "view:leads" },
   { name: "FinanceApplications", href: "/applications", icon: ClipboardList, permission: "view:sales" },
   { name: "Sales", href: "/sales", icon: BadgeDollarSign, permission: "view:sales" },
+  { name: "Commissions", href: "/commissions", icon: TrendingUp, permission: "view:commissions" },
   { name: "Tasks", href: "/tasks", icon: ClipboardList, permission: "view:tasks" },
   { name: "Expenses", href: "/expenses", icon: Receipt, permission: "view:expenses" },
   { name: "Accounting", href: "/accounting", icon: BookOpen, permission: "view:finance" },

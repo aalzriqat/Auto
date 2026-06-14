@@ -234,7 +234,7 @@ export function ApplicationDetailsDialog({
                               variant="outline"
                               onClick={() => setPreviewFile({ url: doc.fileUrl!, name: doc.ruleName })}
                             >
-                              <Eye className="h-4 w-4 mr-1" />
+                              <Eye className="h-4 w-4 me-1" />
                               {t("ViewFile" as any)}
                             </Button>
                             {isManager && (
@@ -265,7 +265,7 @@ export function ApplicationDetailsDialog({
                                 asChild
                               >
                                 <span className="cursor-pointer">
-                                  <Upload className="h-4 w-4 mr-2" />
+                                  <Upload className="h-4 w-4 me-2" />
                                   {t("Upload" as any)}
                                 </span>
                               </Button>
@@ -293,7 +293,7 @@ export function ApplicationDetailsDialog({
             <div className="flex items-center gap-2">
               <Button size="sm" variant="outline" asChild>
                 <a href={previewFile?.url || "#"} download target="_blank" rel="noreferrer">
-                  <Download className="h-4 w-4 mr-1" />
+                  <Download className="h-4 w-4 me-1" />
                   {t("Download" as any) || "Download"}
                 </a>
               </Button>

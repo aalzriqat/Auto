@@ -83,7 +83,7 @@ export function ApplicationClient() {
                             setIsDialogOpen(true);
                           }}
                         >
-                          <Eye className="h-4 w-4 mr-2" />
+                          <Eye className="h-4 w-4 me-2" />
                           {t("ReviewApp" as any)}
                         </Button>
                       </TableCell>

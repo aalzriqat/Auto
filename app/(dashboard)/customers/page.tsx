@@ -20,7 +20,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, Search, Pencil, Trash2, Mail, Phone } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, Mail, Phone, FileSpreadsheet } from "lucide-react";
+import { CustomerImportDialog } from "@/components/customers/CustomerImportDialog";
 import { toast } from "@/components/ui/sonner";
 import {
   Dialog,
@@ -51,6 +52,7 @@ export default function CustomersPage() {
   const [selectedCustomerId, setSelectedCustomerId] = useState<Id<"customers"> | null>(null);
   
   const [customerToDelete, setCustomerToDelete] = useState<Doc<"customers"> | null>(null);
+  const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
 
   const filteredCustomers = customers?.filter(c => {
     const fullName = `${c.firstName} ${c.lastName}`.toLowerCase();
@@ -101,6 +103,9 @@ export default function CustomersPage() {
     <RoleGuard permissions={["view:customers"]}>
       <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
+        <Button variant="outline" onClick={() => setIsImportDialogOpen(true)}>
+          <FileSpreadsheet className="me-2 h-4 w-4" /> Import
+        </Button>
         <Button onClick={handleAddNew}>
           <Plus className="me-2 h-4 w-4" /> {t("AddCustomer" as any)}
         </Button>
@@ -222,6 +227,8 @@ export default function CustomersPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <CustomerImportDialog open={isImportDialogOpen} onOpenChange={setIsImportDialogOpen} />
     </div>
     </RoleGuard>
   );

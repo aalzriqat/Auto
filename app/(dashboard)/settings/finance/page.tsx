@@ -56,7 +56,7 @@ export default function FinanceCompaniesPage() {
             setSelectedCompany(undefined);
             setIsDialogOpen(true);
           }}>
-            <Plus className="mr-2 h-4 w-4" />
+            <Plus className="me-2 h-4 w-4" />
             {t("Add Company" as any)}
           </Button>
       </div>
@@ -140,7 +140,7 @@ export default function FinanceCompaniesPage() {
             {t("Document Requirements" as any)}
           </CardTitle>
           <Button size="sm" onClick={() => setIsRuleDialogOpen(true)}>
-            <Plus className="mr-2 h-4 w-4" />
+            <Plus className="me-2 h-4 w-4" />
             {t("Add Rule" as any)}
           </Button>
         </CardHeader>

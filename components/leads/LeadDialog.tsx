@@ -27,13 +27,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 
 import { leadSchema, LeadFormValues, LeadDialogProps } from "./lead.schema";
 
@@ -147,20 +141,18 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
                     <FormLabel>{t("Customer" as any) || "Customer"} <span className="text-red-500">*</span></FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder={t("SelectCustomer" as any) || "Select a customer"} />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {customers?.map((c) => (
-                          <SelectItem key={c._id} value={c._id}>
-                            {c.firstName} {c.lastName} {c.email ? `(${c.email})` : ""}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <FormControl>
+                      <SearchableSelect
+                        value={field.value}
+                        onValueChange={field.onChange}
+                        placeholder={t("SelectCustomer" as any) || "Select a customer"}
+                        options={customers?.map((c) => ({
+                          value: c._id,
+                          label: `${c.firstName} ${c.lastName}`,
+                          subLabel: c.phone || c.email || undefined,
+                        })) ?? []}
+                      />
+                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -172,21 +164,19 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
                     <FormLabel>{t("VehicleOfInterest" as any) || "Vehicle of Interest (Optional)"}</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder={t("SelectVehicle" as any) || "Select a vehicle"} />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="none">{t("NoSpecificVehicle" as any) || "No specific vehicle yet"}</SelectItem>
-                        {vehicles?.map((v) => (
-                          <SelectItem key={v._id} value={v._id}>
-                            {v.year} {v.make} {v.model} - {v.vin} ({v.sellingPrice.toLocaleString()} JOD)
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <FormControl>
+                      <SearchableSelect
+                        value={field.value}
+                        onValueChange={field.onChange}
+                        placeholder={t("SelectVehicle" as any) || "Select a vehicle"}
+                        noneLabel={t("NoSpecificVehicle" as any) || "No specific vehicle yet"}
+                        options={vehicles?.map((v) => ({
+                          value: v._id,
+                          label: `${v.year} ${v.make} ${v.model}`,
+                          subLabel: `${v.vin} · ${v.sellingPrice.toLocaleString()} JOD`,
+                        })) ?? []}
+                      />
+                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -198,21 +188,19 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>{t("AssignedTo" as any) || "Assigned Salesperson"}</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder={t("NoAssigned" as any) || "Unassigned"} />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="none">{t("NoAssigned" as any) || "Unassigned"}</SelectItem>
-                        {memberships?.map((m) => (
-                          <SelectItem key={m.userId} value={m.userId}>
-                            {m.userName}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <FormControl>
+                      <SearchableSelect
+                        value={field.value}
+                        onValueChange={field.onChange}
+                        placeholder={t("NoAssigned" as any) || "Unassigned"}
+                        noneLabel={t("NoAssigned" as any) || "Unassigned"}
+                        options={memberships?.map((m) => ({
+                          value: m.userId,
+                          label: m.userName,
+                          subLabel: m.roleName || undefined,
+                        })) ?? []}
+                      />
+                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}

@@ -551,7 +551,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                     onClick={() => fileInputRef.current?.click()}
                     disabled={isUploading}
                   >
-                    <Upload className="w-4 h-4 mr-2" />
+                    <Upload className="w-4 h-4 me-2" />
                     {isUploading ? t("Uploading" as any) || "Uploading..." : t("UploadImages" as any) || "Upload Images"}
                   </Button>
                 </div>

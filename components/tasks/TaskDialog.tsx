@@ -35,6 +35,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 
 import { taskSchema, TaskFormValues, TaskDialogProps } from "./task.schema";
 
@@ -188,20 +189,18 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>{t("AssignTo" as any) || "Assign To"} <span className="text-red-500">*</span></FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder={t("SelectTeamMember" as any) || "Select team member"} />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {memberships?.map((m) => (
-                          <SelectItem key={m.userId} value={m.userId}>
-                            {m.userName}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <FormControl>
+                      <SearchableSelect
+                        value={field.value}
+                        onValueChange={field.onChange}
+                        placeholder={t("SelectTeamMember" as any) || "Select team member"}
+                        options={memberships?.map((m) => ({
+                          value: m.userId,
+                          label: m.userName,
+                          subLabel: m.roleName || undefined,
+                        })) ?? []}
+                      />
+                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -227,21 +226,19 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
                     <FormLabel>{t("RelatedCustomer" as any) || "Related Customer"}</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder={t("SelectCustomer" as any) || "Select customer"} />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="none">{t("GeneralTaskNoCustomer" as any) || "-- General Task (No Customer) --"}</SelectItem>
-                        {customers?.map((c) => (
-                          <SelectItem key={c._id} value={c._id}>
-                            {c.firstName} {c.lastName}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <FormControl>
+                      <SearchableSelect
+                        value={field.value}
+                        onValueChange={field.onChange}
+                        placeholder={t("SelectCustomer" as any) || "Select customer"}
+                        noneLabel={t("GeneralTaskNoCustomer" as any) || "-- General Task (No Customer) --"}
+                        options={customers?.map((c) => ({
+                          value: c._id,
+                          label: `${c.firstName} ${c.lastName}`,
+                          subLabel: c.phone || undefined,
+                        })) ?? []}
+                      />
+                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -253,21 +250,19 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
                     <FormLabel>{t("RelatedVehicle" as any) || "Related Vehicle"}</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder={t("SelectVehicle" as any) || "Select vehicle"} />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="none">{t("GeneralTaskNoVehicle" as any) || "-- General Task (No Vehicle) --"}</SelectItem>
-                        {vehicles?.map((v) => (
-                          <SelectItem key={v._id} value={v._id}>
-                            {v.year} {v.make} {v.model} ({v.vin.substring(v.vin.length - 6)})
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <FormControl>
+                      <SearchableSelect
+                        value={field.value}
+                        onValueChange={field.onChange}
+                        placeholder={t("SelectVehicle" as any) || "Select vehicle"}
+                        noneLabel={t("GeneralTaskNoVehicle" as any) || "-- General Task (No Vehicle) --"}
+                        options={vehicles?.map((v) => ({
+                          value: v._id,
+                          label: `${v.year} ${v.make} ${v.model}`,
+                          subLabel: v.vin,
+                        })) ?? []}
+                      />
+                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}

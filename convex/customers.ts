@@ -385,3 +385,50 @@ export const getRelations = query({
     };
   },
 });
+
+export const importBulk = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    customers: v.array(v.object({
+      firstName: v.string(),
+      lastName: v.string(),
+      phone: v.optional(v.string()),
+      whatsapp: v.optional(v.string()),
+      email: v.optional(v.string()),
+      nationalId: v.optional(v.string()),
+      address: v.optional(v.string()),
+    })),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_CUSTOMERS]);
+
+    let inserted = 0;
+    let skipped = 0;
+
+    for (const row of args.customers) {
+      const normalizedEmail = row.email?.toLowerCase().trim() || undefined;
+
+      if (normalizedEmail) {
+        const existing = await ctx.db
+          .query("customers")
+          .withIndex("by_org_email", (q) => q.eq("orgId", args.orgId).eq("email", normalizedEmail))
+          .unique();
+        if (existing) { skipped++; continue; }
+      }
+
+      await ctx.db.insert("customers", {
+        orgId: args.orgId,
+        firstName: row.firstName.trim(),
+        lastName: row.lastName.trim(),
+        phone: row.phone?.trim(),
+        whatsapp: row.whatsapp?.trim(),
+        email: normalizedEmail,
+        nationalId: row.nationalId?.trim(),
+        address: row.address?.trim(),
+      });
+      inserted++;
+    }
+
+    return { inserted, skipped };
+  },
+});

@@ -179,6 +179,16 @@ export const create = mutation({
       throwAppError(AppErrorCode.SALESPERSON_NOT_MEMBER, "Salesperson is not a member of this organization.");
     }
 
+    // Calculate commission based on salesperson's rate and gross profit
+    let commissionAmount: number | undefined;
+    const commissionRate = membership!.commissionRate ?? 0;
+    if (commissionRate > 0) {
+      const grossProfit = vehicle!.purchasePrice != null
+        ? args.salePrice - vehicle!.purchasePrice
+        : args.salePrice;
+      commissionAmount = Math.max(0, grossProfit * (commissionRate / 100));
+    }
+
     // Create the sale
     const saleId = await ctx.db.insert("sales", {
       orgId: args.orgId,
@@ -200,6 +210,7 @@ export const create = mutation({
       termMonths: args.termMonths,
       warrantySold: args.warrantySold,
       gapSold: args.gapSold,
+      commissionAmount,
     });
 
     await markVehicleAsSold(ctx, args.vehicleId);
@@ -350,5 +361,104 @@ export const softDelete = mutation({
       "Sale Deleted",
       `${actorName} deleted a sale record.`
     );
+  },
+});
+
+// ─── Commission Queries & Mutations ──────────────────────────────────────────
+
+export const listCommissions = query({
+  args: {
+    orgId: v.id("organizations"),
+    salespersonId: v.optional(v.id("users")),
+    paidStatus: v.optional(v.union(v.literal("paid"), v.literal("unpaid"))),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_COMMISSIONS]);
+
+    let sales;
+    if (args.salespersonId) {
+      sales = await ctx.db
+        .query("sales")
+        .withIndex("by_org_salesperson", (q) =>
+          q.eq("orgId", args.orgId).eq("salespersonId", args.salespersonId!)
+        )
+        .filter((q) => q.neq(q.field("isDeleted"), true))
+        .collect();
+    } else {
+      sales = await ctx.db
+        .query("sales")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .filter((q) => q.neq(q.field("isDeleted"), true))
+        .collect();
+    }
+
+    // Only include sales that have a commission amount set
+    const withCommission = sales.filter(s => s.commissionAmount != null && s.commissionAmount > 0);
+
+    // Apply paid/unpaid filter
+    const filtered = args.paidStatus === "paid"
+      ? withCommission.filter(s => s.commissionPaidAt != null)
+      : args.paidStatus === "unpaid"
+        ? withCommission.filter(s => s.commissionPaidAt == null)
+        : withCommission;
+
+    return await Promise.all(
+      filtered.map(async (sale) => {
+        const vehicle = await ctx.db.get(sale.vehicleId);
+        const customer = await ctx.db.get(sale.customerId);
+        const salesperson = await ctx.db.get(sale.salespersonId);
+        const paidBy = sale.commissionPaidBy ? await ctx.db.get(sale.commissionPaidBy) : null;
+        return {
+          ...sale,
+          vehicleSummary: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
+          customerName: customer ? `${customer.firstName} ${customer.lastName}` : "Unknown",
+          salespersonName: salesperson?.name ?? salesperson?.email ?? "Unknown",
+          paidByName: paidBy?.name ?? paidBy?.email ?? null,
+        };
+      })
+    );
+  },
+});
+
+export const markCommissionPaid = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    saleId: v.id("sales"),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_COMMISSIONS]);
+
+    const sale = await ctx.db.get(args.saleId);
+    if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
+      throw new Error("Sale not found.");
+    }
+    if (sale.commissionPaidAt != null) {
+      throw new Error("Commission already marked as paid.");
+    }
+
+    await ctx.db.patch(args.saleId, {
+      commissionPaidAt: Date.now(),
+      commissionPaidBy: user._id,
+    });
+  },
+});
+
+export const markCommissionUnpaid = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    saleId: v.id("sales"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_COMMISSIONS]);
+
+    const sale = await ctx.db.get(args.saleId);
+    if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
+      throw new Error("Sale not found.");
+    }
+
+    await ctx.db.patch(args.saleId, {
+      commissionPaidAt: undefined,
+      commissionPaidBy: undefined,
+    });
   },
 });

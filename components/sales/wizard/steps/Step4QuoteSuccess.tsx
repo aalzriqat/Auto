@@ -102,7 +102,7 @@ export function Step4QuoteSuccess({
             className="bg-indigo-600 hover:bg-indigo-700 min-w-[200px]"
             size="lg"
           >
-            <FileDown className="w-4 h-4 mr-2" />
+            <FileDown className="w-4 h-4 me-2" />
             {isGeneratingPdf ? "Generating PDF..." : "Download PDF Quote"}
           </Button>
 
@@ -112,7 +112,7 @@ export function Step4QuoteSuccess({
             size="lg"
             className="min-w-[200px]"
           >
-            <LogOut className="w-4 h-4 mr-2" />
+            <LogOut className="w-4 h-4 me-2" />
             Done & Close
           </Button>
         </div>

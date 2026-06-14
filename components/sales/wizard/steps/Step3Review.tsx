@@ -229,7 +229,7 @@ export function Step3Review({
       {/* ACTIONS */}
       <div className="flex justify-between pt-4 border-t">
         <Button variant="outline" onClick={onBack} disabled={isSubmitting}>
-          <ArrowLeft className="w-4 h-4 mr-2" />
+          <ArrowLeft className="w-4 h-4 me-2" />
           Back
         </Button>
 
@@ -242,7 +242,7 @@ export function Step3Review({
               : "bg-indigo-600 hover:bg-indigo-700"
           }
         >
-          <CheckCircle2 className="w-4 h-4 mr-2" />
+          <CheckCircle2 className="w-4 h-4 me-2" />
           {isSubmitting ? "Generating..." : "Generate Quote"}
         </Button>
       </div>

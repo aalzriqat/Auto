@@ -84,6 +84,10 @@ export const PERMISSIONS = {
 
   // Financial — sensitive field visibility
   VIEW_COST_PRICE: "view:cost_price",
+
+  // Commissions
+  VIEW_COMMISSIONS: "view:commissions",
+  MANAGE_COMMISSIONS: "manage:commissions",
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -136,6 +140,8 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.VIEW_SETTINGS,
       PERMISSIONS.MANAGE_SETTINGS,
       PERMISSIONS.VIEW_COST_PRICE,
+      PERMISSIONS.VIEW_COMMISSIONS,
+      PERMISSIONS.MANAGE_COMMISSIONS,
     ],
   },
   {
@@ -162,6 +168,7 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.CREATE_TASKS,
       PERMISSIONS.EDIT_TASKS,
       PERMISSIONS.VIEW_SETTINGS,
+      PERMISSIONS.VIEW_COMMISSIONS,
     ],
   },
   {

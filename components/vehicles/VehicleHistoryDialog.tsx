@@ -42,7 +42,7 @@ export function VehicleHistoryDialog({ open, onOpenChange, vehicle }: VehicleHis
           </DialogDescription>
         </DialogHeader>
 
-        <ScrollArea className="flex-1 pr-4 -mr-4 mt-4">
+        <ScrollArea className="flex-1 pe-4 -me-4 mt-4">
           {history === undefined ? (
             <div className="text-center py-8 text-muted-foreground">{t("LoadingHistory" as any)}</div>
           ) : history.length === 0 ? (
@@ -50,8 +50,8 @@ export function VehicleHistoryDialog({ open, onOpenChange, vehicle }: VehicleHis
           ) : (
             <div className="space-y-6">
               {history.map((edit) => (
-                <div key={edit._id} className="relative pl-6 pb-2 border-l-2 last:border-0 border-muted">
-                  <div className="absolute -left-[9px] top-1 h-4 w-4 rounded-full bg-background border-2 border-primary" />
+                <div key={edit._id} className="relative ps-6 pb-2 border-s-2 last:border-0 border-muted">
+                  <div className="absolute -start-[9px] top-1 h-4 w-4 rounded-full bg-background border-2 border-primary" />
                   
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
                     <div className="flex items-center gap-2">

@@ -82,10 +82,10 @@ export function VehicleValuationsTab({ vehicleId }: VehicleValuationsTabProps) {
                 </div>
                 <div className="flex items-center space-x-2">
                   <div className="relative flex-1">
-                    <span className="absolute left-3 top-2.5 text-muted-foreground text-sm">JOD</span>
-                    <Input 
+                    <span className="absolute start-3 top-2.5 text-muted-foreground text-sm">JOD</span>
+                    <Input
                       type="number"
-                      className="pl-10"
+                      className="ps-10"
                       placeholder="0.00"
                       value={val}
                       onChange={(e) => setLocalValuations(prev => ({...prev, [company._id]: e.target.value}))}
@@ -97,7 +97,7 @@ export function VehicleValuationsTab({ vehicleId }: VehicleValuationsTabProps) {
                       onClick={() => handleSave(company._id, val)}
                       disabled={isSaving}
                     >
-                      <Save className="w-4 h-4 ltr:mr-1 rtl:ml-1" />
+                      <Save className="w-4 h-4 me-1" />
                       {t("Save" as any) || "Save"}
                     </Button>
                   )}

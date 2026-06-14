@@ -13,14 +13,14 @@ type LanguageContextType = {
 const LanguageContext = createContext<LanguageContextType | undefined>(undefined);
 
 export function LanguageProvider({ children }: { children: React.ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>("en");
+  const [locale, setLocaleState] = useState<Locale>(() => {
+    if (typeof window === "undefined") return "en";
+    const saved = localStorage.getItem("autoflow-locale") as Locale;
+    return saved === "en" || saved === "ar" ? saved : "en";
+  });
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    const savedLocale = localStorage.getItem("autoflow-locale") as Locale;
-    if (savedLocale && (savedLocale === "en" || savedLocale === "ar")) {
-      setLocaleState(savedLocale);
-    }
     setMounted(true);
   }, []);
 

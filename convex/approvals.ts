@@ -4,12 +4,22 @@ import { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 
+const wizardSnapshotValidator = v.optional(v.object({
+  paymentType: v.string(),
+  vehiclePrice: v.number(),
+  desiredProfit: v.number(),
+  downPayment: v.number(),
+  termMonths: v.number(),
+  selectedCompanyId: v.optional(v.string()),
+}));
+
 export const requestProfitApproval = mutation({
   args: {
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
     requestedProfit: v.number(),
     minimumProfit: v.number(),
+    wizardSnapshot: wizardSnapshotValidator,
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
@@ -33,10 +43,10 @@ export const requestProfitApproval = mutation({
       .first();
 
     if (existing) {
-      // Update the existing request with the new requested profit
       return await ctx.db.patch(existing._id, {
         requestedProfit: args.requestedProfit,
         minimumProfit: args.minimumProfit,
+        wizardSnapshot: args.wizardSnapshot,
       });
     }
 
@@ -48,6 +58,7 @@ export const requestProfitApproval = mutation({
       salespersonId: user._id,
       status: "PENDING",
       createdAt: Date.now(),
+      wizardSnapshot: args.wizardSnapshot,
     });
   },
 });
@@ -151,5 +162,32 @@ export const listPendingApprovals = query({
         };
       })
     );
+  },
+});
+
+// Returns the calling salesperson's own non-rejected approval requests from the last 7 days.
+// Used to surface "Pending Deals" on the sales page so they can resume after approval.
+export const listMyPendingApprovals = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const requests = await ctx.db
+      .query("profitApprovalRequests")
+      .withIndex("by_salesperson", (q) => q.eq("salespersonId", user._id))
+      .collect();
+
+    const recent = requests.filter(r => r.createdAt > cutoff && r.status !== "REJECTED");
+
+    return await Promise.all(recent.map(async (r) => {
+      const vehicle = await ctx.db.get(r.vehicleId);
+      return {
+        ...r,
+        vehicleSummary: vehicle
+          ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`
+          : "Unknown Vehicle",
+      };
+    }));
   },
 });

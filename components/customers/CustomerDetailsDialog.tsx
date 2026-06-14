@@ -93,7 +93,7 @@ export function CustomerDetailsDialog({
                 >
                   {t("LeadsSales" as any)}
                   {relations && (relations.leads.length > 0 || relations.sales.length > 0) && (
-                    <Badge variant="secondary" className="ml-2 text-xs px-1.5 py-0.5">{relations.leads.length + relations.sales.length}</Badge>
+                    <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.leads.length + relations.sales.length}</Badge>
                   )}
                 </TabsTrigger>
                 <TabsTrigger
@@ -102,7 +102,7 @@ export function CustomerDetailsDialog({
                 >
                   {t("Quotes" as any)}
                   {relations && relations.quotes?.length > 0 && (
-                    <Badge variant="secondary" className="ml-2 text-xs px-1.5 py-0.5">{relations.quotes.length}</Badge>
+                    <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.quotes.length}</Badge>
                   )}
                 </TabsTrigger>
                 <TabsTrigger
@@ -111,7 +111,7 @@ export function CustomerDetailsDialog({
                 >
                   {t("Tasks" as any)}
                   {relations?.tasks && relations.tasks.length > 0 && (
-                    <Badge variant="secondary" className="ml-2 text-xs px-1.5 py-0.5">{relations.tasks.length}</Badge>
+                    <Badge variant="secondary" className="ms-2 text-xs px-1.5 py-0.5">{relations.tasks.length}</Badge>
                   )}
                 </TabsTrigger>
                 <TabsTrigger

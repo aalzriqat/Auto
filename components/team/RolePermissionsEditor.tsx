@@ -136,7 +136,7 @@ export function RolePermissionsEditor({
         return (
           <AccordionItem key={group.id} value={group.id} className="border rounded-lg px-4 bg-card">
             <AccordionTrigger className="hover:no-underline py-3">
-              <div className="flex items-center justify-between w-full pr-4">
+              <div className="flex items-center justify-between w-full pe-4">
                 <span className="font-semibold">{t(group.label as any)}</span>
                 <div
                   className="flex items-center space-x-2"

@@ -2,6 +2,7 @@ import { convexTest } from "convex-test";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -128,7 +129,7 @@ describe("memberships.leave", () => {
         .filter((q: any) => q.eq(q.field("name"), "Test Dealer"))
         .first()
         .then((o: any) => o._id)
-    );
+    ) as Id<"organizations">;
 
     await expect(
       asOwner.mutation(api.memberships.leave, { orgId })
@@ -145,13 +146,13 @@ describe("memberships.updateRole", () => {
     // Create a second role and a second member
     const salesRoleId = await t.run((ctx: any) =>
       ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] })
-    );
+    ) as Id<"roles">;
     const userId2 = await t.run((ctx: any) =>
       ctx.db.insert("users", { clerkId: "user_m10", email: "member@test.com", name: "Member" })
     );
     const membershipId = await t.run((ctx: any) =>
       ctx.db.insert("memberships", { orgId, userId: userId2, roleId })
-    );
+    ) as Id<"memberships">;
 
     await asAdmin.mutation(api.memberships.updateRole, {
       orgId,

@@ -29,13 +29,7 @@ import {
 } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import {
   Table,
   TableBody,
@@ -51,6 +45,51 @@ import { paginationOptsValidator } from "convex/server";
 const defaultEndDate = new Date();
 const defaultStartDate = new Date();
 defaultStartDate.setDate(defaultStartDate.getDate() - 30);
+
+function ReportsDateFilter({
+  startDateStr,
+  endDateStr,
+  setStartDateStr,
+  setEndDateStr,
+  selectedSalesperson,
+  setSelectedSalesperson,
+  salespersonOptions,
+}: {
+  startDateStr: string;
+  endDateStr: string;
+  setStartDateStr: (v: string) => void;
+  setEndDateStr: (v: string) => void;
+  selectedSalesperson: string;
+  setSelectedSalesperson: (v: string) => void;
+  salespersonOptions: Array<{ id: string; name: string }>;
+}) {
+  const { t } = useLanguage();
+  return (
+    <div className="flex flex-wrap items-end gap-4 no-print bg-card p-4 rounded-lg border shadow-sm">
+      <div className="space-y-1">
+        <label className="text-sm font-medium">{t("StartDate" as any)}</label>
+        <Input type="date" value={startDateStr} onChange={(e) => setStartDateStr(e.target.value)} />
+      </div>
+      <div className="space-y-1">
+        <label className="text-sm font-medium">{t("EndDate" as any)}</label>
+        <Input type="date" value={endDateStr} onChange={(e) => setEndDateStr(e.target.value)} />
+      </div>
+      <div className="space-y-1">
+        <label className="text-sm font-medium">{t("Salesperson" as any)}</label>
+        <SearchableSelect
+          value={selectedSalesperson}
+          onValueChange={setSelectedSalesperson}
+          className="w-[180px]"
+          placeholder={t("AllSalespeople" as any)}
+          options={[
+            { value: "all", label: t("AllSalespeople" as any) },
+            ...salespersonOptions.map((sp) => ({ value: sp.name, label: sp.name })),
+          ]}
+        />
+      </div>
+    </div>
+  );
+}
 
 export default function ReportsPage() {
   const { activeOrgId } = useOrg();
@@ -81,33 +120,7 @@ export default function ReportsPage() {
   const filteredProfit = filteredSales?.reduce((sum: number, s: any) => sum + s.netProfit, 0) ?? 0;
 
   const handlePrint = () => window.print();
-
-  const DateFilter = () => (
-    <div className="flex flex-wrap items-end gap-4 no-print bg-card p-4 rounded-lg border shadow-sm">
-      <div className="space-y-1">
-        <label className="text-sm font-medium">{t("StartDate" as any)}</label>
-        <Input type="date" value={startDateStr} onChange={(e) => setStartDateStr(e.target.value)} />
-      </div>
-      <div className="space-y-1">
-        <label className="text-sm font-medium">{t("EndDate" as any)}</label>
-        <Input type="date" value={endDateStr} onChange={(e) => setEndDateStr(e.target.value)} />
-      </div>
-      <div className="space-y-1">
-        <label className="text-sm font-medium">Salesperson</label>
-        <Select value={selectedSalesperson} onValueChange={setSelectedSalesperson}>
-          <SelectTrigger className="w-[180px]">
-            <SelectValue placeholder="All staff" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All staff</SelectItem>
-            {salespersonOptions.map((sp: any) => (
-              <SelectItem key={sp.id} value={sp.name}>{sp.name}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-    </div>
-  );
+  const dateFilterProps = { startDateStr, endDateStr, setStartDateStr, setEndDateStr, selectedSalesperson, setSelectedSalesperson, salespersonOptions };
 
   return (
     <RoleGuard permissions={["view:reports"]}>
@@ -144,7 +157,7 @@ export default function ReportsPage() {
 
           {/* SALES REPORT */}
           <TabsContent value="sales" className="space-y-4 m-0">
-            <DateFilter />
+            <ReportsDateFilter {...dateFilterProps} />
             <div className="flex items-center justify-between no-print">
               <div>
                 <h3 className="text-lg font-medium">{t("SalesProfitOverview" as any) || "Sales & Profit Overview"}</h3>
@@ -155,10 +168,10 @@ export default function ReportsPage() {
               </div>
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => filteredSales && downloadCSV(filteredSales, "sales_report.csv")}>
-                  <Download className="h-4 w-4 mr-2" /> {t("ExportCSV" as any)}
+                  <Download className="h-4 w-4 me-2" /> {t("ExportCSV" as any)}
                 </Button>
                 <Button onClick={handlePrint}>
-                  <Printer className="h-4 w-4 mr-2" /> {t("Print" as any)}
+                  <Printer className="h-4 w-4 me-2" /> {t("Print" as any)}
                 </Button>
               </div>
             </div>
@@ -239,10 +252,10 @@ export default function ReportsPage() {
               </div>
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => inventoryReport?.vehicles && downloadCSV(inventoryReport.vehicles, "inventory_report.csv")}>
-                  <Download className="h-4 w-4 mr-2" /> {t("ExportCSV" as any)}
+                  <Download className="h-4 w-4 me-2" /> {t("ExportCSV" as any)}
                 </Button>
                 <Button onClick={handlePrint}>
-                  <Printer className="h-4 w-4 mr-2" /> {t("Print" as any)}
+                  <Printer className="h-4 w-4 me-2" /> {t("Print" as any)}
                 </Button>
               </div>
             </div>
@@ -305,7 +318,7 @@ export default function ReportsPage() {
 
           {/* EXPENSES REPORT */}
           <TabsContent value="expenses" className="space-y-4 m-0">
-            <DateFilter />
+            <ReportsDateFilter {...dateFilterProps} />
             <div className="flex items-center justify-between no-print">
               <div>
                 <h3 className="text-lg font-medium">{t("ExpensesOverview" as any) || "Expenses Overview"}</h3>
@@ -315,10 +328,10 @@ export default function ReportsPage() {
               </div>
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => expensesReport?.expenses && downloadCSV(expensesReport.expenses, "expenses_report.csv")}>
-                  <Download className="h-4 w-4 mr-2" /> {t("ExportCSV" as any)}
+                  <Download className="h-4 w-4 me-2" /> {t("ExportCSV" as any)}
                 </Button>
                 <Button onClick={handlePrint}>
-                  <Printer className="h-4 w-4 mr-2" /> {t("Print" as any)}
+                  <Printer className="h-4 w-4 me-2" /> {t("Print" as any)}
                 </Button>
               </div>
             </div>
@@ -370,7 +383,7 @@ export default function ReportsPage() {
 
           {/* PERFORMANCE REPORT */}
           <TabsContent value="performance" className="space-y-4 m-0">
-            <DateFilter />
+            <ReportsDateFilter {...dateFilterProps} />
             <div className="flex items-center justify-between no-print">
               <div>
                 <h3 className="text-lg font-medium">Salesperson Performance</h3>
@@ -380,10 +393,10 @@ export default function ReportsPage() {
               </div>
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => performanceReport && downloadCSV(performanceReport, "performance_report.csv")}>
-                  <Download className="h-4 w-4 mr-2" /> {t("ExportCSV" as any)}
+                  <Download className="h-4 w-4 me-2" /> {t("ExportCSV" as any)}
                 </Button>
                 <Button onClick={handlePrint}>
-                  <Printer className="h-4 w-4 mr-2" /> {t("Print" as any)}
+                  <Printer className="h-4 w-4 me-2" /> {t("Print" as any)}
                 </Button>
               </div>
             </div>
@@ -421,7 +434,7 @@ export default function ReportsPage() {
 
           {/* LEADS REPORT */}
           <TabsContent value="leads" className="space-y-4 m-0">
-            <DateFilter />
+            <ReportsDateFilter {...dateFilterProps} />
             <div className="flex items-center justify-between no-print">
               <div>
                 <h3 className="text-lg font-medium">Lead Conversion</h3>
@@ -430,7 +443,7 @@ export default function ReportsPage() {
                 </p>
               </div>
               <Button onClick={handlePrint}>
-                <Printer className="h-4 w-4 mr-2" /> {t("Print" as any)}
+                <Printer className="h-4 w-4 me-2" /> {t("Print" as any)}
               </Button>
             </div>
 

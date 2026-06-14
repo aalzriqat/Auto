@@ -28,7 +28,7 @@ export function QuotePrintTemplate({
 
   // Extract Battery / Additions from notes
   const rawNotes = selectedVehicle?.notes || "";
-  let additions = rawNotes || "لا يوجد";
+  const additions = rawNotes || "لا يوجد";
 
   return (
     <div

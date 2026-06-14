@@ -13,7 +13,7 @@ export const list = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
-    let q = ctx.db
+    const q = ctx.db
       .query("transactions")
       .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId))
       .order("desc");

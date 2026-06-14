@@ -173,7 +173,7 @@ export function WorkOrderDialog({ open, onOpenChange, vehicleId, workOrder }: Wo
               <div className="flex justify-between items-center mb-2">
                 <h4 className="font-semibold">Service Tasks</h4>
                 <Button type="button" variant="outline" size="sm" onClick={() => append({ id: crypto.randomUUID(), description: "", partsCost: 0, laborCost: 0, mechanicName: "", completed: false })}>
-                  <Plus className="h-4 w-4 mr-2" /> Add Task
+                  <Plus className="h-4 w-4 me-2" /> Add Task
                 </Button>
               </div>
 

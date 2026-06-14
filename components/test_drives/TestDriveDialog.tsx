@@ -27,13 +27,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Textarea } from "@/components/ui/textarea";
 
 const testDriveSchema = z.object({
@@ -153,24 +147,19 @@ export function TestDriveDialog({ open, onOpenChange, vehicleId, testDrive }: Te
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>{t("Customer" as any)}</FormLabel>
-                  <Select
-                    onValueChange={field.onChange}
-                    value={field.value}
-                    disabled={!!testDrive}
-                  >
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue placeholder={t("SelectACustomer" as any)} />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {customers?.map((customer) => (
-                        <SelectItem key={customer._id} value={customer._id}>
-                          {customer.firstName} {customer.lastName}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <FormControl>
+                    <SearchableSelect
+                      value={field.value}
+                      onValueChange={field.onChange}
+                      placeholder={t("SelectACustomer" as any)}
+                      disabled={!!testDrive}
+                      options={customers?.map((c) => ({
+                        value: c._id,
+                        label: `${c.firstName} ${c.lastName}`,
+                        subLabel: c.phone || undefined,
+                      })) ?? []}
+                    />
+                  </FormControl>
                   <FormMessage />
                 </FormItem>
               )}
@@ -182,24 +171,19 @@ export function TestDriveDialog({ open, onOpenChange, vehicleId, testDrive }: Te
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>{t("Salesperson" as any)}</FormLabel>
-                  <Select
-                    onValueChange={field.onChange}
-                    value={field.value}
-                    disabled={!!testDrive}
-                  >
-                    <FormControl>
-                      <SelectTrigger>
-                        <SelectValue placeholder={t("SelectSalesperson" as any)} />
-                      </SelectTrigger>
-                    </FormControl>
-                    <SelectContent>
-                      {memberships?.map((membership) => (
-                        <SelectItem key={membership.userId} value={membership.userId}>
-                          {membership.userName || membership.userEmail}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <FormControl>
+                    <SearchableSelect
+                      value={field.value}
+                      onValueChange={field.onChange}
+                      placeholder={t("SelectSalesperson" as any)}
+                      disabled={!!testDrive}
+                      options={memberships?.map((m) => ({
+                        value: m.userId,
+                        label: m.userName || m.userEmail,
+                        subLabel: m.roleName || undefined,
+                      })) ?? []}
+                    />
+                  </FormControl>
                   <FormMessage />
                 </FormItem>
               )}

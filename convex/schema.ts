@@ -29,6 +29,7 @@ export default defineSchema({
     userId: v.id("users"),
     roleId: v.id("roles"),
     branchId: v.optional(v.id("branches")),
+    commissionRate: v.optional(v.number()), // % of gross profit per sale
   })
     .index("by_user", ["userId"])
     .index("by_org", ["orgId"])
@@ -118,6 +119,7 @@ export default defineSchema({
       fuelType: v.optional(v.string()),
       transmission: v.optional(v.string()),
       purchasePrice: v.optional(v.number()),
+      minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),
       status: v.optional(v.string()),
       notes: v.optional(v.string()),
@@ -211,6 +213,9 @@ export default defineSchema({
     warrantySold: v.optional(v.number()),
     gapSold: v.optional(v.number()),
     applicationId: v.optional(v.id("financeApplications")),
+    commissionAmount: v.optional(v.number()), // Calculated at sale time
+    commissionPaidAt: v.optional(v.number()),
+    commissionPaidBy: v.optional(v.id("users")),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
     deletedBy: v.optional(v.string()),
@@ -553,6 +558,25 @@ export default defineSchema({
     .index("by_org_vehicle", ["orgId", "vehicleId"])
     .index("by_org_status", ["orgId", "status"]),
 
+  wizardDrafts: defineTable({
+    orgId: v.id("organizations"),
+    userId: v.id("users"),
+    paymentType: v.string(),
+    currentStep: v.number(),
+    wizardData: v.object({
+      vehicleId: v.string(),
+      vehiclePrice: v.number(),
+      desiredProfit: v.number(),
+      downPayment: v.number(),
+      termMonths: v.number(),
+      selectedCompanyId: v.optional(v.string()),
+      recipientName: v.optional(v.string()),
+    }),
+    selectedCustomerId: v.optional(v.string()),
+    savedAt: v.number(),
+  })
+    .index("by_org_user", ["orgId", "userId"]),
+
   profitApprovalRequests: defineTable({
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
@@ -563,6 +587,15 @@ export default defineSchema({
     approvedBy: v.optional(v.id("users")),
     notes: v.optional(v.string()),
     createdAt: v.number(),
+    // Full wizard state snapshot so salesperson can resume after approval
+    wizardSnapshot: v.optional(v.object({
+      paymentType: v.string(),
+      vehiclePrice: v.number(),
+      desiredProfit: v.number(),
+      downPayment: v.number(),
+      termMonths: v.number(),
+      selectedCompanyId: v.optional(v.string()),
+    })),
   })
     .index("by_org", ["orgId"])
     .index("by_vehicle", ["vehicleId"])

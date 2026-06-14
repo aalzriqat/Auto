@@ -3,7 +3,7 @@ import { mutation, query, action, internalMutation } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { internal } from "./_generated/api";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
-import { PERMISSIONS } from "./utils/permissions";
+import { PERMISSIONS, ALL_PERMISSIONS, DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
@@ -36,6 +36,7 @@ export const list = query({
           userEmail: user?.email ?? "",
           userImage: user?.imageUrl,
           roleName: role?.name ?? "UNKNOWN",
+          commissionRate: m.commissionRate ?? 0,
         };
       })
     );
@@ -55,12 +56,16 @@ export const getMyMembership = query({
   },
   handler: async (ctx, args) => {
     const { user, membership, role } = await requireTenantAuth(ctx, args.orgId);
+    // OWNER always gets all permissions — prevents stale DB roles when new permissions are added
+    const permissions: string[] = role.name === "OWNER"
+      ? [...ALL_PERMISSIONS]
+      : role.permissions;
     return {
       _id: membership._id,
       userId: user._id,
       roleId: role._id,
       roleName: role.name,
-      permissions: role.permissions,
+      permissions,
     };
   },
 });
@@ -523,6 +528,54 @@ export const checkEmailExists = action({
   }
 });
 
+
+/**
+ * Re-applies the default permission template to all standard roles in the org.
+ * Safe to call after adding new permissions — only updates roles whose names
+ * match a template (OWNER, MANAGER, SALES, RECEPTION, ACCOUNTANT).
+ * Custom roles are never touched.
+ */
+export const syncRolePermissionsToTemplate = mutation({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireOwner(ctx, args.orgId);
+    const roles = await ctx.db
+      .query("roles")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+
+    let updated = 0;
+    for (const role of roles) {
+      const template = DEFAULT_ROLE_TEMPLATES.find(t => t.name === role.name);
+      if (!template) continue;
+      await ctx.db.patch(role._id, { permissions: [...template.permissions] });
+      updated++;
+    }
+    return updated;
+  },
+});
+
+export const updateCommissionRate = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    membershipId: v.id("memberships"),
+    commissionRate: v.number(),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_USERS]);
+
+    const membership = await ctx.db.get(args.membershipId);
+    if (!membership || membership.orgId !== args.orgId) {
+      throw new ConvexError("Membership not found in this organization.");
+    }
+
+    if (args.commissionRate < 0 || args.commissionRate > 100) {
+      throw new ConvexError("Commission rate must be between 0 and 100.");
+    }
+
+    await ctx.db.patch(args.membershipId, { commissionRate: args.commissionRate });
+  },
+});
 
 export const finalizeDirectAccount = internalMutation({
   args: {

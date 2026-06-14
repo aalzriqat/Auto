@@ -273,9 +273,9 @@ export default function TasksPage() {
 
                       {task.communicationMethod && (
                         <div className="flex items-center text-xs text-muted-foreground mt-1">
-                          {task.communicationMethod === "PHONE" && <Phone className="h-3 w-3 mr-1" />}
-                          {task.communicationMethod === "EMAIL" && <Mail className="h-3 w-3 mr-1" />}
-                          {task.communicationMethod === "FAX" && <Printer className="h-3 w-3 mr-1" />}
+                          {task.communicationMethod === "PHONE" && <Phone className="h-3 w-3 me-1" />}
+                          {task.communicationMethod === "EMAIL" && <Mail className="h-3 w-3 me-1" />}
+                          {task.communicationMethod === "FAX" && <Printer className="h-3 w-3 me-1" />}
                           <span className="capitalize">{task.communicationMethod.toLowerCase()}</span>
                         </div>
                       )}

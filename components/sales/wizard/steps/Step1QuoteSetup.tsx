@@ -119,6 +119,14 @@ export default function Step1QuoteSetup({
         vehicleId: watchedVehicleId as Id<"vehicles">,
         requestedProfit: Number(watchedProfit) || 0,
         minimumProfit: minimumProfit,
+        wizardSnapshot: {
+          paymentType,
+          vehiclePrice: Number(watchedPrice) || 0,
+          desiredProfit: Number(watchedProfit) || 0,
+          downPayment: Number(watchedDown) || 0,
+          termMonths: Number(watchedTerm) || 84,
+          selectedCompanyId: selectedCompanyId,
+        },
       });
     } finally {
       setIsRequesting(false);

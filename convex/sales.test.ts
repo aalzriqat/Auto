@@ -12,7 +12,6 @@ vi.mock("./rateLimit", () => ({
 
 describe("Sales Mutations", () => {
   test("Creating a sale marks the vehicle as SOLD and creates a ledger transaction", async () => {
-    // @ts-ignore
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
 
     // Provide a mocked getValidatedEnv implementation or mocked ENV since auth/env hooks might run

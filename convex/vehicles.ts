@@ -605,3 +605,69 @@ export const getRelations = query({
     };
   },
 });
+
+export const importBulk = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    vehicles: v.array(v.object({
+      make: v.string(),
+      model: v.string(),
+      year: v.number(),
+      vin: v.string(),
+      color: v.string(),
+      mileage: v.number(),
+      fuelType: v.string(),
+      transmission: v.string(),
+      sellingPrice: v.number(),
+      purchasePrice: v.optional(v.number()),
+      status: v.optional(v.string()),
+      notes: v.optional(v.string()),
+    })),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
+
+    let inserted = 0;
+    let skipped = 0;
+
+    for (const row of args.vehicles) {
+      const normalizedVin = row.vin.trim().toUpperCase();
+
+      // Skip duplicate VINs within the org (or blank VINs treated as unique)
+      if (normalizedVin) {
+        const existing = await ctx.db
+          .query("vehicles")
+          .withIndex("by_org_vin", (q) => q.eq("orgId", args.orgId).eq("vin", normalizedVin))
+          .unique();
+        if (existing) { skipped++; continue; }
+      }
+
+      const validStatuses = ["AVAILABLE", "RESERVED", "SOLD", "IN_INSPECTION", "IN_REPAIR", "ARCHIVED"];
+      const status = row.status && validStatuses.includes(row.status.toUpperCase())
+        ? (row.status.toUpperCase() as "AVAILABLE" | "RESERVED" | "SOLD" | "IN_INSPECTION" | "IN_REPAIR" | "ARCHIVED")
+        : "AVAILABLE";
+
+      await ctx.db.insert("vehicles", {
+        orgId: args.orgId,
+        vin: normalizedVin || `IMPORT-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        make: row.make.trim(),
+        model: row.model.trim(),
+        year: row.year,
+        mileage: row.mileage,
+        color: row.color.trim(),
+        fuelType: row.fuelType,
+        transmission: row.transmission,
+        sellingPrice: row.sellingPrice,
+        purchasePrice: row.purchasePrice,
+        status,
+        notes: row.notes,
+        addedBy: user._id,
+        updatedBy: user._id,
+        updatedAt: Date.now(),
+      });
+      inserted++;
+    }
+
+    return { inserted, skipped };
+  },
+});

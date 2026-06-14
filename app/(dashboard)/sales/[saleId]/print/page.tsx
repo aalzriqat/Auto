@@ -53,10 +53,10 @@ export default function PrintBillOfSalePage() {
       {/* Non-printable header */}
       <div className="print:hidden p-4 flex justify-between items-center bg-muted border-b">
         <Button variant="outline" onClick={() => router.back()}>
-          <ArrowLeft className="h-4 w-4 mr-2" /> Back
+          <ArrowLeft className="h-4 w-4 me-2" /> Back
         </Button>
         <Button onClick={() => window.print()}>
-          <Printer className="h-4 w-4 mr-2" /> Print Document
+          <Printer className="h-4 w-4 me-2" /> Print Document
         </Button>
       </div>
 

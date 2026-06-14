@@ -76,7 +76,7 @@ export default function ReviewFinanceSummary({
                 {(monthlyInstallment || 0).toLocaleString(undefined, {
                   minimumFractionDigits: 2,
                 })}
-                <span className="text-xs text-muted-foreground ml-1">{t("JOD" as any)}</span>
+                <span className="text-xs text-muted-foreground ms-1">{t("JOD" as any)}</span>
               </p>
             </div>
 
@@ -154,7 +154,7 @@ export default function ReviewFinanceSummary({
                 >
                   {isRtl ? doc.documentName : (DOC_TRANSLATIONS[doc.documentName] || doc.documentName)}
                   {doc.isRequired && (
-                    <span className="text-amber-400 ml-1">*</span>
+                    <span className="text-amber-400 ms-1">*</span>
                   )}
                 </span>
               </div>
