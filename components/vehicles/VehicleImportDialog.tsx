@@ -28,22 +28,63 @@ import { Upload, FileSpreadsheet, AlertCircle, CheckCircle2, Download } from "lu
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 
-// Flexible column name mapping — handles common Excel column header variations
+// ---------------------------------------------------------------------------
+// Column name mapping — handles Arabic + English header variations
+// ---------------------------------------------------------------------------
 const COL_MAP: Record<string, string> = {
-  make: "make", brand: "make", manufacturer: "make", الشركة: "make", الصانع: "make", الماركة: "make",
+  // Make / brand
+  "type/name": "make", typename: "make", type: "make", name: "make",
+  make: "make", brand: "make", manufacturer: "make",
+  الشركة: "make", الصانع: "make", الماركة: "make", الاسم: "make", النوع: "make",
+
+  // Model (may embed year, e.g. "Camry 2022")
   model: "model", النموذج: "model", الموديل: "model",
-  year: "year", سنة: "year", سنةالصنع: "year", "سنة الصنع": "year",
+
+  // Year (standalone column)
+  year: "year", سنة: "year", "سنة الصنع": "year",
+
+  // VIN / chassis
   vin: "vin", chassis: "vin", "chassis number": "vin", "رقم الشاصي": "vin", الشاصي: "vin",
+
+  // Color
   color: "color", colour: "color", اللون: "color",
-  mileage: "mileage", km: "mileage", kilometers: "mileage", odometer: "mileage", المسافة: "mileage", "الكيلومترات": "mileage",
-  "fuel type": "fuelType", fuel: "fuelType", "نوع الوقود": "fuelType", الوقود: "fuelType",
-  transmission: "transmission", gearbox: "transmission", ناقلالحركة: "transmission", "ناقل الحركة": "transmission",
-  "selling price": "sellingPrice", price: "sellingPrice", "sale price": "sellingPrice", "سعر البيع": "sellingPrice", السعر: "sellingPrice",
-  "purchase price": "purchasePrice", cost: "purchasePrice", "buy price": "purchasePrice", "سعر الشراء": "purchasePrice", التكلفة: "purchasePrice",
+
+  // Mileage
+  mileage: "mileage", km: "mileage", "ك.م": "mileage",
+  kilometers: "mileage", odometer: "mileage",
+  المسافة: "mileage", الكيلومترات: "mileage",
+
+  // Fuel type
+  "fuel type": "fuelType", fuel: "fuelType",
+  "نوع الوقود": "fuelType", الوقود: "fuelType",
+
+  // Transmission
+  transmission: "transmission", gearbox: "transmission",
+  "ناقل الحركة": "transmission", ناقلالحركة: "transmission",
+
+  // Selling price — المتخصصة is the primary retail price in the dealership's template
+  "selling price": "sellingPrice", price: "sellingPrice", "sale price": "sellingPrice",
+  "سعر البيع": "sellingPrice", السعر: "sellingPrice",
+  المتخصصة: "sellingPrice",
+
+  // Purchase / cost price
+  "purchase price": "purchasePrice", cost: "purchasePrice", "buy price": "purchasePrice",
+  "سعر الشراء": "purchasePrice", التكلفة: "purchasePrice",
+
+  // Finance-company valuations (imported but not pushed to vehicles table)
+  الكوتر: "valuationCoater",
+  بندار: "valuationBandar",
+  تمكين: "valuationTamkeen",
+  السماحة: "valuationSamaha",
+
+  // Misc
   status: "status", الحالة: "status",
   notes: "notes", comments: "notes", remarks: "notes", ملاحظات: "notes",
 };
 
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 interface ParsedVehicle {
   make: string;
   model: string;
@@ -60,10 +101,17 @@ interface ParsedVehicle {
   _errors: string[];
 }
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 function normalizeKey(key: string): string {
   return key.toLowerCase().trim().replace(/\s+/g, " ");
 }
 
+/**
+ * Parses a raw row object (keyed by whatever header strings the file used)
+ * into a typed ParsedVehicle, using COL_MAP for normalisation.
+ */
 function parseRows(rows: Record<string, any>[]): ParsedVehicle[] {
   return rows.map((row) => {
     const mapped: Record<string, any> = {};
@@ -73,10 +121,14 @@ function parseRows(rows: Record<string, any>[]): ParsedVehicle[] {
       if (field) mapped[field] = val;
     }
 
+    // Extract year from model string if no explicit year column
+    const rawModel = String(mapped.model ?? "").trim();
+    const yearFromModel = rawModel.match(/\b(19|20)\d{2}\b/)?.[0];
+    const model = yearFromModel ? rawModel.replace(yearFromModel, "").trim() : rawModel;
+    const year = parseInt(mapped.year) || (yearFromModel ? parseInt(yearFromModel) : NaN);
+
     const errors: string[] = [];
     const make = String(mapped.make ?? "").trim();
-    const model = String(mapped.model ?? "").trim();
-    const year = parseInt(mapped.year);
     const vin = String(mapped.vin ?? "").trim();
     const color = String(mapped.color ?? "").trim();
     const mileage = parseFloat(String(mapped.mileage ?? "0").replace(/,/g, ""));
@@ -90,32 +142,97 @@ function parseRows(rows: Record<string, any>[]): ParsedVehicle[] {
     if (!make) errors.push("Missing Make");
     if (!model) errors.push("Missing Model");
     if (!year || isNaN(year) || year < 1900 || year > new Date().getFullYear() + 2) errors.push("Invalid Year");
-    if (!sellingPrice || isNaN(sellingPrice) || sellingPrice <= 0) errors.push("Invalid Selling Price");
     if (isNaN(mileage) || mileage < 0) errors.push("Invalid Mileage");
 
     return {
-      make, model, year, vin, color: color || "Unknown",
+      make, model, year: isNaN(year) ? 0 : year,
+      vin, color: color || "Unknown",
       mileage: isNaN(mileage) ? 0 : mileage,
-      fuelType, transmission, sellingPrice: isNaN(sellingPrice) ? 0 : sellingPrice,
+      fuelType, transmission,
+      sellingPrice: isNaN(sellingPrice) ? 0 : sellingPrice,
       purchasePrice: purchasePrice && !isNaN(purchasePrice) ? purchasePrice : undefined,
       status: mapped.status ? String(mapped.status).toUpperCase() : undefined,
       notes: mapped.notes ? String(mapped.notes).trim() : undefined,
       _errors: errors,
     };
-  }).filter(v => v.make || v.model || v.sellingPrice); // Drop completely empty rows
+  }).filter(v => v.make || v.model || v.vin);
 }
 
-const TEMPLATE_HEADERS = ["Make", "Model", "Year", "VIN", "Color", "Mileage", "Fuel Type", "Transmission", "Selling Price", "Purchase Price", "Status", "Notes"];
-const TEMPLATE_EXAMPLE = ["Toyota", "Camry", "2022", "1HGCM82633A123456", "White", "45000", "Petrol", "Automatic", "18000", "14000", "AVAILABLE", ""];
+/**
+ * Reads a worksheet that may have a single OR double header row.
+ * The image template uses 2 rows:
+ *   Row 1: TYPE/Name | VIN | Color | KM | Cost | Model | المتخصصة | الكوتر | [التخمين merged]
+ *   Row 2:                                                                   | بندار | تمكين | السماحة
+ * When row 2 contains Arabic valuation sub-headers, we merge both rows into
+ * a single header and start data from row 3.
+ */
+function parseWorksheet(ws: XLSX.WorkSheet): Record<string, any>[] {
+  const rawRows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+  if (rawRows.length === 0) return [];
 
+  const VALUATION_SUB_HEADERS = new Set(["بندار", "تمكين", "السماحة"]);
+
+  const primaryHeaders: string[] = (rawRows[0] ?? []).map((c: any) => String(c ?? "").trim());
+  const secondRow: string[] = (rawRows[1] ?? []).map((c: any) => String(c ?? "").trim());
+
+  const isDoubleHeader = secondRow.some(cell => VALUATION_SUB_HEADERS.has(cell));
+
+  let finalHeaders: string[];
+  let dataStartRow: number;
+
+  if (isDoubleHeader) {
+    // For each column: prefer the sub-header value if it's non-empty, else use the primary
+    finalHeaders = primaryHeaders.map((h, i) => secondRow[i] || h);
+    dataStartRow = 2;
+  } else {
+    finalHeaders = primaryHeaders;
+    dataStartRow = 1;
+  }
+
+  return rawRows
+    .slice(dataStartRow)
+    .filter(row => row.some((cell: any) => cell !== ""))
+    .map(row => {
+      const obj: Record<string, any> = {};
+      finalHeaders.forEach((h, i) => {
+        if (h) obj[h] = row[i] ?? "";
+      });
+      return obj;
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Template download — matches the image layout exactly
+// ---------------------------------------------------------------------------
 function downloadTemplate() {
   const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.aoa_to_sheet([TEMPLATE_HEADERS, TEMPLATE_EXAMPLE]);
-  ws["!cols"] = TEMPLATE_HEADERS.map(() => ({ wch: 18 }));
+
+  const row1 = ["TYPE/Name", "VIN", "Color", "KM", "Cost", "Model", "المتخصصة", "الكوتر", "التخمين", "", ""];
+  const row2 = ["",           "",    "",      "",   "",     "",       "",          "",        "بندار",    "تمكين", "السماحة"];
+  const example = ["Toyota", "JTDKARFU7G3529873", "White", "45000", "14000", "Camry 2022", "18000", "17500", "19000", "18500", "17000"];
+
+  const ws = XLSX.utils.aoa_to_sheet([row1, row2, example]);
+
+  // Merge التخمين across columns I–K (0-indexed: cols 8–10, row 0)
+  ws["!merges"] = [{ s: { r: 0, c: 8 }, e: { r: 0, c: 10 } }];
+  ws["!cols"] = Array(11).fill({ wch: 16 });
+
+  // Right-align Arabic header cells
+  const arabicCols = [6, 7, 8, 9, 10];
+  arabicCols.forEach(c => {
+    const addr = XLSX.utils.encode_cell({ r: 0, c });
+    if (ws[addr]) ws[addr].s = { alignment: { horizontal: "right", readingOrder: 2 } };
+    const addr2 = XLSX.utils.encode_cell({ r: 1, c });
+    if (ws[addr2]) ws[addr2].s = { alignment: { horizontal: "right", readingOrder: 2 } };
+  });
+
   XLSX.utils.book_append_sheet(wb, ws, "Vehicles");
   XLSX.writeFile(wb, "vehicle_import_template.xlsx");
 }
 
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -141,8 +258,7 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
       const data = e.target?.result;
       const wb = XLSX.read(data, { type: "binary" });
       const ws = wb.Sheets[wb.SheetNames[0]];
-      const json: Record<string, any>[] = XLSX.utils.sheet_to_json(ws, { defval: "" });
-      setRows(parseRows(json));
+      setRows(parseRows(parseWorksheet(ws)));
     };
     reader.readAsBinaryString(file);
   }
@@ -250,12 +366,14 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-8">#</TableHead>
-                    <TableHead>Make</TableHead>
+                    <TableHead>TYPE/Name</TableHead>
                     <TableHead>Model</TableHead>
                     <TableHead>Year</TableHead>
                     <TableHead>VIN</TableHead>
                     <TableHead>Color</TableHead>
-                    <TableHead className="text-right">Selling Price</TableHead>
+                    <TableHead>KM</TableHead>
+                    <TableHead className="text-end">Cost</TableHead>
+                    <TableHead className="text-end">المتخصصة</TableHead>
                     <TableHead>Status</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -268,7 +386,9 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
                       <TableCell>{row.year || <span className="text-destructive">—</span>}</TableCell>
                       <TableCell className="font-mono text-xs">{row.vin || "—"}</TableCell>
                       <TableCell>{row.color}</TableCell>
-                      <TableCell className="text-right">{row.sellingPrice > 0 ? row.sellingPrice.toLocaleString() : <span className="text-destructive">—</span>}</TableCell>
+                      <TableCell>{row.mileage.toLocaleString()}</TableCell>
+                      <TableCell className="text-end">{row.purchasePrice ? row.purchasePrice.toLocaleString() : "—"}</TableCell>
+                      <TableCell className="text-end">{row.sellingPrice > 0 ? row.sellingPrice.toLocaleString() : "—"}</TableCell>
                       <TableCell>
                         {row._errors.length > 0 ? (
                           <Badge variant="destructive" className="text-xs">{row._errors[0]}</Badge>
@@ -286,10 +406,7 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
 
         <DialogFooter className="pt-2 border-t">
           <Button variant="outline" onClick={handleClose} disabled={importing}>{t("Cancel" as any)}</Button>
-          <Button
-            onClick={handleImport}
-            disabled={validRows.length === 0 || importing}
-          >
+          <Button onClick={handleImport} disabled={validRows.length === 0 || importing}>
             {importing ? t("ImportingEllipsis" as any) : `Import ${validRows.length} Vehicle${validRows.length !== 1 ? "s" : ""}`}
           </Button>
         </DialogFooter>
