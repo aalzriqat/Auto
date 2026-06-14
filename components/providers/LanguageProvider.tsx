@@ -13,14 +13,14 @@ type LanguageContextType = {
 const LanguageContext = createContext<LanguageContextType | undefined>(undefined);
 
 export function LanguageProvider({ children }: { children: React.ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>(() => {
-    if (typeof window === "undefined") return "en";
-    const saved = localStorage.getItem("autoflow-locale") as Locale;
-    return saved === "en" || saved === "ar" ? saved : "en";
-  });
+  // Always start with "en" so SSR and the initial client render agree.
+  // Read the saved preference from localStorage after mount to avoid hydration mismatch.
+  const [locale, setLocaleState] = useState<Locale>("en");
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
+    const saved = localStorage.getItem("autoflow-locale") as Locale;
+    if (saved === "ar") setLocaleState("ar");
     setMounted(true);
   }, []);
 
