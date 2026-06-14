@@ -11,7 +11,7 @@ export interface SearchableSelectOption {
 }
 
 interface SearchableSelectProps {
-  value: string;
+  value: string | undefined;
   onValueChange: (value: string) => void;
   options: SearchableSelectOption[];
   placeholder?: string;
@@ -23,7 +23,7 @@ interface SearchableSelectProps {
 }
 
 export function SearchableSelect({
-  value,
+  value: valueProp,
   onValueChange,
   options,
   placeholder = "Select…",
@@ -32,6 +32,7 @@ export function SearchableSelect({
   disabled,
   className,
 }: SearchableSelectProps) {
+  const value = valueProp ?? "";
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
