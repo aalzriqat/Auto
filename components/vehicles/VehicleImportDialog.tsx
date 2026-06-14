@@ -124,11 +124,19 @@ function parseRows(rows: Record<string, any>[]): ParsedVehicle[] {
     // Extract year from model string if no explicit year column
     const rawModel = String(mapped.model ?? "").trim();
     const yearFromModel = rawModel.match(/\b(19|20)\d{2}\b/)?.[0];
-    const model = yearFromModel ? rawModel.replace(yearFromModel, "").trim() : rawModel;
+    let model = yearFromModel ? rawModel.replace(yearFromModel, "").trim() : rawModel;
     const year = parseInt(mapped.year) || (yearFromModel ? parseInt(yearFromModel) : NaN);
 
     const errors: string[] = [];
-    const make = String(mapped.make ?? "").trim();
+    let make = String(mapped.make ?? "").trim();
+
+    // "TYPE/Name" often contains the full vehicle name (e.g. "BYD Dolphyn").
+    // When the model column is empty, split on the first space: first token → make, rest → model.
+    if (!model && make.includes(" ")) {
+      const spaceIdx = make.indexOf(" ");
+      model = make.slice(spaceIdx + 1).trim();
+      make = make.slice(0, spaceIdx).trim();
+    }
     const vin = String(mapped.vin ?? "").trim();
     const color = String(mapped.color ?? "").trim();
     const mileage = parseFloat(String(mapped.mileage ?? "0").replace(/,/g, ""));
