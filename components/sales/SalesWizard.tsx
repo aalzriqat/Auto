@@ -160,7 +160,7 @@ export function SalesWizard({
             {t(paymentType === "CASH" ? "NewCashQuote" as any : "NewInstallmentQuote" as any)}
           </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {t("StepOf" as any, { step: currentStep, total: 3 }) ?? `Step ${currentStep} of 3`}
+            {`Step ${currentStep} of 3`}
           </p>
         </div>
         <button

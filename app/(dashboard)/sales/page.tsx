@@ -182,7 +182,7 @@ export default function SalesHomePage() {
                                     {myWizardDraft.paymentType === "CASH"
                                         ? (t("CashSale" as any) ?? "Cash Sale")
                                         : (t("Installment" as any) ?? "Installment")}
-                                    {" — "}{t("StepOf" as any, { step: myWizardDraft.currentStep, total: 3 }) ?? `Step ${myWizardDraft.currentStep} of 3`}
+                                    {" — "}{`Step ${myWizardDraft.currentStep} of 3`}
                                 </p>
                                 <p className="text-xs text-muted-foreground mt-0.5">
                                     {t("LastSaved" as any) ?? "Last saved"}: {new Date(myWizardDraft.savedAt).toLocaleString()}
