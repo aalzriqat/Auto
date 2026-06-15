@@ -5,6 +5,8 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { rateLimiter } from "./rateLimit";
+import { validateInput } from "./utils/validation";
+import { CreateCustomerSchema, UpdateCustomerSchema } from "./validations/customers";
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
@@ -92,6 +94,8 @@ export const create = mutation({
 
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_CUSTOMERS]);
 
+    validateInput(CreateCustomerSchema, args);
+
     const normalizedEmail = args.email?.toLowerCase().trim() || undefined;
 
     // If email is provided, check for duplicates within the org
@@ -164,7 +168,14 @@ export const update = mutation({
     ),
   },
   handler: async (ctx, args) => {
+    const statusLimit = await rateLimiter.limit(ctx, "standardApi");
+    if (!statusLimit.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+    }
+
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_CUSTOMERS]);
+
+    validateInput(UpdateCustomerSchema, args);
 
     const customer = await ctx.db.get(args.customerId);
     if (!customer || customer.isDeleted || customer.orgId !== args.orgId) {
@@ -226,6 +237,11 @@ export const softDelete = mutation({
     customerId: v.id("customers"),
   },
   handler: async (ctx, args) => {
+    const statusLimit = await rateLimiter.limit(ctx, "standardApi");
+    if (!statusLimit.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+    }
+
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_CUSTOMERS]);
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new ConvexError("Unauthenticated");
@@ -295,7 +311,7 @@ export const getRelations = query({
     const enrichedSales = await Promise.all(
       sales.map(async (sale) => {
         const vehicle = await ctx.db.get(sale.vehicleId);
-        const salesperson = await ctx.db.get(sale.salespersonId as any);
+        const salesperson = await ctx.db.get(sale.salespersonId);
         return {
           ...sale,
           vehicleDesc: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
@@ -314,7 +330,7 @@ export const getRelations = query({
     const enrichedLeads = await Promise.all(
       leads.map(async (lead) => {
         const vehicle = lead.vehicleId ? await ctx.db.get(lead.vehicleId) : null;
-        const assignedUser = lead.assignedUserId ? await ctx.db.get(lead.assignedUserId as any) : null;
+        const assignedUser = lead.assignedUserId ? await ctx.db.get(lead.assignedUserId) : null;
         return {
           ...lead,
           vehicleDesc: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Any",
@@ -332,7 +348,7 @@ export const getRelations = query({
 
     const enrichedTasks = await Promise.all(
       tasks.map(async (task) => {
-        const assignedUser = await ctx.db.get(task.assignedTo as any);
+        const assignedUser = await ctx.db.get(task.assignedTo);
         return {
           ...task,
           assignedUserName: assignedUser && "name" in assignedUser ? assignedUser.name : "Unknown",
@@ -351,7 +367,7 @@ export const getRelations = query({
       quotes.map(async (quote) => {
         const vehicle = await ctx.db.get(quote.vehicleId);
         const company = quote.companyId ? await ctx.db.get(quote.companyId) : null;
-        const createdByUser = await ctx.db.get(quote.createdBy as any);
+        const createdByUser = await ctx.db.get(quote.createdBy);
         return {
           ...quote,
           vehicleDesc: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
@@ -367,5 +383,52 @@ export const getRelations = query({
       tasks: enrichedTasks.sort((a, b) => a.dueDate - b.dueDate),
       quotes: enrichedQuotes.sort((a, b) => b.createdAt - a.createdAt),
     };
+  },
+});
+
+export const importBulk = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    customers: v.array(v.object({
+      firstName: v.string(),
+      lastName: v.string(),
+      phone: v.optional(v.string()),
+      whatsapp: v.optional(v.string()),
+      email: v.optional(v.string()),
+      nationalId: v.optional(v.string()),
+      address: v.optional(v.string()),
+    })),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_CUSTOMERS]);
+
+    let inserted = 0;
+    let skipped = 0;
+
+    for (const row of args.customers) {
+      const normalizedEmail = row.email?.toLowerCase().trim() || undefined;
+
+      if (normalizedEmail) {
+        const existing = await ctx.db
+          .query("customers")
+          .withIndex("by_org_email", (q) => q.eq("orgId", args.orgId).eq("email", normalizedEmail))
+          .unique();
+        if (existing) { skipped++; continue; }
+      }
+
+      await ctx.db.insert("customers", {
+        orgId: args.orgId,
+        firstName: row.firstName.trim(),
+        lastName: row.lastName.trim(),
+        phone: row.phone?.trim(),
+        whatsapp: row.whatsapp?.trim(),
+        email: normalizedEmail,
+        nationalId: row.nationalId?.trim(),
+        address: row.address?.trim(),
+      });
+      inserted++;
+    }
+
+    return { inserted, skipped };
   },
 });

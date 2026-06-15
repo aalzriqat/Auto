@@ -170,7 +170,7 @@ export default function DashboardPage() {
                     {(stats?.salesVolumeThisMonth || 0).toLocaleString()} <span className="text-2xl">JOD</span>
                   </div>
                   <p className="text-sm text-white/80 mt-1 flex items-center">
-                    {t("Revenue" as any) || "Revenue"} <span className="ml-1 text-[#4ade80] font-medium">(+0.0%)</span>
+                    {t("Revenue" as any) || "Revenue"} <span className="ms-1 text-[#4ade80] font-medium">(+0.0%)</span>
                   </p>
                 </div>
                 <div>
@@ -309,7 +309,7 @@ export default function DashboardPage() {
                 </PieChart>
               </ResponsiveContainer>
             </div>
-            <div className="mt-2 flex flex-col gap-1 w-full pl-4">
+            <div className="mt-2 flex flex-col gap-1 w-full ps-4">
               <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-[#10b981]"></div><span className="text-[10px] font-medium text-slate-700">{t("New" as any) || "New"}</span></div>
               <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-[#3b82f6]"></div><span className="text-[10px] font-medium text-slate-700">{t("Contacted" as any) || "Contacted"}</span></div>
               <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-[#f97316]"></div><span className="text-[10px] font-medium text-slate-700">{t("TestDrive" as any) || "Test Drive"}</span></div>
@@ -432,7 +432,7 @@ export default function DashboardPage() {
           </div>
 
           <div className="flex items-center justify-end p-4 border-t border-slate-100 gap-2">
-            <span className="text-xs font-medium text-slate-500 mr-2">
+            <span className="text-xs font-medium text-slate-500 me-2">
               {totalItems === 0 ? "0" : `${(safePage - 1) * itemsPerPage + 1} - ${Math.min(safePage * itemsPerPage, totalItems)}`} of {totalItems}
             </span>
             <Button

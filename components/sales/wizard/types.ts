@@ -5,6 +5,7 @@ export interface WizardData {
   downPayment: number;
   termMonths: number;
   selectedCompanyId?: string;
+  recipientName?: string;
 }
 export type PaymentType = "CASH" | "INSTALLMENT";
 

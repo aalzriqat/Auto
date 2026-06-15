@@ -9,7 +9,7 @@ import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 import {
   Dialog,
   DialogContent,
@@ -26,13 +26,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { calculateUnifiedMurabaha } from "@/lib/financing";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CheckCircle2 } from "lucide-react";
@@ -205,22 +199,22 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>{t("Vehicle" as any)} <span className="text-red-500">*</span></FormLabel>
-                    <Select onValueChange={(val) => {
-                      field.onChange(val);
-                      const v = availableVehicles?.find(v => v._id === val);
-                      if (v) form.setValue("vehiclePrice", v.sellingPrice);
-                    }} defaultValue={field.value} value={field.value}>
-                      <FormControl>
-                        <SelectTrigger className="bg-background"><SelectValue placeholder={t("SelectVehicle" as any)} /></SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {availableVehicles?.map((v) => (
-                          <SelectItem key={v._id} value={v._id}>
-                            {v.year} {v.make} {v.model} ({v.sellingPrice.toLocaleString()} JOD)
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <FormControl>
+                      <SearchableSelect
+                        value={field.value}
+                        onValueChange={(val) => {
+                          field.onChange(val);
+                          const v = availableVehicles?.find(v => v._id === val);
+                          if (v) form.setValue("vehiclePrice", v.sellingPrice);
+                        }}
+                        placeholder={t("SelectVehicle" as any)}
+                        options={availableVehicles?.map((v) => ({
+                          value: v._id,
+                          label: `${v.year} ${v.make} ${v.model}`,
+                          subLabel: `${v.sellingPrice.toLocaleString()} JOD`,
+                        })) ?? []}
+                      />
+                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -231,18 +225,18 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>{t("Customer" as any)} <span className="text-red-500">*</span></FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
-                      <FormControl>
-                        <SelectTrigger className="bg-background"><SelectValue placeholder={t("SelectCustomer" as any)} /></SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {customers?.map((c) => (
-                          <SelectItem key={c._id} value={c._id}>
-                            {c.firstName} {c.lastName}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <FormControl>
+                      <SearchableSelect
+                        value={field.value}
+                        onValueChange={field.onChange}
+                        placeholder={t("SelectCustomer" as any)}
+                        options={customers?.map((c) => ({
+                          value: c._id,
+                          label: `${c.firstName} ${c.lastName}`,
+                          subLabel: c.phone || c.email || undefined,
+                        })) ?? []}
+                      />
+                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -333,7 +327,7 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
                           {result.companyRules && result.companyRules.length > 0 && (
                             <div className="mt-3">
                               <p className="text-xs font-semibold text-muted-foreground mb-1">{t("Conditions" as any)}</p>
-                              <ul className="text-xs text-muted-foreground space-y-1 list-disc pl-4">
+                              <ul className="text-xs text-muted-foreground space-y-1 list-disc ps-4">
                                 {result.companyRules.map((r: any) => (
                                   <li key={r._id}>{r.documentName} {r.isRequired ? "*" : ""}</li>
                                 ))}
@@ -358,7 +352,7 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
                       onClick={() => onSelectQuote(result)}
                       disabled={isSubmitting || result.exceedsValuation}
                     >
-                      <CheckCircle2 className="w-4 h-4 mr-2" />
+                      <CheckCircle2 className="w-4 h-4 me-2" />
                       {result.exceedsValuation ? (t("IncreaseDownPayment" as any)) : (t("SelectSave" as any))}
                     </Button>
                   </CardContent>

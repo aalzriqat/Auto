@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -58,7 +58,7 @@ export const updateQuoteStatus = mutation({
   handler: async (ctx, { orgId, quoteId, status }) => {
     await requireTenantAuth(ctx, orgId, [PERMISSIONS.EDIT_VEHICLES]);
     const existing = await ctx.db.get(quoteId);
-    if (!existing || existing.orgId !== orgId) throw new Error("Not found");
+    if (!existing || existing.orgId !== orgId) throw new ConvexError("Not found");
     
     await ctx.db.patch(quoteId, { status });
   },

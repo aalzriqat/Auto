@@ -1,10 +1,12 @@
 "use client";
 
+import { useState } from "react";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { PaymentType, WizardData } from "../types";
 import { Button } from "@/components/ui/button";
 import { CheckCircle2, FileDown, LogOut } from "lucide-react";
-import { generateQuote, generateFinanceQuote } from "@/lib/pdf";
+import { QuotePrintTemplate } from "../../QuotePrintTemplate";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 
 interface Step4QuoteSuccessProps {
   paymentType: PaymentType;
@@ -27,80 +29,105 @@ export function Step4QuoteSuccess({
   selectedResult,
   onClose,
 }: Step4QuoteSuccessProps) {
-  const isCash = paymentType === "CASH";
+  const { t } = useLanguage();
+  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
 
-  const handleDownload = () => {
-    const customerName = `${selectedCustomer.firstName} ${selectedCustomer.lastName}`;
-    const vehicleSummary = selectedVehicle
-      ? `${selectedVehicle.year} ${selectedVehicle.make} ${selectedVehicle.model}`
-      : "Selected Vehicle";
-    const vehicleVin = selectedVehicle?.vin || "";
+  const handleDownload = async () => {
+    const element = document.getElementById('pdf-quote-content');
+    if (!element) return;
+    
+    setIsGeneratingPdf(true);
+    try {
+      // Temporarily show element off-screen for canvas rendering
+      element.classList.remove('hidden');
+      element.style.position = 'absolute';
+      element.style.left = '-9999px';
+      element.style.top = '-9999px';
+      element.style.display = 'block';
+      
+      const { default: html2canvas } = await import('html2canvas');
+      const { jsPDF } = await import('jspdf');
 
-    if (isCash) {
-      generateQuote(
-        "Auto Dealership", // We could grab from org/user if available
-        customerName,
-        vehicleSummary,
-        vehicleVin,
-        selectedResult.totalFinancedAmount // which is vehiclePrice for cash
-      );
-    } else {
-      generateFinanceQuote(
-        "Auto Dealership",
-        customerName,
-        vehicleSummary,
-        selectedCompany?.name || "Finance Company",
-        wizardData.vehiclePrice + (wizardData.desiredProfit || 0), // effective price
-        wizardData.downPayment,
-        wizardData.termMonths,
-        selectedResult.profitRateApplied || 0,
-        selectedResult.totalFinancedAmount || 0,
-        selectedResult.totalProfit || 0,
-        selectedResult.monthlyInstallment || 0,
-        vehicleVin
-      );
+      const canvas = await html2canvas(element, {
+        scale: 2, // Better quality
+        useCORS: true,
+      });
+
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF('p', 'mm', 'a4');
+      
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+
+      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      pdf.save(`Quote_${selectedCustomer.firstName}.pdf`);
+
+    } catch (err) {
+      console.error('Failed to generate PDF', err);
+    } finally {
+      element.classList.remove('block');
+      element.style.display = '';
+      element.style.position = '';
+      element.style.left = '';
+      element.style.top = '';
+      element.classList.add('hidden');
+      setIsGeneratingPdf(false);
     }
   };
 
   return (
-    <div className="flex flex-col items-center justify-center py-12 space-y-6 text-center">
-      <div className="w-16 h-16 bg-emerald-500/10 text-emerald-500 rounded-full flex items-center justify-center mb-4">
-        <CheckCircle2 className="w-8 h-8" />
+    <>
+      <div className="flex flex-col items-center justify-center py-12 space-y-6 text-center print:hidden">
+        <div className="w-16 h-16 bg-emerald-500/10 text-emerald-500 rounded-full flex items-center justify-center mb-4">
+          <CheckCircle2 className="w-8 h-8" />
+        </div>
+
+        <div className="space-y-2">
+          <h2 className="text-2xl font-bold text-foreground">
+            Quote Generated Successfully!
+          </h2>
+          <p className="text-muted-foreground max-w-md mx-auto">
+            The quote has been saved and is now linked to{" "}
+            <span className="font-semibold text-foreground">
+              {selectedCustomer.firstName} {selectedCustomer.lastName}
+            </span>{" "}
+            and the selected vehicle.
+          </p>
+        </div>
+
+        <div className="pt-6 flex flex-col sm:flex-row gap-4 justify-center items-center">
+          <Button
+            onClick={handleDownload}
+            disabled={isGeneratingPdf}
+            className="bg-indigo-600 hover:bg-indigo-700 min-w-[200px]"
+            size="lg"
+          >
+            <FileDown className="w-4 h-4 me-2" />
+            {isGeneratingPdf ? "Generating PDF..." : "Download PDF Quote"}
+          </Button>
+
+          <Button
+            onClick={onClose}
+            variant="outline"
+            size="lg"
+            className="min-w-[200px]"
+          >
+            <LogOut className="w-4 h-4 me-2" />
+            Done & Close
+          </Button>
+        </div>
       </div>
 
-      <div className="space-y-2">
-        <h2 className="text-2xl font-bold text-foreground">
-          Quote Generated Successfully!
-        </h2>
-        <p className="text-muted-foreground max-w-md mx-auto">
-          The quote has been saved and is now linked to{" "}
-          <span className="font-semibold text-foreground">
-            {selectedCustomer.firstName} {selectedCustomer.lastName}
-          </span>{" "}
-          and the selected vehicle.
-        </p>
-      </div>
-
-      <div className="pt-6 flex flex-col sm:flex-row gap-4 justify-center items-center">
-        <Button
-          onClick={handleDownload}
-          className="bg-indigo-600 hover:bg-indigo-700 min-w-[200px]"
-          size="lg"
-        >
-          <FileDown className="w-4 h-4 mr-2" />
-          Download PDF Quote
-        </Button>
-
-        <Button
-          onClick={onClose}
-          variant="outline"
-          size="lg"
-          className="min-w-[200px]"
-        >
-          <LogOut className="w-4 h-4 mr-2" />
-          Done & Close
-        </Button>
-      </div>
-    </div>
+      {/* Hidden print template rendered only for window.print() */}
+      <QuotePrintTemplate
+        paymentType={paymentType}
+        wizardData={wizardData}
+        selectedVehicle={selectedVehicle}
+        selectedCompany={selectedCompany}
+        selectedCustomer={selectedCustomer}
+        selectedResult={selectedResult}
+        dateStr={new Date().toLocaleDateString("ar-JO")}
+      />
+    </>
   );
 }

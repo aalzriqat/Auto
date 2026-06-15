@@ -1,6 +1,17 @@
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
+import { requireTenantAuth } from "./utils/tenancy";
+import { PERMISSIONS } from "./utils/permissions";
+
+const wizardSnapshotValidator = v.optional(v.object({
+  paymentType: v.string(),
+  vehiclePrice: v.number(),
+  desiredProfit: v.number(),
+  downPayment: v.number(),
+  termMonths: v.number(),
+  selectedCompanyId: v.optional(v.string()),
+}));
 
 export const requestProfitApproval = mutation({
   args: {
@@ -8,17 +19,16 @@ export const requestProfitApproval = mutation({
     vehicleId: v.id("vehicles"),
     requestedProfit: v.number(),
     minimumProfit: v.number(),
+    wizardSnapshot: wizardSnapshotValidator,
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Unauthenticated");
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
 
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
-      .unique();
-
-    if (!user) throw new Error("User not found");
+    // Verify the vehicle belongs to this org
+    const vehicle = await ctx.db.get(args.vehicleId);
+    if (!vehicle || vehicle.orgId !== args.orgId) {
+      throw new ConvexError("Vehicle not found in this organization.");
+    }
 
     // Check if there is an existing pending request for this vehicle and user
     const existing = await ctx.db
@@ -33,10 +43,10 @@ export const requestProfitApproval = mutation({
       .first();
 
     if (existing) {
-      // Update the existing request with the new requested profit
       return await ctx.db.patch(existing._id, {
         requestedProfit: args.requestedProfit,
         minimumProfit: args.minimumProfit,
+        wizardSnapshot: args.wizardSnapshot,
       });
     }
 
@@ -48,6 +58,7 @@ export const requestProfitApproval = mutation({
       salespersonId: user._id,
       status: "PENDING",
       createdAt: Date.now(),
+      wizardSnapshot: args.wizardSnapshot,
     });
   },
 });
@@ -58,18 +69,15 @@ export const checkPendingApproval = query({
     vehicleId: v.id("vehicles"),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) return null;
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
 
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
-      .unique();
-
-    if (!user) return null;
+    // Verify the vehicle belongs to this org
+    const vehicle = await ctx.db.get(args.vehicleId);
+    if (!vehicle || vehicle.orgId !== args.orgId) {
+      return null;
+    }
 
     // We only care about PENDING or APPROVED requests for this salesperson and vehicle.
-    // Wait, if it's approved, the user can proceed. We return the latest request.
     const requests = await ctx.db
       .query("profitApprovalRequests")
       .withIndex("by_vehicle", (q) => q.eq("vehicleId", args.vehicleId))
@@ -86,20 +94,23 @@ export const checkPendingApproval = query({
 
 export const respondToApproval = mutation({
   args: {
+    orgId: v.id("organizations"),
     requestId: v.id("profitApprovalRequests"),
     status: v.union(v.literal("APPROVED"), v.literal("REJECTED")),
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Unauthenticated");
+    // Only managers/owners should be able to respond to approval requests
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_SETTINGS]);
 
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
-      .unique();
+    const request = await ctx.db.get(args.requestId);
+    if (!request || request.orgId !== args.orgId) {
+      throw new ConvexError("Approval request not found in this organization.");
+    }
 
-    if (!user) throw new Error("User not found");
+    if (request.status !== "PENDING") {
+      throw new ConvexError("This approval request has already been resolved.");
+    }
 
     await ctx.db.patch(args.requestId, {
       status: args.status,
@@ -109,11 +120,27 @@ export const respondToApproval = mutation({
   },
 });
 
+export const countPending = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_SETTINGS]);
+    const requests = await ctx.db
+      .query("profitApprovalRequests")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .filter((q) => q.eq(q.field("status"), "PENDING"))
+      .collect();
+    return requests.length;
+  },
+});
+
 export const listPendingApprovals = query({
   args: {
     orgId: v.id("organizations"),
   },
   handler: async (ctx, args) => {
+    // Only users with MANAGE_SETTINGS can see all pending approvals
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_SETTINGS]);
+
     const requests = await ctx.db
       .query("profitApprovalRequests")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
@@ -135,5 +162,32 @@ export const listPendingApprovals = query({
         };
       })
     );
+  },
+});
+
+// Returns the calling salesperson's own non-rejected approval requests from the last 7 days.
+// Used to surface "Pending Deals" on the sales page so they can resume after approval.
+export const listMyPendingApprovals = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const requests = await ctx.db
+      .query("profitApprovalRequests")
+      .withIndex("by_salesperson", (q) => q.eq("salespersonId", user._id))
+      .collect();
+
+    const recent = requests.filter(r => r.createdAt > cutoff && r.status !== "REJECTED");
+
+    return await Promise.all(recent.map(async (r) => {
+      const vehicle = await ctx.db.get(r.vehicleId);
+      return {
+        ...r,
+        vehicleSummary: vehicle
+          ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`
+          : "Unknown Vehicle",
+      };
+    }));
   },
 });

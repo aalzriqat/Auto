@@ -22,8 +22,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Search, Pencil, Trash2, ImageIcon, Download, ClipboardList, Check, X, Hourglass, History, Eye } from "lucide-react";
-import { toast } from "sonner";
+import { Plus, Search, Pencil, Trash2, ImageIcon, Download, ClipboardList, Check, X, Hourglass, History, Eye, FileSpreadsheet } from "lucide-react";
+import { VehicleImportDialog } from "@/components/vehicles/VehicleImportDialog";
+import { toast } from "@/components/ui/sonner";
 import {
   Dialog,
   DialogContent,
@@ -83,6 +84,7 @@ export default function VehiclesPage() {
   const [detailsVehicle, setDetailsVehicle] = useState<Doc<"vehicles"> | null>(null);
   const [statusRequestVehicle, setStatusRequestVehicle] = useState<Doc<"vehicles"> | null>(null);
   const [isApprovalsDialogOpen, setIsApprovalsDialogOpen] = useState(false);
+  const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
   const [statusRequestNotes, setStatusRequestNotes] = useState("");
   const [selectedStatus, setSelectedStatus] = useState<any>("");
 
@@ -237,9 +239,14 @@ export default function VehiclesPage() {
             </Button>
           )}
           {canCreate && (
-            <Button onClick={handleAddNew}>
-              <Plus className="me-2 h-4 w-4" /> {t("AddVehicle")}
-            </Button>
+            <>
+              <Button variant="outline" onClick={() => setIsImportDialogOpen(true)}>
+                <FileSpreadsheet className="me-2 h-4 w-4" /> Import
+              </Button>
+              <Button onClick={handleAddNew}>
+                <Plus className="me-2 h-4 w-4" /> {t("AddVehicle")}
+              </Button>
+            </>
           )}
         </div>
       </div>
@@ -261,6 +268,8 @@ export default function VehiclesPage() {
               <TableHead>{t("Vehicle")}</TableHead>
               <TableHead>{t("VIN" as any)}</TableHead>
               <TableHead>{t("Year" as any)}</TableHead>
+              <TableHead>Mileage</TableHead>
+              <TableHead>Trans.</TableHead>
               <TableHead>{t("Price" as any)}</TableHead>
               <TableHead>{t("Status" as any)}</TableHead>
               <TableHead>{t("Notes" as any)}</TableHead>
@@ -270,13 +279,13 @@ export default function VehiclesPage() {
           <TableBody>
             {filteredVehicles === undefined ? (
               <TableRow>
-                <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
                   {t("LoadingInventory" as any)}
                 </TableCell>
               </TableRow>
             ) : filteredVehicles.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
                   {t("NoVehiclesFound" as any)}
                 </TableCell>
               </TableRow>
@@ -292,6 +301,12 @@ export default function VehiclesPage() {
                   </TableCell>
                   <TableCell className="font-mono text-xs">{vehicle.vin}</TableCell>
                   <TableCell>{vehicle.year}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {vehicle.mileage != null ? vehicle.mileage.toLocaleString() : "-"} km
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {vehicle.transmission ? vehicle.transmission.charAt(0) + vehicle.transmission.slice(1).toLowerCase() : "-"}
+                  </TableCell>
                   <TableCell>{vehicle.sellingPrice.toLocaleString()} JOD</TableCell>
                   <TableCell>
                     <button
@@ -304,7 +319,7 @@ export default function VehiclesPage() {
                       <StatusBadge status={vehicle.status} t={t} />
                       {vehicle.pendingStatusRequest && (
                         <span className="text-[10px] text-muted-foreground font-medium flex items-center mt-1">
-                          <Hourglass className="h-3 w-3 mr-1 inline" />
+                          <Hourglass className="h-3 w-3 me-1 inline" />
                           {t("Pending" as any)}: {vehicle.pendingStatusRequest}
                         </span>
                       )}
@@ -398,7 +413,7 @@ export default function VehiclesPage() {
           </DialogHeader>
           <div className="py-4">
             {galleryVehicle?.imageUrls && galleryVehicle.imageUrls.length > 0 ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-h-[60vh] overflow-y-auto pr-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-h-[60vh] overflow-y-auto pe-2">
                 {galleryVehicle.imageUrls.map((url: string, index: number) => (
                   <div key={index} className="relative aspect-video rounded-md overflow-hidden bg-muted group">
                     {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -409,7 +424,7 @@ export default function VehiclesPage() {
                     />
                     <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                       <Button variant="secondary" size="sm" onClick={() => handleDownloadSingle(url, index)}>
-                        <Download className="h-4 w-4 mr-2" />
+                        <Download className="h-4 w-4 me-2" />
                         {t("Download" as any)}
                       </Button>
                     </div>
@@ -426,7 +441,7 @@ export default function VehiclesPage() {
           <DialogFooter className="sm:justify-between items-center w-full mt-4">
             {galleryVehicle?.imageUrls && galleryVehicle.imageUrls.length > 0 ? (
               <Button variant="outline" onClick={handleDownloadAll}>
-                <Download className="h-4 w-4 mr-2" />
+                <Download className="h-4 w-4 me-2" />
                 {t("DownloadAll" as any)}
               </Button>
             ) : (
@@ -520,10 +535,10 @@ export default function VehiclesPage() {
                     </div>
                     <div className="flex items-center gap-2">
                       <Button variant="outline" size="sm" onClick={() => handleResolveEdit(req._id, "REJECTED")} className="text-red-500 hover:text-red-600 hover:bg-red-50 border-red-200">
-                        <X className="h-4 w-4 mr-1" /> {t("Reject" as any)}
+                        <X className="h-4 w-4 me-1" /> {t("Reject" as any)}
                       </Button>
                       <Button size="sm" onClick={() => handleResolveEdit(req._id, "APPROVED")} className="bg-green-600 hover:bg-green-700 text-white">
-                        <Check className="h-4 w-4 mr-1" /> {t("Approve" as any)}
+                        <Check className="h-4 w-4 me-1" /> {t("Approve" as any)}
                       </Button>
                     </div>
                   </div>
@@ -554,10 +569,10 @@ export default function VehiclesPage() {
                     </div>
                     <div className="flex items-center gap-2">
                       <Button variant="outline" size="sm" onClick={() => handleResolveRequest(req._id, "REJECTED")} className="text-red-500 hover:text-red-600 hover:bg-red-50 border-red-200">
-                        <X className="h-4 w-4 mr-1" /> {t("Reject" as any)}
+                        <X className="h-4 w-4 me-1" /> {t("Reject" as any)}
                       </Button>
                       <Button size="sm" onClick={() => handleResolveRequest(req._id, "APPROVED")} className="bg-green-600 hover:bg-green-700 text-white">
-                        <Check className="h-4 w-4 mr-1" /> {t("Approve" as any)}
+                        <Check className="h-4 w-4 me-1" /> {t("Approve" as any)}
                       </Button>
                     </div>
                   </div>
@@ -570,6 +585,8 @@ export default function VehiclesPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <VehicleImportDialog open={isImportDialogOpen} onOpenChange={setIsImportDialogOpen} />
     </div>
     </RoleGuard>
   );

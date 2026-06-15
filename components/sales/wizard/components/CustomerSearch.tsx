@@ -51,13 +51,13 @@ export default function CustomerSearch({
           placeholder="Search by name, phone, or national ID…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          className="pl-10 bg-background"
+          className="ps-10 bg-background"
         />
       </div>
 
       {/* Results */}
       {query.length > 0 && (
-        <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+        <div className="space-y-2 max-h-64 overflow-y-auto pe-1">
           {filtered.length === 0 ? (
             <p className="text-sm text-center py-6 text-muted-foreground">
               No customers found.
@@ -113,7 +113,7 @@ export default function CustomerSearch({
         className="w-full border-dashed text-muted-foreground hover:text-foreground"
         onClick={onCreateNew}
       >
-        <UserPlus className="w-4 h-4 mr-2" />
+        <UserPlus className="w-4 h-4 me-2" />
         Create a new customer
       </Button>
     </div>

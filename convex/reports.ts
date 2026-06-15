@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { query } from "./_generated/server";
+import { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 
@@ -12,53 +13,64 @@ export const getSalesAndProfitReport = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
 
-    const allSales = await ctx.db
+    // Use index range — avoids collecting ALL org sales
+    const salesInDateRange = await ctx.db
       .query("sales")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .withIndex("by_org_saleDate", (q) =>
+        q.eq("orgId", args.orgId).gte("saleDate", args.startDate)
+      )
+      .filter((q) => q.lte(q.field("saleDate"), args.endDate))
       .collect();
-
-    const salesInDateRange = allSales.filter(
-      (sale) => sale.saleDate >= args.startDate && sale.saleDate <= args.endDate
-    );
 
     let totalRevenue = 0;
     let totalCost = 0;
     let totalProfit = 0;
 
-    const enrichedSales = await Promise.all(
-      salesInDateRange.map(async (sale) => {
-        const vehicle = await ctx.db.get(sale.vehicleId);
+    const vehicleIds = Array.from(new Set(salesInDateRange.map(s => s.vehicleId)));
+    const vehicles = await Promise.all(vehicleIds.map(id => ctx.db.get(id)));
+    const vehicleMap = new Map(
+      vehicles.filter((v): v is NonNullable<typeof v> => v !== null).map(v => [v._id, v])
+    );
 
-        // Fetch expenses for this vehicle
-        const expenses = await ctx.db
+    // Fetch expenses only for vehicles that appear in this date range
+    const expensesByVehicle = new Map<string, any[]>();
+    await Promise.all(
+      vehicleIds.map(async (vehicleId) => {
+        const exps = await ctx.db
           .query("expenses")
-          .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", sale.vehicleId))
+          .withIndex("by_org_vehicle", (q) =>
+            q.eq("orgId", args.orgId).eq("vehicleId", vehicleId)
+          )
           .collect();
-
-        const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
-
-        const cost = (vehicle?.purchasePrice ?? vehicle?.sellingPrice ?? 0) + totalExpenses;
-        const profit = sale.salePrice - cost;
-
-        totalRevenue += sale.salePrice;
-        totalCost += cost;
-        totalProfit += profit;
-
-        return {
-          ...sale,
-          vehicleMake: vehicle?.make,
-          vehicleModel: vehicle?.model,
-          vehicleYear: vehicle?.year,
-          vehicleVin: vehicle?.vin,
-          vehicleCost: vehicle?.purchasePrice ?? vehicle?.sellingPrice ?? 0,
-          vehicleExpenses: totalExpenses,
-          totalCost: cost,
-          netProfit: profit,
-        };
+        expensesByVehicle.set(vehicleId, exps);
       })
     );
 
-    // Sort descending by date
+    const enrichedSales = salesInDateRange.map((sale) => {
+      const vehicle = vehicleMap.get(sale.vehicleId);
+      const expenses = expensesByVehicle.get(sale.vehicleId) ?? [];
+
+      const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
+      const cost = (vehicle?.purchasePrice ?? vehicle?.sellingPrice ?? 0) + totalExpenses;
+      const profit = sale.salePrice - cost;
+
+      totalRevenue += sale.salePrice;
+      totalCost += cost;
+      totalProfit += profit;
+
+      return {
+        ...sale,
+        vehicleMake: vehicle?.make,
+        vehicleModel: vehicle?.model,
+        vehicleYear: vehicle?.year,
+        vehicleVin: vehicle?.vin,
+        vehicleCost: vehicle?.purchasePrice ?? vehicle?.sellingPrice ?? 0,
+        vehicleExpenses: totalExpenses,
+        totalCost: cost,
+        netProfit: profit,
+      };
+    });
+
     enrichedSales.sort((a, b) => b.saleDate - a.saleDate);
 
     return {
@@ -77,37 +89,57 @@ export const getInventoryReport = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
 
-    const vehicles = await ctx.db
-      .query("vehicles")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .collect();
+    // Fetch AVAILABLE and RESERVED vehicles via index — avoids scanning sold/archived
+    const [availableVehicles, reservedVehicles] = await Promise.all([
+      ctx.db
+        .query("vehicles")
+        .withIndex("by_org_status", (q) =>
+          q.eq("orgId", args.orgId).eq("status", "AVAILABLE")
+        )
+        .filter((q) => q.neq(q.field("isDeleted"), true))
+        .collect(),
+      ctx.db
+        .query("vehicles")
+        .withIndex("by_org_status", (q) =>
+          q.eq("orgId", args.orgId).eq("status", "RESERVED")
+        )
+        .filter((q) => q.neq(q.field("isDeleted"), true))
+        .collect(),
+    ]);
 
-    const activeInventory = vehicles.filter((v) => v.isDeleted !== true && (v.status === "AVAILABLE" || v.status === "RESERVED"));
+    const activeInventory = [...availableVehicles, ...reservedVehicles];
+
+    // Fetch expenses only for active inventory vehicles
+    const expensesByVehicle = new Map<string, any[]>();
+    await Promise.all(
+      activeInventory.map(async (vehicle) => {
+        const exps = await ctx.db
+          .query("expenses")
+          .withIndex("by_org_vehicle", (q) =>
+            q.eq("orgId", args.orgId).eq("vehicleId", vehicle._id)
+          )
+          .collect();
+        expensesByVehicle.set(vehicle._id, exps);
+      })
+    );
 
     let totalValue = 0;
 
-    const enrichedInventory = await Promise.all(
-      activeInventory.map(async (vehicle) => {
-        // Fetch expenses to get total investment
-        const expenses = await ctx.db
-          .query("expenses")
-          .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", vehicle._id))
-          .collect();
+    const enrichedInventory = activeInventory.map((vehicle) => {
+      const expenses = expensesByVehicle.get(vehicle._id) ?? [];
+      const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
+      const basePrice = vehicle.purchasePrice ?? vehicle.sellingPrice ?? 0;
+      const totalInvestment = basePrice + totalExpenses;
 
-        const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
-        const basePrice = vehicle.purchasePrice ?? vehicle.sellingPrice ?? 0;
-        const totalInvestment = basePrice + totalExpenses;
+      totalValue += totalInvestment;
 
-        totalValue += totalInvestment;
-
-        return {
-          ...vehicle,
-          purchasePrice: basePrice,
-          totalExpenses,
-          totalInvestment,
-        };
-      })
-    );
+      return {
+        ...vehicle,
+        purchasePrice: basePrice,
+        totalExpenses,
+        totalInvestment,
+      };
+    });
 
     return {
       availableCount: activeInventory.length,
@@ -126,37 +158,39 @@ export const getExpensesReport = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
 
-    const allExpenses = await ctx.db
+    // Use index range — avoids collecting ALL org expenses
+    const expensesInDateRange = await ctx.db
       .query("expenses")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .withIndex("by_org_date", (q) =>
+        q.eq("orgId", args.orgId).gte("date", args.startDate)
+      )
+      .filter((q) => q.lte(q.field("date"), args.endDate))
       .collect();
-
-    const expensesInDateRange = allExpenses.filter(
-      (exp) => exp.date >= args.startDate && exp.date <= args.endDate
-    );
 
     let totalExpenses = 0;
 
-    const enrichedExpenses = await Promise.all(
-      expensesInDateRange.map(async (exp) => {
-        totalExpenses += exp.amount;
-        let vehicleDesc = "General";
-
-        if (exp.vehicleId) {
-          const vehicle = await ctx.db.get(exp.vehicleId);
-          if (vehicle) {
-            vehicleDesc = `${vehicle.year} ${vehicle.make} ${vehicle.model} (${vehicle.vin})`;
-          }
-        }
-
-        return {
-          ...exp,
-          vehicleDesc,
-        };
-      })
+    const vehicleIds = Array.from(
+      new Set(expensesInDateRange.map(e => e.vehicleId).filter(Boolean))
+    ) as Id<"vehicles">[];
+    const vehicles = await Promise.all(vehicleIds.map(id => ctx.db.get(id)));
+    const vehicleMap = new Map(
+      vehicles.filter((v): v is NonNullable<typeof v> => v !== null).map(v => [v._id, v])
     );
 
-    // Sort descending by date
+    const enrichedExpenses = expensesInDateRange.map((exp) => {
+      totalExpenses += exp.amount;
+      let vehicleDesc = "General";
+
+      if (exp.vehicleId) {
+        const vehicle = vehicleMap.get(exp.vehicleId);
+        if (vehicle) {
+          vehicleDesc = `${vehicle.year} ${vehicle.make} ${vehicle.model} (${vehicle.vin})`;
+        }
+      }
+
+      return { ...exp, vehicleDesc };
+    });
+
     enrichedExpenses.sort((a, b) => b.date - a.date);
 
     return {
@@ -175,16 +209,15 @@ export const getSalespersonPerformance = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
 
-    const allSales = await ctx.db
+    // Use index range — avoids collecting ALL org sales
+    const salesInDateRange = await ctx.db
       .query("sales")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .withIndex("by_org_saleDate", (q) =>
+        q.eq("orgId", args.orgId).gte("saleDate", args.startDate)
+      )
+      .filter((q) => q.lte(q.field("saleDate"), args.endDate))
       .collect();
 
-    const salesInDateRange = allSales.filter(
-      (sale) => sale.saleDate >= args.startDate && sale.saleDate <= args.endDate
-    );
-
-    // Group sales by salespersonId
     const salesBySalesperson: Record<string, any[]> = {};
     for (const sale of salesInDateRange) {
       if (sale.salespersonId) {
@@ -195,45 +228,59 @@ export const getSalespersonPerformance = query({
       }
     }
 
-    const result = await Promise.all(
-      Object.entries(salesBySalesperson).map(async ([userId, userSales]) => {
-        let totalRevenue = 0;
-        let totalProfit = 0;
+    const vehicleIds = Array.from(new Set(salesInDateRange.map(s => s.vehicleId)));
+    const vehicles = await Promise.all(vehicleIds.map(id => ctx.db.get(id)));
+    const vehicleMap = new Map(
+      vehicles.filter((v): v is NonNullable<typeof v> => v !== null).map(v => [v._id, v])
+    );
 
-        // Fetch user
-        let userName = "Unknown";
-        const user = await ctx.db.get(userId as any);
-        if (user && "name" in user) {
-          userName = user.name || "Unknown";
-        }
-
-        // Calculate profit for each sale
-        for (const sale of userSales) {
-          const vehicle = await ctx.db.get(sale.vehicleId);
-          const expenses = await ctx.db
-            .query("expenses")
-            .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", sale.vehicleId))
-            .collect();
-
-          const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
-          const cost = ((vehicle as any)?.purchasePrice || 0) + totalExpenses;
-          const profit = sale.salePrice - cost;
-
-          totalRevenue += sale.salePrice;
-          totalProfit += profit;
-        }
-
-        return {
-          userId,
-          userName,
-          vehiclesSold: userSales.length,
-          totalRevenue,
-          totalProfit,
-        };
+    // Fetch expenses only for vehicles in this date range
+    const expensesByVehicle = new Map<string, any[]>();
+    await Promise.all(
+      vehicleIds.map(async (vehicleId) => {
+        const exps = await ctx.db
+          .query("expenses")
+          .withIndex("by_org_vehicle", (q) =>
+            q.eq("orgId", args.orgId).eq("vehicleId", vehicleId)
+          )
+          .collect();
+        expensesByVehicle.set(vehicleId, exps);
       })
     );
 
-    // Sort by profit descending
+    const userIds = Array.from(new Set(Object.keys(salesBySalesperson))) as Id<"users">[];
+    const users = await Promise.all(userIds.map(id => ctx.db.get(id)));
+    const userMap = new Map(
+      users.filter((u): u is NonNullable<typeof u> => u !== null).map(u => [u._id, u])
+    );
+
+    const result = Object.entries(salesBySalesperson).map(([userId, userSales]) => {
+      let totalRevenue = 0;
+      let totalProfit = 0;
+
+      const user = userMap.get(userId as Id<"users">);
+      const userName = (user && "name" in user ? user.name : null) ?? "Unknown";
+
+      for (const sale of userSales) {
+        const vehicle = vehicleMap.get(sale.vehicleId);
+        const expenses = expensesByVehicle.get(sale.vehicleId) ?? [];
+        const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
+        const cost = (vehicle?.purchasePrice || 0) + totalExpenses;
+        const profit = sale.salePrice - cost;
+
+        totalRevenue += sale.salePrice;
+        totalProfit += profit;
+      }
+
+      return {
+        userId,
+        userName,
+        vehiclesSold: userSales.length,
+        totalRevenue,
+        totalProfit,
+      };
+    });
+
     return result.sort((a, b) => b.totalProfit - a.totalProfit);
   },
 });
@@ -247,41 +294,32 @@ export const getLeadConversionReport = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
 
+    // No _creationTime index — cap at 10 000 rows and filter in memory
     const allLeads = await ctx.db
       .query("leads")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .collect();
+      .take(10000);
 
-    // Filter leads created in date range
     const leadsInDateRange = allLeads.filter(
-      (lead) => lead._creationTime >= args.startDate && lead._creationTime <= args.endDate
+      (lead) =>
+        lead._creationTime >= args.startDate && lead._creationTime <= args.endDate
     );
 
-    // Group by Stage
     const stageCounts: Record<string, number> = {
-      NEW: 0,
-      CONTACTED: 0,
-      INTERESTED: 0,
-      TEST_DRIVE: 0,
-      NEGOTIATION: 0,
-      RESERVED: 0,
-      WON: 0,
-      LOST: 0,
+      NEW: 0, CONTACTED: 0, INTERESTED: 0, TEST_DRIVE: 0,
+      NEGOTIATION: 0, RESERVED: 0, WON: 0, LOST: 0,
     };
 
-    let totalLeads = leadsInDateRange.length;
+    const totalLeads = leadsInDateRange.length;
     let wonLeads = 0;
 
     for (const lead of leadsInDateRange) {
       stageCounts[lead.stage] = (stageCounts[lead.stage] || 0) + 1;
-      if (lead.stage === "WON") {
-        wonLeads++;
-      }
+      if (lead.stage === "WON") wonLeads++;
     }
 
     const overallConversionRate = totalLeads > 0 ? (wonLeads / totalLeads) * 100 : 0;
 
-    // Group by Salesperson
     const leadsBySalesperson: Record<string, { total: number; won: number }> = {};
     for (const lead of leadsInDateRange) {
       if (lead.assignedUserId) {
@@ -289,42 +327,27 @@ export const getLeadConversionReport = query({
           leadsBySalesperson[lead.assignedUserId] = { total: 0, won: 0 };
         }
         leadsBySalesperson[lead.assignedUserId].total++;
-        if (lead.stage === "WON") {
-          leadsBySalesperson[lead.assignedUserId].won++;
-        }
+        if (lead.stage === "WON") leadsBySalesperson[lead.assignedUserId].won++;
       }
     }
 
-    const salespersonMetrics = await Promise.all(
-      Object.entries(leadsBySalesperson).map(async ([userId, stats]) => {
-        let userName = "Unknown";
-        const user = await ctx.db.get(userId as any);
-        if (user && "name" in user) {
-          userName = user.name || "Unknown";
-        }
-
-        const conversionRate = stats.total > 0 ? (stats.won / stats.total) * 100 : 0;
-
-        return {
-          userId,
-          userName,
-          totalLeads: stats.total,
-          wonLeads: stats.won,
-          conversionRate,
-        };
-      })
+    const userIds = Array.from(new Set(Object.keys(leadsBySalesperson))) as Id<"users">[];
+    const users = await Promise.all(userIds.map(id => ctx.db.get(id)));
+    const userMap = new Map(
+      users.filter((u): u is NonNullable<typeof u> => u !== null).map(u => [u._id, u])
     );
 
-    // Sort by conversion rate descending
+    const salespersonMetrics = Object.entries(leadsBySalesperson).map(([userId, stats]) => {
+      const user = userMap.get(userId as Id<"users">);
+      const userName = (user && "name" in user ? user.name : null) ?? "Unknown";
+      const conversionRate = stats.total > 0 ? (stats.won / stats.total) * 100 : 0;
+
+      return { userId, userName, totalLeads: stats.total, wonLeads: stats.won, conversionRate };
+    });
+
     salespersonMetrics.sort((a, b) => b.conversionRate - a.conversionRate);
 
-    return {
-      totalLeads,
-      wonLeads,
-      overallConversionRate,
-      stageCounts,
-      salespersonMetrics,
-    };
+    return { totalLeads, wonLeads, overallConversionRate, stageCounts, salespersonMetrics };
   },
 });
 
@@ -337,14 +360,14 @@ export const getProfitAndLoss = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
 
-    const transactions = await ctx.db
+    // Use index range — avoids collecting ALL org transactions
+    const txInDateRange = await ctx.db
       .query("transactions")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .withIndex("by_org_date", (q) =>
+        q.eq("orgId", args.orgId).gte("date", args.startDate)
+      )
+      .filter((q) => q.lte(q.field("date"), args.endDate))
       .collect();
-
-    const txInDateRange = transactions.filter(
-      (tx) => tx.date >= args.startDate && tx.date <= args.endDate
-    );
 
     let totalRevenue = 0;
     let costOfGoodsSold = 0;
@@ -371,7 +394,7 @@ export const getProfitAndLoss = query({
       grossProfit,
       operatingExpenses,
       netProfit,
-      transactions: txInDateRange.sort((a, b) => b.date - a.date)
+      transactions: txInDateRange.sort((a, b) => b.date - a.date),
     };
   },
 });

@@ -5,11 +5,12 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id, Doc } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { calculateUnifiedMurabaha } from "@/lib/financing";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 
 import { ArrowLeft, CheckCircle2, Car, User, TrendingUp, FileText } from "lucide-react";
 
@@ -114,6 +115,9 @@ export function Step3Review({
     effectivePrice,
   ]);
 
+  const [recipientName, setRecipientName] = useState("");
+  const { t } = useLanguage();
+
   const handleGenerate = async () => {
     if (!activeOrgId || !selectedResult) return;
 
@@ -144,7 +148,10 @@ export function Step3Review({
         quoteId: quoteId as Id<"quotes">,
         selectedVehicle,
         selectedCompany,
-        selectedResult,
+        selectedResult: {
+          ...selectedResult,
+          recipientName: recipientName.trim() || `${selectedCustomer.firstName} ${selectedCustomer.lastName}`,
+        },
       });
     } catch (err: any) {
       toast.error(err.message || "Failed to generate quote");
@@ -205,10 +212,24 @@ export function Step3Review({
         </div>
       )}
 
+      {/* RECIPIENT INPUT */}
+      <div className="border-t pt-4">
+        <label className="text-sm font-medium mb-1.5 block">
+          {t("QuoteTo" as any)}
+        </label>
+        <input
+          type="text"
+          placeholder={`${selectedCustomer.firstName} ${selectedCustomer.lastName}`}
+          value={recipientName}
+          onChange={(e) => setRecipientName(e.target.value)}
+          className="flex h-9 w-full sm:max-w-md rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        />
+      </div>
+
       {/* ACTIONS */}
       <div className="flex justify-between pt-4 border-t">
         <Button variant="outline" onClick={onBack} disabled={isSubmitting}>
-          <ArrowLeft className="w-4 h-4 mr-2" />
+          <ArrowLeft className="w-4 h-4 me-2" />
           Back
         </Button>
 
@@ -221,7 +242,7 @@ export function Step3Review({
               : "bg-indigo-600 hover:bg-indigo-700"
           }
         >
-          <CheckCircle2 className="w-4 h-4 mr-2" />
+          <CheckCircle2 className="w-4 h-4 me-2" />
           {isSubmitting ? "Generating..." : "Generate Quote"}
         </Button>
       </div>

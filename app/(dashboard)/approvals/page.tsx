@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Loader2, CheckCircle2, XCircle, AlertCircle } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 import { Id } from "@/convex/_generated/dataModel";
 
 export default function ApprovalsPage() {
@@ -21,6 +21,7 @@ export default function ApprovalsPage() {
   const handleRespond = async (requestId: Id<"profitApprovalRequests">, status: "APPROVED" | "REJECTED") => {
     try {
       await respondToApproval({
+        orgId: activeOrgId!,
         requestId,
         status,
       });
@@ -93,14 +94,14 @@ export default function ApprovalsPage() {
                     className="flex-1 bg-red-50 hover:bg-red-100 hover:text-red-600 border-red-200 text-red-600"
                     onClick={() => handleRespond(request._id, "REJECTED")}
                   >
-                    <XCircle className="w-4 h-4 mr-2" />
+                    <XCircle className="w-4 h-4 me-2" />
                     Reject
                   </Button>
                   <Button
                     className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"
                     onClick={() => handleRespond(request._id, "APPROVED")}
                   >
-                    <CheckCircle2 className="w-4 h-4 mr-2" />
+                    <CheckCircle2 className="w-4 h-4 me-2" />
                     Approve
                   </Button>
                 </div>

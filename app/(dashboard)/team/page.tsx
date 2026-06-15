@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useQuery, useMutation, useAction, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -15,9 +15,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, Trash2, ShieldAlert } from "lucide-react";
+import { Plus, Trash2, ShieldAlert, Pencil, Check, X, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 import {
   Dialog,
   DialogContent,
@@ -40,6 +40,8 @@ export default function TeamPage() {
   const roles = useQuery(api.roles.list, activeOrgId ? { orgId: activeOrgId } : "skip");
 
   const removeMember = useAction(api.memberships.remove);
+  const updateCommissionRate = useMutation(api.memberships.updateCommissionRate);
+  const syncRolePermissions = useMutation(api.memberships.syncRolePermissionsToTemplate);
   const createRole = useMutation(api.roles.create);
   const deleteRole = useMutation(api.roles.remove);
 
@@ -47,6 +49,24 @@ export default function TeamPage() {
   const [memberToDelete, setMemberToDelete] = useState<any>(null);
   const [memberToChangeRole, setMemberToChangeRole] = useState<any>(null);
   const [roleToEdit, setRoleToEdit] = useState<any>(null);
+  const [editingCommission, setEditingCommission] = useState<string | null>(null);
+  const [commissionDraft, setCommissionDraft] = useState("");
+
+  async function handleSaveCommission(membershipId: string) {
+    if (!activeOrgId) return;
+    const rate = parseFloat(commissionDraft);
+    if (isNaN(rate) || rate < 0 || rate > 100) {
+      toast.error("Commission rate must be between 0 and 100.");
+      return;
+    }
+    try {
+      await updateCommissionRate({ orgId: activeOrgId, membershipId: membershipId as any, commissionRate: rate });
+      toast.success("Commission rate updated.");
+    } catch (e: any) {
+      toast.error(e.message ?? "Failed to update.");
+    }
+    setEditingCommission(null);
+  }
 
   const isOwner = myMembership?.roleName === "OWNER";
   const canManageUsers = myMembership?.permissions.includes("manage:users") || myMembership?.permissions.includes("MANAGE_USERS") || isOwner;
@@ -67,9 +87,25 @@ export default function TeamPage() {
       <div className="space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
         {canManageUsers && (
-          <Button onClick={() => setIsInviteOpen(true)}>
-            <Plus className="me-2 h-4 w-4" /> {t("AddMember" as any)}
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={async () => {
+                if (!activeOrgId) return;
+                try {
+                  const n = await syncRolePermissions({ orgId: activeOrgId });
+                  toast.success(`Synced ${n} roles to latest permission templates.`);
+                } catch (e: any) {
+                  toast.error(e.message ?? "Sync failed.");
+                }
+              }}
+            >
+              <RefreshCw className="me-2 h-4 w-4" /> Sync Role Permissions
+            </Button>
+            <Button onClick={() => setIsInviteOpen(true)}>
+              <Plus className="me-2 h-4 w-4" /> {t("AddMember" as any)}
+            </Button>
+          </div>
         )}
       </div>
 
@@ -86,19 +122,20 @@ export default function TeamPage() {
                 <TableRow>
                   <TableHead>{t("Member" as any)}</TableHead>
                   <TableHead>{t("Role" as any)}</TableHead>
+                  <TableHead>Commission %</TableHead>
                   {canManageUsers && <TableHead className="text-end">{t("Actions" as any)}</TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {memberships === undefined ? (
                   <TableRow>
-                    <TableCell colSpan={canManageUsers ? 3 : 2} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={canManageUsers ? 4 : 3} className="text-center py-8 text-muted-foreground">
                       {t("LoadingTeam" as any)}
                     </TableCell>
                   </TableRow>
                 ) : memberships.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={canManageUsers ? 3 : 2} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={canManageUsers ? 4 : 3} className="text-center py-8 text-muted-foreground">
                       {t("NoTeamMembersFound" as any)}
                     </TableCell>
                   </TableRow>
@@ -125,6 +162,51 @@ export default function TeamPage() {
                             <ShieldAlert className="h-4 w-4 text-primary" />
                           )}
                         </div>
+                      </TableCell>
+
+                      <TableCell>
+                        {editingCommission === member._id ? (
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="number"
+                              min="0"
+                              max="100"
+                              step="0.5"
+                              className="w-16 border rounded px-2 py-1 text-sm"
+                              value={commissionDraft}
+                              onChange={e => setCommissionDraft(e.target.value)}
+                              onKeyDown={e => {
+                                if (e.key === "Enter") handleSaveCommission(member._id);
+                                if (e.key === "Escape") setEditingCommission(null);
+                              }}
+                              autoFocus
+                            />
+                            <span className="text-sm text-muted-foreground">%</span>
+                            <button onClick={() => handleSaveCommission(member._id)} className="text-green-600 hover:text-green-700 p-1">
+                              <Check className="h-3.5 w-3.5" />
+                            </button>
+                            <button onClick={() => setEditingCommission(null)} className="text-muted-foreground hover:text-foreground p-1">
+                              <X className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-1.5 group">
+                            <span className="text-sm tabular-nums">
+                              {(member as any).commissionRate > 0 ? `${(member as any).commissionRate}%` : <span className="text-muted-foreground">—</span>}
+                            </span>
+                            {canManageUsers && (
+                              <button
+                                className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-foreground transition-opacity"
+                                onClick={() => {
+                                  setEditingCommission(member._id);
+                                  setCommissionDraft(String((member as any).commissionRate ?? 0));
+                                }}
+                              >
+                                <Pencil className="h-3 w-3" />
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </TableCell>
 
                       {canManageUsers && (

@@ -109,7 +109,8 @@ export const generateUploadUrl = mutation({
       throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
     }
 
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_SALES]);
+    // Any user who can view sales can upload documents for applications
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
 
     // 10MB limit for documents
     if (args.sizeInBytes > 10 * 1024 * 1024) {
@@ -132,7 +133,8 @@ export const saveDocumentFile = mutation({
     fileId: v.id("_storage"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_SALES]);
+    // Any user who can view sales can attach documents to applications
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
 
     const doc = await ctx.db.get(args.documentId);
     if (!doc || doc.orgId !== args.orgId) throw new ConvexError("Document not found");

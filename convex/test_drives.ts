@@ -114,7 +114,7 @@ export const remove = mutation({
     if (!td || td.isDeleted || td.orgId !== args.orgId) throw new ConvexError("Test drive not found");
 
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Unauthenticated");
+    if (!identity) throw new ConvexError("Unauthenticated");
     await ctx.db.patch(args.testDriveId, {
       isDeleted: true,
       deletedAt: Date.now(),

@@ -19,10 +19,28 @@
 | 5 | main | API Rate Limiting | ✅ Done |
 | 6 | feature/searchable-selects-db-drafts-i18n-rtl | SearchableSelect rollout, DB drafts, i18n fixes, hydration fix | ✅ Done |
 | 7 | feature/searchable-selects-db-drafts-i18n-rtl | VIN decode improvements (parallel NHTSA + WMI), mileage optional | ✅ Done |
+| 8 | main | Structured Error Handling & Logging | ✅ Done |
+| 9 | main | CI/CD & Deployment Hardening | ✅ Done |
 | 10 | feature/phase-10-org-settings | Org Settings Foundation | ✅ Done |
 | 11 | feature/phase-11-sales-flow | Pipeline Stages, Approval Thresholds | ✅ Done |
 | 12 | feature/phase-12-branding-whatsapp | Org Logo, Brand Color, WhatsApp Webhook | ✅ Done |
 | 13 | feature/phase-13-advanced | Custom Fields, Commission Tiers, Onboarding Wizard | ✅ Done |
+
+---
+
+## Production Readiness Scorecard
+
+| Dimension             | Score  | Summary |
+|-----------------------|--------|---------|
+| Security              | 6/10   | Clerk/Convex RBAC solid; rate limiting rudimentary; Zod not used in Convex args |
+| Error Handling        | 5/10   | Basic try/catch + Sonner toasts; backend errors lack structured context |
+| Observability/Logging | 4/10   | Sentry installed; no structured logging inside Convex; no distributed tracing |
+| Performance           | 4/10   | Severe N+1 patterns in reports.ts; no caching layer |
+| Scalability           | 7/10   | Convex scales well; unbounded collect() + in-memory filter will OOM under load |
+| Maintainability       | 5/10   | God files exist (schema.ts, large UI components); business logic inside DB queries |
+| Test Coverage         | 2/10   | vitest installed; critical financial logic has zero tests |
+| Documentation         | 3/10   | Barebones README; no ADRs; no API docs |
+| **OVERALL**           | **4.5/10** | **Needs significant optimization and testing before high-scale production launch** |
 
 ---
 
@@ -80,7 +98,7 @@
 ## Phase 13 — Advanced Customization ✅
 
 **Branch:** `feature/phase-13-advanced`
-**Commit:** `51c73c7`
+**Commit:** `89a0dfb`
 
 ### Delivered
 - [x] `orgCustomFields` + `orgCustomFieldValues` tables in schema
@@ -90,26 +108,25 @@
 - [x] `settings/commission/page.tsx` — tier builder with live preview calculator
 - [x] `hooks/useCommission.ts` — `calculate(profit)` + `getAppliedTier(profit)`
 - [x] `components/custom-fields/CustomFieldsSection.tsx` — renders active fields in any form; loads existing values on edit
-- [x] `VehicleDialog` — includes `CustomFieldsSection`, saves custom field values on create/update
+- [x] `VehicleDialog` — CustomFieldsSection + parallel WMI+NHTSA VIN decode with smart brand name helpers
+- [x] `CustomerDialog` / `LeadDialog` — CustomFieldsSection for customer and lead entity types
 - [x] Onboarding wizard — 5-step: name → currency → lead sources → pipeline → done (each step skippable)
-
-### Deferred
-- [ ] CustomerDialog / LeadDialog custom fields (same pattern as VehicleDialog)
-- [ ] Regional doc templates (requires template engine — Phase 14)
 
 ---
 
-## Execution Order
+## Architectural Decisions Log
 
-```
-Phase 10 ✅ → Phase 11 → Phase 12 → Phase 13
-                ↓
-           (stable orgs needed before advanced)
-```
+| Date | Decision | Rationale |
+|------|----------|-----------|
+| 2026-06-13 | Keep approval workflows in pending→approved/rejected pattern | Auditable, supports multi-level review |
+| 2026-06-13 | Soft deletes on all entities | Auditability, recoverability, multi-tenant data safety |
+| 2026-06-13 | Rate limiting per orgId (not per userId) | Prevents one tenant from DoS-ing another; allows fair org-level quotas |
+| 2026-06-15 | WMI wins for Make in VIN decode | ISO 3780 global registry more reliable than NHTSA for non-US manufacturers |
 
 ---
 
 ## Deferred / Pending
 
-- `useCurrency()` rollout — apply to all components still showing hardcoded "JOD" (deferred to a cleanup PR after Phase 11)
-- Merge `feature/searchable-selects-db-drafts-i18n-rtl` to `main` (contains searchable selects, VIN improvements, PROJECT_PLAN.md history)
+- `useCurrency()` rollout — apply to all components still showing hardcoded "JOD"
+- Regional doc templates (requires template engine — Phase 14)
+- Expense category custom fields

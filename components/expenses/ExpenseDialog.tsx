@@ -9,7 +9,7 @@ import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 import {
   Dialog,
   DialogContent,
@@ -34,7 +34,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-// removed Textarea import
+import { SearchableSelect } from "@/components/ui/searchable-select";
 
 import { expenseSchema, ExpenseFormValues, ExpenseDialogProps } from "./expense.schema";
 
@@ -237,21 +237,19 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>{t("AssociatedVehicle" as any)}</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder={t("SelectVehicle" as any)} />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="none">{t("GeneralNoVehicle" as any)}</SelectItem>
-                        {availableVehicles?.map((v) => (
-                          <SelectItem key={v._id} value={v._id}>
-                            {v.year} {v.make} {v.model} - {v.vin.slice(-6)}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <FormControl>
+                      <SearchableSelect
+                        value={field.value}
+                        onValueChange={field.onChange}
+                        placeholder={t("SelectVehicle" as any)}
+                        noneLabel={t("GeneralNoVehicle" as any)}
+                        options={availableVehicles?.map((v) => ({
+                          value: v._id,
+                          label: `${v.year} ${v.make} ${v.model}`,
+                          subLabel: v.vin.slice(-6),
+                        })) ?? []}
+                      />
+                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -299,21 +297,19 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
                     <FormLabel>{t("PaidByPerson" as any)}</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder={t("SelectTeamMember" as any)} />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="none">{t("NotSpecified" as any)}</SelectItem>
-                        {memberships?.map((m) => (
-                          <SelectItem key={m.userId} value={m.userId}>
-                            {m.userName}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <FormControl>
+                      <SearchableSelect
+                        value={field.value}
+                        onValueChange={field.onChange}
+                        placeholder={t("SelectTeamMember" as any)}
+                        noneLabel={t("NotSpecified" as any)}
+                        options={memberships?.map((m) => ({
+                          value: m.userId,
+                          label: m.userName,
+                          subLabel: m.roleName || undefined,
+                        })) ?? []}
+                      />
+                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}

@@ -98,17 +98,17 @@ export function TopNav() {
             </SheetContent>
           </Sheet>
 
-          <div className="hidden md:flex items-center gap-6 w-full ml-2">
+          <div className="hidden md:flex items-center gap-6 w-full ms-2">
             <h1 className="text-xl font-bold tracking-tight text-slate-900 whitespace-nowrap">
               {navigation.find(item => pathname.startsWith(item.href)) ? t(navigation.find(item => pathname.startsWith(item.href))!.name as any) : "AutoFlow"}
             </h1>
 
-            <div className="relative max-w-md w-full ml-4">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-slate-400" />
+            <div className="relative max-w-md w-full ms-4">
+              <Search className="absolute start-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-slate-400" />
               <input
                 type="text"
                 placeholder={t("Search" as any)}
-                className="pl-9 pr-4 py-2 bg-slate-100 border-transparent rounded-lg text-sm w-full focus:bg-white focus:border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all"
+                className="ps-9 pe-4 py-2 bg-slate-100 border-transparent rounded-lg text-sm w-full focus:bg-white focus:border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all"
               />
             </div>
           </div>
@@ -121,7 +121,7 @@ export function TopNav() {
           </div>
           <LanguageSwitcher />
           <NotificationsBell />
-          <div className="ml-2 flex items-center justify-center">
+          <div className="ms-2 flex items-center justify-center">
             <UserButton />
           </div>
         </div>

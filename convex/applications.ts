@@ -33,7 +33,7 @@ export const list = query({
         const customer = await ctx.db.get(app.customerId);
         const vehicle = await ctx.db.get(app.vehicleId);
         const company = app.companyId ? await ctx.db.get(app.companyId) : null;
-        const salesperson = await ctx.db.get(app.salespersonId as any);
+        const salesperson = await ctx.db.get(app.salespersonId);
         const quote = await ctx.db.get(app.quoteId);
 
         return {
@@ -66,7 +66,7 @@ export const get = query({
     const customer = await ctx.db.get(app.customerId);
     const vehicle = await ctx.db.get(app.vehicleId);
     const company = app.companyId ? await ctx.db.get(app.companyId) : null;
-    const salesperson = await ctx.db.get(app.salespersonId as any);
+    const salesperson = await ctx.db.get(app.salespersonId);
     const quote = await ctx.db.get(app.quoteId);
 
     return {
@@ -232,7 +232,7 @@ export const finalizeDeal = mutation({
     // Create the sale record
     await ctx.db.insert("sales", {
       orgId: args.orgId,
-      branchId: vehicle.branchId, // Associate sale with the vehicle's branch
+      branchId: vehicle.branchId,
       vehicleId: app.vehicleId,
       customerId: app.customerId,
       salespersonId: app.salespersonId,
@@ -243,6 +243,7 @@ export const finalizeDeal = mutation({
       financingType: app.companyId ? "FINANCED" : "CASH",
       loanAmount: quote.totalFinancedAmount,
       termMonths: quote.termMonths,
+      applicationId: args.applicationId,
     });
 
     return true;

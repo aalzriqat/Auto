@@ -4,6 +4,8 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { rateLimiter } from "./rateLimit";
+import { validateInput } from "./utils/validation";
+import { CreateVehicleSchema, UpdateVehicleSchema } from "./validations/vehicles";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -101,7 +103,7 @@ export const listAll = query({
         .filter(q => q.neq(q.field("isDeleted"), true));
     }
 
-    const vehicles = await q.order("desc").collect();
+    const vehicles = await q.order("desc").take(200);
 
     const pendingRequests = await ctx.db
       .query("vehicleStatusRequests")
@@ -217,6 +219,8 @@ export const create = mutation({
 
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
 
+    validateInput(CreateVehicleSchema, args);
+
     const normalizedVin = args.vin.trim().toUpperCase();
 
     // Check for duplicate VIN within the org
@@ -302,7 +306,14 @@ export const update = mutation({
     imageIds: v.optional(v.array(v.id("_storage"))),
   },
   handler: async (ctx, args) => {
+    const statusLimit = await rateLimiter.limit(ctx, "standardApi");
+    if (!statusLimit.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+    }
+
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+
+    validateInput(UpdateVehicleSchema, args);
 
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
@@ -388,6 +399,11 @@ export const softDelete = mutation({
     vehicleId: v.id("vehicles"),
   },
   handler: async (ctx, args) => {
+    const statusLimit = await rateLimiter.limit(ctx, "standardApi");
+    if (!statusLimit.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+    }
+
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_VEHICLES]);
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new ConvexError("Unauthenticated");
@@ -484,17 +500,17 @@ export const getRelations = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
 
-    // 1. Fetch Sales
+    // 1. Fetch Sales (a vehicle has at most a handful of sales)
     const sales = await ctx.db
       .query("sales")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .filter((q) => q.eq(q.field("vehicleId"), args.vehicleId))
-      .collect();
+      .take(20);
 
     const enrichedSales = await Promise.all(
       sales.map(async (sale) => {
         const customer = await ctx.db.get(sale.customerId);
-        const salesperson = await ctx.db.get(sale.salespersonId as any);
+        const salesperson = await ctx.db.get(sale.salespersonId);
         return {
           ...sale,
           customerName: customer ? `${customer.firstName} ${customer.lastName}` : "Unknown",
@@ -508,12 +524,12 @@ export const getRelations = query({
       .query("leads")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .filter((q) => q.eq(q.field("vehicleId"), args.vehicleId))
-      .collect();
+      .take(50);
 
     const enrichedLeads = await Promise.all(
       leads.map(async (lead) => {
         const customer = await ctx.db.get(lead.customerId);
-        const assignedUser = lead.assignedUserId ? await ctx.db.get(lead.assignedUserId as any) : null;
+        const assignedUser = lead.assignedUserId ? await ctx.db.get(lead.assignedUserId) : null;
         return {
           ...lead,
           customerName: customer ? `${customer.firstName} ${customer.lastName}` : "Unknown",
@@ -526,7 +542,7 @@ export const getRelations = query({
     const expenses = await ctx.db
       .query("expenses")
       .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
-      .collect();
+      .take(200);
 
     const enrichedExpenses = await Promise.all(
       expenses.map(async (exp) => {
@@ -543,11 +559,11 @@ export const getRelations = query({
     const tasks = await ctx.db
       .query("tasks")
       .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
-      .collect();
+      .take(200);
 
     const enrichedTasks = await Promise.all(
       tasks.map(async (task) => {
-        const assignedUser = await ctx.db.get(task.assignedTo as any);
+        const assignedUser = await ctx.db.get(task.assignedTo);
         return {
           ...task,
           assignedUserName: assignedUser && "name" in assignedUser ? assignedUser.name : "Unknown",
@@ -564,7 +580,7 @@ export const getRelations = query({
     const enrichedTestDrives = await Promise.all(
       testDrives.map(async (td) => {
         const customer = await ctx.db.get(td.customerId);
-        const salesperson = await ctx.db.get(td.salespersonId as any);
+        const salesperson = await ctx.db.get(td.salespersonId);
         return {
           ...td,
           customerName: customer ? `${customer.firstName} ${customer.lastName}` : "Unknown",
@@ -587,5 +603,71 @@ export const getRelations = query({
       testDrives: enrichedTestDrives.sort((a, b) => b.startTime - a.startTime),
       workOrders: workOrders.sort((a, b) => b._creationTime - a._creationTime),
     };
+  },
+});
+
+export const importBulk = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    vehicles: v.array(v.object({
+      make: v.string(),
+      model: v.string(),
+      year: v.number(),
+      vin: v.string(),
+      color: v.string(),
+      mileage: v.optional(v.number()),
+      fuelType: v.string(),
+      transmission: v.string(),
+      sellingPrice: v.number(),
+      purchasePrice: v.optional(v.number()),
+      status: v.optional(v.string()),
+      notes: v.optional(v.string()),
+    })),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
+
+    let inserted = 0;
+    let skipped = 0;
+
+    for (const row of args.vehicles) {
+      const normalizedVin = row.vin.trim().toUpperCase();
+
+      // Skip duplicate VINs within the org (or blank VINs treated as unique)
+      if (normalizedVin) {
+        const existing = await ctx.db
+          .query("vehicles")
+          .withIndex("by_org_vin", (q) => q.eq("orgId", args.orgId).eq("vin", normalizedVin))
+          .unique();
+        if (existing) { skipped++; continue; }
+      }
+
+      const validStatuses = ["AVAILABLE", "RESERVED", "SOLD", "IN_INSPECTION", "IN_REPAIR", "ARCHIVED"];
+      const status = row.status && validStatuses.includes(row.status.toUpperCase())
+        ? (row.status.toUpperCase() as "AVAILABLE" | "RESERVED" | "SOLD" | "IN_INSPECTION" | "IN_REPAIR" | "ARCHIVED")
+        : "AVAILABLE";
+
+      await ctx.db.insert("vehicles", {
+        orgId: args.orgId,
+        vin: normalizedVin || `IMPORT-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        make: row.make.trim(),
+        model: row.model.trim(),
+        year: row.year,
+        mileage: row.mileage ?? 0,
+        color: row.color.trim(),
+        fuelType: row.fuelType,
+        transmission: row.transmission,
+        sellingPrice: row.sellingPrice,
+        purchasePrice: row.purchasePrice,
+        status,
+        notes: row.notes,
+        addedBy: user._id,
+        updatedBy: user._id,
+        updatedAt: Date.now(),
+      });
+      inserted++;
+    }
+
+    return { inserted, skipped };
   },
 });

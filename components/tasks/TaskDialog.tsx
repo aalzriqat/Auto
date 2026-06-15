@@ -9,7 +9,7 @@ import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 import {
   Dialog,
   DialogContent,
@@ -35,6 +35,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 
 import { taskSchema, TaskFormValues, TaskDialogProps } from "./task.schema";
 
@@ -69,16 +70,13 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
       customerId: "none",
       vehicleId: "none",
       communicationMethod: "none",
+      priority: "none",
       status: "PENDING",
     },
   });
 
   useEffect(() => {
     if (task && open) {
-      const date = new Date(task.dueDate);
-      const tzOffset = date.getTimezoneOffset() * 60000;
-      const localISOTime = new Date(date.getTime() - tzOffset).toISOString().slice(0, 16);
-
       form.reset({
         title: task.title,
         description: task.description || "",
@@ -87,6 +85,7 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
         customerId: task.customerId || "none",
         vehicleId: task.vehicleId || "none",
         communicationMethod: (task.communicationMethod as any) || "none",
+        priority: ((task as any).priority as any) || "none",
         status: task.status,
       });
     } else if (open && !task) {
@@ -100,6 +99,7 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
         customerId: "none",
         vehicleId: "none",
         communicationMethod: "none",
+        priority: "none",
         status: "PENDING",
       });
     }
@@ -114,6 +114,7 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
       const customerId = values.customerId === "none" ? undefined : (values.customerId as Id<"customers">);
       const vehicleId = values.vehicleId === "none" ? undefined : (values.vehicleId as Id<"vehicles">);
       const communicationMethod = values.communicationMethod === "none" ? undefined : (values.communicationMethod as "PHONE" | "EMAIL" | "FAX");
+      const priority = (values as any).priority === "none" ? undefined : ((values as any).priority as "HIGH" | "MEDIUM" | "LOW");
 
       if (task) {
         await updateTask({
@@ -126,6 +127,7 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
           customerId: customerId === undefined ? null : customerId,
           vehicleId: vehicleId === undefined ? null : vehicleId,
           status: status,
+          priority: priority,
           communicationMethod: communicationMethod,
         });
         toast.success(t("TaskUpdatedSuccess" as any) || "Task updated successfully");
@@ -139,6 +141,7 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
           customerId: customerId,
           vehicleId: vehicleId,
           status: status,
+          priority: priority,
           communicationMethod: communicationMethod,
         });
         toast.success(t("TaskCreatedSuccess" as any) || "Task created successfully!");
@@ -186,20 +189,18 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>{t("AssignTo" as any) || "Assign To"} <span className="text-red-500">*</span></FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder={t("SelectTeamMember" as any) || "Select team member"} />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        {memberships?.map((m) => (
-                          <SelectItem key={m.userId} value={m.userId}>
-                            {m.userName}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <FormControl>
+                      <SearchableSelect
+                        value={field.value}
+                        onValueChange={field.onChange}
+                        placeholder={t("SelectTeamMember" as any) || "Select team member"}
+                        options={memberships?.map((m) => ({
+                          value: m.userId,
+                          label: m.userName,
+                          subLabel: m.roleName || undefined,
+                        })) ?? []}
+                      />
+                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -225,21 +226,19 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
                     <FormLabel>{t("RelatedCustomer" as any) || "Related Customer"}</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder={t("SelectCustomer" as any) || "Select customer"} />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="none">{t("GeneralTaskNoCustomer" as any) || "-- General Task (No Customer) --"}</SelectItem>
-                        {customers?.map((c) => (
-                          <SelectItem key={c._id} value={c._id}>
-                            {c.firstName} {c.lastName}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <FormControl>
+                      <SearchableSelect
+                        value={field.value}
+                        onValueChange={field.onChange}
+                        placeholder={t("SelectCustomer" as any) || "Select customer"}
+                        noneLabel={t("GeneralTaskNoCustomer" as any) || "-- General Task (No Customer) --"}
+                        options={customers?.map((c) => ({
+                          value: c._id,
+                          label: `${c.firstName} ${c.lastName}`,
+                          subLabel: c.phone || undefined,
+                        })) ?? []}
+                      />
+                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -251,21 +250,19 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
                 render={({ field }) => (
                   <FormItem className="md:col-span-2">
                     <FormLabel>{t("RelatedVehicle" as any) || "Related Vehicle"}</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue placeholder={t("SelectVehicle" as any) || "Select vehicle"} />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="none">{t("GeneralTaskNoVehicle" as any) || "-- General Task (No Vehicle) --"}</SelectItem>
-                        {vehicles?.map((v) => (
-                          <SelectItem key={v._id} value={v._id}>
-                            {v.year} {v.make} {v.model} ({v.vin.substring(v.vin.length - 6)})
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <FormControl>
+                      <SearchableSelect
+                        value={field.value}
+                        onValueChange={field.onChange}
+                        placeholder={t("SelectVehicle" as any) || "Select vehicle"}
+                        noneLabel={t("GeneralTaskNoVehicle" as any) || "-- General Task (No Vehicle) --"}
+                        options={vehicles?.map((v) => ({
+                          value: v._id,
+                          label: `${v.year} ${v.make} ${v.model}`,
+                          subLabel: v.vin,
+                        })) ?? []}
+                      />
+                    </FormControl>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -288,6 +285,30 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
                         <SelectItem value="PHONE">{t("Phone" as any) || "Phone"}</SelectItem>
                         <SelectItem value="EMAIL">{t("Email" as any) || "Email"}</SelectItem>
                         <SelectItem value="FAX">{t("Fax" as any) || "Fax"}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name={"priority" as any}
+                render={({ field }) => (
+                  <FormItem className="md:col-span-2">
+                    <FormLabel>Priority</FormLabel>
+                    <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select priority" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        <SelectItem value="none">-- Not Set --</SelectItem>
+                        <SelectItem value="HIGH">🔴 High</SelectItem>
+                        <SelectItem value="MEDIUM">🟡 Medium</SelectItem>
+                        <SelectItem value="LOW">🟢 Low</SelectItem>
                       </SelectContent>
                     </Select>
                     <FormMessage />

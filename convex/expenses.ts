@@ -4,6 +4,9 @@ import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
+import { validateInput } from "./utils/validation";
+import { CreateExpenseSchema, UpdateExpenseSchema } from "./validations/expenses";
+import { rateLimiter } from "./rateLimit";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -100,6 +103,8 @@ export const create = mutation({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_EXPENSES]);
 
+    validateInput(CreateExpenseSchema, args);
+
     if (args.vehicleId) {
       const vehicle = await ctx.db.get(args.vehicleId);
       if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
@@ -163,7 +168,24 @@ export const update = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const statusLimit = await rateLimiter.limit(ctx, "standardApi");
+    if (!statusLimit.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+    }
+
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_EXPENSES]);
+
+    // Note: Zod schema might not expect `null` for vehicleId or payerId directly if not configured,
+    // but the schema is typed using .optional(). We may need to filter out nulls or the schema might pass.
+    // The UpdateExpenseSchema defines them as optional string, not nullable. 
+    // We can pre-process args before validation if necessary, or just validate.
+    // The UpdateExpenseSchema is `.partial()`, so `undefined` is allowed. `null` from Convex might fail Zod string check.
+    // Let's strip nulls before validation just for Zod.
+    const argsToValidate = { ...args };
+    if (argsToValidate.vehicleId === null) delete argsToValidate.vehicleId;
+    if (argsToValidate.payerId === null) delete argsToValidate.payerId;
+
+    validateInput(UpdateExpenseSchema, argsToValidate);
 
     const expense = await ctx.db.get(args.expenseId);
     if (!expense || expense.isDeleted || expense.orgId !== args.orgId) {
@@ -218,6 +240,11 @@ export const remove = mutation({
     expenseId: v.id("expenses"),
   },
   handler: async (ctx, args) => {
+    const statusLimit = await rateLimiter.limit(ctx, "standardApi");
+    if (!statusLimit.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+    }
+
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_EXPENSES]);
 
     const expense = await ctx.db.get(args.expenseId);
@@ -226,7 +253,7 @@ export const remove = mutation({
     }
 
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Unauthenticated");
+    if (!identity) throw new ConvexError("Unauthenticated");
     await ctx.db.patch(args.expenseId, {
       isDeleted: true,
       deletedAt: Date.now(),

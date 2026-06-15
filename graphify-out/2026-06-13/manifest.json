@@ -1,0 +1,1517 @@
+{
+  "E:\\Auto\\Auto\\app\\layout.tsx": {
+    "mtime": 1781210411.288937,
+    "ast_hash": "a739f5e371ff1c7836c3f5cacbf97c83",
+    "semantic_hash": "a739f5e371ff1c7836c3f5cacbf97c83"
+  },
+  "E:\\Auto\\Auto\\app\\page.tsx": {
+    "mtime": 1781315158.3677883,
+    "ast_hash": "9a0437e206c3b6302f2d26221b2a1f16",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\app\\sign-in\\[[...sign-in]]\\page.tsx": {
+    "mtime": 1781144730.5627227,
+    "ast_hash": "190db17b59d390e8fed8ea4ecb5d1e5b",
+    "semantic_hash": "190db17b59d390e8fed8ea4ecb5d1e5b"
+  },
+  "E:\\Auto\\Auto\\app\\sign-up\\[[...sign-up]]\\page.tsx": {
+    "mtime": 1781144730.5637233,
+    "ast_hash": "7487b864ef252236085e00f0625a739f",
+    "semantic_hash": "7487b864ef252236085e00f0625a739f"
+  },
+  "E:\\Auto\\Auto\\components\\ConvexClientProvider.tsx": {
+    "mtime": 1781144730.5637233,
+    "ast_hash": "b36e3857e970ba14122b1860582b0ded",
+    "semantic_hash": "b36e3857e970ba14122b1860582b0ded"
+  },
+  "E:\\Auto\\Auto\\convex\\_generated\\ai\\ai-files.state.json": {
+    "mtime": 1781144730.6014998,
+    "ast_hash": "8ddefe6a9f685dd946acf44b625aaf74",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\_generated\\api.d.ts": {
+    "mtime": 1781208550.4336972,
+    "ast_hash": "84f2fb518752525c69288f12e45317bb",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\_generated\\api.js": {
+    "mtime": 1781148056.6016297,
+    "ast_hash": "ea14005171d3e17b1b28a7139ad36d62",
+    "semantic_hash": "ea14005171d3e17b1b28a7139ad36d62"
+  },
+  "E:\\Auto\\Auto\\convex\\_generated\\dataModel.d.ts": {
+    "mtime": 1781148058.511436,
+    "ast_hash": "af87bff09394971f8debeb5b8e9f8a70",
+    "semantic_hash": "af87bff09394971f8debeb5b8e9f8a70"
+  },
+  "E:\\Auto\\Auto\\convex\\_generated\\server.d.ts": {
+    "mtime": 1781148058.5323873,
+    "ast_hash": "a6d3e29e1cd98c6a0ebcf82d5074009e",
+    "semantic_hash": "a6d3e29e1cd98c6a0ebcf82d5074009e"
+  },
+  "E:\\Auto\\Auto\\convex\\_generated\\server.js": {
+    "mtime": 1781148058.5202599,
+    "ast_hash": "cfc7a4ed084119abac0e51d79f525f4f",
+    "semantic_hash": "cfc7a4ed084119abac0e51d79f525f4f"
+  },
+  "E:\\Auto\\Auto\\convex\\auth.config.ts": {
+    "mtime": 1781162669.5934758,
+    "ast_hash": "791e8c3732b49d33d5c5117b4bb9985f",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\http.ts": {
+    "mtime": 1781277136.820406,
+    "ast_hash": "841850accbdce535c147b8996a36b8f7",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\schema.ts": {
+    "mtime": 1781275398.108454,
+    "ast_hash": "d0f6abe5d2a5a5ebd2cbb4834384887b",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\tsconfig.json": {
+    "mtime": 1781144730.6162293,
+    "ast_hash": "4411c0b30f34f3b535ac420f54fb7ec4",
+    "semantic_hash": "4411c0b30f34f3b535ac420f54fb7ec4"
+  },
+  "E:\\Auto\\Auto\\convex\\users.ts": {
+    "mtime": 1781275306.748335,
+    "ast_hash": "a6aeab5e15499fd3fb9a20dbed516a5c",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\eslint.config.mjs": {
+    "mtime": 1781144730.620231,
+    "ast_hash": "46c2c30a33263553964db28a2763c6ec",
+    "semantic_hash": "46c2c30a33263553964db28a2763c6ec"
+  },
+  "E:\\Auto\\Auto\\next.config.ts": {
+    "mtime": 1781277312.31994,
+    "ast_hash": "38d3a951503525e6fef334bc669090bf",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\package.json": {
+    "mtime": 1781148383.9835038,
+    "ast_hash": "de7152f7a5b68352a00feb8148f06b42",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\postcss.config.mjs": {
+    "mtime": 1781144730.7835453,
+    "ast_hash": "0a8c5fa8885965eb3d71ee945ff2e9be",
+    "semantic_hash": "0a8c5fa8885965eb3d71ee945ff2e9be"
+  },
+  "E:\\Auto\\Auto\\skills-lock.json": {
+    "mtime": 1781144730.7968476,
+    "ast_hash": "5e3c4d57bab6cac0d304c623bc8f4b5b",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\tsconfig.json": {
+    "mtime": 1781144730.7968476,
+    "ast_hash": "b1b7e39d622a43890711fb854634bf42",
+    "semantic_hash": "b1b7e39d622a43890711fb854634bf42"
+  },
+  "E:\\Auto\\Auto\\.agents\\rules\\graphify.md": {
+    "mtime": 1781144730.526677,
+    "ast_hash": "a0e4d192b9e2e17256124dbfc8e24e6a",
+    "semantic_hash": "a0e4d192b9e2e17256124dbfc8e24e6a"
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-create-component\\SKILL.md": {
+    "mtime": 1781144730.5271819,
+    "ast_hash": "987c535fbb56ea66c0de3e97fb4290a1",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-create-component\\agents\\openai.yaml": {
+    "mtime": 1781144730.5281892,
+    "ast_hash": "220fe8f9c8c013e5e8a4e235c11956fd",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-create-component\\references\\advanced-patterns.md": {
+    "mtime": 1781144730.5281892,
+    "ast_hash": "a62af63f4af89d0c4d7127b3de9c0511",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-create-component\\references\\hybrid-components.md": {
+    "mtime": 1781144730.5291517,
+    "ast_hash": "6226d5a592f5792aad89cb451761b3cd",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-create-component\\references\\local-components.md": {
+    "mtime": 1781144730.5291517,
+    "ast_hash": "196d629c81f2a5b6b7919bd002c47ae6",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-create-component\\references\\packaged-components.md": {
+    "mtime": 1781144730.5291517,
+    "ast_hash": "944a36c2cfcf9d90273e08e63c43ba25",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-migration-helper\\SKILL.md": {
+    "mtime": 1781144730.5296655,
+    "ast_hash": "0d07c53e681be625897c37319d6f6057",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-migration-helper\\agents\\openai.yaml": {
+    "mtime": 1781144730.5296655,
+    "ast_hash": "c5ce609704dd5ccf11eef5ade5c483ba",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-migration-helper\\references\\migration-patterns.md": {
+    "mtime": 1781144730.530681,
+    "ast_hash": "8748d23acea1caad1890b141de3ddc18",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-migration-helper\\references\\migrations-component.md": {
+    "mtime": 1781144730.5312495,
+    "ast_hash": "4d611826d42962d621df279f2c7cbf0c",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-performance-audit\\SKILL.md": {
+    "mtime": 1781144730.5312495,
+    "ast_hash": "4e9b78427f1971eb07ff143c50855292",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-performance-audit\\agents\\openai.yaml": {
+    "mtime": 1781144730.5312495,
+    "ast_hash": "e32b6b73766f5789d6ea35c33b301bc1",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-performance-audit\\references\\function-budget.md": {
+    "mtime": 1781144730.5322561,
+    "ast_hash": "5cbbdc3a33709ef2362ad598ab0cea58",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-performance-audit\\references\\hot-path-rules.md": {
+    "mtime": 1781144730.5322561,
+    "ast_hash": "c0efc6986ba707368a214a68c52e3288",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-performance-audit\\references\\occ-conflicts.md": {
+    "mtime": 1781144730.5332565,
+    "ast_hash": "bf8351e99fb9d67948f67f746bca33c8",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-performance-audit\\references\\subscription-cost.md": {
+    "mtime": 1781144730.5332565,
+    "ast_hash": "c176d967670a9e7015cfe03503996234",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-quickstart\\SKILL.md": {
+    "mtime": 1781144730.5332565,
+    "ast_hash": "a5a7adb402feb221c53a968cce96ea37",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-quickstart\\agents\\openai.yaml": {
+    "mtime": 1781144730.5342565,
+    "ast_hash": "54a5eec30e580b52ec9bbd3c41f07e02",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-setup-auth\\SKILL.md": {
+    "mtime": 1781144730.5342565,
+    "ast_hash": "e9147ddfd3e08de978332019e9b52b39",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-setup-auth\\agents\\openai.yaml": {
+    "mtime": 1781144730.5342565,
+    "ast_hash": "a94b558acadffbcb9198572057e27f50",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-setup-auth\\references\\auth0.md": {
+    "mtime": 1781144730.5352595,
+    "ast_hash": "669e9371606c9dd0dae68a20f0d9ae11",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-setup-auth\\references\\clerk.md": {
+    "mtime": 1781144730.5359876,
+    "ast_hash": "1873cded0ff170fae07cee923e8e2f62",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-setup-auth\\references\\convex-auth.md": {
+    "mtime": 1781144730.5359876,
+    "ast_hash": "4dc023feff0e7be43c02fcad77ec4a83",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-setup-auth\\references\\workos-authkit.md": {
+    "mtime": 1781144730.5359876,
+    "ast_hash": "9be534f8fb1291c9e1fabb1f46cfadaf",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex\\SKILL.md": {
+    "mtime": 1781144730.5369942,
+    "ast_hash": "c34b4dfe9691a4e89b980bda95999e7b",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\workflows\\graphify.md": {
+    "mtime": 1781144730.5369942,
+    "ast_hash": "637776aa6f7496d069afe7520c845c8a",
+    "semantic_hash": "637776aa6f7496d069afe7520c845c8a"
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-create-component\\SKILL.md": {
+    "mtime": 1781144730.5379949,
+    "ast_hash": "987c535fbb56ea66c0de3e97fb4290a1",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-create-component\\agents\\openai.yaml": {
+    "mtime": 1781144730.5379949,
+    "ast_hash": "220fe8f9c8c013e5e8a4e235c11956fd",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-create-component\\references\\advanced-patterns.md": {
+    "mtime": 1781144730.5389948,
+    "ast_hash": "a62af63f4af89d0c4d7127b3de9c0511",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-create-component\\references\\hybrid-components.md": {
+    "mtime": 1781144730.5389948,
+    "ast_hash": "6226d5a592f5792aad89cb451761b3cd",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-create-component\\references\\local-components.md": {
+    "mtime": 1781144730.5389948,
+    "ast_hash": "196d629c81f2a5b6b7919bd002c47ae6",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-create-component\\references\\packaged-components.md": {
+    "mtime": 1781144730.5389948,
+    "ast_hash": "944a36c2cfcf9d90273e08e63c43ba25",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-migration-helper\\SKILL.md": {
+    "mtime": 1781144730.5399935,
+    "ast_hash": "0d07c53e681be625897c37319d6f6057",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-migration-helper\\agents\\openai.yaml": {
+    "mtime": 1781144730.5399935,
+    "ast_hash": "c5ce609704dd5ccf11eef5ade5c483ba",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-migration-helper\\references\\migration-patterns.md": {
+    "mtime": 1781144730.540995,
+    "ast_hash": "8748d23acea1caad1890b141de3ddc18",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-migration-helper\\references\\migrations-component.md": {
+    "mtime": 1781144730.540995,
+    "ast_hash": "4d611826d42962d621df279f2c7cbf0c",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-performance-audit\\SKILL.md": {
+    "mtime": 1781144730.540995,
+    "ast_hash": "4e9b78427f1971eb07ff143c50855292",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-performance-audit\\agents\\openai.yaml": {
+    "mtime": 1781144730.5419943,
+    "ast_hash": "e32b6b73766f5789d6ea35c33b301bc1",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-performance-audit\\references\\function-budget.md": {
+    "mtime": 1781144730.5419943,
+    "ast_hash": "5cbbdc3a33709ef2362ad598ab0cea58",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-performance-audit\\references\\hot-path-rules.md": {
+    "mtime": 1781144730.5429938,
+    "ast_hash": "c0efc6986ba707368a214a68c52e3288",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-performance-audit\\references\\occ-conflicts.md": {
+    "mtime": 1781144730.5429938,
+    "ast_hash": "bf8351e99fb9d67948f67f746bca33c8",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-performance-audit\\references\\subscription-cost.md": {
+    "mtime": 1781144730.5429938,
+    "ast_hash": "c176d967670a9e7015cfe03503996234",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-quickstart\\SKILL.md": {
+    "mtime": 1781144730.5439932,
+    "ast_hash": "a5a7adb402feb221c53a968cce96ea37",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-quickstart\\agents\\openai.yaml": {
+    "mtime": 1781144730.5439932,
+    "ast_hash": "54a5eec30e580b52ec9bbd3c41f07e02",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-setup-auth\\SKILL.md": {
+    "mtime": 1781144730.5449939,
+    "ast_hash": "e9147ddfd3e08de978332019e9b52b39",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-setup-auth\\agents\\openai.yaml": {
+    "mtime": 1781144730.5449939,
+    "ast_hash": "a94b558acadffbcb9198572057e27f50",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-setup-auth\\references\\auth0.md": {
+    "mtime": 1781144730.5459933,
+    "ast_hash": "669e9371606c9dd0dae68a20f0d9ae11",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-setup-auth\\references\\clerk.md": {
+    "mtime": 1781144730.5459933,
+    "ast_hash": "1873cded0ff170fae07cee923e8e2f62",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-setup-auth\\references\\convex-auth.md": {
+    "mtime": 1781144730.5459933,
+    "ast_hash": "4dc023feff0e7be43c02fcad77ec4a83",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-setup-auth\\references\\workos-authkit.md": {
+    "mtime": 1781144730.5459933,
+    "ast_hash": "9be534f8fb1291c9e1fabb1f46cfadaf",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex\\SKILL.md": {
+    "mtime": 1781144730.5469983,
+    "ast_hash": "c34b4dfe9691a4e89b980bda95999e7b",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\AGENTS.md": {
+    "mtime": 1781144730.5482004,
+    "ast_hash": "ec359ca42f06b858d180414a05d00046",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\CLAUDE.md": {
+    "mtime": 1781144730.5482004,
+    "ast_hash": "ec359ca42f06b858d180414a05d00046",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\README.md": {
+    "mtime": 1781144730.5482004,
+    "ast_hash": "d90ddf00f59b2f0ac8a5ff0d1fdde47b",
+    "semantic_hash": "d90ddf00f59b2f0ac8a5ff0d1fdde47b"
+  },
+  "E:\\Auto\\Auto\\convex\\README.md": {
+    "mtime": 1781144730.6004994,
+    "ast_hash": "f148d24e10bc09b78d37780b245bbf9b",
+    "semantic_hash": "f148d24e10bc09b78d37780b245bbf9b"
+  },
+  "E:\\Auto\\Auto\\convex\\_generated\\ai\\guidelines.md": {
+    "mtime": 1781144730.6014998,
+    "ast_hash": "8cbea02be34ffeeb5ded27222eaf4ab8",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-create-component\\assets\\icon.svg": {
+    "mtime": 1781144730.5281892,
+    "ast_hash": "a36bafa81ae72d1f374aea3b91bc8a2a",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-migration-helper\\assets\\icon.svg": {
+    "mtime": 1781144730.5296655,
+    "ast_hash": "20d40af94ffdf5f92b1cd3163140ac56",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-performance-audit\\assets\\icon.svg": {
+    "mtime": 1781144730.5322561,
+    "ast_hash": "b882cf44cc58be47afb164370a68cbdc",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-quickstart\\assets\\icon.svg": {
+    "mtime": 1781144730.5342565,
+    "ast_hash": "4ccb6b42b6fa1584d06d83756155491e",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.agents\\skills\\convex-setup-auth\\assets\\icon.svg": {
+    "mtime": 1781144730.5352595,
+    "ast_hash": "75c95b7a85ab6b9bb084d2b067cc7d00",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-create-component\\assets\\icon.svg": {
+    "mtime": 1781144730.5389948,
+    "ast_hash": "a36bafa81ae72d1f374aea3b91bc8a2a",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-migration-helper\\assets\\icon.svg": {
+    "mtime": 1781144730.5399935,
+    "ast_hash": "20d40af94ffdf5f92b1cd3163140ac56",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-performance-audit\\assets\\icon.svg": {
+    "mtime": 1781144730.5419943,
+    "ast_hash": "b882cf44cc58be47afb164370a68cbdc",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-quickstart\\assets\\icon.svg": {
+    "mtime": 1781144730.5439932,
+    "ast_hash": "4ccb6b42b6fa1584d06d83756155491e",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.claude\\skills\\convex-setup-auth\\assets\\icon.svg": {
+    "mtime": 1781144730.5449939,
+    "ast_hash": "75c95b7a85ab6b9bb084d2b067cc7d00",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\public\\convex.svg": {
+    "mtime": 1781144730.7845519,
+    "ast_hash": "71d1ffdf452d9ff6ee8d285857bd9dc3",
+    "semantic_hash": "71d1ffdf452d9ff6ee8d285857bd9dc3"
+  },
+  "E:\\Auto\\Auto\\convex\\memberships.ts": {
+    "mtime": 1781316816.0646622,
+    "ast_hash": "730de25d364cf7cc362b57001f571af9",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\organizations.ts": {
+    "mtime": 1781144730.6120088,
+    "ast_hash": "925594d6c127a13701588c74eed43af4",
+    "semantic_hash": "925594d6c127a13701588c74eed43af4"
+  },
+  "E:\\Auto\\Auto\\convex\\roles.ts": {
+    "mtime": 1781277136.8224127,
+    "ast_hash": "ff665097b4cf946b65b7465e78ef6d35",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\utils\\permissions.ts": {
+    "mtime": 1781277185.1968775,
+    "ast_hash": "c8137fc0100037324057eb258bf40585",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\utils\\tenancy.ts": {
+    "mtime": 1781144730.618229,
+    "ast_hash": "35429d68097cbc05dcb95670ab29e842",
+    "semantic_hash": "35429d68097cbc05dcb95670ab29e842"
+  },
+  "E:\\Auto\\Auto\\app\\(dashboard)\\customers\\page.tsx": {
+    "mtime": 1781316632.982805,
+    "ast_hash": "98d693177fe96168fda8c45d74f6ea29",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\app\\(dashboard)\\dashboard\\page.tsx": {
+    "mtime": 1781210411.233495,
+    "ast_hash": "ec005ca9690b71abd15e7c7429363245",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\app\\(dashboard)\\expenses\\page.tsx": {
+    "mtime": 1781316632.9838386,
+    "ast_hash": "8553387316d62e9f318ca17c8bda9067",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\app\\(dashboard)\\layout.tsx": {
+    "mtime": 1781316632.9818046,
+    "ast_hash": "30212ef0389f47cb10b00cdacce50920",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\app\\(dashboard)\\leads\\page.tsx": {
+    "mtime": 1781316632.9838386,
+    "ast_hash": "b024a940c9d70f5435d511bf9fe6b456",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\app\\(dashboard)\\sales\\page.tsx": {
+    "mtime": 1781144730.557214,
+    "ast_hash": "a9e008a3a2da0960db1a51f8f34b6977",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\app\\(dashboard)\\tasks\\page.tsx": {
+    "mtime": 1781316632.986352,
+    "ast_hash": "6f783135fc8b279fbebebe266c186524",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\app\\(dashboard)\\team\\page.tsx": {
+    "mtime": 1781316632.9873512,
+    "ast_hash": "e1a3b835cc1b7b9a7a3213560a0e7968",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\app\\(dashboard)\\vehicles\\page.tsx": {
+    "mtime": 1781316632.9883509,
+    "ast_hash": "7a3744ec5edbc468d199996770e685cf",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components.json": {
+    "mtime": 1781144730.5637233,
+    "ast_hash": "ac0aad3a8f31924331f54681472312d0",
+    "semantic_hash": "ac0aad3a8f31924331f54681472312d0"
+  },
+  "E:\\Auto\\Auto\\components\\customers\\CustomerDialog.tsx": {
+    "mtime": 1781316632.9901085,
+    "ast_hash": "4665543023cba86ee87b455764bdd0c4",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\expenses\\ExpenseDialog.tsx": {
+    "mtime": 1781316632.9911077,
+    "ast_hash": "6968ad7c66bf58e9bb3db3dc95e30655",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\layout\\LanguageSwitcher.tsx": {
+    "mtime": 1781144730.5707228,
+    "ast_hash": "f4690076f97e3d23d5e244aca8a2d41c",
+    "semantic_hash": "f4690076f97e3d23d5e244aca8a2d41c"
+  },
+  "E:\\Auto\\Auto\\components\\layout\\NotificationsBell.tsx": {
+    "mtime": 1781316632.992108,
+    "ast_hash": "e3d4dfc4c48478e99161b76fffc4de4c",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\layout\\OrgSwitcher.tsx": {
+    "mtime": 1781316632.992108,
+    "ast_hash": "0ee7320711e120a239d803b77bec73dc",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\leads\\LeadDialog.tsx": {
+    "mtime": 1781316632.992108,
+    "ast_hash": "bb8492b45f203b017ebb69a03e06d568",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\providers\\LanguageProvider.tsx": {
+    "mtime": 1781144730.5737777,
+    "ast_hash": "c1723ffbf9f347e6aec39355154bb434",
+    "semantic_hash": "c1723ffbf9f347e6aec39355154bb434"
+  },
+  "E:\\Auto\\Auto\\components\\providers\\OrgProvider.tsx": {
+    "mtime": 1781144730.5737777,
+    "ast_hash": "3b331be30f5e49126d5ed1409c71d085",
+    "semantic_hash": "3b331be30f5e49126d5ed1409c71d085"
+  },
+  "E:\\Auto\\Auto\\components\\sales\\SaleDialog.tsx": {
+    "mtime": 1781316632.9941084,
+    "ast_hash": "9345fabc1f46312d7d795b32c55c8cd7",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\tasks\\TaskDialog.tsx": {
+    "mtime": 1781316632.997621,
+    "ast_hash": "4fffcec20490c9bf380d41abc0a9fc9a",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\team\\InviteMemberDialog.tsx": {
+    "mtime": 1781316632.9986215,
+    "ast_hash": "9a97da9610c26660dc8e146cd5170f6c",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\ui\\badge.tsx": {
+    "mtime": 1781144730.59062,
+    "ast_hash": "c6db5a6c42e5c86485a853e1a73bef01",
+    "semantic_hash": "c6db5a6c42e5c86485a853e1a73bef01"
+  },
+  "E:\\Auto\\Auto\\components\\ui\\button.tsx": {
+    "mtime": 1781144730.59062,
+    "ast_hash": "c859c8272fbb95452bbab9e0afe996e2",
+    "semantic_hash": "c859c8272fbb95452bbab9e0afe996e2"
+  },
+  "E:\\Auto\\Auto\\components\\ui\\card.tsx": {
+    "mtime": 1781144730.59062,
+    "ast_hash": "417aa24d02057f716cf3256ad3505157",
+    "semantic_hash": "417aa24d02057f716cf3256ad3505157"
+  },
+  "E:\\Auto\\Auto\\components\\ui\\dialog.tsx": {
+    "mtime": 1781144730.5916219,
+    "ast_hash": "c71eb4753e5c302c0f56fef7253632e0",
+    "semantic_hash": "c71eb4753e5c302c0f56fef7253632e0"
+  },
+  "E:\\Auto\\Auto\\components\\ui\\dropdown-menu.tsx": {
+    "mtime": 1781144730.5926213,
+    "ast_hash": "e33057afb8d4fc53d1778dd43778451a",
+    "semantic_hash": "e33057afb8d4fc53d1778dd43778451a"
+  },
+  "E:\\Auto\\Auto\\components\\ui\\form.tsx": {
+    "mtime": 1781144730.5926213,
+    "ast_hash": "be11535cef5b36393c2294118379c97d",
+    "semantic_hash": "be11535cef5b36393c2294118379c97d"
+  },
+  "E:\\Auto\\Auto\\components\\ui\\input.tsx": {
+    "mtime": 1781144730.5926213,
+    "ast_hash": "b6f39aedc2dcec6a539ef6a3f5800eb0",
+    "semantic_hash": "b6f39aedc2dcec6a539ef6a3f5800eb0"
+  },
+  "E:\\Auto\\Auto\\components\\ui\\label.tsx": {
+    "mtime": 1781144730.593621,
+    "ast_hash": "a82ec35cf363a42512246117aeb61897",
+    "semantic_hash": "a82ec35cf363a42512246117aeb61897"
+  },
+  "E:\\Auto\\Auto\\components\\ui\\select.tsx": {
+    "mtime": 1781144730.5946224,
+    "ast_hash": "c385e58d5b0e8afcff8aecf18d68d0c8",
+    "semantic_hash": "c385e58d5b0e8afcff8aecf18d68d0c8"
+  },
+  "E:\\Auto\\Auto\\components\\ui\\separator.tsx": {
+    "mtime": 1781144730.5946224,
+    "ast_hash": "a554485146f11e2f99567142c3eea40a",
+    "semantic_hash": "a554485146f11e2f99567142c3eea40a"
+  },
+  "E:\\Auto\\Auto\\components\\ui\\sheet.tsx": {
+    "mtime": 1781144730.5946224,
+    "ast_hash": "68d48da023c8e8ad52d947c84e24135e",
+    "semantic_hash": "68d48da023c8e8ad52d947c84e24135e"
+  },
+  "E:\\Auto\\Auto\\components\\ui\\sidebar.tsx": {
+    "mtime": 1781144730.5956218,
+    "ast_hash": "2ec02e5139aef06a737f53568448fb27",
+    "semantic_hash": "2ec02e5139aef06a737f53568448fb27"
+  },
+  "E:\\Auto\\Auto\\components\\ui\\skeleton.tsx": {
+    "mtime": 1781144730.5956218,
+    "ast_hash": "f65c9baa039c5484ed34c6ccaf9a2849",
+    "semantic_hash": "f65c9baa039c5484ed34c6ccaf9a2849"
+  },
+  "E:\\Auto\\Auto\\components\\ui\\sonner.tsx": {
+    "mtime": 1781317040.4379594,
+    "ast_hash": "77a05e028d52bf7ab7a5c65fde8203f2",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\ui\\table.tsx": {
+    "mtime": 1781144730.5966282,
+    "ast_hash": "7b1e560c821690c828e63ccea0543c51",
+    "semantic_hash": "7b1e560c821690c828e63ccea0543c51"
+  },
+  "E:\\Auto\\Auto\\components\\ui\\tooltip.tsx": {
+    "mtime": 1781144730.5976288,
+    "ast_hash": "be285d25fa1e5002610c5b30afd5a93c",
+    "semantic_hash": "be285d25fa1e5002610c5b30afd5a93c"
+  },
+  "E:\\Auto\\Auto\\components\\vehicles\\VehicleDialog.tsx": {
+    "mtime": 1781316633.0016203,
+    "ast_hash": "c90b4a9a72b8c550250ae78eede1d4a9",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\crons.ts": {
+    "mtime": 1781275271.031669,
+    "ast_hash": "ff56bfa0f8207535b1463626271d01ef",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\customers.ts": {
+    "mtime": 1781276972.6505535,
+    "ast_hash": "cb67abdcd3294c22b4947d9e5d4d395d",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\dashboard.ts": {
+    "mtime": 1781276443.6800594,
+    "ast_hash": "2e5447c21c90071b76ec0b70afbe74b0",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\email.ts": {
+    "mtime": 1781277185.195295,
+    "ast_hash": "3d0f28f1e9d8e20929d23497f5ed6abc",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\expenses.ts": {
+    "mtime": 1781277136.8189,
+    "ast_hash": "b13fe246a17c4e34a69bfafd7f8b6505",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\leads.ts": {
+    "mtime": 1781144730.610504,
+    "ast_hash": "6cebb968005f22405610e72ffa4437c3",
+    "semantic_hash": "6cebb968005f22405610e72ffa4437c3"
+  },
+  "E:\\Auto\\Auto\\convex\\migrations.ts": {
+    "mtime": 1781144730.6115036,
+    "ast_hash": "e537812e818056938b9f7719ac467e64",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\notifications.ts": {
+    "mtime": 1781144730.6120088,
+    "ast_hash": "e97bb2c164432c3120b82bdf229aa56f",
+    "semantic_hash": "e97bb2c164432c3120b82bdf229aa56f"
+  },
+  "E:\\Auto\\Auto\\convex\\sales.ts": {
+    "mtime": 1781164385.1143355,
+    "ast_hash": "d7909fc1dab7b1bf887532db8a38961f",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\tasks.ts": {
+    "mtime": 1781144730.6152227,
+    "ast_hash": "bf20b0ec7ec38debc6cb52a9a9b3da64",
+    "semantic_hash": "bf20b0ec7ec38debc6cb52a9a9b3da64"
+  },
+  "E:\\Auto\\Auto\\convex\\vehicles.ts": {
+    "mtime": 1781276963.89119,
+    "ast_hash": "d85521b685a06eea34489d4005812f2d",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\hooks\\use-mobile.tsx": {
+    "mtime": 1781144730.7719114,
+    "ast_hash": "654e2ca2e9fddc27eb7e3954900dc48e",
+    "semantic_hash": "654e2ca2e9fddc27eb7e3954900dc48e"
+  },
+  "E:\\Auto\\Auto\\lib\\i18n\\dictionaries.ts": {
+    "mtime": 1781144730.7754269,
+    "ast_hash": "590bd5ef9ffff3eee18ffc37847a159f",
+    "semantic_hash": "590bd5ef9ffff3eee18ffc37847a159f"
+  },
+  "E:\\Auto\\Auto\\lib\\pdf.ts": {
+    "mtime": 1781144730.7794251,
+    "ast_hash": "c19248fcc42bfd5e7189a4f840913dd3",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\lib\\utils.ts": {
+    "mtime": 1781144730.7794251,
+    "ast_hash": "1d8011eb18769078bf77502b220daa5e",
+    "semantic_hash": "1d8011eb18769078bf77502b220daa5e"
+  },
+  "E:\\Auto\\Auto\\app\\(dashboard)\\reports\\page.tsx": {
+    "mtime": 1781144730.5562067,
+    "ast_hash": "4d913b9e098bb51c125f49f06e3fd2ac",
+    "semantic_hash": "4d913b9e098bb51c125f49f06e3fd2ac"
+  },
+  "E:\\Auto\\Auto\\app\\(dashboard)\\sales\\[saleId]\\print\\page.tsx": {
+    "mtime": 1781144730.5562067,
+    "ast_hash": "c000fc0562d5fcbc4f42106aa90d8162",
+    "semantic_hash": "c000fc0562d5fcbc4f42106aa90d8162"
+  },
+  "E:\\Auto\\Auto\\components\\customers\\CustomerDetailsDialog.tsx": {
+    "mtime": 1781316632.9901085,
+    "ast_hash": "e0a25e7b0bc1725d4a9093bc78c6d82c",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\layout\\TopNav.tsx": {
+    "mtime": 1781210411.2864249,
+    "ast_hash": "349210326118f3e6c63d922d48e47440",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\tasks\\TaskHistoryDialog.tsx": {
+    "mtime": 1781144730.5844235,
+    "ast_hash": "72c61f922f99a90d4138330a232d5aae",
+    "semantic_hash": "72c61f922f99a90d4138330a232d5aae"
+  },
+  "E:\\Auto\\Auto\\components\\test_drives\\TestDriveDialog.tsx": {
+    "mtime": 1781316632.9986215,
+    "ast_hash": "1ce8eb3479567f2c14c47f9ca9f5197c",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\ui\\calendar.tsx": {
+    "mtime": 1781144730.59062,
+    "ast_hash": "dc88ab8d135bb7c78656bd868b980790",
+    "semantic_hash": "dc88ab8d135bb7c78656bd868b980790"
+  },
+  "E:\\Auto\\Auto\\components\\ui\\datetime-picker.tsx": {
+    "mtime": 1781144730.5916219,
+    "ast_hash": "13a19b10944291ba3178e3d5ba1ce6b0",
+    "semantic_hash": "13a19b10944291ba3178e3d5ba1ce6b0"
+  },
+  "E:\\Auto\\Auto\\components\\ui\\popover.tsx": {
+    "mtime": 1781144730.593621,
+    "ast_hash": "a193893ff0bd8bed70f38be7ccd8d06b",
+    "semantic_hash": "a193893ff0bd8bed70f38be7ccd8d06b"
+  },
+  "E:\\Auto\\Auto\\components\\ui\\scroll-area.tsx": {
+    "mtime": 1781144730.593621,
+    "ast_hash": "c2a6c130775ed208f1cf8166ddb95483",
+    "semantic_hash": "c2a6c130775ed208f1cf8166ddb95483"
+  },
+  "E:\\Auto\\Auto\\components\\ui\\tabs.tsx": {
+    "mtime": 1781144730.5966282,
+    "ast_hash": "2c6d4276fe379ee448b93d46212915a5",
+    "semantic_hash": "2c6d4276fe379ee448b93d46212915a5"
+  },
+  "E:\\Auto\\Auto\\components\\ui\\textarea.tsx": {
+    "mtime": 1781144730.5966282,
+    "ast_hash": "bebeedb45b1adfa819a2ed25ce3c4f75",
+    "semantic_hash": "bebeedb45b1adfa819a2ed25ce3c4f75"
+  },
+  "E:\\Auto\\Auto\\components\\vehicles\\VehicleDetailsDialog.tsx": {
+    "mtime": 1781144730.5979767,
+    "ast_hash": "5fda0058d468f2a258b6c1317e28626a",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\vehicles\\VehicleHistoryDialog.tsx": {
+    "mtime": 1781144730.598491,
+    "ast_hash": "b61904a800ff5c674f1b6c9ef770f86c",
+    "semantic_hash": "b61904a800ff5c674f1b6c9ef770f86c"
+  },
+  "E:\\Auto\\Auto\\components\\work_orders\\WorkOrderDialog.tsx": {
+    "mtime": 1781316633.0026205,
+    "ast_hash": "93c1b99d8c3e72bf7859a3cf78e8a0c8",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\migrateRoles.ts": {
+    "mtime": 1781144730.6115036,
+    "ast_hash": "8f8322381489caf757e08e15e7bb8f86",
+    "semantic_hash": "8f8322381489caf757e08e15e7bb8f86"
+  },
+  "E:\\Auto\\Auto\\convex\\reports.ts": {
+    "mtime": 1781277034.8073905,
+    "ast_hash": "4a081a2f13d899ce295fdab08da187d7",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\test_drives.ts": {
+    "mtime": 1781277136.8239186,
+    "ast_hash": "70ae6b57b1096c381f064d4c07ed1fdf",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\utils\\notifications.ts": {
+    "mtime": 1781144730.6172295,
+    "ast_hash": "41d053b8bd72bd00e2df7fdf97d081b3",
+    "semantic_hash": "41d053b8bd72bd00e2df7fdf97d081b3"
+  },
+  "E:\\Auto\\Auto\\convex\\vehicleEdits.ts": {
+    "mtime": 1781277042.7850478,
+    "ast_hash": "4cd72319183680e5a9efda598b90439b",
+    "semantic_hash": "4cd72319183680e5a9efda598b90439b"
+  },
+  "E:\\Auto\\Auto\\convex\\vehicleRequests.ts": {
+    "mtime": 1781144730.6192293,
+    "ast_hash": "3f308826d725108dcc98a93606da39e5",
+    "semantic_hash": "3f308826d725108dcc98a93606da39e5"
+  },
+  "E:\\Auto\\Auto\\convex\\workOrders.ts": {
+    "mtime": 1781277136.826457,
+    "ast_hash": "d9dce222f210025aba68e21d47886e68",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\lib\\i18n\\domains\\common.ts": {
+    "mtime": 1781144730.7754269,
+    "ast_hash": "9f13c990a15bd7d3e28e36b895a298dc",
+    "semantic_hash": "9f13c990a15bd7d3e28e36b895a298dc"
+  },
+  "E:\\Auto\\Auto\\lib\\i18n\\domains\\customers.ts": {
+    "mtime": 1781144730.7754269,
+    "ast_hash": "c4882b4fb009ce1cffe7e3e278678d4c",
+    "semantic_hash": "c4882b4fb009ce1cffe7e3e278678d4c"
+  },
+  "E:\\Auto\\Auto\\lib\\i18n\\domains\\dashboard.ts": {
+    "mtime": 1781144730.7764287,
+    "ast_hash": "16b3c0c58c46d9a4a94a573a0f032e47",
+    "semantic_hash": "16b3c0c58c46d9a4a94a573a0f032e47"
+  },
+  "E:\\Auto\\Auto\\lib\\i18n\\domains\\leads.ts": {
+    "mtime": 1781144730.7774253,
+    "ast_hash": "732283fa940d92b3b9d7374ff2cd9b5f",
+    "semantic_hash": "732283fa940d92b3b9d7374ff2cd9b5f"
+  },
+  "E:\\Auto\\Auto\\lib\\i18n\\domains\\sales.ts": {
+    "mtime": 1781147804.612195,
+    "ast_hash": "971d05bb442173ff6aad2072877cecdd",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\lib\\i18n\\domains\\vehicles.ts": {
+    "mtime": 1781144730.778427,
+    "ast_hash": "2ee4f447ab0556fdf235c887a035a57f",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\lib\\utils\\export.ts": {
+    "mtime": 1781144730.7804253,
+    "ast_hash": "bc2b891b30e332124c057ff096dd2fd9",
+    "semantic_hash": "bc2b891b30e332124c057ff096dd2fd9"
+  },
+  "E:\\Auto\\Auto\\app\\(dashboard)\\applications\\client.tsx": {
+    "mtime": 1781144730.5512073,
+    "ast_hash": "0d34fa38be2a09a31c4b0b8e0865eefd",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\app\\(dashboard)\\applications\\page.tsx": {
+    "mtime": 1781277185.0451198,
+    "ast_hash": "ea2539aadf27d70c3362e1952af9b4cd",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\app\\(dashboard)\\settings\\branches\\client.tsx": {
+    "mtime": 1781316632.985344,
+    "ast_hash": "12f1ae559d22bc8172ad97ad8354d5eb",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\app\\(dashboard)\\settings\\branches\\page.tsx": {
+    "mtime": 1781277185.1877208,
+    "ast_hash": "ba4b35a9b88fccef11122614fed21b83",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\app\\(dashboard)\\settings\\finance\\page.tsx": {
+    "mtime": 1781316632.986352,
+    "ast_hash": "48386398dbc2c00e1c873fded2e4d2ba",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\applications\\ApplicationDetailsDialog.tsx": {
+    "mtime": 1781316632.9891045,
+    "ast_hash": "a59b0d423f77115a5b5f6882e7fdb9f0",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\customers\\CustomerFinancialsTab.tsx": {
+    "mtime": 1781316632.9911077,
+    "ast_hash": "2a54a915f2dc374063ab052411b105c2",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\customers\\GuarantorDialog.tsx": {
+    "mtime": 1781316632.9911077,
+    "ast_hash": "56de36805786ea14b1c98554d6ea37db",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\sales\\QuoteDialog.tsx": {
+    "mtime": 1781316632.9931078,
+    "ast_hash": "69ce8e92527ea892c71eef021a0f5fdd",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\settings\\DocumentRuleDialog.tsx": {
+    "mtime": 1781316632.9966154,
+    "ast_hash": "f4ff250b2b2320c1e008e338735eda84",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\settings\\FinanceCompanyDialog.tsx": {
+    "mtime": 1781316632.9966154,
+    "ast_hash": "9bb1e0ad64db53c8c213a0df8ad44b2d",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\vehicles\\VehicleValuationsTab.tsx": {
+    "mtime": 1781316633.0016203,
+    "ast_hash": "818b76f0a7a9d1bf0f11cb97e321b7ad",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\applications.ts": {
+    "mtime": 1781276989.0429637,
+    "ast_hash": "8bbd3bf49cc3cda4773f8b164b776a5e",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\branches.ts": {
+    "mtime": 1781144730.604501,
+    "ast_hash": "a1e1b258107ea57363a66e31d092db71",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\documents.ts": {
+    "mtime": 1781159408.6373653,
+    "ast_hash": "f2d83913e4a7c4d0b34769d3ff4dfe6a",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\finance.ts": {
+    "mtime": 1781277136.8199008,
+    "ast_hash": "c81bae027d9a4c4c9239d5b2398e99c5",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\guarantors.ts": {
+    "mtime": 1781277136.820406,
+    "ast_hash": "3f9577e667daef3a6137191209603dc8",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\quotes.ts": {
+    "mtime": 1781277136.8224127,
+    "ast_hash": "63ae9f2cc2785021e67c82f2c4680763",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\lib\\financing.ts": {
+    "mtime": 1781144730.7744267,
+    "ast_hash": "9da1ab233134a25c4868e5bd53a8012f",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\lib\\i18n\\domains\\expenses.ts": {
+    "mtime": 1781144730.7764287,
+    "ast_hash": "7b021356937edffb3dcbc1ae2d88bd9f",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\lib\\i18n\\domains\\settings.ts": {
+    "mtime": 1781144730.778427,
+    "ast_hash": "ae582112a9c0175e7ccb89daec649d5b",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\team\\ChangeMemberRoleDialog.tsx": {
+    "mtime": 1781316632.997621,
+    "ast_hash": "15f17c0d3b912240c3b32443698403f4",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\team\\EditRoleDialog.tsx": {
+    "mtime": 1781316632.997621,
+    "ast_hash": "1ff5c9913d61cf353a7f341afc4d1468",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\team\\RolePermissionsEditor.tsx": {
+    "mtime": 1781144730.5886202,
+    "ast_hash": "5eb45a02d1d779d4eca7be28b2be02e2",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\ui\\accordion.tsx": {
+    "mtime": 1781144730.5896213,
+    "ast_hash": "babe82cc67afc33956195417f2de2395",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\ui\\checkbox.tsx": {
+    "mtime": 1781144730.5916219,
+    "ast_hash": "1cc20659feaad66f89cf1fbb304057c1",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\ui\\empty-state.tsx": {
+    "mtime": 1781144730.5926213,
+    "ast_hash": "d69a9794897a299d0e5706b64a006db3",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\ui\\switch.tsx": {
+    "mtime": 1781144730.5956218,
+    "ast_hash": "95f741ee976627a5f1aa6bed29c99e48",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\hooks\\use-permissions.tsx": {
+    "mtime": 1781144730.7724185,
+    "ast_hash": "5676929564c20aed271b8d13915fb24f",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\app\\error.tsx": {
+    "mtime": 1781144730.5617144,
+    "ast_hash": "d13a68601b433b5395a0718405970800",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\layout\\Sidebar.tsx": {
+    "mtime": 1781210411.2469642,
+    "ast_hash": "8cb8249419d8776e1859fb9b878812fa",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\public\\dashboard-mockup.png": {
+    "mtime": 1781209365.5949452,
+    "ast_hash": "6583912ca8d7e5178d3fc7eb55293dd6",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\public\\logo.png": {
+    "mtime": 1781144730.7948475,
+    "ast_hash": "f671ae833cfff8668ea7a100057b7b83",
+    "semantic_hash": "f671ae833cfff8668ea7a100057b7b83"
+  },
+  "E:\\Auto\\Auto\\app\\(dashboard)\\accounting\\page.tsx": {
+    "mtime": 1781144730.5502074,
+    "ast_hash": "e890e360b0ed570c7a598910acfa06df",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\app\\(dashboard)\\error.tsx": {
+    "mtime": 1781144730.5532079,
+    "ast_hash": "06b9f1ab08b39ebedf13ad2d60e4ea9f",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\accounting\\AccountingClient.tsx": {
+    "mtime": 1781144730.564723,
+    "ast_hash": "d7519b0be6d69e0832887a0540708230",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\accounting\\ClaimsTab.tsx": {
+    "mtime": 1781144730.564723,
+    "ast_hash": "4aebd747140fde66a1777cee310d499e",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\accounting\\FixedAssetsTab.tsx": {
+    "mtime": 1781144730.564723,
+    "ast_hash": "21ec3b5a4652fa20aac3c8a94404b963",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\accounting\\GeneralLedgerTab.tsx": {
+    "mtime": 1781144730.564723,
+    "ast_hash": "6c0524ca922909d0e36a94923c1f4af4",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\accounting\\PartnerEquityTab.tsx": {
+    "mtime": 1781144730.5657225,
+    "ast_hash": "27e14f3ed03172d2fc88382b2fdcb58b",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\claims.ts": {
+    "mtime": 1781277136.813892,
+    "ast_hash": "76663a24c242e272afd4456fa97b9e2e",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\fixedAssets.ts": {
+    "mtime": 1781277136.820406,
+    "ast_hash": "29a34995b0de4d9855c6af179de1e510",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\partnerEquity.ts": {
+    "mtime": 1781277136.8224127,
+    "ast_hash": "7a2c072b136c1bc0240e7690dcb3dfda",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\transactions.ts": {
+    "mtime": 1781277136.8239186,
+    "ast_hash": "909b2283913d734528deab22abbe9551",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\utils\\permissions.test.ts": {
+    "mtime": 1781144730.6172295,
+    "ast_hash": "34069de61e5aaad2575fc87fd5d57e1a",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\utils\\tenancy.test.ts": {
+    "mtime": 1781144730.618229,
+    "ast_hash": "8dca9e383ee6e3f8be8896577d866b15",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\lib\\financing.test.ts": {
+    "mtime": 1781144730.7744267,
+    "ast_hash": "e004a569c8578af77cf4e35ed10aa355",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\vitest.config.ts": {
+    "mtime": 1781144730.7978544,
+    "ast_hash": "3478011f7e6dcf76d2c7549a65d5679f",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\vitest.setup.ts": {
+    "mtime": 1781144730.7978544,
+    "ast_hash": "d59c125a964dd85b6a17a4d24812874a",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\sheet_names.txt": {
+    "mtime": 1781144730.7968476,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": "d41d8cd98f00b204e9800998ecf8427e"
+  },
+  "E:\\Auto\\Auto\\app\\(dashboard)\\settings\\layout.tsx": {
+    "mtime": 1781144730.5592077,
+    "ast_hash": "2929c5768cc594ba21bf0cb1a0be04ca",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\auth\\RoleGuard.tsx": {
+    "mtime": 1781144730.5667315,
+    "ast_hash": "f7c15f7027b747abe9f199adf633b6c6",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\convex.config.ts": {
+    "mtime": 1781144730.6054988,
+    "ast_hash": "f2374366873f045e038c8dd96b67b540",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\debug.ts": {
+    "mtime": 1781276068.156858,
+    "ast_hash": "f56f8956cfcfacf62310facc2fb2d859",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\rateLimit.ts": {
+    "mtime": 1781164301.135995,
+    "ast_hash": "f2d3719b80b58cdfbe1de686034b0b04",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\lib\\sanitize.ts": {
+    "mtime": 1781144730.7794251,
+    "ast_hash": "7512b0a458137e8295301e406b3cfc54",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\instrumentation.ts": {
+    "mtime": 1781144730.7724185,
+    "ast_hash": "dd226baedd989938966da375f54d62c1",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\lib\\env.ts": {
+    "mtime": 1781144730.7734253,
+    "ast_hash": "048ade7ad20781906c49fd4a89381166",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\sentry.client.config.ts": {
+    "mtime": 1781144730.795852,
+    "ast_hash": "d0f2c266e2960b6e9c437646b48e8ae7",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\sentry.edge.config.ts": {
+    "mtime": 1781144730.795852,
+    "ast_hash": "08186c80fba61bd58ed4837ee567f2c3",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\sentry.server.config.ts": {
+    "mtime": 1781144730.7968476,
+    "ast_hash": "08186c80fba61bd58ed4837ee567f2c3",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\app\\(dashboard)\\dashboard\\loading.tsx": {
+    "mtime": 1781144730.552208,
+    "ast_hash": "08368f57adf6ed68697bc574febdaa79",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\app\\(dashboard)\\leads\\loading.tsx": {
+    "mtime": 1781144730.5552077,
+    "ast_hash": "08368f57adf6ed68697bc574febdaa79",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\app\\(dashboard)\\vehicles\\loading.tsx": {
+    "mtime": 1781144730.5602083,
+    "ast_hash": "08368f57adf6ed68697bc574febdaa79",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\customers\\customer.schema.ts": {
+    "mtime": 1781144730.5697272,
+    "ast_hash": "938fc38386f5c937ad22e1923bf5aa00",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\expenses\\expense.schema.ts": {
+    "mtime": 1781144730.5697272,
+    "ast_hash": "c742733ef967ca8a4c1dcc2cb76391bd",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\leads\\lead.schema.ts": {
+    "mtime": 1781144730.5732713,
+    "ast_hash": "e8537da69d0ba6c4561a719484814845",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\sales\\quote.schema.ts": {
+    "mtime": 1781144730.575411,
+    "ast_hash": "01c132edb36547956b6a044a88ab1f17",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\sales\\sale.schema.ts": {
+    "mtime": 1781144730.575411,
+    "ast_hash": "db4665f86426c0c6247b30e7340fb64c",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\tasks\\task.schema.ts": {
+    "mtime": 1781144730.5851076,
+    "ast_hash": "334bca1bae957be20e54b66d9b11c132",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\vehicles\\vehicle.schema.ts": {
+    "mtime": 1781144730.5995016,
+    "ast_hash": "1b61835e0f084ee96934bf44c0e59611",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\work_orders\\work_order.schema.ts": {
+    "mtime": 1781144730.6004994,
+    "ast_hash": "92646905ea08d06fc15b3fd0873d49ac",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\constants.ts": {
+    "mtime": 1781144730.604501,
+    "ast_hash": "0e34767d43d289415e91c1ecb8941717",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.vscode\\settings.json": {
+    "mtime": 1781144730.5482004,
+    "ast_hash": "99914b932bd37a50b983c5e7c90ae93b",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\app\\(dashboard)\\approvals\\page.tsx": {
+    "mtime": 1781316632.982805,
+    "ast_hash": "8d36056aa658b191b61b1398e66b3798",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\app\\(dashboard)\\sales\\sales\\loading.tsx": {
+    "mtime": 1781144730.557214,
+    "ast_hash": "08368f57adf6ed68697bc574febdaa79",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\app\\(dashboard)\\sales\\sales\\page.tsx": {
+    "mtime": 1781316632.985344,
+    "ast_hash": "6eda3d86b0ee611aa66d603091e44866",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\app\\api\\health\\route.ts": {
+    "mtime": 1781277293.1666646,
+    "ast_hash": "1821853b413e12b9578fdddd50dec177",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\sales\\QuotePrintTemplate.tsx": {
+    "mtime": 1781158465.9209113,
+    "ast_hash": "4460aaae38ff03ae7ff9a0d9b8e07088",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\sales\\SalesWizard.tsx": {
+    "mtime": 1781144730.575411,
+    "ast_hash": "57f39be16a50df08b1546e1c0b46aee2",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\sales\\types.tsx": {
+    "mtime": 1781144730.575411,
+    "ast_hash": "36e626d102c9d2b34099bfef3f998e01",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\sales\\wizard\\SalesWizard.tsx": {
+    "mtime": 1781144730.576421,
+    "ast_hash": "d41d8cd98f00b204e9800998ecf8427e",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\sales\\wizard\\components\\CustomerBanner.tsx": {
+    "mtime": 1781144730.576421,
+    "ast_hash": "1a0822f012e05ad417a33dba630c5de9",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\sales\\wizard\\components\\CustomerCreateForm.tsx": {
+    "mtime": 1781316632.9941084,
+    "ast_hash": "8255e4fe3d858434a361c4d8dd05ab1f",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\sales\\wizard\\components\\CustomerSearch.tsx": {
+    "mtime": 1781144730.5774188,
+    "ast_hash": "8870043da46b8c6b6a8095490ef51e93",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\sales\\wizard\\components\\FinanceCompanyCard.tsx": {
+    "mtime": 1781144730.5774188,
+    "ast_hash": "79b55f95a15eb2c8e211e2a80819e573",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\sales\\wizard\\components\\FinancePanel.tsx": {
+    "mtime": 1781144730.5784192,
+    "ast_hash": "ad185c26d9dd21f70fd64bef93a6cd7c",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\sales\\wizard\\components\\ReviewCustomerCard.tsx": {
+    "mtime": 1781144730.5784192,
+    "ast_hash": "9041b90dcf1e6f409dc0fb68090db804",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\sales\\wizard\\components\\ReviewFinanceSummary.tsx": {
+    "mtime": 1781144730.579419,
+    "ast_hash": "14739d3cfa2373f2fab503b5f1226699",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\sales\\wizard\\components\\ReviewVehicleCard.tsx": {
+    "mtime": 1781144730.579419,
+    "ast_hash": "2c7365446b5be3222599f7a0afb4d6f3",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\sales\\wizard\\components\\StepIndicator.tsx": {
+    "mtime": 1781144730.579419,
+    "ast_hash": "66cbf2b7a88d44505e7e0e7463d48c66",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\sales\\wizard\\components\\VehiclePicker.tsx": {
+    "mtime": 1781144730.5804198,
+    "ast_hash": "b86cc13129fbb69e873ef82e2f190a35",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\sales\\wizard\\hooks\\useCustomerSearch.ts": {
+    "mtime": 1781144730.5804198,
+    "ast_hash": "a3f1e7884d3206d44015ec0219299988",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\sales\\wizard\\hooks\\useFinanceComparison.ts": {
+    "mtime": 1781144730.581426,
+    "ast_hash": "9d79d8984af4afa0de5ca97281278e11",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\sales\\wizard\\schemas.ts": {
+    "mtime": 1781147834.9709492,
+    "ast_hash": "40bcda79916a0f4dbd543827679d5329",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\sales\\wizard\\steps\\Step1QuoteSetup.tsx": {
+    "mtime": 1781147927.7014046,
+    "ast_hash": "5ff3955040357ebe78d831d9574518f6",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\sales\\wizard\\steps\\Step2Customer.tsx": {
+    "mtime": 1781316632.995612,
+    "ast_hash": "9a92c3ccdba6ddc9a3e2eb0647924eca",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\sales\\wizard\\steps\\Step3Review.tsx": {
+    "mtime": 1781316632.9966154,
+    "ast_hash": "cb546a0d9d29e9e6d0e4999f8eae5139",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\sales\\wizard\\steps\\Step4QuoteSuccess.tsx": {
+    "mtime": 1781148353.7005105,
+    "ast_hash": "6f95021b182f9b8471f87dc2dc589ba4",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\sales\\wizard\\types.ts": {
+    "mtime": 1781147954.9362793,
+    "ast_hash": "5aa81704970d386bad9553b7d36f6a57",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\components\\ui\\alert.tsx": {
+    "mtime": 1781144730.5896213,
+    "ast_hash": "2e3ef64863a4bd3f55829b056a9a36be",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\approvals.test.ts": {
+    "mtime": 1781284972.3987978,
+    "ast_hash": "9320be8bb03eadd9056cd2aea17b9bfc",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\approvals.ts": {
+    "mtime": 1781275296.0718367,
+    "ast_hash": "27e973f427542fd161b3742fb18aefcd",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\sales.test.ts": {
+    "mtime": 1781164776.1355443,
+    "ast_hash": "acad6f0878b59c5083853fb1eca7f854",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\seedDocuments.ts": {
+    "mtime": 1781144730.6152227,
+    "ast_hash": "c585400ffd634bf22df81c829838a6d0",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\utils\\env.ts": {
+    "mtime": 1781277136.8249283,
+    "ast_hash": "abfd7a29223945d99d0701501627363e",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\utils\\validation.ts": {
+    "mtime": 1781162249.6198053,
+    "ast_hash": "35aa8ef2591b850893a46a3862df043c",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\validations\\customers.ts": {
+    "mtime": 1781162280.115368,
+    "ast_hash": "16891b2d3b63fba052a2b6291a4bb7d3",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\validations\\expenses.ts": {
+    "mtime": 1781162291.6163502,
+    "ast_hash": "13e2df22b6de7f6587eeb1667d2439bd",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\validations\\sales.ts": {
+    "mtime": 1781162902.3047285,
+    "ast_hash": "e8c6d6e2f64ff1526675b8debd1a9e8a",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\convex\\validations\\vehicles.ts": {
+    "mtime": 1781162271.4960017,
+    "ast_hash": "ff4acd8b3d1d2ed45f7441ffb3424d3f",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\middleware.ts": {
+    "mtime": 1781275315.8040237,
+    "ast_hash": "83385b3da750c3e8748369b581123fd3",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\scratch\\replace_branding.js": {
+    "mtime": 1781277177.5167954,
+    "ast_hash": "4ee2d91f3dd27dd66b5ba7a89ecf89ad",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\scratch\\replace_errors.js": {
+    "mtime": 1781277129.9711041,
+    "ast_hash": "f99a26c49e07477d84ae3db06b6ff274",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\.github\\workflows\\test.yml": {
+    "mtime": 1781163926.9668686,
+    "ast_hash": "76c796f35452fe4134b4c00d7cb8c584",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\00-executive-summary.md": {
+    "mtime": 1781160635.1485326,
+    "ast_hash": "55858be7e2bbc93b342eae35db7a6501",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\01-full-audit-findings.md": {
+    "mtime": 1781160669.5023148,
+    "ast_hash": "be822b1a11c06d0a5a364d3d7532f892",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\Prompt.md": {
+    "mtime": 1781160445.8192148,
+    "ast_hash": "86c588e322f35c0bee708129cbaa2a7d",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\phase-01-performance-and-indexing.md": {
+    "mtime": 1781160687.9891417,
+    "ast_hash": "da65a9fbcec9f9a94d3766a88b7abb3f",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\phase-02-input-validation.md": {
+    "mtime": 1781160702.7906716,
+    "ast_hash": "f0d1ac1c362bc272008b043354ad3e27",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\phase-03-configuration-hardening.md": {
+    "mtime": 1781160718.944038,
+    "ast_hash": "a989ac2bcb66736f191e82dc9cea7d0e",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\phase-04-test-coverage.md": {
+    "mtime": 1781160734.795472,
+    "ast_hash": "84a6dbd838385e345746c880dc6ea7d0",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\phase-05-api-rate-limiting.md": {
+    "mtime": 1781160751.565881,
+    "ast_hash": "3974353bd4ce33b1ab4989234afe47be",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\public\\BloomLogo.png": {
+    "mtime": 1781155708.7532215,
+    "ast_hash": "f3c6fb961b793785445afe38cf0cc9b5",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\public\\dashboard-mockup-v2.png": {
+    "mtime": 1781209365.5949452,
+    "ast_hash": "6583912ca8d7e5178d3fc7eb55293dd6",
+    "semantic_hash": ""
+  },
+  "E:\\Auto\\Auto\\public\\dashboard.png": {
+    "mtime": 1781225651.858163,
+    "ast_hash": "bf8e522e827810f75103a1c7eaef0aa4",
+    "semantic_hash": ""
+  }
+}

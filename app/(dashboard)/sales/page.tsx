@@ -2,26 +2,30 @@
 
 import { useState } from "react";
 import { RoleGuard } from "@/components/auth/RoleGuard";
-import { usePaginatedQuery } from "convex/react";
+import { usePaginatedQuery, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useOrgSettings } from "@/hooks/useOrgSettings";
-import { SalesWizard } from "@/components/sales/SalesWizard";
-import { PaymentType } from "@/components/sales/wizard/types";
-import { Banknote, CreditCard, TrendingUp, ArrowRight } from "lucide-react";
+import { SalesWizard, WizardDraft } from "@/components/sales/SalesWizard";
+import { PaymentType, WizardData } from "@/components/sales/wizard/types";
+import { Banknote, CreditCard, TrendingUp, ArrowRight, Clock, CheckCircle2, RotateCcw, FileEdit } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Id } from "@/convex/_generated/dataModel";
 
 export default function SalesHomePage() {
     const { activeOrgId } = useOrg();
-    const { t, isRtl } = useLanguage();
+    const { t } = useLanguage();
     const [activeWizard, setActiveWizard] = useState<PaymentType | null>(null);
     const orgSettings = useOrgSettings();
-
     const enabledPaymentTypes =
         orgSettings?.enabledPaymentTypes ?? ["CASH", "INSTALLMENT"];
     const cashEnabled = enabledPaymentTypes.includes("CASH");
     const installmentEnabled = enabledPaymentTypes.includes("INSTALLMENT");
+    const [wizardInitialDraft, setWizardInitialDraft] = useState<Partial<WizardData> | undefined>();
+    const [wizardResumeDraft, setWizardResumeDraft] = useState<WizardDraft | undefined>();
 
     const { results: recentSales } = usePaginatedQuery(
         api.sales.list,
@@ -29,13 +33,58 @@ export default function SalesHomePage() {
         { initialNumItems: 5 }
     );
 
+    const myPendingApprovals = useQuery(
+        api.approvals.listMyPendingApprovals,
+        activeOrgId ? { orgId: activeOrgId } : "skip"
+    );
+
+    const myWizardDraft = useQuery(
+        api.wizardDrafts.getMyDraft,
+        activeOrgId ? { orgId: activeOrgId as Id<"organizations"> } : "skip"
+    );
+
+    function openFreshWizard(type: PaymentType) {
+        setWizardInitialDraft(undefined);
+        setWizardResumeDraft(undefined);
+        setActiveWizard(type);
+    }
+
+    function resumeFromApproval(approval: NonNullable<typeof myPendingApprovals>[0]) {
+        if (!approval.wizardSnapshot) return;
+        const snap = approval.wizardSnapshot;
+        setWizardInitialDraft({
+            vehicleId: approval.vehicleId,
+            vehiclePrice: snap.vehiclePrice,
+            desiredProfit: snap.desiredProfit,
+            downPayment: snap.downPayment,
+            termMonths: snap.termMonths,
+            selectedCompanyId: snap.selectedCompanyId,
+        });
+        setWizardResumeDraft(undefined);
+        setActiveWizard(snap.paymentType as PaymentType);
+    }
+
+    function resumeFromDbDraft(draft: NonNullable<typeof myWizardDraft>) {
+        setWizardInitialDraft(undefined);
+        setWizardResumeDraft({
+            paymentType: draft.paymentType as PaymentType,
+            currentStep: draft.currentStep,
+            wizardData: draft.wizardData as WizardData,
+            selectedCustomerId: draft.selectedCustomerId ?? null,
+            savedAt: draft.savedAt,
+        });
+        setActiveWizard(draft.paymentType as PaymentType);
+    }
+
     // If wizard is active, render it full-width instead of the hero
     if (activeWizard) {
         return (
             <RoleGuard permissions={["view:sales"]}>
                 <SalesWizard
                     paymentType={activeWizard}
-                    onClose={() => setActiveWizard(null)}
+                    onClose={() => { setActiveWizard(null); setWizardInitialDraft(undefined); setWizardResumeDraft(undefined); }}
+                    initialDraft={wizardInitialDraft}
+                    resumeDraft={wizardResumeDraft}
                 />
             </RoleGuard>
         );
@@ -71,7 +120,7 @@ export default function SalesHomePage() {
                             {cashEnabled && (
                             <button
                                 id="btn-new-cash-sale"
-                                onClick={() => setActiveWizard("CASH")}
+                                onClick={() => openFreshWizard("CASH")}
                                 className={cn(
                                     "group relative flex flex-col items-start gap-4 rounded-xl border border-teal-500/30 bg-teal-500/10",
                                     "hover:bg-teal-500/20 hover:border-teal-500/60 hover:shadow-lg hover:shadow-teal-500/10",
@@ -100,7 +149,7 @@ export default function SalesHomePage() {
                             {installmentEnabled && (
                             <button
                                 id="btn-new-installment-sale"
-                                onClick={() => setActiveWizard("INSTALLMENT")}
+                                onClick={() => openFreshWizard("INSTALLMENT")}
                                 className={cn(
                                     "group relative flex flex-col items-start gap-4 rounded-xl border border-indigo-500/30 bg-indigo-500/10",
                                     "hover:bg-indigo-500/20 hover:border-indigo-500/60 hover:shadow-lg hover:shadow-indigo-500/10",
@@ -127,6 +176,92 @@ export default function SalesHomePage() {
                         </div>
                     </div>
                 </div>
+
+                {/* ─── In-Progress Draft ────────────────────────────────────── */}
+                {myWizardDraft && (
+                    <div>
+                        <h2 className="text-sm font-semibold mb-3 text-indigo-400 uppercase tracking-wider flex items-center gap-2">
+                            <FileEdit className="w-4 h-4" />
+                            {t("InProgressDraft" as any) ?? "In-Progress Draft"}
+                        </h2>
+                        <div
+                            className="flex items-center justify-between rounded-lg border border-indigo-500/20 bg-indigo-500/5 px-4 py-3"
+                        >
+                            <div>
+                                <p className="text-sm font-medium text-foreground">
+                                    {myWizardDraft.paymentType === "CASH"
+                                        ? (t("CashSale" as any) ?? "Cash Sale")
+                                        : (t("Installment" as any) ?? "Installment")}
+                                    {" — "}{`Step ${myWizardDraft.currentStep} of 3`}
+                                </p>
+                                <p className="text-xs text-muted-foreground mt-0.5">
+                                    {t("LastSaved" as any) ?? "Last saved"}: {new Date(myWizardDraft.savedAt).toLocaleString()}
+                                </p>
+                            </div>
+                            <Button
+                                size="sm"
+                                variant="outline"
+                                className="text-xs border-indigo-400 text-indigo-400 hover:bg-indigo-500/10"
+                                onClick={() => resumeFromDbDraft(myWizardDraft)}
+                            >
+                                <RotateCcw className="w-3 h-3 me-1.5" />
+                                {t("ResumeDraft" as any) ?? "Resume Draft"}
+                            </Button>
+                        </div>
+                    </div>
+                )}
+
+                {/* ─── Pending Deals (awaiting approval) ───────────────────── */}
+                {myPendingApprovals && myPendingApprovals.length > 0 && (
+                    <div>
+                        <h2 className="text-sm font-semibold mb-3 text-amber-400 uppercase tracking-wider flex items-center gap-2">
+                            <Clock className="w-4 h-4" />
+                            {t("PendingDeals" as any) ?? "Pending Deals"}
+                        </h2>
+                        <div className="space-y-2">
+                            {myPendingApprovals.map((approval) => (
+                                <div
+                                    key={approval._id}
+                                    className="flex items-center justify-between rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3"
+                                >
+                                    <div>
+                                        <p className="text-sm font-medium text-foreground">{approval.vehicleSummary}</p>
+                                        <p className="text-xs text-muted-foreground mt-0.5">
+                                            {t("RequestedProfit" as any) ?? "Requested profit"}: {approval.requestedProfit.toLocaleString()} JOD
+                                        </p>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        {approval.status === "PENDING" ? (
+                                            <Badge variant="outline" className="text-amber-600 border-amber-400 text-xs">
+                                                <Clock className="w-3 h-3 me-1" />
+                                                {t("AwaitingApproval" as any) ?? "Awaiting Approval"}
+                                            </Badge>
+                                        ) : (
+                                            <Badge variant="outline" className="text-green-600 border-green-400 text-xs">
+                                                <CheckCircle2 className="w-3 h-3 me-1" />
+                                                {t("Approved" as any) ?? "Approved"}
+                                            </Badge>
+                                        )}
+                                        {approval.wizardSnapshot && (
+                                            <Button
+                                                size="sm"
+                                                variant={approval.status === "APPROVED" ? "default" : "outline"}
+                                                className={cn(
+                                                    "text-xs",
+                                                    approval.status === "APPROVED" && "bg-green-600 hover:bg-green-700 text-white"
+                                                )}
+                                                onClick={() => resumeFromApproval(approval)}
+                                            >
+                                                <RotateCcw className="w-3 h-3 me-1.5" />
+                                                {t("ResumeDeal" as any) ?? "Resume Deal"}
+                                            </Button>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
 
                 {/* ─── Recent Sales ──────────────────────────────────────────── */}
                 {recentSales && recentSales.length > 0 && (

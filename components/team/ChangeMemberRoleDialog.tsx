@@ -12,14 +12,8 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { toast } from "sonner";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { toast } from "@/components/ui/sonner";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 
 export function ChangeMemberRoleDialog({
   member,
@@ -68,21 +62,15 @@ export function ChangeMemberRoleDialog({
         <div className="space-y-4 py-4">
           <div className="space-y-2">
             <Label>{t("SelectNewRole" as any)}</Label>
-            <Select 
-              value={selectedRoleId} 
+            <SearchableSelect
+              value={selectedRoleId}
               onValueChange={setSelectedRoleId}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder={t("SelectARole" as any)} />
-              </SelectTrigger>
-              <SelectContent>
-                {roles?.map((role) => (
-                  <SelectItem key={role._id} value={role._id}>
-                    {t(role.name as any) || role.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              placeholder={t("SelectARole" as any)}
+              options={roles?.map((role) => ({
+                value: role._id,
+                label: t(role.name as any) || role.name,
+              })) ?? []}
+            />
           </div>
         </div>
 

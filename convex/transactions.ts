@@ -1,21 +1,35 @@
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 
 export const list = query({
-  args: { 
+  args: {
     orgId: v.id("organizations"),
     paginationOpts: paginationOptsValidator,
+    startDate: v.optional(v.number()),
+    endDate: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
-    return await ctx.db
+    const q = ctx.db
       .query("transactions")
       .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId))
-      .order("desc")
-      .filter((q) => q.neq(q.field("isDeleted"), true)).paginate(args.paginationOpts);
+      .order("desc");
+    return await q
+      .filter((q) => {
+        const notDeleted = q.neq(q.field("isDeleted"), true);
+        if (args.startDate && args.endDate) {
+          return q.and(
+            notDeleted,
+            q.gte(q.field("date"), args.startDate),
+            q.lte(q.field("date"), args.endDate)
+          );
+        }
+        return notDeleted;
+      })
+      .paginate(args.paginationOpts);
   },
 });
 
@@ -74,6 +88,12 @@ export const update = mutation({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const { orgId, transactionId, ...updates } = args;
 
+    // Verify the transaction belongs to this org
+    const transaction = await ctx.db.get(transactionId);
+    if (!transaction || transaction.orgId !== orgId) {
+      throw new ConvexError("Transaction not found in this organization.");
+    }
+
     // Clean up undefined optional values
     const cleanedUpdates = Object.fromEntries(
       Object.entries(updates).filter(([_, v]) => v !== undefined)
@@ -92,7 +112,7 @@ export const remove = mutation({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new Error("Unauthenticated");
+    if (!identity) throw new ConvexError("Unauthenticated");
     await ctx.db.patch(args.transactionId, {
       isDeleted: true,
       deletedAt: Date.now(),

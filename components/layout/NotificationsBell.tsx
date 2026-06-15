@@ -7,7 +7,7 @@ import { useOrg } from "@/components/providers/OrgProvider";
 import { Bell, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 import { Id } from "@/convex/_generated/dataModel";
 import Link from "next/link";
 import { useLanguage } from "@/components/providers/LanguageProvider";

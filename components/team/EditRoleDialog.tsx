@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { RolePermissionsEditor } from "@/components/team/RolePermissionsEditor";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 export function EditRoleDialog({

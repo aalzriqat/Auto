@@ -286,6 +286,18 @@ export const salesEn = {
   RecentSalesTitle: "Recent Sales",
   ExceedingBy: "Exceeding by",
   Approvals: "Approvals",
+
+  // New Quote Fields
+  QuoteTo: "Quote To (e.g., Mr. / Company)",
+  VehicleCondition: "Vehicle Condition",
+  NewVehicle: "New",
+  UsedVehicle: "Used",
+  BatteryCapacity: "Battery Capacity",
+  Additions: "Additions (Features)",
+  VehicleSpecs: "Vehicle Specifications",
+  MakeYearModel: "Year / Model",
+  VehicleType: "Vehicle Type",
+  PrintQuote: "Print / Save Quote",
 };
 
 export const salesAr = {
@@ -565,4 +577,16 @@ export const salesAr = {
   RecentSalesTitle: "أحدث المبيعات",
   ExceedingBy: "التجاوز بمقدار",
   Approvals: "الموافقات",
+
+  // New Quote Fields
+  QuoteTo: "موجه إلى (السادة / الشركة)",
+  VehicleCondition: "حالة المركبة",
+  NewVehicle: "جديد",
+  UsedVehicle: "مستعمل",
+  BatteryCapacity: "سعة البطارية",
+  Additions: "الإضافات",
+  VehicleSpecs: "مواصفات المركبة",
+  MakeYearModel: "سنة الصنع / موديل",
+  VehicleType: "نوع المركبة",
+  PrintQuote: "طباعة / حفظ العرض",
 };

@@ -10,9 +10,9 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { format } from "date-fns";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 import { Separator } from "@/components/ui/separator";
-import { Upload, CheckCircle, XCircle, Clock } from "lucide-react";
+import { Upload, CheckCircle, XCircle, Clock, Eye, X, Download } from "lucide-react";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 
@@ -29,6 +29,7 @@ export function ApplicationDetailsDialog({
   const { t } = useLanguage();
   const { hasPermission } = usePermissions();
   const isManager = hasPermission(PERMISSIONS.MANAGE_SETTINGS);
+  const [previewFile, setPreviewFile] = useState<{ url: string; name: string } | null>(null);
 
   const app = useQuery(api.applications.get, activeOrgId ? { orgId: activeOrgId, applicationId } : "skip");
   const documents = useQuery(api.documents.getForApplication, activeOrgId ? { orgId: activeOrgId, applicationId } : "skip");
@@ -95,6 +96,7 @@ export function ApplicationDetailsDialog({
             app.status === "CLOSED" ? t("Closed" as any) :
               app.status;
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
@@ -227,17 +229,24 @@ export function ApplicationDetailsDialog({
                       <div className="flex items-center gap-2">
                         {doc.fileUrl ? (
                           <div className="flex gap-2">
-                            <Button size="sm" variant="outline" asChild>
-                              <a href={doc.fileUrl || "#"} target="_blank" rel="noreferrer">{t("ViewFile" as any)}</a>
-                            </Button>
                             <Button
                               size="sm"
-                              variant="default"
-                              onClick={() => updateDocStatus({ orgId: activeOrgId!, documentId: doc._id, status: "VERIFIED" })}
-                              disabled={status === "VERIFIED"}
+                              variant="outline"
+                              onClick={() => setPreviewFile({ url: doc.fileUrl!, name: doc.ruleName })}
                             >
-                              {t("Verify" as any)}
+                              <Eye className="h-4 w-4 me-1" />
+                              {t("ViewFile" as any)}
                             </Button>
+                            {isManager && (
+                              <Button
+                                size="sm"
+                                variant="default"
+                                onClick={() => updateDocStatus({ orgId: activeOrgId!, documentId: doc._id, status: "VERIFIED" })}
+                                disabled={status === "VERIFIED"}
+                              >
+                                {t("Verify" as any)}
+                              </Button>
+                            )}
                           </div>
                         ) : (
                           <div>
@@ -256,7 +265,7 @@ export function ApplicationDetailsDialog({
                                 asChild
                               >
                                 <span className="cursor-pointer">
-                                  <Upload className="h-4 w-4 mr-2" />
+                                  <Upload className="h-4 w-4 me-2" />
                                   {t("Upload" as any)}
                                 </span>
                               </Button>
@@ -275,5 +284,41 @@ export function ApplicationDetailsDialog({
         </div>
       </DialogContent>
     </Dialog>
+
+      {/* Document Preview Dialog */}
+      <Dialog open={!!previewFile} onOpenChange={(o) => { if (!o) setPreviewFile(null); }}>
+        <DialogContent className="max-w-4xl max-h-[95vh] p-0 overflow-hidden">
+          <DialogHeader className="flex flex-row items-center justify-between px-6 py-4 border-b">
+            <DialogTitle className="text-base truncate">{previewFile?.name}</DialogTitle>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" asChild>
+                <a href={previewFile?.url || "#"} download target="_blank" rel="noreferrer">
+                  <Download className="h-4 w-4 me-1" />
+                  {t("Download" as any) || "Download"}
+                </a>
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setPreviewFile(null)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          </DialogHeader>
+          <div className="flex items-center justify-center bg-[#0a0a0a] min-h-[60vh] max-h-[80vh] overflow-auto p-4">
+            {previewFile?.url?.match(/\.pdf/i) ? (
+              <iframe
+                src={previewFile.url}
+                className="w-full h-[75vh] rounded"
+                title={previewFile.name}
+              />
+            ) : (
+              <img
+                src={previewFile?.url || ""}
+                alt={previewFile?.name || "Preview"}
+                className="max-w-full max-h-[75vh] object-contain rounded shadow-lg"
+              />
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 }

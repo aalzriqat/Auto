@@ -15,29 +15,6 @@ export const stats = query({
     // 1. Authenticate and verify membership
     await requireTenantAuth(ctx, args.orgId);
 
-    // 2. Total Vehicles & Available Vehicles
-    const vehicles = await ctx.db
-      .query("vehicles")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .collect();
-
-    const availableVehicles = vehicles.filter(v => v.status === "AVAILABLE").length;
-    const totalVehicles = vehicles.length;
-
-    // 3. Active Leads (not WON/LOST)
-    const leads = await ctx.db
-      .query("leads")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .collect();
-
-    const activeLeads = leads.filter(l => l.stage !== "WON" && l.stage !== "LOST").length;
-
-    // 4. Sales this period
-    const sales = await ctx.db
-      .query("sales")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .collect();
-
     const now = Date.now();
     let filterStart = 0;
 
@@ -49,7 +26,49 @@ export const stats = query({
       filterStart = now - 365 * 24 * 60 * 60 * 1000;
     }
 
-    const periodSales = sales.filter(s => s.saleDate >= filterStart && s.status !== "CANCELLED");
+    // 2. Total Vehicles & Available Vehicles
+    const availableVehicles = await ctx.db
+      .query("vehicles")
+      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "AVAILABLE"))
+      .filter(q => q.neq(q.field("isDeleted"), true))
+      .take(1000)
+      .then(res => res.length); // Use take to avoid memory bounds on huge orgs
+
+    const totalVehicles = await ctx.db
+      .query("vehicles")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .filter(q => q.neq(q.field("isDeleted"), true))
+      .take(2000)
+      .then(res => res.length);
+
+    // 3. Active Leads (not WON/LOST)
+    const activeLeads = await ctx.db
+      .query("leads")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .filter(q => q.and(
+        q.neq(q.field("stage"), "WON"),
+        q.neq(q.field("stage"), "LOST"),
+        q.neq(q.field("isDeleted"), true)
+      ))
+      .take(1000)
+      .then(res => res.length);
+
+    // 4. Sales this period
+    let periodSales;
+    if (filterStart > 0) {
+      periodSales = await ctx.db
+        .query("sales")
+        .withIndex("by_org_saleDate", (q) => q.eq("orgId", args.orgId).gte("saleDate", filterStart))
+        .filter(q => q.neq(q.field("status"), "CANCELLED"))
+        .collect();
+    } else {
+      periodSales = await ctx.db
+        .query("sales")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .filter(q => q.neq(q.field("status"), "CANCELLED"))
+        .take(5000);
+    }
+
     const salesVolume = periodSales.reduce((acc, sale) => acc + sale.salePrice, 0);
 
     const getChartKey = (dateTs: number) => {
@@ -68,18 +87,24 @@ export const stats = query({
     const monthlyProfits: Record<string, number> = {};
 
     // Fetch all expenses to deduct from profit
-    const allExpenses = await ctx.db
-      .query("expenses")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .collect();
+    let allExpenses;
+    if (filterStart > 0) {
+      allExpenses = await ctx.db
+        .query("expenses")
+        .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId).gte("date", filterStart))
+        .collect();
+    } else {
+      allExpenses = await ctx.db
+        .query("expenses")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .take(5000);
+    }
 
     const vehicleExpenses: Record<string, number> = {};
     const generalExpensesByMonth: Record<string, number> = {};
     const totalExpensesByMonth: Record<string, number> = {};
 
     for (const exp of allExpenses) {
-      // Only include expenses within the selected time range
-      if (exp.date < filterStart) continue;
 
       const key = getChartKey(exp.date);
 
@@ -137,13 +162,15 @@ export const stats = query({
     const members = await ctx.db
       .query("memberships")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .collect();
+      .take(500);
 
     // 6. Tasks and Team Activity
+    // Limit to 1000 most recent to prevent dashboard timeouts on massive orgs
     const tasks = await ctx.db
       .query("tasks")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .collect();
+      .order("desc")
+      .take(1000);
 
     const todayStart = new Date().setHours(0, 0, 0, 0);
 
@@ -153,6 +180,13 @@ export const stats = query({
     let overdueTasks = 0;
 
     const memberTaskStats: Record<string, { pending: number, overdue: number, completed: number, name: string }> = {};
+
+    // Batch fetch assignees to prevent N+1 queries
+    const assigneeIds = Array.from(new Set(tasks.map(t => t.assignedTo)));
+    const assignees = await Promise.all(assigneeIds.map(id => ctx.db.get(id)));
+    const assigneeMap = Object.fromEntries(
+      assignees.filter(Boolean).map(user => [user!._id, user!.name || user!.email || "Unknown"])
+    );
 
     for (const task of tasks) {
       totalTasks++;
@@ -165,9 +199,7 @@ export const stats = query({
       // Track by assignee
       const assigneeId = task.assignedTo;
       if (!memberTaskStats[assigneeId]) {
-        const assigneeUser = await ctx.db.get(assigneeId);
-        const name = assigneeUser ? (assigneeUser.name || assigneeUser.email) : "Unknown";
-        memberTaskStats[assigneeId] = { pending: 0, overdue: 0, completed: 0, name };
+        memberTaskStats[assigneeId] = { pending: 0, overdue: 0, completed: 0, name: assigneeMap[assigneeId] || "Unknown" };
       }
       if (task.status === "COMPLETED") memberTaskStats[assigneeId].completed++;
       else if (isOverdue) memberTaskStats[assigneeId].overdue++;
