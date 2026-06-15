@@ -34,6 +34,10 @@ export function Sidebar() {
 
   const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
   const permissions = myMembership?.permissions || [];
+  const logoUrl = useQuery(
+    api.orgSettings.getLogoUrl,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
 
   const visibleNavigation = navigation.filter(item => {
     if (!item.permission) return true;
@@ -44,7 +48,11 @@ export function Sidebar() {
     <aside className="hidden md:flex flex-col w-64 border-e border-slate-200/50 bg-white shadow-sm shrink-0">
       <div className="h-20 flex items-center px-6 border-b border-slate-200/50 shrink-0">
         <Link href="/dashboard" className="flex items-center gap-2">
-          <Image src="/logo.png" alt="AutoFlow Logo" width={180} height={80} className="w-28 h-auto object-contain" priority />
+          {logoUrl ? (
+            <img src={logoUrl} alt="Organization Logo" className="w-28 h-auto object-contain max-h-12" />
+          ) : (
+            <Image src="/logo.png" alt="AutoFlow Logo" width={180} height={80} className="w-28 h-auto object-contain" priority />
+          )}
         </Link>
       </div>
 

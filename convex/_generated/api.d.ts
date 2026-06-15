@@ -51,6 +51,7 @@ import type * as utils_tenancy from "../utils/tenancy.js";
 import type * as vehicleEdits from "../vehicleEdits.js";
 import type * as vehicleRequests from "../vehicleRequests.js";
 import type * as vehicles from "../vehicles.js";
+import type * as whatsapp from "../whatsapp.js";
 import type * as workOrders from "../workOrders.js";
 
 import type {
@@ -103,6 +104,7 @@ declare const fullApi: ApiFromModules<{
   vehicleEdits: typeof vehicleEdits;
   vehicleRequests: typeof vehicleRequests;
   vehicles: typeof vehicles;
+  whatsapp: typeof whatsapp;
   workOrders: typeof workOrders;
 }>;
 

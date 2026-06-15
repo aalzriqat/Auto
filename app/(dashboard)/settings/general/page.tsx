@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { Settings, Palette, CreditCard, Upload, ShieldCheck } from "lucide-react";
+import { Settings, Palette, CreditCard, Upload, ShieldCheck, MessageCircle } from "lucide-react";
 
 const CURRENCIES = [
   { code: "JOD", symbol: "د.أ", label: "Jordanian Dinar (JOD)" },
@@ -68,6 +68,11 @@ export default function GeneralSettingsPage() {
   const [approvalThresholdEnabled, setApprovalThresholdEnabled] = useState(false);
   const [approvalMinProfitPercent, setApprovalMinProfitPercent] = useState("");
 
+  // WhatsApp tab state
+  const [waPhoneNumberId, setWaPhoneNumberId] = useState("");
+  const [waApiToken, setWaApiToken] = useState("");
+  const [waWebhookSecret, setWaWebhookSecret] = useState("");
+
   const [isSaving, setIsSaving] = useState(false);
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
 
@@ -88,6 +93,9 @@ export default function GeneralSettingsPage() {
           ? String(settings.approvalMinProfitPercent)
           : ""
       );
+      setWaPhoneNumberId(settings.whatsappPhoneNumberId ?? "");
+      setWaApiToken(settings.whatsappApiToken ?? "");
+      setWaWebhookSecret(settings.whatsappWebhookSecret ?? "");
     }
   }, [settings]);
 
@@ -160,6 +168,24 @@ export default function GeneralSettingsPage() {
     }
   };
 
+  const handleSaveWhatsApp = async () => {
+    if (!activeOrgId) return;
+    setIsSaving(true);
+    try {
+      await upsert({
+        orgId: activeOrgId,
+        whatsappPhoneNumberId: waPhoneNumberId || undefined,
+        whatsappApiToken: waApiToken || undefined,
+        whatsappWebhookSecret: waWebhookSecret || undefined,
+      });
+      toast.success("WhatsApp settings saved.");
+    } catch (error: any) {
+      toast.error(error.message || "Failed to save settings.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!activeOrgId || !e.target.files?.[0]) return;
     const file = e.target.files[0];
@@ -208,6 +234,10 @@ export default function GeneralSettingsPage() {
           <TabsTrigger value="approvals" className="flex items-center gap-2">
             <ShieldCheck className="h-4 w-4" />
             Approvals
+          </TabsTrigger>
+          <TabsTrigger value="whatsapp" className="flex items-center gap-2">
+            <MessageCircle className="h-4 w-4" />
+            WhatsApp
           </TabsTrigger>
         </TabsList>
 
@@ -440,6 +470,70 @@ export default function GeneralSettingsPage() {
               <div className="flex justify-end">
                 <Button onClick={handleSaveApprovals} disabled={isSaving}>
                   {isSaving ? "Saving..." : "Save Approval Settings"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ── WhatsApp Tab ─────────────────────────────────────────────── */}
+        <TabsContent value="whatsapp">
+          <Card>
+            <CardHeader>
+              <CardTitle>WhatsApp Business Integration</CardTitle>
+              <CardDescription>
+                Connect your WhatsApp Business Cloud API account. Incoming messages will automatically
+                create leads. Register your webhook URL in the Meta Developer Portal:{" "}
+                <code className="text-xs bg-muted px-1 py-0.5 rounded">
+                  {process.env.NEXT_PUBLIC_CONVEX_URL?.replace("convex.cloud", "convex.site")}/whatsapp-webhook?orgId=YOUR_ORG_ID
+                </code>
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-2">
+                  <Label>Phone Number ID</Label>
+                  <Input
+                    placeholder="e.g. 123456789012345"
+                    value={waPhoneNumberId}
+                    onChange={(e) => setWaPhoneNumberId(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Found in Meta Developer Portal → WhatsApp → API Setup.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Webhook Verify Token</Label>
+                  <Input
+                    type="password"
+                    placeholder="Your custom verify token"
+                    value={waWebhookSecret}
+                    onChange={(e) => setWaWebhookSecret(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    A secret string you chose when registering the webhook in Meta.
+                  </p>
+                </div>
+
+                <div className="space-y-2 md:col-span-2">
+                  <Label>Permanent Access Token</Label>
+                  <Input
+                    type="password"
+                    placeholder="EAAxxxxxxxx..."
+                    value={waApiToken}
+                    onChange={(e) => setWaApiToken(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Generate a permanent token from Meta Business Manager → System Users.
+                    Never share this value.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex justify-end">
+                <Button onClick={handleSaveWhatsApp} disabled={isSaving}>
+                  {isSaving ? "Saving..." : "Save WhatsApp Settings"}
                 </Button>
               </div>
             </CardContent>

@@ -7,9 +7,11 @@ import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
 import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
+import { useOrgSettings } from "@/hooks/useOrgSettings";
+import { hexToHslString } from "@/lib/colorUtils";
 
 function Onboarding() {
   const { setActiveOrgId } = useOrg();
@@ -61,6 +63,15 @@ function Onboarding() {
 
 function DashboardWrapper({ children }: { children: React.ReactNode }) {
   const { activeOrgId, isLoading } = useOrg();
+  const orgSettings = useOrgSettings();
+
+  const brandStyle = useMemo(() => {
+    const hsl = orgSettings?.primaryColor
+      ? hexToHslString(orgSettings.primaryColor)
+      : null;
+    if (!hsl) return undefined;
+    return { "--primary": `hsl(${hsl})` } as React.CSSProperties;
+  }, [orgSettings?.primaryColor]);
 
   if (isLoading) {
     return <div className="flex h-screen items-center justify-center">Loading...</div>;
@@ -71,7 +82,10 @@ function DashboardWrapper({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="flex h-screen w-full overflow-hidden bg-slate-50 dark:bg-zinc-950/40">
+    <div
+      className="flex h-screen w-full overflow-hidden bg-slate-50 dark:bg-zinc-950/40"
+      style={brandStyle}
+    >
       <Sidebar />
       <div className="flex flex-col flex-1 w-full overflow-hidden">
         <TopNav />

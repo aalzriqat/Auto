@@ -95,6 +95,21 @@ export const upsert = mutation({
 });
 
 /**
+ * Returns the Convex storage URL for the org's logo, or null if not set.
+ */
+export const getLogoUrl = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const settings = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .unique();
+    if (!settings?.logoStorageId) return null;
+    return await ctx.storage.getUrl(settings.logoStorageId);
+  },
+});
+
+/**
  * Generates a short-lived upload URL for the org logo. Owner-only.
  */
 export const generateLogoUploadUrl = mutation({
