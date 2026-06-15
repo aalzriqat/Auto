@@ -562,7 +562,35 @@ export default defineSchema({
     whatsappWebhookSecret: v.optional(v.string()),
     approvalThresholdEnabled: v.optional(v.boolean()),
     approvalMinProfitPercent: v.optional(v.number()),
+    commissionTiers: v.optional(
+      v.array(v.object({ minProfitAmount: v.number(), commissionPct: v.number() }))
+    ),
   }).index("by_org", ["orgId"]),
+
+  orgCustomFields: defineTable({
+    orgId: v.id("organizations"),
+    entityType: v.union(v.literal("vehicle"), v.literal("customer"), v.literal("lead")),
+    fieldName: v.string(),
+    fieldKey: v.string(),
+    fieldType: v.union(v.literal("text"), v.literal("number"), v.literal("select"), v.literal("date")),
+    isRequired: v.boolean(),
+    options: v.optional(v.array(v.string())),
+    order: v.number(),
+    isActive: v.boolean(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_entity", ["orgId", "entityType"]),
+
+  orgCustomFieldValues: defineTable({
+    orgId: v.id("organizations"),
+    entityType: v.string(),
+    entityId: v.string(),
+    fieldId: v.id("orgCustomFields"),
+    value: v.string(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_entity", ["entityType", "entityId"])
+    .index("by_entity_field", ["entityId", "fieldId"]),
 
   orgLeadSources: defineTable({
     orgId: v.id("organizations"),

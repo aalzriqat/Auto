@@ -37,6 +37,7 @@ import {
 } from "@/components/ui/select";
 
 import { vehicleSchema, VehicleFormValues, VehicleDialogProps } from "./vehicle.schema";
+import { CustomFieldsSection, useSaveCustomFieldValues } from "@/components/custom-fields/CustomFieldsSection";
 
 
 export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, canEdit = false }: VehicleDialogProps) {
@@ -55,6 +56,8 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [imageIds, setImageIds] = useState<string[]>([]);
   const [imageUrls, setImageUrls] = useState<string[]>([]);
+  const [customFieldValues, setCustomFieldValues] = useState<Record<string, string>>({});
+  const saveCustomFields = useSaveCustomFieldValues();
 
   const form = useForm<z.infer<typeof vehicleSchema>>({
     resolver: zodResolver(vehicleSchema as any),
@@ -254,6 +257,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
             ...restValues,
             imageIds: imageIds as Id<"_storage">[],
           });
+          await saveCustomFields(activeOrgId, "vehicle", vehicle._id, customFieldValues);
           toast.success(t("VehicleUpdated" as any));
         } else {
           await requestUpdate({
@@ -268,11 +272,12 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
         }
       } else {
         if (canCreate) {
-          await createVehicle({
+          const newId = await createVehicle({
             orgId: activeOrgId,
             ...restValues,
             imageIds: imageIds as Id<"_storage">[],
           });
+          if (newId) await saveCustomFields(activeOrgId, "vehicle", newId, customFieldValues);
           toast.success(t("VehicleAdded" as any));
         } else {
           await requestCreate({
@@ -579,6 +584,15 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 </div>
               )}
             </div>
+
+            {activeOrgId && (
+              <CustomFieldsSection
+                orgId={activeOrgId}
+                entityType="vehicle"
+                entityId={vehicle?._id}
+                onChange={setCustomFieldValues}
+              />
+            )}
 
             <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>

@@ -49,6 +49,9 @@ export const upsert = mutation({
     whatsappWebhookSecret: v.optional(v.string()),
     approvalThresholdEnabled: v.optional(v.boolean()),
     approvalMinProfitPercent: v.optional(v.number()),
+    commissionTiers: v.optional(
+      v.array(v.object({ minProfitAmount: v.number(), commissionPct: v.number() }))
+    ),
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
@@ -88,6 +91,7 @@ export const upsert = mutation({
         whatsappWebhookSecret: fields.whatsappWebhookSecret,
         approvalThresholdEnabled: fields.approvalThresholdEnabled,
         approvalMinProfitPercent: fields.approvalMinProfitPercent,
+        commissionTiers: fields.commissionTiers,
       });
       return newId;
     }
