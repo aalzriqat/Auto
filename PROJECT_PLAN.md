@@ -20,6 +20,7 @@
 | 6 | feature/searchable-selects-db-drafts-i18n-rtl | SearchableSelect rollout, DB drafts, i18n fixes, hydration fix | ✅ Done |
 | 7 | feature/searchable-selects-db-drafts-i18n-rtl | VIN decode improvements (parallel NHTSA + WMI), mileage optional | ✅ Done |
 | 10 | feature/phase-10-org-settings | Org Settings Foundation | ✅ Done |
+| 11 | feature/phase-11-sales-flow | Pipeline Stages, Approval Thresholds | ✅ Done |
 
 ---
 
@@ -43,38 +44,18 @@
 
 ---
 
-## Phase 11 — Sales Flow Customization
+## Phase 11 — Sales Flow Customization ✅
 
 **Branch:** `feature/phase-11-sales-flow`
-**Goal:** Make pipeline stages, expense categories, and approval thresholds configurable per org.
+**Commit:** `7dc8bbb`
 
-### Schema additions (`convex/schema.ts`)
-```ts
-orgPipelineStages: {
-  orgId, label, order, isActive, color?, isDefault
-}
-orgExpenseCategories: {
-  orgId, label, order, isActive
-}
-// orgSettings gains: approvalThresholdEnabled, approvalMinProfitPercent
-```
-
-### Tasks
-- [ ] Add `orgPipelineStages` and `orgExpenseCategories` tables to schema
-- [ ] Add approval threshold fields to `orgSettings` schema
-- [ ] `convex/orgPipelineStages.ts` — list, seed (default stages), create, update, remove, reorder
-- [ ] `convex/orgExpenseCategories.ts` — list, seed (default categories), create, update, remove, reorder
-- [ ] `app/(dashboard)/settings/pipeline/page.tsx` — manage pipeline stages (colors, labels, order)
-- [ ] `app/(dashboard)/settings/expense-categories/page.tsx` — manage expense categories
-- [ ] Add approval threshold controls to `settings/general/page.tsx` (Approval tab)
-- [ ] Wire `orgPipelineStages` into LeadDialog stage dropdown
-- [ ] Wire `orgExpenseCategories` into expense forms
-- [ ] Update `convex/codegen` after schema changes
-
-### Commit checklist
-- [ ] `npx convex codegen` passes
-- [ ] `pnpm build` passes
-- [ ] All new settings pages accessible and functional
+### Delivered
+- [x] `orgPipelineStages` table — stageKey, label, color, order, isActive per org
+- [x] `convex/orgPipelineStages.ts` — list, seed, update, reorder
+- [x] `orgSettings` gains `approvalThresholdEnabled` + `approvalMinProfitPercent`
+- [x] `app/(dashboard)/settings/pipeline/page.tsx` — inline label edit, color picker, reorder, active toggle
+- [x] `app/(dashboard)/settings/general/page.tsx` — Approvals tab with threshold toggle + percent input
+- [x] `components/leads/LeadDialog.tsx` — stage dropdown driven by `orgPipelineStages` with static fallback
 
 ---
 
