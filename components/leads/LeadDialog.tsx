@@ -5,6 +5,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
+
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -36,6 +37,7 @@ import {
 } from "@/components/ui/select";
 
 import { leadSchema, LeadFormValues, LeadDialogProps } from "./lead.schema";
+import { CustomFieldsSection, useSaveCustomFieldValues } from "@/components/custom-fields/CustomFieldsSection";
 
 
 export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
@@ -49,6 +51,14 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
     { initialNumItems: 100 }
   );
   const vehicles = useQuery(api.vehicles.listAll, activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE" } : "skip");
+  const dynamicLeadSources = useQuery(
+    api.orgLeadSources.list,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
+  const pipelineStages = useQuery(
+    api.orgPipelineStages.list,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
   const { results: memberships } = usePaginatedQuery(
     api.memberships.list,
     activeOrgId ? { orgId: activeOrgId } : "skip",
@@ -58,6 +68,8 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
   const createLead = useMutation(api.leads.create);
   const updateLead = useMutation(api.leads.update);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [customFieldValues, setCustomFieldValues] = useState<Record<string, string>>({});
+  const saveCustomFields = useSaveCustomFieldValues();
 
   const form = useForm<LeadFormValues>({
     resolver: zodResolver(leadSchema as any),
@@ -112,12 +124,14 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
           leadId: lead._id,
           ...payload,
         });
+        await saveCustomFields(activeOrgId, "lead", lead._id, customFieldValues);
         toast.success(t("LeadUpdatedSuccess" as any) || "Lead updated successfully");
       } else {
-        await createLead({
+        const newId = await createLead({
           orgId: activeOrgId,
           ...payload,
         });
+        if (newId) await saveCustomFields(activeOrgId, "lead", newId, customFieldValues);
         toast.success(t("LeadAddedSuccess" as any) || "Lead created successfully");
       }
       onOpenChange(false);
@@ -231,14 +245,23 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="NEW">{t("StageNew" as any) || "New"}</SelectItem>
-                        <SelectItem value="CONTACTED">{t("StageContacted" as any) || "Contacted"}</SelectItem>
-                        <SelectItem value="INTERESTED">{t("Interested" as any) || "Interested"}</SelectItem>
-                        <SelectItem value="TEST_DRIVE">{t("StageTestDrive" as any) || "Test Drive"}</SelectItem>
-                        <SelectItem value="NEGOTIATION">{t("StageNegotiation" as any) || "Negotiation"}</SelectItem>
-                        <SelectItem value="RESERVED">{t("Reserved" as any) || "Reserved"}</SelectItem>
-                        <SelectItem value="WON">{t("StageWon" as any) || "Won"}</SelectItem>
-                        <SelectItem value="LOST">{t("Lost" as any) || "Lost"}</SelectItem>
+                        {(pipelineStages && pipelineStages.length > 0
+                          ? pipelineStages.filter((s) => s.isActive)
+                          : [
+                              { stageKey: "NEW", label: "New" },
+                              { stageKey: "CONTACTED", label: "Contacted" },
+                              { stageKey: "INTERESTED", label: "Interested" },
+                              { stageKey: "TEST_DRIVE", label: "Test Drive" },
+                              { stageKey: "NEGOTIATION", label: "Negotiation" },
+                              { stageKey: "RESERVED", label: "Reserved" },
+                              { stageKey: "WON", label: "Won" },
+                              { stageKey: "LOST", label: "Lost" },
+                            ]
+                        ).map((s) => (
+                          <SelectItem key={s.stageKey} value={s.stageKey}>
+                            {s.label}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                     <FormMessage />
@@ -259,13 +282,22 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="Walk-in">{t("WalkIn" as any) || "Walk-in"}</SelectItem>
-                        <SelectItem value="Website">{t("Website" as any) || "Website"}</SelectItem>
-                        <SelectItem value="Facebook">{t("Facebook" as any) || "Facebook"}</SelectItem>
-                        <SelectItem value="Instagram">{t("Instagram" as any) || "Instagram"}</SelectItem>
-                        <SelectItem value="Referral">{t("Referral" as any) || "Referral"}</SelectItem>
-                        <SelectItem value="Phone">{t("Phone" as any) || "Phone Call"}</SelectItem>
-                        <SelectItem value="Other">{t("Other" as any) || "Other"}</SelectItem>
+                        {(dynamicLeadSources && dynamicLeadSources.length > 0
+                          ? dynamicLeadSources.filter((s) => s.isActive)
+                          : [
+                              { label: "Walk-in" },
+                              { label: "Website" },
+                              { label: "Facebook" },
+                              { label: "Instagram" },
+                              { label: "Referral" },
+                              { label: "Phone" },
+                              { label: "Other" },
+                            ]
+                        ).map((s) => (
+                          <SelectItem key={s.label} value={s.label}>
+                            {s.label}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                     <FormMessage />
@@ -287,6 +319,14 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                 )}
               />
             </div>
+            {activeOrgId && (
+              <CustomFieldsSection
+                orgId={activeOrgId}
+                entityType="lead"
+                entityId={lead?._id}
+                onChange={setCustomFieldValues}
+              />
+            )}
             <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 {t("Cancel" as any) || "Cancel"}

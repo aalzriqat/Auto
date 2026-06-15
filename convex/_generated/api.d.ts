@@ -29,6 +29,11 @@ import type * as memberships from "../memberships.js";
 import type * as migrateRoles from "../migrateRoles.js";
 import type * as migrations from "../migrations.js";
 import type * as notifications from "../notifications.js";
+import type * as orgCustomFields from "../orgCustomFields.js";
+import type * as orgLeadSources from "../orgLeadSources.js";
+import type * as orgPipelineStages from "../orgPipelineStages.js";
+import type * as orgSettings from "../orgSettings.js";
+import type * as orgValuationCompanies from "../orgValuationCompanies.js";
 import type * as organizations from "../organizations.js";
 import type * as partnerEquity from "../partnerEquity.js";
 import type * as quotes from "../quotes.js";
@@ -47,6 +52,7 @@ import type * as utils_tenancy from "../utils/tenancy.js";
 import type * as vehicleEdits from "../vehicleEdits.js";
 import type * as vehicleRequests from "../vehicleRequests.js";
 import type * as vehicles from "../vehicles.js";
+import type * as whatsapp from "../whatsapp.js";
 import type * as workOrders from "../workOrders.js";
 
 import type {
@@ -77,6 +83,11 @@ declare const fullApi: ApiFromModules<{
   migrateRoles: typeof migrateRoles;
   migrations: typeof migrations;
   notifications: typeof notifications;
+  orgCustomFields: typeof orgCustomFields;
+  orgLeadSources: typeof orgLeadSources;
+  orgPipelineStages: typeof orgPipelineStages;
+  orgSettings: typeof orgSettings;
+  orgValuationCompanies: typeof orgValuationCompanies;
   organizations: typeof organizations;
   partnerEquity: typeof partnerEquity;
   quotes: typeof quotes;
@@ -95,6 +106,7 @@ declare const fullApi: ApiFromModules<{
   vehicleEdits: typeof vehicleEdits;
   vehicleRequests: typeof vehicleRequests;
   vehicles: typeof vehicles;
+  whatsapp: typeof whatsapp;
   workOrders: typeof workOrders;
 }>;
 

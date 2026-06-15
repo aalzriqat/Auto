@@ -41,6 +41,10 @@ export function TopNav() {
 
   const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
   const permissions = myMembership?.permissions || [];
+  const logoUrl = useQuery(
+    api.orgSettings.getLogoUrl,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
 
   const visibleNavigation = navigation.filter(item => {
     if (!item.permission) return true;
@@ -63,7 +67,11 @@ export function TopNav() {
             <SheetContent side={isRtl ? "right" : "left"} className="w-[280px] p-0">
               <SheetHeader className="p-6 border-b border-slate-100 text-start">
                 <SheetTitle className="flex items-center gap-2">
-                  <Image src="/logo.png" alt="AutoFlow Logo" width={180} height={80} className="w-32 h-auto object-contain" priority />
+                  {logoUrl ? (
+                    <img src={logoUrl} alt="Organization Logo" className="w-32 h-auto object-contain max-h-12" />
+                  ) : (
+                    <Image src="/logo.png" alt="AutoFlow Logo" width={180} height={80} className="w-32 h-auto object-contain" priority />
+                  )}
                 </SheetTitle>
               </SheetHeader>
               <nav className="flex flex-col gap-1 p-4">

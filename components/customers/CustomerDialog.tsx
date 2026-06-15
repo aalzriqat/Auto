@@ -29,6 +29,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 
 import { customerSchema, CustomerFormValues, CustomerDialogProps } from "./customer.schema";
+import { CustomFieldsSection, useSaveCustomFieldValues } from "@/components/custom-fields/CustomFieldsSection";
 
 
 export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogProps) {
@@ -37,6 +38,8 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
   const createCustomer = useMutation(api.customers.create);
   const updateCustomer = useMutation(api.customers.update);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [customFieldValues, setCustomFieldValues] = useState<Record<string, string>>({});
+  const saveCustomFields = useSaveCustomFieldValues();
 
   const form = useForm<CustomerFormValues>({
     resolver: zodResolver(customerSchema as any),
@@ -96,12 +99,14 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
           customerId: customer._id,
           ...payload,
         });
+        await saveCustomFields(activeOrgId, "customer", customer._id, customFieldValues);
         toast.success(t("CustomerUpdatedSuccess" as any));
       } else {
-        await createCustomer({
+        const newId = await createCustomer({
           orgId: activeOrgId,
           ...payload,
         });
+        if (newId) await saveCustomFields(activeOrgId, "customer", newId, customFieldValues);
         toast.success(t("CustomerAddedSuccess" as any));
       }
       onOpenChange(false);
@@ -217,6 +222,15 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
                 )}
               />
             </div>
+            {activeOrgId && (
+              <CustomFieldsSection
+                orgId={activeOrgId}
+                entityType="customer"
+                entityId={customer?._id}
+                onChange={setCustomFieldValues}
+              />
+            )}
+
             <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 {t("Cancel" as any)}

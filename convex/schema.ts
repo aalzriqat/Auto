@@ -547,6 +547,76 @@ export default defineSchema({
     .index("by_org_vehicle", ["orgId", "vehicleId"])
     .index("by_org_status", ["orgId", "status"]),
 
+  orgSettings: defineTable({
+    orgId: v.id("organizations"),
+    currency: v.string(),
+    currencySymbol: v.string(),
+    vatRate: v.optional(v.number()),
+    country: v.optional(v.string()),
+    timezone: v.optional(v.string()),
+    enabledPaymentTypes: v.array(v.string()),
+    logoStorageId: v.optional(v.id("_storage")),
+    primaryColor: v.optional(v.string()),
+    whatsappPhoneNumberId: v.optional(v.string()),
+    whatsappApiToken: v.optional(v.string()),
+    whatsappWebhookSecret: v.optional(v.string()),
+    approvalThresholdEnabled: v.optional(v.boolean()),
+    approvalMinProfitPercent: v.optional(v.number()),
+    commissionTiers: v.optional(
+      v.array(v.object({ minProfitAmount: v.number(), commissionPct: v.number() }))
+    ),
+  }).index("by_org", ["orgId"]),
+
+  orgCustomFields: defineTable({
+    orgId: v.id("organizations"),
+    entityType: v.union(v.literal("vehicle"), v.literal("customer"), v.literal("lead")),
+    fieldName: v.string(),
+    fieldKey: v.string(),
+    fieldType: v.union(v.literal("text"), v.literal("number"), v.literal("select"), v.literal("date")),
+    isRequired: v.boolean(),
+    options: v.optional(v.array(v.string())),
+    order: v.number(),
+    isActive: v.boolean(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_entity", ["orgId", "entityType"]),
+
+  orgCustomFieldValues: defineTable({
+    orgId: v.id("organizations"),
+    entityType: v.string(),
+    entityId: v.string(),
+    fieldId: v.id("orgCustomFields"),
+    value: v.string(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_entity", ["entityType", "entityId"])
+    .index("by_entity_field", ["entityId", "fieldId"]),
+
+  orgLeadSources: defineTable({
+    orgId: v.id("organizations"),
+    label: v.string(),
+    isActive: v.boolean(),
+    order: v.number(),
+  }).index("by_org", ["orgId"]),
+
+  orgValuationCompanies: defineTable({
+    orgId: v.id("organizations"),
+    name: v.string(),
+    isActive: v.boolean(),
+    order: v.number(),
+  }).index("by_org", ["orgId"]),
+
+  orgPipelineStages: defineTable({
+    orgId: v.id("organizations"),
+    stageKey: v.string(), // "NEW" | "CONTACTED" | "INTERESTED" | "TEST_DRIVE" | "NEGOTIATION" | "RESERVED" | "WON" | "LOST"
+    label: v.string(), // Custom display label, e.g. "طازج" instead of "New"
+    color: v.optional(v.string()), // Hex color, e.g. "#3b82f6"
+    order: v.number(),
+    isActive: v.boolean(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_key", ["orgId", "stageKey"]),
+
   profitApprovalRequests: defineTable({
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),

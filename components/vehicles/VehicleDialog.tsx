@@ -37,6 +37,39 @@ import {
 } from "@/components/ui/select";
 
 import { vehicleSchema, VehicleFormValues, VehicleDialogProps } from "./vehicle.schema";
+import { CustomFieldsSection, useSaveCustomFieldValues } from "@/components/custom-fields/CustomFieldsSection";
+
+function decodeVinYear(char: string): number | null {
+  const base: Record<string, number> = {
+    A: 1980, B: 1981, C: 1982, D: 1983, E: 1984, F: 1985, G: 1986, H: 1987,
+    J: 1988, K: 1989, L: 1990, M: 1991, N: 1992, P: 1993, R: 1994, S: 1995,
+    T: 1996, V: 1997, W: 1998, X: 1999, Y: 2000,
+    "1": 2001, "2": 2002, "3": 2003, "4": 2004, "5": 2005,
+    "6": 2006, "7": 2007, "8": 2008, "9": 2009,
+  };
+  const year = base[char?.toUpperCase()];
+  if (!year) return null;
+  const now = new Date().getFullYear();
+  return year + 30 <= now + 2 ? year + 30 : year;
+}
+
+function toCarBrand(name: string): string {
+  return name
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(w => (w.length <= 3 ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()))
+    .join(" ");
+}
+
+function cleanMfrName(mfr: string): string {
+  const cleaned = mfr
+    .replace(/\b(CORPORATION|CORP|COMPANY|CO|LIMITED|LTD|INC|AUTO|MOTOR|MOTORS|AUTOMOTIVE|MANUFACTURING|AG|GROUP)\b\.?,?/gi, " ")
+    .replace(/[,./\\]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned || mfr.split(/\s+/)[0];
+}
 
 
 export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, canEdit = false }: VehicleDialogProps) {
@@ -55,6 +88,8 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [imageIds, setImageIds] = useState<string[]>([]);
   const [imageUrls, setImageUrls] = useState<string[]>([]);
+  const [customFieldValues, setCustomFieldValues] = useState<Record<string, string>>({});
+  const saveCustomFields = useSaveCustomFieldValues();
 
   const form = useForm<z.infer<typeof vehicleSchema>>({
     resolver: zodResolver(vehicleSchema as any),
@@ -161,11 +196,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
   const handleDecodeVIN = async () => {
     const rawVin = form.getValues("vin");
     const vin = rawVin.trim().toUpperCase();
-
-    // Update the form with the cleaned VIN
-    if (vin !== rawVin) {
-      form.setValue("vin", vin);
-    }
+    if (vin !== rawVin) form.setValue("vin", vin);
 
     if (!vin || vin.length !== 17) {
       toast.error(t("InvalidVIN" as any) || "Please enter a valid 17-character VIN");
@@ -174,47 +205,43 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
 
     setIsDecoding(true);
     try {
-      const response = await fetch(`https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/${vin}?format=json`);
-      const data = await response.json();
+      const [vinResult, wmiResult] = await Promise.allSettled([
+        fetch(`https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/${vin}?format=json`).then(r => r.json()),
+        fetch(`https://vpic.nhtsa.dot.gov/api/vehicles/DecodeWMI/${vin.slice(0, 3)}?format=json`).then(r => r.json()),
+      ]);
 
-      if (data.Results && data.Results.length > 0) {
-        const result = data.Results[0];
+      const v = vinResult.status === "fulfilled" ? (vinResult.value.Results?.[0] ?? {}) : {};
+      const wmiName = wmiResult.status === "fulfilled" ? (wmiResult.value.Results?.[0]?.Name ?? "") : "";
 
-        // NHTSA returns "0" or "0 - ..." for success
-        // Many valid international VINs fail the check digit test (ErrorCode 1, 5, 14, etc.)
-        // We shouldn't show a scary error if we still managed to decode the Make
-        if (result.Make) {
-          toast.success(t("VINDecodedSuccessfully" as any) || "VIN decoded successfully!");
-          if (result.ErrorCode && result.ErrorCode !== "0" && !result.ErrorCode.startsWith("0 -")) {
-            console.warn(`VIN Decode Warning: ${result.ErrorText}`);
-          }
-        } else if (result.ErrorCode && result.ErrorCode !== "0" && !result.ErrorCode.startsWith("0 -")) {
-          toast.error(`VIN Decode Warning: ${result.ErrorText}`);
-        } else {
-          toast.success(t("VINDecodedSuccessfully" as any) || "VIN decoded successfully!");
-        }
+      const makeFromWmi = wmiName ? toCarBrand(cleanMfrName(wmiName)) : "";
+      const makeFromVin = v.Make ? toCarBrand(v.Make.trim()) : "";
+      const make = makeFromWmi || makeFromVin;
 
-        if (result.Make) form.setValue("make", result.Make.charAt(0).toUpperCase() + result.Make.slice(1).toLowerCase());
+      const model   = (v.Model || v.Series || "").trim();
+      const trim    = v.Trim?.trim() ?? "";
+      const fuelRaw = v.FuelTypePrimary?.toLowerCase() ?? "";
 
-        const decodedModel = result.Model || result.Series || "";
-        if (decodedModel) {
-          form.setValue("model", decodedModel.charAt(0).toUpperCase() + decodedModel.slice(1).toLowerCase());
-        }
+      const nhtsaYear = v.ModelYear ? parseInt(v.ModelYear) : NaN;
+      const year = !isNaN(nhtsaYear) ? nhtsaYear : (decodeVinYear(vin[9]) ?? undefined);
 
-        if (result.ModelYear && !isNaN(parseInt(result.ModelYear))) form.setValue("year", parseInt(result.ModelYear));
-        if (result.Trim) form.setValue("trim", result.Trim);
+      if (make)  form.setValue("make",  make);
+      if (model) form.setValue("model", toCarBrand(model));
+      if (year)  form.setValue("year",  year);
+      if (trim)  form.setValue("trim",  trim);
 
-        if (result.FuelTypePrimary) {
-          const fuel = result.FuelTypePrimary.toLowerCase();
-          if (fuel.includes("gasoline")) form.setValue("fuelType", "Gasoline");
-          else if (fuel.includes("diesel")) form.setValue("fuelType", "Diesel");
-          else if (fuel.includes("electric")) form.setValue("fuelType", "Electric");
-          else if (fuel.includes("hybrid")) form.setValue("fuelType", "Hybrid");
-        }
+      if (fuelRaw.includes("gasoline") || fuelRaw.includes("petrol")) form.setValue("fuelType", "Gasoline");
+      else if (fuelRaw.includes("diesel"))   form.setValue("fuelType", "Diesel");
+      else if (fuelRaw.includes("electric")) form.setValue("fuelType", "Electric");
+      else if (fuelRaw.includes("hybrid"))   form.setValue("fuelType", "Hybrid");
+
+      if (!make) {
+        toast.error(t("NoDataForVIN" as any) || "Could not identify this VIN — please fill in details manually.");
+      } else if (!model) {
+        toast.warning("Manufacturer identified — model not found, please enter it manually.");
       } else {
-        toast.error(t("NoDataForVIN" as any));
+        toast.success(t("VINDecodedSuccessfully" as any) || "VIN decoded successfully!");
       }
-    } catch (error) {
+    } catch {
       toast.error(t("FailedToDecodeVIN" as any));
     } finally {
       setIsDecoding(false);
@@ -254,6 +281,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
             ...restValues,
             imageIds: imageIds as Id<"_storage">[],
           });
+          await saveCustomFields(activeOrgId, "vehicle", vehicle._id, customFieldValues);
           toast.success(t("VehicleUpdated" as any));
         } else {
           await requestUpdate({
@@ -268,11 +296,12 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
         }
       } else {
         if (canCreate) {
-          await createVehicle({
+          const newId = await createVehicle({
             orgId: activeOrgId,
             ...restValues,
             imageIds: imageIds as Id<"_storage">[],
           });
+          if (newId) await saveCustomFields(activeOrgId, "vehicle", newId, customFieldValues);
           toast.success(t("VehicleAdded" as any));
         } else {
           await requestCreate({
@@ -579,6 +608,15 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 </div>
               )}
             </div>
+
+            {activeOrgId && (
+              <CustomFieldsSection
+                orgId={activeOrgId}
+                entityType="vehicle"
+                entityId={vehicle?._id}
+                onChange={setCustomFieldValues}
+              />
+            )}
 
             <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
