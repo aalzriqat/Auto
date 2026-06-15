@@ -61,6 +61,7 @@
     "@types/node": "^24.12.2",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@vitest/coverage-v8": "^4.1.9",
     "convex-test": "^0.0.53",
     "eslint": "^9.39.4",
     "eslint-config-next": "^16.2.4",

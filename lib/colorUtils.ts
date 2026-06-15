@@ -12,7 +12,7 @@ export function hexToHslString(hex: string): string | null {
           .map((c) => c + c)
           .join("")
       : cleaned;
-  if (full.length !== 6) return null;
+  if (full.length !== 6 || !/^[0-9a-f]{6}$/i.test(full)) return null;
 
   const r = parseInt(full.slice(0, 2), 16) / 255;
   const g = parseInt(full.slice(2, 4), 16) / 255;

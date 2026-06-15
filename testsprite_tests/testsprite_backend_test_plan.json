@@ -1,0 +1,52 @@
+[
+  {
+    "id": "TC001",
+    "title": "getapihealthreturnsservicestatus",
+    "description": "Verify GET /api/health returns 200 with service status, timestamp, and service name when service is healthy."
+  },
+  {
+    "id": "TC002",
+    "title": "postclerkwebhookprocessesvalidusercreatedevent",
+    "description": "Verify POST /clerk-webhook with valid Svix headers and signed user.created event returns 200 and syncs user record."
+  },
+  {
+    "id": "TC003",
+    "title": "postclerkwebhookrejectsinvalidsignature",
+    "description": "Verify POST /clerk-webhook without Svix headers or with invalid signature returns 400 error."
+  },
+  {
+    "id": "TC004",
+    "title": "postclerkwebhookreturns500ifsecretnotset",
+    "description": "Verify POST /clerk-webhook returns 500 error if webhook secret is not configured."
+  },
+  {
+    "id": "TC005",
+    "title": "mutationorganizationscreatecreatesneworganization",
+    "description": "Verify organizations.create mutation with valid name creates organization and returns new organization ID."
+  },
+  {
+    "id": "TC006",
+    "title": "mutationorganizationsupdateupdatesorgnamebyowner",
+    "description": "Verify organizations.update mutation updates organization name when performed by OWNER role and changes are reflected in organizations.listMine."
+  },
+  {
+    "id": "TC007",
+    "title": "mutationorganizationsupdatedeniesnonowner",
+    "description": "Verify organizations.update mutation returns authorization error and does not update organization when performed by non-owner."
+  },
+  {
+    "id": "TC008",
+    "title": "querymembershipslistreturnsorganizationmembers",
+    "description": "Verify memberships.list query returns all members of an organization with user and role data for authenticated user."
+  },
+  {
+    "id": "TC009",
+    "title": "mutationmembershipsaddaddsoreinvitesuserbyemail",
+    "description": "Verify memberships.add mutation adds existing user to organization or creates invitation for unknown user email, returning status 'added' or 'invited'."
+  },
+  {
+    "id": "TC010",
+    "title": "mutationmembershipsaddrejectsduplicatependinginvitation",
+    "description": "Verify memberships.add mutation returns error when adding an email that already has a pending invitation."
+  }
+]
