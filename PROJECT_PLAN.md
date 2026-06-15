@@ -22,6 +22,7 @@
 | 10 | feature/phase-10-org-settings | Org Settings Foundation | ✅ Done |
 | 11 | feature/phase-11-sales-flow | Pipeline Stages, Approval Thresholds | ✅ Done |
 | 12 | feature/phase-12-branding-whatsapp | Org Logo, Brand Color, WhatsApp Webhook | ✅ Done |
+| 13 | feature/phase-13-advanced | Custom Fields, Commission Tiers, Onboarding Wizard | ✅ Done |
 
 ---
 
@@ -76,18 +77,25 @@
 
 ---
 
-## Phase 13 — Advanced Customization
+## Phase 13 — Advanced Customization ✅
 
 **Branch:** `feature/phase-13-advanced`
-**Goal:** Custom vehicle fields, tiered commissions, onboarding wizard, regional doc templates.
+**Commit:** `51c73c7`
 
-### Tasks
-- [ ] `orgCustomFields` table — define custom fields per entity type (vehicle, customer, lead)
-- [ ] VehicleDialog / CustomerDialog render custom fields dynamically
-- [ ] Tiered commission config in `orgSettings` — JSON array of tiers `{ minProfit, commissionPct }`
-- [ ] Commission calculator uses org tiers instead of hardcoded value
-- [ ] Onboarding wizard (new org flow): currency → logo → lead sources → pipeline stages → done
-- [ ] Regional doc templates — print layouts per country/language
+### Delivered
+- [x] `orgCustomFields` + `orgCustomFieldValues` tables in schema
+- [x] `orgSettings.commissionTiers` — array of `{ minProfitAmount, commissionPct }` tiers
+- [x] `convex/orgCustomFields.ts` — list, create, update, remove (field defs) + getValues/setValues (values)
+- [x] `settings/custom-fields/page.tsx` — add text/number/select/date fields per entity type
+- [x] `settings/commission/page.tsx` — tier builder with live preview calculator
+- [x] `hooks/useCommission.ts` — `calculate(profit)` + `getAppliedTier(profit)`
+- [x] `components/custom-fields/CustomFieldsSection.tsx` — renders active fields in any form; loads existing values on edit
+- [x] `VehicleDialog` — includes `CustomFieldsSection`, saves custom field values on create/update
+- [x] Onboarding wizard — 5-step: name → currency → lead sources → pipeline → done (each step skippable)
+
+### Deferred
+- [ ] CustomerDialog / LeadDialog custom fields (same pattern as VehicleDialog)
+- [ ] Regional doc templates (requires template engine — Phase 14)
 
 ---
 
