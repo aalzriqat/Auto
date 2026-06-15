@@ -37,6 +37,7 @@ import {
 } from "@/components/ui/select";
 
 import { leadSchema, LeadFormValues, LeadDialogProps } from "./lead.schema";
+import { CustomFieldsSection, useSaveCustomFieldValues } from "@/components/custom-fields/CustomFieldsSection";
 
 
 export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
@@ -67,6 +68,8 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
   const createLead = useMutation(api.leads.create);
   const updateLead = useMutation(api.leads.update);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [customFieldValues, setCustomFieldValues] = useState<Record<string, string>>({});
+  const saveCustomFields = useSaveCustomFieldValues();
 
   const form = useForm<LeadFormValues>({
     resolver: zodResolver(leadSchema as any),
@@ -121,12 +124,14 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
           leadId: lead._id,
           ...payload,
         });
+        await saveCustomFields(activeOrgId, "lead", lead._id, customFieldValues);
         toast.success(t("LeadUpdatedSuccess" as any) || "Lead updated successfully");
       } else {
-        await createLead({
+        const newId = await createLead({
           orgId: activeOrgId,
           ...payload,
         });
+        if (newId) await saveCustomFields(activeOrgId, "lead", newId, customFieldValues);
         toast.success(t("LeadAddedSuccess" as any) || "Lead created successfully");
       }
       onOpenChange(false);
@@ -314,6 +319,14 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                 )}
               />
             </div>
+            {activeOrgId && (
+              <CustomFieldsSection
+                orgId={activeOrgId}
+                entityType="lead"
+                entityId={lead?._id}
+                onChange={setCustomFieldValues}
+              />
+            )}
             <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 {t("Cancel" as any) || "Cancel"}
