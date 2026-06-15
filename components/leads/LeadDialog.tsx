@@ -5,6 +5,7 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
+
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -49,6 +50,10 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
     { initialNumItems: 100 }
   );
   const vehicles = useQuery(api.vehicles.listAll, activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE" } : "skip");
+  const dynamicLeadSources = useQuery(
+    api.orgLeadSources.list,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
   const { results: memberships } = usePaginatedQuery(
     api.memberships.list,
     activeOrgId ? { orgId: activeOrgId } : "skip",
@@ -259,13 +264,22 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="Walk-in">{t("WalkIn" as any) || "Walk-in"}</SelectItem>
-                        <SelectItem value="Website">{t("Website" as any) || "Website"}</SelectItem>
-                        <SelectItem value="Facebook">{t("Facebook" as any) || "Facebook"}</SelectItem>
-                        <SelectItem value="Instagram">{t("Instagram" as any) || "Instagram"}</SelectItem>
-                        <SelectItem value="Referral">{t("Referral" as any) || "Referral"}</SelectItem>
-                        <SelectItem value="Phone">{t("Phone" as any) || "Phone Call"}</SelectItem>
-                        <SelectItem value="Other">{t("Other" as any) || "Other"}</SelectItem>
+                        {(dynamicLeadSources && dynamicLeadSources.length > 0
+                          ? dynamicLeadSources.filter((s) => s.isActive)
+                          : [
+                              { label: "Walk-in" },
+                              { label: "Website" },
+                              { label: "Facebook" },
+                              { label: "Instagram" },
+                              { label: "Referral" },
+                              { label: "Phone" },
+                              { label: "Other" },
+                            ]
+                        ).map((s) => (
+                          <SelectItem key={s.label} value={s.label}>
+                            {s.label}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                     <FormMessage />

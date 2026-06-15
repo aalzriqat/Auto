@@ -547,6 +547,35 @@ export default defineSchema({
     .index("by_org_vehicle", ["orgId", "vehicleId"])
     .index("by_org_status", ["orgId", "status"]),
 
+  orgSettings: defineTable({
+    orgId: v.id("organizations"),
+    currency: v.string(),
+    currencySymbol: v.string(),
+    vatRate: v.optional(v.number()),
+    country: v.optional(v.string()),
+    timezone: v.optional(v.string()),
+    enabledPaymentTypes: v.array(v.string()),
+    logoStorageId: v.optional(v.id("_storage")),
+    primaryColor: v.optional(v.string()),
+    whatsappPhoneNumberId: v.optional(v.string()),
+    whatsappApiToken: v.optional(v.string()),
+    whatsappWebhookSecret: v.optional(v.string()),
+  }).index("by_org", ["orgId"]),
+
+  orgLeadSources: defineTable({
+    orgId: v.id("organizations"),
+    label: v.string(),
+    isActive: v.boolean(),
+    order: v.number(),
+  }).index("by_org", ["orgId"]),
+
+  orgValuationCompanies: defineTable({
+    orgId: v.id("organizations"),
+    name: v.string(),
+    isActive: v.boolean(),
+    order: v.number(),
+  }).index("by_org", ["orgId"]),
+
   profitApprovalRequests: defineTable({
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),

@@ -5,6 +5,7 @@ import { RoleGuard } from "@/components/auth/RoleGuard";
 import { usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
+import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { SalesWizard } from "@/components/sales/SalesWizard";
 import { PaymentType } from "@/components/sales/wizard/types";
 import { Banknote, CreditCard, TrendingUp, ArrowRight } from "lucide-react";
@@ -15,6 +16,12 @@ export default function SalesHomePage() {
     const { activeOrgId } = useOrg();
     const { t, isRtl } = useLanguage();
     const [activeWizard, setActiveWizard] = useState<PaymentType | null>(null);
+    const orgSettings = useOrgSettings();
+
+    const enabledPaymentTypes =
+        orgSettings?.enabledPaymentTypes ?? ["CASH", "INSTALLMENT"];
+    const cashEnabled = enabledPaymentTypes.includes("CASH");
+    const installmentEnabled = enabledPaymentTypes.includes("INSTALLMENT");
 
     const { results: recentSales } = usePaginatedQuery(
         api.sales.list,
@@ -61,6 +68,7 @@ export default function SalesHomePage() {
                         {/* Launch Buttons */}
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-2xl w-full">
                             {/* Cash */}
+                            {cashEnabled && (
                             <button
                                 id="btn-new-cash-sale"
                                 onClick={() => setActiveWizard("CASH")}
@@ -86,8 +94,10 @@ export default function SalesHomePage() {
                                     {t("ThreeStepWizard" as any)}
                                 </div>
                             </button>
+                            )}
 
                             {/* Installment */}
+                            {installmentEnabled && (
                             <button
                                 id="btn-new-installment-sale"
                                 onClick={() => setActiveWizard("INSTALLMENT")}
@@ -113,6 +123,7 @@ export default function SalesHomePage() {
                                     {t("ThreeStepWizard" as any)}
                                 </div>
                             </button>
+                            )}
                         </div>
                     </div>
                 </div>
