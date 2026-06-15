@@ -54,6 +54,10 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
     api.orgLeadSources.list,
     activeOrgId ? { orgId: activeOrgId } : "skip"
   );
+  const pipelineStages = useQuery(
+    api.orgPipelineStages.list,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
   const { results: memberships } = usePaginatedQuery(
     api.memberships.list,
     activeOrgId ? { orgId: activeOrgId } : "skip",
@@ -236,14 +240,23 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="NEW">{t("StageNew" as any) || "New"}</SelectItem>
-                        <SelectItem value="CONTACTED">{t("StageContacted" as any) || "Contacted"}</SelectItem>
-                        <SelectItem value="INTERESTED">{t("Interested" as any) || "Interested"}</SelectItem>
-                        <SelectItem value="TEST_DRIVE">{t("StageTestDrive" as any) || "Test Drive"}</SelectItem>
-                        <SelectItem value="NEGOTIATION">{t("StageNegotiation" as any) || "Negotiation"}</SelectItem>
-                        <SelectItem value="RESERVED">{t("Reserved" as any) || "Reserved"}</SelectItem>
-                        <SelectItem value="WON">{t("StageWon" as any) || "Won"}</SelectItem>
-                        <SelectItem value="LOST">{t("Lost" as any) || "Lost"}</SelectItem>
+                        {(pipelineStages && pipelineStages.length > 0
+                          ? pipelineStages.filter((s) => s.isActive)
+                          : [
+                              { stageKey: "NEW", label: "New" },
+                              { stageKey: "CONTACTED", label: "Contacted" },
+                              { stageKey: "INTERESTED", label: "Interested" },
+                              { stageKey: "TEST_DRIVE", label: "Test Drive" },
+                              { stageKey: "NEGOTIATION", label: "Negotiation" },
+                              { stageKey: "RESERVED", label: "Reserved" },
+                              { stageKey: "WON", label: "Won" },
+                              { stageKey: "LOST", label: "Lost" },
+                            ]
+                        ).map((s) => (
+                          <SelectItem key={s.stageKey} value={s.stageKey}>
+                            {s.label}
+                          </SelectItem>
+                        ))}
                       </SelectContent>
                     </Select>
                     <FormMessage />

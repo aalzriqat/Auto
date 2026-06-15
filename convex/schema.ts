@@ -560,6 +560,8 @@ export default defineSchema({
     whatsappPhoneNumberId: v.optional(v.string()),
     whatsappApiToken: v.optional(v.string()),
     whatsappWebhookSecret: v.optional(v.string()),
+    approvalThresholdEnabled: v.optional(v.boolean()),
+    approvalMinProfitPercent: v.optional(v.number()),
   }).index("by_org", ["orgId"]),
 
   orgLeadSources: defineTable({
@@ -575,6 +577,17 @@ export default defineSchema({
     isActive: v.boolean(),
     order: v.number(),
   }).index("by_org", ["orgId"]),
+
+  orgPipelineStages: defineTable({
+    orgId: v.id("organizations"),
+    stageKey: v.string(), // "NEW" | "CONTACTED" | "INTERESTED" | "TEST_DRIVE" | "NEGOTIATION" | "RESERVED" | "WON" | "LOST"
+    label: v.string(), // Custom display label, e.g. "طازج" instead of "New"
+    color: v.optional(v.string()), // Hex color, e.g. "#3b82f6"
+    order: v.number(),
+    isActive: v.boolean(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_key", ["orgId", "stageKey"]),
 
   profitApprovalRequests: defineTable({
     orgId: v.id("organizations"),

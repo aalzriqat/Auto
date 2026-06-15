@@ -30,6 +30,7 @@ import type * as migrateRoles from "../migrateRoles.js";
 import type * as migrations from "../migrations.js";
 import type * as notifications from "../notifications.js";
 import type * as orgLeadSources from "../orgLeadSources.js";
+import type * as orgPipelineStages from "../orgPipelineStages.js";
 import type * as orgSettings from "../orgSettings.js";
 import type * as orgValuationCompanies from "../orgValuationCompanies.js";
 import type * as organizations from "../organizations.js";
@@ -81,6 +82,7 @@ declare const fullApi: ApiFromModules<{
   migrations: typeof migrations;
   notifications: typeof notifications;
   orgLeadSources: typeof orgLeadSources;
+  orgPipelineStages: typeof orgPipelineStages;
   orgSettings: typeof orgSettings;
   orgValuationCompanies: typeof orgValuationCompanies;
   organizations: typeof organizations;

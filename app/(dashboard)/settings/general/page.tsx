@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
-import { Settings, Palette, CreditCard, Upload } from "lucide-react";
+import { Settings, Palette, CreditCard, Upload, ShieldCheck } from "lucide-react";
 
 const CURRENCIES = [
   { code: "JOD", symbol: "د.أ", label: "Jordanian Dinar (JOD)" },
@@ -63,6 +63,11 @@ export default function GeneralSettingsPage() {
 
   // Appearance tab state
   const [primaryColor, setPrimaryColor] = useState("#0f172a");
+
+  // Approvals tab state
+  const [approvalThresholdEnabled, setApprovalThresholdEnabled] = useState(false);
+  const [approvalMinProfitPercent, setApprovalMinProfitPercent] = useState("");
+
   const [isSaving, setIsSaving] = useState(false);
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
 
@@ -77,6 +82,12 @@ export default function GeneralSettingsPage() {
       setCashEnabled(pt.includes("CASH"));
       setInstallmentEnabled(pt.includes("INSTALLMENT"));
       setPrimaryColor(settings.primaryColor ?? "#0f172a");
+      setApprovalThresholdEnabled(settings.approvalThresholdEnabled ?? false);
+      setApprovalMinProfitPercent(
+        settings.approvalMinProfitPercent !== undefined
+          ? String(settings.approvalMinProfitPercent)
+          : ""
+      );
     }
   }, [settings]);
 
@@ -110,6 +121,25 @@ export default function GeneralSettingsPage() {
       if (installmentEnabled) enabledPaymentTypes.push("INSTALLMENT");
       await upsert({ orgId: activeOrgId, enabledPaymentTypes });
       toast.success("Payment types saved.");
+    } catch (error: any) {
+      toast.error(error.message || "Failed to save settings.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleSaveApprovals = async () => {
+    if (!activeOrgId) return;
+    setIsSaving(true);
+    try {
+      await upsert({
+        orgId: activeOrgId,
+        approvalThresholdEnabled,
+        approvalMinProfitPercent: approvalMinProfitPercent
+          ? parseFloat(approvalMinProfitPercent)
+          : undefined,
+      });
+      toast.success("Approval settings saved.");
     } catch (error: any) {
       toast.error(error.message || "Failed to save settings.");
     } finally {
@@ -174,6 +204,10 @@ export default function GeneralSettingsPage() {
           <TabsTrigger value="appearance" className="flex items-center gap-2">
             <Palette className="h-4 w-4" />
             Appearance
+          </TabsTrigger>
+          <TabsTrigger value="approvals" className="flex items-center gap-2">
+            <ShieldCheck className="h-4 w-4" />
+            Approvals
           </TabsTrigger>
         </TabsList>
 
@@ -354,6 +388,58 @@ export default function GeneralSettingsPage() {
               <div className="flex justify-end">
                 <Button onClick={handleSaveAppearance} disabled={isSaving}>
                   {isSaving ? "Saving..." : "Save Appearance"}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
+        {/* ── Approvals Tab ────────────────────────────────────────────── */}
+        <TabsContent value="approvals">
+          <Card>
+            <CardHeader>
+              <CardTitle>Approval Thresholds</CardTitle>
+              <CardDescription>
+                Require manager approval when a sale falls below a minimum profit percentage.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="flex items-center justify-between rounded-lg border p-4">
+                <div>
+                  <p className="font-medium">Enable Profit Approval Workflow</p>
+                  <p className="text-sm text-muted-foreground">
+                    Sales below the minimum profit percentage must be approved by a manager.
+                  </p>
+                </div>
+                <Switch
+                  checked={approvalThresholdEnabled}
+                  onCheckedChange={setApprovalThresholdEnabled}
+                />
+              </div>
+
+              {approvalThresholdEnabled && (
+                <div className="space-y-2">
+                  <Label>Minimum Profit Percentage (%)</Label>
+                  <div className="flex items-center gap-3 max-w-xs">
+                    <Input
+                      type="number"
+                      min="0"
+                      max="100"
+                      step="0.5"
+                      placeholder="e.g. 5"
+                      value={approvalMinProfitPercent}
+                      onChange={(e) => setApprovalMinProfitPercent(e.target.value)}
+                    />
+                    <span className="text-sm text-muted-foreground">%</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Sales with profit below this percentage of the vehicle cost will require approval.
+                  </p>
+                </div>
+              )}
+
+              <div className="flex justify-end">
+                <Button onClick={handleSaveApprovals} disabled={isSaving}>
+                  {isSaving ? "Saving..." : "Save Approval Settings"}
                 </Button>
               </div>
             </CardContent>

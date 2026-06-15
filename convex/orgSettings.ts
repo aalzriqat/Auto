@@ -47,6 +47,8 @@ export const upsert = mutation({
     whatsappPhoneNumberId: v.optional(v.string()),
     whatsappApiToken: v.optional(v.string()),
     whatsappWebhookSecret: v.optional(v.string()),
+    approvalThresholdEnabled: v.optional(v.boolean()),
+    approvalMinProfitPercent: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
@@ -84,6 +86,8 @@ export const upsert = mutation({
         whatsappPhoneNumberId: fields.whatsappPhoneNumberId,
         whatsappApiToken: fields.whatsappApiToken,
         whatsappWebhookSecret: fields.whatsappWebhookSecret,
+        approvalThresholdEnabled: fields.approvalThresholdEnabled,
+        approvalMinProfitPercent: fields.approvalMinProfitPercent,
       });
       return newId;
     }
