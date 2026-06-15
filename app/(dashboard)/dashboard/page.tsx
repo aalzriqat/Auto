@@ -5,6 +5,7 @@ import { useQuery, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useCurrency } from "@/hooks/useCurrency";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Car, Filter, Search, ChevronDown, Calendar, ArrowUpRight } from "lucide-react";
 import { motion } from "framer-motion";
@@ -46,6 +47,7 @@ import { useRouter } from "next/navigation";
 export default function DashboardPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  const { formatCompact } = useCurrency();
   const router = useRouter();
   const [timeRange, setTimeRange] = useState<"DAY" | "MONTH" | "YEAR" | "ALL_TIME">("MONTH");
   const [currentPage, setCurrentPage] = useState(1);
@@ -167,7 +169,7 @@ export default function DashboardPage() {
               <div className="flex items-baseline gap-6">
                 <div>
                   <div className="text-5xl font-bold tracking-tight">
-                    {(stats?.salesVolumeThisMonth || 0).toLocaleString()} <span className="text-2xl">JOD</span>
+                    {formatCompact(stats?.salesVolumeThisMonth || 0)}
                   </div>
                   <p className="text-sm text-white/80 mt-1 flex items-center">
                     {t("Revenue" as any) || "Revenue"} <span className="ms-1 text-[#4ade80] font-medium">(+0.0%)</span>

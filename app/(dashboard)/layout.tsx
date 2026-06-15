@@ -34,7 +34,7 @@ const CURRENCIES = [
 
 const STEPS = ["Dealership", "Currency", "Lead Sources", "Pipeline", "Done"];
 
-function Onboarding() {
+function Onboarding({ onComplete }: { onComplete: () => void }) {
   const { setActiveOrgId } = useOrg();
   const [step, setStep] = useState(0);
   const [orgId, setOrgId] = useState<string | null>(null);
@@ -55,7 +55,6 @@ function Onboarding() {
     try {
       const newId = await createOrg({ name: name.trim() });
       setOrgId(newId as string);
-      setActiveOrgId(newId);
       setStep(1);
     } catch (err: any) {
       toast.error(err.message || "Something went wrong");
@@ -242,7 +241,7 @@ function Onboarding() {
                 Your dealership is ready. Head to Settings anytime to customize further.
               </p>
             </div>
-            <Button className="w-full" onClick={() => window.location.reload()}>
+            <Button className="w-full" onClick={() => { setActiveOrgId(orgId! as any); onComplete(); }}>
               Go to Dashboard
             </Button>
           </div>
@@ -256,6 +255,13 @@ function DashboardWrapper({ children }: { children: React.ReactNode }) {
   const { activeOrgId, isLoading } = useOrg();
   const orgSettings = useOrgSettings();
 
+  // Initialize from localStorage so returning users skip the wizard on reload.
+  // New users have no stored org → showWizard starts true and stays true until
+  // they click "Go to Dashboard", even if OrgProvider auto-selects the new org.
+  const [showWizard, setShowWizard] = useState(
+    () => !localStorage.getItem("autoflow_active_org")
+  );
+
   const brandStyle = useMemo(() => {
     const hsl = orgSettings?.primaryColor
       ? hexToHslString(orgSettings.primaryColor)
@@ -264,7 +270,7 @@ function DashboardWrapper({ children }: { children: React.ReactNode }) {
     return { "--primary": `hsl(${hsl})` } as React.CSSProperties;
   }, [orgSettings?.primaryColor]);
 
-  if (isLoading) {
+  if (isLoading && !showWizard) {
     return (
       <div className="flex h-screen items-center justify-center bg-muted/30 flex-col gap-4">
         <div className="w-10 h-10 rounded-full border-4 border-primary border-t-transparent animate-spin" />
@@ -273,8 +279,8 @@ function DashboardWrapper({ children }: { children: React.ReactNode }) {
     );
   }
 
-  if (!activeOrgId) {
-    return <Onboarding />;
+  if (showWizard || !activeOrgId) {
+    return <Onboarding onComplete={() => setShowWizard(false)} />;
   }
 
   return (

@@ -6,6 +6,7 @@ import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useCurrency } from "@/hooks/useCurrency";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ExpenseDialog } from "@/components/expenses/ExpenseDialog";
@@ -32,6 +33,7 @@ import {
 export default function ExpensesPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  const { format } = useCurrency();
   const { results: expenses } = usePaginatedQuery(api.expenses.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
   const removeExpense = useMutation(api.expenses.remove);
 
@@ -149,7 +151,7 @@ export default function ExpensesPage() {
                     )}
                   </TableCell>
                   <TableCell className="text-end font-medium text-red-500">
-                    -{expense.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} JOD
+                    -{format(expense.amount)}
                   </TableCell>
                   <TableCell className="text-end">
                     <Button variant="ghost" size="icon" onClick={() => handleEdit(expense)}>

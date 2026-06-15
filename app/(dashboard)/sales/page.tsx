@@ -11,6 +11,7 @@ import { PaymentType, WizardData } from "@/components/sales/wizard/types";
 import { Banknote, CreditCard, TrendingUp, ArrowRight, Clock, CheckCircle2, RotateCcw, FileEdit } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useCurrency } from "@/hooks/useCurrency";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Id } from "@/convex/_generated/dataModel";
@@ -18,6 +19,7 @@ import { Id } from "@/convex/_generated/dataModel";
 export default function SalesHomePage() {
     const { activeOrgId } = useOrg();
     const { t } = useLanguage();
+    const { format } = useCurrency();
     const [activeWizard, setActiveWizard] = useState<PaymentType | null>(null);
     const orgSettings = useOrgSettings();
     const enabledPaymentTypes =
@@ -227,7 +229,7 @@ export default function SalesHomePage() {
                                     <div>
                                         <p className="text-sm font-medium text-foreground">{approval.vehicleSummary}</p>
                                         <p className="text-xs text-muted-foreground mt-0.5">
-                                            {t("RequestedProfit" as any) ?? "Requested profit"}: {approval.requestedProfit.toLocaleString()} JOD
+                                            {t("RequestedProfit" as any) ?? "Requested profit"}: {format(approval.requestedProfit)}
                                         </p>
                                     </div>
                                     <div className="flex items-center gap-3">
@@ -286,11 +288,7 @@ export default function SalesHomePage() {
                                     </div>
                                     <div className="text-end">
                                         <p className="text-sm font-semibold">
-                                            {sale.salePrice.toLocaleString(undefined, {
-                                                minimumFractionDigits: 2,
-                                                maximumFractionDigits: 2,
-                                            })}{" "}
-                                            {t("JOD" as any)}
+                                            {format(sale.salePrice)}
                                         </p>
                                         <p className="text-xs text-muted-foreground">
                                             {new Date(sale.saleDate).toLocaleDateString()}

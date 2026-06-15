@@ -22,6 +22,7 @@ import { Search, Pencil, Trash2, FileText, ExternalLink } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useCurrency } from "@/hooks/useCurrency";
 import { toast } from "@/components/ui/sonner";
 import { generateBillOfSale } from "@/lib/pdf";
 import {
@@ -36,6 +37,7 @@ import {
 export default function SalesPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  const { format } = useCurrency();
   const { results: sales, status: salesStatus, loadMore: loadMoreSales } = usePaginatedQuery(
     api.sales.list,
     activeOrgId ? { orgId: activeOrgId } : "skip",
@@ -153,7 +155,7 @@ export default function SalesPage() {
                       </div>
                     </TableCell>
                     <TableCell className="text-end font-medium">
-                      {sale.salePrice.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} JOD
+                      {format(sale.salePrice)}
                     </TableCell>
                     <TableCell>{getStatusBadge(sale.status)}</TableCell>
                     <TableCell className="text-end">

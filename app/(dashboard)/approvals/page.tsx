@@ -4,6 +4,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useCurrency } from "@/hooks/useCurrency";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,6 +15,7 @@ import { Id } from "@/convex/_generated/dataModel";
 export default function ApprovalsPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  const { format } = useCurrency();
 
   const pendingApprovals = useQuery(api.approvals.listPendingApprovals, activeOrgId ? { orgId: activeOrgId } : "skip");
   const respondToApproval = useMutation(api.approvals.respondToApproval);
@@ -74,17 +76,17 @@ export default function ApprovalsPage() {
                   <div className="grid grid-cols-2 gap-4 rounded-lg bg-slate-50 p-3 border border-slate-100">
                     <div>
                       <p className="text-xs text-slate-500 font-medium">Requested Profit</p>
-                      <p className="text-lg font-bold text-slate-900">{request.requestedProfit.toLocaleString()} JOD</p>
+                      <p className="text-lg font-bold text-slate-900">{format(request.requestedProfit)}</p>
                     </div>
                     <div>
                       <p className="text-xs text-slate-500 font-medium">Minimum Allowed</p>
-                      <p className="text-sm font-semibold text-slate-600">{request.minimumProfit.toLocaleString()} JOD</p>
+                      <p className="text-sm font-semibold text-slate-600">{format(request.minimumProfit)}</p>
                     </div>
                   </div>
 
                   <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 px-3 py-2 rounded-md border border-amber-100">
                     <AlertCircle className="h-4 w-4 shrink-0" />
-                    <span>Short by {(request.minimumProfit - request.requestedProfit).toLocaleString()} JOD</span>
+                    <span>Short by {format(request.minimumProfit - request.requestedProfit)}</span>
                   </div>
                 </div>
 
