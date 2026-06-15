@@ -28,6 +28,119 @@
 
 ---
 
+## Phase 1 — Critical Performance & Indexing ✅
+
+**Branch:** `main` · **Completed:** 2026-06-13
+
+### Delivered
+- [x] `by_status_alarm` index added in `convex/schema.ts`
+- [x] `convex/crons.ts` uses the index (no more full-table scan)
+- [x] `convex/reports.ts` bulk-fetch + `Promise.all` pattern — N+1 eliminated
+
+---
+
+## Phase 2 — Input Validation Layer ✅
+
+**Branch:** `main` · **Completed:** 2026-06-13
+
+### Delivered
+- [x] `convex/validations/` — sales, vehicles, customers, expenses schemas
+- [x] `convex/utils/validation.ts` with `validateInput()` helper
+- [x] Applied to sales, vehicles, customers, expenses mutations
+
+---
+
+## Phase 3 — Configuration & Environment Hardening ✅
+
+**Branch:** `main` · **Completed:** 2026-06-13
+
+### Delivered
+- [x] `convex/utils/env.ts` — `getValidatedEnv()` validates required env vars at startup
+- [x] Applied to `email.ts`, `http.ts`, `auth.config.ts`
+- [x] `.env.example` added
+
+---
+
+## Phase 4 — Test Coverage Foundation ✅
+
+**Branch:** `main` · **Completed:** 2026-06-13
+
+### Delivered
+- [x] `lib/financing.test.ts` — APR / monthly payment calculations
+- [x] `convex/sales.test.ts` — sale creation, profit checks
+- [x] `convex/approvals.test.ts` — approval workflow states
+- [x] `convex/utils/permissions.test.ts` — RBAC permission checks
+- [x] `.github/workflows/test.yml` — CI runs lint + tests on every PR
+
+---
+
+## Phase 5 — API Rate Limiting & DoS Protection ✅
+
+**Branch:** `main` · **Completed:** 2026-06-13
+
+### Delivered
+- [x] `heavyRead` + `standardApi` buckets in `convex/rateLimit.ts`
+- [x] `heavyRead` applied to all 6 queries in `convex/reports.ts`
+- [x] `standardApi` applied to update/softDelete in expenses, customers, sales, vehicles
+
+---
+
+## Phase 6 — SearchableSelect + DB Drafts + i18n Fixes ✅
+
+**Branch:** `feature/searchable-selects-db-drafts-i18n-rtl` · **Completed:** 2026-06-15
+
+### Delivered
+- [x] `SearchableSelect` component — searchable combobox replacing plain `<Select>` in high-volume dropdowns
+- [x] `wizardDrafts` table — persists in-progress sale wizard state to Convex so it survives page refresh
+- [x] `SalesWizard` — `resumeDraft` prop + draft auto-save on step change
+- [x] `sales/page.tsx` — "Resume Draft" card shown when a saved draft exists
+- [x] `LanguageProvider` SSR fix — eliminated client/server hydration mismatch
+- [x] RTL layout improvements
+
+---
+
+## Phase 7 — VIN Decode Improvements ✅
+
+**Branch:** `feature/searchable-selects-db-drafts-i18n-rtl` · **Completed:** 2026-06-15
+
+### Delivered
+- [x] Parallel WMI + full NHTSA VIN lookup via `Promise.allSettled`
+- [x] `decodeVinYear(char)` — ISO 3779 position-10 year decode with 30-year cycle
+- [x] `toCarBrand(name)` — smart case (≤3 chars → ALL-CAPS, longer → Title Case)
+- [x] `cleanMfrName(mfr)` — strips legal suffixes (CORPORATION, CO., LTD, MOTOR…)
+- [x] WMI wins for Make (better international coverage); NHTSA provides model/trim/fuel/year
+- [x] `VehicleImportDialog` — mileage column made optional; split TYPE/Name → make + model
+
+---
+
+## Phase 8 — Structured Error Handling & Logging ✅
+
+**Branch:** `main` · **Completed:** 2026-06-13
+
+### Delivered
+- [x] `convex/utils/errors.ts` — `AppErrorCode` const + `throwAppError()` factory
+- [x] Structured `{ code, message }` errors in `sales.ts` (13 throws) and `utils/tenancy.ts` (7 throws)
+- [x] `sonner.tsx` `formatFriendlyError` parses structured JSON errors before keyword matching
+
+### Remaining (incremental)
+- [ ] Other 28 files still use plain `ConvexError(string)` — migrate using `throwAppError()` pattern
+
+---
+
+## Phase 9 — CI/CD & Deployment Hardening ✅
+
+**Branch:** `main` · **Completed:** 2026-06-13
+
+### Delivered
+- [x] `.github/workflows/test.yml` — lint + typecheck + tests on every PR to `main`
+
+### Remaining
+- [ ] Convex deploy step to CI (staging environment)
+- [ ] Branch protection rule: PRs require passing CI before merge
+- [ ] Document rollback procedure in CLAUDE.md
+
+---
+
 ## Production Readiness Scorecard
 
 | Dimension             | Score  | Summary |
