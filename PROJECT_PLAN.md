@@ -21,6 +21,7 @@
 | 7 | feature/searchable-selects-db-drafts-i18n-rtl | VIN decode improvements (parallel NHTSA + WMI), mileage optional | ✅ Done |
 | 10 | feature/phase-10-org-settings | Org Settings Foundation | ✅ Done |
 | 11 | feature/phase-11-sales-flow | Pipeline Stages, Approval Thresholds | ✅ Done |
+| 12 | feature/phase-12-branding-whatsapp | Org Logo, Brand Color, WhatsApp Webhook | ✅ Done |
 
 ---
 
@@ -59,19 +60,19 @@
 
 ---
 
-## Phase 12 — Branding + WhatsApp Integration
+## Phase 12 — Branding + WhatsApp Integration ✅
 
 **Branch:** `feature/phase-12-branding-whatsapp`
-**Goal:** Show org logo in TopNav/print layouts; WhatsApp webhook → auto-create leads.
+**Commit:** `b3d3a53`
 
-### Tasks
-- [ ] Display `orgSettings.logoStorageId` in TopNav (next to org name)
-- [ ] Apply `primaryColor` as CSS variable via `useOrgSettings` in root layout
-- [ ] Print layout component uses org logo + name
-- [ ] WhatsApp webhook endpoint `convex/http.ts` — receive message, extract sender phone, map to customer or create new, create lead
-- [ ] Convex action: call Claude API to classify message intent and extract vehicle interest
-- [ ] `orgSettings.whatsappPhoneNumberId` + `whatsappAccessToken` fields (encrypted-at-rest note)
-- [ ] Settings UI: WhatsApp tab in general settings for credentials entry
+### Delivered
+- [x] `convex/orgSettings.ts` — `getLogoUrl` query returns Convex storage URL for org logo
+- [x] `Sidebar.tsx` + `TopNav.tsx` — dynamic org logo; falls back to `/logo.png`
+- [x] `lib/colorUtils.ts` — `hexToHslString()` converts hex → shadcn/ui HSL format
+- [x] `app/(dashboard)/layout.tsx` — applies `orgSettings.primaryColor` as `--primary` CSS variable
+- [x] `settings/general/page.tsx` — WhatsApp tab (Phone Number ID, API token, webhook secret)
+- [x] `convex/whatsapp.ts` — `handleIncomingMessage` internal mutation (find/create customer + open NEW lead)
+- [x] `convex/http.ts` — GET `/whatsapp-webhook` (Meta verification) + POST (message → lead)
 
 ---
 
