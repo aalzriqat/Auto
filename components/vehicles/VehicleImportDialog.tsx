@@ -91,7 +91,7 @@ interface ParsedVehicle {
   year: number;
   vin: string;
   color: string;
-  mileage: number;
+  mileage?: number;
   fuelType: string;
   transmission: string;
   sellingPrice: number;
@@ -139,7 +139,8 @@ function parseRows(rows: Record<string, any>[]): ParsedVehicle[] {
     }
     const vin = String(mapped.vin ?? "").trim();
     const color = String(mapped.color ?? "").trim();
-    const mileage = parseFloat(String(mapped.mileage ?? "0").replace(/,/g, ""));
+    const rawMileage = mapped.mileage != null ? String(mapped.mileage).trim() : "";
+    const mileage = rawMileage === "" ? undefined : parseFloat(rawMileage.replace(/,/g, ""));
     const fuelType = String(mapped.fuelType ?? "Petrol").trim() || "Petrol";
     const transmission = String(mapped.transmission ?? "Automatic").trim() || "Automatic";
     const sellingPrice = parseFloat(String(mapped.sellingPrice ?? "0").replace(/,/g, ""));
@@ -150,12 +151,12 @@ function parseRows(rows: Record<string, any>[]): ParsedVehicle[] {
     if (!make) errors.push("Missing Make");
     if (!model) errors.push("Missing Model");
     if (!year || isNaN(year) || year < 1900 || year > new Date().getFullYear() + 2) errors.push("Invalid Year");
-    if (isNaN(mileage) || mileage < 0) errors.push("Invalid Mileage");
+    if (mileage !== undefined && (isNaN(mileage) || mileage < 0)) errors.push("Invalid Mileage");
 
     return {
       make, model, year: isNaN(year) ? 0 : year,
       vin, color: color || "Unknown",
-      mileage: isNaN(mileage) ? 0 : mileage,
+      mileage: mileage !== undefined && !isNaN(mileage) ? mileage : undefined,
       fuelType, transmission,
       sellingPrice: isNaN(sellingPrice) ? 0 : sellingPrice,
       purchasePrice: purchasePrice && !isNaN(purchasePrice) ? purchasePrice : undefined,
@@ -217,9 +218,11 @@ function downloadTemplate() {
 
   const row1 = ["TYPE/Name", "VIN", "Color", "KM", "Cost", "Model", "المتخصصة", "الكوتر", "التخمين", "", ""];
   const row2 = ["",           "",    "",      "",   "",     "",       "",          "",        "بندار",    "تمكين", "السماحة"];
-  const example = ["Toyota", "JTDKARFU7G3529873", "White", "45000", "14000", "Camry 2022", "18000", "17500", "19000", "18500", "17000"];
+  // KM=number → zero-km or known mileage; KM=empty → used car, mileage to be added later
+  const example1 = ["Toyota", "JTDKARFU7G3529873", "White", "45000", "14000", "Camry 2022", "18000", "17500", "19000", "18500", "17000"];
+  const example2 = ["BYD", "LJ136HBDA4P123456", "Black", "", "22000", "Dolphin 2024", "26000", "25000", "27000", "26500", "25500"];
 
-  const ws = XLSX.utils.aoa_to_sheet([row1, row2, example]);
+  const ws = XLSX.utils.aoa_to_sheet([row1, row2, example1, example2]);
 
   // Merge التخمين across columns I–K (0-indexed: cols 8–10, row 0)
   ws["!merges"] = [{ s: { r: 0, c: 8 }, e: { r: 0, c: 10 } }];
@@ -394,7 +397,7 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
                       <TableCell>{row.year || <span className="text-destructive">—</span>}</TableCell>
                       <TableCell className="font-mono text-xs">{row.vin || "—"}</TableCell>
                       <TableCell>{row.color}</TableCell>
-                      <TableCell>{row.mileage.toLocaleString()}</TableCell>
+                      <TableCell>{row.mileage !== undefined ? row.mileage.toLocaleString() : <span className="text-muted-foreground text-xs">TBD</span>}</TableCell>
                       <TableCell className="text-end">{row.purchasePrice ? row.purchasePrice.toLocaleString() : "—"}</TableCell>
                       <TableCell className="text-end">{row.sellingPrice > 0 ? row.sellingPrice.toLocaleString() : "—"}</TableCell>
                       <TableCell>
