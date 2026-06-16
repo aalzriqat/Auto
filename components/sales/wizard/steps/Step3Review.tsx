@@ -169,11 +169,13 @@ export function Step3Review({
     <div className="space-y-6">
       {/* HEADER SUMMARY GRID */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <ReviewVehicleCard
-          vehicle={selectedVehicle!}
-          basePrice={wizardData.vehiclePrice}
-          desiredProfit={wizardData.desiredProfit}
-        />
+        {selectedVehicle && (
+          <ReviewVehicleCard
+            vehicle={selectedVehicle}
+            basePrice={wizardData.vehiclePrice}
+            desiredProfit={wizardData.desiredProfit}
+          />
+        )}
 
         <ReviewCustomerCard customer={selectedCustomer} />
       </div>

@@ -67,12 +67,14 @@ export default function ReviewVehicleCard({
         )}
       </div>
 
-      {/* Cost breakdown */}
-      <VehicleCostBar
-        vehicleId={vehicle._id}
-        purchasePrice={vehicle.purchasePrice}
-        salePrice={effectivePrice}
-      />
+      {/* Cost breakdown — only rendered once vehicle data is available */}
+      {vehicle && (
+        <VehicleCostBar
+          vehicleId={vehicle._id}
+          purchasePrice={vehicle.purchasePrice}
+          salePrice={effectivePrice}
+        />
+      )}
     </div>
   );
 }

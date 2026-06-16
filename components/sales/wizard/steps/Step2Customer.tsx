@@ -1,21 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { usePaginatedQuery, useMutation } from "convex/react";
+import { usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { Doc, Id } from "@/convex/_generated/dataModel";
+import { Doc } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { PaymentType } from "../types";
 
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, ArrowRight, X } from "lucide-react";
+import { ArrowLeft, ArrowRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import  CustomerSearch  from "../components/CustomerSearch";
 import { CustomerCreateForm } from "../components/CustomerCreateForm";
 import { CustomerBanner } from "../components/CustomerBanner";
-
-import { toast } from "@/components/ui/sonner";
 
 // ─────────────────────────────────────────────
 // Props
@@ -41,7 +39,6 @@ export default function Step2Customer({
   onBack,
 }: Step2CustomerProps) {
   const { activeOrgId } = useOrg();
-  const createCustomer = useMutation(api.customers.create);
 
   const [showCreateForm, setShowCreateForm] = useState(false);
 
@@ -51,29 +48,11 @@ export default function Step2Customer({
     { initialNumItems: 100 }
   );
 
-  const handleCreateCustomer = async (data: any) => {
-    if (!activeOrgId) return;
-
-    try {
-      const id = await createCustomer({
-        orgId: activeOrgId,
-        ...data,
-      });
-
-      const newCustomer: Doc<"customers"> = {
-        _id: id as Id<"customers">,
-        _creationTime: Date.now(),
-        orgId: activeOrgId as Id<"organizations">,
-        ...data,
-      };
-
-      onSelectCustomer(newCustomer);
-      setShowCreateForm(false);
-
-      toast.success("Customer created");
-    } catch (err: any) {
-      toast.error(err.message || "Failed to create customer");
-    }
+  // CustomerCreateForm already creates the customer and returns the full Doc.
+  // We just accept it here and update wizard state — no second mutation call.
+  const handleCustomerCreated = (customer: Doc<"customers">) => {
+    onSelectCustomer(customer);
+    setShowCreateForm(false);
   };
 
   const isCash = paymentType === "CASH";
@@ -112,7 +91,7 @@ export default function Step2Customer({
       {/* CREATE FORM */}
       {showCreateForm && (
         <CustomerCreateForm
-          onCreated={handleCreateCustomer}
+          onCreated={handleCustomerCreated}
           onCancel={() => setShowCreateForm(false)}
           paymentType={paymentType}
         />
