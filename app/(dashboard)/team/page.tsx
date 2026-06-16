@@ -38,7 +38,9 @@ export default function TeamPage() {
 
   const { results: memberships } = usePaginatedQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
   const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const orgSettings = useQuery(api.orgSettings.get, activeOrgId ? { orgId: activeOrgId } : "skip");
   const roles = useQuery(api.roles.list, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const commissionMode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
 
   const removeMember = useAction(api.memberships.remove);
   const updateCommissionRate = useMutation(api.memberships.updateCommissionRate);
@@ -123,7 +125,20 @@ export default function TeamPage() {
                 <TableRow>
                   <TableHead>{t("Member" as any)}</TableHead>
                   <TableHead>{t("Role" as any)}</TableHead>
-                  <TableHead>{t("CommissionPct" as any)}</TableHead>
+                  <TableHead>
+                    <div className="flex items-center gap-1.5">
+                      {t("CommissionPct" as any)}
+                      {commissionMode === "AUTO_MEMBER" ? (
+                        <span className="text-[9px] font-semibold uppercase tracking-wide text-primary bg-primary/10 rounded px-1 py-0.5 leading-none">
+                          {t("CommissionModeActive" as any)}
+                        </span>
+                      ) : (
+                        <span className="text-[9px] text-muted-foreground uppercase tracking-wide">
+                          ({t("CommissionModeAutoMember" as any)})
+                        </span>
+                      )}
+                    </div>
+                  </TableHead>
                   {canManageUsers && <TableHead className="text-end">{t("Actions" as any)}</TableHead>}
                 </TableRow>
               </TableHeader>

@@ -7,6 +7,7 @@ import { notifyManagers, getActorName } from "./utils/notifications";
 import { rateLimiter } from "./rateLimit";
 import { validateInput } from "./utils/validation";
 import { CreateSaleSchema, UpdateSaleSchema } from "./validations/sales";
+import { calculateCommissionFromTiers } from "./utils/commission";
 import {
   markVehicleAsSold,
   restoreVehicleToAvailable,
@@ -179,15 +180,32 @@ export const create = mutation({
       throwAppError(AppErrorCode.SALESPERSON_NOT_MEMBER, "Salesperson is not a member of this organization.");
     }
 
-    // Calculate commission based on salesperson's rate and gross profit
+    // Determine commission amount based on org's commission mode
+    const orgSettings = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .unique();
+
+    const commissionMode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
+    const grossProfit = vehicle!.purchasePrice != null
+      ? Math.max(0, args.salePrice - vehicle!.purchasePrice)
+      : args.salePrice;
+
     let commissionAmount: number | undefined;
-    const commissionRate = membership!.commissionRate ?? 0;
-    if (commissionRate > 0) {
-      const grossProfit = vehicle!.purchasePrice != null
-        ? args.salePrice - vehicle!.purchasePrice
-        : args.salePrice;
-      commissionAmount = Math.max(0, grossProfit * (commissionRate / 100));
+
+    if (commissionMode === "AUTO_MEMBER") {
+      // Per-salesperson flat rate set on the team page
+      const rate = membership!.commissionRate ?? 0;
+      if (rate > 0) {
+        commissionAmount = grossProfit * (rate / 100);
+      }
+    } else if (commissionMode === "AUTO_TIERS") {
+      // Org-wide tier table (Settings → Commission)
+      const tiers = orgSettings?.commissionTiers ?? [];
+      const amount = calculateCommissionFromTiers(grossProfit, tiers);
+      if (amount > 0) commissionAmount = amount;
     }
+    // MANUAL: commissionAmount stays undefined — manager sets it in Commissions page
 
     // Create the sale
     const saleId = await ctx.db.insert("sales", {

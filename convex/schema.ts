@@ -598,7 +598,7 @@ export default defineSchema({
     commissionTiers: v.optional(
       v.array(v.object({ minProfitAmount: v.number(), commissionPct: v.number() }))
     ),
-    commissionMode: v.optional(v.union(v.literal("AUTO"), v.literal("MANUAL"))),
+    commissionMode: v.optional(v.union(v.literal("AUTO_TIERS"), v.literal("AUTO_MEMBER"), v.literal("MANUAL"))),
   }).index("by_org", ["orgId"]),
 
   orgCustomFields: defineTable({

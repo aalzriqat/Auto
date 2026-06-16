@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { toast } from "sonner";
-import { Plus, Trash2, Zap, PenLine } from "lucide-react";
+import { Plus, Trash2, Zap, PenLine, Users } from "lucide-react";
 
 interface Tier {
   minProfitAmount: number;
@@ -28,7 +28,7 @@ export default function CommissionSettingsPage() {
   const [isSaving, setIsSaving] = useState(false);
   const [isSavingMode, setIsSavingMode] = useState(false);
 
-  const commissionMode = (settings?.commissionMode ?? "AUTO") as "AUTO" | "MANUAL";
+  const commissionMode = (settings?.commissionMode ?? "AUTO_MEMBER") as "AUTO_TIERS" | "AUTO_MEMBER" | "MANUAL";
 
   useEffect(() => {
     if (settings?.commissionTiers) {
@@ -36,7 +36,7 @@ export default function CommissionSettingsPage() {
     }
   }, [settings]);
 
-  const handleSaveMode = async (mode: "AUTO" | "MANUAL") => {
+  const handleSaveMode = async (mode: "AUTO_TIERS" | "AUTO_MEMBER" | "MANUAL") => {
     if (!activeOrgId) return;
     setIsSavingMode(true);
     try {
@@ -93,53 +93,77 @@ export default function CommissionSettingsPage() {
         <p className="text-muted-foreground text-sm mt-1">{t("CommissionStructureDesc")}</p>
       </div>
 
-      {/* Commission Mode Toggle */}
+      {/* Commission Mode Selector */}
       <Card>
         <CardHeader>
           <CardTitle>{t("CommissionMode" as any)}</CardTitle>
           <CardDescription>{t("CommissionModeDesc" as any)}</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <button
-              disabled={isSavingMode}
-              onClick={() => handleSaveMode("AUTO")}
-              className={`flex items-start gap-3 rounded-lg border-2 p-4 text-start transition-colors ${
-                commissionMode === "AUTO"
-                  ? "border-primary bg-primary/5"
-                  : "border-border hover:border-primary/40 hover:bg-muted/40"
-              }`}
-            >
-              <Zap className={`h-5 w-5 mt-0.5 shrink-0 ${commissionMode === "AUTO" ? "text-primary" : "text-muted-foreground"}`} />
-              <div>
-                <p className="font-medium text-sm">{t("CommissionModeAuto" as any)}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">{t("CommissionModeAutoDesc" as any)}</p>
-              </div>
-            </button>
-            <button
-              disabled={isSavingMode}
-              onClick={() => handleSaveMode("MANUAL")}
-              className={`flex items-start gap-3 rounded-lg border-2 p-4 text-start transition-colors ${
-                commissionMode === "MANUAL"
-                  ? "border-primary bg-primary/5"
-                  : "border-border hover:border-primary/40 hover:bg-muted/40"
-              }`}
-            >
-              <PenLine className={`h-5 w-5 mt-0.5 shrink-0 ${commissionMode === "MANUAL" ? "text-primary" : "text-muted-foreground"}`} />
-              <div>
-                <p className="font-medium text-sm">{t("CommissionModeManual" as any)}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">{t("CommissionModeManualDesc" as any)}</p>
-              </div>
-            </button>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {(
+              [
+                {
+                  mode: "AUTO_TIERS",
+                  icon: Zap,
+                  labelKey: "CommissionModeAutoTiers",
+                  descKey: "CommissionModeAutoTiersDesc",
+                },
+                {
+                  mode: "AUTO_MEMBER",
+                  icon: Users,
+                  labelKey: "CommissionModeAutoMember",
+                  descKey: "CommissionModeAutoMemberDesc",
+                },
+                {
+                  mode: "MANUAL",
+                  icon: PenLine,
+                  labelKey: "CommissionModeManual",
+                  descKey: "CommissionModeManualDesc",
+                },
+              ] as const
+            ).map(({ mode, icon: Icon, labelKey, descKey }) => {
+              const isActive = commissionMode === mode;
+              return (
+                <button
+                  key={mode}
+                  disabled={isSavingMode}
+                  onClick={() => handleSaveMode(mode)}
+                  className={`relative flex items-start gap-3 rounded-lg border-2 p-4 text-start transition-colors ${
+                    isActive
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:border-primary/40 hover:bg-muted/40"
+                  }`}
+                >
+                  {isActive && (
+                    <span className="absolute top-2 end-2 text-[10px] font-semibold uppercase tracking-wide text-primary">
+                      {t("CommissionModeActive" as any)}
+                    </span>
+                  )}
+                  <Icon className={`h-5 w-5 mt-0.5 shrink-0 ${isActive ? "text-primary" : "text-muted-foreground"}`} />
+                  <div>
+                    <p className="font-medium text-sm">{t(labelKey as any)}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{t(descKey as any)}</p>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </CardContent>
       </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
-          <Card>
+          <Card className={commissionMode !== "AUTO_TIERS" ? "opacity-60" : ""}>
             <CardHeader>
-              <CardTitle>{t("CommissionTiers")}</CardTitle>
+              <CardTitle className="flex items-center gap-2">
+                {t("CommissionTiers")}
+                {commissionMode === "AUTO_TIERS" && (
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-primary bg-primary/10 rounded px-1.5 py-0.5">
+                    {t("CommissionModeActive" as any)}
+                  </span>
+                )}
+              </CardTitle>
               <CardDescription>{t("CommissionTiersDesc")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
