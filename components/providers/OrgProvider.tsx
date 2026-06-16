@@ -20,7 +20,15 @@ const OrgContext = createContext<OrgContextType | undefined>(undefined);
 const WEBHOOK_SYNC_WAIT_MS = 4000;
 
 export function OrgProvider({ children }: { children: ReactNode }) {
-  const [activeOrgId, setActiveOrgId] = useState<Id<"organizations"> | null>(null);
+  // Read from localStorage synchronously so activeOrgId is set on the very
+  // first render — avoids a flash where isLoading=false but activeOrgId=null
+  // causes DashboardWrapper to briefly show the onboarding wizard for returning users.
+  const [activeOrgId, setActiveOrgId] = useState<Id<"organizations"> | null>(
+    () =>
+      typeof window !== "undefined"
+        ? (localStorage.getItem("autoflow_active_org") as Id<"organizations"> | null)
+        : null
+  );
   const { isAuthenticated } = useConvexAuth();
 
   // Fetch user's organizations
@@ -69,21 +77,11 @@ export function OrgProvider({ children }: { children: ReactNode }) {
   }, [orgs]);
 
   useEffect(() => {
-    // Auto-select the first org if none is selected and orgs are available
-    if (orgs && orgs.length > 0 && !activeOrgId) {
-      // Check localStorage first
-      const stored = localStorage.getItem("autoflow_active_org");
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      if (stored && orgs.some((o: any) => o._id === stored)) {
-        setActiveOrgId(stored as Id<"organizations">);
-      } else {
-        const firstOrgId = orgs[0]?._id;
-        // eslint-disable-next-line react-hooks/set-state-in-effect
-        if (firstOrgId) {
-          setActiveOrgId(firstOrgId);
-        }
-      }
-    }
+    // Validate stored activeOrgId against the loaded org list.
+    // If the stored value is stale or missing, fall back to the first org.
+    if (!orgs || orgs.length === 0) return;
+    if (activeOrgId && orgs.some((o: any) => o._id === activeOrgId)) return;
+    setActiveOrgId(orgs[0]!._id);
   }, [orgs, activeOrgId]);
 
   useEffect(() => {

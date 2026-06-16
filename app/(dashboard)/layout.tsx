@@ -265,17 +265,20 @@ function DashboardWrapper({ children }: { children: React.ReactNode }) {
     return { "--primary": `hsl(${hsl})` } as React.CSSProperties;
   }, [orgSettings?.primaryColor]);
 
-  if (isLoading && !showWizard) {
+  // Only gate on the wizard flag — never show onboarding while Convex is
+  // still loading (guards against the race where activeOrgId is null for a
+  // brief render cycle before the validated org list arrives).
+  if (showWizard || (!isLoading && !activeOrgId)) {
+    return <Onboarding onComplete={() => setShowWizard(false)} />;
+  }
+
+  if (isLoading || !activeOrgId) {
     return (
       <div className="flex h-screen items-center justify-center bg-muted/30 flex-col gap-4">
         <div className="w-10 h-10 rounded-full border-4 border-primary border-t-transparent animate-spin" />
         <p className="text-sm text-muted-foreground">Loading your workspace...</p>
       </div>
     );
-  }
-
-  if (showWizard || !activeOrgId) {
-    return <Onboarding onComplete={() => setShowWizard(false)} />;
   }
 
   return (
