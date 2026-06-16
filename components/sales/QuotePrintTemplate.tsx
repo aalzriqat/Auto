@@ -1,5 +1,6 @@
 import { Doc } from "@/convex/_generated/dataModel";
 import { WizardData } from "./wizard/types";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 
 export interface OrgBranding {
   name?: string | null;
@@ -30,10 +31,11 @@ export function QuotePrintTemplate({
   dateStr,
   orgBranding,
 }: QuotePrintTemplateProps) {
+  const { t, isRtl } = useLanguage();
   const recipientName = selectedResult?.recipientName || `${selectedCustomer.firstName} ${selectedCustomer.lastName}`;
 
-  const condition = (selectedVehicle?.mileage || 0) > 0 ? "مستعمل" : "جديد";
-  const additions = selectedVehicle?.notes || "لا يوجد";
+  const condition = (selectedVehicle?.mileage || 0) > 0 ? t("UsedVehicle" as any) : t("NewVehicle" as any);
+  const additions = selectedVehicle?.notes || t("None" as any);
 
   const primary = orgBranding?.primaryColor ?? "#0f172a";
   const logoSrc = orgBranding?.logoUrl ?? "/logo.png";
@@ -46,7 +48,7 @@ export function QuotePrintTemplate({
     <div
       id="pdf-quote-content"
       className="hidden print:block absolute inset-0 bg-[#ffffff] w-[210mm] h-[297mm] mx-auto text-[#000000] p-12 font-sans relative overflow-hidden box-border"
-      dir="rtl"
+      dir={isRtl ? "rtl" : "ltr"}
       style={{ boxSizing: "border-box" }}
     >
       {/* Decorative frame */}
@@ -82,9 +84,9 @@ export function QuotePrintTemplate({
             <div className="flex items-center gap-4">
               <img src={logoSrc} alt="Dealer Logo" className="h-16 object-contain" />
             </div>
-            <div className="text-left text-xs text-[#4b5563] space-y-1">
+            <div className="text-end text-xs text-[#4b5563] space-y-1">
               <p className="font-bold" style={{ color: primary }}>{orgName}</p>
-              <p>التاريخ: {dateStr}</p>
+              <p>{t("Date" as any)}: {dateStr}</p>
             </div>
           </div>
 
@@ -94,53 +96,53 @@ export function QuotePrintTemplate({
               className="text-center text-[#ffffff] px-8 py-2 rounded-md font-bold text-lg"
               style={{ backgroundColor: primary }}
             >
-              عرض سعر مركبة
+              {t("VehicleQuote" as any)}
             </div>
           </div>
 
           {/* Recipient */}
           <div className="mb-6">
             <div className="flex items-baseline gap-2 mb-2">
-              <span className="text-sm font-semibold text-[#4b5563]">السادة /</span>
-              <span className="text-base font-bold" style={{ color: primary }}>{recipientName} المحترمين</span>
+              <span className="text-sm font-semibold text-[#4b5563]">{t("QuoteTo" as any)}</span>
+              <span className="text-base font-bold" style={{ color: primary }}>{recipientName} {t("Respected" as any)}</span>
             </div>
             <div className="text-center my-2">
-              <p className="text-sm font-semibold text-[#4b5563] inline-block pb-1 px-8">تحية طيبة وبعد،،،</p>
+              <p className="text-sm font-semibold text-[#4b5563] inline-block pb-1 px-8">{t("Greeting" as any)}</p>
             </div>
           </div>
 
           {/* Vehicle Info */}
           <div className="mb-6">
             <h2
-              className="text-base font-bold border-r-4 border-[#dc2626] pr-2 mb-3"
+              className="text-base font-bold border-s-4 border-[#dc2626] ps-2 mb-3"
               style={{ color: primary }}
             >
-              مواصفات المركبة
+              {t("VehicleSpecs" as any)}
             </h2>
             <table className="w-full text-xs border-collapse border border-[#e5e7eb]">
               <tbody>
                 <tr className="border-b border-[#e5e7eb]">
-                  <td className="py-2.5 font-semibold text-[#374151] w-1/3 bg-[#f0f4f2] px-3 border-l border-[#e5e7eb]">نوع المركبة:</td>
-                  <td className="py-2.5 px-3 font-medium text-[#111827]">{selectedVehicle?.make ?? "غير محدد"} {selectedVehicle?.model}</td>
+                  <td className="py-2.5 font-semibold text-[#374151] w-1/3 bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("VehicleType" as any)}:</td>
+                  <td className="py-2.5 px-3 font-medium text-[#111827]">{selectedVehicle?.make ?? t("NotSpecified" as any)} {selectedVehicle?.model}</td>
                 </tr>
                 <tr className="border-b border-[#e5e7eb]">
-                  <td className="py-2.5 font-semibold text-[#374151] bg-[#f0f4f2] px-3 border-l border-[#e5e7eb]">سنة الصنع:</td>
+                  <td className="py-2.5 font-semibold text-[#374151] bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("ManufactureYear" as any)}</td>
                   <td className="py-2.5 px-3 font-medium text-[#111827]">{selectedVehicle?.year}</td>
                 </tr>
                 <tr className="border-b border-[#e5e7eb]">
-                  <td className="py-2.5 font-semibold text-[#374151] bg-[#f0f4f2] px-3 border-l border-[#e5e7eb]">سعة البطارية / نوع الوقود:</td>
-                  <td className="py-2.5 px-3 font-medium text-[#111827]">{selectedVehicle?.fuelType ?? "غير محدد"} {selectedVehicle?.trim ? `(${selectedVehicle.trim})` : ""}</td>
+                  <td className="py-2.5 font-semibold text-[#374151] bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("BatteryFuelType" as any)}</td>
+                  <td className="py-2.5 px-3 font-medium text-[#111827]">{selectedVehicle?.fuelType ?? t("NotSpecified" as any)} {selectedVehicle?.trim ? `(${selectedVehicle.trim})` : ""}</td>
                 </tr>
                 <tr className="border-b border-[#e5e7eb]">
-                  <td className="py-2.5 font-semibold text-[#374151] bg-[#f0f4f2] px-3 border-l border-[#e5e7eb]">الحالة (جديد / مستعمل):</td>
+                  <td className="py-2.5 font-semibold text-[#374151] bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("ConditionNewUsed" as any)}</td>
                   <td className="py-2.5 px-3 font-medium text-[#111827]">{condition}</td>
                 </tr>
                 <tr className="border-b border-[#e5e7eb]">
-                  <td className="py-2.5 font-semibold text-[#374151] bg-[#f0f4f2] px-3 border-l border-[#e5e7eb]">رقم الهيكل (VIN):</td>
-                  <td className="py-2.5 px-3 font-mono text-xs text-[#111827]">{selectedVehicle?.vin ?? "قيد الانتظار"}</td>
+                  <td className="py-2.5 font-semibold text-[#374151] bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("ChassisNumberVIN" as any)}</td>
+                  <td className="py-2.5 px-3 font-mono text-xs text-[#111827]">{selectedVehicle?.vin ?? t("PendingQuoteVIN" as any)}</td>
                 </tr>
                 <tr className="border-b border-[#e5e7eb]">
-                  <td className="py-2.5 font-semibold text-[#374151] bg-[#f0f4f2] px-3 border-l border-[#e5e7eb]">الإضافات / المواصفات:</td>
+                  <td className="py-2.5 font-semibold text-[#374151] bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("AdditionsSpecs" as any)}</td>
                   <td className="py-2.5 px-3 text-[#374151] leading-relaxed">{additions}</td>
                 </tr>
               </tbody>
@@ -150,15 +152,15 @@ export function QuotePrintTemplate({
           {/* Pricing */}
           <div className="mb-6">
             <h2
-              className="text-base font-bold border-r-4 border-[#dc2626] pr-2 mb-3"
+              className="text-base font-bold border-s-4 border-[#dc2626] ps-2 mb-3"
               style={{ color: primary }}
             >
-              التفاصيل المالية
+              {t("FinancialDetails" as any)}
             </h2>
             <table className="w-full text-xs border-collapse border border-[#e5e7eb]">
               <tbody>
                 <tr>
-                  <td className="py-3 font-semibold text-[#374151] w-1/3 bg-[#f0f4f2] px-3 border-l border-[#e5e7eb]">سعر المركبة الإجمالي:</td>
+                  <td className="py-3 font-semibold text-[#374151] w-1/3 bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("TotalVehiclePrice" as any)}</td>
                   <td className="py-3 px-3 font-bold text-base text-[#dc2626]">
                     {selectedResult?.totalFinancedAmount?.toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencyLabel}
                   </td>
@@ -166,7 +168,7 @@ export function QuotePrintTemplate({
               </tbody>
             </table>
             <br />
-            <p className="text-sm font-semibold text-[#4b5563] mt-2 text-center">وتفضلوا بقبول فائق الإحترام</p>
+            <p className="text-sm font-semibold text-[#4b5563] mt-2 text-center">{t("Respects" as any)}</p>
           </div>
         </div>
 
@@ -176,7 +178,7 @@ export function QuotePrintTemplate({
             <div className="text-center w-60">
               <p className="font-bold text-sm" style={{ color: primary }}>({orgName})</p>
               <div className="mt-12 border-t border-dashed border-[#a0bfad] pt-2">
-                <p className="text-xs text-[#6b7280]">الختم والتوقيع</p>
+                <p className="text-xs text-[#6b7280]">{t("SealAndSignature" as any)}</p>
               </div>
             </div>
           </div>
