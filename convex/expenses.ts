@@ -82,6 +82,30 @@ export const list = query({
   },
 });
 
+/**
+ * Returns total expenses for a single vehicle — lightweight, no pagination.
+ * Used by the sales wizard to show cost breakdown to the salesperson.
+ */
+export const totalByVehicle = query({
+  args: {
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_EXPENSES]);
+
+    const expenses = await ctx.db
+      .query("expenses")
+      .withIndex("by_org_vehicle", (q) =>
+        q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId)
+      )
+      .filter((q) => q.neq(q.field("isDeleted"), true))
+      .collect();
+
+    return expenses.reduce((sum, e) => sum + e.amount, 0);
+  },
+});
+
 // ─── Mutations ───────────────────────────────────────────────────────────────
 
 /**

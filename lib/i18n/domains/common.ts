@@ -283,6 +283,14 @@ export const commonEn = {
   ApprovalRejectedMsg: "Request rejected",
   FailedToProcessApproval: "Failed to process approval",
 
+  // Vehicle cost breakdown in wizard
+  VehicleCostBreakdown: "Vehicle Cost",
+  PurchasePrice: "Purchase Price",
+  TotalExpenses: "Total Expenses",
+  TotalCost: "Total Cost",
+  CostNotAvailable: "Cost not visible",
+  Profit: "Profit",
+
   // Feedback widget
   FeedbackInbox: "Feedback Inbox",
   FeedbackWidgetTitle: "Send Feedback",
@@ -611,6 +619,14 @@ export const commonAr = {
   ApprovalApprovedMsg: "تمت الموافقة على الطلب بنجاح",
   ApprovalRejectedMsg: "تم رفض الطلب",
   FailedToProcessApproval: "فشل في معالجة الموافقة",
+
+  // Vehicle cost breakdown in wizard
+  VehicleCostBreakdown: "تكلفة المركبة",
+  PurchasePrice: "سعر الشراء",
+  TotalExpenses: "إجمالي المصروفات",
+  TotalCost: "التكلفة الإجمالية",
+  CostNotAvailable: "التكلفة غير مرئية",
+  Profit: "الربح",
 
   // Feedback widget
   FeedbackInbox: "صندوق التغذية الراجعة",

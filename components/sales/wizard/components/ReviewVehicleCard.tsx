@@ -4,6 +4,7 @@ import { Doc } from "@/convex/_generated/dataModel";
 import { Car, TrendingUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { VehicleCostBar } from "./VehicleCostBar";
 
 interface ReviewVehicleCardProps {
   vehicle: Doc<"vehicles">;
@@ -65,6 +66,13 @@ export default function ReviewVehicleCard({
           </div>
         )}
       </div>
+
+      {/* Cost breakdown */}
+      <VehicleCostBar
+        vehicleId={vehicle._id}
+        purchasePrice={vehicle.purchasePrice}
+        salePrice={effectivePrice}
+      />
     </div>
   );
 }

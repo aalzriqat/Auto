@@ -25,6 +25,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { VehicleCostBar } from "../components/VehicleCostBar";
 
 const CUSTOMER_STATUS_OPTIONS = [
   { id: "salary_slip", labelKey: "StatusSalarySlip" as const },
@@ -208,6 +209,15 @@ export default function Step1QuoteSetup({
             </FormItem>
           )}
         />
+
+        {/* Vehicle cost breakdown — visible when a vehicle is selected */}
+        {selectedVehicle && (
+          <VehicleCostBar
+            vehicleId={selectedVehicle._id}
+            purchasePrice={selectedVehicle.purchasePrice}
+            salePrice={Number(watchedPrice) || selectedVehicle.sellingPrice}
+          />
+        )}
 
         {/* Pricing */}
         <div
