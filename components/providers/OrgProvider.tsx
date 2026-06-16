@@ -80,14 +80,18 @@ export function OrgProvider({ children }: { children: ReactNode }) {
     // Validate stored activeOrgId against the loaded org list.
     if (!orgs) return; // Still loading — do nothing
     if (orgs.length === 0) {
-      // Only clear the stale orgId once we've stabilized (i.e. waited long
-      // enough to rule out a Clerk-webhook sync delay for brand-new users).
-      if (stabilized) setActiveOrgId(null);
+      if (activeOrgId) {
+        // Has a stored orgId but no memberships — the user was removed from
+        // their org. Clear immediately so no downstream query fires with an
+        // unauthorized orgId. The stabilization timer is only needed when
+        // activeOrgId is already null (new-user webhook-sync delay).
+        setActiveOrgId(null);
+      }
       return;
     }
     if (activeOrgId && orgs.some((o: any) => o._id === activeOrgId)) return;
     setActiveOrgId(orgs[0]!._id);
-  }, [orgs, activeOrgId, stabilized]);
+  }, [orgs, activeOrgId]);
 
   useEffect(() => {
     // Persist to localStorage when it changes; clear it when null so a
