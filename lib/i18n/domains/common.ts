@@ -228,6 +228,9 @@ export const commonEn = {
   OdometerStatement: "Odometer Disclosure Statement: The seller certifies that to the best of their knowledge the odometer reading reflects the actual mileage of the vehicle described herein unless indicated otherwise.",
 
   // Accounting
+  TxIn: "IN",
+  TxOut: "OUT",
+  TxNet: "Net",
   AccountingDesc: "Manage General Ledger, Assets, Equity, and Claims",
   GeneralLedger: "General Ledger",
   FixedAssets: "Fixed Assets",
@@ -511,6 +514,9 @@ export const commonAr = {
   OdometerStatement: "إفصاح عداد المسافة: يُقرّ البائع بأنه في حدود علمه يعكس قراءة عداد المسافة المسافة الفعلية للمركبة الموصوفة هنا ما لم يُشر إلى خلاف ذلك.",
 
   // Accounting
+  TxIn: "وارد",
+  TxOut: "صادر",
+  TxNet: "صافي",
   AccountingDesc: "إدارة دفتر الأستاذ العام والأصول وحقوق الملكية والمطالبات",
   GeneralLedger: "دفتر الأستاذ العام",
   FixedAssets: "الأصول الثابتة",

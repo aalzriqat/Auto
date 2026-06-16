@@ -58,9 +58,9 @@ export function GeneralLedgerTab() {
 
       {/* Summary row */}
       <div className="flex gap-4 text-sm">
-        <span className="text-emerald-600 font-semibold">IN: {formatCurrency(totalIn)}</span>
-        <span className="text-rose-600 font-semibold">OUT: {formatCurrency(totalOut)}</span>
-        <span className="text-slate-600 font-semibold">Net: {formatCurrency(totalIn - totalOut)}</span>
+        <span className="text-emerald-600 font-semibold">{t("TxIn" as any)}: {formatCurrency(totalIn)}</span>
+        <span className="text-rose-600 font-semibold">{t("TxOut" as any)}: {formatCurrency(totalOut)}</span>
+        <span className="text-slate-600 font-semibold">{t("TxNet" as any)}: {formatCurrency(totalIn - totalOut)}</span>
       </div>
 
       <div className="rounded-md border border-slate-200">
