@@ -56,6 +56,9 @@ export default function GeneralSettingsPage() {
   const [country, setCountry] = useState("");
   const [vatRate, setVatRate] = useState("");
   const [timezone, setTimezone] = useState("");
+  const [dealershipName, setDealershipName] = useState("");
+  const [dealershipAddress, setDealershipAddress] = useState("");
+  const [dealershipPhone, setDealershipPhone] = useState("");
 
   // Payment types tab state
   const [cashEnabled, setCashEnabled] = useState(true);
@@ -83,6 +86,9 @@ export default function GeneralSettingsPage() {
       setCountry(settings.country ?? "");
       setVatRate(settings.vatRate !== undefined ? String(settings.vatRate) : "");
       setTimezone(settings.timezone ?? "");
+      setDealershipName(settings.dealershipName ?? "");
+      setDealershipAddress(settings.dealershipAddress ?? "");
+      setDealershipPhone(settings.dealershipPhone ?? "");
       const pt = settings.enabledPaymentTypes ?? ["CASH", "INSTALLMENT"];
       setCashEnabled(pt.includes("CASH"));
       setInstallmentEnabled(pt.includes("INSTALLMENT"));
@@ -111,6 +117,9 @@ export default function GeneralSettingsPage() {
         country: country || undefined,
         vatRate: vatRate ? parseFloat(vatRate) : undefined,
         timezone: timezone || undefined,
+        dealershipName: dealershipName || undefined,
+        dealershipAddress: dealershipAddress || undefined,
+        dealershipPhone: dealershipPhone || undefined,
       });
       toast.success(t("GeneralSettingsSaved"));
     } catch (error: any) {
@@ -300,6 +309,37 @@ export default function GeneralSettingsPage() {
                       ))}
                     </SelectContent>
                   </Select>
+                </div>
+              </div>
+
+              <div className="col-span-1 md:col-span-2 border-t pt-4">
+                <p className="text-sm font-semibold mb-1">{t("DealershipInfo")}</p>
+                <p className="text-xs text-muted-foreground mb-4">{t("DealershipInfoDesc")}</p>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-2">
+                    <Label>{t("DealershipName")}</Label>
+                    <Input
+                      placeholder={t("DealershipNamePlaceholder")}
+                      value={dealershipName}
+                      onChange={(e) => setDealershipName(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>{t("DealershipPhone")}</Label>
+                    <Input
+                      placeholder={t("DealershipPhonePlaceholder")}
+                      value={dealershipPhone}
+                      onChange={(e) => setDealershipPhone(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2 md:col-span-2">
+                    <Label>{t("DealershipAddress")}</Label>
+                    <Input
+                      placeholder={t("DealershipAddressPlaceholder")}
+                      value={dealershipAddress}
+                      onChange={(e) => setDealershipAddress(e.target.value)}
+                    />
+                  </div>
                 </div>
               </div>
 

@@ -1,12 +1,15 @@
 "use client";
 
-import { useState } from "react";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { PaymentType, WizardData } from "../types";
 import { Button } from "@/components/ui/button";
 import { CheckCircle2, FileDown, LogOut } from "lucide-react";
 import { QuotePrintTemplate } from "../../QuotePrintTemplate";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useOrg } from "@/components/providers/OrgProvider";
+import { useQuery } from "convex/react";
+import { api } from "@/convex/_generated/api";
+import { useOrgSettings } from "@/hooks/useOrgSettings";
 
 interface Step4QuoteSuccessProps {
   paymentType: PaymentType;
@@ -15,7 +18,7 @@ interface Step4QuoteSuccessProps {
   quoteId: Id<"quotes">;
   selectedVehicle?: Doc<"vehicles">;
   selectedCompany?: Doc<"financeCompanies">;
-  selectedResult: any; // The result from calculateUnifiedMurabaha
+  selectedResult: any;
   onClose: () => void;
 }
 
@@ -23,55 +26,58 @@ export function Step4QuoteSuccess({
   paymentType,
   wizardData,
   selectedCustomer,
-  quoteId,
+  quoteId: _quoteId,
   selectedVehicle,
   selectedCompany,
   selectedResult,
   onClose,
 }: Step4QuoteSuccessProps) {
   const { t } = useLanguage();
-  const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+  const { activeOrgId } = useOrg();
+  const orgSettings = useOrgSettings();
+  const logoUrl = useQuery(
+    api.orgSettings.getLogoUrl,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
+
+  const orgBranding = {
+    name: orgSettings?.dealershipName,
+    logoUrl,
+    primaryColor: orgSettings?.primaryColor,
+    address: orgSettings?.dealershipAddress,
+    phone: orgSettings?.dealershipPhone,
+    currencySymbol: orgSettings?.currencySymbol,
+  };
 
   const handleDownload = async () => {
-    const element = document.getElementById('pdf-quote-content');
+    const element = document.getElementById("pdf-quote-content");
     if (!element) return;
-    
-    setIsGeneratingPdf(true);
+
     try {
-      // Temporarily show element off-screen for canvas rendering
-      element.classList.remove('hidden');
-      element.style.position = 'absolute';
-      element.style.left = '-9999px';
-      element.style.top = '-9999px';
-      element.style.display = 'block';
-      
-      const { default: html2canvas } = await import('html2canvas');
-      const { jsPDF } = await import('jspdf');
+      element.classList.remove("hidden");
+      element.style.position = "absolute";
+      element.style.left = "-9999px";
+      element.style.top = "-9999px";
+      element.style.display = "block";
 
-      const canvas = await html2canvas(element, {
-        scale: 2, // Better quality
-        useCORS: true,
-      });
+      const { default: html2canvas } = await import("html2canvas");
+      const { jsPDF } = await import("jspdf");
 
-      const imgData = canvas.toDataURL('image/png');
-      const pdf = new jsPDF('p', 'mm', 'a4');
-      
+      const canvas = await html2canvas(element, { scale: 2, useCORS: true });
+      const imgData = canvas.toDataURL("image/png");
+      const pdf = new jsPDF("p", "mm", "a4");
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-
-      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      pdf.addImage(imgData, "PNG", 0, 0, pdfWidth, pdfHeight);
       pdf.save(`Quote_${selectedCustomer.firstName}.pdf`);
-
-    } catch (err) {
-      console.error('Failed to generate PDF', err);
+    } catch {
+      // silently fail — browser PDF generation
     } finally {
-      element.classList.remove('block');
-      element.style.display = '';
-      element.style.position = '';
-      element.style.left = '';
-      element.style.top = '';
-      element.classList.add('hidden');
-      setIsGeneratingPdf(false);
+      element.style.display = "";
+      element.style.position = "";
+      element.style.left = "";
+      element.style.top = "";
+      element.classList.add("hidden");
     }
   };
 
@@ -84,41 +90,33 @@ export function Step4QuoteSuccess({
 
         <div className="space-y-2">
           <h2 className="text-2xl font-bold text-foreground">
-            Quote Generated Successfully!
+            {t("QuoteGeneratedSuccess" as any)}
           </h2>
           <p className="text-muted-foreground max-w-md mx-auto">
-            The quote has been saved and is now linked to{" "}
+            {t("QuoteSavedLinkedTo" as any)}{" "}
             <span className="font-semibold text-foreground">
               {selectedCustomer.firstName} {selectedCustomer.lastName}
-            </span>{" "}
-            and the selected vehicle.
+            </span>
           </p>
         </div>
 
         <div className="pt-6 flex flex-col sm:flex-row gap-4 justify-center items-center">
           <Button
             onClick={handleDownload}
-            disabled={isGeneratingPdf}
             className="bg-indigo-600 hover:bg-indigo-700 min-w-[200px]"
             size="lg"
           >
             <FileDown className="w-4 h-4 me-2" />
-            {isGeneratingPdf ? "Generating PDF..." : "Download PDF Quote"}
+            {t("DownloadPDFQuote" as any)}
           </Button>
 
-          <Button
-            onClick={onClose}
-            variant="outline"
-            size="lg"
-            className="min-w-[200px]"
-          >
+          <Button onClick={onClose} variant="outline" size="lg" className="min-w-[200px]">
             <LogOut className="w-4 h-4 me-2" />
-            Done & Close
+            {t("DoneClose" as any)}
           </Button>
         </div>
       </div>
 
-      {/* Hidden print template rendered only for window.print() */}
       <QuotePrintTemplate
         paymentType={paymentType}
         wizardData={wizardData}
@@ -127,6 +125,7 @@ export function Step4QuoteSuccess({
         selectedCustomer={selectedCustomer}
         selectedResult={selectedResult}
         dateStr={new Date().toLocaleDateString("ar-JO")}
+        orgBranding={orgBranding}
       />
     </>
   );

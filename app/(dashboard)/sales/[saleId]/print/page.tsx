@@ -7,6 +7,7 @@ import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { format } from "date-fns";
 import { Loader2, Printer, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -16,6 +17,7 @@ export default function PrintBillOfSalePage() {
   const router = useRouter();
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  const orgSettings = useOrgSettings();
   const saleId = params.saleId as Id<"sales">;
 
   const sale = useQuery(api.sales.get, activeOrgId ? { orgId: activeOrgId, saleId } : "skip");
@@ -45,7 +47,8 @@ export default function PrintBillOfSalePage() {
   }
 
   const { vehicle, customer } = sale;
-  const orgName = "Auto Dealership";
+  const orgName = orgSettings?.dealershipName || "AutoFlow";
+  const currencySymbol = orgSettings?.currencySymbol || "JOD";
 
   return (
     <div className="min-h-screen bg-white">
@@ -123,35 +126,35 @@ export default function PrintBillOfSalePage() {
             <tbody>
               <tr className="border-b">
                 <th className="py-2 font-semibold">{t("SalePrice")}</th>
-                <td className="py-2 text-right">{sale.salePrice.toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</td>
+                <td className="py-2 text-right">{sale.salePrice.toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencySymbol}</td>
               </tr>
               <tr className="border-b">
                 <th className="py-2 font-semibold">{t("DealerFees")}</th>
-                <td className="py-2 text-right">{(sale.dealerFees || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</td>
+                <td className="py-2 text-right">{(sale.dealerFees || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencySymbol}</td>
               </tr>
               <tr className="border-b">
                 <th className="py-2 font-semibold">{t("Taxes")}</th>
-                <td className="py-2 text-right">{(sale.taxAmount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</td>
+                <td className="py-2 text-right">{(sale.taxAmount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencySymbol}</td>
               </tr>
               <tr className="border-b">
                 <th className="py-2 font-semibold">{t("ExtendedWarranty")}</th>
-                <td className="py-2 text-right">{(sale.warrantySold || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</td>
+                <td className="py-2 text-right">{(sale.warrantySold || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencySymbol}</td>
               </tr>
               <tr className="border-b">
                 <th className="py-2 font-semibold">{t("GAPInsurance")}</th>
-                <td className="py-2 text-right">{(sale.gapSold || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</td>
+                <td className="py-2 text-right">{(sale.gapSold || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencySymbol}</td>
               </tr>
               <tr className="border-b text-red-700">
                 <th className="py-2 font-semibold">{t("TradeInAllowance")}</th>
-                <td className="py-2 text-right">-{(sale.tradeInValue || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</td>
+                <td className="py-2 text-right">-{(sale.tradeInValue || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencySymbol}</td>
               </tr>
               <tr className="border-b text-red-700">
                 <th className="py-2 font-semibold">{t("DownPayment")}</th>
-                <td className="py-2 text-right">-{(sale.downPayment || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</td>
+                <td className="py-2 text-right">-{(sale.downPayment || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencySymbol}</td>
               </tr>
               <tr className="border-b-2 border-black bg-gray-50">
                 <th className="py-3 font-bold text-base">{t("TotalAmountDueFinanced")}</th>
-                <td className="py-3 text-right font-bold text-base">{(sale.loanAmount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</td>
+                <td className="py-3 text-right font-bold text-base">{(sale.loanAmount || 0).toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencySymbol}</td>
               </tr>
             </tbody>
           </table>
