@@ -35,11 +35,11 @@ export function QuotePrintTemplate({
   const condition = (selectedVehicle?.mileage || 0) > 0 ? "مستعمل" : "جديد";
   const additions = selectedVehicle?.notes || "لا يوجد";
 
-  const primary = orgBranding?.primaryColor ?? "#104f32";
-  const logoSrc = orgBranding?.logoUrl ?? "/BloomLogo.png";
-  const orgName = orgBranding?.name ?? "مؤسسة عصر الازدهار للسيارات";
-  const orgAddress = orgBranding?.address ?? "عمان - وادي صقره- قرب صندوق الائتمان العسكري";
-  const orgPhone = orgBranding?.phone ?? "0790888360 | 0790888360";
+  const primary = orgBranding?.primaryColor ?? "#0f172a";
+  const logoSrc = orgBranding?.logoUrl ?? "/logo.png";
+  const orgName = orgBranding?.name ?? "";
+  const orgAddress = orgBranding?.address ?? "";
+  const orgPhone = orgBranding?.phone ?? "";
   const currencyLabel = orgBranding?.currencySymbol ?? "JOD";
 
   return (
@@ -56,10 +56,12 @@ export function QuotePrintTemplate({
       />
       <div className="absolute inset-0 pointer-events-none z-0 border border-[#dc2626] m-[22px]" />
 
-      {/* Faint Logo Watermark */}
-      <div className="absolute inset-0 pointer-events-none z-0 flex items-center justify-center opacity-[0.03]">
-        <img src={logoSrc} alt="" className="w-[120mm] object-contain rotate-[-12deg]" />
-      </div>
+      {/* Faint Logo Watermark — only shown when an org logo is configured */}
+      {orgBranding?.logoUrl && (
+        <div className="absolute inset-0 pointer-events-none z-0 flex items-center justify-center opacity-[0.03]">
+          <img src={logoSrc} alt="" className="w-[120mm] object-contain rotate-[-12deg]" />
+        </div>
+      )}
 
       {/* Corner Accents — top-right */}
       <div className="absolute top-0 right-0 w-24 h-24 pointer-events-none z-0 overflow-hidden">
