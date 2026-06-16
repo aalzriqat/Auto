@@ -22,7 +22,14 @@ export const get = query({
     // Return null gracefully during logout (brief window before redirect)
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) return null;
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SETTINGS]);
+    // Return null gracefully when activeOrgId from localStorage is stale
+    // (e.g. different env, user removed from org, shared device) — the
+    // OrgProvider will correct activeOrgId once orgs load.
+    try {
+      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SETTINGS]);
+    } catch {
+      return null;
+    }
     const settings = await ctx.db
       .query("orgSettings")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
