@@ -3,6 +3,7 @@
 import { TopNav } from "@/components/layout/TopNav";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { OrgProvider, useOrg } from "@/components/providers/OrgProvider";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
 import { useMutation } from "convex/react";
@@ -37,6 +38,7 @@ const STEPS = ["Dealership", "Currency", "Lead Sources", "Pipeline", "Done"];
 
 function Onboarding({ onComplete }: { onComplete: () => void }) {
   const { setActiveOrgId } = useOrg();
+  const { t } = useLanguage();
   const [step, setStep] = useState(0);
   const [orgId, setOrgId] = useState<string | null>(null);
   const [name, setName] = useState("");
@@ -140,14 +142,14 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
         {step === 0 && (
           <div className="space-y-4">
             <div>
-              <h2 className="text-xl font-bold">Welcome to AutoFlow</h2>
-              <p className="text-muted-foreground text-sm">Start by naming your dealership.</p>
+              <h2 className="text-xl font-bold">{t("WelcomeToAutoFlow")}</h2>
+              <p className="text-muted-foreground text-sm">{t("StartByNamingYourDealership")}</p>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="orgName">Dealership Name</Label>
+              <Label htmlFor="orgName">{t("DealershipName")}</Label>
               <Input
                 id="orgName"
-                placeholder="e.g. Al Mada Motors"
+                placeholder={t("DealershipNamePlaceholder")}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleCreateOrg()}
@@ -155,7 +157,7 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
               />
             </div>
             <Button className="w-full" onClick={handleCreateOrg} disabled={isBusy || !name.trim()}>
-              {isBusy ? "Creating..." : "Continue →"}
+              {isBusy ? t("OnboardingCreating") : t("Continue")}
             </Button>
           </div>
         )}
@@ -164,11 +166,11 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
         {step === 1 && (
           <div className="space-y-4">
             <div>
-              <h2 className="text-xl font-bold">Currency</h2>
-              <p className="text-muted-foreground text-sm">Which currency does your dealership use?</p>
+              <h2 className="text-xl font-bold">{t("Currency")}</h2>
+              <p className="text-muted-foreground text-sm">{t("WhichCurrencyDoYouUse")}</p>
             </div>
             <div className="space-y-2">
-              <Label>Currency</Label>
+              <Label>{t("Currency")}</Label>
               <Select value={currency} onValueChange={setCurrency}>
                 <SelectTrigger>
                   <SelectValue />
@@ -181,7 +183,7 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
               </Select>
             </div>
             <Button className="w-full" onClick={handleSaveCurrency} disabled={isBusy}>
-              {isBusy ? "Saving..." : "Continue →"}
+              {isBusy ? t("OnboardingSaving") : t("Continue")}
             </Button>
           </div>
         )}
@@ -190,20 +192,17 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
         {step === 2 && (
           <div className="space-y-4">
             <div>
-              <h2 className="text-xl font-bold">Lead Sources</h2>
-              <p className="text-muted-foreground text-sm">
-                We'll load default lead sources (Walk-in, Website, Facebook, etc.).
-                You can customize them later in Settings.
-              </p>
+              <h2 className="text-xl font-bold">{t("LeadSources")}</h2>
+              <p className="text-muted-foreground text-sm">{t("WillLoadDefaultLeadSources")}</p>
             </div>
             <Button className="w-full" onClick={handleSeedLeadSources} disabled={isBusy}>
-              {isBusy ? "Loading..." : "Load Default Lead Sources →"}
+              {isBusy ? t("OnboardingLoading") : t("LoadDefaultLeadSources")}
             </Button>
             <button
               className="w-full text-sm text-muted-foreground underline underline-offset-2"
               onClick={() => setStep(3)}
             >
-              Skip
+              {t("Skip")}
             </button>
           </div>
         )}
@@ -212,20 +211,17 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
         {step === 3 && (
           <div className="space-y-4">
             <div>
-              <h2 className="text-xl font-bold">Sales Pipeline</h2>
-              <p className="text-muted-foreground text-sm">
-                We'll create default pipeline stages (New → Contacted → Interested → …).
-                You can rename and reorder them in Settings.
-              </p>
+              <h2 className="text-xl font-bold">{t("Pipeline")}</h2>
+              <p className="text-muted-foreground text-sm">{t("WillCreateDefaultPipeline")}</p>
             </div>
             <Button className="w-full" onClick={handleSeedPipeline} disabled={isBusy}>
-              {isBusy ? "Loading..." : "Load Default Pipeline →"}
+              {isBusy ? t("OnboardingLoading") : t("LoadDefaultPipeline")}
             </Button>
             <button
               className="w-full text-sm text-muted-foreground underline underline-offset-2"
               onClick={() => setStep(4)}
             >
-              Skip
+              {t("Skip")}
             </button>
           </div>
         )}
@@ -237,13 +233,11 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
               <Check className="h-8 w-8 text-primary" />
             </div>
             <div>
-              <h2 className="text-xl font-bold">You're all set!</h2>
-              <p className="text-muted-foreground text-sm">
-                Your dealership is ready. Head to Settings anytime to customize further.
-              </p>
+              <h2 className="text-xl font-bold">{t("YoureAllSet")}</h2>
+              <p className="text-muted-foreground text-sm">{t("YourDealershipIsReady")}</p>
             </div>
             <Button className="w-full" onClick={() => { setActiveOrgId(orgId! as Id<"organizations">); onComplete(); }}>
-              Go to Dashboard
+              {t("GoToDashboard")}
             </Button>
           </div>
         )}

@@ -5,6 +5,7 @@ import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useOrgSettings } from "@/hooks/useOrgSettings";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -19,6 +20,7 @@ interface Tier {
 
 export default function CommissionSettingsPage() {
   const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
   const settings = useOrgSettings();
   const upsert = useMutation(api.orgSettings.upsert);
 
@@ -51,15 +53,14 @@ export default function CommissionSettingsPage() {
     try {
       await upsert({ orgId: activeOrgId, commissionTiers: sorted });
       setTiers(sorted);
-      toast.success("Commission tiers saved.");
+      toast.success(t("CommissionTiersSaved"));
     } catch (error: any) {
-      toast.error(error.message || "Failed to save commission tiers.");
+      toast.error(error.message || t("FailedToSaveCommissionTiers"));
     } finally {
       setIsSaving(false);
     }
   };
 
-  // Preview: calculate commission for a sample profit
   const calcCommission = (profit: number) => {
     const sorted = [...tiers].sort((a, b) => a.minProfitAmount - b.minProfitAmount);
     let pct = 0;
@@ -72,33 +73,28 @@ export default function CommissionSettingsPage() {
   return (
     <div className="flex-1 space-y-4 p-4 md:p-8 pt-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Commission Structure</h1>
-        <p className="text-muted-foreground text-sm mt-1">
-          Define tiered commission rates. The highest tier whose minimum profit is met applies.
-        </p>
+        <h1 className="text-2xl font-bold tracking-tight">{t("CommissionStructure")}</h1>
+        <p className="text-muted-foreground text-sm mt-1">{t("CommissionStructureDesc")}</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">
           <Card>
             <CardHeader>
-              <CardTitle>Commission Tiers</CardTitle>
-              <CardDescription>
-                Each tier specifies a minimum profit amount and the commission percentage.
-                Tiers are evaluated from highest to lowest — the first one the sale qualifies for wins.
-              </CardDescription>
+              <CardTitle>{t("CommissionTiers")}</CardTitle>
+              <CardDescription>{t("CommissionTiersDesc")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               {tiers.length === 0 && (
                 <div className="text-center py-6 text-muted-foreground text-sm">
-                  No tiers defined. Add one to enable commission tracking.
+                  {t("NoTiersDefined")}
                 </div>
               )}
 
               {tiers.map((tier, index) => (
                 <div key={index} className="flex items-end gap-3 rounded-lg border p-4">
                   <div className="flex-1 space-y-1">
-                    <Label className="text-xs">Min Profit (amount)</Label>
+                    <Label className="text-xs">{t("MinProfitLabel")}</Label>
                     <Input
                       type="number"
                       min="0"
@@ -108,7 +104,7 @@ export default function CommissionSettingsPage() {
                     />
                   </div>
                   <div className="flex-1 space-y-1">
-                    <Label className="text-xs">Commission (%)</Label>
+                    <Label className="text-xs">{t("CommissionPctLabel")}</Label>
                     <Input
                       type="number"
                       min="0"
@@ -132,22 +128,21 @@ export default function CommissionSettingsPage() {
               <div className="flex gap-3">
                 <Button variant="outline" size="sm" onClick={handleAddTier}>
                   <Plus className="h-4 w-4 mr-2" />
-                  Add Tier
+                  {t("AddTier")}
                 </Button>
                 <Button size="sm" onClick={handleSave} disabled={isSaving}>
-                  {isSaving ? "Saving..." : "Save Tiers"}
+                  {isSaving ? t("Saving") : t("SaveTiers")}
                 </Button>
               </div>
             </CardContent>
           </Card>
         </div>
 
-        {/* Preview calculator */}
         <div>
           <Card>
             <CardHeader>
-              <CardTitle>Preview</CardTitle>
-              <CardDescription>Calculate commission for a sample profit.</CardDescription>
+              <CardTitle>{t("CommissionPreviewTitle")}</CardTitle>
+              <CardDescription>{t("CommissionPreviewDesc")}</CardDescription>
             </CardHeader>
             <CardContent>
               <CommissionPreview tiers={tiers} calcFn={calcCommission} />
@@ -160,16 +155,17 @@ export default function CommissionSettingsPage() {
 }
 
 function CommissionPreview({ tiers, calcFn }: { tiers: Tier[]; calcFn: (p: number) => number }) {
+  const { t } = useLanguage();
   const [sampleProfit, setSampleProfit] = useState("1000");
   const profit = parseFloat(sampleProfit) || 0;
   const commission = calcFn(profit);
   const sorted = [...tiers].sort((a, b) => a.minProfitAmount - b.minProfitAmount);
-  const appliedTier = [...sorted].reverse().find((t) => profit >= t.minProfitAmount);
+  const appliedTier = [...sorted].reverse().find((tier) => profit >= tier.minProfitAmount);
 
   return (
     <div className="space-y-4">
       <div className="space-y-1">
-        <Label>Profit Amount</Label>
+        <Label>{t("ProfitAmount")}</Label>
         <Input
           type="number"
           value={sampleProfit}
@@ -178,13 +174,13 @@ function CommissionPreview({ tiers, calcFn }: { tiers: Tier[]; calcFn: (p: numbe
       </div>
       <div className="rounded-lg bg-muted/50 p-4 space-y-2">
         <div className="flex justify-between text-sm">
-          <span className="text-muted-foreground">Applied tier</span>
+          <span className="text-muted-foreground">{t("AppliedTier")}</span>
           <span className="font-medium">
-            {appliedTier ? `${appliedTier.commissionPct}% (≥${appliedTier.minProfitAmount.toLocaleString()})` : "None"}
+            {appliedTier ? `${appliedTier.commissionPct}% (≥${appliedTier.minProfitAmount.toLocaleString()})` : "—"}
           </span>
         </div>
         <div className="flex justify-between text-sm">
-          <span className="text-muted-foreground">Commission</span>
+          <span className="text-muted-foreground">{t("CommissionAmount")}</span>
           <span className="font-bold text-primary">
             {commission.toLocaleString(undefined, { maximumFractionDigits: 2 })}
           </span>

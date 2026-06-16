@@ -27,9 +27,9 @@ export default function ApprovalsPage() {
         requestId,
         status,
       });
-      toast.success(status === "APPROVED" ? "Request approved successfully" : "Request rejected");
+      toast.success(status === "APPROVED" ? t("ApprovalApprovedMsg") : t("ApprovalRejectedMsg"));
     } catch (error: any) {
-      toast.error(error.message || "Failed to process approval");
+      toast.error(error.message || t("FailedToProcessApproval"));
     }
   };
 
@@ -38,7 +38,7 @@ export default function ApprovalsPage() {
   return (
     <div className="flex-1 space-y-6 p-8 pt-6">
       <div className="flex items-center justify-between space-y-2">
-        <h2 className="text-3xl font-bold tracking-tight">Approvals</h2>
+        <h2 className="text-3xl font-bold tracking-tight">{t("Approvals")}</h2>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -49,8 +49,8 @@ export default function ApprovalsPage() {
         ) : pendingApprovals.length === 0 ? (
           <div className="col-span-full flex flex-col items-center justify-center p-12 text-center border rounded-xl border-dashed bg-muted/20">
             <CheckCircle2 className="h-10 w-10 text-emerald-500 mb-4 opacity-50" />
-            <p className="text-lg font-medium text-slate-700">No pending approvals</p>
-            <p className="text-sm text-slate-500">All caught up! There are no profit approval requests waiting.</p>
+            <p className="text-lg font-medium text-slate-700">{t("NoPendingApprovals")}</p>
+            <p className="text-sm text-slate-500">{t("AllCaughtUp")}</p>
           </div>
         ) : (
           pendingApprovals.map((request) => (
@@ -67,7 +67,7 @@ export default function ApprovalsPage() {
                     </CardDescription>
                   </div>
                   <Badge variant="outline" className="bg-yellow-500/10 text-yellow-600 border-yellow-500/20">
-                    Pending
+                    {t("Pending")}
                   </Badge>
                 </div>
               </CardHeader>
@@ -75,18 +75,18 @@ export default function ApprovalsPage() {
                 <div className="space-y-4 mb-6">
                   <div className="grid grid-cols-2 gap-4 rounded-lg bg-slate-50 p-3 border border-slate-100">
                     <div>
-                      <p className="text-xs text-slate-500 font-medium">Requested Profit</p>
+                      <p className="text-xs text-slate-500 font-medium">{t("RequestedProfit")}</p>
                       <p className="text-lg font-bold text-slate-900">{format(request.requestedProfit)}</p>
                     </div>
                     <div>
-                      <p className="text-xs text-slate-500 font-medium">Minimum Allowed</p>
+                      <p className="text-xs text-slate-500 font-medium">{t("MinimumAllowed")}</p>
                       <p className="text-sm font-semibold text-slate-600">{format(request.minimumProfit)}</p>
                     </div>
                   </div>
 
                   <div className="flex items-center gap-2 text-sm text-amber-600 bg-amber-50 px-3 py-2 rounded-md border border-amber-100">
                     <AlertCircle className="h-4 w-4 shrink-0" />
-                    <span>Short by {format(request.minimumProfit - request.requestedProfit)}</span>
+                    <span>{t("ShortBy")} {format(request.minimumProfit - request.requestedProfit)}</span>
                   </div>
                 </div>
 
@@ -97,14 +97,14 @@ export default function ApprovalsPage() {
                     onClick={() => handleRespond(request._id, "REJECTED")}
                   >
                     <XCircle className="w-4 h-4 me-2" />
-                    Reject
+                    {t("Reject")}
                   </Button>
                   <Button
                     className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"
                     onClick={() => handleRespond(request._id, "APPROVED")}
                   >
                     <CheckCircle2 className="w-4 h-4 me-2" />
-                    Approve
+                    {t("Approve")}
                   </Button>
                 </div>
               </CardContent>

@@ -112,9 +112,9 @@ export default function GeneralSettingsPage() {
         vatRate: vatRate ? parseFloat(vatRate) : undefined,
         timezone: timezone || undefined,
       });
-      toast.success("General settings saved.");
+      toast.success(t("GeneralSettingsSaved"));
     } catch (error: any) {
-      toast.error(error.message || "Failed to save settings.");
+      toast.error(error.message || t("FailedToSaveSettings"));
     } finally {
       setIsSaving(false);
     }
@@ -128,9 +128,9 @@ export default function GeneralSettingsPage() {
       if (cashEnabled) enabledPaymentTypes.push("CASH");
       if (installmentEnabled) enabledPaymentTypes.push("INSTALLMENT");
       await upsert({ orgId: activeOrgId, enabledPaymentTypes });
-      toast.success("Payment types saved.");
+      toast.success(t("PaymentTypesSaved"));
     } catch (error: any) {
-      toast.error(error.message || "Failed to save settings.");
+      toast.error(error.message || t("FailedToSaveSettings"));
     } finally {
       setIsSaving(false);
     }
@@ -147,9 +147,9 @@ export default function GeneralSettingsPage() {
           ? parseFloat(approvalMinProfitPercent)
           : undefined,
       });
-      toast.success("Approval settings saved.");
+      toast.success(t("ApprovalSettingsSaved"));
     } catch (error: any) {
-      toast.error(error.message || "Failed to save settings.");
+      toast.error(error.message || t("FailedToSaveSettings"));
     } finally {
       setIsSaving(false);
     }
@@ -160,9 +160,9 @@ export default function GeneralSettingsPage() {
     setIsSaving(true);
     try {
       await upsert({ orgId: activeOrgId, primaryColor });
-      toast.success("Appearance settings saved.");
+      toast.success(t("AppearanceSaved"));
     } catch (error: any) {
-      toast.error(error.message || "Failed to save settings.");
+      toast.error(error.message || t("FailedToSaveSettings"));
     } finally {
       setIsSaving(false);
     }
@@ -178,9 +178,9 @@ export default function GeneralSettingsPage() {
         whatsappApiToken: waApiToken || undefined,
         whatsappWebhookSecret: waWebhookSecret || undefined,
       });
-      toast.success("WhatsApp settings saved.");
+      toast.success(t("WhatsAppSettingsSaved"));
     } catch (error: any) {
-      toast.error(error.message || "Failed to save settings.");
+      toast.error(error.message || t("FailedToSaveSettings"));
     } finally {
       setIsSaving(false);
     }
@@ -200,9 +200,9 @@ export default function GeneralSettingsPage() {
       if (!result.ok) throw new Error("Upload failed.");
       const { storageId } = await result.json();
       await upsert({ orgId: activeOrgId, logoStorageId: storageId });
-      toast.success("Logo uploaded successfully.");
+      toast.success(t("LogoUploadedSuccess"));
     } catch (error: any) {
-      toast.error(error.message || "Logo upload failed.");
+      toast.error(error.message || t("LogoUploadFailed"));
     } finally {
       setIsUploadingLogo(false);
     }
@@ -211,33 +211,31 @@ export default function GeneralSettingsPage() {
   return (
     <div className="flex-1 space-y-4 p-4 md:p-8 pt-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">General Settings</h1>
-        <p className="text-muted-foreground text-sm mt-1">
-          Configure your organization&apos;s currency, payment types, and appearance.
-        </p>
+        <h1 className="text-2xl font-bold tracking-tight">{t("GeneralSettings")}</h1>
+        <p className="text-muted-foreground text-sm mt-1">{t("GeneralSettingsDesc")}</p>
       </div>
 
       <Tabs defaultValue="general" className="space-y-4">
         <TabsList>
           <TabsTrigger value="general" className="flex items-center gap-2">
             <Settings className="h-4 w-4" />
-            General
+            {t("GeneralTab")}
           </TabsTrigger>
           <TabsTrigger value="payment-types" className="flex items-center gap-2">
             <CreditCard className="h-4 w-4" />
-            Payment Types
+            {t("PaymentTypes")}
           </TabsTrigger>
           <TabsTrigger value="appearance" className="flex items-center gap-2">
             <Palette className="h-4 w-4" />
-            Appearance
+            {t("AppearanceTab")}
           </TabsTrigger>
           <TabsTrigger value="approvals" className="flex items-center gap-2">
             <ShieldCheck className="h-4 w-4" />
-            Approvals
+            {t("ApprovalsTab")}
           </TabsTrigger>
           <TabsTrigger value="whatsapp" className="flex items-center gap-2">
             <MessageCircle className="h-4 w-4" />
-            WhatsApp
+            {t("WhatsAppTab")}
           </TabsTrigger>
         </TabsList>
 
@@ -245,18 +243,16 @@ export default function GeneralSettingsPage() {
         <TabsContent value="general">
           <Card>
             <CardHeader>
-              <CardTitle>General</CardTitle>
-              <CardDescription>
-                Set the currency, country, VAT rate, and timezone for your dealership.
-              </CardDescription>
+              <CardTitle>{t("GeneralTab")}</CardTitle>
+              <CardDescription>{t("GeneralTabDesc")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-2">
-                  <Label>Currency</Label>
+                  <Label>{t("Currency")}</Label>
                   <Select value={currency} onValueChange={setCurrency}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Select currency" />
+                      <SelectValue placeholder={t("SelectCurrencyPlaceholder")} />
                     </SelectTrigger>
                     <SelectContent>
                       {CURRENCIES.map((c) => (
@@ -269,7 +265,7 @@ export default function GeneralSettingsPage() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Country</Label>
+                  <Label>{t("Country")}</Label>
                   <Input
                     placeholder="e.g. Jordan"
                     value={country}
@@ -278,7 +274,7 @@ export default function GeneralSettingsPage() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label>VAT Rate (%)</Label>
+                  <Label>{t("VATRate")}</Label>
                   <Input
                     type="number"
                     min="0"
@@ -291,10 +287,10 @@ export default function GeneralSettingsPage() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Timezone</Label>
+                  <Label>{t("Timezone")}</Label>
                   <Select value={timezone} onValueChange={setTimezone}>
                     <SelectTrigger>
-                      <SelectValue placeholder="Select timezone" />
+                      <SelectValue placeholder={t("SelectTimezonePlaceholder")} />
                     </SelectTrigger>
                     <SelectContent>
                       {TIMEZONES.map((tz) => (
@@ -309,7 +305,7 @@ export default function GeneralSettingsPage() {
 
               <div className="flex justify-end">
                 <Button onClick={handleSaveGeneral} disabled={isSaving}>
-                  {isSaving ? "Saving..." : "Save General Settings"}
+                  {isSaving ? t("Saving") : t("SaveGeneralSettings")}
                 </Button>
               </div>
             </CardContent>
@@ -320,19 +316,15 @@ export default function GeneralSettingsPage() {
         <TabsContent value="payment-types">
           <Card>
             <CardHeader>
-              <CardTitle>Payment Types</CardTitle>
-              <CardDescription>
-                Enable or disable the sale types available in the Sales wizard.
-              </CardDescription>
+              <CardTitle>{t("PaymentTypes")}</CardTitle>
+              <CardDescription>{t("PaymentTypesDesc")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="space-y-4">
                 <div className="flex items-center justify-between rounded-lg border p-4">
                   <div>
-                    <p className="font-medium">Cash Sales</p>
-                    <p className="text-sm text-muted-foreground">
-                      Allow full upfront cash payments.
-                    </p>
+                    <p className="font-medium">{t("CashSales")}</p>
+                    <p className="text-sm text-muted-foreground">{t("CashSalesDesc")}</p>
                   </div>
                   <Switch
                     checked={cashEnabled}
@@ -342,10 +334,8 @@ export default function GeneralSettingsPage() {
 
                 <div className="flex items-center justify-between rounded-lg border p-4">
                   <div>
-                    <p className="font-medium">Installment / Finance Sales</p>
-                    <p className="text-sm text-muted-foreground">
-                      Allow sales financed through banks or finance companies.
-                    </p>
+                    <p className="font-medium">{t("InstallmentFinanceSales")}</p>
+                    <p className="text-sm text-muted-foreground">{t("InstallmentFinanceSalesDesc")}</p>
                   </div>
                   <Switch
                     checked={installmentEnabled}
@@ -356,7 +346,7 @@ export default function GeneralSettingsPage() {
 
               <div className="flex justify-end">
                 <Button onClick={handleSavePaymentTypes} disabled={isSaving}>
-                  {isSaving ? "Saving..." : "Save Payment Types"}
+                  {isSaving ? t("Saving") : t("SavePaymentTypes")}
                 </Button>
               </div>
             </CardContent>
@@ -367,14 +357,12 @@ export default function GeneralSettingsPage() {
         <TabsContent value="appearance">
           <Card>
             <CardHeader>
-              <CardTitle>Appearance</CardTitle>
-              <CardDescription>
-                Customize your dealership&apos;s logo and brand color.
-              </CardDescription>
+              <CardTitle>{t("AppearanceTab")}</CardTitle>
+              <CardDescription>{t("AppearanceDesc")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="space-y-2">
-                <Label>Primary Color</Label>
+                <Label>{t("PrimaryColor")}</Label>
                 <div className="flex items-center gap-3">
                   <input
                     type="color"
@@ -392,7 +380,7 @@ export default function GeneralSettingsPage() {
               </div>
 
               <div className="space-y-2">
-                <Label>Organization Logo</Label>
+                <Label>{t("OrganizationLogo")}</Label>
                 <div className="flex items-center gap-3">
                   <Button
                     variant="outline"
@@ -400,7 +388,7 @@ export default function GeneralSettingsPage() {
                     onClick={() => document.getElementById("logo-upload")?.click()}
                   >
                     <Upload className="h-4 w-4 mr-2" />
-                    {isUploadingLogo ? "Uploading..." : "Upload Logo"}
+                    {isUploadingLogo ? t("UploadingLogo") : t("UploadLogo")}
                   </Button>
                   <input
                     id="logo-upload"
@@ -409,15 +397,13 @@ export default function GeneralSettingsPage() {
                     className="hidden"
                     onChange={handleLogoUpload}
                   />
-                  <span className="text-sm text-muted-foreground">
-                    PNG, JPG, SVG up to 5 MB
-                  </span>
+                  <span className="text-sm text-muted-foreground">{t("LogoMaxSize")}</span>
                 </div>
               </div>
 
               <div className="flex justify-end">
                 <Button onClick={handleSaveAppearance} disabled={isSaving}>
-                  {isSaving ? "Saving..." : "Save Appearance"}
+                  {isSaving ? t("Saving") : t("SaveAppearance")}
                 </Button>
               </div>
             </CardContent>
@@ -427,18 +413,14 @@ export default function GeneralSettingsPage() {
         <TabsContent value="approvals">
           <Card>
             <CardHeader>
-              <CardTitle>Approval Thresholds</CardTitle>
-              <CardDescription>
-                Require manager approval when a sale falls below a minimum profit percentage.
-              </CardDescription>
+              <CardTitle>{t("ApprovalsTab")}</CardTitle>
+              <CardDescription>{t("ApprovalsTabDesc")}</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="flex items-center justify-between rounded-lg border p-4">
                 <div>
-                  <p className="font-medium">Enable Profit Approval Workflow</p>
-                  <p className="text-sm text-muted-foreground">
-                    Sales below the minimum profit percentage must be approved by a manager.
-                  </p>
+                  <p className="font-medium">{t("EnableProfitApprovalWorkflow")}</p>
+                  <p className="text-sm text-muted-foreground">{t("EnableProfitApprovalWorkflowDesc")}</p>
                 </div>
                 <Switch
                   checked={approvalThresholdEnabled}
@@ -448,7 +430,7 @@ export default function GeneralSettingsPage() {
 
               {approvalThresholdEnabled && (
                 <div className="space-y-2">
-                  <Label>Minimum Profit Percentage (%)</Label>
+                  <Label>{t("MinimumProfitPercentage")}</Label>
                   <div className="flex items-center gap-3 max-w-xs">
                     <Input
                       type="number"
@@ -461,15 +443,13 @@ export default function GeneralSettingsPage() {
                     />
                     <span className="text-sm text-muted-foreground">%</span>
                   </div>
-                  <p className="text-xs text-muted-foreground">
-                    Sales with profit below this percentage of the vehicle cost will require approval.
-                  </p>
+                  <p className="text-xs text-muted-foreground">{t("MinimumProfitPercentageDesc")}</p>
                 </div>
               )}
 
               <div className="flex justify-end">
                 <Button onClick={handleSaveApprovals} disabled={isSaving}>
-                  {isSaving ? "Saving..." : "Save Approval Settings"}
+                  {isSaving ? t("Saving") : t("SaveApprovalSettings")}
                 </Button>
               </div>
             </CardContent>
@@ -480,10 +460,9 @@ export default function GeneralSettingsPage() {
         <TabsContent value="whatsapp">
           <Card>
             <CardHeader>
-              <CardTitle>WhatsApp Business Integration</CardTitle>
+              <CardTitle>{t("WhatsAppTab")}</CardTitle>
               <CardDescription>
-                Connect your WhatsApp Business Cloud API account. Incoming messages will automatically
-                create leads. Register your webhook URL in the Meta Developer Portal:{" "}
+                {t("WhatsAppTabDesc")}{" "}
                 <code className="text-xs bg-muted px-1 py-0.5 rounded">
                   {process.env.NEXT_PUBLIC_CONVEX_URL?.replace("convex.cloud", "convex.site")}/whatsapp-webhook?orgId=YOUR_ORG_ID
                 </code>
@@ -492,48 +471,41 @@ export default function GeneralSettingsPage() {
             <CardContent className="space-y-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div className="space-y-2">
-                  <Label>Phone Number ID</Label>
+                  <Label>{t("PhoneNumberId")}</Label>
                   <Input
                     placeholder="e.g. 123456789012345"
                     value={waPhoneNumberId}
                     onChange={(e) => setWaPhoneNumberId(e.target.value)}
                   />
-                  <p className="text-xs text-muted-foreground">
-                    Found in Meta Developer Portal → WhatsApp → API Setup.
-                  </p>
+                  <p className="text-xs text-muted-foreground">{t("PhoneNumberIdDesc")}</p>
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Webhook Verify Token</Label>
+                  <Label>{t("WebhookVerifyToken")}</Label>
                   <Input
                     type="password"
-                    placeholder="Your custom verify token"
+                    placeholder={t("WebhookVerifyTokenPlaceholder")}
                     value={waWebhookSecret}
                     onChange={(e) => setWaWebhookSecret(e.target.value)}
                   />
-                  <p className="text-xs text-muted-foreground">
-                    A secret string you chose when registering the webhook in Meta.
-                  </p>
+                  <p className="text-xs text-muted-foreground">{t("WebhookVerifyTokenDesc")}</p>
                 </div>
 
                 <div className="space-y-2 md:col-span-2">
-                  <Label>Permanent Access Token</Label>
+                  <Label>{t("PermanentAccessToken")}</Label>
                   <Input
                     type="password"
                     placeholder="EAAxxxxxxxx..."
                     value={waApiToken}
                     onChange={(e) => setWaApiToken(e.target.value)}
                   />
-                  <p className="text-xs text-muted-foreground">
-                    Generate a permanent token from Meta Business Manager → System Users.
-                    Never share this value.
-                  </p>
+                  <p className="text-xs text-muted-foreground">{t("PermanentAccessTokenDesc")}</p>
                 </div>
               </div>
 
               <div className="flex justify-end">
                 <Button onClick={handleSaveWhatsApp} disabled={isSaving}>
-                  {isSaving ? "Saving..." : "Save WhatsApp Settings"}
+                  {isSaving ? t("Saving") : t("SaveWhatsAppSettings")}
                 </Button>
               </div>
             </CardContent>

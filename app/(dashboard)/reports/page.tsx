@@ -68,22 +68,22 @@ function ReportsDateFilter({
   return (
     <div className="flex flex-wrap items-end gap-4 no-print bg-card p-4 rounded-lg border shadow-sm">
       <div className="space-y-1">
-        <label className="text-sm font-medium">{t("StartDate" as any)}</label>
+        <label className="text-sm font-medium">{t("StartDate")}</label>
         <Input type="date" value={startDateStr} onChange={(e) => setStartDateStr(e.target.value)} />
       </div>
       <div className="space-y-1">
-        <label className="text-sm font-medium">{t("EndDate" as any)}</label>
+        <label className="text-sm font-medium">{t("EndDate")}</label>
         <Input type="date" value={endDateStr} onChange={(e) => setEndDateStr(e.target.value)} />
       </div>
       <div className="space-y-1">
-        <label className="text-sm font-medium">{t("Salesperson" as any)}</label>
+        <label className="text-sm font-medium">{t("Salesperson")}</label>
         <SearchableSelect
           value={selectedSalesperson}
           onValueChange={setSelectedSalesperson}
           className="w-[180px]"
-          placeholder={t("AllSalespeople" as any)}
+          placeholder={t("AllSalespeople")}
           options={[
-            { value: "all", label: t("AllSalespeople" as any) },
+            { value: "all", label: t("AllSalespeople") },
             ...salespersonOptions.map((sp) => ({ value: sp.name, label: sp.name })),
           ]}
         />
@@ -141,19 +141,19 @@ export default function ReportsPage() {
         <Tabs defaultValue="sales" className="space-y-4 print-full-width">
           <TabsList className="no-print">
             <TabsTrigger value="sales" className="gap-2">
-              <LineChart className="h-4 w-4" /> {t("SalesProfit" as any) || "Sales & Profit"}
+              <LineChart className="h-4 w-4" /> {t("SalesProfit") || "Sales & Profit"}
             </TabsTrigger>
             <TabsTrigger value="inventory" className="gap-2">
-              <Car className="h-4 w-4" /> {t("Inventory" as any) || "Inventory"}
+              <Car className="h-4 w-4" /> {t("Inventory") || "Inventory"}
             </TabsTrigger>
             <TabsTrigger value="expenses" className="gap-2">
-              <Receipt className="h-4 w-4" /> {t("Expenses" as any) || "Expenses"}
+              <Receipt className="h-4 w-4" /> {t("Expenses") || "Expenses"}
             </TabsTrigger>
             <TabsTrigger value="performance" className="gap-2">
-              <Users className="h-4 w-4" /> Performance
+              <Users className="h-4 w-4" /> {t("Performance")}
             </TabsTrigger>
             <TabsTrigger value="leads" className="gap-2">
-              <Target className="h-4 w-4" /> {t("LeadConversion" as any) || "Lead Conversion"}
+              <Target className="h-4 w-4" /> {t("LeadConversion") || "Lead Conversion"}
             </TabsTrigger>
           </TabsList>
 
@@ -162,7 +162,7 @@ export default function ReportsPage() {
             <ReportsDateFilter {...dateFilterProps} />
             <div className="flex items-center justify-between no-print">
               <div>
-                <h3 className="text-lg font-medium">{t("SalesProfitOverview" as any) || "Sales & Profit Overview"}</h3>
+                <h3 className="text-lg font-medium">{t("SalesProfitOverview") || "Sales & Profit Overview"}</h3>
                 <p className="text-sm text-muted-foreground">
                   {new Date(startDate).toLocaleDateString()} — {new Date(endDate).toLocaleDateString()}
                   {selectedSalesperson !== "all" && ` · ${selectedSalesperson}`}
@@ -170,10 +170,10 @@ export default function ReportsPage() {
               </div>
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => filteredSales && downloadCSV(filteredSales, "sales_report.csv")}>
-                  <Download className="h-4 w-4 me-2" /> {t("ExportCSV" as any)}
+                  <Download className="h-4 w-4 me-2" /> {t("ExportCSV")}
                 </Button>
                 <Button onClick={handlePrint}>
-                  <Printer className="h-4 w-4 me-2" /> {t("Print" as any)}
+                  <Printer className="h-4 w-4 me-2" /> {t("Print")}
                 </Button>
               </div>
             </div>
@@ -181,7 +181,7 @@ export default function ReportsPage() {
             <div className="grid gap-4 md:grid-cols-3 mb-4">
               <Card className="print-shadow-none border print:border-gray-200">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">{t("TotalRevenue" as any) || "Total Revenue"}</CardTitle>
+                  <CardTitle className="text-sm font-medium">{t("TotalRevenue") || "Total Revenue"}</CardTitle>
                   <LineChart className="h-4 w-4 text-muted-foreground no-print" />
                 </CardHeader>
                 <CardContent>
@@ -190,7 +190,7 @@ export default function ReportsPage() {
               </Card>
               <Card className="print-shadow-none border print:border-gray-200">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">{t("TotalCosts" as any) || "Total Costs"}</CardTitle>
+                  <CardTitle className="text-sm font-medium">{t("TotalCosts") || "Total Costs"}</CardTitle>
                   <Receipt className="h-4 w-4 text-muted-foreground no-print" />
                 </CardHeader>
                 <CardContent>
@@ -199,7 +199,7 @@ export default function ReportsPage() {
               </Card>
               <Card className="print-shadow-none border print:border-gray-200">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">{t("NetProfit" as any) || "Net Profit"}</CardTitle>
+                  <CardTitle className="text-sm font-medium">{t("NetProfit") || "Net Profit"}</CardTitle>
                   <BadgeDollarSign className="h-4 w-4 text-green-500 no-print" />
                 </CardHeader>
                 <CardContent>
@@ -212,13 +212,13 @@ export default function ReportsPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>{t("Date" as any)}</TableHead>
-                    <TableHead>{t("Vehicle" as any)}</TableHead>
-                    <TableHead>{t("VIN" as any)}</TableHead>
-                    <TableHead>Salesperson</TableHead>
-                    <TableHead className="text-right">{t("SalePrice" as any) || "Sale Price"}</TableHead>
-                    <TableHead className="text-right">{t("TotalCost" as any) || "Total Cost"}</TableHead>
-                    <TableHead className="text-right">{t("NetProfit" as any) || "Net Profit"}</TableHead>
+                    <TableHead>{t("Date")}</TableHead>
+                    <TableHead>{t("Vehicle")}</TableHead>
+                    <TableHead>{t("VIN")}</TableHead>
+                    <TableHead>{t("Salesperson")}</TableHead>
+                    <TableHead className="text-right">{t("SalePrice") || "Sale Price"}</TableHead>
+                    <TableHead className="text-right">{t("TotalCost") || "Total Cost"}</TableHead>
+                    <TableHead className="text-right">{t("NetProfit") || "Net Profit"}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -236,7 +236,7 @@ export default function ReportsPage() {
                   {!filteredSales?.length && (
                     <TableRow>
                       <TableCell colSpan={7} className="text-center py-6 text-muted-foreground">
-                        {t("NoSalesFoundPeriod" as any) || "No sales found in this period."}
+                        {t("NoSalesFoundPeriod") || "No sales found in this period."}
                       </TableCell>
                     </TableRow>
                   )}
@@ -249,15 +249,15 @@ export default function ReportsPage() {
           <TabsContent value="inventory" className="space-y-4 m-0">
             <div className="flex items-center justify-between no-print">
               <div>
-                <h3 className="text-lg font-medium">Inventory Valuation</h3>
-                <p className="text-sm text-muted-foreground">Current available and reserved vehicles</p>
+                <h3 className="text-lg font-medium">{t("InventoryValuation")}</h3>
+                <p className="text-sm text-muted-foreground">{t("CurrentAvailableAndReserved")}</p>
               </div>
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => inventoryReport?.vehicles && downloadCSV(inventoryReport.vehicles, "inventory_report.csv")}>
-                  <Download className="h-4 w-4 me-2" /> {t("ExportCSV" as any)}
+                  <Download className="h-4 w-4 me-2" /> {t("ExportCSV")}
                 </Button>
                 <Button onClick={handlePrint}>
-                  <Printer className="h-4 w-4 me-2" /> {t("Print" as any)}
+                  <Printer className="h-4 w-4 me-2" /> {t("Print")}
                 </Button>
               </div>
             </div>
@@ -265,7 +265,7 @@ export default function ReportsPage() {
             <div className="grid gap-4 md:grid-cols-2 mb-4">
               <Card className="print-shadow-none border print:border-gray-200">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Active Vehicles</CardTitle>
+                  <CardTitle className="text-sm font-medium">{t("ActiveVehicles")}</CardTitle>
                   <Car className="h-4 w-4 text-muted-foreground no-print" />
                 </CardHeader>
                 <CardContent>
@@ -274,7 +274,7 @@ export default function ReportsPage() {
               </Card>
               <Card className="print-shadow-none border print:border-gray-200">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">{t("InventoryValue" as any) || "Inventory Value"}</CardTitle>
+                  <CardTitle className="text-sm font-medium">{t("InventoryValue") || "Inventory Value"}</CardTitle>
                   <BadgeDollarSign className="h-4 w-4 text-muted-foreground no-print" />
                 </CardHeader>
                 <CardContent>
@@ -287,12 +287,12 @@ export default function ReportsPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>{t("Vehicle" as any)}</TableHead>
-                    <TableHead>{t("VIN" as any)}</TableHead>
-                    <TableHead>{t("Status" as any)}</TableHead>
-                    <TableHead className="text-right">{t("PurchasePrice" as any) || "Purchase Price"}</TableHead>
-                    <TableHead className="text-right">{t("Expenses" as any)}</TableHead>
-                    <TableHead className="text-right">{t("TotalInvested" as any) || "Total Invested"}</TableHead>
+                    <TableHead>{t("Vehicle")}</TableHead>
+                    <TableHead>{t("VIN")}</TableHead>
+                    <TableHead>{t("Status")}</TableHead>
+                    <TableHead className="text-right">{t("PurchasePrice") || "Purchase Price"}</TableHead>
+                    <TableHead className="text-right">{t("Expenses")}</TableHead>
+                    <TableHead className="text-right">{t("TotalInvested") || "Total Invested"}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -309,7 +309,7 @@ export default function ReportsPage() {
                   {!inventoryReport?.vehicles?.length && (
                     <TableRow>
                       <TableCell colSpan={6} className="text-center py-6 text-muted-foreground">
-                        No active vehicles in inventory.
+                        {t("NoActiveVehiclesInInventory")}
                       </TableCell>
                     </TableRow>
                   )}
@@ -323,17 +323,17 @@ export default function ReportsPage() {
             <ReportsDateFilter {...dateFilterProps} />
             <div className="flex items-center justify-between no-print">
               <div>
-                <h3 className="text-lg font-medium">{t("ExpensesOverview" as any) || "Expenses Overview"}</h3>
+                <h3 className="text-lg font-medium">{t("ExpensesOverview") || "Expenses Overview"}</h3>
                 <p className="text-sm text-muted-foreground">
                   {new Date(startDate).toLocaleDateString()} — {new Date(endDate).toLocaleDateString()}
                 </p>
               </div>
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => expensesReport?.expenses && downloadCSV(expensesReport.expenses, "expenses_report.csv")}>
-                  <Download className="h-4 w-4 me-2" /> {t("ExportCSV" as any)}
+                  <Download className="h-4 w-4 me-2" /> {t("ExportCSV")}
                 </Button>
                 <Button onClick={handlePrint}>
-                  <Printer className="h-4 w-4 me-2" /> {t("Print" as any)}
+                  <Printer className="h-4 w-4 me-2" /> {t("Print")}
                 </Button>
               </div>
             </div>
@@ -341,7 +341,7 @@ export default function ReportsPage() {
             <div className="grid gap-4 md:grid-cols-3 mb-4">
               <Card className="print-shadow-none border print:border-gray-200">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">{t("TotalExpenses" as any) || "Total Expenses"}</CardTitle>
+                  <CardTitle className="text-sm font-medium">{t("TotalExpenses") || "Total Expenses"}</CardTitle>
                   <Receipt className="h-4 w-4 text-muted-foreground no-print" />
                 </CardHeader>
                 <CardContent>
@@ -354,11 +354,11 @@ export default function ReportsPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>{t("Date" as any)}</TableHead>
-                    <TableHead>Category</TableHead>
-                    <TableHead>Description</TableHead>
-                    <TableHead>Related Vehicle</TableHead>
-                    <TableHead className="text-right">Amount</TableHead>
+                    <TableHead>{t("Date")}</TableHead>
+                    <TableHead>{t("Category")}</TableHead>
+                    <TableHead>{t("Description")}</TableHead>
+                    <TableHead>{t("RelatedVehicle")}</TableHead>
+                    <TableHead className="text-right">{t("Amount")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -374,7 +374,7 @@ export default function ReportsPage() {
                   {!expensesReport?.expenses?.length && (
                     <TableRow>
                       <TableCell colSpan={5} className="text-center py-6 text-muted-foreground">
-                        No expenses found in this period.
+                        {t("NoExpensesFoundPeriod")}
                       </TableCell>
                     </TableRow>
                   )}
@@ -388,17 +388,17 @@ export default function ReportsPage() {
             <ReportsDateFilter {...dateFilterProps} />
             <div className="flex items-center justify-between no-print">
               <div>
-                <h3 className="text-lg font-medium">Salesperson Performance</h3>
+                <h3 className="text-lg font-medium">{t("SalespersonPerformance")}</h3>
                 <p className="text-sm text-muted-foreground">
                   {new Date(startDate).toLocaleDateString()} — {new Date(endDate).toLocaleDateString()}
                 </p>
               </div>
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => performanceReport && downloadCSV(performanceReport, "performance_report.csv")}>
-                  <Download className="h-4 w-4 me-2" /> {t("ExportCSV" as any)}
+                  <Download className="h-4 w-4 me-2" /> {t("ExportCSV")}
                 </Button>
                 <Button onClick={handlePrint}>
-                  <Printer className="h-4 w-4 me-2" /> {t("Print" as any)}
+                  <Printer className="h-4 w-4 me-2" /> {t("Print")}
                 </Button>
               </div>
             </div>
@@ -407,10 +407,10 @@ export default function ReportsPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Salesperson</TableHead>
-                    <TableHead className="text-right">Vehicles Sold</TableHead>
-                    <TableHead className="text-right">Total Revenue</TableHead>
-                    <TableHead className="text-right">Net Profit</TableHead>
+                    <TableHead>{t("Salesperson")}</TableHead>
+                    <TableHead className="text-right">{t("VehiclesSold")}</TableHead>
+                    <TableHead className="text-right">{t("TotalRevenue")}</TableHead>
+                    <TableHead className="text-right">{t("NetProfit")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -425,7 +425,7 @@ export default function ReportsPage() {
                   {!performanceReport?.length && (
                     <TableRow>
                       <TableCell colSpan={4} className="text-center py-6 text-muted-foreground">
-                        No performance data found in this period.
+                        {t("NoPerformanceData")}
                       </TableCell>
                     </TableRow>
                   )}
@@ -439,20 +439,20 @@ export default function ReportsPage() {
             <ReportsDateFilter {...dateFilterProps} />
             <div className="flex items-center justify-between no-print">
               <div>
-                <h3 className="text-lg font-medium">Lead Conversion</h3>
+                <h3 className="text-lg font-medium">{t("LeadConversion")}</h3>
                 <p className="text-sm text-muted-foreground">
                   {new Date(startDate).toLocaleDateString()} — {new Date(endDate).toLocaleDateString()}
                 </p>
               </div>
               <Button onClick={handlePrint}>
-                <Printer className="h-4 w-4 me-2" /> {t("Print" as any)}
+                <Printer className="h-4 w-4 me-2" /> {t("Print")}
               </Button>
             </div>
 
             <div className="grid gap-4 md:grid-cols-3 mb-4">
               <Card className="print-shadow-none border print:border-gray-200">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Total Leads</CardTitle>
+                  <CardTitle className="text-sm font-medium">{t("TotalLeads")}</CardTitle>
                   <Target className="h-4 w-4 text-muted-foreground no-print" />
                 </CardHeader>
                 <CardContent>
@@ -461,7 +461,7 @@ export default function ReportsPage() {
               </Card>
               <Card className="print-shadow-none border print:border-gray-200">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Won Leads</CardTitle>
+                  <CardTitle className="text-sm font-medium">{t("WonLeads")}</CardTitle>
                   <Users className="h-4 w-4 text-muted-foreground no-print" />
                 </CardHeader>
                 <CardContent>
@@ -470,7 +470,7 @@ export default function ReportsPage() {
               </Card>
               <Card className="print-shadow-none border print:border-gray-200">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">Overall Conversion</CardTitle>
+                  <CardTitle className="text-sm font-medium">{t("OverallConversion")}</CardTitle>
                   <LineChart className="h-4 w-4 text-green-500 no-print" />
                 </CardHeader>
                 <CardContent>
@@ -485,10 +485,10 @@ export default function ReportsPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Salesperson</TableHead>
-                    <TableHead className="text-right">Assigned Leads</TableHead>
-                    <TableHead className="text-right">Won</TableHead>
-                    <TableHead className="text-right">Conversion Rate</TableHead>
+                    <TableHead>{t("Salesperson")}</TableHead>
+                    <TableHead className="text-right">{t("AssignedLeads")}</TableHead>
+                    <TableHead className="text-right">{t("Won")}</TableHead>
+                    <TableHead className="text-right">{t("ConversionRate")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -503,7 +503,7 @@ export default function ReportsPage() {
                   {!leadsReport?.salespersonMetrics?.length && (
                     <TableRow>
                       <TableCell colSpan={4} className="text-center py-6 text-muted-foreground">
-                        No lead metrics found in this period.
+                        {t("NoLeadMetrics")}
                       </TableCell>
                     </TableRow>
                   )}

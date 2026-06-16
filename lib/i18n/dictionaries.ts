@@ -6,6 +6,7 @@ import { leadsEn, leadsAr } from "./domains/leads";
 import { salesEn, salesAr } from "./domains/sales";
 import { settingsEn, settingsAr } from "./domains/settings";
 import { expensesEn, expensesAr } from "./domains/expenses";
+import { reportsEn, reportsAr } from "./domains/reports";
 
 export type Locale = "en" | "ar";
 
@@ -18,6 +19,7 @@ const en = {
   ...salesEn,
   ...settingsEn,
   ...expensesEn,
+  ...reportsEn,
 };
 
 const ar = {
@@ -29,6 +31,7 @@ const ar = {
   ...salesAr,
   ...settingsAr,
   ...expensesAr,
+  ...reportsAr,
 } as unknown as typeof en;
 
 export const dictionaries = {
