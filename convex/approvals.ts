@@ -167,6 +167,29 @@ export const listPendingApprovals = query({
 
 // Returns the calling salesperson's own non-rejected approval requests from the last 7 days.
 // Used to surface "Pending Deals" on the sales page so they can resume after approval.
+export const cancelMyApproval = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    requestId: v.id("profitApprovalRequests"),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+
+    const request = await ctx.db.get(args.requestId);
+    if (!request || request.orgId !== args.orgId) {
+      throw new ConvexError("Approval request not found.");
+    }
+    if (request.salespersonId !== user._id) {
+      throw new ConvexError("You can only cancel your own approval requests.");
+    }
+    if (request.status !== "PENDING") {
+      throw new ConvexError("Only pending requests can be cancelled.");
+    }
+
+    await ctx.db.patch(args.requestId, { status: "REJECTED" });
+  },
+});
+
 export const listMyPendingApprovals = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {

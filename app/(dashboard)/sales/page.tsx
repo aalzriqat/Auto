@@ -2,13 +2,14 @@
 
 import { useState } from "react";
 import { RoleGuard } from "@/components/auth/RoleGuard";
-import { usePaginatedQuery, useQuery } from "convex/react";
+import { usePaginatedQuery, useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { SalesWizard, WizardDraft } from "@/components/sales/SalesWizard";
 import { PaymentType, WizardData } from "@/components/sales/wizard/types";
-import { Banknote, CreditCard, TrendingUp, ArrowRight, Clock, CheckCircle2, RotateCcw, FileEdit } from "lucide-react";
+import { Banknote, CreditCard, TrendingUp, ArrowRight, Clock, CheckCircle2, RotateCcw, FileEdit, X } from "lucide-react";
+import { toast } from "@/components/ui/sonner";
 import { cn } from "@/lib/utils";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
@@ -44,6 +45,29 @@ export default function SalesHomePage() {
         api.wizardDrafts.getMyDraft,
         activeOrgId ? { orgId: activeOrgId as Id<"organizations"> } : "skip"
     );
+
+    const clearDraft = useMutation(api.wizardDrafts.clearDraft);
+    const cancelApproval = useMutation(api.approvals.cancelMyApproval);
+
+    async function handleDiscardDraft() {
+        if (!activeOrgId) return;
+        try {
+            await clearDraft({ orgId: activeOrgId as Id<"organizations"> });
+            toast.success(t("DraftDiscarded" as any) ?? "Draft discarded");
+        } catch {
+            toast.error(t("FailedToDiscard" as any) ?? "Failed to discard draft");
+        }
+    }
+
+    async function handleCancelApproval(requestId: Id<"profitApprovalRequests">) {
+        if (!activeOrgId) return;
+        try {
+            await cancelApproval({ orgId: activeOrgId, requestId });
+            toast.success(t("ApprovalCancelled" as any) ?? "Deal request cancelled");
+        } catch {
+            toast.error(t("FailedToCancelApproval" as any) ?? "Failed to cancel request");
+        }
+    }
 
     function openFreshWizard(type: PaymentType) {
         setWizardInitialDraft(undefined);
@@ -187,7 +211,7 @@ export default function SalesHomePage() {
                             {t("InProgressDraft" as any) ?? "In-Progress Draft"}
                         </h2>
                         <div
-                            className="flex items-center justify-between rounded-lg border border-indigo-500/20 bg-indigo-500/5 px-4 py-3"
+                            className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-indigo-500/20 bg-indigo-500/5 px-4 py-3"
                         >
                             <div>
                                 <p className="text-sm font-medium text-foreground">
@@ -200,15 +224,26 @@ export default function SalesHomePage() {
                                     {t("LastSaved" as any) ?? "Last saved"}: {new Date(myWizardDraft.savedAt).toLocaleString()}
                                 </p>
                             </div>
-                            <Button
-                                size="sm"
-                                variant="outline"
-                                className="text-xs border-indigo-400 text-indigo-400 hover:bg-indigo-500/10"
-                                onClick={() => resumeFromDbDraft(myWizardDraft)}
-                            >
-                                <RotateCcw className="w-3 h-3 me-1.5" />
-                                {t("ResumeDraft" as any) ?? "Resume Draft"}
-                            </Button>
+                            <div className="flex gap-2">
+                                <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    className="text-xs text-red-400 hover:text-red-500 hover:bg-red-500/10"
+                                    onClick={handleDiscardDraft}
+                                >
+                                    <X className="w-3 h-3 me-1.5" />
+                                    {t("Discard" as any) ?? "Discard"}
+                                </Button>
+                                <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="text-xs border-indigo-400 text-indigo-400 hover:bg-indigo-500/10"
+                                    onClick={() => resumeFromDbDraft(myWizardDraft)}
+                                >
+                                    <RotateCcw className="w-3 h-3 me-1.5" />
+                                    {t("ResumeDraft" as any) ?? "Resume Draft"}
+                                </Button>
+                            </div>
                         </div>
                     </div>
                 )}
@@ -232,7 +267,7 @@ export default function SalesHomePage() {
                                             {t("RequestedProfit" as any) ?? "Requested profit"}: {format(approval.requestedProfit)}
                                         </p>
                                     </div>
-                                    <div className="flex items-center gap-3">
+                                    <div className="flex flex-wrap items-center gap-2">
                                         {approval.status === "PENDING" ? (
                                             <Badge variant="outline" className="text-amber-600 border-amber-400 text-xs">
                                                 <Clock className="w-3 h-3 me-1" />
@@ -243,6 +278,17 @@ export default function SalesHomePage() {
                                                 <CheckCircle2 className="w-3 h-3 me-1" />
                                                 {t("Approved" as any) ?? "Approved"}
                                             </Badge>
+                                        )}
+                                        {approval.status === "PENDING" && (
+                                            <Button
+                                                size="sm"
+                                                variant="ghost"
+                                                className="text-xs text-red-400 hover:text-red-500 hover:bg-red-500/10"
+                                                onClick={() => handleCancelApproval(approval._id)}
+                                            >
+                                                <X className="w-3 h-3 me-1.5" />
+                                                {t("Cancel" as any) ?? "Cancel"}
+                                            </Button>
                                         )}
                                         {approval.wizardSnapshot && (
                                             <Button
