@@ -279,12 +279,9 @@ export const remove = action({
           });
           
           if (!res.ok) {
-            const errorText = await res.text();
-            console.error("Clerk deletion failed, but Convex user was deleted. Manual cleanup required:", errorText);
             throw new ConvexError("User removed from DB, but failed to remove from authentication provider.");
           }
         } catch (error) {
-          console.error("Failed to delete user from Clerk:", error);
           if (error instanceof ConvexError) throw error;
           throw new ConvexError("Failed to connect to authentication provider to remove user.");
         }
@@ -461,7 +458,6 @@ export const createAccount = action({
 
         if (!response.ok) {
           const errorData = await response.json();
-          console.error("Clerk user creation failed:", errorData);
           const firstError = errorData.errors?.[0];
           if (firstError) {
             if (firstError.code === "form_data_missing" && firstError.meta?.param_names?.includes("last_name")) {

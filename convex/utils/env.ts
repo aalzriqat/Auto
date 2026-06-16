@@ -20,10 +20,9 @@ export function getValidatedEnv() {
   });
   
   if (!result.success) {
-    const errorMsg = "Backend Environment Variables Missing/Invalid: " + 
+    const errorMsg = "Backend Environment Variables Missing/Invalid: " +
       result.error.errors.map(e => `${e.path.join('.')}`).join(', ');
-    console.error(errorMsg);
-    throw new ConvexError(errorMsg); // This will crash the action/mutation predictably
+    throw new ConvexError(errorMsg);
   }
   
   return result.data;

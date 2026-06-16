@@ -62,8 +62,6 @@ export const sendTaskAlarm = internalAction({
     `;
 
     if (!resendApiKey) {
-      console.log(`[MOCK EMAIL] To: ${args.toEmail} | Subject: Reminder - ${args.taskTitle}`);
-      console.log(`[MOCK ICS]\n${icsString}`);
       return { success: true, mock: true };
     }
 
@@ -84,7 +82,6 @@ export const sendTaskAlarm = internalAction({
       });
       return { success: true, mock: false };
     } catch (error) {
-      console.error("Failed to send email via Resend:", error);
       return { success: false, error: String(error) };
     }
   },
@@ -118,7 +115,6 @@ export const sendTeamInvite = internalAction({
     `;
 
     if (!resendApiKey) {
-      console.log(`[MOCK EMAIL] To: ${args.toEmail} | Subject: Join ${args.orgName}`);
       return { success: true, mock: true };
     }
 
@@ -133,7 +129,6 @@ export const sendTeamInvite = internalAction({
       });
       return { success: true, mock: false };
     } catch (error) {
-      console.error("Failed to send invite email via Resend:", error);
       return { success: false, error: String(error) };
     }
   },

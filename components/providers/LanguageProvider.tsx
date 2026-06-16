@@ -6,7 +6,8 @@ import { Locale, dictionaries } from "@/lib/i18n/dictionaries";
 type LanguageContextType = {
   locale: Locale;
   setLocale: (locale: Locale) => void;
-  t: (key: keyof typeof dictionaries.en) => string;
+  // Accept any string key; keyof typeof dictionaries.en gets autocomplete, unknowns return the key itself
+  t: (key: keyof typeof dictionaries.en | (string & {})) => string;
   isRtl: boolean;
 };
 
@@ -46,8 +47,9 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
     }
   }, [locale, mounted, isRtl]);
 
-  const t = (key: keyof typeof dictionaries.en) => {
-    return dictionaries[locale][key] || dictionaries["en"][key] || key;
+  const t = (key: keyof typeof dictionaries.en | (string & {})) => {
+    const k = key as keyof typeof dictionaries.en;
+    return dictionaries[locale][k] || dictionaries["en"][k] || key;
   };
 
   return (

@@ -17,8 +17,7 @@ http.route({
       const env = getValidatedEnv();
       if (!env.CLERK_WEBHOOK_SECRET) throw new ConvexError("CLERK_WEBHOOK_SECRET not set");
       webhookSecret = env.CLERK_WEBHOOK_SECRET;
-    } catch (e) {
-      console.error(e);
+    } catch {
       return new Response("Webhook secret not set or invalid env", { status: 500 });
     }
 
@@ -33,15 +32,15 @@ http.route({
     const payload = await request.text();
     const wh = new Webhook(webhookSecret);
 
-    let event: any;
+    type ClerkWebhookEvent = { type: string; data: Record<string, unknown> };
+    let event: ClerkWebhookEvent;
     try {
       event = wh.verify(payload, {
         "svix-id": svixId,
         "svix-timestamp": svixTimestamp,
         "svix-signature": svixSignature,
-      });
-    } catch (err) {
-      console.error("Error verifying Clerk webhook signature:", err);
+      }) as ClerkWebhookEvent;
+    } catch {
       return new Response("Invalid signature", { status: 400 });
     }
 
@@ -50,12 +49,20 @@ http.route({
     switch (type) {
       case "user.created":
       case "user.updated": {
-        const email = data.email_addresses?.[0]?.email_address ?? "";
-        const name = [data.first_name, data.last_name].filter(Boolean).join(" ");
-        const imageUrl = data.image_url ?? "";
+        type ClerkUserData = {
+          id: string;
+          email_addresses?: Array<{ email_address: string }>;
+          first_name?: string;
+          last_name?: string;
+          image_url?: string;
+        };
+        const d = data as ClerkUserData;
+        const email = d.email_addresses?.[0]?.email_address ?? "";
+        const name = [d.first_name, d.last_name].filter(Boolean).join(" ");
+        const imageUrl = d.image_url ?? "";
 
         await ctx.runMutation(internal.users.updateOrCreateUser, {
-          clerkId: data.id,
+          clerkId: d.id,
           email,
           name: name || undefined,
           imageUrl: imageUrl || undefined,
@@ -63,15 +70,16 @@ http.route({
         break;
       }
       case "user.deleted": {
-        if (data.id) {
+        const d = data as { id?: string };
+        if (d.id) {
           await ctx.runMutation(internal.users.deleteUser, {
-            clerkId: data.id,
+            clerkId: d.id,
           });
         }
         break;
       }
       default:
-        console.log(`Unhandled Clerk webhook event type: ${type}`);
+        break;
     }
 
     return new Response(null, { status: 200 });

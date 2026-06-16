@@ -47,7 +47,6 @@ export const seedMutakhasisa = internalMutation({
           description: doc.desc
         });
       }
-      console.log("Added Mutakhasisa and its 4 rules");
     }
   }
 });

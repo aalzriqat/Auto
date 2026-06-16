@@ -3,6 +3,7 @@
 import { useState, useRef } from "react";
 import { useQuery, useMutation, useAction, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Button } from "@/components/ui/button";
@@ -60,7 +61,7 @@ export default function TeamPage() {
       return;
     }
     try {
-      await updateCommissionRate({ orgId: activeOrgId, membershipId: membershipId as any, commissionRate: rate });
+      await updateCommissionRate({ orgId: activeOrgId, membershipId: membershipId as Id<"memberships">, commissionRate: rate });
       toast.success("Commission rate updated.");
     } catch (e: any) {
       toast.error(e.message ?? "Failed to update.");

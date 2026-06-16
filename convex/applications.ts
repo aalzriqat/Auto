@@ -18,7 +18,7 @@ export const list = query({
     if (args.status) {
       pageResult = await ctx.db
         .query("financeApplications")
-        .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", args.status as any))
+        .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", args.status!))
         .paginate(args.paginationOpts);
     } else {
       pageResult = await ctx.db

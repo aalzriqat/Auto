@@ -22,6 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Check } from "lucide-react";
+import { Id } from "@/convex/_generated/dataModel";
 
 const CURRENCIES = [
   { code: "JOD", symbol: "د.أ", label: "Jordanian Dinar (JOD)" },
@@ -70,7 +71,7 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
     try {
       const cur = CURRENCIES.find((c) => c.code === currency)!;
       await upsertSettings({
-        orgId: orgId as any,
+        orgId: orgId as Id<"organizations">,
         currency: cur.code,
         currencySymbol: cur.symbol,
       });
@@ -241,7 +242,7 @@ function Onboarding({ onComplete }: { onComplete: () => void }) {
                 Your dealership is ready. Head to Settings anytime to customize further.
               </p>
             </div>
-            <Button className="w-full" onClick={() => { setActiveOrgId(orgId! as any); onComplete(); }}>
+            <Button className="w-full" onClick={() => { setActiveOrgId(orgId! as Id<"organizations">); onComplete(); }}>
               Go to Dashboard
             </Button>
           </div>

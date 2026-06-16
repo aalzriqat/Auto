@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import {
@@ -41,12 +42,12 @@ export function ChangeMemberRoleDialog({
       await updateRole({
         orgId: activeOrgId,
         membershipId: member._id,
-        newRoleId: selectedRoleId as any,
+        newRoleId: selectedRoleId as Id<"roles">,
       });
-      toast.success(t("RoleUpdatedSuccess" as any));
+      toast.success(t("RoleUpdatedSuccess"));
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || t("RoleUpdateFail" as any));
+      toast.error(error.message || t("RoleUpdateFail"));
     } finally {
       setIsSubmitting(false);
     }
@@ -56,19 +57,19 @@ export function ChangeMemberRoleDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>{t("ChangeRole" as any)} - {member?.userName}</DialogTitle>
+          <DialogTitle>{t("ChangeRole")} - {member?.userName}</DialogTitle>
         </DialogHeader>
         
         <div className="space-y-4 py-4">
           <div className="space-y-2">
-            <Label>{t("SelectNewRole" as any)}</Label>
+            <Label>{t("SelectNewRole")}</Label>
             <SearchableSelect
               value={selectedRoleId}
               onValueChange={setSelectedRoleId}
-              placeholder={t("SelectARole" as any)}
+              placeholder={t("SelectARole")}
               options={roles?.map((role) => ({
                 value: role._id,
-                label: t(role.name as any) || role.name,
+                label: t(role.name) || role.name,
               })) ?? []}
             />
           </div>
@@ -76,10 +77,10 @@ export function ChangeMemberRoleDialog({
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
-            {t("Cancel" as any)}
+            {t("Cancel")}
           </Button>
           <Button onClick={handleSave} disabled={isSubmitting || selectedRoleId === member?.roleId}>
-            {isSubmitting ? t("Saving" as any) : t("Save" as any)}
+            {isSubmitting ? t("Saving") : t("Save")}
           </Button>
         </DialogFooter>
       </DialogContent>
