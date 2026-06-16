@@ -70,17 +70,17 @@ export function TopNav() {
                 <span className="sr-only">{t("ToggleNavigationMenu" as any)}</span>
               </Button>
             </SheetTrigger>
-            <SheetContent side={isRtl ? "right" : "left"} className="w-[280px] p-0">
-              <SheetHeader className="p-6 border-b border-slate-100 text-start">
+            <SheetContent side={isRtl ? "right" : "left"} className="w-[280px] p-0 flex flex-col">
+              <SheetHeader className="p-4 border-b border-slate-100 text-start shrink-0">
                 <SheetTitle className="flex items-center gap-2">
                   {logoUrl ? (
-                    <img src={logoUrl} alt="Organization Logo" className="w-32 h-auto object-contain max-h-12" />
+                    <img src={logoUrl} alt="Organization Logo" className="w-28 h-auto object-contain max-h-10" />
                   ) : (
-                    <Image src="/logo.png" alt="AutoFlow Logo" width={180} height={80} className="w-32 h-auto object-contain" priority />
+                    <Image src="/logo.png" alt="AutoFlow Logo" width={180} height={80} className="w-28 h-auto object-contain max-h-10" priority />
                   )}
                 </SheetTitle>
               </SheetHeader>
-              <nav className="flex flex-col gap-1 p-4">
+              <nav className="flex-1 overflow-y-auto flex flex-col gap-1 p-3">
                 {visibleNavigation.map((item) => {
                   const isActive = pathname.startsWith(item.href);
                   return (
