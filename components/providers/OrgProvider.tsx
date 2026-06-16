@@ -78,16 +78,24 @@ export function OrgProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     // Validate stored activeOrgId against the loaded org list.
-    // If the stored value is stale or missing, fall back to the first org.
-    if (!orgs || orgs.length === 0) return;
+    if (!orgs) return; // Still loading — do nothing
+    if (orgs.length === 0) {
+      // Only clear the stale orgId once we've stabilized (i.e. waited long
+      // enough to rule out a Clerk-webhook sync delay for brand-new users).
+      if (stabilized) setActiveOrgId(null);
+      return;
+    }
     if (activeOrgId && orgs.some((o: any) => o._id === activeOrgId)) return;
     setActiveOrgId(orgs[0]!._id);
-  }, [orgs, activeOrgId]);
+  }, [orgs, activeOrgId, stabilized]);
 
   useEffect(() => {
-    // Persist to localStorage when it changes
+    // Persist to localStorage when it changes; clear it when null so a
+    // subsequent page load doesn't restore a stale/unauthorized orgId.
     if (activeOrgId) {
       localStorage.setItem("autoflow_active_org", activeOrgId);
+    } else {
+      localStorage.removeItem("autoflow_active_org");
     }
   }, [activeOrgId]);
 
