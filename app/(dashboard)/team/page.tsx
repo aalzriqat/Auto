@@ -101,7 +101,7 @@ export default function TeamPage() {
                 }
               }}
             >
-              <RefreshCw className="me-2 h-4 w-4" /> Sync Role Permissions
+              <RefreshCw className="me-2 h-4 w-4" /> {t("SyncRolePermissions" as any)}
             </Button>
             <Button onClick={() => setIsInviteOpen(true)}>
               <Plus className="me-2 h-4 w-4" /> {t("AddMember" as any)}
@@ -123,7 +123,7 @@ export default function TeamPage() {
                 <TableRow>
                   <TableHead>{t("Member" as any)}</TableHead>
                   <TableHead>{t("Role" as any)}</TableHead>
-                  <TableHead>Commission %</TableHead>
+                  <TableHead>{t("CommissionPct" as any)}</TableHead>
                   {canManageUsers && <TableHead className="text-end">{t("Actions" as any)}</TableHead>}
                 </TableRow>
               </TableHeader>

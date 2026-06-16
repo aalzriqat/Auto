@@ -1,62 +1,50 @@
 "use client";
 
-import { useQuery, usePaginatedQuery } from "convex/react";
+import { usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 export function PartnerEquityTab() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  const formatCurrency = useCurrencyFormatter();
   const { results: equities } = usePaginatedQuery(api.partnerEquity.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
 
   if (!equities) {
-    return <div className="p-8 text-center text-slate-500">Loading partner equity...</div>;
+    return <div className="p-8 text-center text-slate-500">{t("LoadingEquity" as any)}</div>;
   }
-
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: "JOD",
-      minimumFractionDigits: 0,
-    }).format(amount);
-  };
 
   return (
     <div className="p-6">
       <div className="mb-6 flex justify-between items-center">
-        <h2 className="text-lg font-semibold text-slate-900">{t("PartnerEquity" as any) || "Partner Equity"}</h2>
+        <h2 className="text-lg font-semibold text-slate-900">{t("PartnerEquity" as any)}</h2>
       </div>
 
       <div className="rounded-md border border-slate-200">
         <Table>
           <TableHeader className="bg-slate-50">
             <TableRow>
-              <TableHead>Partner Name</TableHead>
-              <TableHead className="text-right">Initial Capital</TableHead>
-              <TableHead className="text-right">Current Balance</TableHead>
+              <TableHead>{t("PartnerName" as any)}</TableHead>
+              <TableHead className="text-right">{t("InitialCapital" as any)}</TableHead>
+              <TableHead className="text-right">{t("CurrentBalance" as any)}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {equities.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={3} className="text-center text-slate-500 py-8">
-                  No partner equity records found.
+                  {t("NoEquityFound" as any)}
                 </TableCell>
               </TableRow>
             ) : (
               equities.map((eq) => (
                 <TableRow key={eq._id}>
-                  <TableCell className="font-medium">
-                    {eq.partnerName}
-                  </TableCell>
-                  <TableCell className="text-right text-slate-600">
-                    {formatCurrency(eq.initialCapital)}
-                  </TableCell>
-                  <TableCell className="text-right font-semibold text-slate-900">
-                    {formatCurrency(eq.currentBalance)}
-                  </TableCell>
+                  <TableCell className="font-medium">{eq.partnerName}</TableCell>
+                  <TableCell className="text-right text-slate-600">{formatCurrency(eq.initialCapital)}</TableCell>
+                  <TableCell className="text-right font-semibold text-slate-900">{formatCurrency(eq.currentBalance)}</TableCell>
                 </TableRow>
               ))
             )}

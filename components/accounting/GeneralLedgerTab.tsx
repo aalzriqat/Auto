@@ -5,6 +5,7 @@ import { usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,7 @@ defaultStart.setDate(defaultStart.getDate() - 30);
 export function GeneralLedgerTab() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  const formatCurrency = useCurrencyFormatter();
 
   const [startDateStr, setStartDateStr] = useState(defaultStart.toISOString().split("T")[0]);
   const [endDateStr, setEndDateStr] = useState(defaultEnd.toISOString().split("T")[0]);
@@ -33,9 +35,6 @@ export function GeneralLedgerTab() {
       : "skip",
     { initialNumItems: 100 }
   );
-
-  const formatCurrency = (amount: number) =>
-    new Intl.NumberFormat("en-US", { style: "currency", currency: "JOD", minimumFractionDigits: 0 }).format(amount);
 
   const totalIn = transactions?.filter((t) => t.type === "IN").reduce((s, t) => s + t.amount, 0) ?? 0;
   const totalOut = transactions?.filter((t) => t.type === "OUT").reduce((s, t) => s + t.amount, 0) ?? 0;
@@ -53,7 +52,7 @@ export function GeneralLedgerTab() {
           <Input type="date" value={endDateStr} onChange={(e) => setEndDateStr(e.target.value)} className="h-8 text-sm" />
         </div>
         <Button size="sm" variant={filterActive ? "default" : "outline"} onClick={() => setFilterActive(!filterActive)}>
-          {filterActive ? "Clear filter" : "Apply filter"}
+          {filterActive ? t("ClearFilter" as any) : t("ApplyFilter" as any)}
         </Button>
       </div>
 
@@ -68,21 +67,21 @@ export function GeneralLedgerTab() {
         <Table>
           <TableHeader className="bg-slate-50">
             <TableRow>
-              <TableHead>Date</TableHead>
-              <TableHead>Type</TableHead>
-              <TableHead>Category</TableHead>
-              <TableHead>Description</TableHead>
-              <TableHead className="text-right">Amount</TableHead>
+              <TableHead>{t("Date" as any)}</TableHead>
+              <TableHead>{t("TypeLabel" as any)}</TableHead>
+              <TableHead>{t("Category" as any)}</TableHead>
+              <TableHead>{t("DescriptionLabel" as any)}</TableHead>
+              <TableHead className="text-right">{t("Amount" as any)}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {!transactions ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center text-slate-500 py-8">Loading...</TableCell>
+                <TableCell colSpan={5} className="text-center text-slate-500 py-8">{t("Loading" as any)}</TableCell>
               </TableRow>
             ) : transactions.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center text-slate-500 py-8">No transactions found.</TableCell>
+                <TableCell colSpan={5} className="text-center text-slate-500 py-8">{t("NoTransactionsFound" as any)}</TableCell>
               </TableRow>
             ) : (
               transactions.map((tx) => (
@@ -116,7 +115,7 @@ export function GeneralLedgerTab() {
 
       {status === "CanLoadMore" && (
         <div className="flex justify-center">
-          <Button variant="outline" size="sm" onClick={() => loadMore(100)}>Load more</Button>
+          <Button variant="outline" size="sm" onClick={() => loadMore(100)}>{t("LoadMore" as any)}</Button>
         </div>
       )}
     </div>

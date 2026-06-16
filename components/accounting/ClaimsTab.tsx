@@ -1,9 +1,10 @@
 "use client";
 
-import { useQuery, usePaginatedQuery } from "convex/react";
+import { usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { format } from "date-fns";
@@ -11,42 +12,35 @@ import { format } from "date-fns";
 export function ClaimsTab() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  const formatCurrency = useCurrencyFormatter();
   const { results: claims } = usePaginatedQuery(api.claims.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
 
   if (!claims) {
-    return <div className="p-8 text-center text-slate-500">Loading claims...</div>;
+    return <div className="p-8 text-center text-slate-500">{t("LoadingClaims" as any)}</div>;
   }
-
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat("en-US", {
-      style: "currency",
-      currency: "JOD",
-      minimumFractionDigits: 0,
-    }).format(amount);
-  };
 
   return (
     <div className="p-6">
       <div className="mb-6 flex justify-between items-center">
-        <h2 className="text-lg font-semibold text-slate-900">{t("Claims" as any) || "Claims"}</h2>
+        <h2 className="text-lg font-semibold text-slate-900">{t("Claims" as any)}</h2>
       </div>
 
       <div className="rounded-md border border-slate-200">
         <Table>
           <TableHeader className="bg-slate-50">
             <TableRow>
-              <TableHead>Date</TableHead>
-              <TableHead>Financing Entity</TableHead>
-              <TableHead>Buyer Name</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead className="text-right">Claim Amount</TableHead>
+              <TableHead>{t("Date" as any)}</TableHead>
+              <TableHead>{t("FinancingEntity" as any)}</TableHead>
+              <TableHead>{t("BuyerName" as any)}</TableHead>
+              <TableHead>{t("Status" as any)}</TableHead>
+              <TableHead className="text-right">{t("ClaimAmount" as any)}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {claims.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={5} className="text-center text-slate-500 py-8">
-                  No claims found.
+                  {t("NoClaimsFound" as any)}
                 </TableCell>
               </TableRow>
             ) : (

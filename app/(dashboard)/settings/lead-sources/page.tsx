@@ -35,9 +35,9 @@ export default function LeadSourcesPage() {
     if (!activeOrgId) return;
     try {
       await seedSources({ orgId: activeOrgId });
-      toast.success("Default lead sources loaded.");
+      toast.success(t("DefaultSourcesLoaded" as any));
     } catch (error: any) {
-      toast.error(error.message || "Failed to seed lead sources.");
+      toast.error(error.message || t("DefaultSourcesLoadFail" as any));
     }
   };
 
@@ -48,62 +48,53 @@ export default function LeadSourcesPage() {
       await createSource({ orgId: activeOrgId, label: newLabel.trim() });
       setNewLabel("");
       setShowAddInput(false);
-      toast.success("Lead source added.");
+      toast.success(t("LeadSourceAdded" as any));
     } catch (error: any) {
-      toast.error(error.message || "Failed to add lead source.");
+      toast.error(error.message || t("LeadSourceAddFail" as any));
     } finally {
       setIsAdding(false);
     }
   };
 
-  const handleToggleActive = async (
-    sourceId: Id<"orgLeadSources">,
-    isActive: boolean
-  ) => {
+  const handleToggleActive = async (sourceId: Id<"orgLeadSources">, isActive: boolean) => {
     if (!activeOrgId) return;
     try {
       await updateSource({ orgId: activeOrgId, sourceId, isActive });
     } catch (error: any) {
-      toast.error(error.message || "Failed to update lead source.");
+      toast.error(error.message || t("LeadSourceUpdateFail" as any));
     }
   };
 
   const handleDelete = async (sourceId: Id<"orgLeadSources">) => {
     if (!activeOrgId) return;
-    if (!confirm("Delete this lead source?")) return;
+    if (!confirm(t("LeadSourceDeleteConfirm" as any))) return;
     try {
       await removeSource({ orgId: activeOrgId, sourceId });
-      toast.success("Lead source deleted.");
+      toast.success(t("LeadSourceDeleted" as any));
     } catch (error: any) {
-      toast.error(error.message || "Failed to delete lead source.");
+      toast.error(error.message || t("LeadSourceDeleteFail" as any));
     }
   };
 
   const handleMoveUp = async (index: number) => {
     if (!activeOrgId || !sources || index === 0) return;
     const orderedIds = sources.map((s) => s._id);
-    [orderedIds[index - 1], orderedIds[index]] = [
-      orderedIds[index],
-      orderedIds[index - 1],
-    ];
+    [orderedIds[index - 1], orderedIds[index]] = [orderedIds[index], orderedIds[index - 1]];
     try {
       await reorderSources({ orgId: activeOrgId, orderedIds });
     } catch (error: any) {
-      toast.error(error.message || "Failed to reorder.");
+      toast.error(error.message || t("ReorderFail" as any));
     }
   };
 
   const handleMoveDown = async (index: number) => {
     if (!activeOrgId || !sources || index === sources.length - 1) return;
     const orderedIds = sources.map((s) => s._id);
-    [orderedIds[index], orderedIds[index + 1]] = [
-      orderedIds[index + 1],
-      orderedIds[index],
-    ];
+    [orderedIds[index], orderedIds[index + 1]] = [orderedIds[index + 1], orderedIds[index]];
     try {
       await reorderSources({ orgId: activeOrgId, orderedIds });
     } catch (error: any) {
-      toast.error(error.message || "Failed to reorder.");
+      toast.error(error.message || t("ReorderFail" as any));
     }
   };
 
@@ -111,60 +102,46 @@ export default function LeadSourcesPage() {
     <div className="flex-1 space-y-4 p-4 md:p-8 pt-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Lead Sources</h1>
-          <p className="text-muted-foreground text-sm mt-1">
-            Manage the lead source options available when creating a lead.
-          </p>
+          <h1 className="text-2xl font-bold tracking-tight">{t("LeadSources" as any)}</h1>
+          <p className="text-muted-foreground text-sm mt-1">{t("LeadSourcesDesc" as any)}</p>
         </div>
         <div className="flex gap-2">
           {sources !== undefined && sources.length === 0 && (
             <Button variant="outline" onClick={handleSeed}>
-              Load Defaults
+              {t("LoadDefaults" as any)}
             </Button>
           )}
           <Button onClick={() => setShowAddInput(true)}>
             <Plus className="h-4 w-4 mr-2" />
-            Add Source
+            {t("AddSource" as any)}
           </Button>
         </div>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Sources</CardTitle>
-          <CardDescription>
-            Toggle active state or reorder using the arrows. Inactive sources won&apos;t appear in the lead form.
-          </CardDescription>
+          <CardTitle>{t("Sources" as any)}</CardTitle>
+          <CardDescription>{t("SourcesDesc" as any)}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-2">
           {showAddInput && (
             <div className="flex items-center gap-2 p-3 rounded-lg border border-dashed border-border bg-muted/30">
               <Input
-                placeholder="Source label..."
+                placeholder={t("SourceLabelPlaceholder" as any)}
                 value={newLabel}
                 onChange={(e) => setNewLabel(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") handleAdd();
-                  if (e.key === "Escape") {
-                    setShowAddInput(false);
-                    setNewLabel("");
-                  }
+                  if (e.key === "Escape") { setShowAddInput(false); setNewLabel(""); }
                 }}
                 autoFocus
                 className="flex-1"
               />
               <Button size="sm" onClick={handleAdd} disabled={isAdding || !newLabel.trim()}>
-                {isAdding ? <Loader2 className="h-4 w-4 animate-spin" /> : "Add"}
+                {isAdding ? <Loader2 className="h-4 w-4 animate-spin" /> : t("AddNew" as any)}
               </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => {
-                  setShowAddInput(false);
-                  setNewLabel("");
-                }}
-              >
-                Cancel
+              <Button size="sm" variant="ghost" onClick={() => { setShowAddInput(false); setNewLabel(""); }}>
+                {t("Cancel" as any)}
               </Button>
             </div>
           )}
@@ -172,11 +149,11 @@ export default function LeadSourcesPage() {
           {sources === undefined ? (
             <div className="flex items-center justify-center py-8 text-muted-foreground">
               <Loader2 className="h-5 w-5 animate-spin mr-2" />
-              Loading...
+              {t("Loading" as any)}
             </div>
           ) : sources.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground text-sm">
-              No lead sources yet. Click &quot;Load Defaults&quot; or add one manually.
+              {t("NoLeadSourcesYet" as any)}
             </div>
           ) : (
             sources.map((source, index) => (
@@ -184,7 +161,6 @@ export default function LeadSourcesPage() {
                 key={source._id}
                 className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3"
               >
-                {/* Reorder arrows */}
                 <div className="flex flex-col gap-0.5">
                   <button
                     onClick={() => handleMoveUp(index)}
@@ -206,9 +182,7 @@ export default function LeadSourcesPage() {
 
                 <Switch
                   checked={source.isActive}
-                  onCheckedChange={(checked) =>
-                    handleToggleActive(source._id, checked)
-                  }
+                  onCheckedChange={(checked) => handleToggleActive(source._id, checked)}
                 />
 
                 <Button

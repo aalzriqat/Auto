@@ -158,9 +158,9 @@ export default function TasksPage() {
 
   const getPriorityBadge = (priority?: string) => {
     switch (priority) {
-      case "HIGH": return <Badge variant="outline" className="bg-red-50 text-red-600 border-red-200 text-[10px] px-1.5">High</Badge>;
-      case "MEDIUM": return <Badge variant="outline" className="bg-yellow-50 text-yellow-600 border-yellow-200 text-[10px] px-1.5">Med</Badge>;
-      case "LOW": return <Badge variant="outline" className="bg-slate-50 text-slate-500 border-slate-200 text-[10px] px-1.5">Low</Badge>;
+      case "HIGH": return <Badge variant="outline" className="bg-red-50 text-red-600 border-red-200 text-[10px] px-1.5">{t("High" as any)}</Badge>;
+      case "MEDIUM": return <Badge variant="outline" className="bg-yellow-50 text-yellow-600 border-yellow-200 text-[10px] px-1.5">{t("Medium" as any)}</Badge>;
+      case "LOW": return <Badge variant="outline" className="bg-slate-50 text-slate-500 border-slate-200 text-[10px] px-1.5">{t("Low" as any)}</Badge>;
       default: return null;
     }
   };
@@ -186,13 +186,13 @@ export default function TasksPage() {
         </div>
         <Select value={priorityFilter} onValueChange={(v) => setPriorityFilter(v as any)}>
           <SelectTrigger className="w-[140px]">
-            <SelectValue placeholder="Priority" />
+            <SelectValue placeholder={t("Priority" as any)} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All priorities</SelectItem>
-            <SelectItem value="HIGH">High</SelectItem>
-            <SelectItem value="MEDIUM">Medium</SelectItem>
-            <SelectItem value="LOW">Low</SelectItem>
+            <SelectItem value="all">{t("AllPriorities" as any)}</SelectItem>
+            <SelectItem value="HIGH">{t("High" as any)}</SelectItem>
+            <SelectItem value="MEDIUM">{t("Medium" as any)}</SelectItem>
+            <SelectItem value="LOW">{t("Low" as any)}</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -202,9 +202,9 @@ export default function TasksPage() {
           <TableHeader>
             <TableRow>
               <TableHead className="w-12"></TableHead>
-              <TableHead className="w-16">Priority</TableHead>
+              <TableHead className="w-16">{t("Priority" as any)}</TableHead>
               <TableHead>{t("Task" as any) || "Task"}</TableHead>
-              <TableHead>{t("DueDate" as any) || "Due Date"}</TableHead>
+              <TableHead>{t("DueDate" as any)}</TableHead>
               <TableHead>{t("AssignedTo" as any) || "Assigned To"}</TableHead>
               <TableHead>{t("RelatedCustomer" as any) || "Related Customer"}</TableHead>
               <TableHead>{t("Status" as any) || "Status"}</TableHead>

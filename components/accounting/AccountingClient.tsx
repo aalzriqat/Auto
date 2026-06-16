@@ -21,10 +21,10 @@ export function AccountingClient() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
             <Landmark className="w-6 h-6 text-primary" />
-            {t("Accounting" as any) || "Accounting"}
+            {t("Accounting" as any)}
           </h1>
           <p className="text-slate-500 mt-1">
-            {t("AccountingDesc" as any) || "Manage General Ledger, Assets, Equity, and Claims"}
+            {t("AccountingDesc" as any)}
           </p>
         </div>
       </div>
@@ -33,19 +33,19 @@ export function AccountingClient() {
         <TabsList className="w-full sm:w-auto self-start mb-4 bg-white border border-slate-200/60 p-1">
           <TabsTrigger value="ledger" className="gap-2 data-[state=active]:bg-primary/5 data-[state=active]:text-primary data-[state=active]:shadow-none px-4">
             <BookOpen className="w-4 h-4" />
-            {t("GeneralLedger" as any) || "General Ledger"}
+            {t("GeneralLedger" as any)}
           </TabsTrigger>
           <TabsTrigger value="assets" className="gap-2 data-[state=active]:bg-primary/5 data-[state=active]:text-primary data-[state=active]:shadow-none px-4">
             <Briefcase className="w-4 h-4" />
-            {t("FixedAssets" as any) || "Fixed Assets"}
+            {t("FixedAssets" as any)}
           </TabsTrigger>
           <TabsTrigger value="equity" className="gap-2 data-[state=active]:bg-primary/5 data-[state=active]:text-primary data-[state=active]:shadow-none px-4">
             <HandCoins className="w-4 h-4" />
-            {t("PartnerEquity" as any) || "Partner Equity"}
+            {t("PartnerEquity" as any)}
           </TabsTrigger>
           <TabsTrigger value="claims" className="gap-2 data-[state=active]:bg-primary/5 data-[state=active]:text-primary data-[state=active]:shadow-none px-4">
             <Landmark className="w-4 h-4" />
-            {t("Claims" as any) || "Claims"}
+            {t("Claims" as any)}
           </TabsTrigger>
         </TabsList>
 

@@ -9,6 +9,7 @@ import {
     LucideIcon,
 } from "lucide-react";
 import { PaymentType } from "../types";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 
 interface StepIndicatorProps {
     currentStep: number;
@@ -24,10 +25,11 @@ export function StepIndicator({
     currentStep,
     paymentType,
 }: StepIndicatorProps) {
+    const { t } = useLanguage();
     const steps: StepConfig[] = [
-        { label: "Quote Setup", icon: Car },
-        { label: "Customer", icon: User },
-        { label: "Review & Generate", icon: CheckCircle2 },
+        { label: t("WizardStepQuoteSetup" as any), icon: Car },
+        { label: t("WizardStepCustomer" as any), icon: User },
+        { label: t("WizardStepReviewGenerate" as any), icon: CheckCircle2 },
     ];
 
     const isCash = paymentType === "CASH";

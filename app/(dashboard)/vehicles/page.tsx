@@ -241,7 +241,7 @@ export default function VehiclesPage() {
           {canCreate && (
             <>
               <Button variant="outline" onClick={() => setIsImportDialogOpen(true)}>
-                <FileSpreadsheet className="me-2 h-4 w-4" /> Import
+                <FileSpreadsheet className="me-2 h-4 w-4" /> {t("Import" as any)}
               </Button>
               <Button onClick={handleAddNew}>
                 <Plus className="me-2 h-4 w-4" /> {t("AddVehicle")}
@@ -268,8 +268,8 @@ export default function VehiclesPage() {
               <TableHead>{t("Vehicle")}</TableHead>
               <TableHead>{t("VIN" as any)}</TableHead>
               <TableHead>{t("Year" as any)}</TableHead>
-              <TableHead>Mileage</TableHead>
-              <TableHead>Trans.</TableHead>
+              <TableHead>{t("Mileage" as any)}</TableHead>
+              <TableHead>{t("Transmission" as any)}</TableHead>
               <TableHead>{t("Price" as any)}</TableHead>
               <TableHead>{t("Status" as any)}</TableHead>
               <TableHead>{t("Notes" as any)}</TableHead>

@@ -227,6 +227,50 @@ export const commonEn = {
   BillOfSaleDisclaimer: "I, the undersigned buyer, acknowledge receipt of this Bill of Sale and understand there is no guarantee or warranty, expressed or implied, with respect to the above-described property. It is also understood that the above-stated vehicle is sold in \"AS IS\" condition.",
   OdometerStatement: "Odometer Disclosure Statement: The seller certifies that to the best of their knowledge the odometer reading reflects the actual mileage of the vehicle described herein unless indicated otherwise.",
 
+  // Accounting
+  AccountingDesc: "Manage General Ledger, Assets, Equity, and Claims",
+  GeneralLedger: "General Ledger",
+  FixedAssets: "Fixed Assets",
+  PartnerEquity: "Partner Equity",
+  Claims: "Claims",
+  ApplyFilter: "Apply filter",
+  ClearFilter: "Clear filter",
+  LoadMore: "Load more",
+  NoTransactionsFound: "No transactions found.",
+  NoClaimsFound: "No claims found.",
+  NoAssetsFound: "No fixed assets found.",
+  NoEquityFound: "No partner equity records found.",
+  FinancingEntity: "Financing Entity",
+  BuyerName: "Buyer Name",
+  ClaimAmount: "Claim Amount",
+  AssetName: "Asset Name",
+  PurchaseDateLabel: "Purchase Date",
+  NotesLabel: "Notes",
+  PurchaseValue: "Purchase Value",
+  PartnerName: "Partner Name",
+  InitialCapital: "Initial Capital",
+  CurrentBalance: "Current Balance",
+  TypeLabel: "Type",
+  DescriptionLabel: "Description",
+  LoadingClaims: "Loading claims...",
+  LoadingAssets: "Loading assets...",
+  LoadingEquity: "Loading partner equity...",
+
+  // Team
+  CommissionPct: "Commission %",
+  SyncRolePermissions: "Sync Role Permissions",
+
+  // Tasks / common
+  AllPriorities: "All priorities",
+  DueDate: "Due Date",
+
+  // Wizard step labels
+  WizardStepQuoteSetup: "Quote Setup",
+  WizardStepCustomer: "Customer",
+  WizardStepReviewGenerate: "Review & Generate",
+  StepLabel: "Step",
+  StepOf: "of",
+
   // Profit approval requests
   NoPendingApprovals: "No pending approvals",
   AllCaughtUp: "All caught up! There are no profit approval requests waiting.",
@@ -465,6 +509,50 @@ export const commonAr = {
   NationalId: "رقم الهوية الوطنية",
   BillOfSaleDisclaimer: "أنا، المشتري الموقّع أدناه، أُقرّ باستلام هذا العقد وأفهم أنه لا يوجد ضمان أو كفالة، صريحة أو ضمنية، فيما يتعلق بالعقار الموصوف أعلاه. كما يُفهم أن المركبة المذكورة أعلاه تُباع بحالتها \"كما هي\".",
   OdometerStatement: "إفصاح عداد المسافة: يُقرّ البائع بأنه في حدود علمه يعكس قراءة عداد المسافة المسافة الفعلية للمركبة الموصوفة هنا ما لم يُشر إلى خلاف ذلك.",
+
+  // Accounting
+  AccountingDesc: "إدارة دفتر الأستاذ العام والأصول وحقوق الملكية والمطالبات",
+  GeneralLedger: "دفتر الأستاذ العام",
+  FixedAssets: "الأصول الثابتة",
+  PartnerEquity: "حقوق الشركاء",
+  Claims: "المطالبات",
+  ApplyFilter: "تطبيق الفلتر",
+  ClearFilter: "مسح الفلتر",
+  LoadMore: "تحميل المزيد",
+  NoTransactionsFound: "لا توجد معاملات.",
+  NoClaimsFound: "لا توجد مطالبات.",
+  NoAssetsFound: "لا توجد أصول ثابتة.",
+  NoEquityFound: "لا توجد سجلات حقوق شركاء.",
+  FinancingEntity: "جهة التمويل",
+  BuyerName: "اسم المشتري",
+  ClaimAmount: "مبلغ المطالبة",
+  AssetName: "اسم الأصل",
+  PurchaseDateLabel: "تاريخ الشراء",
+  NotesLabel: "ملاحظات",
+  PurchaseValue: "قيمة الشراء",
+  PartnerName: "اسم الشريك",
+  InitialCapital: "رأس المال الأولي",
+  CurrentBalance: "الرصيد الحالي",
+  TypeLabel: "النوع",
+  DescriptionLabel: "الوصف",
+  LoadingClaims: "جاري تحميل المطالبات...",
+  LoadingAssets: "جاري تحميل الأصول...",
+  LoadingEquity: "جاري تحميل حقوق الشركاء...",
+
+  // Team
+  CommissionPct: "نسبة العمولة %",
+  SyncRolePermissions: "مزامنة صلاحيات الأدوار",
+
+  // Tasks / common
+  AllPriorities: "جميع الأولويات",
+  DueDate: "تاريخ الاستحقاق",
+
+  // Wizard step labels
+  WizardStepQuoteSetup: "إعداد العرض",
+  WizardStepCustomer: "العميل",
+  WizardStepReviewGenerate: "المراجعة والإنشاء",
+  StepLabel: "الخطوة",
+  StepOf: "من",
 
   // Profit approval requests
   NoPendingApprovals: "لا توجد موافقات معلقة",

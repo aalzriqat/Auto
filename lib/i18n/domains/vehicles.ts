@@ -125,6 +125,25 @@ export const vehiclesEn = {
   CreationRequestSubmitted: "Creation request submitted for approval",
   SomethingWentWrong: "Something went wrong",
   LoadingHistory: "Loading history...",
+  
+  // Import Dialog
+  ImportVehiclesTitle: "Import Vehicles via Excel",
+  ImportVehiclesDesc: "Upload an Excel file to bulk import vehicles.",
+  DropFileHere: "Click or drop Excel file here",
+  FileTypesAccepted: "Supports .xlsx, .xls, .csv",
+  DownloadTemplate: "Download Template",
+  ReadyToImport: "ready",
+  ImportErrors: "errors",
+  RowsHaveErrors: "rows have errors",
+  ImportingEllipsis: "Importing...",
+  ImportVehiclesAction: "Import Vehicles",
+  TypeName: "TYPE/Name",
+  Cost: "Cost",
+  AlMutakhasisa: "Al-Mutakhasisa",
+  Import: "Import",
+  BankValuations: "Bank Valuations",
+  BankValuationsDesc: "Current bank valuations for financing this vehicle.",
+  NoActiveFinanceCompanies: "No active finance companies. Configure them in Settings → Finance.",
 };
 
 export const vehiclesAr = {
@@ -254,4 +273,23 @@ export const vehiclesAr = {
   CreationRequestSubmitted: "تم تقديم طلب الإضافة للموافقة",
   SomethingWentWrong: "حدث خطأ ما",
   LoadingHistory: "جاري تحميل السجل...",
+
+  // Import Dialog
+  ImportVehiclesTitle: "استيراد المركبات عبر إكسل",
+  ImportVehiclesDesc: "قم برفع ملف إكسل لاستيراد المركبات دفعة واحدة.",
+  DropFileHere: "انقر أو أسحب ملف إكسل هنا",
+  FileTypesAccepted: "يدعم .xlsx, .xls, .csv",
+  DownloadTemplate: "تحميل القالب",
+  ReadyToImport: "جاهز",
+  ImportErrors: "أخطاء",
+  RowsHaveErrors: "صفوف تحتوي على أخطاء",
+  ImportingEllipsis: "جاري الاستيراد...",
+  ImportVehiclesAction: "استيراد المركبات",
+  TypeName: "النوع/الاسم",
+  Cost: "التكلفة",
+  AlMutakhasisa: "المتخصصة",
+  Import: "استيراد",
+  BankValuations: "تقييمات البنك",
+  BankValuationsDesc: "تقييمات البنك الحالية لتمويل هذه المركبة.",
+  NoActiveFinanceCompanies: "لا توجد شركات تمويل نشطة. قم بتكوينها في الإعدادات ← المالية.",
 };
