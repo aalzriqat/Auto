@@ -1,6 +1,6 @@
 "use client";
 
-import { Car, Users, LayoutDashboard, Target, BadgeDollarSign, Shield, Receipt, ClipboardList, LineChart, Settings, Store, BookOpen, TrendingUp, Sliders, GitBranch, FormInput, Percent } from "lucide-react";
+import { Car, Users, LayoutDashboard, Target, BadgeDollarSign, Shield, Receipt, ClipboardList, LineChart, Settings, Store, BookOpen, TrendingUp, Sliders, GitBranch, FormInput, Percent, Building2 } from "lucide-react";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
@@ -28,6 +28,7 @@ const navigation = [
 const settingsNavigation = [
   { name: "Team", href: "/team", icon: Users, permission: "manage:users" },
   { name: "GeneralSettings", href: "/settings/general", icon: Settings, permission: "view:settings" },
+  { name: "FinanceSettings", href: "/settings/finance", icon: Building2, permission: "view:settings" },
   { name: "Pipeline", href: "/settings/pipeline", icon: GitBranch, permission: "view:settings" },
   { name: "LeadSources", href: "/settings/lead-sources", icon: Sliders, permission: "view:settings" },
   { name: "CustomFields", href: "/settings/custom-fields", icon: FormInput, permission: "view:settings" },
