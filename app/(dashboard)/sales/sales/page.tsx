@@ -88,7 +88,7 @@ export default function SalesPage() {
     <RoleGuard permissions={["view:sales"]}>
       <div className="space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button variant="outline" onClick={() => setIsQuoteDialogOpen(true)}>
               {t("CreateQuote" as any)}
             </Button>
@@ -105,7 +105,52 @@ export default function SalesPage() {
           />
         </div>
 
-        <div className="rounded-md border">
+        {/* Mobile card list */}
+        <div className="flex flex-col gap-3 md:hidden">
+          {filteredSales === undefined ? (
+            <p className="text-center py-8 text-muted-foreground">{t("LoadingSales" as any)}</p>
+          ) : filteredSales.length === 0 ? (
+            <p className="text-center py-8 text-muted-foreground">{t("NoSalesFound" as any)}</p>
+          ) : filteredSales.map((sale) => (
+            <div key={sale._id} className="rounded-xl border bg-card p-4 space-y-3">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="font-semibold text-sm truncate">{sale.customerName}</p>
+                  <p className="text-xs text-muted-foreground truncate">{sale.vehicleSummary}</p>
+                  <p className="text-[10px] text-muted-foreground font-mono">{sale.vehicleVin}</p>
+                </div>
+                {getStatusBadge(sale.status)}
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-bold text-sm">{format(sale.salePrice)}</p>
+                  <p className="text-xs text-muted-foreground">{new Date(sale.saleDate).toLocaleDateString()} · {sale.salespersonName}</p>
+                </div>
+                <div className="flex gap-0.5">
+                  <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => {
+                    try { generateBillOfSale("AutoFlow Dealership", sale.customerName, sale.vehicleSummary, sale.vehicleVin, sale.salePrice, sale.saleDate); toast.success(t("BillOfSaleGenerated" as any)); } catch { toast.error(t("FailedGeneratePDF" as any)); }
+                  }}>
+                    <FileText className="h-4 w-4 text-blue-500" />
+                  </Button>
+                  <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => handleEdit(sale)}>
+                    <Pencil className="h-4 w-4 text-muted-foreground" />
+                  </Button>
+                  <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => setSaleToDelete(sale)}>
+                    <Trash2 className="h-4 w-4 text-red-500" />
+                  </Button>
+                </div>
+              </div>
+            </div>
+          ))}
+          {salesStatus === "CanLoadMore" && (
+            <div className="flex justify-center pt-2">
+              <Button variant="outline" onClick={() => loadMoreSales(25)}>{t("LoadMore" as any) || "Load More"}</Button>
+            </div>
+          )}
+        </div>
+
+        {/* Desktop table */}
+        <div className="hidden md:block rounded-md border overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>

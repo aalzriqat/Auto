@@ -225,28 +225,30 @@ export default function GeneralSettingsPage() {
       </div>
 
       <Tabs defaultValue="general" className="space-y-4">
-        <TabsList>
-          <TabsTrigger value="general" className="flex items-center gap-2">
-            <Settings className="h-4 w-4" />
-            {t("GeneralTab")}
-          </TabsTrigger>
-          <TabsTrigger value="payment-types" className="flex items-center gap-2">
-            <CreditCard className="h-4 w-4" />
-            {t("PaymentTypes")}
-          </TabsTrigger>
-          <TabsTrigger value="appearance" className="flex items-center gap-2">
-            <Palette className="h-4 w-4" />
-            {t("AppearanceTab")}
-          </TabsTrigger>
-          <TabsTrigger value="approvals" className="flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4" />
-            {t("ApprovalsTab")}
-          </TabsTrigger>
-          <TabsTrigger value="whatsapp" className="flex items-center gap-2">
-            <MessageCircle className="h-4 w-4" />
-            {t("WhatsAppTab")}
-          </TabsTrigger>
-        </TabsList>
+        <div className="overflow-x-auto">
+          <TabsList className="w-max">
+            <TabsTrigger value="general" className="flex items-center gap-2">
+              <Settings className="h-4 w-4" />
+              {t("GeneralTab")}
+            </TabsTrigger>
+            <TabsTrigger value="payment-types" className="flex items-center gap-2">
+              <CreditCard className="h-4 w-4" />
+              {t("PaymentTypes")}
+            </TabsTrigger>
+            <TabsTrigger value="appearance" className="flex items-center gap-2">
+              <Palette className="h-4 w-4" />
+              {t("AppearanceTab")}
+            </TabsTrigger>
+            <TabsTrigger value="approvals" className="flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4" />
+              {t("ApprovalsTab")}
+            </TabsTrigger>
+            <TabsTrigger value="whatsapp" className="flex items-center gap-2">
+              <MessageCircle className="h-4 w-4" />
+              {t("WhatsAppTab")}
+            </TabsTrigger>
+          </TabsList>
+        </div>
 
         {/* ── General Tab ─────────────────────────────────────────────── */}
         <TabsContent value="general">

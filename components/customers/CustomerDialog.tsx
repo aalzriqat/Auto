@@ -119,7 +119,7 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-xl max-h-[90dvh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{customer ? (t("EditCustomer" as any)) : (t("AddCustomer" as any))}</DialogTitle>
           <DialogDescription>

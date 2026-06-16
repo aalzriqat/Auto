@@ -224,12 +224,12 @@ export function CustomerImportDialog({ open, onOpenChange }: Props) {
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-8">#</TableHead>
-                    <TableHead>First Name</TableHead>
-                    <TableHead>Last Name</TableHead>
-                    <TableHead>Phone</TableHead>
-                    <TableHead>Email</TableHead>
-                    <TableHead>National ID</TableHead>
-                    <TableHead>Status</TableHead>
+                    <TableHead>{t("FirstName" as any)}</TableHead>
+                    <TableHead>{t("LastName" as any)}</TableHead>
+                    <TableHead>{t("Phone" as any)}</TableHead>
+                    <TableHead>{t("Email" as any)}</TableHead>
+                    <TableHead>{t("NationalID" as any)}</TableHead>
+                    <TableHead>{t("Status" as any)}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -262,7 +262,7 @@ export function CustomerImportDialog({ open, onOpenChange }: Props) {
             onClick={handleImport}
             disabled={validRows.length === 0 || importing}
           >
-            {importing ? t("ImportingEllipsis" as any) : `Import ${validRows.length} Customer${validRows.length !== 1 ? "s" : ""}`}
+            {importing ? t("ImportingEllipsis" as any) : `${t("ImportCustomersAction" as any)} (${validRows.length})`}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -79,16 +79,16 @@ export function OrgSwitcher() {
             size="lg"
             className="flex items-center gap-2 px-2 hover:bg-accent hover:text-accent-foreground data-[state=open]:bg-accent data-[state=open]:text-accent-foreground"
           >
-            <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+            <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground shrink-0">
               {activeOrg?.name?.charAt(0).toUpperCase() || "A"}
             </div>
-            <div className="grid flex-1 text-start text-sm leading-tight max-w-[120px] md:max-w-[150px]">
+            <div className="hidden sm:grid flex-1 text-start text-sm leading-tight max-w-[120px] md:max-w-[150px]">
               <span className="truncate font-semibold">
                 {activeOrg?.name || t("Loading" as any)}
               </span>
               <span className="truncate text-xs text-muted-foreground">{t("Dealership" as any)}</span>
             </div>
-            <ChevronsUpDown className="size-4 shrink-0 opacity-50" />
+            <ChevronsUpDown className="hidden sm:block size-4 shrink-0 opacity-50" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent

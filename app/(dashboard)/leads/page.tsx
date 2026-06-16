@@ -163,7 +163,59 @@ export default function LeadsPage() {
 
         {/* TABLE VIEW */}
         {view === "table" && (
-          <div className="flex-1 overflow-auto bg-card rounded-xl border-0 ring-1 ring-slate-100 dark:ring-zinc-800 shadow-sm">
+          <>
+          {/* Mobile card list */}
+          <div className="flex flex-col gap-3 md:hidden">
+            {!leads || leads.length === 0 ? (
+              <p className="text-center py-12 text-muted-foreground">{t("Empty" as any) || "No leads found."}</p>
+            ) : leads.map((lead) => (
+              <div
+                key={lead._id}
+                className="rounded-xl border bg-card p-4 space-y-3 cursor-pointer active:bg-muted/30"
+                onClick={() => handleEdit(lead)}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-9 h-9 rounded-full bg-slate-100 dark:bg-zinc-800 flex items-center justify-center text-slate-500 font-bold text-xs shrink-0">
+                      {lead.customerName ? lead.customerName.charAt(0).toUpperCase() : "?"}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-semibold text-sm truncate">{lead.customerName}</p>
+                      {lead.vehicleSummary && (
+                        <p className="text-xs text-muted-foreground truncate flex items-center gap-1">
+                          <Car className="h-3 w-3 shrink-0" />{lead.vehicleSummary}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <span className={`text-[10px] uppercase font-semibold px-2 py-0.5 rounded-full shrink-0 ${getStageColor(lead.stage)}`}>
+                    {translateStage(lead.stage)}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  {lead.assignedUserName ? (
+                    <span className="text-xs text-muted-foreground flex items-center gap-1">
+                      <User className="h-3 w-3" />{lead.assignedUserName}
+                    </span>
+                  ) : <span />}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); setLeadToDelete(lead); }}
+                    className="p-3 rounded-md text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+            ))}
+            {leadsStatus === "CanLoadMore" && (
+              <div className="flex justify-center pt-2">
+                <Button variant="outline" onClick={() => loadMoreLeads(25)}>{t("LoadMore" as any) || "Load More"}</Button>
+              </div>
+            )}
+          </div>
+
+          {/* Desktop table */}
+          <div className="hidden md:block flex-1 overflow-auto bg-card rounded-xl border-0 ring-1 ring-slate-100 dark:ring-zinc-800 shadow-sm">
             <Table>
               <TableHeader>
                 <TableRow className="bg-slate-50/50 dark:bg-zinc-900/50 hover:bg-slate-50/50 dark:hover:bg-zinc-900/50">
@@ -244,6 +296,7 @@ export default function LeadsPage() {
               </div>
             )}
           </div>
+          </>
         )}
 
         {/* KANBAN VIEW */}

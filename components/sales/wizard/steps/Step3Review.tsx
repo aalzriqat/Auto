@@ -229,8 +229,8 @@ export function Step3Review({
       </div>
 
       {/* ACTIONS */}
-      <div className="flex justify-between pt-4 border-t">
-        <Button variant="outline" onClick={onBack} disabled={isSubmitting}>
+      <div className="flex flex-col-reverse sm:flex-row justify-between gap-3 pt-4 border-t">
+        <Button variant="outline" onClick={onBack} disabled={isSubmitting} className="w-full sm:w-auto">
           <ArrowLeft className="w-4 h-4 me-2" />
           Back
         </Button>
@@ -238,11 +238,12 @@ export function Step3Review({
         <Button
           onClick={handleGenerate}
           disabled={isSubmitting || !selectedResult}
-          className={
+          className={cn(
+            "w-full sm:w-auto",
             paymentType === "CASH"
               ? "bg-teal-600 hover:bg-teal-700"
               : "bg-indigo-600 hover:bg-indigo-700"
-          }
+          )}
         >
           <CheckCircle2 className="w-4 h-4 me-2" />
           {isSubmitting ? "Generating..." : "Generate Quote"}

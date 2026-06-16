@@ -277,3 +277,201 @@
 - `useCurrency()` rollout — apply to all components still showing hardcoded "JOD"
 - Regional doc templates (requires template engine — Phase 14)
 - Expense category custom fields
+
+---
+
+## Phase 16 — Mobile-First Responsive Design
+
+**Branch:** `feature/phase-16-mobile-first`
+**Goal:** Make AutoFlow fully usable on phones (390px–428px) and tablets (768px) without regressing any desktop (1280px+) behaviour. Strategy: mobile styles are the base; `md:` and `lg:` prefixes add desktop enhancements — never the other way around.
+
+**Guiding constraints:**
+- No new libraries required — Tailwind breakpoints + existing shadcn/ui Sheet/Dialog primitives cover everything.
+- Desktop layout, data density, and feature set must stay identical.
+- RTL (Arabic) must be tested alongside every change.
+- Touch targets must be ≥ 44px.
+
+---
+
+### 16.1 — Navigation Shell (Quick wins)
+
+**Files:** `components/layout/TopNav.tsx`, `components/layout/Sidebar.tsx`, `app/(dashboard)/layout.tsx`
+
+**Current issues:**
+- Search input is `hidden md:flex` → mobile users cannot search.
+- `OrgSwitcher` is `hidden sm:block` → missing on small phones.
+- Page title is inside `hidden md:flex` block → not visible on mobile.
+
+**Tasks:**
+- [x] **TopNav — mobile search**: Search icon button on mobile toggles an inline search bar below the header row; desktop inline search unchanged.
+- [x] **TopNav — always-visible OrgSwitcher**: Removed `hidden sm:block` wrapper; OrgSwitcher shows icon-only on mobile (text+chevron hidden with `hidden sm:*`), full label on sm+.
+- [x] **TopNav — mobile page title**: Page title rendered inline in the nav bar on mobile (`md:hidden`); deduped from the `hidden md:flex` desktop block using a shared `pageTitle` variable.
+- [x] **Main layout padding**: Changed to `p-3 sm:p-4 md:p-6 lg:p-8`.
+- [x] **iOS safe area**: `pb-[calc(0.75rem+env(safe-area-inset-bottom))]` on main scroll container.
+
+---
+
+### 16.2 — Data Tables → Scroll + Card Pattern
+
+All primary list pages use bare `<Table>` with 7–9 columns. On a 390px screen these clip.
+
+**Affected pages (in priority order):**
+1. `app/(dashboard)/vehicles/page.tsx` — 9-column table
+2. `app/(dashboard)/customers/page.tsx`
+3. `app/(dashboard)/sales/page.tsx` + `sales/sales/page.tsx`
+4. `app/(dashboard)/leads/page.tsx`
+5. `app/(dashboard)/expenses/page.tsx`
+6. `app/(dashboard)/tasks/page.tsx`
+7. `app/(dashboard)/team/page.tsx`
+8. `app/(dashboard)/commissions/page.tsx`
+9. `app/(dashboard)/approvals/page.tsx`
+10. `components/accounting/AccountingClient.tsx`
+
+**Strategy (two tiers):**
+
+*Tier A — overflow scroll (all 10 pages, fast):*
+Wrap every `<Table>` in `<div className="overflow-x-auto -mx-3 sm:mx-0 rounded-xl border">`. This preserves the full desktop table unchanged; mobile users can horizontal-scroll. `-mx-3 sm:mx-0` makes the scroll area bleed to screen edges on phones for a native feel.
+
+*Tier B — card view (Vehicles, Customers, Sales, Leads only — highest traffic):*
+Add a card-grid that renders on mobile and is hidden on desktop. Pattern:
+```tsx
+// Mobile card list  
+<div className="flex flex-col gap-3 md:hidden">
+  {rows.map(row => <VehicleCard key={row._id} vehicle={row} />)}
+</div>
+// Desktop table (unchanged)
+<div className="hidden md:block overflow-x-auto">
+  <Table>…</Table>
+</div>
+```
+Each card shows: primary identifier (make/model or name), 2–3 key fields, status badge, and a tap-target action button. Keeps the desktop table completely untouched.
+
+**Tasks:**
+- [x] Wrap all tables in `overflow-x-auto` containers (Tier A) — vehicles, customers, sales/sales, expenses, tasks, team (×2), commissions, accounting/GeneralLedger, dashboard recent-leads
+- [x] Filter bars: `flex-wrap gap-2` on vehicles action buttons and sales/sales action buttons; tasks/commissions already had `flex-wrap`
+- [x] Build `VehicleCard`, `CustomerCard`, `LeadCard`, `SaleCard` mobile card components
+- [x] Replace mobile table view with card components on the 4 high-traffic pages (Tier B)
+
+---
+
+### 16.3 — Dashboard Responsive Layout
+
+**File:** `app/(dashboard)/dashboard/page.tsx`
+
+**Current issues:**
+- Hero stat grid is `grid gap-4 md:grid-cols-3` → 1 column on mobile (fine) but the hero card is a large fixed-height gradient block that doesn't adapt well to 390px.
+- Lower stat grid is also `md:grid-cols-3`.
+- Recent sales uses a `<Table>` with no overflow wrapper.
+
+**Tasks:**
+- [x] Stats grids: `grid-cols-2 md:grid-cols-3` — Vehicles + Leads side-by-side; Team card spans `col-span-2 md:col-span-1` (full-width on mobile).
+- [x] Hero card: removed fixed `h-[220px]`, restructured inner layout to `flex-col md:flex-row`; chart column (`hidden md:flex`); mobile time-range picker added inline; numbers downscaled to `text-3xl md:text-5xl`.
+- [x] Donut chart in Leads card: `hidden sm:flex` so it doesn't crowd the 2-col grid on small phones.
+- [x] Recent leads table: `overflow-x-auto` wrapper (done in 16.2A).
+- [x] Loading skeletons: updated to match new 2-col grid.
+
+---
+
+### 16.4 — Dialogs & Forms
+
+**Current issues:**
+- Internal form grids use `grid-cols-2` or `grid-cols-3` with no `sm:` guard → cramped at 390px.
+- `max-h-[90vh]` is correct but `90dvh` is safer on iOS (accounts for browser chrome resize).
+- `max-w-3xl` dialogs are full-width on mobile anyway, but the close button and header padding eat into usable space.
+
+**Affected components:** `VehicleDialog.tsx`, `CustomerDialog.tsx`, `SaleDialog.tsx`, `LeadDialog.tsx`, `ExpenseDialog.tsx`, `TaskDialog.tsx`, `GuarantorDialog.tsx`, `QuoteDialog.tsx`
+
+**Tasks:**
+- [x] `max-h-[90vh]` → `max-h-[90dvh]` across all 6 `DialogContent` usages (Vehicle, Sale, Customer, Lead, Expense, Task, Quote).
+- [x] `GuarantorDialog`: both bare `grid-cols-2` grids → `grid-cols-1 sm:grid-cols-2`.
+- [x] `VehicleDialog` image thumbnail grid: `grid-cols-2 md:grid-cols-4` → `grid-cols-2 sm:grid-cols-4`.
+- [ ] Dialog header padding: use `p-4 md:p-6` — deferred, shadcn/ui Dialog handles this via internal padding.
+
+---
+
+### 16.5 — Sales Wizard Mobile Layout
+
+**File:** `components/sales/SalesWizard.tsx` + all wizard step files
+
+**Current issues:**
+- The wizard renders as a full-page overlay (not a Dialog) — good for mobile.
+- `StepIndicator` with 4 steps and labels likely clips on 390px.
+- Step 1 (Quote Setup) and Step 3 (Review) have side-by-side panel layouts that need stacking.
+
+**Tasks:**
+- [x] `StepIndicator`: on mobile show only step numbers + current label, hide non-active labels (`hidden sm:block`); connector bars `w-10 sm:w-16`; circle `w-9 h-9 md:w-10 md:h-10`.
+- [x] `Step1QuoteSetup`: Next button `w-full sm:w-auto` (stacks full-width on mobile).
+- [x] `Step3Review`: Back + Generate buttons `flex-col-reverse sm:flex-row`, `w-full sm:w-auto`.
+- [x] `Step2Customer`: Back + Next buttons `flex-col-reverse sm:flex-row`, `w-full sm:w-auto`.
+- [x] `SalesWizard.tsx`: resume prompt `flex-wrap`; header `text-xl md:text-2xl`.
+
+---
+
+### 16.6 — Settings Pages
+
+**Affected:** `settings/general`, `settings/commission`, `settings/custom-fields`, `settings/pipeline`, `settings/finance`, `settings/branches`
+
+**Current issues:**
+- Settings pages with many tabs (General has ~6 tabs) will overflow horizontally on mobile.
+- Commission tier table has inline number inputs that become unusable at 390px.
+
+**Tasks:**
+- [x] Tab bars: `<div className="overflow-x-auto">` wrapper + `w-max` on `TabsList` — applied to General Settings (5 tabs) and Custom Fields (3 tabs).
+- [x] `RolePermissionsEditor`: already uses Accordion + responsive flex layouts; no table overflow needed.
+- [x] Commission mode cards: already `grid-cols-1 sm:grid-cols-3` ✓. Tier rows use `flex items-end gap-3` with `flex-1` inputs — functional at 390px.
+- [x] Branch settings table: `rounded-md border overflow-x-auto`; alert card `flex-wrap gap-4` + `shrink-0` button.
+- [x] Finance settings: both Finance Companies + Document Rules tables wrapped with `overflow-x-auto`.
+
+---
+
+### 16.7 — Reports & Accounting
+
+**Files:** `app/(dashboard)/reports/page.tsx`, `components/accounting/AccountingClient.tsx`, `components/accounting/GeneralLedgerTab.tsx`
+
+**Tasks:**
+- [x] Reports page 5-tab `TabsList`: wrapped in `overflow-x-auto` div with `w-max` on the list.
+- [x] All 5 report section headers: `flex-wrap gap-2` so Export/Print buttons wrap on narrow screens.
+- [x] All 5 report tables: `overflow-x-auto` added to the enclosing `Card`.
+- [x] Accounting `TabsList` (4 tabs): `overflow-x-auto` wrapper + `w-max` on list; `self-start w-full sm:w-auto` on wrapper.
+- [x] General Ledger: already had `overflow-x-auto` ✓; all 4 accounting tabs (FixedAssets, PartnerEquity, Claims + Ledger) now have `overflow-x-auto` table wrappers.
+
+---
+
+### 16.8 — Polish & Cross-Cutting
+
+**Tasks:**
+- [x] **Touch targets**: Mobile card buttons in Vehicles, Customers, Sales cards: `h-9 w-9` → `h-10 w-10` (36px→40px). Leads delete button: `p-2` → `p-3` (raw button, 32px→40px). TopNav mobile search toggle: `h-9 w-9` → `h-10 w-10`.
+- [ ] **RTL + mobile**: Visual test — verify `me-`, `ms-`, `start-`, `end-` directional classes render correctly in Arabic mode at 390px. All Phase 16 changes use directional classes throughout.
+- [ ] **Landscape phone**: Visual test at 667×375 (iPhone SE landscape) — dialogs scroll, wizard fits.
+- [ ] **Tablet (768px)**: Visual verify sidebar + `md:` breakpoint transitions on key pages.
+- [ ] **Font sizes**: All mobile card text uses `text-xs` (12px) minimum — `text-[10px]` used only for mono VIN and status chips where density is required.
+- [x] **Feedback widget**: `bottom-5` → `bottom-[calc(1.25rem+env(safe-area-inset-bottom))]` for iOS home indicator clearance.
+
+---
+
+### Delivery Order
+
+| Sub-phase | Effort | Impact | Branch milestone |
+|-----------|--------|--------|-----------------|
+| 16.1 Navigation shell | ~1 day | High (every page) | Commit A |
+| 16.2 Table overflow (Tier A) | ~0.5 day | High (all list pages) | Commit B |
+| 16.3 Dashboard | ~0.5 day | High (landing page) | Commit C |
+| 16.4 Dialogs & forms | ~1 day | High (all create/edit flows) | Commit D |
+| 16.2 Card views (Tier B) | ~1.5 days | Medium (4 key pages) | Commit E |
+| 16.5 Sales Wizard | ~1 day | High (core transaction flow) | Commit F |
+| 16.6 Settings | ~0.5 day | Medium | Commit G |
+| 16.7 Reports & Accounting | ~0.5 day | Medium | Commit H |
+| 16.8 Polish & RTL testing | ~1 day | High (quality gate) | Commit I |
+
+**Total estimated effort:** ~7–8 dev days
+
+---
+
+### Definition of Done
+
+- [ ] All primary pages render without horizontal overflow on a 390px viewport (Chrome DevTools iPhone 16 profile)
+- [ ] All dialogs are scrollable and fully usable on mobile
+- [ ] Desktop layout at 1280px is pixel-identical to pre-Phase-16
+- [ ] Arabic (RTL) mode passes the same mobile checks
+- [ ] No new TypeScript errors (`pnpm build` clean)
+- [ ] `pnpm test` still passes

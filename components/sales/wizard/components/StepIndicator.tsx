@@ -35,7 +35,7 @@ export function StepIndicator({
     const isCash = paymentType === "CASH";
 
     return (
-        <div className="flex items-center justify-center gap-0 mb-8">
+        <div className="flex items-center justify-center gap-0 mb-6 md:mb-8">
             {steps.map((step, index) => {
                 const stepNum = index + 1;
                 const isCompleted = currentStep > stepNum;
@@ -47,7 +47,7 @@ export function StepIndicator({
                         <div className="flex flex-col items-center">
                             <div
                                 className={cn(
-                                    "w-10 h-10 rounded-full flex items-center justify-center border-2 transition-all duration-300",
+                                    "w-9 h-9 md:w-10 md:h-10 rounded-full flex items-center justify-center border-2 transition-all duration-300",
                                     isCompleted
                                         ? "bg-emerald-500 border-emerald-500 text-white"
                                         : isActive
@@ -58,9 +58,9 @@ export function StepIndicator({
                                 )}
                             >
                                 {isCompleted ? (
-                                    <Check className="w-5 h-5" />
+                                    <Check className="w-4 h-4 md:w-5 md:h-5" />
                                 ) : (
-                                    <Icon className="w-5 h-5" />
+                                    <Icon className="w-4 h-4 md:w-5 md:h-5" />
                                 )}
                             </div>
 
@@ -69,7 +69,7 @@ export function StepIndicator({
                                     "text-xs mt-1 font-medium whitespace-nowrap",
                                     isActive
                                         ? "text-foreground"
-                                        : "text-muted-foreground"
+                                        : "text-muted-foreground hidden sm:block"
                                 )}
                             >
                                 {step.label}
@@ -79,7 +79,7 @@ export function StepIndicator({
                         {index < steps.length - 1 && (
                             <div
                                 className={cn(
-                                    "w-16 h-0.5 mx-1 mb-5 transition-all duration-500",
+                                    "w-10 sm:w-16 h-0.5 mx-1 mb-4 md:mb-5 transition-all duration-500",
                                     currentStep > stepNum
                                         ? "bg-emerald-500"
                                         : "bg-border"

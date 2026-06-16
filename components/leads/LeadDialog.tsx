@@ -145,7 +145,7 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-xl max-h-[90dvh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{lead ? (t("EditLead" as any) || "Edit Lead") : (t("AddLead" as any) || "Create Lead")}</DialogTitle>
           <DialogDescription>

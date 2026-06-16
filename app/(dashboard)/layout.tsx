@@ -289,7 +289,7 @@ function DashboardWrapper({ children }: { children: React.ReactNode }) {
       <Sidebar />
       <div className="flex flex-col flex-1 w-full overflow-hidden">
         <TopNav />
-        <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 relative">
+        <main className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 lg:p-8 relative pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:pb-8">
           {children}
         </main>
       </div>

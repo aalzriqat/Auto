@@ -155,7 +155,7 @@ export function SalesWizard({
       {/* HEADER */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold flex items-center gap-2">
+          <h1 className="text-xl md:text-2xl font-bold flex items-center gap-2">
             <Icon className="w-6 h-6 text-indigo-400" />
             {t(paymentType === "CASH" ? "NewCashQuote" as any : "NewInstallmentQuote" as any)}
           </h1>
@@ -173,7 +173,7 @@ export function SalesWizard({
 
       {/* RESUME PROMPT */}
       {showResumePrompt && storedDraft && (
-        <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 flex items-center justify-between gap-4">
+        <div className="mb-6 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4 flex flex-wrap items-center justify-between gap-4">
           <div>
             <p className="font-medium text-amber-700 dark:text-amber-400 text-sm">
               {t("DraftFound" as any) ?? "You have an unsaved draft from a previous session."}

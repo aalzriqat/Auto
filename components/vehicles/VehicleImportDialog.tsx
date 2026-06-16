@@ -251,7 +251,7 @@ interface Props {
 
 export function VehicleImportDialog({ open, onOpenChange }: Props) {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, isRtl } = useLanguage();
   const importBulk = useMutation(api.vehicles.importBulk);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -377,15 +377,15 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-8">#</TableHead>
-                    <TableHead>TYPE/Name</TableHead>
-                    <TableHead>Model</TableHead>
-                    <TableHead>Year</TableHead>
-                    <TableHead>VIN</TableHead>
-                    <TableHead>Color</TableHead>
+                    <TableHead>{t("TypeName" as any)}</TableHead>
+                    <TableHead>{t("Model" as any)}</TableHead>
+                    <TableHead>{t("Year" as any)}</TableHead>
+                    <TableHead>{t("VIN" as any)}</TableHead>
+                    <TableHead>{t("Color" as any)}</TableHead>
                     <TableHead>KM</TableHead>
-                    <TableHead className="text-end">Cost</TableHead>
-                    <TableHead className="text-end">المتخصصة</TableHead>
-                    <TableHead>Status</TableHead>
+                    <TableHead className={`text-${isRtl ? "left" : "right"}`}>{t("Cost" as any)}</TableHead>
+                    <TableHead className={`text-${isRtl ? "left" : "right"}`}>{t("AlMutakhasisa" as any)}</TableHead>
+                    <TableHead>{t("Status" as any)}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -398,8 +398,8 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
                       <TableCell className="font-mono text-xs">{row.vin || "—"}</TableCell>
                       <TableCell>{row.color}</TableCell>
                       <TableCell>{row.mileage !== undefined ? row.mileage.toLocaleString() : <span className="text-muted-foreground text-xs">TBD</span>}</TableCell>
-                      <TableCell className="text-end">{row.purchasePrice ? row.purchasePrice.toLocaleString() : "—"}</TableCell>
-                      <TableCell className="text-end">{row.sellingPrice > 0 ? row.sellingPrice.toLocaleString() : "—"}</TableCell>
+                      <TableCell className={`text-${isRtl ? "left" : "right"}`}>{row.purchasePrice ? row.purchasePrice.toLocaleString() : "—"}</TableCell>
+                      <TableCell className={`text-${isRtl ? "left" : "right"}`}>{row.sellingPrice > 0 ? row.sellingPrice.toLocaleString() : "—"}</TableCell>
                       <TableCell>
                         {row._errors.length > 0 ? (
                           <Badge variant="destructive" className="text-xs">{row._errors[0]}</Badge>
@@ -418,7 +418,7 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
         <DialogFooter className="pt-2 border-t">
           <Button variant="outline" onClick={handleClose} disabled={importing}>{t("Cancel" as any)}</Button>
           <Button onClick={handleImport} disabled={validRows.length === 0 || importing}>
-            {importing ? t("ImportingEllipsis" as any) : `Import ${validRows.length} Vehicle${validRows.length !== 1 ? "s" : ""}`}
+            {importing ? t("ImportingEllipsis" as any) : `${t("ImportVehiclesAction" as any)} (${validRows.length})`}
           </Button>
         </DialogFooter>
       </DialogContent>

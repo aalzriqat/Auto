@@ -119,7 +119,7 @@ export default function TeamPage() {
         </TabsList>
 
         <TabsContent value="members">
-          <div className="rounded-md border">
+          <div className="rounded-md border overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -258,7 +258,7 @@ export default function TeamPage() {
 
         {canManageUsers && (
           <TabsContent value="roles">
-            <div className="rounded-md border">
+            <div className="rounded-md border overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>

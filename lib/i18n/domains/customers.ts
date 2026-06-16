@@ -95,6 +95,19 @@ export const customersEn = {
   Relationship: "Relationship",
   RelationshipEg: "e.g. Brother, Friend",
   IncomeJOD: "Income (JOD)",
+  
+  // Import Dialog
+  ImportCustomersTitle: "Import Customers via Excel",
+  ImportCustomersDesc: "Upload an Excel file to bulk import customers.",
+  DropFileHere: "Click or drop Excel file here",
+  FileTypesAccepted: "Supports .xlsx, .xls, .csv",
+  DownloadTemplate: "Download Template",
+  ReadyToImport: "ready",
+  ImportErrors: "errors",
+  RowsHaveErrors: "rows have errors",
+  ImportingEllipsis: "Importing...",
+  ImportCustomersAction: "Import Customers",
+  Status: "Status",
 };
 
 export const customersAr = {
@@ -194,4 +207,17 @@ export const customersAr = {
   Relationship: "صلة القرابة",
   RelationshipEg: "مثال: أخ، صديق",
   IncomeJOD: "الدخل (دينار أردني)",
+
+  // Import Dialog
+  ImportCustomersTitle: "استيراد العملاء عبر إكسل",
+  ImportCustomersDesc: "قم برفع ملف إكسل لاستيراد العملاء دفعة واحدة.",
+  DropFileHere: "انقر أو أسحب ملف إكسل هنا",
+  FileTypesAccepted: "يدعم .xlsx, .xls, .csv",
+  DownloadTemplate: "تحميل القالب",
+  ReadyToImport: "جاهز",
+  ImportErrors: "أخطاء",
+  RowsHaveErrors: "صفوف تحتوي على أخطاء",
+  ImportingEllipsis: "جاري الاستيراد...",
+  ImportCustomersAction: "استيراد العملاء",
+  Status: "الحالة",
 };

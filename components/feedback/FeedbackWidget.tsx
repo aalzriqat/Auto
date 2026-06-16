@@ -65,7 +65,7 @@ export function FeedbackWidget() {
       {/* Floating trigger button */}
       <button
         onClick={() => setOpen(true)}
-        className="fixed bottom-5 end-5 z-40 flex items-center gap-2 rounded-full bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-lg ring-1 ring-black/10 hover:bg-primary/90 transition-colors"
+        className="fixed bottom-[calc(1.25rem+env(safe-area-inset-bottom))] end-5 z-40 flex items-center gap-2 rounded-full bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-lg ring-1 ring-black/10 hover:bg-primary/90 transition-colors"
         aria-label={t("FeedbackWidgetTitle" as any)}
       >
         <MessageSquarePlus className="h-4 w-4" />

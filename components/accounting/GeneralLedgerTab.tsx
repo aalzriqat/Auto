@@ -63,7 +63,7 @@ export function GeneralLedgerTab() {
         <span className="text-slate-600 font-semibold">{t("TxNet" as any)}: {formatCurrency(totalIn - totalOut)}</span>
       </div>
 
-      <div className="rounded-md border border-slate-200">
+      <div className="rounded-md border border-slate-200 overflow-x-auto">
         <Table>
           <TableHeader className="bg-slate-50">
             <TableRow>

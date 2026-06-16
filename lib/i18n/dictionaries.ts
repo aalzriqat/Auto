@@ -42,3 +42,4 @@ export const dictionaries = {
 export function getDictionary(locale: Locale) {
   return dictionaries[locale];
 }
+// force reload 

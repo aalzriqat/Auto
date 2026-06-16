@@ -96,9 +96,9 @@ export function BranchesClient() {
       {!branches?.length && branches !== undefined && (
         <Card className="bg-yellow-50 border-yellow-200">
           <CardContent className="pt-6">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-4">
               <div className="flex items-center gap-4">
-                <div className="p-3 bg-yellow-100 rounded-full text-yellow-600">
+                <div className="p-3 bg-yellow-100 rounded-full text-yellow-600 shrink-0">
                   <AlertTriangle className="h-6 w-6" />
                 </div>
                 <div>
@@ -106,7 +106,7 @@ export function BranchesClient() {
                   <p className="text-yellow-700">{t("BranchInitDesc" as any)}</p>
                 </div>
               </div>
-              <Button onClick={handleMigrate} className="bg-yellow-600 hover:bg-yellow-700 text-white">
+              <Button onClick={handleMigrate} className="shrink-0 bg-yellow-600 hover:bg-yellow-700 text-white">
                 {t("InitializeMigrateData" as any)}
               </Button>
             </div>
@@ -123,7 +123,7 @@ export function BranchesClient() {
           <CardDescription>{t("ManagePhysicalBranches" as any)}</CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="rounded-md border">
+          <div className="rounded-md border overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>

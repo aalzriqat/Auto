@@ -235,7 +235,7 @@ export default function CommissionsPage() {
         </div>
 
         {/* Commission table */}
-        <div className="rounded-md border">
+        <div className="rounded-md border overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>

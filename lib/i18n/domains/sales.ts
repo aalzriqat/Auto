@@ -302,6 +302,21 @@ export const salesEn = {
   MakeYearModel: "Year / Model",
   VehicleType: "Vehicle Type",
   PrintQuote: "Print / Save Quote",
+  
+  // Quote Print Template
+  VehicleQuote: "Vehicle Quote",
+  Respected: "Respected",
+  Greeting: "Greetings,",
+  ManufactureYear: "Manufacture Year",
+  BatteryFuelType: "Battery Capacity / Fuel Type",
+  ConditionNewUsed: "Condition (New / Used)",
+  ChassisNumberVIN: "Chassis Number (VIN)",
+  PendingQuoteVIN: "Pending",
+  AdditionsSpecs: "Additions / Specifications",
+  FinancialDetails: "Financial Details",
+  TotalVehiclePrice: "Total Vehicle Price:",
+  Respects: "With Best Regards,",
+  SealAndSignature: "Seal & Signature",
 };
 
 export const salesAr = {
@@ -597,4 +612,19 @@ export const salesAr = {
   MakeYearModel: "سنة الصنع / موديل",
   VehicleType: "نوع المركبة",
   PrintQuote: "طباعة / حفظ العرض",
+
+  // Quote Print Template
+  VehicleQuote: "عرض سعر مركبة",
+  Respected: "المحترمين",
+  Greeting: "تحية طيبة وبعد،،،",
+  ManufactureYear: "سنة الصنع:",
+  BatteryFuelType: "سعة البطارية / نوع الوقود:",
+  ConditionNewUsed: "الحالة (جديد / مستعمل):",
+  ChassisNumberVIN: "رقم الهيكل (VIN):",
+  PendingQuoteVIN: "قيد الانتظار",
+  AdditionsSpecs: "الإضافات / المواصفات:",
+  FinancialDetails: "التفاصيل المالية",
+  TotalVehiclePrice: "سعر المركبة الإجمالي:",
+  Respects: "وتفضلوا بقبول فائق الإحترام",
+  SealAndSignature: "الختم والتوقيع",
 };

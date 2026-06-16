@@ -139,28 +139,30 @@ export default function ReportsPage() {
         `}} />
 
         <Tabs defaultValue="sales" className="space-y-4 print-full-width">
-          <TabsList className="no-print">
-            <TabsTrigger value="sales" className="gap-2">
-              <LineChart className="h-4 w-4" /> {t("SalesProfit") || "Sales & Profit"}
-            </TabsTrigger>
-            <TabsTrigger value="inventory" className="gap-2">
-              <Car className="h-4 w-4" /> {t("Inventory") || "Inventory"}
-            </TabsTrigger>
-            <TabsTrigger value="expenses" className="gap-2">
-              <Receipt className="h-4 w-4" /> {t("Expenses") || "Expenses"}
-            </TabsTrigger>
-            <TabsTrigger value="performance" className="gap-2">
-              <Users className="h-4 w-4" /> {t("Performance")}
-            </TabsTrigger>
-            <TabsTrigger value="leads" className="gap-2">
-              <Target className="h-4 w-4" /> {t("LeadConversion") || "Lead Conversion"}
-            </TabsTrigger>
-          </TabsList>
+          <div className="overflow-x-auto no-print">
+            <TabsList className="w-max">
+              <TabsTrigger value="sales" className="gap-2">
+                <LineChart className="h-4 w-4" /> {t("SalesProfit") || "Sales & Profit"}
+              </TabsTrigger>
+              <TabsTrigger value="inventory" className="gap-2">
+                <Car className="h-4 w-4" /> {t("Inventory") || "Inventory"}
+              </TabsTrigger>
+              <TabsTrigger value="expenses" className="gap-2">
+                <Receipt className="h-4 w-4" /> {t("Expenses") || "Expenses"}
+              </TabsTrigger>
+              <TabsTrigger value="performance" className="gap-2">
+                <Users className="h-4 w-4" /> {t("Performance")}
+              </TabsTrigger>
+              <TabsTrigger value="leads" className="gap-2">
+                <Target className="h-4 w-4" /> {t("LeadConversion") || "Lead Conversion"}
+              </TabsTrigger>
+            </TabsList>
+          </div>
 
           {/* SALES REPORT */}
           <TabsContent value="sales" className="space-y-4 m-0">
             <ReportsDateFilter {...dateFilterProps} />
-            <div className="flex items-center justify-between no-print">
+            <div className="flex flex-wrap items-center justify-between gap-2 no-print">
               <div>
                 <h3 className="text-lg font-medium">{t("SalesProfitOverview") || "Sales & Profit Overview"}</h3>
                 <p className="text-sm text-muted-foreground">
@@ -208,7 +210,7 @@ export default function ReportsPage() {
               </Card>
             </div>
 
-            <Card className="print-shadow-none border print:border-gray-200">
+            <Card className="print-shadow-none border print:border-gray-200 overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -247,7 +249,7 @@ export default function ReportsPage() {
 
           {/* INVENTORY REPORT */}
           <TabsContent value="inventory" className="space-y-4 m-0">
-            <div className="flex items-center justify-between no-print">
+            <div className="flex flex-wrap items-center justify-between gap-2 no-print">
               <div>
                 <h3 className="text-lg font-medium">{t("InventoryValuation")}</h3>
                 <p className="text-sm text-muted-foreground">{t("CurrentAvailableAndReserved")}</p>
@@ -283,7 +285,7 @@ export default function ReportsPage() {
               </Card>
             </div>
 
-            <Card className="print-shadow-none border print:border-gray-200">
+            <Card className="print-shadow-none border print:border-gray-200 overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -321,7 +323,7 @@ export default function ReportsPage() {
           {/* EXPENSES REPORT */}
           <TabsContent value="expenses" className="space-y-4 m-0">
             <ReportsDateFilter {...dateFilterProps} />
-            <div className="flex items-center justify-between no-print">
+            <div className="flex flex-wrap items-center justify-between gap-2 no-print">
               <div>
                 <h3 className="text-lg font-medium">{t("ExpensesOverview") || "Expenses Overview"}</h3>
                 <p className="text-sm text-muted-foreground">
@@ -350,7 +352,7 @@ export default function ReportsPage() {
               </Card>
             </div>
 
-            <Card className="print-shadow-none border print:border-gray-200">
+            <Card className="print-shadow-none border print:border-gray-200 overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -386,7 +388,7 @@ export default function ReportsPage() {
           {/* PERFORMANCE REPORT */}
           <TabsContent value="performance" className="space-y-4 m-0">
             <ReportsDateFilter {...dateFilterProps} />
-            <div className="flex items-center justify-between no-print">
+            <div className="flex flex-wrap items-center justify-between gap-2 no-print">
               <div>
                 <h3 className="text-lg font-medium">{t("SalespersonPerformance")}</h3>
                 <p className="text-sm text-muted-foreground">
@@ -403,7 +405,7 @@ export default function ReportsPage() {
               </div>
             </div>
 
-            <Card className="print-shadow-none border print:border-gray-200">
+            <Card className="print-shadow-none border print:border-gray-200 overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -437,7 +439,7 @@ export default function ReportsPage() {
           {/* LEADS REPORT */}
           <TabsContent value="leads" className="space-y-4 m-0">
             <ReportsDateFilter {...dateFilterProps} />
-            <div className="flex items-center justify-between no-print">
+            <div className="flex flex-wrap items-center justify-between gap-2 no-print">
               <div>
                 <h3 className="text-lg font-medium">{t("LeadConversion")}</h3>
                 <p className="text-sm text-muted-foreground">
@@ -481,7 +483,7 @@ export default function ReportsPage() {
               </Card>
             </div>
 
-            <Card className="print-shadow-none border print:border-gray-200">
+            <Card className="print-shadow-none border print:border-gray-200 overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>

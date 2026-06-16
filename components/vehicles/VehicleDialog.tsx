@@ -292,7 +292,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-3xl max-h-[90dvh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{vehicle ? t("EditVehicle" as any) : t("AddVehicle")}</DialogTitle>
           <DialogDescription>
@@ -555,7 +555,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
               </div>
 
               {imageUrls.length > 0 ? (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-2">
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-2">
                   {imageUrls.map((url, index) => (
                     <div key={index} className="relative group aspect-video bg-muted rounded-md overflow-hidden border">
                       <img src={url} alt={`Vehicle ${index + 1}`} className="object-cover w-full h-full" />

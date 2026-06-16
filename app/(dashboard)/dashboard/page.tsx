@@ -83,11 +83,11 @@ export default function DashboardPage() {
     return (
       <RoleGuard permissions={[]}>
         <div className="space-y-4 max-w-[1400px] mx-auto pb-4 pt-4">
-          <Skeleton className="w-full h-[220px] rounded-2xl" />
-          <div className="grid gap-4 md:grid-cols-3">
-            <Skeleton className="w-full h-[200px] rounded-2xl" />
-            <Skeleton className="w-full h-[200px] rounded-2xl" />
-            <Skeleton className="w-full h-[200px] rounded-2xl" />
+          <Skeleton className="w-full h-[180px] md:h-[220px] rounded-2xl" />
+          <div className="grid gap-4 grid-cols-2 md:grid-cols-3">
+            <Skeleton className="w-full h-[160px] md:h-[200px] rounded-2xl" />
+            <Skeleton className="w-full h-[160px] md:h-[200px] rounded-2xl" />
+            <Skeleton className="col-span-2 md:col-span-1 w-full h-[160px] md:h-[200px] rounded-2xl" />
           </div>
           <Skeleton className="w-full h-[300px] rounded-2xl" />
         </div>
@@ -155,20 +155,37 @@ export default function DashboardPage() {
       {/* Row 1: Sales Hero Card */}
       <motion.div
         initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}
-        className="rounded-2xl border-0 bg-gradient-to-r from-[#6b21a8] via-[#4f46e5] to-[#2563eb] text-white shadow-lg overflow-hidden relative w-full h-[220px]"
+        className="rounded-2xl border-0 bg-gradient-to-r from-[#6b21a8] via-[#4f46e5] to-[#2563eb] text-white shadow-lg overflow-hidden relative w-full"
       >
-        <div className="absolute inset-0 p-6 flex justify-between z-10">
+        <div className="p-4 md:p-6 flex flex-col md:flex-row md:justify-between gap-4 z-10">
           {/* Left Column */}
-          <div className="flex flex-col justify-between h-full w-1/3">
+          <div className="flex flex-col gap-3 md:gap-0 md:justify-between md:h-full md:w-1/3">
             <div>
-              <div className="flex items-center gap-2 mb-6 text-sm font-medium tracking-widest uppercase text-white/80">
-                <span>{t("SalesOverview" as any) || "SALES OVERVIEW"}</span>
+              <div className="flex items-center justify-between gap-2 mb-3 md:mb-6">
+                <span className="text-sm font-medium tracking-widest uppercase text-white/80">{t("SalesOverview" as any) || "SALES OVERVIEW"}</span>
+                {/* Mobile time-range picker */}
+                <div className="md:hidden">
+                  <Select value={timeRange} onValueChange={(val: any) => setTimeRange(val)}>
+                    <SelectTrigger className="w-[120px] bg-white/10 border-white/20 text-white hover:bg-white/20 rounded-lg border-0 h-8 text-xs">
+                      <div className="flex items-center gap-1">
+                        <Calendar className="w-3 h-3" />
+                        <SelectValue placeholder={t("SelectTimeRange" as any)} />
+                      </div>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="DAY">{t("Today" as any)}</SelectItem>
+                      <SelectItem value="MONTH">{t("ThisMonth" as any)}</SelectItem>
+                      <SelectItem value="YEAR">{t("ThisYear" as any)}</SelectItem>
+                      <SelectItem value="ALL_TIME">{t("AllTime" as any)}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
               <p className="text-xs font-semibold tracking-wider text-white/70 mb-2 uppercase">{t("SalesPerformance" as any) || "SALES PERFORMANCE"}</p>
 
               <div className="flex items-baseline gap-6">
                 <div>
-                  <div className="text-5xl font-bold tracking-tight">
+                  <div className="text-3xl md:text-5xl font-bold tracking-tight">
                     {formatCompact(stats?.salesVolumeThisMonth || 0)}
                   </div>
                   <p className="text-sm text-white/80 mt-1 flex items-center">
@@ -176,13 +193,13 @@ export default function DashboardPage() {
                   </p>
                 </div>
                 <div>
-                  <div className="text-5xl font-bold tracking-tight">{stats?.salesThisMonth || 0}</div>
+                  <div className="text-3xl md:text-5xl font-bold tracking-tight">{stats?.salesThisMonth || 0}</div>
                   <p className="text-sm text-white/80 mt-1">{t("VehiclesSold" as any) || "Vehicles Sold"}</p>
                 </div>
               </div>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-3 mt-3 md:mt-0">
               <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-xs font-bold border border-white/30">
                 {stats?.teamTasks?.[0]?.name ? stats.teamTasks[0].name.substring(0, 2).toUpperCase() : "SJ"}
               </div>
@@ -190,8 +207,8 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Right Column (Graph) */}
-          <div className="flex flex-col justify-between items-end h-full w-2/3">
+          {/* Right Column (Graph) — desktop only */}
+          <div className="hidden md:flex flex-col justify-between items-end h-full w-2/3">
             <Select value={timeRange} onValueChange={(val: any) => setTimeRange(val)}>
               <SelectTrigger className="w-[160px] bg-white/10 border-white/20 text-white hover:bg-white/20 rounded-lg border-0 h-9">
                 <div className="flex items-center gap-2">
@@ -235,7 +252,7 @@ export default function DashboardPage() {
       </motion.div>
 
       {/* Row 2: Secondary Metrics (3 Columns) */}
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 grid-cols-2 md:grid-cols-3">
         {/* Vehicles Card */}
         <motion.div
           initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}
@@ -291,7 +308,7 @@ export default function DashboardPage() {
             <div className="text-sm font-medium text-[#16a34a]">+0.0% {t("Growth" as any) || "growth"}</div>
           </div>
 
-          <div className="w-32 flex flex-col items-center justify-center mt-2">
+          <div className="hidden sm:flex w-32 flex-col items-center justify-center mt-2">
             <div className="h-20 w-20">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
@@ -323,7 +340,7 @@ export default function DashboardPage() {
         {/* Team Card */}
         <motion.div
           initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}
-          className="rounded-2xl bg-[#e0f2fe] p-5 shadow-sm border border-[#bae6fd]/50"
+          className="col-span-2 md:col-span-1 rounded-2xl bg-[#e0f2fe] p-5 shadow-sm border border-[#bae6fd]/50"
         >
           <h3 className="text-xs font-bold text-slate-700 tracking-wider uppercase mb-2">{t("TeamMembers" as any) || "TEAM MEMBERS"}</h3>
           <div className="text-4xl font-bold text-slate-900 tracking-tight">{stats?.teamMembers || 0}</div>
@@ -385,7 +402,7 @@ export default function DashboardPage() {
           </div>
         </div>
         <div className="p-0 flex-1 bg-white">
-          <div className="w-full">
+          <div className="w-full overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>

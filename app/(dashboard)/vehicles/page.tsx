@@ -226,7 +226,7 @@ export default function VehiclesPage() {
     <RoleGuard permissions={["view:vehicles"]}>
       <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           {canEdit && (
             <Button variant="outline" onClick={() => setIsApprovalsDialogOpen(true)}>
               <ClipboardList className="me-2 h-4 w-4" />
@@ -261,7 +261,60 @@ export default function VehiclesPage() {
         />
       </div>
 
-      <div className="rounded-md border">
+      {/* Mobile card list */}
+      <div className="flex flex-col gap-3 md:hidden">
+        {filteredVehicles === undefined ? (
+          <p className="text-center py-8 text-muted-foreground">{t("LoadingInventory" as any)}</p>
+        ) : filteredVehicles.length === 0 ? (
+          <p className="text-center py-8 text-muted-foreground">{t("NoVehiclesFound" as any)}</p>
+        ) : filteredVehicles.map((vehicle) => (
+          <div
+            key={vehicle._id}
+            id={`row-${vehicle._id}`}
+            className={`rounded-xl border bg-card p-4 space-y-3 ${highlightId === vehicle._id ? "ring-2 ring-primary" : ""}`}
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="font-semibold text-sm">
+                  {vehicle.year} {vehicle.make} {vehicle.model}
+                  {vehicle.trim && <span className="text-muted-foreground text-xs ms-1">{vehicle.trim}</span>}
+                </p>
+                <p className="text-xs text-muted-foreground font-mono mt-0.5 truncate">{vehicle.vin}</p>
+              </div>
+              <StatusBadge status={vehicle.status} t={t} />
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+              {vehicle.mileage != null && <span>{vehicle.mileage.toLocaleString()} km</span>}
+              {vehicle.transmission && <span>{vehicle.transmission.charAt(0) + vehicle.transmission.slice(1).toLowerCase()}</span>}
+              {vehicle.notes && <span className="truncate max-w-[200px]">{vehicle.notes}</span>}
+            </div>
+            <div className="flex items-center justify-between">
+              <p className="font-bold text-sm">{vehicle.sellingPrice.toLocaleString()} JOD</p>
+              <div className="flex gap-0.5">
+                <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => setDetailsVehicle(vehicle)}>
+                  <Eye className="h-4 w-4 text-muted-foreground" />
+                </Button>
+                <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => setGalleryVehicle(vehicle)}>
+                  <ImageIcon className="h-4 w-4 text-muted-foreground" />
+                </Button>
+                {canEdit && (
+                  <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => handleEdit(vehicle)}>
+                    <Pencil className="h-4 w-4 text-muted-foreground" />
+                  </Button>
+                )}
+                {canDelete && (
+                  <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => setVehicleToDelete(vehicle)}>
+                    <Trash2 className="h-4 w-4 text-red-500" />
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Desktop table */}
+      <div className="hidden md:block rounded-md border overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>

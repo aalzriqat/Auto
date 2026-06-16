@@ -239,11 +239,13 @@ export default function CustomFieldsPage() {
       </div>
 
       <Tabs defaultValue="vehicle" className="space-y-4">
-        <TabsList>
-          {ENTITY_TABS.map((tab) => (
-            <TabsTrigger key={tab.value} value={tab.value}>{t(tab.labelKey as any)}</TabsTrigger>
-          ))}
-        </TabsList>
+        <div className="overflow-x-auto">
+          <TabsList className="w-max">
+            {ENTITY_TABS.map((tab) => (
+              <TabsTrigger key={tab.value} value={tab.value}>{t(tab.labelKey as any)}</TabsTrigger>
+            ))}
+          </TabsList>
+        </div>
 
         {ENTITY_TABS.map((tab) => (
           <TabsContent key={tab.value} value={tab.value}>

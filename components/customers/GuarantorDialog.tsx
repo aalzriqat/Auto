@@ -107,7 +107,7 @@ export function GuarantorDialog({ open, onOpenChange, customerId, guarantor }: G
           <DialogTitle>{guarantor ? (t("EditGuarantor" as any)) : (t("AddGuarantor" as any))}</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>{t("FirstName" as any)} <span className="text-red-500">*</span></Label>
               <Input
@@ -144,7 +144,7 @@ export function GuarantorDialog({ open, onOpenChange, customerId, guarantor }: G
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label>{t("Relationship" as any)}</Label>
               <Input

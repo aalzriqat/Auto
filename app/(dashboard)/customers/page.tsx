@@ -121,7 +121,51 @@ export default function CustomersPage() {
         />
       </div>
 
-      <div className="rounded-md border">
+      {/* Mobile card list */}
+      <div className="flex flex-col gap-3 md:hidden">
+        {filteredCustomers === undefined ? (
+          <p className="text-center py-8 text-muted-foreground">{t("LoadingCustomers" as any)}</p>
+        ) : filteredCustomers.length === 0 ? (
+          <p className="text-center py-8 text-muted-foreground">{t("NoCustomers" as any)}</p>
+        ) : filteredCustomers.map((customer) => (
+          <div
+            key={customer._id}
+            id={`row-${customer._id}`}
+            className={`rounded-xl border bg-card p-4 space-y-2 cursor-pointer active:bg-muted/50 ${highlightId === customer._id ? "ring-2 ring-primary" : ""}`}
+            onClick={() => handleRowClick(customer._id)}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-sm shrink-0">
+                  {customer.firstName.charAt(0).toUpperCase()}
+                </div>
+                <p className="font-semibold text-sm truncate">{customer.firstName} {customer.lastName}</p>
+              </div>
+              <div className="flex gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                <Button variant="ghost" size="icon" className="h-10 w-10" onClick={(e) => handleEdit(customer, e)}>
+                  <Pencil className="h-4 w-4 text-muted-foreground" />
+                </Button>
+                <Button variant="ghost" size="icon" className="h-10 w-10" onClick={(e) => { e.stopPropagation(); setCustomerToDelete(customer); }}>
+                  <Trash2 className="h-4 w-4 text-red-500" />
+                </Button>
+              </div>
+            </div>
+            <div className="flex flex-col gap-1 text-xs text-muted-foreground ps-12">
+              {customer.email && <div className="flex items-center gap-1"><Mail className="h-3 w-3 shrink-0" /><span className="truncate">{customer.email}</span></div>}
+              {(customer.phone || customer.whatsapp) && <div className="flex items-center gap-1"><Phone className="h-3 w-3 shrink-0" /><span>{customer.phone || customer.whatsapp}</span></div>}
+              {customer.nationalId && <span>{t("NationalID" as any)}: {customer.nationalId}</span>}
+            </div>
+          </div>
+        ))}
+        {customersStatus === "CanLoadMore" && (
+          <div className="flex justify-center pt-2">
+            <Button variant="outline" onClick={() => loadMoreCustomers(25)}>{t("LoadMore" as any)}</Button>
+          </div>
+        )}
+      </div>
+
+      {/* Desktop table */}
+      <div className="hidden md:block rounded-md border overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
@@ -146,7 +190,7 @@ export default function CustomersPage() {
               </TableRow>
             ) : (
               filteredCustomers.map((customer) => (
-                <TableRow 
+                <TableRow
                   key={customer._id}
                   id={`row-${customer._id}`}
                   className={`cursor-pointer hover:bg-muted/50 ${highlightId === customer._id ? "bg-primary/20 transition-all duration-1000" : ""}`}

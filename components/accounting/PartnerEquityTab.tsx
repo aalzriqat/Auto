@@ -23,7 +23,7 @@ export function PartnerEquityTab() {
         <h2 className="text-lg font-semibold text-slate-900">{t("PartnerEquity" as any)}</h2>
       </div>
 
-      <div className="rounded-md border border-slate-200">
+      <div className="rounded-md border border-slate-200 overflow-x-auto">
         <Table>
           <TableHeader className="bg-slate-50">
             <TableRow>

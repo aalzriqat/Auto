@@ -204,7 +204,7 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
                     <User className="h-4 w-4 text-muted-foreground shrink-0" />
                     <div className="flex flex-col">
                       <span className="text-xs text-muted-foreground">
-                        {isRTL ? "الاسم المسجل" : "Registered name"}
+                        {t("RegisteredName" as any)}
                       </span>
                       <span className="text-sm font-medium">{existingUserName}</span>
                     </div>
@@ -213,9 +213,7 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
                 <div className="flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-800 p-3 text-sm text-blue-800 dark:text-blue-300">
                   <Info className="h-4 w-4 mt-0.5 shrink-0" />
                   <p>
-                    {isRTL
-                      ? "هذا المستخدم لديه حساب بالفعل. سيتم إضافته مباشرة إلى المعرض دون الحاجة لإنشاء حساب جديد."
-                      : "This user already has an account. They will be added directly to the organization — no new account needed."}
+                    {t("ExistingUserNotice" as any)}
                   </p>
                 </div>
               </>
@@ -301,7 +299,7 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
                 {isSubmitting ? (
                   <><Loader2 className="me-2 h-4 w-4 animate-spin" />{t("Creating" as any)}</>
                 ) : isExistingUser ? (
-                  isRTL ? "إضافة إلى المعرض" : "Add to Organization"
+                  t("AddToOrganization" as any)
                 ) : (
                   t("CreateAccount" as any)
                 )}
