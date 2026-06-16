@@ -19,6 +19,9 @@ export const DEFAULT_SETTINGS = {
 export const get = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
+    // Return null gracefully during logout (brief window before redirect)
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return null;
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SETTINGS]);
     const settings = await ctx.db
       .query("orgSettings")
