@@ -11,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { toast } from "sonner";
-import { Plus, Trash2 } from "lucide-react";
+import { Plus, Trash2, Zap, PenLine } from "lucide-react";
 
 interface Tier {
   minProfitAmount: number;
@@ -26,12 +26,28 @@ export default function CommissionSettingsPage() {
 
   const [tiers, setTiers] = useState<Tier[]>([]);
   const [isSaving, setIsSaving] = useState(false);
+  const [isSavingMode, setIsSavingMode] = useState(false);
+
+  const commissionMode = (settings?.commissionMode ?? "AUTO") as "AUTO" | "MANUAL";
 
   useEffect(() => {
     if (settings?.commissionTiers) {
       setTiers([...settings.commissionTiers].sort((a, b) => a.minProfitAmount - b.minProfitAmount));
     }
   }, [settings]);
+
+  const handleSaveMode = async (mode: "AUTO" | "MANUAL") => {
+    if (!activeOrgId) return;
+    setIsSavingMode(true);
+    try {
+      await upsert({ orgId: activeOrgId, commissionMode: mode });
+      toast.success(t("CommissionModeSaved" as any));
+    } catch (error: any) {
+      toast.error(error.message || t("CommissionModeError" as any));
+    } finally {
+      setIsSavingMode(false);
+    }
+  };
 
   const handleAddTier = () => {
     setTiers((prev) => [...prev, { minProfitAmount: 0, commissionPct: 0 }]);
@@ -71,11 +87,53 @@ export default function CommissionSettingsPage() {
   };
 
   return (
-    <div className="flex-1 space-y-4 p-4 md:p-8 pt-6">
+    <div className="flex-1 space-y-6 p-4 md:p-8 pt-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">{t("CommissionStructure")}</h1>
         <p className="text-muted-foreground text-sm mt-1">{t("CommissionStructureDesc")}</p>
       </div>
+
+      {/* Commission Mode Toggle */}
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("CommissionMode" as any)}</CardTitle>
+          <CardDescription>{t("CommissionModeDesc" as any)}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <button
+              disabled={isSavingMode}
+              onClick={() => handleSaveMode("AUTO")}
+              className={`flex items-start gap-3 rounded-lg border-2 p-4 text-start transition-colors ${
+                commissionMode === "AUTO"
+                  ? "border-primary bg-primary/5"
+                  : "border-border hover:border-primary/40 hover:bg-muted/40"
+              }`}
+            >
+              <Zap className={`h-5 w-5 mt-0.5 shrink-0 ${commissionMode === "AUTO" ? "text-primary" : "text-muted-foreground"}`} />
+              <div>
+                <p className="font-medium text-sm">{t("CommissionModeAuto" as any)}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{t("CommissionModeAutoDesc" as any)}</p>
+              </div>
+            </button>
+            <button
+              disabled={isSavingMode}
+              onClick={() => handleSaveMode("MANUAL")}
+              className={`flex items-start gap-3 rounded-lg border-2 p-4 text-start transition-colors ${
+                commissionMode === "MANUAL"
+                  ? "border-primary bg-primary/5"
+                  : "border-border hover:border-primary/40 hover:bg-muted/40"
+              }`}
+            >
+              <PenLine className={`h-5 w-5 mt-0.5 shrink-0 ${commissionMode === "MANUAL" ? "text-primary" : "text-muted-foreground"}`} />
+              <div>
+                <p className="font-medium text-sm">{t("CommissionModeManual" as any)}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{t("CommissionModeManualDesc" as any)}</p>
+              </div>
+            </button>
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">

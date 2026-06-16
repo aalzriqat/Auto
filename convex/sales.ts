@@ -462,3 +462,23 @@ export const markCommissionUnpaid = mutation({
     });
   },
 });
+
+export const setCommissionAmount = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    saleId: v.id("sales"),
+    commissionAmount: v.number(),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_COMMISSIONS]);
+
+    const sale = await ctx.db.get(args.saleId);
+    if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
+      throw new Error("Sale not found.");
+    }
+
+    await ctx.db.patch(args.saleId, {
+      commissionAmount: Math.max(0, args.commissionAmount),
+    });
+  },
+});

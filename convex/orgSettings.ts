@@ -58,6 +58,7 @@ export const upsert = mutation({
     commissionTiers: v.optional(
       v.array(v.object({ minProfitAmount: v.number(), commissionPct: v.number() }))
     ),
+    commissionMode: v.optional(v.union(v.literal("AUTO"), v.literal("MANUAL"))),
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
@@ -101,6 +102,7 @@ export const upsert = mutation({
         approvalThresholdEnabled: fields.approvalThresholdEnabled,
         approvalMinProfitPercent: fields.approvalMinProfitPercent,
         commissionTiers: fields.commissionTiers,
+        commissionMode: fields.commissionMode,
       });
       return newId;
     }

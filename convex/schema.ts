@@ -598,6 +598,7 @@ export default defineSchema({
     commissionTiers: v.optional(
       v.array(v.object({ minProfitAmount: v.number(), commissionPct: v.number() }))
     ),
+    commissionMode: v.optional(v.union(v.literal("AUTO"), v.literal("MANUAL"))),
   }).index("by_org", ["orgId"]),
 
   orgCustomFields: defineTable({
@@ -674,4 +675,17 @@ export default defineSchema({
     .index("by_vehicle", ["vehicleId"])
     .index("by_salesperson", ["salespersonId"])
     .index("by_status", ["status"]),
+
+  feedback: defineTable({
+    orgId: v.id("organizations"),
+    userId: v.id("users"),
+    type: v.union(v.literal("BUG"), v.literal("FEATURE")),
+    title: v.string(),
+    description: v.optional(v.string()),
+    url: v.optional(v.string()),
+    status: v.union(v.literal("OPEN"), v.literal("CLOSED")),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"]),
 });

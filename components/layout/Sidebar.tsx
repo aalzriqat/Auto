@@ -1,6 +1,6 @@
 "use client";
 
-import { Car, Users, LayoutDashboard, Target, BadgeDollarSign, Shield, Receipt, ClipboardList, LineChart, Settings, Store, BookOpen, TrendingUp, Sliders, GitBranch, FormInput, Percent, Building2 } from "lucide-react";
+import { Car, Users, LayoutDashboard, Target, BadgeDollarSign, Shield, Receipt, ClipboardList, LineChart, Settings, Store, BookOpen, TrendingUp, Sliders, GitBranch, FormInput, Percent, Building2, MessageSquarePlus } from "lucide-react";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
@@ -34,6 +34,7 @@ const settingsNavigation = [
   { name: "CustomFields", href: "/settings/custom-fields", icon: FormInput, permission: "view:settings" },
   { name: "Commission", href: "/settings/commission", icon: Percent, permission: "view:settings" },
   { name: "Branches", href: "/settings/branches", icon: Store, permission: "manage:users" },
+  { name: "FeedbackInbox", href: "/settings/feedback", icon: MessageSquarePlus, permission: "manage:users" },
 ];
 
 export function Sidebar() {

@@ -5,6 +5,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { RoleGuard } from "@/components/auth/RoleGuard";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -27,7 +28,7 @@ import {
 } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "@/components/ui/sonner";
-import { TrendingUp, CheckCircle2, Clock, DollarSign, Check, Undo2 } from "lucide-react";
+import { TrendingUp, CheckCircle2, Clock, DollarSign, Check, Undo2, Pencil, X } from "lucide-react";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 
 type CommissionSale = Doc<"sales"> & {
@@ -44,6 +45,8 @@ function formatCurrency(amount: number) {
 export default function CommissionsPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  const orgSettings = useOrgSettings();
+  const isManualMode = orgSettings?.commissionMode === "MANUAL";
 
   const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
   const canManage = myMembership?.permissions.includes("manage:commissions") ?? false;
@@ -65,6 +68,10 @@ export default function CommissionsPage() {
 
   const markPaid = useMutation(api.sales.markCommissionPaid);
   const markUnpaid = useMutation(api.sales.markCommissionUnpaid);
+  const setCommissionAmount = useMutation(api.sales.setCommissionAmount);
+
+  const [editingId, setEditingId] = useState<Id<"sales"> | null>(null);
+  const [editingAmount, setEditingAmount] = useState("");
 
   const filtered = useMemo(() => {
     if (!commissions) return [];
@@ -112,6 +119,25 @@ export default function CommissionsPage() {
     } catch (e: any) {
       toast.error(e.message ?? "Failed to update.");
     }
+  }
+
+  async function handleSaveCommission(saleId: Id<"sales">) {
+    if (!activeOrgId) return;
+    const amount = parseFloat(editingAmount);
+    if (isNaN(amount) || amount < 0) return;
+    try {
+      await setCommissionAmount({ orgId: activeOrgId, saleId, commissionAmount: amount });
+      toast.success(t("CommissionUpdated" as any));
+      setEditingId(null);
+      setEditingAmount("");
+    } catch (e: any) {
+      toast.error(e.message ?? t("CommissionUpdateFailed" as any));
+    }
+  }
+
+  function startEditing(saleId: Id<"sales">, current: number) {
+    setEditingId(saleId);
+    setEditingAmount(String(current));
   }
 
   return (
@@ -247,7 +273,42 @@ export default function CommissionsPage() {
                     </TableCell>
                     <TableCell className="text-end tabular-nums">{formatCurrency(c.salePrice)}</TableCell>
                     <TableCell className="text-end tabular-nums font-semibold">
-                      {formatCurrency(c.commissionAmount ?? 0)}
+                      {isManualMode && canManage && editingId === c._id ? (
+                        <div className="flex items-center justify-end gap-1">
+                          <Input
+                            type="number"
+                            min="0"
+                            step="1"
+                            value={editingAmount}
+                            onChange={(e) => setEditingAmount(e.target.value)}
+                            className="h-7 w-24 text-sm text-end"
+                            autoFocus
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") handleSaveCommission(c._id);
+                              if (e.key === "Escape") { setEditingId(null); setEditingAmount(""); }
+                            }}
+                          />
+                          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => handleSaveCommission(c._id)}>
+                            <Check className="h-3.5 w-3.5 text-green-600" />
+                          </Button>
+                          <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => { setEditingId(null); setEditingAmount(""); }}>
+                            <X className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-end gap-1.5">
+                          {formatCurrency(c.commissionAmount ?? 0)}
+                          {isManualMode && canManage && !c.commissionPaidAt && (
+                            <button
+                              onClick={() => startEditing(c._id, c.commissionAmount ?? 0)}
+                              className="text-muted-foreground hover:text-foreground transition-colors"
+                              title={t("EditCommission" as any)}
+                            >
+                              <Pencil className="h-3 w-3" />
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </TableCell>
                     <TableCell>
                       {c.commissionPaidAt ? (

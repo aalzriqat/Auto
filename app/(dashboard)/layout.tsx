@@ -12,8 +12,8 @@ import { useState, useMemo } from "react";
 import { toast } from "sonner";
 import { Input } from "@/components/ui/input";
 import { useOrgSettings } from "@/hooks/useOrgSettings";
+import { FeedbackWidget } from "@/components/feedback/FeedbackWidget";
 import { hexToHslString } from "@/lib/colorUtils";
-import { useQuery } from "convex/react";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -291,6 +291,7 @@ function DashboardWrapper({ children }: { children: React.ReactNode }) {
         </main>
       </div>
       <Toaster />
+      <FeedbackWidget />
     </div>
   );
 }

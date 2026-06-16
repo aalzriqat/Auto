@@ -25,6 +25,8 @@
 | 11 | feature/phase-11-sales-flow | Pipeline Stages, Approval Thresholds | ✅ Done |
 | 12 | feature/phase-12-branding-whatsapp | Org Logo, Brand Color, WhatsApp Webhook | ✅ Done |
 | 13 | feature/phase-13-advanced | Custom Fields, Commission Tiers, Onboarding Wizard | ✅ Done |
+| 14 | main | Feedback Widget (floating bug/feature reporter + admin inbox) | ✅ Done |
+| 15 | main | Commission Mode (AUTO tier-based vs MANUAL per-sale editing) | ✅ Done |
 
 ---
 
@@ -224,6 +226,38 @@
 - [x] `VehicleDialog` — CustomFieldsSection + parallel WMI+NHTSA VIN decode with smart brand name helpers
 - [x] `CustomerDialog` / `LeadDialog` — CustomFieldsSection for customer and lead entity types
 - [x] Onboarding wizard — 5-step: name → currency → lead sources → pipeline → done (each step skippable)
+
+---
+
+## Phase 14 — Feedback Widget ✅
+
+**Branch:** `main`
+**Completed:** 2026-06-16
+
+### Delivered
+- [x] `feedback` table in `convex/schema.ts` — `{ orgId, userId, type: BUG|FEATURE, title, description, url, status: OPEN|CLOSED, createdAt }`
+- [x] `convex/feedback.ts` — `submit` mutation (any member), `list` query (owner-only), `setStatus` mutation
+- [x] `components/feedback/FeedbackWidget.tsx` — floating button (bottom-right) on all dashboard pages; two-step: pick Bug/Feature → fill title + description; auto-captures page URL
+- [x] `app/(dashboard)/layout.tsx` — `<FeedbackWidget />` mounted inside `DashboardWrapper`
+- [x] `app/(dashboard)/settings/feedback/page.tsx` — owner-only inbox with type/status filters, mark open/closed
+- [x] Sidebar "Feedback Inbox" link (`manage:users` permission, i.e. owner/manager only)
+- [x] Full EN + AR i18n for all new strings (FeedbackWidgetTitle, FeedbackTypeBug, FeedbackTypeFeature, FeedbackSuccess, etc.)
+
+---
+
+## Phase 15 — Commission Mode ✅
+
+**Branch:** `main`
+**Completed:** 2026-06-16
+
+### Delivered
+- [x] `commissionMode: "AUTO" | "MANUAL"` added to `orgSettings` table in schema
+- [x] `convex/orgSettings.ts` — `upsert` accepts `commissionMode`
+- [x] `convex/sales.ts` — `setCommissionAmount` mutation (manage:commissions guard)
+- [x] `settings/commission/page.tsx` — mode selector card at top: AUTO (tier-based) vs MANUAL (per-sale)
+- [x] `commissions/page.tsx` — in MANUAL mode, commission cell shows pencil-edit inline input (owner/manager only, blocked after paid)
+- [x] `hooks/useOrgSettings.ts` — `commissionMode` is readable everywhere via existing hook
+- [x] Full EN + AR i18n (CommissionMode, CommissionModeAuto, CommissionModeManual, EditCommission, etc.)
 
 ---
 
