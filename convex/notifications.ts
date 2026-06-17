@@ -1,21 +1,18 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation } from "./_generated/server";
+import { requireTenantAuth } from "./utils/tenancy";
 
 export const list = query({
   args: {
     orgId: v.id("organizations"),
-    userId: v.id("users"),
   },
   handler: async (ctx, args) => {
-    // Only return notifications for the current user in this org
-    const user = await ctx.auth.getUserIdentity();
-    if (!user) throw new ConvexError("Unauthenticated");
+    // userId is derived from the authenticated identity, never trusted from the client.
+    const { user } = await requireTenantAuth(ctx, args.orgId);
 
-    // Let's assume the user requests their own notifications. We should ideally check the JWT.
-    
     return await ctx.db
       .query("notifications")
-      .withIndex("by_org_user", (q) => q.eq("orgId", args.orgId).eq("userId", args.userId))
+      .withIndex("by_org_user", (q) => q.eq("orgId", args.orgId).eq("userId", user._id))
       .order("desc") // newest first
       .take(50);
   },
@@ -23,9 +20,17 @@ export const list = query({
 
 export const markAsRead = mutation({
   args: {
+    orgId: v.id("organizations"),
     notificationId: v.id("notifications"),
   },
   handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId);
+
+    const notification = await ctx.db.get(args.notificationId);
+    if (!notification || notification.orgId !== args.orgId || notification.userId !== user._id) {
+      throw new ConvexError("Notification not found.");
+    }
+
     await ctx.db.patch(args.notificationId, { isRead: true });
   },
 });
@@ -33,12 +38,13 @@ export const markAsRead = mutation({
 export const markAllAsRead = mutation({
   args: {
     orgId: v.id("organizations"),
-    userId: v.id("users"),
   },
   handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId);
+
     const unread = await ctx.db
       .query("notifications")
-      .withIndex("by_org_user", (q) => q.eq("orgId", args.orgId).eq("userId", args.userId))
+      .withIndex("by_org_user", (q) => q.eq("orgId", args.orgId).eq("userId", user._id))
       .filter((q) => q.eq(q.field("isRead"), false))
       .collect();
 

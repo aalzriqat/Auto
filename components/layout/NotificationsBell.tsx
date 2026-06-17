@@ -15,12 +15,9 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 export function NotificationsBell() {
   const { t, locale } = useLanguage();
   const { activeOrgId } = useOrg();
-  const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
-  const localUserId = myMembership?.userId;
-
   const notifications = useQuery(
     api.notifications.list,
-    activeOrgId && localUserId ? { orgId: activeOrgId, userId: localUserId } : "skip"
+    activeOrgId ? { orgId: activeOrgId } : "skip"
   );
   const markAsRead = useMutation(api.notifications.markAsRead);
   const markAllAsRead = useMutation(api.notifications.markAllAsRead);
@@ -77,17 +74,18 @@ export function NotificationsBell() {
   }, [unreadCount]);
 
   const handleMarkAsRead = async (id: Id<"notifications">) => {
+    if (!activeOrgId) return;
     try {
-      await markAsRead({ notificationId: id });
+      await markAsRead({ orgId: activeOrgId, notificationId: id });
     } catch (e) {
       console.error(e);
     }
   };
 
   const handleMarkAllAsRead = async () => {
-    if (!activeOrgId || !localUserId) return;
+    if (!activeOrgId) return;
     try {
-      await markAllAsRead({ orgId: activeOrgId, userId: localUserId });
+      await markAllAsRead({ orgId: activeOrgId });
       toast.success(t("SaveChanges" as any) || "All notifications marked as read");
     } catch (e) {
       console.error(e);
