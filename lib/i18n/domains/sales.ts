@@ -252,10 +252,7 @@ export const salesEn = {
   Closed: "Closed",
 
   CustomerStatusReqs: "Customer Status Requirements",
-  StatusSalarySlip: "Social Security & Salary Slip",
-  StatusIdOnly: "ID Only",
-  StatusCommercial: "Commercial Register",
-  StatusDelivery: "Delivery Apps",
+  NoCustomerStatusesConfigured: "No customer statuses configured yet — set them up in Finance Settings.",
   SelectStatusFilter: "Select customer status to view available financing companies.",
 
   ProfitRate: "Profit Rate",
@@ -547,6 +544,11 @@ export const salesAr = {
   DocUploaded: "مرفوع",
   DocVerified: "تم التحقق",
   DocRejected: "مرفوض",
+  PendingDocs: "المستندات المعلقة",
+  UnderReview: "قيد المراجعة",
+  Approved: "مقبول",
+  Rejected: "مرفوض",
+  Closed: "مغلق",
   ViewFile: "عرض الملف",
   Verify: "تحقق",
   Upload: "رفع",
@@ -559,10 +561,7 @@ export const salesAr = {
   UploadFail: "فشل رفع المستند",
 
   CustomerStatusReqs: "متطلبات حالة العميل",
-  StatusSalarySlip: "ضمان وكشف راتب",
-  StatusIdOnly: "هوية",
-  StatusCommercial: "سجل تجاري",
-  StatusDelivery: "تطبيقات توصيل الطلبات",
+  NoCustomerStatusesConfigured: "لم يتم تكوين حالات العميل بعد — قم بإعدادها في إعدادات التمويل.",
   SelectStatusFilter: "حدد حالة العميل لعرض شركات التمويل المتاحة.",
 
   ProfitRate: "نسبة الربح",

@@ -150,12 +150,17 @@ export const commonEn = {
   ResumeDraft: "Resume Draft",
   InProgressDraft: "In-Progress Draft",
   LastSaved: "Last saved",
+  Discard: "Discard",
+  DraftDiscarded: "Draft discarded",
+  FailedToDiscard: "Failed to discard draft",
 
   // Pending Deals (approval wait)
   PendingDeals: "Pending Deals",
   AwaitingApproval: "Awaiting Approval",
   ResumeDeal: "Resume Deal",
   RequestedProfit: "Requested profit",
+  ApprovalCancelled: "Deal request cancelled",
+  FailedToCancelApproval: "Failed to cancel request",
 
   // Import dialogs
   ImportVehiclesTitle: "Import Vehicles from Excel / CSV",
@@ -169,6 +174,13 @@ export const commonEn = {
   ImportErrors: "errors",
   RowsHaveErrors: "row(s) have errors and will be skipped. Fix them in your spreadsheet and re-upload, or proceed to import only the valid rows.",
   ImportingEllipsis: "Importing…",
+  MapColumnsDesc: "Tell us what each column in your file means — we've pre-filled our best guess.",
+  ColumnInYourFile: "Column in your file",
+  SampleValue: "Sample value",
+  MapsTo: "Maps to",
+  IgnoreColumn: "Ignore this column",
+  BackToMapping: "Back to column mapping",
+  ContinueToPreview: "Continue",
 
   // Commissions page
   TotalEarned: "Total Earned",
@@ -490,12 +502,17 @@ export const commonAr = {
   ResumeDraft: "استئناف المسودة",
   InProgressDraft: "مسودة قيد التنفيذ",
   LastSaved: "آخر حفظ",
+  Discard: "تجاهل",
+  DraftDiscarded: "تم تجاهل المسودة",
+  FailedToDiscard: "فشل تجاهل المسودة",
 
   // Pending Deals (approval wait)
   PendingDeals: "الصفقات المعلقة",
   AwaitingApproval: "في انتظار الموافقة",
   ResumeDeal: "استئناف الصفقة",
   RequestedProfit: "الربح المطلوب",
+  ApprovalCancelled: "تم إلغاء طلب الصفقة",
+  FailedToCancelApproval: "فشل إلغاء الطلب",
 
   // Import dialogs
   ImportVehiclesTitle: "استيراد المركبات من Excel / CSV",
@@ -509,6 +526,13 @@ export const commonAr = {
   ImportErrors: "أخطاء",
   RowsHaveErrors: "صف(صفوف) بها أخطاء وسيتم تخطيها. قم بإصلاحها في جدول البيانات وأعد الرفع، أو تابع لاستيراد الصفوف الصحيحة فقط.",
   ImportingEllipsis: "جارٍ الاستيراد...",
+  MapColumnsDesc: "أخبرنا بمعنى كل عمود في ملفك — لقد قمنا بتعبئة أفضل تخمين لدينا.",
+  ColumnInYourFile: "العمود في ملفك",
+  SampleValue: "قيمة نموذجية",
+  MapsTo: "يُطابق",
+  IgnoreColumn: "تجاهل هذا العمود",
+  BackToMapping: "العودة إلى تخطيط الأعمدة",
+  ContinueToPreview: "استمرار",
 
   // Commissions page
   TotalEarned: "إجمالي الأرباح",
