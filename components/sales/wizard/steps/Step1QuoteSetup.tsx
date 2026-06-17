@@ -27,13 +27,6 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { VehicleCostBar } from "../components/VehicleCostBar";
 
-const CUSTOMER_STATUS_OPTIONS = [
-  { id: "salary_slip", labelKey: "StatusSalarySlip" as const },
-  { id: "id_only", labelKey: "StatusIdOnly" as const },
-  { id: "commercial", labelKey: "StatusCommercial" as const },
-  { id: "delivery", labelKey: "StatusDelivery" as const },
-];
-
 export type Step1Values = z.infer<typeof step1Schema>;
 
 // ─────────────────────────────────────────────────────────────
@@ -72,6 +65,11 @@ export default function Step1QuoteSetup({
     );
     setSelectedCompanyId(undefined); // Reset selection when requirements change
   };
+
+  const customerStatusOptions = useQuery(
+    api.orgCustomerStatuses.list,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
+  )?.filter((s) => s.isActive) ?? [];
 
   const availableVehicles = useQuery(
     api.vehicles.listAll,
@@ -306,23 +304,29 @@ export default function Step1QuoteSetup({
             <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
               {t("CustomerStatusReqs")}
             </label>
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
-              {CUSTOMER_STATUS_OPTIONS.map((option) => (
-                <div key={option.id} className="flex items-center gap-2 rounded-md border p-4">
-                  <Checkbox
-                    id={`status-${option.id}`}
-                    checked={customerStatuses.includes(option.id)}
-                    onCheckedChange={() => toggleStatus(option.id)}
-                  />
-                  <label
-                    htmlFor={`status-${option.id}`}
-                    className="font-normal text-sm cursor-pointer select-none leading-none"
-                  >
-                    {t(option.labelKey as any)}
-                  </label>
-                </div>
-              ))}
-            </div>
+            {customerStatusOptions.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                {t("NoCustomerStatusesConfigured" as any) ?? "No customer statuses configured yet — set them up in Finance Settings."}
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4">
+                {customerStatusOptions.map((option) => (
+                  <div key={option._id} className="flex items-center gap-2 rounded-md border p-4">
+                    <Checkbox
+                      id={`status-${option._id}`}
+                      checked={customerStatuses.includes(option._id)}
+                      onCheckedChange={() => toggleStatus(option._id)}
+                    />
+                    <label
+                      htmlFor={`status-${option._id}`}
+                      className="font-normal text-sm cursor-pointer select-none leading-none"
+                    >
+                      {option.label}
+                    </label>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
