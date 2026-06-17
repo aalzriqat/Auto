@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -43,13 +43,18 @@ export function FinanceCompanyDialog({
     includesCommissionInDebt?: boolean;
     maxFinancingLTV?: number;
     isActive: boolean;
+    acceptedStatuses?: string[];
   };
 }) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  
+
   const createCompany = useMutation(api.finance.createCompany);
   const updateCompany = useMutation(api.finance.updateCompany);
+  const customerStatusOptions = useQuery(
+    api.orgCustomerStatuses.list,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
+  ) ?? [];
 
   const [isLoading, setIsLoading] = useState(false);
   const [formData, setFormData] = useState({
@@ -62,7 +67,17 @@ export function FinanceCompanyDialog({
     includesCommissionInDebt: company?.includesCommissionInDebt || false,
     maxFinancingLTV: company?.maxFinancingLTV || 100,
     isActive: company?.isActive ?? true,
+    acceptedStatuses: company?.acceptedStatuses || [],
   });
+
+  const toggleAcceptedStatus = (id: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      acceptedStatuses: prev.acceptedStatuses.includes(id)
+        ? prev.acceptedStatuses.filter((s) => s !== id)
+        : [...prev.acceptedStatuses, id],
+    }));
+  };
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -70,17 +85,21 @@ export function FinanceCompanyDialog({
 
     setIsLoading(true);
     try {
+      const payload = {
+        ...formData,
+        acceptedStatuses: formData.acceptedStatuses as Id<"orgCustomerStatuses">[],
+      };
       if (company) {
         await updateCompany({
           id: company._id,
           orgId: activeOrgId,
-          ...formData,
+          ...payload,
         });
         toast.success(t("CompanyUpdatedSuccess" as any));
       } else {
         await createCompany({
           orgId: activeOrgId,
-          ...formData,
+          ...payload,
         });
         toast.success(t("CompanyCreatedSuccess" as any));
       }
@@ -168,6 +187,34 @@ export function FinanceCompanyDialog({
                 onChange={(e) => setFormData({ ...formData, maxFinancingLTV: parseFloat(e.target.value) || 0 })}
               />
             </div>
+          </div>
+          <div className="grid gap-2">
+            <Label>{t("AcceptedCustomerStatuses" as any)}</Label>
+            <p className="text-xs text-muted-foreground">
+              {t("AcceptedCustomerStatusesHelp" as any)}
+            </p>
+            {customerStatusOptions.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                {t("NoCustomerStatusesConfigured" as any) ?? "No customer statuses configured yet — add some below."}
+              </p>
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                {customerStatusOptions.map((option) => (
+                  <div key={option._id} className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id={`accepted-status-${option._id}`}
+                      className="w-4 h-4"
+                      checked={formData.acceptedStatuses.includes(option._id)}
+                      onChange={() => toggleAcceptedStatus(option._id)}
+                    />
+                    <Label htmlFor={`accepted-status-${option._id}`} className="font-normal">
+                      {option.label}
+                    </Label>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           <div className="flex flex-col gap-3 pt-2">
             <div className="flex items-center gap-2">

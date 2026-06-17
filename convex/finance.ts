@@ -29,6 +29,7 @@ export const createCompany = mutation({
     includesCommissionInDebt: v.optional(v.boolean()),
     maxFinancingLTV: v.optional(v.number()),
     isActive: v.boolean(),
+    acceptedStatuses: v.optional(v.array(v.id("orgCustomerStatuses"))),
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_SETTINGS]);
@@ -52,6 +53,7 @@ export const updateCompany = mutation({
     includesCommissionInDebt: v.optional(v.boolean()),
     maxFinancingLTV: v.optional(v.number()),
     isActive: v.boolean(),
+    acceptedStatuses: v.optional(v.array(v.id("orgCustomerStatuses"))),
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_SETTINGS]);

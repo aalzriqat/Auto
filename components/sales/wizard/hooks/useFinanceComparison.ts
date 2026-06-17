@@ -91,35 +91,14 @@ export function useFinanceComparison({
       return [];
     }
 
-    // Allowed companies based on rules
-    const STATUS_RULES: Record<string, string[]> = {
-      "salary_slip": ["دار التمويل", "تمكين", "الكوثر", "السماحة"],
-      "id_only": ["المتخصصة", "بندار"],
-      "commercial": ["دار التمويل", "تمكين", "الكوثر", "السماحة"],
-      "delivery": ["السماحة", "دار التمويل"],
-    };
-
-    // Get union of all allowed companies for the selected statuses
-    const allowedTargetNames = new Set<string>();
-    for (const status of customerStatuses) {
-      if (STATUS_RULES[status]) {
-        STATUS_RULES[status].forEach(name => allowedTargetNames.add(name));
-      }
-    }
-
-    // If they selected something, only allow companies that match the allowed targets
-    if (allowedTargetNames.size > 0) {
-      activeCompanies = activeCompanies.filter(company => {
-        let matched = false;
-        for (const target of allowedTargetNames) {
-          if (company.name.includes(target)) {
-            matched = true;
-            break;
-          }
-        }
-        return matched;
-      });
-    }
+    // Each company opts into which customer statuses it accepts via its
+    // `acceptedStatuses` setting (configured in Finance Settings). No
+    // restriction configured (undefined/empty) means it accepts all.
+    activeCompanies = activeCompanies.filter((company) => {
+      const accepted = company.acceptedStatuses;
+      if (!accepted || accepted.length === 0) return true;
+      return customerStatuses.some((s) => accepted.includes(s as Id<"orgCustomerStatuses">));
+    });
 
     return activeCompanies.map((company) => {
       const result = calculateUnifiedMurabaha({

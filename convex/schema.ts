@@ -367,6 +367,7 @@ export default defineSchema({
     includesCommissionInDebt: v.optional(v.boolean()),
     maxFinancingLTV: v.optional(v.number()), // e.g. 85 for 85% Loan-to-Value
     isActive: v.boolean(),
+    acceptedStatuses: v.optional(v.array(v.id("orgCustomerStatuses"))), // undefined/empty = accepts all
   }).index("by_org", ["orgId"]),
 
   vehicleValuations: defineTable({
@@ -650,6 +651,23 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_org_key", ["orgId", "stageKey"]),
+
+  orgImportMappings: defineTable({
+    orgId: v.id("organizations"),
+    entityType: v.union(v.literal("vehicle"), v.literal("customer")),
+    mapping: v.array(v.object({
+      sourceHeader: v.string(), // normalized header text from the dealer's file
+      targetField: v.string(), // schema field key, e.g. "make" / "vin"
+    })),
+    updatedAt: v.number(),
+  }).index("by_org_entity", ["orgId", "entityType"]),
+
+  orgCustomerStatuses: defineTable({
+    orgId: v.id("organizations"),
+    label: v.string(),
+    isActive: v.boolean(),
+    order: v.number(),
+  }).index("by_org", ["orgId"]),
 
   profitApprovalRequests: defineTable({
     orgId: v.id("organizations"),

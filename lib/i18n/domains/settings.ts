@@ -189,6 +189,8 @@ export const settingsEn = {
   AnErrorOccurred: "An error occurred",
   MaxFinancingLTV: "Max Financing LTV (%)",
   CapitalizesCommissionIntoDebt: "Capitalizes Commission into Debt",
+  AcceptedCustomerStatuses: "Accepted Customer Statuses",
+  AcceptedCustomerStatusesHelp: "Leave all unchecked to accept every customer status.",
   DocumentNameRequired: "Document name is required",
   RuleAddedSuccess: "Rule added successfully",
   RuleAddFail: "Failed to add rule",
@@ -295,6 +297,21 @@ export const settingsEn = {
   DefaultSourcesLoaded: "Default lead sources loaded.",
   DefaultSourcesLoadFail: "Failed to seed lead sources.",
   ReorderFail: "Failed to reorder.",
+
+  // Customer Statuses card (Finance Settings)
+  CustomerStatusesCardTitle: "Customer Statuses",
+  CustomerStatusesCardDesc: "Manage the customer-status options used in the Sales Wizard and for finance-company eligibility.",
+  AddStatus: "Add Status",
+  StatusLabelPlaceholder: "Status label...",
+  NoCustomerStatusesYet: "No customer statuses yet. Click \"Load Defaults\" or add one manually.",
+  CustomerStatusAdded: "Customer status added.",
+  CustomerStatusAddFail: "Failed to add customer status.",
+  CustomerStatusDeleted: "Customer status deleted.",
+  CustomerStatusDeleteFail: "Failed to delete customer status.",
+  CustomerStatusUpdateFail: "Failed to update customer status.",
+  CustomerStatusDeleteConfirm: "Delete this customer status?",
+  DefaultStatusesLoaded: "Default customer statuses loaded.",
+  DefaultStatusesLoadFail: "Failed to seed customer statuses.",
 
   // Pipeline Stages page
   PipelineStagesPage: "Pipeline Stages",
@@ -519,6 +536,8 @@ export const settingsAr = {
   AnErrorOccurred: "حدث خطأ",
   MaxFinancingLTV: "الحد الأقصى للتمويل LTV (%)",
   CapitalizesCommissionIntoDebt: "تضاف العمولة إلى الدين",
+  AcceptedCustomerStatuses: "حالات العميل المقبولة",
+  AcceptedCustomerStatusesHelp: "اترك الكل غير محدد لقبول جميع حالات العميل.",
   DocumentNameRequired: "اسم المستند مطلوب",
   RuleAddedSuccess: "تمت إضافة الشرط بنجاح",
   RuleAddFail: "فشل في إضافة الشرط",
@@ -625,6 +644,21 @@ export const settingsAr = {
   DefaultSourcesLoaded: "تم تحميل المصادر الافتراضية.",
   DefaultSourcesLoadFail: "فشل في تحميل المصادر الافتراضية.",
   ReorderFail: "فشل في إعادة الترتيب.",
+
+  // Customer Statuses card (Finance Settings)
+  CustomerStatusesCardTitle: "حالات العميل",
+  CustomerStatusesCardDesc: "إدارة خيارات حالة العميل المستخدمة في معالج المبيعات وأهلية شركات التمويل.",
+  AddStatus: "إضافة حالة",
+  StatusLabelPlaceholder: "اسم الحالة...",
+  NoCustomerStatusesYet: "لا توجد حالات عميل بعد. انقر على \"تحميل الافتراضيات\" أو أضف واحدة يدوياً.",
+  CustomerStatusAdded: "تمت إضافة حالة العميل.",
+  CustomerStatusAddFail: "فشل في إضافة حالة العميل.",
+  CustomerStatusDeleted: "تم حذف حالة العميل.",
+  CustomerStatusDeleteFail: "فشل في حذف حالة العميل.",
+  CustomerStatusUpdateFail: "فشل في تحديث حالة العميل.",
+  CustomerStatusDeleteConfirm: "هل تريد حذف حالة العميل هذه؟",
+  DefaultStatusesLoaded: "تم تحميل حالات العميل الافتراضية.",
+  DefaultStatusesLoadFail: "فشل في تحميل حالات العميل الافتراضية.",
 
   // Pipeline Stages page
   PipelineStagesPage: "مراحل خط الأنابيب",
