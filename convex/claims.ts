@@ -32,6 +32,14 @@ export const add = mutation({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+
+    if (args.saleId) {
+      const sale = await ctx.db.get(args.saleId);
+      if (!sale || sale.orgId !== args.orgId) {
+        throw new ConvexError("Sale not found in this organization.");
+      }
+    }
+
     return await ctx.db.insert("claims", {
       orgId: args.orgId,
       claimDate: args.claimDate,
@@ -56,6 +64,11 @@ export const update = mutation({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const { orgId, claimId, ...updates } = args;
 
+    const claim = await ctx.db.get(claimId);
+    if (!claim || claim.orgId !== orgId) {
+      throw new ConvexError("Claim not found in this organization.");
+    }
+
     const cleanedUpdates = Object.fromEntries(
       Object.entries(updates).filter(([_, v]) => v !== undefined)
     );
@@ -72,6 +85,10 @@ export const remove = mutation({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const claim = await ctx.db.get(args.claimId);
+    if (!claim || claim.orgId !== args.orgId) {
+      throw new ConvexError("Claim not found in this organization.");
+    }
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new ConvexError("Unauthenticated");
     await ctx.db.patch(args.claimId, {

@@ -87,3 +87,32 @@ jobs:
 
     - name: Lint
       run: pnpm lint
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Use Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm install -g pnpm && pnpm install
+
+    # Non-blocking for now: there are pre-existing advisories in transitive
+    # deps (vite>esbuild, convex>ws, next>postcss, sentry>opentelemetry) that
+    # need a deliberate upgrade pass, not a CI failure on every push. Once
+    # those are cleared, remove `continue-on-error` to make this a real gate.
+    - name: pnpm audit
+      run: pnpm audit --audit-level high
+      continue-on-error: true
+
+    - name: Audit summary
+      if: always()
+      run: |
+        echo "## Dependency Audit" >> $GITHUB_STEP_SUMMARY
+        pnpm audit --audit-level high >> $GITHUB_STEP_SUMMARY 2>&1 || true

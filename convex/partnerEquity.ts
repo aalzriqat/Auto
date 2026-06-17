@@ -52,6 +52,11 @@ export const update = mutation({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const { orgId, equityId, ...updates } = args;
 
+    const equity = await ctx.db.get(equityId);
+    if (!equity || equity.orgId !== orgId) {
+      throw new ConvexError("Partner equity record not found in this organization.");
+    }
+
     // Clean up undefined optional values
     const cleanedUpdates = Object.fromEntries(
       Object.entries(updates).filter(([_, v]) => v !== undefined)
@@ -69,6 +74,10 @@ export const remove = mutation({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const equity = await ctx.db.get(args.equityId);
+    if (!equity || equity.orgId !== args.orgId) {
+      throw new ConvexError("Partner equity record not found in this organization.");
+    }
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new ConvexError("Unauthenticated");
     await ctx.db.patch(args.equityId, {

@@ -1,8 +1,9 @@
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { rateLimiter } from "./rateLimit";
 
 export const getSalesAndProfitReport = query({
   args: {
@@ -12,6 +13,11 @@ export const getSalesAndProfitReport = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
+
+    const rateStatus = await rateLimiter.check(ctx, "heavyRead");
+    if (!rateStatus.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
+    }
 
     // Use index range — avoids collecting ALL org sales
     const salesInDateRange = await ctx.db
@@ -89,6 +95,11 @@ export const getInventoryReport = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
 
+    const rateStatus = await rateLimiter.check(ctx, "heavyRead");
+    if (!rateStatus.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
+    }
+
     // Fetch AVAILABLE and RESERVED vehicles via index — avoids scanning sold/archived
     const [availableVehicles, reservedVehicles] = await Promise.all([
       ctx.db
@@ -158,6 +169,11 @@ export const getExpensesReport = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
 
+    const rateStatus = await rateLimiter.check(ctx, "heavyRead");
+    if (!rateStatus.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
+    }
+
     // Use index range — avoids collecting ALL org expenses
     const expensesInDateRange = await ctx.db
       .query("expenses")
@@ -208,6 +224,11 @@ export const getSalespersonPerformance = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
+
+    const rateStatus = await rateLimiter.check(ctx, "heavyRead");
+    if (!rateStatus.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
+    }
 
     // Use index range — avoids collecting ALL org sales
     const salesInDateRange = await ctx.db
@@ -294,6 +315,11 @@ export const getLeadConversionReport = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
 
+    const rateStatus = await rateLimiter.check(ctx, "heavyRead");
+    if (!rateStatus.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
+    }
+
     // No _creationTime index — cap at 10 000 rows and filter in memory
     const allLeads = await ctx.db
       .query("leads")
@@ -359,6 +385,11 @@ export const getProfitAndLoss = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_REPORTS]);
+
+    const rateStatus = await rateLimiter.check(ctx, "heavyRead");
+    if (!rateStatus.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
+    }
 
     // Use index range — avoids collecting ALL org transactions
     const txInDateRange = await ctx.db

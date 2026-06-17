@@ -5,13 +5,23 @@ import { internal } from "./_generated/api";
 import { Webhook } from "svix";
 import { Id } from "./_generated/dataModel";
 import { getValidatedEnv } from "./utils/env";
+import { rateLimiter } from "./rateLimit";
 
 const http = httpRouter();
+
+function clientIp(request: Request): string {
+  return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+}
 
 http.route({
   path: "/clerk-webhook",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
+    const limitStatus = await rateLimiter.limit(ctx, "webhook", { key: clientIp(request) });
+    if (!limitStatus.ok) {
+      return new Response("Too many requests", { status: 429 });
+    }
+
     let webhookSecret: string;
     try {
       const env = getValidatedEnv();
@@ -105,6 +115,11 @@ http.route({
       return new Response("Bad request", { status: 400 });
     }
 
+    const limitStatus = await rateLimiter.limit(ctx, "webhook", { key: orgId });
+    if (!limitStatus.ok) {
+      return new Response("Too many requests", { status: 429 });
+    }
+
     const settings = await ctx.runQuery(internal.whatsapp.getSettingsByOrg, { orgId });
     if (!settings?.whatsappWebhookSecret || settings.whatsappWebhookSecret !== token) {
       return new Response("Forbidden", { status: 403 });
@@ -121,6 +136,11 @@ http.route({
     const url = new URL(request.url);
     const orgId = url.searchParams.get("orgId") as Id<"organizations"> | null;
     if (!orgId) return new Response("Bad request", { status: 400 });
+
+    const limitStatus = await rateLimiter.limit(ctx, "webhook", { key: orgId });
+    if (!limitStatus.ok) {
+      return new Response("Too many requests", { status: 429 });
+    }
 
     let body: any;
     try {

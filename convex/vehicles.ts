@@ -482,6 +482,9 @@ export const deleteImage = mutation({
     if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
       throw new ConvexError("Vehicle not found in this organization.");
     }
+    if (!(vehicle.imageIds ?? []).includes(args.storageId)) {
+      throw new ConvexError("Image not found on this vehicle.");
+    }
 
     // Delete from storage
     await ctx.storage.delete(args.storageId);

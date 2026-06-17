@@ -52,6 +52,20 @@ export const add = mutation({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+
+    if (args.vehicleId) {
+      const vehicle = await ctx.db.get(args.vehicleId);
+      if (!vehicle || vehicle.orgId !== args.orgId) {
+        throw new ConvexError("Vehicle not found in this organization.");
+      }
+    }
+    if (args.expenseId) {
+      const expense = await ctx.db.get(args.expenseId);
+      if (!expense || expense.orgId !== args.orgId) {
+        throw new ConvexError("Expense not found in this organization.");
+      }
+    }
+
     return await ctx.db.insert("transactions", {
       orgId: args.orgId,
       type: args.type,
@@ -94,6 +108,19 @@ export const update = mutation({
       throw new ConvexError("Transaction not found in this organization.");
     }
 
+    if (updates.vehicleId) {
+      const vehicle = await ctx.db.get(updates.vehicleId);
+      if (!vehicle || vehicle.orgId !== orgId) {
+        throw new ConvexError("Vehicle not found in this organization.");
+      }
+    }
+    if (updates.expenseId) {
+      const expense = await ctx.db.get(updates.expenseId);
+      if (!expense || expense.orgId !== orgId) {
+        throw new ConvexError("Expense not found in this organization.");
+      }
+    }
+
     // Clean up undefined optional values
     const cleanedUpdates = Object.fromEntries(
       Object.entries(updates).filter(([_, v]) => v !== undefined)
@@ -111,6 +138,10 @@ export const remove = mutation({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const transaction = await ctx.db.get(args.transactionId);
+    if (!transaction || transaction.orgId !== args.orgId) {
+      throw new ConvexError("Transaction not found in this organization.");
+    }
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new ConvexError("Unauthenticated");
     await ctx.db.patch(args.transactionId, {
