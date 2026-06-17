@@ -56,7 +56,7 @@ export const add = mutation({
       args.orgId,
       "Guarantor Added",
       `${actorName} added a guarantor for ${customer.firstName} ${customer.lastName}`,
-      `/customers?highlightId=${args.customerId}`
+      `/${args.orgId}/customers?highlightId=${args.customerId}`
     );
 
     return id;

@@ -131,7 +131,7 @@ export const create = mutation({
       args.orgId,
       "New Customer Added",
       `${actorName} added a new customer: ${args.firstName.trim()} ${args.lastName.trim()}`,
-      `/customers?highlightId=${id}`
+      `/${args.orgId}/customers?highlightId=${id}`
     );
 
     return id;
@@ -221,7 +221,7 @@ export const update = mutation({
         args.orgId,
         "Customer Updated",
         `${actorName} updated details for ${customer.firstName} ${customer.lastName}`,
-        `/customers?highlightId=${args.customerId}`
+        `/${args.orgId}/customers?highlightId=${args.customerId}`
       );
     }
   },

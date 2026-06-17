@@ -41,7 +41,7 @@ export const triggerAlarms = internalMutation({
           title: "Upcoming Task",
           message: `Your task "${task.title}" is scheduled for ${new Date(task.dueDate).toLocaleTimeString()}`,
           isRead: false,
-          link: "/tasks",
+          link: `/${task.orgId}/tasks`,
           relatedTaskId: task._id,
         });
 

@@ -167,7 +167,7 @@ export const create = mutation({
       args.orgId,
       "New Expense Added",
       `${actorName} added a new expense: ${args.title} ($${args.amount})`,
-      `/expenses?highlightId=${id}`
+      `/${args.orgId}/expenses?highlightId=${id}`
     );
 
     return id;
@@ -248,7 +248,7 @@ export const update = mutation({
         args.orgId,
         "Expense Updated",
         `${actorName} updated an expense record.`,
-        `/expenses?highlightId=${args.expenseId}`
+        `/${args.orgId}/expenses?highlightId=${args.expenseId}`
       );
     }
   },

@@ -43,7 +43,7 @@ export const requestCreate = mutation({
       args.orgId,
       "Vehicle Creation Request",
       `${actorName} requested to add a new vehicle (${args.payload.year} ${args.payload.make} ${args.payload.model}).`,
-      `/vehicles?approvals=true`
+      `/${args.orgId}/vehicles?approvals=true`
     );
 
     return requestId;
@@ -118,7 +118,7 @@ export const requestUpdate = mutation({
       args.orgId,
       "Vehicle Update Request",
       `${actorName} requested to update details for the ${vehicle.year} ${vehicle.make} ${vehicle.model}.`,
-      `/vehicles?approvals=true`
+      `/${args.orgId}/vehicles?approvals=true`
     );
 
     return requestId;

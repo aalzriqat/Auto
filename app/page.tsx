@@ -4,28 +4,39 @@ import Link from "next/link";
 import Image from "next/image";
 import { useState, useRef, useEffect } from "react";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { 
-  ArrowLeft, 
-  ArrowRight, 
-  Sparkles, 
-  Fingerprint, 
-  Activity, 
-  Zap, 
-  Calculator, 
-  TrendingUp, 
-  Clock, 
-  ShieldCheck, 
-  Check, 
-  Workflow, 
-  Building2, 
-  Users, 
-  Menu, 
-  X, 
+import {
+  ArrowLeft,
+  ArrowRight,
+  Sparkles,
+  Fingerprint,
+  Activity,
+  Zap,
+  Calculator,
+  TrendingUp,
+  Clock,
+  ShieldCheck,
+  Check,
+  Workflow,
+  Building2,
+  Users,
+  Menu,
+  X,
   Calendar,
   Layers,
   ChevronRight,
   TrendingDown,
-  Globe
+  Globe,
+  BarChart3,
+  PieChart,
+  GitBranch,
+  SlidersHorizontal,
+  KeyRound,
+  Receipt,
+  Languages,
+  ClipboardCheck,
+  UploadCloud,
+  Wallet,
+  ListChecks
 } from "lucide-react";
 import { motion, AnimatePresence, useScroll, useTransform, useMotionValue, useSpring } from "framer-motion";
 
@@ -34,6 +45,7 @@ interface LocalCopy {
   navFeatures: string;
   navCalculator: string;
   navWorkflow: string;
+  navReports: string;
   navPricing: string;
   navLogin: string;
   navStart: string;
@@ -86,6 +98,14 @@ interface LocalCopy {
   footerRights: string;
   footerPrivacy: string;
   footerTerms: string;
+  platformTitle: string;
+  platformSub: string;
+  rolesTitle: string;
+  rolesSub: string;
+  analyticsTitle: string;
+  analyticsSub: string;
+  opsTitle: string;
+  opsSub: string;
 }
 
 const copy: Record<"en" | "ar", LocalCopy> = {
@@ -93,6 +113,7 @@ const copy: Record<"en" | "ar", LocalCopy> = {
     navFeatures: "Features",
     navCalculator: "Financing Calculator",
     navWorkflow: "Deal Flow",
+    navReports: "Reports",
     navPricing: "Pricing",
     navLogin: "Sign In",
     navStart: "Get Started",
@@ -144,12 +165,21 @@ const copy: Record<"en" | "ar", LocalCopy> = {
     faqSub: "Everything you need to know about migrating your showroom operations.",
     footerRights: "AUTOFLOW. All rights reserved.",
     footerPrivacy: "Privacy Policy",
-    footerTerms: "Terms of Service"
+    footerTerms: "Terms of Service",
+    platformTitle: "One Operating System. Every Department.",
+    platformSub: "From the showroom floor to the back office — inventory, CRM, sales, finance, and reporting all live in a single connected workspace.",
+    rolesTitle: "Granular Access For Every Employee",
+    rolesSub: "Five ready-made role templates, fully customizable — give every employee exactly the access they need, nothing more.",
+    analyticsTitle: "Reports That Actually Run Your Business",
+    analyticsSub: "Six built-in report types turn raw transactions into decisions — filter any date range and export what you need.",
+    opsTitle: "Built To Scale With Your Group",
+    opsSub: "Multi-branch operations, secure approval chains, bulk data tools, and a form builder that bends to your workflow — not the other way around."
   },
   ar: {
     navFeatures: "الميزات",
     navCalculator: "حاسبة التمويل",
     navWorkflow: "دورة العمل",
+    navReports: "التقارير",
     navPricing: "الأسعار",
     navLogin: "دخول",
     navStart: "ابدأ الآن",
@@ -201,7 +231,15 @@ const copy: Record<"en" | "ar", LocalCopy> = {
     faqSub: "كل ما تود معرفته عن ترحيل بيانات معرضك ونظام أوتوفلو.",
     footerRights: "أوتوفلو. جميع الحقوق محفوظة.",
     footerPrivacy: "سياسة الخصوصية",
-    footerTerms: "شروط الخدمة"
+    footerTerms: "شروط الخدمة",
+    platformTitle: "نظام تشغيل واحد لكل قسم في معرضك",
+    platformSub: "من صالة العرض إلى المكتب الخلفي، يجمع أوتوفلو المخزون وعلاقات العملاء والمبيعات والمحاسبة والتقارير في مساحة عمل واحدة متصلة.",
+    rolesTitle: "صلاحيات دقيقة لكل موظف",
+    rolesSub: "خمسة قوالب أدوار جاهزة وقابلة للتخصيص الكامل، أعطِ كل موظف الصلاحية التي يحتاجها فقط، لا أكثر ولا أقل.",
+    analyticsTitle: "تقارير تدير أعمالك فعلياً",
+    analyticsSub: "ستة أنواع تقارير جاهزة تحوّل بياناتك الخام إلى قرارات، فلترة أي مدى تاريخي وتصدير ما تحتاجه بسهولة.",
+    opsTitle: "مصمم للنمو مع مجموعتك",
+    opsSub: "عمليات متعددة الفروع، سلاسل اعتماد آمنة، أدوات استيراد جماعية، ومُنشئ حقول مرن يتكيف مع أسلوب عملك."
   }
 };
 
@@ -365,9 +403,6 @@ export default function CreativeMarketingPage() {
   const hoursSavedPerWk = Math.round(monthlySales * 0.85);
   const annualSavingsDollars = Math.round(monthlySales * 38 * 12);
 
-  // --- Widget D: Pricing Card Toggle ---
-  const [billingPeriod, setBillingPeriod] = useState<"monthly" | "annual">("annual");
-
   // --- FAQ State ---
   const [activeFaq, setActiveFaq] = useState<number | null>(null);
   const faqs = [
@@ -388,14 +423,126 @@ export default function CreativeMarketingPage() {
       qAr: "هل يدعم أوتوفلو معارض السيارات ذات الفروع المتعددة؟",
       aEn: "Yes. Our enterprise plan supports granular branch-scoping, permitting salesmen to view local stock while enabling executives to monitor consolidated inventory, sales, and analytics across all regional sites.",
       aAr: "نعم. يدعم أوتوفلو تقسيم الصلاحيات والمخزون للفروع المتعددة. حيث يمكن للموظف رؤية سيارات فرعه المحلي فقط، بينما يستطيع المسؤول العام تتبع كافة الفروع والتقارير المالية المدمجة بكفاءة."
+    },
+    {
+      qEn: "Can we control exactly what each employee sees and does?",
+      qAr: "هل يمكننا التحكم بدقة بما يراه ويفعله كل موظف؟",
+      aEn: "Yes. AutoFlow ships with five role templates (Owner, Manager, Sales, Reception, Accountant) covering the most common dealership structures, and every permission is individually toggleable per role — so you can lock down cost prices, deletions, or financial views exactly the way you want.",
+      aAr: "نعم. يأتي أوتوفلو بخمسة قوالب أدوار جاهزة (مالك، مدير، مبيعات، استقبال، محاسب) تغطي أكثر الهياكل التنظيمية شيوعاً، وكل صلاحية قابلة للتفعيل أو التعطيل بشكل فردي لكل دور، فتستطيع التحكم بدقة في من يرى سعر التكلفة أو يحذف السجلات أو يصل للبيانات المالية."
+    },
+    {
+      qEn: "Is the Arabic interface a real translation or just a mirrored layout?",
+      qAr: "هل واجهة اللغة العربية ترجمة حقيقية أم مجرد انعكاس للتصميم؟",
+      aEn: "It's a genuine right-to-left experience, not a CSS mirror trick. Every screen, form, and report is fully translated and laid out natively for Arabic, and switching languages is instant — no reload, no broken layouts.",
+      aAr: "هي تجربة عربية حقيقية بترتيب من اليمين لليسار، وليست مجرد انعكاس بصري بواسطة CSS. كل شاشة ونموذج وتقرير مترجم بالكامل ومصمم بشكل أصلي للغة العربية، والتبديل بين اللغتين فوري دون إعادة تحميل أو أي خلل في التصميم."
     }
   ];
+
+  // --- Platform module index (all major areas of the product) ---
+  const platformModules = [
+    { icon: Layers, titleEn: "Vehicles & Inventory", titleAr: "المخزون والمركبات" },
+    { icon: Users, titleEn: "CRM & Customers", titleAr: "علاقات العملاء" },
+    { icon: Workflow, titleEn: "Lead Pipeline", titleAr: "متابعة العملاء المحتملين" },
+    { icon: Calculator, titleEn: "Sales Wizard", titleAr: "معالج المبيعات" },
+    { icon: TrendingDown, titleEn: "Expense Tracking", titleAr: "تتبع المصاريف" },
+    { icon: ListChecks, titleEn: "Task Management", titleAr: "إدارة المهام" },
+    { icon: BarChart3, titleEn: "Reports & Analytics", titleAr: "التقارير والتحليلات" },
+    { icon: Receipt, titleEn: "Accounting Ledger", titleAr: "دفتر المحاسبة" },
+    { icon: Wallet, titleEn: "Financing Applications", titleAr: "طلبات التمويل" },
+    { icon: KeyRound, titleEn: "Team & Role Permissions", titleAr: "صلاحيات الفريق" },
+    { icon: ClipboardCheck, titleEn: "Approval Workflows", titleAr: "سلاسل الاعتماد" },
+    { icon: GitBranch, titleEn: "Multi-Branch Operations", titleAr: "إدارة الفروع" },
+    { icon: TrendingUp, titleEn: "Commission Tracking", titleAr: "تتبع العمولات" },
+    { icon: SlidersHorizontal, titleEn: "Custom Fields", titleAr: "حقول مخصصة" },
+    { icon: UploadCloud, titleEn: "Bulk Import / Export", titleAr: "استيراد وتصدير جماعي" },
+    { icon: Languages, titleEn: "Bilingual EN / AR (RTL)", titleAr: "ثنائي اللغة (دعم RTL)" },
+  ];
+
+  // --- Role-based access showcase ---
+  const rolesData = [
+    {
+      icon: Building2,
+      color: "blue",
+      nameEn: "Owner",
+      nameAr: "المالك",
+      taglineEn: "Full control",
+      taglineAr: "تحكم كامل",
+      bulletsEn: ["Every permission, every module", "Manage roles & team members", "Approve below-margin deals", "Full financial visibility"],
+      bulletsAr: ["كل الصلاحيات وكل الوحدات", "إدارة الأدوار وأعضاء الفريق", "اعتماد الصفقات منخفضة الربح", "رؤية مالية كاملة"],
+    },
+    {
+      icon: ShieldCheck,
+      color: "cyan",
+      nameEn: "Manager",
+      nameAr: "المدير",
+      taglineEn: "Runs daily operations",
+      taglineAr: "يدير العمليات اليومية",
+      bulletsEn: ["Manage inventory, sales & team", "Approve or reject deals & expenses", "View cost prices & commissions", "Configure org settings"],
+      bulletsAr: ["إدارة المخزون والمبيعات والفريق", "اعتماد أو رفض الصفقات والمصاريف", "رؤية التكلفة والعمولات", "تعديل إعدادات المؤسسة"],
+    },
+    {
+      icon: Activity,
+      color: "teal",
+      nameEn: "Sales",
+      nameAr: "المبيعات",
+      taglineEn: "Sells, not signs off",
+      taglineAr: "يبيع دون اعتماد مباشر",
+      bulletsEn: ["Build leads & manage customers", "Quote deals — sent for approval", "Views own commission & catalog", "No visibility into cost price"],
+      bulletsAr: ["إنشاء عملاء محتملين وإدارة العملاء", "تقديم عروض الصفقات للاعتماد", "رؤية عمولاته ومخزون السيارات", "بدون رؤية لسعر التكلفة"],
+    },
+    {
+      icon: Calendar,
+      color: "orange",
+      nameEn: "Reception",
+      nameAr: "الاستقبال",
+      taglineEn: "Front-desk scoped",
+      taglineAr: "صلاحيات محدودة بالاستقبال",
+      bulletsEn: ["Register walk-in customers", "Log new leads instantly", "View vehicle test-drive status", "Strictly scoped to front-desk"],
+      bulletsAr: ["تسجيل العملاء الزائرين", "تسجيل عملاء محتملين فوريين", "رؤية حالة تجارب القيادة", "صلاحيات محدودة بالاستقبال فقط"],
+    },
+    {
+      icon: Receipt,
+      color: "amber",
+      nameEn: "Accountant",
+      nameAr: "المحاسب",
+      taglineEn: "Owns the books",
+      taglineAr: "يدير السجلات المالية",
+      bulletsEn: ["Full finance ledger & transactions", "Runs every report type", "Views sales & expense history", "No access to edit inventory"],
+      bulletsAr: ["دفتر الحسابات والمعاملات بالكامل", "تشغيل جميع أنواع التقارير", "رؤية سجل المبيعات والمصاريف", "بدون صلاحية تعديل المخزون"],
+    },
+  ];
+
+  // --- Reports & analytics gallery ---
+  const reportCards = [
+    { icon: BarChart3, titleEn: "Sales & Profit Report", titleAr: "تقرير المبيعات والأرباح", descEn: "Revenue, cost, and margin per sale, for any date range.", descAr: "الإيرادات والتكلفة والهامش لكل صفقة، لأي مدى تاريخي." },
+    { icon: Layers, titleEn: "Inventory Valuation", titleAr: "تقييم المخزون", descEn: "Real-time value of every vehicle in stock, plus sunk expenses.", descAr: "القيمة الفعلية لكل سيارة في المخزون، بالإضافة للمصاريف المرتبطة بها." },
+    { icon: Receipt, titleEn: "Expense Breakdown", titleAr: "تفصيل المصاريف", descEn: "Every cost logged, tagged by vehicle or general overhead.", descAr: "كل مصروف مسجل ومرتبط بسيارة أو بالمصاريف العامة." },
+    { icon: TrendingUp, titleEn: "Salesperson Leaderboard", titleAr: "ترتيب أداء المبيعات", descEn: "Rank your team by revenue and profit generated.", descAr: "ترتيب فريقك حسب الإيرادات والأرباح المحققة." },
+    { icon: Workflow, titleEn: "Lead Conversion Funnel", titleAr: "قمع تحويل العملاء المحتملين", descEn: "Stage-by-stage conversion rates, by salesperson.", descAr: "نسب التحويل في كل مرحلة، لكل موظف مبيعات." },
+    { icon: PieChart, titleEn: "Profit & Loss Statement", titleAr: "بيان الأرباح والخسائر", descEn: "Revenue, COGS, operating expenses, net profit — at a glance.", descAr: "الإيرادات وتكلفة البضاعة والمصاريف التشغيلية وصافي الربح في شاشة واحدة." },
+  ];
+
+  // --- Operations row: branches, approvals, import/export, custom fields ---
+  const opsFeatures = [
+    { icon: GitBranch, titleEn: "Multi-Branch Operations", titleAr: "إدارة متعددة الفروع", descEn: "Scope inventory and staff per branch while executives see consolidated totals across every location.", descAr: "تقسيم المخزون والموظفين لكل فرع، بينما يرى المدراء التنفيذيون الإجمالي الموحد لكل الفروع." },
+    { icon: ClipboardCheck, titleEn: "Approval Workflows", titleAr: "سلاسل الاعتماد", descEn: "Vehicle edits, status changes, and below-margin deals all route to a manager queue before they go live.", descAr: "تعديلات السيارات وتغييرات الحالة والصفقات منخفضة الربح تُرسل تلقائياً لقائمة اعتماد المدير قبل التنفيذ." },
+    { icon: UploadCloud, titleEn: "Bulk Import / Export", titleAr: "استيراد وتصدير جماعي", descEn: "Drop in any spreadsheet — AutoFlow maps your columns automatically and remembers the mapping next time.", descAr: "أدرج أي ملف إكسل، يقوم أوتوفلو بمطابقة الأعمدة تلقائياً ويتذكر الإعداد للمرة القادمة." },
+    { icon: SlidersHorizontal, titleEn: "Custom Fields", titleAr: "حقول مخصصة", descEn: "Add the fields your dealership actually needs to vehicle and lead forms — no developer required.", descAr: "أضف الحقول التي يحتاجها معرضك فعلياً لنماذج السيارات والعملاء المحتملين، دون الحاجة لمطور." },
+  ];
+
+  const roleColorMap: Record<string, { ring: string; bg: string; text: string; glow: string }> = {
+    blue: { ring: "border-blue-500/30", bg: "bg-blue-500/10", text: "text-blue-400", glow: "rgba(59,130,246,0.15)" },
+    cyan: { ring: "border-cyan-500/30", bg: "bg-cyan-500/10", text: "text-cyan-400", glow: "rgba(6,182,212,0.15)" },
+    teal: { ring: "border-teal-500/30", bg: "bg-teal-500/10", text: "text-teal-400", glow: "rgba(20,184,166,0.15)" },
+    orange: { ring: "border-orange-500/30", bg: "bg-orange-500/10", text: "text-orange-400", glow: "rgba(249,115,22,0.15)" },
+    amber: { ring: "border-amber-500/30", bg: "bg-amber-500/10", text: "text-amber-400", glow: "rgba(245,158,11,0.15)" },
+  };
 
   return (
     <div 
       ref={pageContainerRef} 
       onMouseMove={handleGlobalMouseMove}
-      className={`dark relative min-h-screen bg-[#030014] text-white selection:bg-indigo-500/30 overflow-hidden font-sans`}
+      className={`dark relative min-h-screen bg-[#030014] text-white selection:bg-blue-500/30 overflow-hidden font-sans`}
       style={{ direction: isRtl ? "rtl" : "ltr" }}
     >
       
@@ -404,16 +551,16 @@ export default function CreativeMarketingPage() {
       <div 
         className="fixed inset-0 pointer-events-none z-0 transition-opacity duration-500"
         style={{
-          background: `radial-gradient(700px circle at ${mousePos.x}px ${mousePos.y}px, rgba(99, 102, 241, 0.08), transparent 45%)`
+          background: `radial-gradient(700px circle at ${mousePos.x}px ${mousePos.y}px, rgba(59, 130, 246, 0.08), transparent 45%)`
         }}
       />
       {/* 2. Abstract Glowing Vector Grid */}
       <div className="absolute inset-0 bg-[linear-gradient(to_right,#1f29370f_1px,transparent_1px),linear-gradient(to_bottom,#1f29370f_1px,transparent_1px)] bg-[size:4rem_4rem] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)] pointer-events-none z-0" />
       
       {/* 3. Deep Cinematic Nebula Orbs */}
-      <div className="absolute top-[-10%] right-[-5%] w-[45vw] h-[45vw] rounded-full bg-indigo-600/10 blur-[130px] animate-pulse pointer-events-none z-0" style={{ animationDuration: "12s" }} />
+      <div className="absolute top-[-10%] right-[-5%] w-[45vw] h-[45vw] rounded-full bg-blue-600/10 blur-[130px] animate-pulse pointer-events-none z-0" style={{ animationDuration: "12s" }} />
       <div className="absolute bottom-[20%] left-[-10%] w-[50vw] h-[50vw] rounded-full bg-blue-500/5 blur-[150px] pointer-events-none z-0" />
-      <div className="absolute top-[40%] left-[30%] w-[35vw] h-[35vw] rounded-full bg-purple-600/5 blur-[140px] pointer-events-none z-0" />
+      <div className="absolute top-[40%] left-[30%] w-[35vw] h-[35vw] rounded-full bg-orange-600/5 blur-[140px] pointer-events-none z-0" />
 
       {/* Bespoke Header */}
       <header className="fixed top-0 inset-x-0 z-50 w-full bg-[#030014]/40 backdrop-blur-2xl border-b border-white/5 transition-all duration-300">
@@ -424,7 +571,7 @@ export default function CreativeMarketingPage() {
               alt="AutoFlow Logo" 
               width={160} 
               height={50} 
-              className="w-28 h-auto object-contain brightness-0 invert opacity-95 transition-transform duration-500 hover:scale-105" 
+              className="w-28 h-auto object-contain opacity-95 transition-transform duration-500 hover:scale-105"
               priority 
             />
           </Link>
@@ -432,19 +579,19 @@ export default function CreativeMarketingPage() {
           <nav className="hidden lg:flex items-center gap-8 text-xs font-semibold tracking-wider text-white/60 uppercase">
             <a href="#features" className="hover:text-white transition-colors duration-300 relative group py-2">
               {t.navFeatures}
-              <span className="absolute bottom-0 left-0 w-0 h-0.5 bg-indigo-500 group-hover:w-full transition-all duration-300" />
+              <span className="absolute bottom-0 left-0 w-0 h-0.5 bg-blue-500 group-hover:w-full transition-all duration-300" />
             </a>
             <a href="#calculator" className="hover:text-white transition-colors duration-300 relative group py-2">
               {t.navCalculator}
-              <span className="absolute bottom-0 left-0 w-0 h-0.5 bg-indigo-500 group-hover:w-full transition-all duration-300" />
+              <span className="absolute bottom-0 left-0 w-0 h-0.5 bg-blue-500 group-hover:w-full transition-all duration-300" />
             </a>
             <a href="#workflow" className="hover:text-white transition-colors duration-300 relative group py-2">
               {t.navWorkflow}
-              <span className="absolute bottom-0 left-0 w-0 h-0.5 bg-indigo-500 group-hover:w-full transition-all duration-300" />
+              <span className="absolute bottom-0 left-0 w-0 h-0.5 bg-blue-500 group-hover:w-full transition-all duration-300" />
             </a>
-            <a href="#pricing" className="hover:text-white transition-colors duration-300 relative group py-2">
-              {t.navPricing}
-              <span className="absolute bottom-0 left-0 w-0 h-0.5 bg-indigo-500 group-hover:w-full transition-all duration-300" />
+            <a href="#analytics" className="hover:text-white transition-colors duration-300 relative group py-2">
+              {t.navReports}
+              <span className="absolute bottom-0 left-0 w-0 h-0.5 bg-blue-500 group-hover:w-full transition-all duration-300" />
             </a>
           </nav>
 
@@ -463,8 +610,8 @@ export default function CreativeMarketingPage() {
             </Link>
 
             <Link href="/sign-up" className="relative group">
-              <div className="absolute -inset-0.5 bg-gradient-to-r from-indigo-500 to-purple-600 rounded-full blur opacity-40 group-hover:opacity-100 transition duration-700" />
-              <button className="relative px-6 py-2.5 bg-black hover:bg-[#07051a] rounded-full flex items-center gap-2 border border-white/10 group-hover:border-indigo-500/30 transition-colors duration-300 cursor-pointer">
+              <div className="absolute -inset-0.5 bg-gradient-to-r from-blue-500 to-orange-600 rounded-full blur opacity-40 group-hover:opacity-100 transition duration-700" />
+              <button className="relative px-6 py-2.5 bg-black hover:bg-[#07051a] rounded-full flex items-center gap-2 border border-white/10 group-hover:border-blue-500/30 transition-colors duration-300 cursor-pointer">
                 <span className="text-white text-xs font-bold">{t.navStart}</span>
                 {isRtl ? <ArrowLeft className="w-3.5 h-3.5 text-white/70" /> : <ArrowRight className="w-3.5 h-3.5 text-white/70" />}
               </button>
@@ -494,30 +641,30 @@ export default function CreativeMarketingPage() {
             <a 
               href="#features" 
               onClick={() => setMobileMenuOpen(false)}
-              className="py-2.5 text-sm font-semibold hover:text-indigo-400 transition-colors"
+              className="py-2.5 text-sm font-semibold hover:text-blue-400 transition-colors"
             >
               {t.navFeatures}
             </a>
             <a 
               href="#calculator" 
               onClick={() => setMobileMenuOpen(false)}
-              className="py-2.5 text-sm font-semibold hover:text-indigo-400 transition-colors"
+              className="py-2.5 text-sm font-semibold hover:text-blue-400 transition-colors"
             >
               {t.navCalculator}
             </a>
-            <a 
-              href="#workflow" 
+            <a
+              href="#workflow"
               onClick={() => setMobileMenuOpen(false)}
-              className="py-2.5 text-sm font-semibold hover:text-indigo-400 transition-colors"
+              className="py-2.5 text-sm font-semibold hover:text-blue-400 transition-colors"
             >
               {t.navWorkflow}
             </a>
-            <a 
-              href="#pricing" 
+            <a
+              href="#analytics"
               onClick={() => setMobileMenuOpen(false)}
-              className="py-2.5 text-sm font-semibold hover:text-indigo-400 transition-colors"
+              className="py-2.5 text-sm font-semibold hover:text-blue-400 transition-colors"
             >
-              {t.navPricing}
+              {t.navReports}
             </a>
           </motion.div>
         )}
@@ -536,8 +683,8 @@ export default function CreativeMarketingPage() {
               transition={{ duration: 1.2, ease: [0.16, 1, 0.3, 1] }}
               className="inline-flex items-center gap-2.5 px-4 py-1.5 rounded-full bg-white/5 border border-white/10 backdrop-blur-md mb-8"
             >
-              <Sparkles className="w-3.5 h-3.5 text-indigo-400" />
-              <span className="text-[10px] sm:text-xs font-bold tracking-widest text-indigo-200/90">{t.heroBadge}</span>
+              <Sparkles className="w-3.5 h-3.5 text-blue-400" />
+              <span className="text-[10px] sm:text-xs font-bold tracking-widest text-blue-200/90">{t.heroBadge}</span>
             </motion.div>
             
             {/* Split Title Animations */}
@@ -554,7 +701,7 @@ export default function CreativeMarketingPage() {
                 initial={{ opacity: 0, y: 35 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 1, delay: 0.3, ease: [0.16, 1, 0.3, 1] }}
-                className="block text-transparent bg-clip-text bg-gradient-to-r from-indigo-200 via-indigo-400 to-purple-500"
+                className="block text-transparent bg-clip-text bg-gradient-to-r from-blue-200 via-blue-400 to-cyan-400"
               >
                 {t.heroTitle2}
               </motion.span>
@@ -564,7 +711,7 @@ export default function CreativeMarketingPage() {
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ duration: 1.2, delay: 0.5 }}
-              className="text-base sm:text-lg lg:text-xl text-white/50 max-w-2xl mx-auto leading-relaxed font-medium mb-12"
+              className="text-base sm:text-lg lg:text-xl text-white/65 max-w-2xl mx-auto leading-relaxed font-medium mb-12"
             >
               {t.heroSubhead}
             </motion.p>
@@ -577,7 +724,7 @@ export default function CreativeMarketingPage() {
               className="flex flex-col sm:flex-row items-center gap-5 justify-center w-full"
             >
               <Link href="/sign-up" className="relative group w-full sm:w-auto">
-                <div className="absolute -inset-1 bg-gradient-to-r from-indigo-500 to-indigo-600 rounded-full blur opacity-60 group-hover:opacity-100 transition duration-700" />
+                <div className="absolute -inset-1 bg-gradient-to-r from-blue-500 to-blue-600 rounded-full blur opacity-60 group-hover:opacity-100 transition duration-700" />
                 <button className="relative w-full sm:w-auto px-10 py-4.5 bg-white text-black font-bold rounded-full flex items-center justify-center gap-3 hover:bg-white/95 transition-colors cursor-pointer text-sm">
                   <span>{t.heroCTA}</span>
                   {isRtl ? <ArrowLeft className="w-4 h-4" /> : <ArrowRight className="w-4 h-4" />}
@@ -616,7 +763,7 @@ export default function CreativeMarketingPage() {
                   rotateX: springRotateX,
                   rotateY: springRotateY,
                 }}
-                className="relative w-full rounded-2xl md:rounded-3xl border border-white/10 bg-[#090622]/85 shadow-[0_0_120px_rgba(99,102,241,0.15)] overflow-hidden aspect-[16/10] backdrop-blur-3xl transition-shadow duration-700 hover:shadow-[0_0_150px_rgba(99,102,241,0.25)] group"
+                className="relative w-full rounded-2xl md:rounded-3xl border border-white/10 bg-[#090622]/85 shadow-[0_0_120px_rgba(59,130,246,0.15)] overflow-hidden aspect-[16/10] backdrop-blur-3xl transition-shadow duration-700 hover:shadow-[0_0_150px_rgba(59,130,246,0.25)] group"
               >
                 
                 {/* Visual Glass Overlay reflection */}
@@ -629,7 +776,7 @@ export default function CreativeMarketingPage() {
                     <div className="w-3 h-3 rounded-full bg-yellow-500/60" />
                     <div className="w-3 h-3 rounded-full bg-green-500/60" />
                   </div>
-                  <div className="bg-white/5 px-6 py-1 rounded text-[10px] text-white/30 font-semibold tracking-wider w-40 text-center truncate">
+                  <div className="bg-white/5 px-6 py-1 rounded text-[10px] text-white/50 font-semibold tracking-wider w-40 text-center truncate">
                     autoflow.io/dashboard
                   </div>
                   <div className="w-16" />
@@ -646,11 +793,48 @@ export default function CreativeMarketingPage() {
                   />
                   
                   {/* Internal ambient glowing points */}
-                  <div className="absolute top-1/4 left-1/3 w-32 h-32 bg-indigo-500/10 rounded-full blur-3xl" />
-                  <div className="absolute bottom-1/4 right-1/4 w-40 h-40 bg-purple-500/10 rounded-full blur-3xl" />
+                  <div className="absolute top-1/4 left-1/3 w-32 h-32 bg-blue-500/10 rounded-full blur-3xl" />
+                  <div className="absolute bottom-1/4 right-1/4 w-40 h-40 bg-orange-500/10 rounded-full blur-3xl" />
                 </div>
               </motion.div>
             </motion.div>
+          </div>
+        </section>
+
+        {/* Platform Module Index — every department, one glance */}
+        <section id="platform" className="py-20 relative border-t border-white/5 bg-[#030014]">
+          <div className="container mx-auto px-6 max-w-6xl">
+            <div className="text-center mb-14">
+              <h2 className="text-2xl sm:text-4xl font-extrabold text-white mb-3">
+                {t.platformTitle}
+              </h2>
+              <p className="text-sm sm:text-base text-white/60 max-w-2xl mx-auto font-medium leading-relaxed">
+                {t.platformSub}
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+              {platformModules.map((mod, idx) => {
+                const Icon = mod.icon;
+                return (
+                  <motion.div
+                    key={idx}
+                    initial={{ opacity: 0, y: 16 }}
+                    whileInView={{ opacity: 1, y: 0 }}
+                    viewport={{ once: true }}
+                    transition={{ duration: 0.5, delay: idx * 0.03 }}
+                    className="group flex flex-col items-center justify-center gap-2.5 text-center p-4 rounded-2xl bg-white/[0.02] border border-white/5 hover:border-blue-500/30 hover:bg-white/[0.05] transition-all duration-300"
+                  >
+                    <div className="w-10 h-10 rounded-xl bg-blue-500/10 border border-blue-500/10 flex items-center justify-center group-hover:bg-blue-500/20 transition-colors duration-300">
+                      <Icon className="w-4.5 h-4.5 text-blue-400" />
+                    </div>
+                    <span className="text-[10px] sm:text-[11px] font-bold text-white/70 group-hover:text-white leading-tight transition-colors duration-300">
+                      {locale === "ar" ? mod.titleAr : mod.titleEn}
+                    </span>
+                  </motion.div>
+                );
+              })}
+            </div>
           </div>
         </section>
 
@@ -661,7 +845,7 @@ export default function CreativeMarketingPage() {
               <h2 className="text-2xl sm:text-4xl font-extrabold text-white mb-4">
                 {t.bentoTitle}
               </h2>
-              <p className="text-sm sm:text-base text-white/40 max-w-2xl mx-auto font-medium leading-relaxed">
+              <p className="text-sm sm:text-base text-white/60 max-w-2xl mx-auto font-medium leading-relaxed">
                 {t.bentoSub}
               </p>
             </div>
@@ -675,26 +859,26 @@ export default function CreativeMarketingPage() {
                 whileInView={{ opacity: 1, y: 0 }}
                 viewport={{ once: true }}
                 transition={{ duration: 0.8 }}
-                className="md:col-span-2 md:row-span-2 rounded-2xl bg-gradient-to-br from-white/5 to-[#05031b] border border-white/5 p-8 relative overflow-hidden group hover:border-indigo-500/30 transition-all duration-500 flex flex-col justify-between"
+                className="md:col-span-2 md:row-span-2 rounded-2xl bg-gradient-to-br from-white/5 to-[#05031b] border border-white/5 p-8 relative overflow-hidden group hover:border-blue-500/30 transition-all duration-500 flex flex-col justify-between"
               >
                 {/* Floating graphic overlay */}
-                <div className="absolute top-0 right-0 w-80 h-80 bg-indigo-500/[0.02] rounded-full blur-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-700 pointer-events-none" />
+                <div className="absolute top-0 right-0 w-80 h-80 bg-blue-500/[0.02] rounded-full blur-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-700 pointer-events-none" />
                 
                 {/* Interactive Showroom Stock Mini-Widget */}
                 <div className="relative z-10 w-full h-full flex flex-col justify-between gap-6">
                   <div className="flex items-center justify-between">
-                    <div className="w-12 h-12 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center">
-                      <Layers className="w-5 h-5 text-indigo-400" />
+                    <div className="w-12 h-12 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center">
+                      <Layers className="w-5 h-5 text-blue-400" />
                     </div>
-                    <span className="text-[10px] font-bold text-indigo-400/80 uppercase tracking-widest bg-indigo-500/5 px-3 py-1 rounded-full border border-indigo-500/10">Interactive Sandbox</span>
+                    <span className="text-[10px] font-bold text-blue-400/80 uppercase tracking-widest bg-blue-500/5 px-3 py-1 rounded-full border border-blue-500/10">Interactive Sandbox</span>
                   </div>
 
                   {/* Mock Inventory List */}
                   <div className="space-y-2.5 my-4">
                     {[
-                      { name: "Porsche 911 GT3 RS", vin: "WP0AC2A98HS12", status: "Reserved", statusAr: "محجوزة", color: "text-amber-400 bg-amber-400/5 border-amber-400/20", price: locale === "ar" ? "160,000 د.أ" : "160,000 JOD" },
-                      { name: "Mercedes-AMG GT Black Series", vin: "WDDJK9FB2HA04", status: "Available", statusAr: "متوفرة", color: "text-emerald-400 bg-emerald-400/5 border-emerald-400/20", price: locale === "ar" ? "230,000 د.أ" : "230,000 JOD" },
-                      { name: "Ferrari 296 GTB", vin: "ZFF89LHB7KS09", status: "Sold", statusAr: "مباعة", color: "text-indigo-400 bg-indigo-400/5 border-indigo-400/20", price: locale === "ar" ? "225,000 د.أ" : "225,000 JOD" }
+                      { name: "Toyota Land Cruiser GXR", vin: "JTMHV05J504123456", status: "Available", statusAr: "متوفرة", color: "text-emerald-400 bg-emerald-400/5 border-emerald-400/20", price: locale === "ar" ? "47,500 د.أ" : "47,500 JOD" },
+                      { name: "Hyundai Tucson 2024", vin: "KM8J3CAL2RU123456", status: "Reserved", statusAr: "محجوزة", color: "text-amber-400 bg-amber-400/5 border-amber-400/20", price: locale === "ar" ? "28,900 د.أ" : "28,900 JOD" },
+                      { name: "Porsche 911 Carrera S", vin: "WP0AB2A99NS123456", status: "Sold", statusAr: "مباعة", color: "text-blue-400 bg-blue-400/5 border-blue-400/20", price: locale === "ar" ? "165,000 د.أ" : "165,000 JOD" }
                     ].map((car, idx) => (
                       <div 
                         key={idx} 
@@ -702,7 +886,7 @@ export default function CreativeMarketingPage() {
                       >
                         <div className="flex flex-col text-left" style={{ direction: "ltr" }}>
                           <span className="text-xs font-bold text-white/90">{car.name}</span>
-                          <span className="text-[9px] text-white/30 font-semibold mt-0.5">VIN: {car.vin}</span>
+                          <span className="text-[9px] text-white/50 font-semibold mt-0.5">VIN: {car.vin}</span>
                         </div>
                         <div className="flex items-center gap-3">
                           <span className="text-xs font-extrabold text-white/80">{car.price}</span>
@@ -716,7 +900,7 @@ export default function CreativeMarketingPage() {
 
                   <div>
                     <h3 className="text-lg sm:text-xl font-bold text-white mb-2">{t.bentoCard1Title}</h3>
-                    <p className="text-xs sm:text-sm text-white/50 leading-relaxed max-w-xl">{t.bentoCard1Desc}</p>
+                    <p className="text-xs sm:text-sm text-white/65 leading-relaxed max-w-xl">{t.bentoCard1Desc}</p>
                   </div>
                 </div>
               </motion.div>
@@ -730,8 +914,8 @@ export default function CreativeMarketingPage() {
                 className="rounded-2xl bg-[#090622]/85 border border-white/5 p-6 relative overflow-hidden group hover:border-white/20 transition-all duration-500 flex flex-col justify-between"
               >
                 <div className="flex items-center justify-between">
-                  <div className="w-10 h-10 rounded-lg bg-indigo-500/10 flex items-center justify-center">
-                    <Zap className="w-5 h-5 text-indigo-400" />
+                  <div className="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                    <Zap className="w-5 h-5 text-blue-400" />
                   </div>
                   {/* Ping Animation indicator */}
                   <div className="flex items-center gap-1.5 bg-emerald-500/5 px-2.5 py-1 rounded border border-emerald-500/10">
@@ -742,16 +926,16 @@ export default function CreativeMarketingPage() {
                 
                 {/* Ping speedometer mock */}
                 <div className="bg-black/40 rounded-xl p-3 border border-white/5 text-center my-2 select-none" style={{ direction: "ltr" }}>
-                  <div className="text-xs text-white/40 font-bold mb-1">Websocket Latency</div>
-                  <div className="text-2xl font-black text-indigo-400 tracking-tight">
+                  <div className="text-xs text-white/60 font-bold mb-1">Websocket Latency</div>
+                  <div className="text-2xl font-black text-blue-400 tracking-tight">
                     12<span className="text-xs text-white/60 font-semibold ml-0.5">ms</span>
                   </div>
-                  <div className="text-[9px] text-white/20 font-bold mt-1">Convex Reactive Subscriptions</div>
+                  <div className="text-[9px] text-white/40 font-bold mt-1">Convex Reactive Subscriptions</div>
                 </div>
 
                 <div>
                   <h3 className="text-base font-bold text-white mb-1">{t.bentoCard2Title}</h3>
-                  <p className="text-xs text-white/40 leading-relaxed">{t.bentoCard2Desc}</p>
+                  <p className="text-xs text-white/60 leading-relaxed">{t.bentoCard2Desc}</p>
                 </div>
               </motion.div>
 
@@ -764,8 +948,8 @@ export default function CreativeMarketingPage() {
                 className="rounded-2xl bg-[#090622]/85 border border-white/5 p-6 relative overflow-hidden group hover:border-white/20 transition-all duration-500 flex flex-col justify-between"
               >
                 <div className="flex items-center justify-between">
-                  <div className="w-10 h-10 rounded-lg bg-indigo-500/10 flex items-center justify-center">
-                    <ShieldCheck className="w-5 h-5 text-indigo-400" />
+                  <div className="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                    <ShieldCheck className="w-5 h-5 text-blue-400" />
                   </div>
                   <span className="text-[9px] font-bold text-red-400 uppercase tracking-widest bg-red-500/5 px-2 py-0.5 rounded border border-red-500/10">Security Trigger</span>
                 </div>
@@ -781,7 +965,7 @@ export default function CreativeMarketingPage() {
 
                 <div>
                   <h3 className="text-base font-bold text-white mb-1">{t.bentoCard3Title}</h3>
-                  <p className="text-xs text-white/40 leading-relaxed">{t.bentoCard3Desc}</p>
+                  <p className="text-xs text-white/60 leading-relaxed">{t.bentoCard3Desc}</p>
                 </div>
               </motion.div>
 
@@ -793,8 +977,8 @@ export default function CreativeMarketingPage() {
                 transition={{ duration: 0.8, delay: 0.3 }}
                 className="rounded-2xl bg-[#090622]/85 border border-white/5 p-6 relative overflow-hidden group hover:border-white/20 transition-all duration-500 flex flex-col justify-between md:col-span-1"
               >
-                <div className="w-10 h-10 rounded-lg bg-indigo-500/10 flex items-center justify-center">
-                  <Users className="w-5 h-5 text-indigo-400" />
+                <div className="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                  <Users className="w-5 h-5 text-blue-400" />
                 </div>
                 
                 {/* Customer tags list mock */}
@@ -808,10 +992,63 @@ export default function CreativeMarketingPage() {
 
                 <div>
                   <h3 className="text-base font-bold text-white mb-1">{t.bentoCard4Title}</h3>
-                  <p className="text-xs text-white/40 leading-relaxed">{t.bentoCard4Desc}</p>
+                  <p className="text-xs text-white/60 leading-relaxed">{t.bentoCard4Desc}</p>
                 </div>
               </motion.div>
 
+            </div>
+          </div>
+        </section>
+
+        {/* Role-Based Access Showcase */}
+        <section id="roles" className="py-24 relative border-t border-white/5 bg-[#030014]">
+          <div className="container mx-auto px-6 max-w-6xl">
+            <div className="text-center mb-16">
+              <h2 className="text-2xl sm:text-4xl font-extrabold text-white mb-3">
+                {t.rolesTitle}
+              </h2>
+              <p className="text-sm sm:text-base text-white/60 max-w-2xl mx-auto font-medium leading-relaxed">
+                {t.rolesSub}
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-5">
+              {rolesData.map((role, idx) => {
+                const Icon = role.icon;
+                const colors = roleColorMap[role.color];
+                return (
+                  <motion.div
+                    key={idx}
+                    initial={{ opacity: 0, y: 24 }}
+                    whileInView={{ opacity: 1, y: 0 }}
+                    viewport={{ once: true }}
+                    transition={{ duration: 0.6, delay: idx * 0.08 }}
+                    className={`relative rounded-2xl border ${colors.ring} bg-white/[0.02] p-6 flex flex-col gap-4 hover:bg-white/[0.04] transition-all duration-500 group`}
+                  >
+                    <div
+                      className="absolute -top-10 -right-10 w-32 h-32 rounded-full blur-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-700 pointer-events-none"
+                      style={{ backgroundColor: colors.glow }}
+                    />
+                    <div className={`w-11 h-11 rounded-xl ${colors.bg} flex items-center justify-center relative z-10`}>
+                      <Icon className={`w-5 h-5 ${colors.text}`} />
+                    </div>
+                    <div className="relative z-10">
+                      <h3 className="text-base font-extrabold text-white">{locale === "ar" ? role.nameAr : role.nameEn}</h3>
+                      <span className={`text-[10px] font-bold uppercase tracking-wide ${colors.text}`}>
+                        {locale === "ar" ? role.taglineAr : role.taglineEn}
+                      </span>
+                    </div>
+                    <ul className="space-y-2 relative z-10">
+                      {(locale === "ar" ? role.bulletsAr : role.bulletsEn).map((bullet, i) => (
+                        <li key={i} className="flex items-start gap-2 text-[11px] text-white/55 leading-snug font-medium">
+                          <Check className={`w-3 h-3 mt-0.5 shrink-0 ${colors.text}`} />
+                          <span>{bullet}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </motion.div>
+                );
+              })}
             </div>
           </div>
         </section>
@@ -824,7 +1061,7 @@ export default function CreativeMarketingPage() {
               <h2 className="text-2xl sm:text-4xl font-extrabold text-white mb-3">
                 {t.calcTitle}
               </h2>
-              <p className="text-sm sm:text-base text-white/40 max-w-xl mx-auto font-medium">
+              <p className="text-sm sm:text-base text-white/60 max-w-xl mx-auto font-medium">
                 {t.calcSub}
               </p>
             </div>
@@ -839,7 +1076,7 @@ export default function CreativeMarketingPage() {
                 <div className="space-y-3">
                   <div className="flex justify-between items-center text-sm">
                     <span className="font-bold text-white/75">{t.calcVal}</span>
-                    <span className="font-black text-indigo-400 text-lg" style={{ direction: "ltr" }}>
+                    <span className="font-black text-blue-400 text-lg" style={{ direction: "ltr" }}>
                       {carPrice.toLocaleString()} {locale === "ar" ? "د.أ" : "JOD"}
                     </span>
                   </div>
@@ -850,9 +1087,9 @@ export default function CreativeMarketingPage() {
                     step="5000"
                     value={carPrice}
                     onChange={(e) => setCarPrice(Number(e.target.value))}
-                    className="w-full accent-indigo-500 h-1.5 bg-white/5 rounded-lg cursor-pointer"
+                    className="w-full accent-blue-500 h-1.5 bg-white/5 rounded-lg cursor-pointer"
                   />
-                  <div className="flex justify-between text-[10px] text-white/20 font-bold" style={{ direction: "ltr" }}>
+                  <div className="flex justify-between text-[10px] text-white/40 font-bold" style={{ direction: "ltr" }}>
                     <span>15,000 JOD</span>
                     <span>250,000 JOD</span>
                   </div>
@@ -862,7 +1099,7 @@ export default function CreativeMarketingPage() {
                 <div className="space-y-3">
                   <div className="flex justify-between items-center text-sm">
                     <span className="font-bold text-white/75">{t.calcDown}</span>
-                    <span className="font-black text-indigo-400 text-lg" style={{ direction: "ltr" }}>
+                    <span className="font-black text-blue-400 text-lg" style={{ direction: "ltr" }}>
                       {downPayment.toLocaleString()} {locale === "ar" ? "د.أ" : "JOD"}
                     </span>
                   </div>
@@ -873,9 +1110,9 @@ export default function CreativeMarketingPage() {
                     step="2000"
                     value={downPayment}
                     onChange={(e) => setDownPayment(Number(e.target.value))}
-                    className="w-full accent-indigo-500 h-1.5 bg-white/5 rounded-lg cursor-pointer"
+                    className="w-full accent-blue-500 h-1.5 bg-white/5 rounded-lg cursor-pointer"
                   />
-                  <div className="flex justify-between text-[10px] text-white/20 font-bold" style={{ direction: "ltr" }}>
+                  <div className="flex justify-between text-[10px] text-white/40 font-bold" style={{ direction: "ltr" }}>
                     <span>0 JOD</span>
                     <span>Max ({carPrice ? `${carPrice.toLocaleString()} JOD` : ""})</span>
                   </div>
@@ -885,7 +1122,7 @@ export default function CreativeMarketingPage() {
                 <div className="space-y-3">
                   <div className="flex justify-between items-center text-sm">
                     <span className="font-bold text-white/75">{t.calcRate}</span>
-                    <span className="font-black text-indigo-400 text-lg" style={{ direction: "ltr" }}>
+                    <span className="font-black text-blue-400 text-lg" style={{ direction: "ltr" }}>
                       {apr.toFixed(1)}%
                     </span>
                   </div>
@@ -896,9 +1133,9 @@ export default function CreativeMarketingPage() {
                     step="0.1"
                     value={apr}
                     onChange={(e) => setApr(Number(e.target.value))}
-                    className="w-full accent-indigo-500 h-1.5 bg-white/5 rounded-lg cursor-pointer"
+                    className="w-full accent-blue-500 h-1.5 bg-white/5 rounded-lg cursor-pointer"
                   />
-                  <div className="flex justify-between text-[10px] text-white/20 font-bold" style={{ direction: "ltr" }}>
+                  <div className="flex justify-between text-[10px] text-white/40 font-bold" style={{ direction: "ltr" }}>
                     <span>1.9%</span>
                     <span>17.9%</span>
                   </div>
@@ -914,7 +1151,7 @@ export default function CreativeMarketingPage() {
                         onClick={() => setTerm(m)}
                         className={`py-3 rounded-xl border text-xs font-bold transition-all duration-300 cursor-pointer ${
                           term === m 
-                            ? "bg-indigo-500 border-indigo-500 text-white shadow-[0_0_15px_rgba(99,102,241,0.4)]" 
+                            ? "bg-blue-500 border-blue-500 text-white shadow-[0_0_15px_rgba(59,130,246,0.4)]" 
                             : "bg-white/5 border-white/5 text-white/75 hover:bg-white/10 hover:border-white/10"
                         }`}
                       >
@@ -929,13 +1166,13 @@ export default function CreativeMarketingPage() {
               {/* Dynamic Calculations Visualizer Panel */}
               <div className="lg:col-span-5 bg-gradient-to-b from-[#090622] to-black border border-white/5 rounded-3xl p-8 flex flex-col justify-between gap-8 relative overflow-hidden group">
                 {/* Glowing ring backdrop */}
-                <div className="absolute -top-1/4 -right-1/4 w-60 h-60 bg-indigo-500/[0.04] rounded-full blur-3xl" />
+                <div className="absolute -top-1/4 -right-1/4 w-60 h-60 bg-blue-500/[0.04] rounded-full blur-3xl" />
                 
                 <div className="text-center relative z-10">
-                  <span className="text-[10px] font-extrabold tracking-widest text-white/30 uppercase">{t.calcMonthly}</span>
+                  <span className="text-[10px] font-extrabold tracking-widest text-white/50 uppercase">{t.calcMonthly}</span>
                   <div className="text-4xl sm:text-5xl font-black text-white mt-1 mb-2" style={{ direction: "ltr" }}>
                     {Math.round(monthlyInstallment).toLocaleString()} <span className="text-xl font-bold">{locale === "ar" ? "د.أ" : "JOD"}</span>
-                    <span className="text-sm font-light text-white/40 tracking-wider"> / {locale === "ar" ? "شهرياً" : "mo"}</span>
+                    <span className="text-sm font-light text-white/60 tracking-wider"> / {locale === "ar" ? "شهرياً" : "mo"}</span>
                   </div>
                 </div>
 
@@ -947,7 +1184,7 @@ export default function CreativeMarketingPage() {
                       cx="72" 
                       cy="72" 
                       r="48" 
-                      className="stroke-purple-500/20" 
+                      className="stroke-orange-500/20" 
                       strokeWidth="10" 
                       fill="transparent" 
                     />
@@ -956,7 +1193,7 @@ export default function CreativeMarketingPage() {
                       cx="72" 
                       cy="72" 
                       r="48" 
-                      className="stroke-indigo-500 transition-all duration-500" 
+                      className="stroke-blue-500 transition-all duration-500" 
                       strokeWidth="10" 
                       fill="transparent" 
                       strokeDasharray={strokeDasharray}
@@ -968,26 +1205,26 @@ export default function CreativeMarketingPage() {
                   {/* Digital percentage display inside circle */}
                   <div className="absolute flex flex-col items-center select-none" style={{ direction: "ltr" }}>
                     <span className="text-lg font-black text-white">{Math.round(principalPercent)}%</span>
-                    <span className="text-[8px] text-white/30 font-bold uppercase tracking-wider">{t.calcPrinc}</span>
+                    <span className="text-[8px] text-white/50 font-bold uppercase tracking-wider">{t.calcPrinc}</span>
                   </div>
                 </div>
 
                 {/* Numeric details list */}
                 <div className="space-y-3.5 relative z-10 border-t border-white/5 pt-6">
                   <div className="flex justify-between items-center text-xs">
-                    <span className="text-white/40 font-bold">{t.calcPrinc}</span>
+                    <span className="text-white/60 font-bold">{t.calcPrinc}</span>
                     <span className="text-white font-extrabold" style={{ direction: "ltr" }}>
                       {principal.toLocaleString()} {locale === "ar" ? "د.أ" : "JOD"}
                     </span>
                   </div>
                   <div className="flex justify-between items-center text-xs">
-                    <span className="text-white/40 font-bold">{t.calcInterest}</span>
-                    <span className="text-purple-400 font-extrabold" style={{ direction: "ltr" }}>
+                    <span className="text-white/60 font-bold">{t.calcInterest}</span>
+                    <span className="text-orange-400 font-extrabold" style={{ direction: "ltr" }}>
                       {Math.round(totalInterest).toLocaleString()} {locale === "ar" ? "د.أ" : "JOD"}
                     </span>
                   </div>
                   <div className="flex justify-between items-center text-xs border-t border-white/5 pt-3">
-                    <span className="text-white/40 font-bold">{t.calcTotalPaid}</span>
+                    <span className="text-white/60 font-bold">{t.calcTotalPaid}</span>
                     <span className="text-white font-black text-sm" style={{ direction: "ltr" }}>
                       {Math.round(totalPaid).toLocaleString()} {locale === "ar" ? "د.أ" : "JOD"}
                     </span>
@@ -1009,7 +1246,7 @@ export default function CreativeMarketingPage() {
               <h2 className="text-2xl sm:text-4xl font-extrabold text-white mb-3">
                 {t.pipeTitle}
               </h2>
-              <p className="text-sm sm:text-base text-white/40 max-w-xl mx-auto font-medium">
+              <p className="text-sm sm:text-base text-white/60 max-w-xl mx-auto font-medium">
                 {t.pipeSub}
               </p>
             </div>
@@ -1028,10 +1265,10 @@ export default function CreativeMarketingPage() {
                       key={idx}
                       className={`relative p-5 rounded-2xl border transition-all duration-500 text-center select-none ${
                         isActive 
-                          ? "bg-indigo-500/10 border-indigo-500 shadow-[0_0_20px_rgba(99,102,241,0.2)]" 
+                          ? "bg-blue-500/10 border-blue-500 shadow-[0_0_20px_rgba(59,130,246,0.2)]" 
                           : isDone 
-                            ? "bg-white/[0.03] border-indigo-500/40 text-white/80"
-                            : "bg-white/[0.01] border-white/5 text-white/35"
+                            ? "bg-white/[0.03] border-blue-500/40 text-white/80"
+                            : "bg-white/[0.01] border-white/5 text-white/55"
                       }`}
                     >
                       <div className="absolute top-3 right-3 text-[10px] font-black opacity-35">0{idx + 1}</div>
@@ -1039,10 +1276,10 @@ export default function CreativeMarketingPage() {
                       <div className="flex justify-center mb-3">
                         <div className={`w-10 h-10 rounded-full flex items-center justify-center transition-colors duration-500 ${
                           isActive 
-                            ? "bg-indigo-500 text-white animate-pulse" 
+                            ? "bg-blue-500 text-white animate-pulse" 
                             : isDone
-                              ? "bg-indigo-500/20 text-indigo-400"
-                              : "bg-white/5 text-white/30"
+                              ? "bg-blue-500/20 text-blue-400"
+                              : "bg-white/5 text-white/50"
                         }`}>
                           <Workflow className="w-4 h-4" />
                         </div>
@@ -1053,10 +1290,10 @@ export default function CreativeMarketingPage() {
                       </div>
                       <div className={`text-[9px] font-bold px-2 py-0.5 rounded inline-block ${
                         isActive 
-                          ? "bg-indigo-500/20 text-indigo-300"
+                          ? "bg-blue-500/20 text-blue-300"
                           : isDone 
                             ? "bg-white/5 text-white/60"
-                            : "bg-white/5 text-white/20"
+                            : "bg-white/5 text-white/40"
                       }`}>
                         {locale === "ar" ? stage.statusAr : stage.statusEn}
                       </div>
@@ -1069,9 +1306,9 @@ export default function CreativeMarketingPage() {
               <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-center border-t border-white/5 pt-8">
                 
                 <div className="md:col-span-8 space-y-4">
-                  <div className="inline-flex items-center gap-2 bg-indigo-500/10 border border-indigo-500/20 px-3.5 py-1 rounded-full">
-                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse" />
-                    <span className="text-[10px] font-black uppercase text-indigo-300 tracking-wider">
+                  <div className="inline-flex items-center gap-2 bg-blue-500/10 border border-blue-500/20 px-3.5 py-1 rounded-full">
+                    <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
+                    <span className="text-[10px] font-black uppercase text-blue-300 tracking-wider">
                       Stage {pipelineStage + 1} Details
                     </span>
                   </div>
@@ -1079,7 +1316,7 @@ export default function CreativeMarketingPage() {
                   <h4 className="text-xl sm:text-2xl font-black text-white">
                     {locale === "ar" ? pipelineStages[pipelineStage].labelAr : pipelineStages[pipelineStage].labelEn}
                   </h4>
-                  <p className="text-xs sm:text-sm text-white/50 leading-relaxed max-w-xl">
+                  <p className="text-xs sm:text-sm text-white/65 leading-relaxed max-w-xl">
                     {locale === "ar" ? pipelineStages[pipelineStage].descAr : pipelineStages[pipelineStage].descEn}
                   </p>
                 </div>
@@ -1087,7 +1324,7 @@ export default function CreativeMarketingPage() {
                 <div className="md:col-span-4 flex flex-col md:flex-row gap-3 md:justify-end">
                   <button
                     onClick={handleNextPipelineStage}
-                    className="px-6 py-3 bg-indigo-500 hover:bg-indigo-600 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer"
+                    className="px-6 py-3 bg-blue-500 hover:bg-blue-600 text-white font-bold rounded-xl text-xs transition-colors cursor-pointer"
                   >
                     {t.pipeBtn}
                   </button>
@@ -1106,6 +1343,94 @@ export default function CreativeMarketingPage() {
           </div>
         </section>
 
+        {/* Reports & Analytics Gallery */}
+        <section id="analytics" className="py-24 relative border-t border-white/5 bg-white/[0.01]">
+          <div className="container mx-auto px-6 max-w-6xl">
+            <div className="text-center mb-16">
+              <h2 className="text-2xl sm:text-4xl font-extrabold text-white mb-3">
+                {t.analyticsTitle}
+              </h2>
+              <p className="text-sm sm:text-base text-white/60 max-w-2xl mx-auto font-medium leading-relaxed">
+                {t.analyticsSub}
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+              {reportCards.map((report, idx) => {
+                const Icon = report.icon;
+                const barHeights = [40, 70, 55, 85, 60, 95];
+                return (
+                  <motion.div
+                    key={idx}
+                    initial={{ opacity: 0, y: 24 }}
+                    whileInView={{ opacity: 1, y: 0 }}
+                    viewport={{ once: true }}
+                    transition={{ duration: 0.6, delay: idx * 0.07 }}
+                    className="rounded-2xl bg-gradient-to-br from-white/5 to-[#05031b] border border-white/5 p-6 hover:border-blue-500/30 transition-all duration-500 group flex flex-col gap-5"
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                        <Icon className="w-5 h-5 text-blue-400" />
+                      </div>
+                      <div className="flex items-end gap-1 h-8" style={{ direction: "ltr" }}>
+                        {barHeights.map((h, i) => (
+                          <div
+                            key={i}
+                            className="w-1.5 rounded-full bg-blue-500/20 group-hover:bg-blue-500/50 transition-all duration-500"
+                            style={{ height: `${h}%` }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-white mb-1.5">{locale === "ar" ? report.titleAr : report.titleEn}</h3>
+                      <p className="text-xs text-white/62 leading-relaxed">{locale === "ar" ? report.descAr : report.descEn}</p>
+                    </div>
+                  </motion.div>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+
+        {/* Operations: branches, approvals, bulk tools, custom fields */}
+        <section id="operations" className="py-24 relative border-t border-white/5 bg-[#030014]">
+          <div className="container mx-auto px-6 max-w-6xl">
+            <div className="text-center mb-16">
+              <h2 className="text-2xl sm:text-4xl font-extrabold text-white mb-3">
+                {t.opsTitle}
+              </h2>
+              <p className="text-sm sm:text-base text-white/60 max-w-2xl mx-auto font-medium leading-relaxed">
+                {t.opsSub}
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+              {opsFeatures.map((feature, idx) => {
+                const Icon = feature.icon;
+                return (
+                  <motion.div
+                    key={idx}
+                    initial={{ opacity: 0, y: 24 }}
+                    whileInView={{ opacity: 1, y: 0 }}
+                    viewport={{ once: true }}
+                    transition={{ duration: 0.6, delay: idx * 0.08 }}
+                    className="rounded-2xl bg-[#090622]/85 border border-white/5 p-6 hover:border-white/20 transition-all duration-500 flex flex-col gap-4"
+                  >
+                    <div className="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                      <Icon className="w-5 h-5 text-blue-400" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-bold text-white mb-1.5">{locale === "ar" ? feature.titleAr : feature.titleEn}</h3>
+                      <p className="text-xs text-white/62 leading-relaxed">{locale === "ar" ? feature.descAr : feature.descEn}</p>
+                    </div>
+                  </motion.div>
+                );
+              })}
+            </div>
+          </div>
+        </section>
+
         {/* Dynamic ROI Calculator widget section */}
         <section className="py-24 relative border-t border-white/5 bg-[#030014]">
           <div className="container mx-auto px-6 max-w-4xl">
@@ -1114,7 +1439,7 @@ export default function CreativeMarketingPage() {
               <h2 className="text-2xl sm:text-4xl font-extrabold text-white mb-3">
                 {t.roiTitle}
               </h2>
-              <p className="text-sm sm:text-base text-white/40 max-w-xl mx-auto font-medium">
+              <p className="text-sm sm:text-base text-white/60 max-w-xl mx-auto font-medium">
                 {t.roiSub}
               </p>
             </div>
@@ -1126,7 +1451,7 @@ export default function CreativeMarketingPage() {
                 <div className="md:col-span-6 space-y-4">
                   <div className="flex justify-between items-center text-sm">
                     <span className="font-bold text-white/85">{t.roiSales}</span>
-                    <span className="font-black text-indigo-400 text-xl">{monthlySales}</span>
+                    <span className="font-black text-blue-400 text-xl">{monthlySales}</span>
                   </div>
                   <input 
                     type="range"
@@ -1135,9 +1460,9 @@ export default function CreativeMarketingPage() {
                     step="5"
                     value={monthlySales}
                     onChange={(e) => setMonthlySales(Number(e.target.value))}
-                    className="w-full accent-indigo-500 h-1.5 bg-white/5 rounded-lg cursor-pointer"
+                    className="w-full accent-blue-500 h-1.5 bg-white/5 rounded-lg cursor-pointer"
                   />
-                  <div className="flex justify-between text-[10px] text-white/20 font-bold" style={{ direction: "ltr" }}>
+                  <div className="flex justify-between text-[10px] text-white/40 font-bold" style={{ direction: "ltr" }}>
                     <span>5 cars</span>
                     <span>300 cars</span>
                   </div>
@@ -1150,10 +1475,10 @@ export default function CreativeMarketingPage() {
                     <div className="text-2xl sm:text-3xl font-black text-white mb-1">
                       {hoursSavedPerWk}
                     </div>
-                    <div className="text-[10px] text-indigo-400 font-extrabold uppercase tracking-wide mb-1">
+                    <div className="text-[10px] text-blue-400 font-extrabold uppercase tracking-wide mb-1">
                       {t.roiHours}
                     </div>
-                    <div className="text-[9px] text-white/35 font-bold leading-tight">
+                    <div className="text-[9px] text-white/55 font-bold leading-tight">
                       {t.roiHoursSub}
                     </div>
                   </div>
@@ -1162,10 +1487,10 @@ export default function CreativeMarketingPage() {
                     <div className="text-2xl sm:text-3xl font-black text-white mb-1" style={{ direction: "ltr" }}>
                       {annualSavingsDollars.toLocaleString()} {locale === "ar" ? "د.أ" : "JOD"}
                     </div>
-                    <div className="text-[10px] text-indigo-400 font-extrabold uppercase tracking-wide mb-1">
+                    <div className="text-[10px] text-blue-400 font-extrabold uppercase tracking-wide mb-1">
                       {t.roiSavings}
                     </div>
-                    <div className="text-[9px] text-white/35 font-bold leading-tight">
+                    <div className="text-[9px] text-white/55 font-bold leading-tight">
                       {t.roiSavingsSub}
                     </div>
                   </div>
@@ -1178,90 +1503,6 @@ export default function CreativeMarketingPage() {
           </div>
         </section>
 
-        {/* Minimalist Interactive Pricing section */}
-        <section id="pricing" className="py-24 relative border-t border-white/5 bg-white/[0.01]">
-          <div className="container mx-auto px-6 max-w-4xl text-center">
-            
-            <h2 className="text-3xl sm:text-5xl font-black text-white mb-4">
-              {t.pricingTitle}
-            </h2>
-            <p className="text-sm sm:text-base text-white/40 mb-12 max-w-xl mx-auto font-medium">
-              {t.pricingSub}
-            </p>
-
-            {/* Toggle Billing interval */}
-            <div className="inline-flex bg-white/5 border border-white/10 rounded-full p-1 mb-16 relative select-none">
-              <button
-                onClick={() => setBillingPeriod("monthly")}
-                className={`px-6 py-2.5 rounded-full text-xs font-bold transition-all duration-300 cursor-pointer ${
-                  billingPeriod === "monthly" ? "bg-indigo-500 text-white" : "text-white/60 hover:text-white"
-                }`}
-              >
-                {t.pricingMonthly}
-              </button>
-              <button
-                onClick={() => setBillingPeriod("annual")}
-                className={`px-6 py-2.5 rounded-full text-xs font-bold transition-all duration-300 cursor-pointer ${
-                  billingPeriod === "annual" ? "bg-indigo-500 text-white" : "text-white/60 hover:text-white"
-                }`}
-              >
-                {t.pricingAnnual}
-              </button>
-            </div>
-
-            {/* Single Elite Card */}
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.95 }}
-              whileInView={{ opacity: 1, scale: 1 }}
-              viewport={{ once: true }}
-              transition={{ duration: 1, ease: [0.16, 1, 0.3, 1] }}
-              className="relative p-[1px] rounded-[2.5rem] bg-gradient-to-b from-white/20 to-transparent max-w-lg mx-auto group hover:from-indigo-500/50 transition-all duration-1000"
-            >
-              <div className="absolute inset-0 bg-indigo-500/20 blur-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-1000 pointer-events-none" />
-              
-              <div className="relative bg-[#05031b] rounded-[2.5rem] p-10 sm:p-12 overflow-hidden border border-white/5">
-                <div className="absolute top-0 right-0 w-[180px] h-[180px] bg-indigo-500/10 blur-[80px] pointer-events-none" />
-                
-                <span className="text-[10px] font-black text-indigo-400 bg-indigo-500/10 px-3.5 py-1 rounded-full border border-indigo-500/20 uppercase tracking-wider mb-6 inline-block">
-                  {t.pricingBadge}
-                </span>
-
-                <h3 className="text-xl sm:text-2xl font-black text-white mb-4">{t.pricingBadge}</h3>
-                
-                <div className="flex items-baseline justify-center gap-1.5 mb-10" style={{ direction: isRtl ? "rtl" : "ltr" }}>
-                  <span className="text-5xl sm:text-6xl font-black text-white">
-                    {billingPeriod === "annual" ? "119" : "149"}
-                  </span>
-                  <span className="text-white/80 font-bold text-lg mx-1">{locale === "ar" ? "د.أ" : "JOD"}</span>
-                  <span className="text-white/30 tracking-widest text-xs">/ {locale === "ar" ? "شهرياً" : "mo"}</span>
-                </div>
-                
-                <ul className="space-y-4 text-right mb-10" style={{ direction: isRtl ? "rtl" : "ltr" }}>
-                  {[
-                    locale === "ar" ? "وصول غير محدود لكافة الفروع والمخزون" : "Unlimited branches, vehicles, and users",
-                    locale === "ar" ? "أتمتة الموافقات وحسابات التمويل الذكية" : "Dynamic finance calculator & margin approvals",
-                    locale === "ar" ? "نظام أدوار وصلاحيات أمان متقدم ومحمي" : "Enterprise granular roles & authorizations",
-                    locale === "ar" ? "دعم فني مخصص وخطة عمل متكاملة" : "24/7 dedicated support & data migration"
-                  ].map((feature, i) => (
-                    <li key={i} className="flex items-center gap-3 text-white/75 text-xs sm:text-sm font-semibold">
-                      <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 shrink-0" />
-                      <span>{feature}</span>
-                    </li>
-                  ))}
-                </ul>
-
-                <Link href="/sign-up" className="block w-full relative">
-                  <div className="absolute inset-0 bg-indigo-500 rounded-full blur-sm opacity-50 hover:opacity-100 transition-opacity duration-300" />
-                  <button className="relative w-full py-4.5 bg-white text-black rounded-full text-xs font-black tracking-wide hover:bg-white/95 transition-colors cursor-pointer">
-                    {t.pricingButton}
-                  </button>
-                </Link>
-              </div>
-            </motion.div>
-
-          </div>
-        </section>
-
         {/* Brand FAQ Section */}
         <section className="py-24 relative border-t border-white/5 bg-[#030014]">
           <div className="container mx-auto px-6 max-w-3xl">
@@ -1270,7 +1511,7 @@ export default function CreativeMarketingPage() {
               <h2 className="text-2xl sm:text-4xl font-extrabold text-white mb-3">
                 {t.faqTitle}
               </h2>
-              <p className="text-sm sm:text-base text-white/40 max-w-xl mx-auto font-medium">
+              <p className="text-sm sm:text-base text-white/60 max-w-xl mx-auto font-medium">
                 {t.faqSub}
               </p>
             </div>
@@ -1289,7 +1530,7 @@ export default function CreativeMarketingPage() {
                       style={{ direction: isRtl ? "rtl" : "ltr" }}
                     >
                       <span>{locale === "ar" ? faq.qAr : faq.qEn}</span>
-                      <ChevronRight className={`w-4 h-4 text-white/40 shrink-0 transition-transform duration-300 ${isOpen ? "rotate-90" : ""}`} />
+                      <ChevronRight className={`w-4 h-4 text-white/60 shrink-0 transition-transform duration-300 ${isOpen ? "rotate-90" : ""}`} />
                     </button>
                     
                     <AnimatePresence initial={false}>
@@ -1300,7 +1541,7 @@ export default function CreativeMarketingPage() {
                           exit={{ height: 0, opacity: 0 }}
                           transition={{ duration: 0.25 }}
                         >
-                          <div className="px-6 pb-6 text-xs sm:text-sm text-white/50 leading-relaxed text-right border-t border-white/5 pt-4" style={{ direction: isRtl ? "rtl" : "ltr" }}>
+                          <div className="px-6 pb-6 text-xs sm:text-sm text-white/65 leading-relaxed text-right border-t border-white/5 pt-4" style={{ direction: isRtl ? "rtl" : "ltr" }}>
                             {locale === "ar" ? faq.aAr : faq.aEn}
                           </div>
                         </motion.div>
@@ -1326,15 +1567,15 @@ export default function CreativeMarketingPage() {
               alt="AutoFlow Logo" 
               width={100} 
               height={30} 
-              className="w-20 h-auto object-contain brightness-0 invert opacity-40 hover:opacity-100 transition-opacity duration-300" 
+              className="w-20 h-auto object-contain opacity-70 hover:opacity-100 transition-opacity duration-300"
             />
           </div>
 
-          <p className="text-white/20 text-xs font-semibold tracking-wider">
+          <p className="text-white/40 text-xs font-semibold tracking-wider">
             © {new Date().getFullYear()} {t.footerRights}
           </p>
 
-          <div className="flex gap-6 text-xs font-semibold tracking-wider text-white/30 uppercase">
+          <div className="flex gap-6 text-xs font-semibold tracking-wider text-white/50 uppercase">
             <Link href="#" className="hover:text-white transition-colors duration-300">{t.footerPrivacy}</Link>
             <Link href="#" className="hover:text-white transition-colors duration-300">{t.footerTerms}</Link>
           </div>

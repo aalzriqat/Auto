@@ -192,7 +192,7 @@ export const create = mutation({
       args.orgId,
       "New Lead Created",
       `${actorName} created a new lead.`,
-      `/leads?highlightId=${id}`
+      `/${args.orgId}/leads?highlightId=${id}`
     );
 
     if (args.assignedUserId) {
@@ -202,7 +202,7 @@ export const create = mutation({
         args.assignedUserId,
         "New Lead Assigned",
         `${actorName} assigned a new lead to you.`,
-        `/leads?highlightId=${id}`
+        `/${args.orgId}/leads?highlightId=${id}`
       );
     }
 
@@ -279,7 +279,7 @@ export const update = mutation({
         args.orgId,
         "Lead Updated",
         `${actorName} updated a lead.`,
-        `/leads?highlightId=${args.leadId}`
+        `/${args.orgId}/leads?highlightId=${args.leadId}`
       );
 
       // If re-assigned to a new user
@@ -290,7 +290,7 @@ export const update = mutation({
           args.assignedUserId,
           "Lead Assigned",
           `${actorName} assigned a lead to you.`,
-          `/leads?highlightId=${args.leadId}`
+          `/${args.orgId}/leads?highlightId=${args.leadId}`
         );
       }
     }

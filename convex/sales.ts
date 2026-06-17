@@ -251,7 +251,7 @@ export const create = mutation({
       args.orgId,
       "New Sale Recorded",
       `${actorName} recorded a new sale for ${vehicle.year} ${vehicle.make} ${vehicle.model}`,
-      `/sales?highlightId=${saleId}`
+      `/${args.orgId}/sales?highlightId=${saleId}`
     );
 
     return saleId;
@@ -329,7 +329,7 @@ export const update = mutation({
         args.orgId,
         "Sale Updated",
         `${actorName} updated a sale record.`,
-        `/sales?highlightId=${args.saleId}`
+        `/${args.orgId}/sales?highlightId=${args.saleId}`
       );
     }
   },

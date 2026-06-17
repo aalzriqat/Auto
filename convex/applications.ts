@@ -144,7 +144,7 @@ export const createFromQuote = mutation({
       args.orgId,
       "New Finance Application",
       `${actorName} submitted a new finance application for ${customer?.firstName} ${customer?.lastName}`,
-      `/applications/${appId}`
+      `/${args.orgId}/applications`
     );
 
     return appId;

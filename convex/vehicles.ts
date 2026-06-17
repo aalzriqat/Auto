@@ -275,7 +275,7 @@ export const create = mutation({
       args.orgId,
       "New Vehicle Added",
       `${actorName} added a ${args.year} ${args.make.trim()} ${args.model.trim()}`,
-      `/vehicles?highlightId=${id}`
+      `/${args.orgId}/vehicles?highlightId=${id}`
     );
 
     return id;
@@ -383,7 +383,7 @@ export const update = mutation({
         args.orgId,
         "Vehicle Updated",
         `${actorName} updated details for the ${vehicle.year} ${vehicle.make} ${vehicle.model}`,
-        `/vehicles?highlightId=${args.vehicleId}`
+        `/${args.orgId}/vehicles?highlightId=${args.vehicleId}`
       );
     }
   },
