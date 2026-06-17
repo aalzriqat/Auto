@@ -41,7 +41,7 @@ export function TopNav() {
   const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
   const mobileSearchRef = useRef<HTMLInputElement>(null);
 
-  const currentNavItem = navigation.find(item => pathname.startsWith(item.href));
+  const currentNavItem = navigation.find(item => pathname.startsWith(`/${activeOrgId}${item.href}`));
   const pageTitle = currentNavItem ? t(currentNavItem.name as any) : "AutoFlow";
 
   const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
@@ -82,11 +82,12 @@ export function TopNav() {
               </SheetHeader>
               <nav className="flex-1 overflow-y-auto flex flex-col gap-1 p-3">
                 {visibleNavigation.map((item) => {
-                  const isActive = pathname.startsWith(item.href);
+                  const href = `/${activeOrgId}${item.href}`;
+                  const isActive = pathname.startsWith(href);
                   return (
                     <Link
                       key={item.name}
-                      href={item.href}
+                      href={href}
                       onClick={() => setIsMobileMenuOpen(false)}
                       className={cn(
                         "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors",

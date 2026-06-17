@@ -45,19 +45,19 @@ async def run_test():
         elem = page.get_by_role('link', name='Sign In', exact=True)
         await elem.click(timeout=10000)
         
-        # -> Write the step checklist into todo.md, fill '***REMOVED-LEAKED-USERNAME***' into the email/username field, fill '***REMOVED-LEAKED-PASSWORD***' into the password field, then click the 'Continue' button to submit the sign-in form.
+        # -> Write the step checklist into todo.md, fill 'alaajarad' into the email/username field, fill 'Alaa@14111991' into the password field, then click the 'Continue' button to submit the sign-in form.
         # Enter email or username text field
         elem = page.locator('[id="identifier-field"]')
         await elem.wait_for(state="visible", timeout=10000)
-        await elem.fill("***REMOVED-LEAKED-USERNAME***")
+        await elem.fill("alaajarad")
         
-        # -> Write the step checklist into todo.md, fill '***REMOVED-LEAKED-USERNAME***' into the email/username field, fill '***REMOVED-LEAKED-PASSWORD***' into the password field, then click the 'Continue' button to submit the sign-in form.
+        # -> Write the step checklist into todo.md, fill 'alaajarad' into the email/username field, fill 'Alaa@14111991' into the password field, then click the 'Continue' button to submit the sign-in form.
         # Enter your password password field
         elem = page.locator('[id="password-field"]')
         await elem.wait_for(state="visible", timeout=10000)
-        await elem.fill("***REMOVED-LEAKED-PASSWORD***")
+        await elem.fill("Alaa@14111991")
         
-        # -> Write the step checklist into todo.md, fill '***REMOVED-LEAKED-USERNAME***' into the email/username field, fill '***REMOVED-LEAKED-PASSWORD***' into the password field, then click the 'Continue' button to submit the sign-in form.
+        # -> Write the step checklist into todo.md, fill 'alaajarad' into the email/username field, fill 'Alaa@14111991' into the password field, then click the 'Continue' button to submit the sign-in form.
         # Continue button
         elem = page.get_by_role('button', name='Continue', exact=True)
         await elem.click(timeout=10000)

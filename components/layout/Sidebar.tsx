@@ -66,13 +66,14 @@ export function Sidebar() {
   });
 
   const renderNavItem = (item: typeof navigation[0]) => {
-    const isActive = pathname.startsWith(item.href);
+    const href = `/${activeOrgId}${item.href}`;
+    const isActive = pathname.startsWith(href);
     const isApprovals = item.name === "Approvals";
 
     return (
       <Link
         key={item.name}
-        href={item.href}
+        href={href}
         className={cn(
           "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all",
           isActive
@@ -94,7 +95,7 @@ export function Sidebar() {
   return (
     <aside className="hidden md:flex flex-col w-64 border-e border-slate-200/50 bg-white shadow-sm shrink-0">
       <div className="h-20 flex items-center px-6 border-b border-slate-200/50 shrink-0">
-        <Link href="/dashboard" className="flex items-center gap-2">
+        <Link href={`/${activeOrgId}/dashboard`} className="flex items-center gap-2">
           {logoUrl ? (
             <img src={logoUrl} alt="Organization Logo" className="w-28 h-auto object-contain max-h-12" />
           ) : (

@@ -3,8 +3,8 @@
   "type": "frontend",
   "scope": "codebase",
   "localEndpoint": "http://localhost:3000",
-  "loginUser": "***REMOVED-LEAKED-USERNAME***",
-  "loginPassword": "***REMOVED-LEAKED-PASSWORD***",
+  "loginUser": "alaajarad",
+  "loginPassword": "Alaa@14111991",
   "executionArgs": {
     "projectName": "Auto",
     "projectPath": "e:\\Auto\\Auto",

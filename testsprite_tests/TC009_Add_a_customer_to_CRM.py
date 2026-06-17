@@ -45,19 +45,19 @@ async def run_test():
         elem = page.get_by_role('link', name='Sign In', exact=True)
         await elem.click(timeout=10000)
         
-        # -> Fill '***REMOVED-LEAKED-USERNAME***' into the 'Email address or username' field, fill '***REMOVED-LEAKED-PASSWORD***' into the 'Password' field, and click the 'Continue' button to sign in.
+        # -> Fill 'alaajarad' into the 'Email address or username' field, fill 'Alaa@14111991' into the 'Password' field, and click the 'Continue' button to sign in.
         # Enter email or username text field
         elem = page.locator('[id="identifier-field"]')
         await elem.wait_for(state="visible", timeout=10000)
-        await elem.fill("***REMOVED-LEAKED-USERNAME***")
+        await elem.fill("alaajarad")
         
-        # -> Fill '***REMOVED-LEAKED-USERNAME***' into the 'Email address or username' field, fill '***REMOVED-LEAKED-PASSWORD***' into the 'Password' field, and click the 'Continue' button to sign in.
+        # -> Fill 'alaajarad' into the 'Email address or username' field, fill 'Alaa@14111991' into the 'Password' field, and click the 'Continue' button to sign in.
         # Enter your password password field
         elem = page.locator('[id="password-field"]')
         await elem.wait_for(state="visible", timeout=10000)
-        await elem.fill("***REMOVED-LEAKED-PASSWORD***")
+        await elem.fill("Alaa@14111991")
         
-        # -> Fill '***REMOVED-LEAKED-USERNAME***' into the 'Email address or username' field, fill '***REMOVED-LEAKED-PASSWORD***' into the 'Password' field, and click the 'Continue' button to sign in.
+        # -> Fill 'alaajarad' into the 'Email address or username' field, fill 'Alaa@14111991' into the 'Password' field, and click the 'Continue' button to sign in.
         # Continue button
         elem = page.get_by_role('button', name='Continue', exact=True)
         await elem.click(timeout=10000)

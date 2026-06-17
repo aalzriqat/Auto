@@ -47,19 +47,19 @@ async def run_test():
         except Exception:
             pass
         
-        # -> Sign in using the provided credentials by entering '***REMOVED-LEAKED-USERNAME***' in the email/username field and '***REMOVED-LEAKED-PASSWORD***' in the password field, then click the 'Continue' button so the app can redirect to the dashboard.
+        # -> Sign in using the provided credentials by entering 'alaajarad' in the email/username field and 'Alaa@14111991' in the password field, then click the 'Continue' button so the app can redirect to the dashboard.
         # Enter email or username text field
         elem = page.locator('[id="identifier-field"]')
         await elem.wait_for(state="visible", timeout=10000)
-        await elem.fill("***REMOVED-LEAKED-USERNAME***")
+        await elem.fill("alaajarad")
         
-        # -> Sign in using the provided credentials by entering '***REMOVED-LEAKED-USERNAME***' in the email/username field and '***REMOVED-LEAKED-PASSWORD***' in the password field, then click the 'Continue' button so the app can redirect to the dashboard.
+        # -> Sign in using the provided credentials by entering 'alaajarad' in the email/username field and 'Alaa@14111991' in the password field, then click the 'Continue' button so the app can redirect to the dashboard.
         # Enter your password password field
         elem = page.locator('[id="password-field"]')
         await elem.wait_for(state="visible", timeout=10000)
-        await elem.fill("***REMOVED-LEAKED-PASSWORD***")
+        await elem.fill("Alaa@14111991")
         
-        # -> Sign in using the provided credentials by entering '***REMOVED-LEAKED-USERNAME***' in the email/username field and '***REMOVED-LEAKED-PASSWORD***' in the password field, then click the 'Continue' button so the app can redirect to the dashboard.
+        # -> Sign in using the provided credentials by entering 'alaajarad' in the email/username field and 'Alaa@14111991' in the password field, then click the 'Continue' button so the app can redirect to the dashboard.
         # Continue button
         elem = page.get_by_role('button', name='Continue', exact=True)
         await elem.click(timeout=10000)

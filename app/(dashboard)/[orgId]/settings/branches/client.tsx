@@ -1,0 +1,230 @@
+"use client";
+
+import { useState } from "react";
+import { useQuery, useMutation } from "convex/react";
+import { api } from "@/convex/_generated/api";
+import { useOrg } from "@/components/providers/OrgProvider";
+import { useLanguage } from "@/components/providers/LanguageProvider";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
+import { Plus, Store, CheckCircle, AlertTriangle } from "lucide-react";
+import { toast } from "@/components/ui/sonner";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+
+export function BranchesClient() {
+  const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
+
+  const branches = useQuery(api.branches.list, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const migrate = useMutation(api.branches.migrateToDefaultBranch);
+  const addBranch = useMutation(api.branches.add);
+  const updateBranch = useMutation(api.branches.update);
+
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [editingBranch, setEditingBranch] = useState<any>(null);
+  
+  const [formData, setFormData] = useState({
+    name: "",
+    address: "",
+    phone: "",
+    isActive: true,
+  });
+
+  const handleOpenAdd = () => {
+    setEditingBranch(null);
+    setFormData({ name: "", address: "", phone: "", isActive: true });
+    setIsDialogOpen(true);
+  };
+
+  const handleOpenEdit = (branch: any) => {
+    setEditingBranch(branch);
+    setFormData({
+      name: branch.name,
+      address: branch.address || "",
+      phone: branch.phone || "",
+      isActive: branch.isActive,
+    });
+    setIsDialogOpen(true);
+  };
+
+  const handleSave = async () => {
+    if (!activeOrgId || !formData.name) return;
+    try {
+      if (editingBranch) {
+        await updateBranch({
+          orgId: activeOrgId,
+          id: editingBranch._id,
+          ...formData,
+        });
+        toast.success(t("BranchUpdatedSuccess" as any));
+      } else {
+        await addBranch({
+          orgId: activeOrgId,
+          ...formData,
+        });
+        toast.success(t("BranchCreatedSuccess" as any));
+      }
+      setIsDialogOpen(false);
+    } catch (error: any) {
+      toast.error(error.message || t("BranchSaveFail" as any));
+    }
+  };
+
+  const handleMigrate = async () => {
+    if (!activeOrgId) return;
+    try {
+      await migrate({ orgId: activeOrgId });
+      toast.success(t("MigrationSuccess" as any));
+    } catch (error: any) {
+      toast.error(t("MigrationFail" as any));
+    }
+  };
+
+  return (
+    <div className="flex-1 space-y-4 p-4 md:p-8 pt-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
+        <Button onClick={handleOpenAdd}>
+          <Plus className="me-2 h-4 w-4" />
+          {t("AddBranch" as any)}
+        </Button>
+      </div>
+
+      {!branches?.length && branches !== undefined && (
+        <Card className="bg-yellow-50 border-yellow-200">
+          <CardContent className="pt-6">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-4">
+                <div className="p-3 bg-yellow-100 rounded-full text-yellow-600 shrink-0">
+                  <AlertTriangle className="h-6 w-6" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-yellow-900">{t("BranchSystemNotInitialized" as any)}</h3>
+                  <p className="text-yellow-700">{t("BranchInitDesc" as any)}</p>
+                </div>
+              </div>
+              <Button onClick={handleMigrate} className="shrink-0 bg-yellow-600 hover:bg-yellow-700 text-white">
+                {t("InitializeMigrateData" as any)}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Store className="h-5 w-5" />
+            {t("PhysicalBranches" as any)}
+          </CardTitle>
+          <CardDescription>{t("ManagePhysicalBranches" as any)}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="rounded-md border overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t("Name" as any)}</TableHead>
+                  <TableHead>{t("Address" as any)}</TableHead>
+                  <TableHead>{t("Phone" as any)}</TableHead>
+                  <TableHead>{t("Manager" as any)}</TableHead>
+                  <TableHead>{t("Status" as any)}</TableHead>
+                  <TableHead className="text-right">{t("Actions" as any)}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {branches === undefined ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="text-center">{t("Loading" as any)}</TableCell>
+                  </TableRow>
+                ) : branches.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={6} className="text-center text-muted-foreground">
+                      {t("NoBranchesFound" as any)}
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  branches.map((branch) => (
+                    <TableRow key={branch._id}>
+                      <TableCell className="font-medium">{branch.name}</TableCell>
+                      <TableCell>{branch.address || "N/A"}</TableCell>
+                      <TableCell>{branch.phone || "N/A"}</TableCell>
+                      <TableCell>{branch.managerName}</TableCell>
+                      <TableCell>
+                        <Badge variant={branch.isActive ? "default" : "secondary"}>
+                          {branch.isActive ? t("Active" as any) : t("Inactive" as any)}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleOpenEdit(branch)}
+                        >
+                          {t("Edit" as any)}
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{editingBranch ? t("EditBranch" as any) : t("AddNewBranch" as any)}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <div className="space-y-2">
+              <Label>{t("BranchName" as any)}</Label>
+              <Input
+                value={formData.name}
+                onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                placeholder="e.g. North Showroom"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>{t("AddressOptional" as any)}</Label>
+              <Input
+                value={formData.address}
+                onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                placeholder="123 Main St"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>{t("PhoneOptional" as any)}</Label>
+              <Input
+                value={formData.phone}
+                onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                placeholder="+1 234 567 890"
+              />
+            </div>
+            <div className="flex items-center space-x-2 pt-2">
+              <input 
+                type="checkbox"
+                id="isActive" 
+                checked={formData.isActive}
+                onChange={(e) => setFormData({ ...formData, isActive: e.target.checked })}
+                className="w-4 h-4 text-primary rounded border-gray-300"
+              />
+              <Label htmlFor="isActive">{t("ActiveBranch" as any)}</Label>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIsDialogOpen(false)}>{t("Cancel" as any)}</Button>
+            <Button onClick={handleSave} disabled={!formData.name}>
+              {editingBranch ? t("SaveChanges" as any) : t("CreateBranch" as any)}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}

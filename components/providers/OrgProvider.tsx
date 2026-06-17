@@ -1,110 +1,53 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, useRef, ReactNode } from "react";
+import { createContext, useContext, useEffect, ReactNode } from "react";
 import { useQuery, useConvexAuth } from "convex/react";
+import { useParams, usePathname, useRouter } from "next/navigation";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 
 interface OrgContextType {
   activeOrgId: Id<"organizations"> | null;
-  setActiveOrgId: (id: Id<"organizations"> | null) => void;
+  setActiveOrgId: (id: Id<"organizations">) => void;
   isLoading: boolean;
 }
 
 const OrgContext = createContext<OrgContextType | undefined>(undefined);
 
-// How long to wait after receiving an empty org list before showing the
-// onboarding screen. This gives the Clerk webhook time to sync a newly
-// created user into the Convex `users` table so that listMine can return
-// their memberships on the next reactive update.
-const WEBHOOK_SYNC_WAIT_MS = 4000;
-
+// Active org lives in the URL (the [orgId] segment), not in client storage.
+// Every navigation re-derives it, and every Convex query re-validates it
+// server-side via requireTenantAuth — so there's no separate persisted
+// client state that can go stale (e.g. after a user is removed from an org).
 export function OrgProvider({ children }: { children: ReactNode }) {
-  // Read from localStorage synchronously so activeOrgId is set on the very
-  // first render — avoids a flash where isLoading=false but activeOrgId=null
-  // causes DashboardWrapper to briefly show the onboarding wizard for returning users.
-  const [activeOrgId, setActiveOrgId] = useState<Id<"organizations"> | null>(
-    () =>
-      typeof window !== "undefined"
-        ? (localStorage.getItem("autoflow_active_org") as Id<"organizations"> | null)
-        : null
-  );
+  const params = useParams<{ orgId: string }>();
+  const pathname = usePathname();
+  const router = useRouter();
   const { isAuthenticated } = useConvexAuth();
 
-  // Fetch user's organizations
+  const urlOrgId = (params?.orgId ?? null) as Id<"organizations"> | null;
+
   const orgs = useQuery(api.organizations.listMine, isAuthenticated ? undefined : "skip");
 
-  // stabilized: true means we've waited long enough and can trust an empty list
-  const [stabilized, setStabilized] = useState(false);
-  const stabilizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isMember = orgs?.some((o: any) => o._id === urlOrgId) ?? false;
 
   useEffect(() => {
-    if (orgs === undefined) {
-      // Still loading from Convex — reset stabilization
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      setStabilized(false);
-      if (stabilizeTimerRef.current) {
-        clearTimeout(stabilizeTimerRef.current);
-        stabilizeTimerRef.current = null;
-      }
-      return;
+    if (!orgs) return; // still loading — don't redirect yet
+    if (!urlOrgId || !isMember) {
+      // The URL references an org the user doesn't belong to (stale link,
+      // removed membership, foreign id). Bounce to the entry point, which
+      // will pick a valid org or show onboarding.
+      router.replace("/dashboard");
     }
+  }, [orgs, urlOrgId, isMember, router]);
 
-    if (orgs.length > 0) {
-      // We have orgs — immediately stable, cancel any pending timer
-      setStabilized(true);
-      if (stabilizeTimerRef.current) {
-        clearTimeout(stabilizeTimerRef.current);
-        stabilizeTimerRef.current = null;
-      }
-      return;
-    }
+  function setActiveOrgId(id: Id<"organizations">) {
+    // Swap the leading orgId path segment, preserving the rest of the path.
+    const rest = pathname.split("/").slice(2).join("/");
+    router.push(`/${id}${rest ? `/${rest}` : ""}`);
+  }
 
-    // orgs is defined but empty — could be a webhook race condition.
-    // Start a timer; if orgs are still empty when it fires, we show onboarding.
-    if (!stabilizeTimerRef.current) {
-      stabilizeTimerRef.current = setTimeout(() => {
-        setStabilized(true);
-        stabilizeTimerRef.current = null;
-      }, WEBHOOK_SYNC_WAIT_MS);
-    }
-
-    return () => {
-      if (stabilizeTimerRef.current) {
-        clearTimeout(stabilizeTimerRef.current);
-      }
-    };
-  }, [orgs]);
-
-  useEffect(() => {
-    // Validate stored activeOrgId against the loaded org list.
-    if (!orgs) return; // Still loading — do nothing
-    if (orgs.length === 0) {
-      if (activeOrgId) {
-        // Has a stored orgId but no memberships — the user was removed from
-        // their org. Clear immediately so no downstream query fires with an
-        // unauthorized orgId. The stabilization timer is only needed when
-        // activeOrgId is already null (new-user webhook-sync delay).
-        setActiveOrgId(null);
-      }
-      return;
-    }
-    if (activeOrgId && orgs.some((o: any) => o._id === activeOrgId)) return;
-    setActiveOrgId(orgs[0]!._id);
-  }, [orgs, activeOrgId]);
-
-  useEffect(() => {
-    // Persist to localStorage when it changes; clear it when null so a
-    // subsequent page load doesn't restore a stale/unauthorized orgId.
-    if (activeOrgId) {
-      localStorage.setItem("autoflow_active_org", activeOrgId);
-    } else {
-      localStorage.removeItem("autoflow_active_org");
-    }
-  }, [activeOrgId]);
-
-  // Loading = Convex query is in flight OR we haven't yet stabilized on an empty result
-  const isLoading = orgs === undefined || (orgs.length === 0 && !stabilized);
+  const isLoading = orgs === undefined;
+  const activeOrgId = !isLoading && isMember ? urlOrgId : null;
 
   return (
     <OrgContext.Provider

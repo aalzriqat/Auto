@@ -45,19 +45,19 @@ async def run_test():
         elem = page.get_by_role('link', name='Sign In', exact=True)
         await elem.click(timeout=10000)
         
-        # -> Fill the email/username field with '***REMOVED-LEAKED-USERNAME***', fill the password field with the provided password, and click the 'Continue' button to submit the Clerk sign-in form.
+        # -> Fill the email/username field with 'alaajarad', fill the password field with the provided password, and click the 'Continue' button to submit the Clerk sign-in form.
         # Enter email or username text field
         elem = page.locator('[id="identifier-field"]')
         await elem.wait_for(state="visible", timeout=10000)
-        await elem.fill("***REMOVED-LEAKED-USERNAME***")
+        await elem.fill("alaajarad")
         
-        # -> Fill the email/username field with '***REMOVED-LEAKED-USERNAME***', fill the password field with the provided password, and click the 'Continue' button to submit the Clerk sign-in form.
+        # -> Fill the email/username field with 'alaajarad', fill the password field with the provided password, and click the 'Continue' button to submit the Clerk sign-in form.
         # Enter your password password field
         elem = page.locator('[id="password-field"]')
         await elem.wait_for(state="visible", timeout=10000)
-        await elem.fill("***REMOVED-LEAKED-PASSWORD***")
+        await elem.fill("Alaa@14111991")
         
-        # -> Fill the email/username field with '***REMOVED-LEAKED-USERNAME***', fill the password field with the provided password, and click the 'Continue' button to submit the Clerk sign-in form.
+        # -> Fill the email/username field with 'alaajarad', fill the password field with the provided password, and click the 'Continue' button to submit the Clerk sign-in form.
         # Continue button
         elem = page.get_by_role('button', name='Continue', exact=True)
         await elem.click(timeout=10000)

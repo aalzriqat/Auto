@@ -49,13 +49,13 @@ async def run_test():
         # Enter email or username text field
         elem = page.locator('[id="identifier-field"]')
         await elem.wait_for(state="visible", timeout=10000)
-        await elem.fill("***REMOVED-LEAKED-USERNAME***")
+        await elem.fill("alaajarad")
         
         # -> Fill the 'Email address or username' field with the provided username, fill the 'Password' field with the provided password, then click the 'Continue' button to submit the sign-in form.
         # Enter your password password field
         elem = page.locator('[id="password-field"]')
         await elem.wait_for(state="visible", timeout=10000)
-        await elem.fill("***REMOVED-LEAKED-PASSWORD***")
+        await elem.fill("Alaa@14111991")
         
         # -> Fill the 'Email address or username' field with the provided username, fill the 'Password' field with the provided password, then click the 'Continue' button to submit the sign-in form.
         # Continue button
