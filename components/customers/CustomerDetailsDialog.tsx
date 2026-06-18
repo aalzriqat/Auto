@@ -304,38 +304,48 @@ export function CustomerDetailsDialog({
                           </span>
                         </div>
 
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 bg-muted/50 p-3 rounded-md">
+                        <div className={`grid grid-cols-2 ${quote.companyId ? "md:grid-cols-4" : ""} gap-4 bg-muted/50 p-3 rounded-md`}>
                           <div>
                             <p className="text-xs text-muted-foreground">{t("VehiclePrice" as any)}</p>
                             <p className="font-medium">{quote.vehiclePrice?.toLocaleString()} JOD</p>
                           </div>
-                          <div>
-                            <p className="text-xs text-muted-foreground">{t("DownPayment" as any)}</p>
-                            <p className="font-medium">{quote.downPayment?.toLocaleString()} JOD</p>
-                          </div>
-                          <div>
-                            <p className="text-xs text-muted-foreground">{t("Term" as any)}</p>
-                            <p className="font-medium">{quote.termMonths} Months</p>
-                          </div>
-                          <div>
-                            <p className="text-xs text-muted-foreground">{t("ProfitRate" as any)}</p>
-                            <p className="font-medium">{quote.profitRateApplied || 0}%</p>
-                          </div>
+                          {quote.companyId && (
+                            <div>
+                              <p className="text-xs text-muted-foreground">{t("DownPayment" as any)}</p>
+                              <p className="font-medium">{quote.downPayment?.toLocaleString()} JOD</p>
+                            </div>
+                          )}
+                          {quote.companyId && (
+                            <div>
+                              <p className="text-xs text-muted-foreground">{t("Term" as any)}</p>
+                              <p className="font-medium">{quote.termMonths} Months</p>
+                            </div>
+                          )}
+                          {quote.companyId && (
+                            <div>
+                              <p className="text-xs text-muted-foreground">{t("ProfitRate" as any)}</p>
+                              <p className="font-medium">{quote.profitRateApplied || 0}%</p>
+                            </div>
+                          )}
                         </div>
 
-                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 border-t pt-3">
+                        <div className={`grid grid-cols-2 ${quote.companyId ? "md:grid-cols-3" : ""} gap-4 border-t pt-3`}>
                           <div>
-                            <p className="text-xs text-muted-foreground">{t("FinancedAmount" as any)}</p>
+                            <p className="text-xs text-muted-foreground">{t("TotalAmountDueFinanced" as any)}</p>
                             <p className="font-medium">{quote.totalFinancedAmount?.toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</p>
                           </div>
-                          <div>
-                            <p className="text-xs text-muted-foreground">{t("TotalProfit" as any)}</p>
-                            <p className="font-medium text-orange-600">{quote.totalProfit?.toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</p>
-                          </div>
-                          <div className="bg-primary/10 -m-2 p-2 rounded-md text-center">
-                            <p className="text-xs text-primary font-medium">{t("MonthlyInstallment" as any)}</p>
-                            <p className="text-lg font-bold text-primary">{quote.monthlyInstallment?.toLocaleString(undefined, { minimumFractionDigits: 2 })} <span className="text-xs font-normal">JOD</span></p>
-                          </div>
+                          {quote.companyId && (
+                            <div>
+                              <p className="text-xs text-muted-foreground">{t("TotalProfit" as any)}</p>
+                              <p className="font-medium text-orange-600">{quote.totalProfit?.toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</p>
+                            </div>
+                          )}
+                          {quote.companyId && (
+                            <div className="bg-primary/10 -m-2 p-2 rounded-md text-center">
+                              <p className="text-xs text-primary font-medium">{t("MonthlyInstallment" as any)}</p>
+                              <p className="text-lg font-bold text-primary">{quote.monthlyInstallment?.toLocaleString(undefined, { minimumFractionDigits: 2 })} <span className="text-xs font-normal">JOD</span></p>
+                            </div>
+                          )}
                         </div>
 
                         <div className="flex justify-between items-center text-xs text-muted-foreground pt-2">
@@ -431,7 +441,7 @@ export function CustomerDetailsDialog({
             selectedCustomer={customer}
             selectedResult={{
               totalFinancedAmount: printingQuote.totalFinancedAmount,
-              recipientName: `${customer.firstName} ${customer.lastName}`,
+              recipientName: printingQuote.recipientName || `${customer.firstName} ${customer.lastName}`,
             }}
             dateStr={format(printingQuote.createdAt, "PP")}
             orgBranding={orgBranding}

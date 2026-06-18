@@ -31,6 +31,7 @@ export const saveQuote = mutation({
     monthlyInstallment: v.optional(v.number()),
     profitRateApplied: v.optional(v.number()),
     totalProfit: v.optional(v.number()),
+    recipientName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     // We don't have MANAGE_SALES in permissions yet, using MANAGE_VEHICLES/VIEW_CUSTOMERS

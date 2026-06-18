@@ -418,6 +418,8 @@ export default defineSchema({
     profitRateApplied: v.optional(v.number()),
     totalProfit: v.optional(v.number()),
 
+    recipientName: v.optional(v.string()), // Who the quote is addressed to (e.g. a bank, for installment deals)
+
     status: v.union(v.literal("DRAFT"), v.literal("SHARED"), v.literal("ACCEPTED"), v.literal("EXPIRED")),
     expiresAt: v.optional(v.number()),
     createdBy: v.id("users"),

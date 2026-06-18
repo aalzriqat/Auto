@@ -141,6 +141,7 @@ export function Step3Review({
         monthlyInstallment: selectedResult.monthlyInstallment,
         profitRateApplied: (selectedResult as any).profitRateApplied,
         totalProfit: selectedResult.totalProfit,
+        recipientName: recipientName.trim() || undefined,
       });
 
       toast.success("Quote generated successfully");
