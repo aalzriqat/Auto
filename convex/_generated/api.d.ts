@@ -50,6 +50,7 @@ import type * as reports from "../reports.js";
 import type * as roles from "../roles.js";
 import type * as sales from "../sales.js";
 import type * as seedDocuments from "../seedDocuments.js";
+import type * as support from "../support.js";
 import type * as tasks from "../tasks.js";
 import type * as test_drives from "../test_drives.js";
 import type * as transactions from "../transactions.js";
@@ -122,6 +123,7 @@ declare const fullApi: ApiFromModules<{
   roles: typeof roles;
   sales: typeof sales;
   seedDocuments: typeof seedDocuments;
+  support: typeof support;
   tasks: typeof tasks;
   test_drives: typeof test_drives;
   transactions: typeof transactions;
