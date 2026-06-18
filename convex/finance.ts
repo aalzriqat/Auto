@@ -1,6 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 
 // --- Finance Companies ---
@@ -32,7 +32,7 @@ export const createCompany = mutation({
     acceptedStatuses: v.optional(v.array(v.id("orgCustomerStatuses"))),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_SETTINGS]);
+    await requireOwner(ctx, args.orgId);
     return await ctx.db.insert("financeCompanies", {
       ...args,
     });
@@ -56,7 +56,7 @@ export const updateCompany = mutation({
     acceptedStatuses: v.optional(v.array(v.id("orgCustomerStatuses"))),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_SETTINGS]);
+    await requireOwner(ctx, args.orgId);
     const { id, orgId, ...updates } = args;
     
     const existing = await ctx.db.get(id);
@@ -72,7 +72,7 @@ export const deleteCompany = mutation({
     orgId: v.id("organizations"),
   },
   handler: async (ctx, { id, orgId }) => {
-    await requireTenantAuth(ctx, orgId, [PERMISSIONS.MANAGE_SETTINGS]);
+    await requireOwner(ctx, orgId);
     const existing = await ctx.db.get(id);
     if (!existing || existing.orgId !== orgId) throw new ConvexError("Not found");
     await ctx.db.delete(id);

@@ -84,24 +84,67 @@ const PERMISSION_GROUPS = [
     ]
   },
   {
+    id: "reports",
+    label: "Reports",
+    baseView: PERMISSIONS.VIEW_REPORTS,
+    tabs: [],
+    actions: [],
+  },
+  {
+    id: "finance",
+    label: "Finance",
+    baseView: PERMISSIONS.VIEW_FINANCE,
+    tabs: [],
+    actions: [
+      { id: PERMISSIONS.MANAGE_FINANCE, label: "ManageFinance" },
+    ],
+  },
+  {
+    id: "commissions",
+    label: "Commissions",
+    baseView: PERMISSIONS.VIEW_COMMISSIONS,
+    tabs: [],
+    actions: [
+      { id: PERMISSIONS.MANAGE_COMMISSIONS, label: "ManageCommissions" },
+    ],
+  },
+  {
+    id: "approvals",
+    label: "Approvals",
+    baseView: PERMISSIONS.APPROVE_REQUESTS,
+    tabs: [],
+    actions: [],
+  },
+  {
     id: "settings",
     label: "Settings",
     baseView: PERMISSIONS.VIEW_SETTINGS,
     tabs: [],
     actions: [
       { id: PERMISSIONS.MANAGE_SETTINGS, label: "Manage Settings" },
+      { id: PERMISSIONS.EDIT_ORG, label: "EditOrganizationDetails" },
       { id: PERMISSIONS.MANAGE_USERS, label: "Manage Users & Roles" },
       { id: PERMISSIONS.VIEW_COST_PRICE, label: "View Cost Price" },
-    ]
+    ],
+    // Settings administration is hard-restricted to the OWNER role on the
+    // backend (requireOwner) regardless of this flag, so the toggle is
+    // locked here for every other role to avoid implying it's grantable.
+    ownerLocked: true,
   }
 ];
 
 export function RolePermissionsEditor({
   selectedPermissions,
-  onChange
+  onChange,
+  isOwnerRole = false,
+  disabled = false,
 }: {
   selectedPermissions: string[];
   onChange: (permissions: string[]) => void;
+  /** True when editing the built-in OWNER role itself — OWNER always has every permission. */
+  isOwnerRole?: boolean;
+  /** Disables every control (used for the OWNER role, whose permissions can't be changed). */
+  disabled?: boolean;
 }) {
   const { t } = useLanguage();
 
@@ -132,6 +175,7 @@ export function RolePermissionsEditor({
     <Accordion type="multiple" className="w-full space-y-2">
       {PERMISSION_GROUPS.map((group) => {
         const hasBaseAccess = selectedPermissions.includes(group.baseView);
+        const isGroupLocked = disabled || (!!(group as any).ownerLocked && !isOwnerRole);
 
         return (
           <AccordionItem key={group.id} value={group.id} className="border rounded-lg px-4 bg-card">
@@ -148,19 +192,26 @@ export function RolePermissionsEditor({
                   <Switch
                     id={`base-${group.id}`}
                     checked={hasBaseAccess}
+                    disabled={isGroupLocked}
                     onCheckedChange={(c) => togglePermission(group.baseView, c)}
                   />
                 </div>
               </div>
             </AccordionTrigger>
             <AccordionContent className="pt-2 pb-4 space-y-6 border-t mt-2">
-              {!hasBaseAccess && (
+              {(group as any).ownerLocked && !isOwnerRole && (
+                <div className="text-sm text-amber-700 dark:text-amber-400 p-3 bg-amber-500/10 rounded-md border border-amber-500/30">
+                  {t("OwnerOnlyGroupNotice" as any)}
+                </div>
+              )}
+
+              {!hasBaseAccess && !isGroupLocked && (
                 <div className="text-sm text-muted-foreground p-3 bg-muted rounded-md border border-dashed">
                   {t("EnableModuleToggle" as any)}
                 </div>
               )}
 
-              <div className={`space-y-6 ${!hasBaseAccess ? 'opacity-50 pointer-events-none' : ''}`}>
+              <div className={`space-y-6 ${(!hasBaseAccess || isGroupLocked) ? 'opacity-50 pointer-events-none' : ''}`}>
                 {/* Tabs Configuration */}
                 {group.tabs.length > 0 && (
                   <div>
@@ -171,6 +222,7 @@ export function RolePermissionsEditor({
                           <Checkbox
                             id={tab.id}
                             checked={selectedPermissions.includes(tab.id)}
+                            disabled={isGroupLocked}
                             onCheckedChange={(c) => togglePermission(tab.id, c === true)}
                           />
                           <Label htmlFor={tab.id} className="text-xs cursor-pointer font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
@@ -202,6 +254,7 @@ export function RolePermissionsEditor({
                             <div className="flex bg-muted p-1 rounded-md">
                               <button
                                 type="button"
+                                disabled={isGroupLocked}
                                 onClick={() => handleActionChange(action.id, actionRequest, "NONE")}
                                 className={`px-3 py-1 text-xs rounded-sm font-medium transition-colors ${currentValue === "NONE" ? "bg-background shadow-sm text-foreground" : "text-muted-foreground hover:text-foreground"}`}
                               >
@@ -210,6 +263,7 @@ export function RolePermissionsEditor({
                               {actionRequest && (
                                 <button
                                   type="button"
+                                  disabled={isGroupLocked}
                                   onClick={() => handleActionChange(action.id, actionRequest, "REQUEST")}
                                   className={`px-3 py-1 text-xs rounded-sm font-medium transition-colors ${currentValue === "REQUEST" ? "bg-yellow-500/20 text-yellow-700 dark:text-yellow-400 shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
                                 >
@@ -218,6 +272,7 @@ export function RolePermissionsEditor({
                               )}
                               <button
                                 type="button"
+                                disabled={isGroupLocked}
                                 onClick={() => handleActionChange(action.id, actionRequest, "DIRECT")}
                                 className={`px-3 py-1 text-xs rounded-sm font-medium transition-colors ${currentValue === "DIRECT" ? "bg-green-500/20 text-green-700 dark:text-green-400 shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
                               >

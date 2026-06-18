@@ -14,10 +14,13 @@ export const backfillPermissions = internalMutation({
           permissions: ALL_PERMISSIONS,
         });
       } else if (role.name === "MANAGER") {
-        // Add new settings permissions to MANAGER if not present
+        // Add new settings/approval permissions to MANAGER if not present.
+        // manage:settings is intentionally NOT granted — settings administration
+        // is restricted to OWNER only; approvals use the dedicated approve:requests permission.
         const permissions = new Set(role.permissions);
         permissions.add("view:settings");
-        permissions.add("manage:settings");
+        permissions.add("approve:requests");
+        permissions.delete("manage:settings");
 
         await ctx.db.patch(role._id, {
           permissions: Array.from(permissions),

@@ -117,7 +117,7 @@ describe("Approvals Permissions", () => {
     ).rejects.toThrow("Unauthorized: You are not a member of this organization.");
   });
 
-  it("rejects users without MANAGE_SETTINGS from responding to approvals", async () => {
+  it("rejects users without APPROVE_REQUESTS from responding to approvals", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const orgId = await t.run(async (ctx) => {
       return await ctx.db.insert("organizations", {
@@ -179,7 +179,7 @@ describe("Approvals Permissions", () => {
       });
     });
 
-    // Try to approve the request without MANAGE_SETTINGS
+    // Try to approve the request without APPROVE_REQUESTS
     await expect(
       asSalesperson.mutation(api.approvals.respondToApproval, {
         orgId,

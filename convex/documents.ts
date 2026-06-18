@@ -1,6 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { rateLimiter } from "./rateLimit";
 
@@ -36,7 +36,7 @@ export const addRule = mutation({
     description: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_SETTINGS]);
+    await requireOwner(ctx, args.orgId);
 
     await ctx.db.insert("companyDocumentRules", {
       orgId: args.orgId,
@@ -54,7 +54,7 @@ export const removeRule = mutation({
     ruleId: v.id("companyDocumentRules"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_SETTINGS]);
+    await requireOwner(ctx, args.orgId);
 
     const rule = await ctx.db.get(args.ruleId);
     if (!rule || rule.orgId !== args.orgId) throw new ConvexError("Rule not found.");
@@ -161,7 +161,7 @@ export const updateDocumentStatus = mutation({
     rejectionReason: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_SETTINGS]);
+    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
 
     const doc = await ctx.db.get(args.documentId);
     if (!doc || doc.orgId !== args.orgId) throw new ConvexError("Document not found");

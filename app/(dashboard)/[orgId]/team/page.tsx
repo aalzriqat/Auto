@@ -91,20 +91,22 @@ export default function TeamPage() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
         {canManageUsers && (
           <div className="flex gap-2">
-            <Button
-              variant="outline"
-              onClick={async () => {
-                if (!activeOrgId) return;
-                try {
-                  const n = await syncRolePermissions({ orgId: activeOrgId });
-                  toast.success(`Synced ${n} roles to latest permission templates.`);
-                } catch (e: any) {
-                  toast.error(e.message ?? "Sync failed.");
-                }
-              }}
-            >
-              <RefreshCw className="me-2 h-4 w-4" /> {t("SyncRolePermissions" as any)}
-            </Button>
+            {isOwner && (
+              <Button
+                variant="outline"
+                onClick={async () => {
+                  if (!activeOrgId) return;
+                  try {
+                    const n = await syncRolePermissions({ orgId: activeOrgId });
+                    toast.success(`Synced ${n} roles to latest permission templates.`);
+                  } catch (e: any) {
+                    toast.error(e.message ?? "Sync failed.");
+                  }
+                }}
+              >
+                <RefreshCw className="me-2 h-4 w-4" /> {t("SyncRolePermissions" as any)}
+              </Button>
+            )}
             <Button onClick={() => setIsInviteOpen(true)}>
               <Plus className="me-2 h-4 w-4" /> {t("AddMember" as any)}
             </Button>
@@ -115,7 +117,7 @@ export default function TeamPage() {
       <Tabs defaultValue="members" className="w-full">
         <TabsList className="mb-4">
           <TabsTrigger value="members">{t("Members" as any)}</TabsTrigger>
-          {canManageUsers && <TabsTrigger value="roles">{t("RolesPermissions" as any)}</TabsTrigger>}
+          {isOwner && <TabsTrigger value="roles">{t("RolesPermissions" as any)}</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="members">
@@ -256,7 +258,7 @@ export default function TeamPage() {
           </div>
         </TabsContent>
 
-        {canManageUsers && (
+        {isOwner && (
           <TabsContent value="roles">
             <div className="rounded-md border overflow-x-auto">
               <Table>

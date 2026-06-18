@@ -1,6 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
@@ -47,7 +47,7 @@ export const get = query({
 
 /**
  * Creates a custom role within an organization.
- * Requires MANAGE_ROLES permission.
+ * Owner-only — role/permission management can't be delegated.
  */
 export const create = mutation({
   args: {
@@ -56,7 +56,7 @@ export const create = mutation({
     permissions: v.array(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_ROLES]);
+    await requireOwner(ctx, args.orgId);
 
     // Prevent duplicate role names within the same org
     const existingRoles = await ctx.db
@@ -81,7 +81,7 @@ export const create = mutation({
 
 /**
  * Updates a role's name and/or permissions.
- * Requires MANAGE_ROLES permission.
+ * Owner-only — role/permission management can't be delegated.
  * The built-in OWNER role cannot be renamed.
  */
 export const update = mutation({
@@ -92,7 +92,7 @@ export const update = mutation({
     permissions: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_ROLES]);
+    await requireOwner(ctx, args.orgId);
 
     const role = await ctx.db.get(args.roleId);
     if (!role || role.isDeleted || role.orgId !== args.orgId) {
@@ -125,7 +125,7 @@ export const remove = mutation({
     roleId: v.id("roles"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_ROLES]);
+    await requireOwner(ctx, args.orgId);
 
     const role = await ctx.db.get(args.roleId);
     if (!role || role.isDeleted || role.orgId !== args.orgId) {

@@ -8,7 +8,7 @@ export default function SettingsLayout({
   children: React.ReactNode;
 }) {
   return (
-    <RoleGuard permissions={["view:settings"]}>
+    <RoleGuard ownerOnly>
       {children}
     </RoleGuard>
   );

@@ -42,15 +42,17 @@ export function EditRoleDialog({
     }
   }, [role]);
 
+  const isOwnerRole = role?.name === "OWNER";
+
   const handleSave = async () => {
-    if (!activeOrgId || !role) return;
-    
+    if (!activeOrgId || !role || isOwnerRole) return;
+
     setIsSubmitting(true);
     try {
       await updateRole({
         orgId: activeOrgId,
         roleId: role._id,
-        name: role.name === "OWNER" ? undefined : name,
+        name,
         permissions,
       });
       toast.success(t("RoleUpdated" as any));
@@ -77,18 +79,23 @@ export function EditRoleDialog({
                 id="role-name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                disabled={role?.name === "OWNER"}
+                disabled={isOwnerRole}
               />
-              {role?.name === "OWNER" && (
+              {isOwnerRole && (
                 <p className="text-xs text-muted-foreground">{t("OwnerRoleCannotBeRenamed" as any)}</p>
               )}
             </div>
 
             <div className="space-y-2">
               <Label>{t("Permissions" as any)}</Label>
-              <RolePermissionsEditor 
+              {isOwnerRole && (
+                <p className="text-xs text-muted-foreground">{t("OwnerRolePermissionsLocked" as any)}</p>
+              )}
+              <RolePermissionsEditor
                 selectedPermissions={permissions}
                 onChange={setPermissions}
+                isOwnerRole={isOwnerRole}
+                disabled={isOwnerRole}
               />
             </div>
           </div>
@@ -98,7 +105,7 @@ export function EditRoleDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isSubmitting}>
             {t("Cancel" as any)}
           </Button>
-          <Button onClick={handleSave} disabled={isSubmitting}>
+          <Button onClick={handleSave} disabled={isSubmitting || isOwnerRole}>
             {isSubmitting ? t("Saving" as any) : t("Save" as any)}
           </Button>
         </DialogFooter>

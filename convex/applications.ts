@@ -180,7 +180,7 @@ export const updateStatus = mutation({
 
     if (args.status === "APPROVED" && app.status !== "APPROVED") {
       // Verify permissions for approval
-      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_SETTINGS]); // Only managers can approve
+      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]); // Only managers can approve
       approvedBy = auth.user._id;
       approvedAt = Date.now();
     }

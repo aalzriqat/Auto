@@ -1,6 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 
 export const list = query({
@@ -36,7 +36,7 @@ export const add = mutation({
     isActive: v.boolean(),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_SETTINGS]);
+    await requireOwner(ctx, args.orgId);
     
     await ctx.db.insert("branches", {
       orgId: args.orgId,
@@ -60,7 +60,7 @@ export const update = mutation({
     isActive: v.boolean(),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_SETTINGS]);
+    await requireOwner(ctx, args.orgId);
     
     const branch = await ctx.db.get(args.id);
     if (!branch || branch.orgId !== args.orgId) throw new ConvexError("Branch not found.");
@@ -81,7 +81,7 @@ export const migrateToDefaultBranch = mutation({
     orgId: v.id("organizations"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_SETTINGS]);
+    await requireOwner(ctx, args.orgId);
     
     // Check if any branch exists
     const existing = await ctx.db.query("branches").withIndex("by_org", q => q.eq("orgId", args.orgId)).first();

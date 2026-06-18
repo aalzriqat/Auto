@@ -6,12 +6,15 @@ import { useOrg } from "@/components/providers/OrgProvider";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
-export function RoleGuard({ 
-  children, 
-  permissions 
-}: { 
+export function RoleGuard({
+  children,
+  permissions = [],
+  ownerOnly = false,
+}: {
   children: React.ReactNode;
-  permissions: string[];
+  permissions?: string[];
+  /** When true, only the OWNER role may pass — overrides `permissions`. */
+  ownerOnly?: boolean;
 }) {
   const { activeOrgId } = useOrg();
   const router = useRouter();
@@ -24,14 +27,16 @@ export function RoleGuard({
 
   useEffect(() => {
     if (membership !== undefined && activeOrgId) {
-      const hasPermission = permissions.every(p => membership.permissions.includes(p));
-      if (!hasPermission) {
+      const hasAccess = ownerOnly
+        ? membership.roleName === "OWNER"
+        : permissions.every(p => membership.permissions.includes(p));
+      if (!hasAccess) {
         router.replace("/"); // Redirect to dashboard if no permission
       } else {
         setIsChecking(false);
       }
     }
-  }, [membership, activeOrgId, permissions, router]);
+  }, [membership, activeOrgId, permissions, ownerOnly, router]);
 
   if (isChecking || membership === undefined || !activeOrgId) {
     return (
