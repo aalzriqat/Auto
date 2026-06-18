@@ -9,9 +9,20 @@ import type { MutationCtx } from "./_generated/server";
 const CONTACT_FORM_TO_EMAIL = "support@autoflowdealer.com";
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+type Inbox = "support" | "info";
+
+const FROM_EMAIL: Record<Inbox, string> = {
+  support: "support@autoflowdealer.com",
+  info: "info@autoflowdealer.com",
+};
+
+function inboxForAddress(toEmail: string): Inbox {
+  return toEmail.toLowerCase().includes("info@") ? "info" : "support";
+}
+
 // Shared by the Resend inbound webhook and the public contact form below —
 // both just need to land a message in a thread keyed by participant email
-// and fire the one-time auto-reply.
+// + inbox, and fire the one-time auto-reply.
 async function recordSupportMessage(
   ctx: MutationCtx,
   args: {
@@ -25,10 +36,13 @@ async function recordSupportMessage(
   }
 ) {
   const email = args.fromEmail.toLowerCase().trim();
+  const inbox = inboxForAddress(args.toEmail);
 
   let thread = await ctx.db
     .query("supportThreads")
-    .withIndex("by_participantEmail", (q) => q.eq("participantEmail", email))
+    .withIndex("by_participantEmail_and_inbox", (q) =>
+      q.eq("participantEmail", email).eq("inbox", inbox)
+    )
     .first();
 
   const now = Date.now();
@@ -39,6 +53,7 @@ async function recordSupportMessage(
       participantName: args.fromName,
       subject: args.subject,
       status: "OPEN",
+      inbox,
       lastMessageAt: now,
     });
     thread = await ctx.db.get(threadId);
@@ -70,6 +85,7 @@ async function recordSupportMessage(
       toEmail: email,
       participantName: args.fromName,
       subject: args.subject,
+      inbox,
     });
   }
 }
@@ -140,6 +156,7 @@ export const submitContactMessage = mutation({
 
 export const listThreads = query({
   args: {
+    inbox: v.union(v.literal("support"), v.literal("info")),
     status: v.optional(v.union(v.literal("OPEN"), v.literal("CLOSED"))),
     paginationOpts: paginationOptsValidator,
   },
@@ -149,14 +166,14 @@ export const listThreads = query({
     if (args.status) {
       return await ctx.db
         .query("supportThreads")
-        .withIndex("by_status", (q) => q.eq("status", args.status!))
+        .withIndex("by_inbox_and_status", (q) => q.eq("inbox", args.inbox).eq("status", args.status!))
         .order("desc")
         .paginate(args.paginationOpts);
     }
 
     return await ctx.db
       .query("supportThreads")
-      .withIndex("by_lastMessageAt")
+      .withIndex("by_inbox_and_lastMessageAt", (q) => q.eq("inbox", args.inbox))
       .order("desc")
       .paginate(args.paginationOpts);
   },
@@ -205,6 +222,7 @@ export const requireSuperAdminForAction = internalQuery({
 export const recordOutboundMessage = internalMutation({
   args: {
     threadId: v.id("supportThreads"),
+    fromEmail: v.string(),
     toEmail: v.string(),
     bodyText: v.string(),
     resendEmailId: v.optional(v.string()),
@@ -214,7 +232,7 @@ export const recordOutboundMessage = internalMutation({
     await ctx.db.insert("supportMessages", {
       threadId: args.threadId,
       direction: "OUTBOUND",
-      fromEmail: "support@autoflowdealer.com",
+      fromEmail: args.fromEmail,
       toEmail: args.toEmail,
       bodyText: args.bodyText,
       resendEmailId: args.resendEmailId,
@@ -242,6 +260,7 @@ export const sendReply = action({
       toEmail: threadData.participantEmail,
       subject: threadData.subject.startsWith("Re:") ? threadData.subject : `Re: ${threadData.subject}`,
       bodyText: args.bodyText,
+      inbox: threadData.inbox,
     });
 
     if (!result.success) {
@@ -250,6 +269,7 @@ export const sendReply = action({
 
     await ctx.runMutation(internal.support.recordOutboundMessage, {
       threadId: args.threadId,
+      fromEmail: FROM_EMAIL[threadData.inbox],
       toEmail: threadData.participantEmail,
       bodyText: args.bodyText,
       resendEmailId: result.resendEmailId,
@@ -275,17 +295,20 @@ export const sendAutoReply = internalAction({
     toEmail: v.string(),
     participantName: v.optional(v.string()),
     subject: v.string(),
+    inbox: v.union(v.literal("support"), v.literal("info")),
   },
   handler: async (ctx, args) => {
     const result = await ctx.runAction(internal.email.sendAutoReplyEmail, {
       toEmail: args.toEmail,
       participantName: args.participantName,
       subject: args.subject,
+      inbox: args.inbox,
     });
 
     if (result.success) {
       await ctx.runMutation(internal.support.recordOutboundMessage, {
         threadId: args.threadId,
+        fromEmail: FROM_EMAIL[args.inbox],
         toEmail: args.toEmail,
         bodyText: "(Automated acknowledgment — your message was received and a team member will follow up shortly.)",
         resendEmailId: result.resendEmailId,

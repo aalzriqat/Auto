@@ -231,12 +231,18 @@ export const sendNewAccountCredentials = internalAction({
   },
 });
 
-/** Sends a reply from the company support inbox (support@autoflowdealer.com) to a subscriber. */
+const SUPPORT_INBOX_FROM: Record<"support" | "info", string> = {
+  support: "AutoFlow Support <support@autoflowdealer.com>",
+  info: "AutoFlow <info@autoflowdealer.com>",
+};
+
+/** Sends a reply from the company support or info inbox to a subscriber. */
 export const sendSupportReply = internalAction({
   args: {
     toEmail: v.string(),
     subject: v.string(),
     bodyText: v.string(),
+    inbox: v.union(v.literal("support"), v.literal("info")),
   },
   handler: async (ctx, args): Promise<{ success: boolean; resendEmailId?: string; error?: string }> => {
     const status = await rateLimiter.limit(ctx, "email");
@@ -260,7 +266,7 @@ export const sendSupportReply = internalAction({
 
     try {
       const result = await resend.emails.send({
-        from: 'AutoFlow Support <support@autoflowdealer.com>',
+        from: SUPPORT_INBOX_FROM[args.inbox],
         to: args.toEmail,
         subject: args.subject,
         html: emailHtml,
@@ -273,12 +279,13 @@ export const sendSupportReply = internalAction({
   },
 });
 
-/** Professional acknowledgment sent automatically the first time a new sender emails support@autoflowdealer.com. */
+/** Professional acknowledgment sent automatically the first time a new sender emails support@ or info@autoflowdealer.com. */
 export const sendAutoReplyEmail = internalAction({
   args: {
     toEmail: v.string(),
     participantName: v.optional(v.string()),
     subject: v.string(),
+    inbox: v.union(v.literal("support"), v.literal("info")),
   },
   handler: async (ctx, args): Promise<{ success: boolean; resendEmailId?: string; error?: string }> => {
     const status = await rateLimiter.limit(ctx, "email");
@@ -318,7 +325,7 @@ export const sendAutoReplyEmail = internalAction({
 
     try {
       const result = await resend.emails.send({
-        from: 'AutoFlow Support <support@autoflowdealer.com>',
+        from: SUPPORT_INBOX_FROM[args.inbox],
         to: args.toEmail,
         subject: replySubject,
         html: emailHtml,

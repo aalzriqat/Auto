@@ -744,7 +744,7 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_createdAt", ["createdAt"]),
 
-  // ─── Company-level support inbox (support@autoflowdealer.com) ─────────────
+  // ─── Company-level support inboxes (support@ / info@ autoflowdealer.com) ───
   // Not org-scoped — this is the AutoFlow operator's own inbox for talking to
   // subscriber dealerships, separate entirely from any tenant's data.
 
@@ -753,12 +753,15 @@ export default defineSchema({
     participantName: v.optional(v.string()),
     subject: v.string(),
     status: v.union(v.literal("OPEN"), v.literal("CLOSED")),
+    // Which inbox this thread belongs to — support@ (help requests) vs info@
+    // (general/sales inquiries) get separate threads even for the same sender.
+    inbox: v.union(v.literal("support"), v.literal("info")),
     lastMessageAt: v.number(),
     autoRepliedAt: v.optional(v.number()),
   })
-    .index("by_participantEmail", ["participantEmail"])
-    .index("by_lastMessageAt", ["lastMessageAt"])
-    .index("by_status", ["status"]),
+    .index("by_participantEmail_and_inbox", ["participantEmail", "inbox"])
+    .index("by_inbox_and_lastMessageAt", ["inbox", "lastMessageAt"])
+    .index("by_inbox_and_status", ["inbox", "status"]),
 
   supportMessages: defineTable({
     threadId: v.id("supportThreads"),
