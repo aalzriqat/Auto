@@ -51,46 +51,67 @@ http.route({
         "svix-signature": svixSignature,
       }) as ClerkWebhookEvent;
     } catch {
+      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+        source: "clerk",
+        status: "error",
+        summary: "Signature verification failed",
+      });
       return new Response("Invalid signature", { status: 400 });
     }
 
     const { type, data } = event;
 
-    switch (type) {
-      case "user.created":
-      case "user.updated": {
-        type ClerkUserData = {
-          id: string;
-          email_addresses?: Array<{ email_address: string }>;
-          first_name?: string;
-          last_name?: string;
-          image_url?: string;
-        };
-        const d = data as ClerkUserData;
-        const email = d.email_addresses?.[0]?.email_address ?? "";
-        const name = [d.first_name, d.last_name].filter(Boolean).join(" ");
-        const imageUrl = d.image_url ?? "";
+    try {
+      switch (type) {
+        case "user.created":
+        case "user.updated": {
+          type ClerkUserData = {
+            id: string;
+            email_addresses?: Array<{ email_address: string }>;
+            first_name?: string;
+            last_name?: string;
+            image_url?: string;
+          };
+          const d = data as ClerkUserData;
+          const email = d.email_addresses?.[0]?.email_address ?? "";
+          const name = [d.first_name, d.last_name].filter(Boolean).join(" ");
+          const imageUrl = d.image_url ?? "";
 
-        await ctx.runMutation(internal.users.updateOrCreateUser, {
-          clerkId: d.id,
-          email,
-          name: name || undefined,
-          imageUrl: imageUrl || undefined,
-        });
-        break;
-      }
-      case "user.deleted": {
-        const d = data as { id?: string };
-        if (d.id) {
-          await ctx.runMutation(internal.users.deleteUser, {
+          await ctx.runMutation(internal.users.updateOrCreateUser, {
             clerkId: d.id,
+            email,
+            name: name || undefined,
+            imageUrl: imageUrl || undefined,
           });
+          break;
         }
-        break;
+        case "user.deleted": {
+          const d = data as { id?: string };
+          if (d.id) {
+            await ctx.runMutation(internal.users.deleteUser, {
+              clerkId: d.id,
+            });
+          }
+          break;
+        }
+        default:
+          break;
       }
-      default:
-        break;
+    } catch (err) {
+      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+        source: "clerk",
+        status: "error",
+        summary: type,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return new Response(null, { status: 200 });
     }
+
+    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+      source: "clerk",
+      status: "success",
+      summary: type,
+    });
 
     return new Response(null, { status: 200 });
   }),
@@ -165,11 +186,27 @@ http.route({
     const messageText: string | undefined =
       message.type === "text" ? message.text?.body : undefined;
 
-    await ctx.runMutation(internal.whatsapp.handleIncomingMessage, {
-      orgId,
-      senderPhone,
-      senderName,
-      messageText,
+    try {
+      await ctx.runMutation(internal.whatsapp.handleIncomingMessage, {
+        orgId,
+        senderPhone,
+        senderName,
+        messageText,
+      });
+    } catch (err) {
+      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+        source: "whatsapp",
+        status: "error",
+        summary: `Message from ${senderPhone}`,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return new Response(null, { status: 200 });
+    }
+
+    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+      source: "whatsapp",
+      status: "success",
+      summary: `Message from ${senderPhone}`,
     });
 
     return new Response(null, { status: 200 });

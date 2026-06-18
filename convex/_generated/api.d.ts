@@ -12,6 +12,7 @@ import type * as adminAudit from "../adminAudit.js";
 import type * as adminAuth from "../adminAuth.js";
 import type * as adminData from "../adminData.js";
 import type * as adminOrgs from "../adminOrgs.js";
+import type * as adminSystem from "../adminSystem.js";
 import type * as adminUsers from "../adminUsers.js";
 import type * as applications from "../applications.js";
 import type * as approvals from "../approvals.js";
@@ -83,6 +84,7 @@ declare const fullApi: ApiFromModules<{
   adminAuth: typeof adminAuth;
   adminData: typeof adminData;
   adminOrgs: typeof adminOrgs;
+  adminSystem: typeof adminSystem;
   adminUsers: typeof adminUsers;
   applications: typeof applications;
   approvals: typeof approvals;
