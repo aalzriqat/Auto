@@ -11,6 +11,7 @@
 import type * as adminAudit from "../adminAudit.js";
 import type * as adminAuth from "../adminAuth.js";
 import type * as adminOrgs from "../adminOrgs.js";
+import type * as adminUsers from "../adminUsers.js";
 import type * as applications from "../applications.js";
 import type * as approvals from "../approvals.js";
 import type * as branches from "../branches.js";
@@ -80,6 +81,7 @@ declare const fullApi: ApiFromModules<{
   adminAudit: typeof adminAudit;
   adminAuth: typeof adminAuth;
   adminOrgs: typeof adminOrgs;
+  adminUsers: typeof adminUsers;
   applications: typeof applications;
   approvals: typeof approvals;
   branches: typeof branches;
