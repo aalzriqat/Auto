@@ -182,7 +182,7 @@ export default function CommissionsPage() {
         </div>
 
         {/* Salesperson summary strip */}
-        {bySalesperson.length > 1 && (
+        {canManage && bySalesperson.length > 1 && (
           <div className="flex flex-wrap gap-3">
             {bySalesperson.map(sp => (
               <div key={sp.id} className="flex items-center gap-2 rounded-lg border px-3 py-2 text-sm">
@@ -212,16 +212,18 @@ export default function CommissionsPage() {
               className="ps-3"
             />
           </div>
-          <SearchableSelect
-            value={filterSalesperson}
-            onValueChange={setFilterSalesperson}
-            className="w-[180px]"
-            placeholder={t("AllSalespeople" as any)}
-            options={[
-              { value: "all", label: t("AllSalespeople" as any) },
-              ...(members?.page.map(m => ({ value: m.userId, label: m.userName })) ?? []),
-            ]}
-          />
+          {canManage && (
+            <SearchableSelect
+              value={filterSalesperson}
+              onValueChange={setFilterSalesperson}
+              className="w-[180px]"
+              placeholder={t("AllSalespeople" as any)}
+              options={[
+                { value: "all", label: t("AllSalespeople" as any) },
+                ...(members?.page.map(m => ({ value: m.userId, label: m.userName })) ?? []),
+              ]}
+            />
+          )}
           <Select value={filterStatus} onValueChange={v => setFilterStatus(v as any)}>
             <SelectTrigger className="w-[140px]">
               <SelectValue placeholder={t("AllStatus" as any)} />

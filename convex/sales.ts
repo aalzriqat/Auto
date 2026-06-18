@@ -391,14 +391,20 @@ export const listCommissions = query({
     paidStatus: v.optional(v.union(v.literal("paid"), v.literal("unpaid"))),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_COMMISSIONS]);
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_COMMISSIONS]);
+
+    // Without MANAGE_COMMISSIONS, a salesperson can only see their own
+    // commissions — ignore whatever salespersonId was requested and force
+    // it to the caller, regardless of org-wide view requested via "all".
+    const canViewAll = role.permissions.includes(PERMISSIONS.MANAGE_COMMISSIONS);
+    const salespersonId = canViewAll ? args.salespersonId : user._id;
 
     let sales;
-    if (args.salespersonId) {
+    if (salespersonId) {
       sales = await ctx.db
         .query("sales")
         .withIndex("by_org_salesperson", (q) =>
-          q.eq("orgId", args.orgId).eq("salespersonId", args.salespersonId!)
+          q.eq("orgId", args.orgId).eq("salespersonId", salespersonId)
         )
         .filter((q) => q.neq(q.field("isDeleted"), true))
         .collect();
