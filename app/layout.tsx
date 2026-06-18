@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Inter, Cairo } from "next/font/google";
 import "./globals.css";
 import ConvexClientProvider from "@/components/ConvexClientProvider";
-import { ClerkProvider } from "@clerk/nextjs";
+import { ClerkProviderWithLocale } from "@/components/providers/ClerkProviderWithLocale";
 import { LanguageProvider } from "@/components/providers/LanguageProvider";
 
 const inter = Inter({
@@ -29,15 +29,15 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="ar" dir="rtl">
       <body
-        className={`${inter.variable} ${cairo.variable} font-inter antialiased`}
+        className={`${inter.variable} ${cairo.variable} font-cairo antialiased`}
       >
-        <ClerkProvider dynamic>
-          <LanguageProvider>
+        <LanguageProvider>
+          <ClerkProviderWithLocale>
             <ConvexClientProvider>{children}</ConvexClientProvider>
-          </LanguageProvider>
-        </ClerkProvider>
+          </ClerkProviderWithLocale>
+        </LanguageProvider>
       </body>
     </html>
   );

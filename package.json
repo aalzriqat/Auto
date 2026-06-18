@@ -3,7 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "pnpm": {
-    "onlyBuiltDependencies": ["@sentry/cli", "core-js", "esbuild", "sharp", "unrs-resolver"]
+    "onlyBuiltDependencies": [
+      "@sentry/cli",
+      "core-js",
+      "esbuild",
+      "sharp",
+      "unrs-resolver"
+    ]
   },
   "scripts": {
     "dev": "convex dev --start \"next dev -H 0.0.0.0\"",
@@ -13,6 +19,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@clerk/localizations": "^4.9.0",
     "@clerk/nextjs": "^7.4.2",
     "@convex-dev/rate-limiter": "^0.3.2",
     "@hookform/resolvers": "^3.9.0",
