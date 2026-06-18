@@ -25,7 +25,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Send, FileText, CheckCircle } from "lucide-react";
 import { CustomerFinancialsTab } from "@/components/customers/CustomerFinancialsTab";
-import { generateFinanceQuote } from "@/lib/pdf";
+import { QuotePrintTemplate } from "@/components/sales/QuotePrintTemplate";
+import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { toast } from "@/components/ui/sonner";
 
 interface CustomerDetailsDialogProps {
@@ -42,6 +43,21 @@ export function CustomerDetailsDialog({
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const [activeTab, setActiveTab] = useState("overview");
+  const [printingQuoteId, setPrintingQuoteId] = useState<Id<"quotes"> | null>(null);
+
+  const orgSettings = useOrgSettings();
+  const logoUrl = useQuery(
+    api.orgSettings.getLogoUrl,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
+  const orgBranding = {
+    name: orgSettings?.dealershipName,
+    logoUrl,
+    primaryColor: orgSettings?.primaryColor,
+    address: orgSettings?.dealershipAddress,
+    phone: orgSettings?.dealershipPhone,
+    currencySymbol: orgSettings?.currencySymbol,
+  };
 
   const customer = useQuery(
     api.customers.get,
@@ -58,6 +74,50 @@ export function CustomerDetailsDialog({
   );
 
   const createApplication = useMutation(api.applications.createFromQuote);
+
+  async function handleDownloadQuote(quote: any) {
+    setPrintingQuoteId(quote._id);
+    // Wait for the (now-mounted) print template to actually paint before capturing it.
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
+    const element = document.getElementById("pdf-quote-content");
+    if (!element) {
+      setPrintingQuoteId(null);
+      toast.error(t("FailedGeneratePDF" as any));
+      return;
+    }
+
+    try {
+      element.classList.remove("hidden");
+      element.style.position = "absolute";
+      element.style.left = "-9999px";
+      element.style.top = "-9999px";
+      element.style.display = "block";
+
+      const { default: html2canvas } = await import("html2canvas");
+      const { jsPDF } = await import("jspdf");
+
+      const canvas = await html2canvas(element, { scale: 2, useCORS: true });
+      const imgData = canvas.toDataURL("image/png");
+      const pdf = new jsPDF("p", "mm", "a4");
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+      pdf.addImage(imgData, "PNG", 0, 0, pdfWidth, pdfHeight);
+      pdf.save(`Quote_${customer?.firstName ?? ""}.pdf`);
+      toast.success(t("QuotePDFGenerated" as any));
+    } catch {
+      toast.error(t("FailedGeneratePDF" as any));
+    } finally {
+      element.style.display = "";
+      element.style.position = "";
+      element.style.left = "";
+      element.style.top = "";
+      element.classList.add("hidden");
+      setPrintingQuoteId(null);
+    }
+  }
+
+  const printingQuote = relations?.quotes?.find((q: any) => q._id === printingQuoteId);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -292,25 +352,7 @@ export function CustomerDetailsDialog({
                             className="h-8 gap-1 text-primary hover:text-primary/80"
                             onClick={(e) => {
                               e.stopPropagation();
-                              try {
-                                generateFinanceQuote(
-                                  "AutoFlow Dealership",
-                                  `${customer.firstName} ${customer.lastName}`,
-                                  quote.vehicleDesc,
-                                  quote.companyName,
-                                  quote.vehiclePrice || 0,
-                                  quote.downPayment || 0,
-                                  quote.termMonths,
-                                  quote.profitRateApplied || 0,
-                                  quote.totalFinancedAmount || 0,
-                                  quote.totalProfit || 0,
-                                  quote.monthlyInstallment || 0,
-                                  quote.vehicleId.vin || "N/A"
-                                );
-                                toast.success(t("QuotePDFGenerated" as any));
-                              } catch (err) {
-                                toast.error(t("FailedGeneratePDF" as any));
-                              }
+                              handleDownloadQuote(quote);
                             }}
                           >
                             <FileText className="w-4 h-4" />
@@ -379,6 +421,21 @@ export function CustomerDetailsDialog({
               </TabsContent>
             </div>
           </Tabs>
+        )}
+
+        {printingQuote && customer && (
+          <QuotePrintTemplate
+            paymentType={printingQuote.companyId ? "INSTALLMENT" : "CASH"}
+            wizardData={{} as any}
+            selectedVehicle={printingQuote.vehicle ?? undefined}
+            selectedCustomer={customer}
+            selectedResult={{
+              totalFinancedAmount: printingQuote.totalFinancedAmount,
+              recipientName: `${customer.firstName} ${customer.lastName}`,
+            }}
+            dateStr={format(printingQuote.createdAt, "PP")}
+            orgBranding={orgBranding}
+          />
         )}
       </DialogContent>
     </Dialog>

@@ -370,6 +370,7 @@ export const getRelations = query({
         const createdByUser = await ctx.db.get(quote.createdBy);
         return {
           ...quote,
+          vehicle: vehicle ?? null,
           vehicleDesc: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "Unknown",
           companyName: company ? company.name : "Cash Deal",
           createdByUserName: createdByUser && "name" in createdByUser ? createdByUser.name : "Unknown",
