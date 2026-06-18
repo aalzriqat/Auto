@@ -230,7 +230,7 @@ export default function DashboardPage() {
                 {t("RevenueTrend" as any) || "Revenue Trend"}<br /><span className="text-slate-500 font-normal">{trendRange}</span>
                 <div className="absolute -bottom-1 left-1/2 transform -translate-x-1/2 w-2 h-2 bg-white rotate-45"></div>
               </div>
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                 <LineChart data={lineChartData} margin={{ top: 20, right: 0, left: 20, bottom: 0 }}>
                   <Line
                     type="monotone"
@@ -311,7 +311,7 @@ export default function DashboardPage() {
 
           <div className="hidden sm:flex w-32 flex-col items-center justify-center mt-2">
             <div className="h-20 w-20">
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height="100%" minWidth={0}>
                 <PieChart>
                   <Pie
                     data={finalDonutData}

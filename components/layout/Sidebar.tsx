@@ -49,7 +49,7 @@ export function Sidebar() {
     activeOrgId ? { orgId: activeOrgId } : "skip"
   );
 
-  const canSeeApprovals = permissions.includes("manage:users");
+  const canSeeApprovals = permissions.includes("approve:requests");
   const pendingCount = useQuery(
     api.approvals.countPending,
     activeOrgId && canSeeApprovals ? { orgId: activeOrgId } : "skip"
