@@ -64,6 +64,32 @@ function emailButton(url: string, label: string): string {
   return `<a href="${url}" style="display:inline-block; background-color:#0f172a; color:#ffffff; text-decoration:none; padding:12px 24px; border-radius:8px; font-size:14px; font-weight:600;">${label}</a>`;
 }
 
+/**
+ * Plain wrapper for human-written replies — no branded banner, card, or
+ * "automated message" disclaimer, since a support agent actually typed this.
+ */
+function wrapPlainEmailHtml(preheader: string, bodyHtml: string): string {
+  return `
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  </head>
+  <body style="margin:0; padding:0; background-color:#ffffff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+    <span style="display:none; font-size:1px; color:#ffffff; line-height:1px; max-height:0; max-width:0; opacity:0; overflow:hidden;">${preheader}</span>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+      <tr>
+        <td style="padding:24px; color:#1f2937; font-size:14px; line-height:1.6;">
+          ${bodyHtml}
+          <p style="margin:24px 0 0; font-size:13px; color:#6b7280;">AutoFlow Support<br />support@autoflowdealer.com</p>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+}
+
 export const sendTaskAlarm = internalAction({
   args: {
     toEmail: v.string(),
@@ -221,7 +247,7 @@ export const sendSupportReply = internalAction({
     const resendApiKey = env.RESEND_API_KEY;
 
     const safeBody = escapeHtml(args.bodyText).replace(/\n/g, "<br />");
-    const emailHtml = wrapEmailHtml(
+    const emailHtml = wrapPlainEmailHtml(
       args.subject,
       `<div style="white-space:pre-wrap;">${safeBody}</div>`
     );
