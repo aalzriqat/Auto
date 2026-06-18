@@ -355,6 +355,7 @@ export const claimThread = mutation({
       claimedByUserId: user._id,
       claimedAt: Date.now(),
     });
+    await postAgentJoinedNotice(ctx, args.threadId, user._id, user.name);
 
     await logAdminAction(ctx, user, {
       action: "live_chat.claim",
@@ -383,6 +384,7 @@ export const acceptOffer = mutation({
       offeredAt: undefined,
       offerExpiresAt: undefined,
     });
+    await postAgentJoinedNotice(ctx, args.threadId, user._id, user.name);
 
     await logAdminAction(ctx, user, {
       action: "live_chat.accept",
@@ -614,6 +616,25 @@ export const heartbeat = mutation({
     }
   },
 });
+
+async function postAgentJoinedNotice(
+  ctx: MutationCtx,
+  threadId: Id<"liveChatThreads">,
+  agentUserId: Id<"users">,
+  agentName: string | undefined
+) {
+  const now = Date.now();
+  await ctx.db.insert("liveChatMessages", {
+    threadId,
+    senderType: "AGENT",
+    senderUserId: agentUserId,
+    senderName: agentName,
+    bodyText: `${agentName ?? "An agent"} joined the conversation.`,
+    createdAt: now,
+    isSystem: true,
+  });
+  await ctx.db.patch(threadId, { lastMessageAt: now });
+}
 
 async function revokeGrantsForThread(ctx: MutationCtx, threadId: Id<"liveChatThreads">) {
   const grants = await ctx.db

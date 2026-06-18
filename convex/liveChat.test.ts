@@ -213,6 +213,43 @@ describe("liveChat agent status (break/offline deferral)", () => {
   });
 });
 
+describe("liveChat agent-joined notice", () => {
+  test("accepting an offer posts a system notice that the agent joined", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asDealer } = await seedOrgAndDealer(t, "16");
+    const agent = await seedAgent(t, "A16");
+
+    const threadId = await asDealer.mutation(api.liveChat.startOrGetMyThread, { orgId });
+    await flushImmediate(t);
+    await agent.asAgent.mutation(api.liveChat.acceptOffer, { threadId });
+
+    const messages = await t.run(async (ctx) =>
+      ctx.db.query("liveChatMessages").withIndex("by_thread", (q) => q.eq("threadId", threadId)).collect()
+    );
+    const notice = messages.find((m) => m.isSystem);
+    expect(notice).toBeDefined();
+    expect(notice?.senderType).toBe("AGENT");
+    expect(notice?.bodyText).toContain("joined the conversation");
+  });
+
+  test("manually claiming a waiting thread also posts the joined notice", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asDealer } = await seedOrgAndDealer(t, "17");
+    const offlineAgent = await seedAgent(t, "A17", { isOnline: false });
+
+    const threadId = await asDealer.mutation(api.liveChat.startOrGetMyThread, { orgId });
+    await flushImmediate(t);
+    await offlineAgent.asAgent.mutation(api.liveChat.claimThread, { threadId });
+
+    const messages = await t.run(async (ctx) =>
+      ctx.db.query("liveChatMessages").withIndex("by_thread", (q) => q.eq("threadId", threadId)).collect()
+    );
+    const notice = messages.find((m) => m.isSystem);
+    expect(notice).toBeDefined();
+    expect(notice?.senderType).toBe("AGENT");
+  });
+});
+
 describe("liveChat dealer-initiated end", () => {
   test("a dealer can end their own active chat, posting a system notice", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
@@ -231,9 +268,8 @@ describe("liveChat dealer-initiated end", () => {
     const messages = await t.run(async (ctx) =>
       ctx.db.query("liveChatMessages").withIndex("by_thread", (q) => q.eq("threadId", threadId)).collect()
     );
-    const notice = messages.find((m) => m.isSystem);
+    const notice = messages.find((m) => m.isSystem && m.senderType === "DEALER");
     expect(notice).toBeDefined();
-    expect(notice?.senderType).toBe("DEALER");
   });
 
   test("ending a chat from the dealer side also revokes any active org-access grant", async () => {

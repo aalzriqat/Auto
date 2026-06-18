@@ -15,6 +15,12 @@ export const chatEn = {
   LiveChatEndChat: "End chat",
   LiveChatIdleFor: "Idle {time}",
   LiveChatAwayFor: "Away {time}",
+  LiveChatFaqTitle: "How can we help?",
+  LiveChatFaqSubtitle: "Pick a topic to find a quick answer, or chat with an agent any time.",
+  LiveChatFaqTalkToAgent: "Talk to an agent instead",
+  LiveChatFaqBack: "Back",
+  LiveChatFaqHelped: "That answered my question",
+  LiveChatFaqStillNeedHelp: "Still need help — chat with an agent",
 };
 
 export const chatAr = {
@@ -34,4 +40,10 @@ export const chatAr = {
   LiveChatEndChat: "إنهاء المحادثة",
   LiveChatIdleFor: "خامل {time}",
   LiveChatAwayFor: "غائب {time}",
+  LiveChatFaqTitle: "كيف يمكننا المساعدة؟",
+  LiveChatFaqSubtitle: "اختر موضوعاً للحصول على إجابة سريعة، أو تحدث مع أحد موظفي الدعم في أي وقت.",
+  LiveChatFaqTalkToAgent: "تحدث مع موظف دعم بدلاً من ذلك",
+  LiveChatFaqBack: "رجوع",
+  LiveChatFaqHelped: "هذا أجاب على سؤالي",
+  LiveChatFaqStillNeedHelp: "ما زلت بحاجة للمساعدة — تحدث مع موظف دعم",
 };
