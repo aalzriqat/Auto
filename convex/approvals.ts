@@ -101,7 +101,7 @@ export const respondToApproval = mutation({
   },
   handler: async (ctx, args) => {
     // Only managers/owners should be able to respond to approval requests
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_SETTINGS]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
 
     const request = await ctx.db.get(args.requestId);
     if (!request || request.orgId !== args.orgId) {
@@ -123,7 +123,12 @@ export const respondToApproval = mutation({
 export const countPending = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_SETTINGS]);
+    // Badge count — must never throw and crash the page.
+    try {
+      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    } catch {
+      return 0;
+    }
     const requests = await ctx.db
       .query("profitApprovalRequests")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
@@ -138,8 +143,8 @@ export const listPendingApprovals = query({
     orgId: v.id("organizations"),
   },
   handler: async (ctx, args) => {
-    // Only users with MANAGE_SETTINGS can see all pending approvals
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_SETTINGS]);
+    // Only users with APPROVE_REQUESTS can see all pending approvals
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
 
     const requests = await ctx.db
       .query("profitApprovalRequests")
