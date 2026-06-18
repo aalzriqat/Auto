@@ -69,7 +69,7 @@ export const sendTaskAlarm = internalAction({
 
     try {
       await resend.emails.send({
-        from: 'AutoFlow Tasks <onboarding@resend.dev>',
+        from: 'AutoFlow Tasks <notifications@mail.autoflowdealer.com>',
         to: args.toEmail,
         subject: `Task Reminder: ${args.taskTitle}`,
         html: emailHtml,
@@ -126,7 +126,7 @@ export const sendNewAccountCredentials = internalAction({
 
     try {
       await resend.emails.send({
-        from: 'AutoFlow Teams <onboarding@resend.dev>',
+        from: 'AutoFlow Teams <notifications@mail.autoflowdealer.com>',
         to: args.toEmail,
         subject: `Your AutoFlow account for ${args.orgName}`,
         html: emailHtml,
@@ -173,7 +173,7 @@ export const sendTeamInvite = internalAction({
 
     try {
       await resend.emails.send({
-        from: 'AutoFlow Teams <onboarding@resend.dev>',
+        from: 'AutoFlow Teams <notifications@mail.autoflowdealer.com>',
         to: args.toEmail,
         subject: `You're invited to join ${args.orgName} on AutoFlow`,
         html: emailHtml,
