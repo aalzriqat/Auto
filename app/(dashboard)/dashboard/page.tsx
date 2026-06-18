@@ -259,13 +259,21 @@ export default function DashboardEntryPage() {
   // agent console instead of the dealership-onboarding wizard below.
   const isSupportAgent = useQuery(api.supportAgentAuth.isSupportAgent, isAuthenticated ? {} : "skip");
 
+  const [isOnboarding, setIsOnboarding] = useState(false);
+
   useEffect(() => {
-    if (orgs && orgs.length > 0) {
+    if (orgs && orgs.length === 0 && isSupportAgent === false && !isOnboarding) {
+      setIsOnboarding(true);
+    }
+  }, [orgs, isSupportAgent, isOnboarding]);
+
+  useEffect(() => {
+    if (orgs && orgs.length > 0 && !isOnboarding) {
       router.replace(`/${orgs[0]!._id}/dashboard`);
     } else if (orgs && orgs.length === 0 && isSupportAgent === true) {
       router.replace("/support");
     }
-  }, [orgs, isSupportAgent, router]);
+  }, [orgs, isSupportAgent, router, isOnboarding]);
 
   if (orgs === undefined || (orgs.length === 0 && isSupportAgent === undefined)) {
     return <Spinner />;
@@ -275,7 +283,7 @@ export default function DashboardEntryPage() {
     return <Spinner />;
   }
 
-  if (orgs.length === 0) {
+  if (isOnboarding || orgs.length === 0) {
     return <Onboarding onComplete={(newOrgId) => router.replace(`/${newOrgId}/dashboard`)} />;
   }
 
