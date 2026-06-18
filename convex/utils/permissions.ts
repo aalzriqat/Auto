@@ -88,6 +88,9 @@ export const PERMISSIONS = {
   // Commissions
   VIEW_COMMISSIONS: "view:commissions",
   MANAGE_COMMISSIONS: "manage:commissions",
+
+  // Approvals (profit approvals, finance application approvals, document verification)
+  APPROVE_REQUESTS: "approve:requests", // Cache buster 1
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -137,11 +140,11 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.EDIT_TASKS,
       PERMISSIONS.DELETE_TASKS,
       PERMISSIONS.VIEW_REPORTS,
-      PERMISSIONS.VIEW_SETTINGS,
-      PERMISSIONS.MANAGE_SETTINGS,
+      PERMISSIONS.VIEW_SETTINGS, // read-only: branch/lead-source/customer-status dropdowns, org config
       PERMISSIONS.VIEW_COST_PRICE,
       PERMISSIONS.VIEW_COMMISSIONS,
       PERMISSIONS.MANAGE_COMMISSIONS,
+      PERMISSIONS.APPROVE_REQUESTS,
     ],
   },
   {

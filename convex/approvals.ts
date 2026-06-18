@@ -101,7 +101,7 @@ export const respondToApproval = mutation({
   },
   handler: async (ctx, args) => {
     // Only managers/owners should be able to respond to approval requests
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]); // Cache buster 2
 
     const request = await ctx.db.get(args.requestId);
     if (!request || request.orgId !== args.orgId) {
