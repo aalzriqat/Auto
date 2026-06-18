@@ -401,6 +401,16 @@ function generateTemporaryPassword(): string {
   return `Af${random}!9`;
 }
 
+/** Derives a Clerk-compatible username (this Clerk instance requires one): first initial + full last name. */
+function generateUsername(firstName: string, lastName: string, email: string, suffix: number): string {
+  const firstInitial = firstName.trim().charAt(0).toLowerCase().replace(/[^a-z0-9]/g, "");
+  const cleanLastName = lastName.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const base = `${firstInitial}${cleanLastName}`
+    || email.split("@")[0].toLowerCase().replace(/[^a-z0-9]/g, "")
+    || "user";
+  return suffix === 0 ? base : `${base}${suffix}`;
+}
+
 export const createAccount = action({
   args: {
     orgId: v.id("organizations"),
@@ -446,29 +456,43 @@ export const createAccount = action({
       let temporaryPassword: string | null = null;
 
       if (!clerkId) {
-        // 3a. No existing Clerk account — create a new one with an auto-generated password
+        // 3a. No existing Clerk account — create a new one with an auto-generated password + username
         temporaryPassword = generateTemporaryPassword();
         isNewClerkUser = true;
 
-        const response = await fetch("https://api.clerk.com/v1/users", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${clerkSecret}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            email_address: [args.email.toLowerCase().trim()],
-            password: temporaryPassword,
-            first_name: args.firstName.trim(),
-            last_name: args.lastName.trim() || undefined,
-            skip_password_checks: false,
-            skip_password_requirement: false,
-          }),
-        });
+        let response: Response | null = null;
+        let errorData: any = null;
 
-        if (!response.ok) {
-          const errorData = await response.json();
-          const firstError = errorData.errors?.[0];
+        // This Clerk instance requires a unique username — retry with a numeric suffix on collision.
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const username = generateUsername(args.firstName, args.lastName, args.email, attempt);
+
+          response = await fetch("https://api.clerk.com/v1/users", {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${clerkSecret}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              email_address: [args.email.toLowerCase().trim()],
+              password: temporaryPassword,
+              username,
+              first_name: args.firstName.trim(),
+              last_name: args.lastName.trim() || undefined,
+              skip_password_checks: false,
+              skip_password_requirement: false,
+            }),
+          });
+
+          if (response.ok) break;
+
+          errorData = await response.json();
+          const isUsernameTaken = errorData.errors?.some((e: any) => e.meta?.param_name === "username");
+          if (!isUsernameTaken) break;
+        }
+
+        if (!response!.ok) {
+          const firstError = errorData?.errors?.[0];
           if (firstError) {
             if (firstError.code === "form_data_missing" && firstError.meta?.param_names?.includes("last_name")) {
               throw new ConvexError("Family name is required. Please enter both first and last name.");
@@ -478,7 +502,7 @@ export const createAccount = action({
           throw new ConvexError("Failed to create user in Clerk");
         }
 
-        const clerkUser = await response.json();
+        const clerkUser = await response!.json();
         clerkId = clerkUser.id;
       }
 
