@@ -74,6 +74,13 @@ All shadcn/ui components are in `components/ui/`. Use `cn()` from `lib/utils.ts`
 - Library tests: `lib/*.test.ts`.
 - Environment is `jsdom` (see `vitest.config.ts`).
 
+### Super Admin dashboard
+
+- `/admin` is a developer-only, cross-tenant control panel — completely separate from per-org RBAC. Gated by `requireSuperAdmin(ctx)` (`convex/utils/tenancy.ts`), which checks the caller's email against the `SUPER_ADMIN_EMAILS` Convex env var (comma-separated). Set it via `npx convex env set SUPER_ADMIN_EMAILS "you@example.com"`.
+- Backend lives in `convex/admin*.ts` (`adminAuth`, `adminOrgs`, `adminUsers`, `adminData`, `adminSystem`, `adminAudit`). Frontend lives in `app/admin/` with its own layout/sidebar, outside `app/(dashboard)/[orgId]/`.
+- Can suspend/hard-delete any org, disable/delete/change-role any user across orgs, browse and edit/hard-delete any record in ~20 entity tables via a raw-JSON editor (`adminData.ts`), and view system health (cron heartbeats, webhook delivery log). Every admin mutation writes to the `adminAuditLog` table.
+- Impersonation deep-links to the Clerk Dashboard's built-in "Impersonate user" feature rather than reimplementing Clerk Actor Tokens in-app.
+
 <!-- convex-ai-start -->
 
 This project uses [Convex](https://convex.dev) as its backend.

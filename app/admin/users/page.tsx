@@ -211,7 +211,7 @@ export default function AdminUsersPage() {
       </Dialog>
 
       <p className="text-xs text-slate-500 mt-4">
-        "Impersonate" opens the Clerk Dashboard's Users page — search by email, then use the row menu → Impersonate user.
+        &ldquo;Impersonate&rdquo; opens the Clerk Dashboard&apos;s Users page — search by email, then use the row menu → Impersonate user.
       </p>
 
       {manageTarget && <ManageUserOrgsDialog userId={manageTarget} onClose={() => setManageTarget(null)} />}

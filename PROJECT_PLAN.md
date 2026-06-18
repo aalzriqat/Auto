@@ -27,6 +27,7 @@
 | 13 | feature/phase-13-advanced | Custom Fields, Commission Tiers, Onboarding Wizard | ✅ Done |
 | 14 | main | Feedback Widget (floating bug/feature reporter + admin inbox) | ✅ Done |
 | 15 | main | Commission Mode (AUTO tier-based vs MANUAL per-sale editing) | ✅ Done |
+| 17 | feature/phase-17-super-admin | Super Admin Dashboard (cross-tenant developer control panel) | ✅ Done |
 
 ---
 
@@ -475,3 +476,23 @@ Each card shows: primary identifier (make/model or name), 2–3 key fields, stat
 - [ ] Arabic (RTL) mode passes the same mobile checks
 - [ ] No new TypeScript errors (`pnpm build` clean)
 - [ ] `pnpm test` still passes
+
+---
+
+## Phase 17 — Super Admin Dashboard ✅
+
+**Branch:** `feature/phase-17-super-admin`
+
+A developer-only, cross-tenant control panel — fully separate from per-org RBAC — for full visibility into and control over every organization's data.
+
+### Delivered
+- [x] 17.1 — `requireSuperAdmin(ctx)` (`convex/utils/tenancy.ts`) gated by `SUPER_ADMIN_EMAILS` env var; `/admin` route shell (`app/admin/layout.tsx`) outside `app/(dashboard)/[orgId]/` since `OrgProvider` can't accommodate cross-org browsing
+- [x] 17.2 — `convex/adminOrgs.ts`: list/suspend/unsuspend/hard-delete any org (typed-confirmation delete cascades across all ~37 org-scoped tables); `organizations.suspended` flag enforced in `requireTenantAuth`
+- [x] 17.3 — `convex/adminUsers.ts`: cross-org user list, disable/enable (`users.disabled` enforced in `requireAuth`), change role, remove membership, hard-delete (DB + Clerk account); impersonation deep-links to the Clerk Dashboard's built-in "Impersonate user" feature
+- [x] 17.4 — `convex/adminData.ts`: generic cross-org data browser over ~20 entity tables — list/get/update/hard-delete via one module instead of per-table CRUD (isolated `as any` cast where Convex's `Id<TableName>` can't be parameterized by a runtime string); `app/admin/data/page.tsx` raw-JSON editor
+- [x] 17.5 — `convex/adminSystem.ts`: cross-org entity counts, cron heartbeats (`cronHeartbeats` table, written by `crons.ts`), webhook delivery log (`webhookLogs` table, written by `http.ts`'s Clerk + WhatsApp handlers); links out to Sentry for error logs
+- [x] 17.6 — `convex/adminAudit.ts`: `adminAuditLog` table + `logAdminAction()` helper called by every admin mutation; `app/admin/audit/page.tsx` viewer
+- [x] 17.7 — `convex/admin*.test.ts` (4 files, allowlist-gate + cross-org-write coverage); `CLAUDE.md` Super Admin section; 138/138 tests passing, clean typecheck/build/lint
+
+### Setup
+Set the allowlist on the Convex deployment: `npx convex env set SUPER_ADMIN_EMAILS "you@example.com"` (comma-separated for multiple developers).

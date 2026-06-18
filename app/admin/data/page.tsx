@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -25,13 +25,11 @@ export default function AdminDataPage() {
   const { results: orgs } = usePaginatedQuery(api.adminOrgs.listOrgs, {}, { initialNumItems: 200 });
 
   const [orgId, setOrgId] = useState<Id<"organizations"> | "">((searchParams.get("orgId") as Id<"organizations">) || "");
-  const [table, setTable] = useState<string>("");
+  const [selectedTable, setSelectedTable] = useState<string>("");
   const [editTarget, setEditTarget] = useState<{ id: string; json: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string } | null>(null);
 
-  useEffect(() => {
-    if (!table && tables && tables.length > 0) setTable(tables[0]);
-  }, [tables, table]);
+  const table = selectedTable || tables?.[0] || "";
 
   const {
     results: rows,
@@ -89,7 +87,7 @@ export default function AdminDataPage() {
           ))}
         </select>
 
-        <select className="text-sm border rounded-md px-3 py-2 bg-background" value={table} onChange={(e) => setTable(e.target.value)}>
+        <select className="text-sm border rounded-md px-3 py-2 bg-background" value={table} onChange={(e) => setSelectedTable(e.target.value)}>
           {tables?.map((t) => (
             <option key={t} value={t}>{t}</option>
           ))}
