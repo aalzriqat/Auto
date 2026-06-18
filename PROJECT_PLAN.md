@@ -496,3 +496,17 @@ A developer-only, cross-tenant control panel — fully separate from per-org RBA
 
 ### Setup
 Set the allowlist on the Convex deployment: `npx convex env set SUPER_ADMIN_EMAILS "you@example.com"` (comma-separated for multiple developers).
+
+## Phase 18 — Landing Page Legal Pages, Contact Form & Marketing Chat Assistant ✅
+
+Public-facing additions to the marketing landing page: a working Privacy Policy / Terms of Service, a functioning Contact Us form, and a self-service FAQ chat assistant with live-agent escalation for anonymous visitors.
+
+### Delivered
+- [x] 18.1 — `app/privacy/page.tsx`, `app/terms/page.tsx`: bilingual (EN/AR) legal pages styled to match the landing page; `components/marketing/MarketingShell.tsx` shared header/footer for new public pages
+- [x] 18.2 — `app/contact/page.tsx`: react-hook-form + zod contact form (`components/marketing/contact.schema.ts`) wired to a new public `convex/support.submitContactMessage` mutation — reuses the existing email support inbox (`supportThreads`/`supportMessages`, same tables/auto-reply the Resend webhook already populates) so submissions show up in `/admin/support` and get an auto-reply; new `contactForm` rate-limit bucket (3/10min, keyed by email) in `convex/rateLimit.ts`
+- [x] 18.3 — `proxy.ts`: added `/privacy`, `/terms`, `/contact` to the public route matcher (Clerk middleware was redirecting anonymous visitors to `/sign-in`)
+- [x] 18.4 — Extended `liveChatThreads`/`liveChatMessages` (`convex/schema.ts`) with optional `kind`/`leadId`/`leadEmail` fields (undefined `kind` = pre-existing dealer rows) so anonymous marketing-site visitors can flow through the **same** WAITING/OFFERED/ACTIVE/CLOSED agent queue as dealer live-chat — no separate routing system. Anonymous identity is a random capability token (`leadId`, stored in the visitor's localStorage) instead of a Clerk session
+- [x] 18.5 — `convex/liveChat.ts`: new lead-facing public functions (`startOrGetLeadThread`, `getLeadThread`, `getLeadThreadMessages`, `sendLeadMessage`, `markLeadThreadRead`, `setLeadTyping`, `updateLeadPresence`, `endThreadByLead`); `requestOrgAccess`/`revokeOrgAccess` guarded against orgId-less LEAD threads; 5 new tests in `convex/liveChat.test.ts` (22/22 passing)
+- [x] 18.6 — `components/marketing/MarketingChatWidget.tsx`: floating chat bot on the landing page — sends a greeting, offers FAQ category/question chips (`lib/marketingFaq.ts`), replies inline, and escalates to the real-time agent queue ("Talk to a human") with an optional name/email capture step
+- [x] 18.7 — `app/support/page.tsx`: agent console now labels LEAD threads ("Website Lead" badge + captured email) and hides the dealer-only "Get access to dealer's dashboard" action for them
+- [x] 18.8 — Full suite green (164/164 tests, clean typecheck/lint); graph updated via `python -m graphify update .`

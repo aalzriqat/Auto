@@ -34,11 +34,15 @@ function OfferedCard({ thread }: { thread: any }) {
   const acceptOffer = useMutation(api.liveChat.acceptOffer);
   const rejectOffer = useMutation(api.liveChat.rejectOffer);
   const secondsLeft = useCountdown(thread.offerExpiresAt);
+  const isLead = thread.kind === "LEAD";
 
   return (
     <Card className="p-4 border-amber-300 bg-amber-50">
       <div className="flex items-center justify-between mb-2">
-        <p className="text-sm font-medium text-slate-900">{thread.dealerName || "A dealer"} needs help</p>
+        <p className="text-sm font-medium text-slate-900">
+          {thread.dealerName || (isLead ? "A website visitor" : "A dealer")} needs help
+          {isLead && <Badge variant="secondary" className="ms-2 align-middle">Website Lead</Badge>}
+        </p>
         <Badge className="bg-amber-500/20 text-amber-700 border-amber-400">{secondsLeft}s</Badge>
       </div>
       <div className="flex gap-2">
@@ -146,8 +150,11 @@ export default function SupportConsolePage() {
                     activeThreadId === thread._id && "bg-primary/10"
                   )}
                 >
-                  <span className={cn("text-sm truncate", isUnread ? "font-semibold text-slate-900" : "text-slate-700")}>
-                    {thread.dealerName || "Dealer"}
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    <span className={cn("text-sm truncate", isUnread ? "font-semibold text-slate-900" : "text-slate-700")}>
+                      {thread.dealerName || (thread.kind === "LEAD" ? "Website visitor" : "Dealer")}
+                    </span>
+                    {thread.kind === "LEAD" && <Badge variant="secondary" className="shrink-0 text-[10px]">Lead</Badge>}
                   </span>
                   {isUnread && <span className="h-2 w-2 rounded-full bg-rose-500 shrink-0" />}
                 </button>
@@ -162,7 +169,12 @@ export default function SupportConsolePage() {
             {queue?.unassigned.length === 0 && <p className="text-sm text-slate-500 p-4">Nothing waiting.</p>}
             {queue?.unassigned.map((thread) => (
               <div key={thread._id} className="flex items-center justify-between px-4 py-3 border-b border-slate-100 last:border-b-0">
-                <span className="text-sm text-slate-700 truncate">{thread.dealerName || "Dealer"}</span>
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-sm text-slate-700 truncate">
+                    {thread.dealerName || (thread.kind === "LEAD" ? "Website visitor" : "Dealer")}
+                  </span>
+                  {thread.kind === "LEAD" && <Badge variant="secondary" className="shrink-0 text-[10px]">Lead</Badge>}
+                </span>
                 <Button
                   size="sm"
                   variant="outline"
@@ -305,30 +317,40 @@ function ThreadView({ threadId, onClosed }: { threadId: Id<"liveChatThreads">; o
     <div className="h-full flex flex-col">
       <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 shrink-0">
         <div className="flex items-center gap-2">
-          <p className="text-sm font-medium text-slate-900">{thread?.dealerName || "Conversation"}</p>
-          <span className="flex items-center gap-1 text-xs text-slate-500">
-            <span className={cn("h-2 w-2 rounded-full", dealerPresenceColor)} />
-            {dealerIsTyping ? "Typing…" : dealerPresenceLabel}
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          {accessGrant && secondsLeft > 0 ? (
+          <p className="text-sm font-medium text-slate-900">
+            {thread?.dealerName || (thread?.kind === "LEAD" ? "Website visitor" : "Conversation")}
+          </p>
+          {thread?.kind === "LEAD" ? (
             <>
-              <Badge variant="secondary">Access {Math.ceil(secondsLeft / 60)}m left</Badge>
-              <Button size="sm" variant="outline" asChild>
-                <a href={`/${accessGrant.orgId}/dashboard`} target="_blank" rel="noreferrer">
-                  Open dealer dashboard ↗
-                </a>
-              </Button>
-              <Button size="sm" variant="outline" onClick={handleRevokeAccess}>
-                Revoke now
-              </Button>
+              <Badge variant="secondary">Website Lead{thread.leadEmail ? ` · ${thread.leadEmail}` : ""}</Badge>
+              {dealerIsTyping && <span className="text-xs text-slate-500">Typing…</span>}
             </>
           ) : (
-            <Button size="sm" variant="outline" onClick={handleRequestAccess}>
-              Get access to dealer's dashboard
-            </Button>
+            <span className="flex items-center gap-1 text-xs text-slate-500">
+              <span className={cn("h-2 w-2 rounded-full", dealerPresenceColor)} />
+              {dealerIsTyping ? "Typing…" : dealerPresenceLabel}
+            </span>
           )}
+        </div>
+        <div className="flex items-center gap-2">
+          {thread?.orgId &&
+            (accessGrant && secondsLeft > 0 ? (
+              <>
+                <Badge variant="secondary">Access {Math.ceil(secondsLeft / 60)}m left</Badge>
+                <Button size="sm" variant="outline" asChild>
+                  <a href={`/${accessGrant.orgId}/dashboard`} target="_blank" rel="noreferrer">
+                    Open dealer dashboard ↗
+                  </a>
+                </Button>
+                <Button size="sm" variant="outline" onClick={handleRevokeAccess}>
+                  Revoke now
+                </Button>
+              </>
+            ) : (
+              <Button size="sm" variant="outline" onClick={handleRequestAccess}>
+                Get access to dealer's dashboard
+              </Button>
+            ))}
           <Button
             size="sm"
             variant="outline"

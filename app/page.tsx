@@ -39,6 +39,7 @@ import {
   ListChecks
 } from "lucide-react";
 import { motion, AnimatePresence, useScroll, useTransform, useMotionValue, useSpring } from "framer-motion";
+import { MarketingChatWidget } from "@/components/marketing/MarketingChatWidget";
 
 // Custom type definitions for localization
 interface LocalCopy {
@@ -98,6 +99,7 @@ interface LocalCopy {
   footerRights: string;
   footerPrivacy: string;
   footerTerms: string;
+  footerContact: string;
   platformTitle: string;
   platformSub: string;
   rolesTitle: string;
@@ -166,6 +168,7 @@ const copy: Record<"en" | "ar", LocalCopy> = {
     footerRights: "AUTOFLOW. All rights reserved.",
     footerPrivacy: "Privacy Policy",
     footerTerms: "Terms of Service",
+    footerContact: "Contact Us",
     platformTitle: "One Operating System. Every Department.",
     platformSub: "From the showroom floor to the back office — inventory, CRM, sales, finance, and reporting all live in a single connected workspace.",
     rolesTitle: "Granular Access For Every Employee",
@@ -232,6 +235,7 @@ const copy: Record<"en" | "ar", LocalCopy> = {
     footerRights: "أوتوفلو. جميع الحقوق محفوظة.",
     footerPrivacy: "سياسة الخصوصية",
     footerTerms: "شروط الخدمة",
+    footerContact: "تواصل معنا",
     platformTitle: "نظام تشغيل واحد لكل قسم في معرضك",
     platformSub: "من صالة العرض إلى المكتب الخلفي، يجمع أوتوفلو المخزون وعلاقات العملاء والمبيعات والمحاسبة والتقارير في مساحة عمل واحدة متصلة.",
     rolesTitle: "صلاحيات دقيقة لكل موظف",
@@ -1576,12 +1580,15 @@ export default function CreativeMarketingPage() {
           </p>
 
           <div className="flex gap-6 text-xs font-semibold tracking-wider text-white/50 uppercase">
-            <Link href="#" className="hover:text-white transition-colors duration-300">{t.footerPrivacy}</Link>
-            <Link href="#" className="hover:text-white transition-colors duration-300">{t.footerTerms}</Link>
+            <Link href="/privacy" className="hover:text-white transition-colors duration-300">{t.footerPrivacy}</Link>
+            <Link href="/terms" className="hover:text-white transition-colors duration-300">{t.footerTerms}</Link>
+            <Link href="/contact" className="hover:text-white transition-colors duration-300">{t.footerContact}</Link>
           </div>
 
         </div>
       </footer>
+
+      <MarketingChatWidget />
     </div>
   );
 }

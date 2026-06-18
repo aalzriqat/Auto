@@ -3,6 +3,10 @@ import { expect, test, describe, vi, beforeEach, afterEach } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 
+vi.mock("./rateLimit", () => ({
+  rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
+}));
+
 beforeEach(() => {
   process.env.CLERK_JWT_ISSUER_DOMAIN ??= "https://test.clerk.accounts.dev";
   process.env.NEXT_PUBLIC_APP_URL ??= "https://test.example.com";
@@ -370,5 +374,68 @@ describe("liveChat org access grant", () => {
     await agent.asAgent.mutation(api.liveChat.acceptOffer, { threadId });
 
     await expect(agent.asAgent.mutation(api.liveChat.requestOrgAccess, { threadId })).rejects.toThrow();
+  });
+});
+
+describe("liveChat lead (anonymous marketing-site) threads", () => {
+  test("starting a lead thread offers it to the only online agent, same as a dealer chat", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const agentA = await seedAgent(t, "LA1");
+
+    const threadId = await t.mutation(api.liveChat.startOrGetLeadThread, {
+      leadId: "lead-1",
+      name: "Visitor",
+      email: "visitor@example.com",
+    });
+    await flushImmediate(t);
+
+    const queue = await agentA.asAgent.query(api.liveChat.listQueue, {});
+    expect(queue.offeredToMe.map((th) => th._id)).toContain(threadId);
+
+    const thread = await t.run(async (ctx) => ctx.db.get(threadId));
+    expect(thread?.status).toBe("OFFERED");
+    expect(thread?.kind).toBe("LEAD");
+    expect(thread?.orgId).toBeUndefined();
+  });
+
+  test("starting a lead thread twice with the same leadId reuses the existing thread", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const threadId1 = await t.mutation(api.liveChat.startOrGetLeadThread, { leadId: "lead-2" });
+    const threadId2 = await t.mutation(api.liveChat.startOrGetLeadThread, { leadId: "lead-2", name: "Later Name" });
+
+    expect(threadId2).toBe(threadId1);
+    const thread = await t.run(async (ctx) => ctx.db.get(threadId1));
+    expect(thread?.dealerName).toBe("Later Name");
+  });
+
+  test("sendLeadMessage rejects a leadId that doesn't match the thread's capability token", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const threadId = await t.mutation(api.liveChat.startOrGetLeadThread, { leadId: "lead-3" });
+
+    await expect(
+      t.mutation(api.liveChat.sendLeadMessage, { threadId, leadId: "someone-elses-token", bodyText: "hi" })
+    ).rejects.toThrow();
+  });
+
+  test("requestOrgAccess is rejected for a LEAD thread (no organization to access)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const agent = await seedAgent(t, "LA4");
+    const threadId = await t.mutation(api.liveChat.startOrGetLeadThread, { leadId: "lead-4" });
+    await flushImmediate(t);
+    await agent.asAgent.mutation(api.liveChat.acceptOffer, { threadId });
+
+    await expect(agent.asAgent.mutation(api.liveChat.requestOrgAccess, { threadId })).rejects.toThrow();
+  });
+
+  test("an agent's reply is visible to the lead via getLeadThreadMessages", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const agent = await seedAgent(t, "LA5");
+    const threadId = await t.mutation(api.liveChat.startOrGetLeadThread, { leadId: "lead-5" });
+    await flushImmediate(t);
+    await agent.asAgent.mutation(api.liveChat.acceptOffer, { threadId });
+    await agent.asAgent.mutation(api.liveChat.sendAgentMessage, { threadId, bodyText: "Hello, how can I help?" });
+
+    const messages = await t.query(api.liveChat.getLeadThreadMessages, { threadId, leadId: "lead-5" });
+    expect(messages.some((m) => m.bodyText === "Hello, how can I help?" && m.senderType === "AGENT")).toBe(true);
   });
 });

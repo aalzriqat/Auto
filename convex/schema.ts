@@ -797,9 +797,17 @@ export default defineSchema({
     .index("by_email", ["email"]),
 
   liveChatThreads: defineTable({
-    orgId: v.id("organizations"),
-    dealerUserId: v.id("users"),
-    dealerName: v.optional(v.string()),
+    // kind is omitted on every pre-existing row, which are all dealer chats —
+    // undefined is treated as "DEALER" everywhere this is read.
+    kind: v.optional(v.union(v.literal("DEALER"), v.literal("LEAD"))),
+    orgId: v.optional(v.id("organizations")), // unset for anonymous LEAD threads
+    dealerUserId: v.optional(v.id("users")), // unset for anonymous LEAD threads
+    dealerName: v.optional(v.string()), // doubles as the lead's display name for LEAD threads
+    // Capability token (random, client-generated, stored in the visitor's
+    // localStorage) identifying an anonymous marketing-site lead — there's no
+    // authenticated `users` row to key off for these. Only set for LEAD threads.
+    leadId: v.optional(v.string()),
+    leadEmail: v.optional(v.string()),
     status: v.union(v.literal("WAITING"), v.literal("OFFERED"), v.literal("ACTIVE"), v.literal("CLOSED")),
     // Offer/accept/reject routing — a thread is offered to one agent at a
     // time; rejecting or timing out re-offers to the next eligible agent.
@@ -831,13 +839,14 @@ export default defineSchema({
     agentPresenceSince: v.optional(v.number()),
   })
     .index("by_dealerUserId", ["dealerUserId"])
+    .index("by_leadId", ["leadId"])
     .index("by_status", ["status", "createdAt"])
     .index("by_claimedByUserId", ["claimedByUserId"]),
 
   liveChatMessages: defineTable({
     threadId: v.id("liveChatThreads"),
     senderType: v.union(v.literal("DEALER"), v.literal("AGENT")),
-    senderUserId: v.id("users"),
+    senderUserId: v.optional(v.id("users")), // unset for messages sent by an anonymous LEAD-thread visitor
     senderName: v.optional(v.string()),
     bodyText: v.string(),
     createdAt: v.number(),

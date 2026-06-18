@@ -1,7 +1,7 @@
 import { v, ConvexError } from "convex/values";
-import { query, mutation, internalMutation, MutationCtx } from "./_generated/server";
+import { query, mutation, internalMutation, MutationCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth, requireSupportAgent } from "./utils/tenancy";
 import { rateLimiter } from "./rateLimit";
 import { logAdminAction } from "./adminAudit";
@@ -90,7 +90,7 @@ export const sendDealerMessage = mutation({
   args: { threadId: v.id("liveChatThreads"), bodyText: v.string() },
   handler: async (ctx, args) => {
     const thread = await ctx.db.get(args.threadId);
-    if (!thread) throw new ConvexError("Thread not found.");
+    if (!thread || !thread.orgId) throw new ConvexError("Thread not found.");
     const { user } = await requireTenantAuth(ctx, thread.orgId);
     if (thread.dealerUserId !== user._id) {
       throw new ConvexError("Thread not found.");
@@ -141,7 +141,7 @@ export const markThreadReadByDealer = mutation({
   args: { threadId: v.id("liveChatThreads") },
   handler: async (ctx, args) => {
     const thread = await ctx.db.get(args.threadId);
-    if (!thread) throw new ConvexError("Thread not found.");
+    if (!thread || !thread.orgId) throw new ConvexError("Thread not found.");
     const { user } = await requireTenantAuth(ctx, thread.orgId);
     if (thread.dealerUserId !== user._id) {
       throw new ConvexError("Thread not found.");
@@ -154,7 +154,7 @@ export const setDealerTyping = mutation({
   args: { threadId: v.id("liveChatThreads") },
   handler: async (ctx, args) => {
     const thread = await ctx.db.get(args.threadId);
-    if (!thread) throw new ConvexError("Thread not found.");
+    if (!thread || !thread.orgId) throw new ConvexError("Thread not found.");
     const { user } = await requireTenantAuth(ctx, thread.orgId);
     if (thread.dealerUserId !== user._id) {
       throw new ConvexError("Thread not found.");
@@ -167,7 +167,7 @@ export const updateDealerPresence = mutation({
   args: { threadId: v.id("liveChatThreads"), state: v.union(v.literal("active"), v.literal("idle")) },
   handler: async (ctx, args) => {
     const thread = await ctx.db.get(args.threadId);
-    if (!thread) throw new ConvexError("Thread not found.");
+    if (!thread || !thread.orgId) throw new ConvexError("Thread not found.");
     const { user } = await requireTenantAuth(ctx, thread.orgId);
     if (thread.dealerUserId !== user._id) {
       throw new ConvexError("Thread not found.");
@@ -187,7 +187,7 @@ export const endThreadByDealer = mutation({
   args: { threadId: v.id("liveChatThreads") },
   handler: async (ctx, args) => {
     const thread = await ctx.db.get(args.threadId);
-    if (!thread) throw new ConvexError("Thread not found.");
+    if (!thread || !thread.orgId) throw new ConvexError("Thread not found.");
     const { user } = await requireTenantAuth(ctx, thread.orgId);
     if (thread.dealerUserId !== user._id) {
       throw new ConvexError("Thread not found.");
@@ -231,6 +231,257 @@ export const getActiveOrgAccessGrant = query({
   },
 });
 
+// ─── Lead-facing (anonymous marketing-site visitors) ───────────────────────
+// Same WAITING/OFFERED/ACTIVE/CLOSED queue and agent routing as the dealer
+// chats above — offerToNextAgent, listQueue, claimThread, acceptOffer,
+// sendAgentMessage, closeThread, etc. all work unchanged for these threads.
+// The only thing that differs is identity: there's no Clerk session for an
+// anonymous visitor, so these mutations trust a random, client-generated
+// `leadId` (kept in the visitor's localStorage) as a capability token in
+// place of requireTenantAuth.
+
+const LEAD_ID_MAX_LENGTH = 100;
+const LEAD_NAME_MAX_LENGTH = 200;
+const LEAD_EMAIL_MAX_LENGTH = 320;
+const LEAD_MESSAGE_MAX_LENGTH = 5000;
+
+function normalizeLeadId(leadId: string): string {
+  const trimmed = leadId.trim();
+  if (!trimmed || trimmed.length > LEAD_ID_MAX_LENGTH) {
+    throw new ConvexError("Invalid chat session.");
+  }
+  return trimmed;
+}
+
+/** Shared by getMyThread-equivalent queries — queue position, agent online state, claimer's name. */
+async function buildThreadStatusInfo(ctx: QueryCtx, thread: Doc<"liveChatThreads"> | null) {
+  const agents = await ctx.db.query("supportAgents").collect();
+  const now = Date.now();
+  const anyAgentOnline = agents.some(
+    (a) => a.isActive && a.isOnline && a.lastHeartbeatAt && now - a.lastHeartbeatAt < ONLINE_THRESHOLD_MS
+  );
+
+  if (!thread) return { thread: null, queuePosition: null, anyAgentOnline };
+
+  let queuePosition: number | null = null;
+  if (thread.status === "WAITING" || thread.status === "OFFERED") {
+    const ahead = await ctx.db
+      .query("liveChatThreads")
+      .withIndex("by_status", (q) => q.eq("status", "WAITING").lt("createdAt", thread.createdAt))
+      .collect();
+    const aheadOffered = await ctx.db
+      .query("liveChatThreads")
+      .withIndex("by_status", (q) => q.eq("status", "OFFERED").lt("createdAt", thread.createdAt))
+      .collect();
+    queuePosition = ahead.length + aheadOffered.length + 1;
+  }
+
+  let claimedByName: string | undefined;
+  if (thread.claimedByUserId) {
+    const agentUser = await ctx.db.get(thread.claimedByUserId);
+    claimedByName = agentUser?.name;
+  }
+
+  return { thread, queuePosition, anyAgentOnline, claimedByName };
+}
+
+/** Finds the visitor's most recent non-closed lead thread, or starts a new (WAITING) one. */
+export const startOrGetLeadThread = mutation({
+  args: { leadId: v.string(), name: v.optional(v.string()), email: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const leadId = normalizeLeadId(args.leadId);
+    const name = args.name?.trim().slice(0, LEAD_NAME_MAX_LENGTH) || undefined;
+    const email = args.email?.trim().toLowerCase().slice(0, LEAD_EMAIL_MAX_LENGTH) || undefined;
+
+    const limit = await rateLimiter.limit(ctx, "chatMessage", { key: leadId });
+    if (!limit.ok) {
+      throw new ConvexError(`Too many requests — try again in ${Math.ceil(limit.retryAfter / 1000)}s`);
+    }
+
+    const existing = await ctx.db
+      .query("liveChatThreads")
+      .withIndex("by_leadId", (q) => q.eq("leadId", leadId))
+      .order("desc")
+      .filter((q) => q.neq(q.field("status"), "CLOSED"))
+      .first();
+
+    if (existing) {
+      // Capture a name/email offered later (e.g. only when escalating to a
+      // human) even though the thread itself was already started anonymously.
+      if ((name && name !== existing.dealerName) || (email && email !== existing.leadEmail)) {
+        await ctx.db.patch(existing._id, {
+          dealerName: name ?? existing.dealerName,
+          leadEmail: email ?? existing.leadEmail,
+        });
+      }
+      return existing._id;
+    }
+
+    const now = Date.now();
+    const threadId = await ctx.db.insert("liveChatThreads", {
+      kind: "LEAD",
+      leadId,
+      dealerName: name,
+      leadEmail: email,
+      status: "WAITING",
+      createdAt: now,
+      lastMessageAt: now,
+    });
+
+    await ctx.scheduler.runAfter(0, internal.liveChat.offerToNextAgent, { threadId });
+    return threadId;
+  },
+});
+
+export const getLeadThread = query({
+  args: { leadId: v.string() },
+  handler: async (ctx, args) => {
+    const leadId = normalizeLeadId(args.leadId);
+    const thread = await ctx.db
+      .query("liveChatThreads")
+      .withIndex("by_leadId", (q) => q.eq("leadId", leadId))
+      .order("desc")
+      .filter((q) => q.neq(q.field("status"), "CLOSED"))
+      .first();
+
+    return buildThreadStatusInfo(ctx, thread ?? null);
+  },
+});
+
+export const getLeadThreadMessages = query({
+  args: { threadId: v.id("liveChatThreads"), leadId: v.string() },
+  handler: async (ctx, args) => {
+    const leadId = normalizeLeadId(args.leadId);
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread || thread.kind !== "LEAD" || thread.leadId !== leadId) {
+      throw new ConvexError("Thread not found.");
+    }
+    return await ctx.db
+      .query("liveChatMessages")
+      .withIndex("by_thread", (q) => q.eq("threadId", args.threadId))
+      .order("asc")
+      .collect();
+  },
+});
+
+export const sendLeadMessage = mutation({
+  args: { threadId: v.id("liveChatThreads"), leadId: v.string(), bodyText: v.string() },
+  handler: async (ctx, args) => {
+    const leadId = normalizeLeadId(args.leadId);
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread || thread.kind !== "LEAD" || thread.leadId !== leadId) {
+      throw new ConvexError("Thread not found.");
+    }
+    const bodyText = args.bodyText.trim();
+    if (!bodyText) return;
+    if (bodyText.length > LEAD_MESSAGE_MAX_LENGTH) {
+      throw new ConvexError("Message is too long.");
+    }
+
+    const limit = await rateLimiter.limit(ctx, "chatMessage", { key: leadId });
+    if (!limit.ok) {
+      throw new ConvexError(`Sending too fast — try again in ${Math.ceil(limit.retryAfter / 1000)}s`);
+    }
+
+    const now = Date.now();
+    await ctx.db.insert("liveChatMessages", {
+      threadId: args.threadId,
+      senderType: "DEALER",
+      senderName: thread.dealerName,
+      bodyText,
+      createdAt: now,
+    });
+
+    const wasClosed = thread.status === "CLOSED";
+    await ctx.db.patch(args.threadId, {
+      lastMessageAt: now,
+      dealerTypingAt: undefined,
+      // Re-queue a closed conversation if the visitor writes again instead
+      // of silently dropping the message into a dead thread.
+      ...(wasClosed
+        ? {
+            status: "WAITING" as const,
+            claimedByUserId: undefined,
+            claimedAt: undefined,
+            offeredToUserId: undefined,
+            offeredAt: undefined,
+            offerExpiresAt: undefined,
+            rejectedByUserIds: undefined,
+          }
+        : {}),
+    });
+
+    if (wasClosed) {
+      await ctx.scheduler.runAfter(0, internal.liveChat.offerToNextAgent, { threadId: args.threadId });
+    }
+  },
+});
+
+export const markLeadThreadRead = mutation({
+  args: { threadId: v.id("liveChatThreads"), leadId: v.string() },
+  handler: async (ctx, args) => {
+    const leadId = normalizeLeadId(args.leadId);
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread || thread.kind !== "LEAD" || thread.leadId !== leadId) return;
+    await ctx.db.patch(args.threadId, { dealerLastReadAt: Date.now() });
+  },
+});
+
+export const setLeadTyping = mutation({
+  args: { threadId: v.id("liveChatThreads"), leadId: v.string() },
+  handler: async (ctx, args) => {
+    const leadId = normalizeLeadId(args.leadId);
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread || thread.kind !== "LEAD" || thread.leadId !== leadId) return;
+    await ctx.db.patch(args.threadId, { dealerTypingAt: Date.now() });
+  },
+});
+
+export const updateLeadPresence = mutation({
+  args: {
+    threadId: v.id("liveChatThreads"),
+    leadId: v.string(),
+    state: v.union(v.literal("active"), v.literal("idle")),
+  },
+  handler: async (ctx, args) => {
+    const leadId = normalizeLeadId(args.leadId);
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread || thread.kind !== "LEAD" || thread.leadId !== leadId) return;
+    const now = Date.now();
+    const stateChanged = thread.dealerPresence !== args.state;
+    await ctx.db.patch(args.threadId, {
+      dealerPresence: args.state,
+      dealerPresenceAt: now,
+      ...(stateChanged ? { dealerPresenceSince: now } : {}),
+    });
+  },
+});
+
+/** Visitor-initiated end — mirrors endThreadByDealer (no org-access grants exist for LEAD threads to revoke). */
+export const endThreadByLead = mutation({
+  args: { threadId: v.id("liveChatThreads"), leadId: v.string() },
+  handler: async (ctx, args) => {
+    const leadId = normalizeLeadId(args.leadId);
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread || thread.kind !== "LEAD" || thread.leadId !== leadId) {
+      throw new ConvexError("Thread not found.");
+    }
+    if (thread.status === "CLOSED") return;
+
+    const now = Date.now();
+    await ctx.db.patch(args.threadId, { status: "CLOSED", closedAt: now, lastMessageAt: now });
+
+    await ctx.db.insert("liveChatMessages", {
+      threadId: args.threadId,
+      senderType: "DEALER",
+      senderName: thread.dealerName,
+      bodyText: `${thread.dealerName ?? "The visitor"} ended the conversation.`,
+      createdAt: now,
+      isSystem: true,
+    });
+  },
+});
+
 // ─── Shared (dealer + agent, ownership/role-checked separately) ────────────
 
 export const getThreadMessages = query({
@@ -240,9 +491,11 @@ export const getThreadMessages = query({
     if (!thread) throw new ConvexError("Thread not found.");
 
     // Either the owning dealer (tenant-auth'd) or any support agent may read.
+    // (Anonymous LEAD-thread visitors use getLeadThreadMessages instead.)
     try {
       await requireSupportAgent(ctx);
     } catch {
+      if (!thread.orgId) throw new ConvexError("Thread not found.");
       const { user } = await requireTenantAuth(ctx, thread.orgId);
       if (thread.dealerUserId !== user._id) {
         throw new ConvexError("Thread not found.");
@@ -721,11 +974,15 @@ export const requestOrgAccess = mutation({
     if (thread.status !== "ACTIVE" || thread.claimedByUserId !== user._id) {
       throw new ConvexError("You can only request access while actively handling this conversation.");
     }
+    if (!thread.orgId) {
+      throw new ConvexError("This conversation has no organization to access.");
+    }
+    const orgId = thread.orgId;
 
     const now = Date.now();
     const existingGrants = await ctx.db
       .query("supportOrgAccessGrants")
-      .withIndex("by_agentUserId_org", (q) => q.eq("agentUserId", user._id).eq("orgId", thread.orgId))
+      .withIndex("by_agentUserId_org", (q) => q.eq("agentUserId", user._id).eq("orgId", orgId))
       .collect();
     const activeGrant = existingGrants.find((g) => !g.revokedAt && g.expiresAt > now);
 
@@ -734,14 +991,14 @@ export const requestOrgAccess = mutation({
       await ctx.db.patch(activeGrant._id, { expiresAt });
       await ctx.scheduler.runAfter(GRANT_DURATION_MS, internal.liveChat.expireOrgAccessGrant, {
         agentUserId: user._id,
-        orgId: thread.orgId,
+        orgId,
       });
-      return { orgId: thread.orgId, expiresAt };
+      return { orgId, expiresAt };
     }
 
     const existingMembership = await ctx.db
       .query("memberships")
-      .withIndex("by_org_user", (q) => q.eq("orgId", thread.orgId).eq("userId", user._id))
+      .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", user._id))
       .unique();
     if (existingMembership) {
       throw new ConvexError("You're already a member of this organization.");
@@ -749,14 +1006,14 @@ export const requestOrgAccess = mutation({
 
     const orgRoles = await ctx.db
       .query("roles")
-      .withIndex("by_org", (q) => q.eq("orgId", thread.orgId))
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
       .filter((q) => q.neq(q.field("isDeleted"), true))
       .collect();
     const ownerRole = orgRoles.find((r) => r.name === "OWNER");
     if (!ownerRole) throw new ConvexError("This organization has no OWNER role to grant.");
 
     const membershipId = await ctx.db.insert("memberships", {
-      orgId: thread.orgId,
+      orgId,
       userId: user._id,
       roleId: ownerRole._id,
     });
@@ -764,7 +1021,7 @@ export const requestOrgAccess = mutation({
     const expiresAt = now + GRANT_DURATION_MS;
     await ctx.db.insert("supportOrgAccessGrants", {
       agentUserId: user._id,
-      orgId: thread.orgId,
+      orgId,
       threadId: args.threadId,
       membershipId,
       grantedAt: now,
@@ -773,18 +1030,18 @@ export const requestOrgAccess = mutation({
 
     await ctx.scheduler.runAfter(GRANT_DURATION_MS, internal.liveChat.expireOrgAccessGrant, {
       agentUserId: user._id,
-      orgId: thread.orgId,
+      orgId,
     });
 
     await logAdminAction(ctx, user, {
       action: "live_chat.org_access_grant",
       targetTable: "organizations",
-      targetId: thread.orgId,
-      orgId: thread.orgId,
+      targetId: orgId,
+      orgId,
       after: { threadId: args.threadId, expiresAt },
     });
 
-    return { orgId: thread.orgId, expiresAt };
+    return { orgId, expiresAt };
   },
 });
 
@@ -793,11 +1050,12 @@ export const revokeOrgAccess = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireSupportAgent(ctx);
     const thread = await ctx.db.get(args.threadId);
-    if (!thread) throw new ConvexError("Thread not found.");
+    if (!thread || !thread.orgId) return;
+    const orgId = thread.orgId;
 
     const grants = await ctx.db
       .query("supportOrgAccessGrants")
-      .withIndex("by_agentUserId_org", (q) => q.eq("agentUserId", user._id).eq("orgId", thread.orgId))
+      .withIndex("by_agentUserId_org", (q) => q.eq("agentUserId", user._id).eq("orgId", orgId))
       .collect();
     const now = Date.now();
     const active = grants.find((g) => !g.revokedAt && g.expiresAt > now);
@@ -809,8 +1067,8 @@ export const revokeOrgAccess = mutation({
     await logAdminAction(ctx, user, {
       action: "live_chat.org_access_revoke",
       targetTable: "organizations",
-      targetId: thread.orgId,
-      orgId: thread.orgId,
+      targetId: orgId,
+      orgId,
     });
   },
 });

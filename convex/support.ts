@@ -3,6 +3,76 @@ import { paginationOptsValidator } from "convex/server";
 import { query, mutation, action, internalMutation, internalQuery, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { requireSuperAdmin } from "./utils/tenancy";
+import { rateLimiter } from "./rateLimit";
+import type { MutationCtx } from "./_generated/server";
+
+const CONTACT_FORM_TO_EMAIL = "support@autoflowdealer.com";
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Shared by the Resend inbound webhook and the public contact form below —
+// both just need to land a message in a thread keyed by participant email
+// and fire the one-time auto-reply.
+async function recordSupportMessage(
+  ctx: MutationCtx,
+  args: {
+    fromEmail: string;
+    fromName?: string;
+    toEmail: string;
+    subject: string;
+    bodyText?: string;
+    bodyHtml?: string;
+    resendEmailId?: string;
+  }
+) {
+  const email = args.fromEmail.toLowerCase().trim();
+
+  let thread = await ctx.db
+    .query("supportThreads")
+    .withIndex("by_participantEmail", (q) => q.eq("participantEmail", email))
+    .first();
+
+  const now = Date.now();
+
+  if (!thread) {
+    const threadId = await ctx.db.insert("supportThreads", {
+      participantEmail: email,
+      participantName: args.fromName,
+      subject: args.subject,
+      status: "OPEN",
+      lastMessageAt: now,
+    });
+    thread = await ctx.db.get(threadId);
+  } else {
+    await ctx.db.patch(thread._id, {
+      lastMessageAt: now,
+      status: "OPEN",
+      participantName: args.fromName ?? thread.participantName,
+    });
+  }
+
+  await ctx.db.insert("supportMessages", {
+    threadId: thread!._id,
+    direction: "INBOUND",
+    fromEmail: email,
+    toEmail: args.toEmail,
+    bodyText: args.bodyText,
+    bodyHtml: args.bodyHtml,
+    resendEmailId: args.resendEmailId,
+    createdAt: now,
+  });
+
+  // Acknowledge first contact only — once per thread, regardless of how many
+  // messages arrive before a human admin (or this auto-reply) responds.
+  if (!thread!.autoRepliedAt) {
+    await ctx.db.patch(thread!._id, { autoRepliedAt: now });
+    await ctx.scheduler.runAfter(0, internal.support.sendAutoReply, {
+      threadId: thread!._id,
+      toEmail: email,
+      participantName: args.fromName,
+      subject: args.subject,
+    });
+  }
+}
 
 // ─── Inbound (called from the Resend webhook in convex/http.ts) ───────────────
 
@@ -17,54 +87,52 @@ export const recordInboundMessage = internalMutation({
     resendEmailId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const email = args.fromEmail.toLowerCase().trim();
+    await recordSupportMessage(ctx, args);
+  },
+});
 
-    let thread = await ctx.db
-      .query("supportThreads")
-      .withIndex("by_participantEmail", (q) => q.eq("participantEmail", email))
-      .first();
+// ─── Inbound (called from the public "Contact us" form on the landing page) ───
 
-    const now = Date.now();
+export const submitContactMessage = mutation({
+  args: {
+    name: v.string(),
+    email: v.string(),
+    subject: v.string(),
+    message: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const name = args.name.trim();
+    const email = args.email.trim().toLowerCase();
+    const subject = args.subject.trim();
+    const message = args.message.trim();
 
-    if (!thread) {
-      const threadId = await ctx.db.insert("supportThreads", {
-        participantEmail: email,
-        participantName: args.fromName,
-        subject: args.subject,
-        status: "OPEN",
-        lastMessageAt: now,
-      });
-      thread = await ctx.db.get(threadId);
-    } else {
-      await ctx.db.patch(thread._id, {
-        lastMessageAt: now,
-        status: "OPEN",
-        participantName: args.fromName ?? thread.participantName,
-      });
+    if (!name || name.length > 200) {
+      throw new ConvexError("Please enter a valid name.");
+    }
+    if (!EMAIL_REGEX.test(email) || email.length > 320) {
+      throw new ConvexError("Please enter a valid email address.");
+    }
+    if (!subject || subject.length > 200) {
+      throw new ConvexError("Please enter a subject (max 200 characters).");
+    }
+    if (!message || message.length > 5000) {
+      throw new ConvexError("Please enter a message (max 5000 characters).");
     }
 
-    await ctx.db.insert("supportMessages", {
-      threadId: thread!._id,
-      direction: "INBOUND",
+    const status = await rateLimiter.limit(ctx, "contactForm", { key: email });
+    if (!status.ok) {
+      throw new ConvexError(`Too many messages sent. Try again in ${Math.ceil(status.retryAfter / 60000)} minute(s).`);
+    }
+
+    await recordSupportMessage(ctx, {
       fromEmail: email,
-      toEmail: args.toEmail,
-      bodyText: args.bodyText,
-      bodyHtml: args.bodyHtml,
-      resendEmailId: args.resendEmailId,
-      createdAt: now,
+      fromName: name,
+      toEmail: CONTACT_FORM_TO_EMAIL,
+      subject,
+      bodyText: message,
     });
 
-    // Acknowledge first contact only — once per thread, regardless of how many
-    // messages arrive before a human admin (or this auto-reply) responds.
-    if (!thread!.autoRepliedAt) {
-      await ctx.db.patch(thread!._id, { autoRepliedAt: now });
-      await ctx.scheduler.runAfter(0, internal.support.sendAutoReply, {
-        threadId: thread!._id,
-        toEmail: email,
-        participantName: args.fromName,
-        subject: args.subject,
-      });
-    }
+    return { success: true };
   },
 });
 
