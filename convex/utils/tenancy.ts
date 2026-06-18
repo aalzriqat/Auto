@@ -2,6 +2,7 @@ import { QueryCtx, MutationCtx } from "../_generated/server";
 import { Id, Doc } from "../_generated/dataModel";
 import { Permission } from "./permissions";
 import { throwAppError, AppErrorCode } from "./errors";
+import { getValidatedEnv } from "./env";
 
 /**
  * Result returned by all auth helpers so callers have typed access
@@ -35,6 +36,32 @@ export async function requireAuth(ctx: QueryCtx | MutationCtx): Promise<Doc<"use
     throwAppError(AppErrorCode.USER_NOT_FOUND, "User not found in the database. Please contact support.");
   }
 
+  if (user.disabled) {
+    throwAppError(AppErrorCode.FORBIDDEN, "Forbidden: This account has been disabled.");
+  }
+
+  return user;
+}
+
+// ─── Super-admin guard (cross-tenant) ────────────────────────────────────────
+
+/**
+ * Restricts access to developers listed in the SUPER_ADMIN_EMAILS env var.
+ * Deliberately independent of org membership/roles — used only by the /admin
+ * dashboard, which can see and act on every organization's data.
+ */
+export async function requireSuperAdmin(ctx: QueryCtx | MutationCtx): Promise<Doc<"users">> {
+  const user = await requireAuth(ctx);
+
+  const allowlist = (getValidatedEnv().SUPER_ADMIN_EMAILS ?? "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+
+  if (!allowlist.includes(user.email.toLowerCase())) {
+    throwAppError(AppErrorCode.FORBIDDEN, "Forbidden: Super-admin access only.");
+  }
+
   return user;
 }
 
@@ -59,6 +86,9 @@ export async function requireTenantAuth(
   const org = await ctx.db.get(orgId);
   if (!org) {
     throwAppError(AppErrorCode.ORG_NOT_FOUND, "Organization not found.");
+  }
+  if (org.suspended) {
+    throwAppError(AppErrorCode.FORBIDDEN, "Forbidden: This organization has been suspended.");
   }
 
   const membership = await ctx.db

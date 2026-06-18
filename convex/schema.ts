@@ -7,12 +7,16 @@ export default defineSchema({
     email: v.string(),
     name: v.optional(v.string()),
     imageUrl: v.optional(v.string()),
+    disabled: v.optional(v.boolean()),
   }).index("by_clerkId", ["clerkId"])
     .index("by_email", ["email"]),
 
   organizations: defineTable({
     name: v.string(),
     createdAt: v.number(),
+    suspended: v.optional(v.boolean()),
+    suspendedAt: v.optional(v.number()),
+    suspendedReason: v.optional(v.string()),
   }),
 
   roles: defineTable({
@@ -706,4 +710,35 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"]),
+
+  // ─── Super-admin dashboard (cross-tenant, /admin) ──────────────────────────
+
+  adminAuditLog: defineTable({
+    actorUserId: v.id("users"),
+    actorEmail: v.string(),
+    action: v.string(),
+    targetTable: v.optional(v.string()),
+    targetId: v.optional(v.string()),
+    orgId: v.optional(v.id("organizations")),
+    before: v.optional(v.any()),
+    after: v.optional(v.any()),
+    createdAt: v.number(),
+  })
+    .index("by_createdAt", ["createdAt"])
+    .index("by_org", ["orgId"]),
+
+  cronHeartbeats: defineTable({
+    jobName: v.string(),
+    ranAt: v.number(),
+    success: v.boolean(),
+    detail: v.optional(v.string()),
+  }).index("by_job", ["jobName"]),
+
+  webhookLogs: defineTable({
+    source: v.union(v.literal("clerk"), v.literal("whatsapp")),
+    status: v.union(v.literal("success"), v.literal("error")),
+    summary: v.string(),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+  }).index("by_createdAt", ["createdAt"]),
 });
