@@ -178,8 +178,8 @@ export default function ContactPage() {
           <Mail className="w-4 h-4 shrink-0" />
           <span>
             {t.altContact}{" "}
-            <a href="mailto:support@autoflowdealer.com" className="text-blue-400 hover:text-blue-300 transition-colors">
-              support@autoflowdealer.com
+            <a href="mailto:info@autoflowdealer.com" className="text-blue-400 hover:text-blue-300 transition-colors">
+              info@autoflowdealer.com
             </a>
           </span>
         </div>

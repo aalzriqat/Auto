@@ -6,7 +6,7 @@ import { requireSuperAdmin } from "./utils/tenancy";
 import { rateLimiter } from "./rateLimit";
 import type { MutationCtx } from "./_generated/server";
 
-const CONTACT_FORM_TO_EMAIL = "support@autoflowdealer.com";
+const CONTACT_FORM_TO_EMAIL = "info@autoflowdealer.com";
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 type Inbox = "support" | "info";

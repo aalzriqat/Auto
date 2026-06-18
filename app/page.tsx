@@ -39,7 +39,6 @@ import {
   ListChecks
 } from "lucide-react";
 import { motion, AnimatePresence, useScroll, useTransform, useMotionValue, useSpring } from "framer-motion";
-import { MarketingChatWidget } from "@/components/marketing/MarketingChatWidget";
 
 // Custom type definitions for localization
 interface LocalCopy {
@@ -1587,8 +1586,6 @@ export default function CreativeMarketingPage() {
 
         </div>
       </footer>
-
-      <MarketingChatWidget />
     </div>
   );
 }

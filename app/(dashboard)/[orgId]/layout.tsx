@@ -7,7 +7,6 @@ import { OrgProvider, useOrg } from "@/components/providers/OrgProvider";
 import { Toaster } from "@/components/ui/sonner";
 import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { FeedbackWidget } from "@/components/feedback/FeedbackWidget";
-import { LiveChatWidget } from "@/components/support/LiveChatWidget";
 import { SupportAccessBanner } from "@/components/support/SupportAccessBanner";
 import { hexToHslString } from "@/lib/colorUtils";
 
@@ -50,7 +49,6 @@ function DashboardWrapper({ children }: { children: React.ReactNode }) {
       </div>
       <Toaster />
       <FeedbackWidget />
-      <LiveChatWidget />
     </div>
   );
 }
