@@ -393,16 +393,25 @@ export const rollbackDirectAccount = internalMutation({
   }
 });
 
+/** Generates a random password meeting Clerk's default complexity rules (mixed case, digit, symbol, 12+ chars). */
+function generateTemporaryPassword(): string {
+  const bytes = new Uint8Array(18);
+  crypto.getRandomValues(bytes);
+  const random = Array.from(bytes, (b) => b.toString(36)).join("").slice(0, 20);
+  return `Af${random}!9`;
+}
+
 export const createAccount = action({
   args: {
     orgId: v.id("organizations"),
-    name: v.string(),
-    username: v.optional(v.string()),
+    firstName: v.string(),
+    lastName: v.string(),
     email: v.string(),
-    password: v.optional(v.string()),
     roleId: v.id("roles"),
   },
   handler: async (ctx, args) => {
+    const fullName = `${args.firstName.trim()} ${args.lastName.trim()}`.trim();
+
     // 1. Prepare: Check permissions and insert invitation
     const inviteId = await ctx.runMutation(internal.memberships.prepareDirectAccount, {
       orgId: args.orgId,
@@ -424,6 +433,7 @@ export const createAccount = action({
       );
 
       let clerkId: string | null = null;
+      let isNewClerkUser = false;
 
       if (lookupResponse.ok) {
         const existingUsers = await lookupResponse.json();
@@ -433,11 +443,12 @@ export const createAccount = action({
         }
       }
 
+      let temporaryPassword: string | null = null;
+
       if (!clerkId) {
-        // 3a. No existing Clerk account — create a new one
-        if (!args.password) {
-          throw new ConvexError("Password is required when creating a new account.");
-        }
+        // 3a. No existing Clerk account — create a new one with an auto-generated password
+        temporaryPassword = generateTemporaryPassword();
+        isNewClerkUser = true;
 
         const response = await fetch("https://api.clerk.com/v1/users", {
           method: "POST",
@@ -447,10 +458,9 @@ export const createAccount = action({
           },
           body: JSON.stringify({
             email_address: [args.email.toLowerCase().trim()],
-            password: args.password,
-            username: args.username,
-            first_name: args.name.split(" ")[0],
-            last_name: args.name.split(" ").slice(1).join(" ") || undefined,
+            password: temporaryPassword,
+            first_name: args.firstName.trim(),
+            last_name: args.lastName.trim() || undefined,
             skip_password_checks: false,
             skip_password_requirement: false,
           }),
@@ -476,11 +486,22 @@ export const createAccount = action({
       await ctx.runMutation(internal.memberships.finalizeDirectAccount, {
         clerkId: clerkId!,
         email: args.email,
-        name: args.name,
+        name: fullName,
         orgId: args.orgId,
         roleId: args.roleId,
         inviteId,
       });
+
+      // 3c. Email the temporary password — only for accounts we just created in Clerk
+      if (isNewClerkUser && temporaryPassword) {
+        const org = await ctx.runQuery(internal.organizations.getInternal, { orgId: args.orgId });
+        await ctx.scheduler.runAfter(0, internal.email.sendNewAccountCredentials, {
+          toEmail: args.email,
+          firstName: args.firstName.trim(),
+          orgName: org?.name ?? "AutoFlow",
+          temporaryPassword,
+        });
+      }
 
       return { success: true };
     } catch (error: any) {
@@ -493,12 +514,12 @@ export const createAccount = action({
 
 /**
  * Check whether an email address already has a Clerk account.
- * Returns exists flag and the user's display name if found.
- * Used by the frontend to decide whether to show the username/password/name fields.
+ * Returns exists flag and the user's first/last name if found.
+ * Used by the frontend to decide whether to show the name-entry fields.
  */
 export const checkEmailExists = action({
   args: { email: v.string() },
-  handler: async (ctx, args): Promise<{ exists: boolean; name?: string }> => {
+  handler: async (ctx, args): Promise<{ exists: boolean; firstName?: string; lastName?: string }> => {
     const clerkSecret = process.env.CLERK_SECRET_KEY;
     if (!clerkSecret) return { exists: false };
 
@@ -516,11 +537,11 @@ export const checkEmailExists = action({
     if (!Array.isArray(users) || users.length === 0) return { exists: false };
 
     const clerkUser = users[0];
-    const firstName = clerkUser.first_name || "";
-    const lastName = clerkUser.last_name || "";
-    const fullName = [firstName, lastName].filter(Boolean).join(" ") || clerkUser.username || "";
-
-    return { exists: true, name: fullName || undefined };
+    return {
+      exists: true,
+      firstName: clerkUser.first_name || undefined,
+      lastName: clerkUser.last_name || undefined,
+    };
   }
 });
 

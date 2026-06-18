@@ -1,7 +1,15 @@
 import { v, ConvexError } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { mutation, query, internalQuery } from "./_generated/server";
 import { requireAuth, requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS, DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
+
+/** Internal lookup (no auth) for server-side flows like account-creation emails. */
+export const getInternal = internalQuery({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.orgId);
+  },
+});
 
 // ─── Mutations ───────────────────────────────────────────────────────────────
 

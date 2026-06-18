@@ -87,6 +87,57 @@ export const sendTaskAlarm = internalAction({
   },
 });
 
+export const sendNewAccountCredentials = internalAction({
+  args: {
+    toEmail: v.string(),
+    firstName: v.string(),
+    orgName: v.string(),
+    temporaryPassword: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const status = await rateLimiter.limit(ctx, "email");
+    if (!status.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(status.retryAfter / 1000)}s`);
+    }
+    const env = getValidatedEnv();
+    const resendApiKey = env.RESEND_API_KEY;
+    const appUrl = env.NEXT_PUBLIC_APP_URL;
+    const signInUrl = `${appUrl}/sign-in`;
+
+    const safeOrgName = escapeHtml(args.orgName);
+    const safeFirstName = escapeHtml(args.firstName);
+    const safeEmail = escapeHtml(args.toEmail);
+    const safePassword = escapeHtml(args.temporaryPassword);
+
+    const emailHtml = `
+      <h1>Welcome to ${safeOrgName} on AutoFlow</h1>
+      <p>Hi ${safeFirstName},</p>
+      <p>An account has been created for you on AutoFlow. Use the temporary password below to sign in, then change it from your account settings (click your avatar in the top-right corner once signed in).</p>
+      <p><strong>Email:</strong> ${safeEmail}<br />
+      <strong>Temporary password:</strong> <code>${safePassword}</code></p>
+      <p><a href="${signInUrl}">Sign In to AutoFlow</a></p>
+    `;
+
+    if (!resendApiKey) {
+      return { success: true, mock: true };
+    }
+
+    const resend = new Resend(resendApiKey);
+
+    try {
+      await resend.emails.send({
+        from: 'AutoFlow Teams <onboarding@resend.dev>',
+        to: args.toEmail,
+        subject: `Your AutoFlow account for ${args.orgName}`,
+        html: emailHtml,
+      });
+      return { success: true, mock: false };
+    } catch (error) {
+      return { success: false, error: String(error) };
+    }
+  },
+});
+
 export const sendTeamInvite = internalAction({
   args: {
     toEmail: v.string(),

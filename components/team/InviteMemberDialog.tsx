@@ -28,13 +28,12 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { Info, UserCheck, Loader2, User } from "lucide-react";
+import { Info, UserCheck, Loader2 } from "lucide-react";
 
 const baseSchema = z.object({
   email: z.string().email("Invalid email address"),
-  name: z.string().optional(),
-  username: z.string().optional(),
-  password: z.string().optional(),
+  firstName: z.string().optional(),
+  lastName: z.string().optional(),
   roleId: z.string().min(1, "Role is required"),
 });
 
@@ -55,15 +54,13 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [emailCheckState, setEmailCheckState] = useState<"idle" | "checking" | "exists" | "new">("idle");
-  const [existingUserName, setExistingUserName] = useState<string>("");
 
   const form = useForm<CreateAccountFormValues>({
     resolver: zodResolver(baseSchema as any),
     defaultValues: {
       email: "",
-      name: "",
-      username: "",
-      password: "",
+      firstName: "",
+      lastName: "",
       roleId: "",
     },
   });
@@ -80,7 +77,6 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
         clearTimeout(timer);
         if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
           setEmailCheckState("idle");
-          setExistingUserName("");
           return;
         }
         setEmailCheckState("checking");
@@ -89,14 +85,14 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
             const result = await checkEmailExists({ email });
             if (result.exists) {
               setEmailCheckState("exists");
-              setExistingUserName(result.name || "");
+              // Pre-fill with the name already on file for this email — admin doesn't retype it.
+              form.setValue("firstName", result.firstName || "");
+              form.setValue("lastName", result.lastName || "");
             } else {
               setEmailCheckState("new");
-              setExistingUserName("");
             }
           } catch {
             setEmailCheckState("new");
-            setExistingUserName("");
           }
         }, 700);
       };
@@ -113,45 +109,34 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
     if (!open) {
       form.reset();
       setEmailCheckState("idle");
-      setExistingUserName("");
     }
   }, [open]);
 
   const onSubmit = async (values: CreateAccountFormValues) => {
     if (!activeOrgId) return;
 
-    // For brand-new accounts, enforce username + password + name
-    if (!isExistingUser) {
-      if (!values.name || values.name.trim().length < 2) {
-        form.setError("name", { message: "Full name must be at least 2 characters" });
-        return;
-      }
-      if (!values.username || values.username.length < 3) {
-        form.setError("username", { message: "Username must be at least 3 characters" });
-        return;
-      }
-      if (!values.password || values.password.length < 8) {
-        form.setError("password", { message: "Password must be at least 8 characters" });
-        return;
-      }
+    if (!values.firstName || values.firstName.trim().length < 1) {
+      form.setError("firstName", { message: "First name is required" });
+      return;
+    }
+    if (!values.lastName || values.lastName.trim().length < 1) {
+      form.setError("lastName", { message: "Last name is required" });
+      return;
     }
 
     setIsSubmitting(true);
     try {
       await createAccount({
         orgId: activeOrgId,
-        // For existing users: pass their real name from Clerk, or a placeholder
-        name: isExistingUser ? (existingUserName || values.email) : (values.name || ""),
+        firstName: values.firstName,
+        lastName: values.lastName,
         email: values.email,
-        username: isExistingUser ? undefined : values.username,
-        password: isExistingUser ? undefined : values.password,
         roleId: values.roleId as Id<"roles">,
       });
 
       toast.success(t("AccountCreatedSuccess" as any));
       form.reset();
       setEmailCheckState("idle");
-      setExistingUserName("");
       onOpenChange(false);
     } catch (error: any) {
       toast.error(error.message || t("AccountCreatedFail" as any));
@@ -196,74 +181,45 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
               )}
             />
 
-            {/* Existing user: show their name as a read-only badge, hide the input */}
-            {isExistingUser && (
-              <>
-                {existingUserName && (
-                  <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 dark:bg-zinc-900 dark:border-zinc-700 px-3 py-2.5">
-                    <User className="h-4 w-4 text-muted-foreground shrink-0" />
-                    <div className="flex flex-col">
-                      <span className="text-xs text-muted-foreground">
-                        {t("RegisteredName" as any)}
-                      </span>
-                      <span className="text-sm font-medium">{existingUserName}</span>
-                    </div>
-                  </div>
-                )}
-                <div className="flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-800 p-3 text-sm text-blue-800 dark:text-blue-300">
-                  <Info className="h-4 w-4 mt-0.5 shrink-0" />
-                  <p>
-                    {t("ExistingUserNotice" as any)}
-                  </p>
-                </div>
-              </>
+            {/* First/Last name — pre-filled and read-only for existing users, editable for new ones */}
+            {emailCheckState !== "idle" && emailCheckState !== "checking" && (
+              <div className="grid grid-cols-2 gap-3">
+                <FormField
+                  control={form.control}
+                  name="firstName"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("FirstName" as any)}</FormLabel>
+                      <FormControl>
+                        <Input placeholder="John" {...field} readOnly={isExistingUser} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="lastName"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("LastName" as any)}</FormLabel>
+                      <FormControl>
+                        <Input placeholder="Doe" {...field} readOnly={isExistingUser} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
             )}
 
-            {/* New user only: name, username, password */}
-            {!isExistingUser && emailCheckState !== "idle" && (
-              <>
-                <FormField
-                  control={form.control}
-                  name="name"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("FullName" as any)}</FormLabel>
-                      <FormControl>
-                        <Input placeholder="John Doe" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-
-                <FormField
-                  control={form.control}
-                  name="username"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("Username" as any)}</FormLabel>
-                      <FormControl>
-                        <Input placeholder="johndoe" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-
-                <FormField
-                  control={form.control}
-                  name="password"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>{t("Password" as any)}</FormLabel>
-                      <FormControl>
-                        <Input type="password" placeholder="********" {...field} />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </>
+            {isExistingUser && (
+              <div className="flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-800 p-3 text-sm text-blue-800 dark:text-blue-300">
+                <Info className="h-4 w-4 mt-0.5 shrink-0" />
+                <p>
+                  {t("ExistingUserNotice" as any)}
+                </p>
+              </div>
             )}
 
             {/* Role — shown once we know if they exist or not */}
