@@ -1,6 +1,6 @@
 "use client";
 
-import { LayoutDashboard, Building2, Users, Database, History } from "lucide-react";
+import { LayoutDashboard, Building2, Users, Database, History, Inbox } from "lucide-react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
@@ -10,6 +10,7 @@ const navigation = [
   { name: "Organizations", href: "/admin/organizations", icon: Building2 },
   { name: "Users", href: "/admin/users", icon: Users },
   { name: "Data Browser", href: "/admin/data", icon: Database },
+  { name: "Support Inbox", href: "/admin/support", icon: Inbox },
   { name: "Audit Log", href: "/admin/audit", icon: History },
 ];
 

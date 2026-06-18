@@ -737,10 +737,37 @@ export default defineSchema({
   }).index("by_job", ["jobName"]),
 
   webhookLogs: defineTable({
-    source: v.union(v.literal("clerk"), v.literal("whatsapp")),
+    source: v.union(v.literal("clerk"), v.literal("whatsapp"), v.literal("resend")),
     status: v.union(v.literal("success"), v.literal("error")),
     summary: v.string(),
     error: v.optional(v.string()),
     createdAt: v.number(),
   }).index("by_createdAt", ["createdAt"]),
+
+  // ─── Company-level support inbox (support@autoflowdealer.com) ─────────────
+  // Not org-scoped — this is the AutoFlow operator's own inbox for talking to
+  // subscriber dealerships, separate entirely from any tenant's data.
+
+  supportThreads: defineTable({
+    participantEmail: v.string(),
+    participantName: v.optional(v.string()),
+    subject: v.string(),
+    status: v.union(v.literal("OPEN"), v.literal("CLOSED")),
+    lastMessageAt: v.number(),
+  })
+    .index("by_participantEmail", ["participantEmail"])
+    .index("by_lastMessageAt", ["lastMessageAt"])
+    .index("by_status", ["status"]),
+
+  supportMessages: defineTable({
+    threadId: v.id("supportThreads"),
+    direction: v.union(v.literal("INBOUND"), v.literal("OUTBOUND")),
+    fromEmail: v.string(),
+    toEmail: v.string(),
+    bodyText: v.optional(v.string()),
+    bodyHtml: v.optional(v.string()),
+    resendEmailId: v.optional(v.string()),
+    sentByUserId: v.optional(v.id("users")),
+    createdAt: v.number(),
+  }).index("by_thread", ["threadId"]),
 });
