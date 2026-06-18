@@ -130,7 +130,7 @@ export async function requireTenantAuth(
     throwAppError(AppErrorCode.ROLE_NOT_FOUND, "Membership role not found or corrupted.");
   }
 
-  if (requiredPermissions.length > 0) {
+  if (requiredPermissions.length > 0 && role.name !== "OWNER") {
     const missing = requiredPermissions.filter((p) => !role.permissions.includes(p));
     if (missing.length > 0) {
       throwAppError(
