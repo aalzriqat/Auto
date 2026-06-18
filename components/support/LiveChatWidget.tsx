@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -8,17 +8,27 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { MessageCircle, X } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, firstName } from "@/lib/utils";
+import { playChatMessagePing } from "@/lib/chatSound";
+import { useTicker } from "@/hooks/useTicker";
+import { format } from "date-fns";
+
+const TYPING_TIMEOUT_MS = 4_000;
+const TYPING_THROTTLE_MS = 2_000;
+const PRESENCE_REPORT_INTERVAL_MS = 10_000;
 
 export function LiveChatWidget() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const [open, setOpen] = useState(false);
   const [message, setMessage] = useState("");
+  useTicker(1000);
 
   const startOrGetMyThread = useMutation(api.liveChat.startOrGetMyThread);
   const sendDealerMessage = useMutation(api.liveChat.sendDealerMessage);
   const markThreadReadByDealer = useMutation(api.liveChat.markThreadReadByDealer);
+  const setDealerTyping = useMutation(api.liveChat.setDealerTyping);
+  const updateDealerPresence = useMutation(api.liveChat.updateDealerPresence);
 
   const threadInfo = useQuery(api.liveChat.getMyThread, activeOrgId ? { orgId: activeOrgId } : "skip");
   const messages = useQuery(
@@ -40,6 +50,61 @@ export function LiveChatWidget() {
       markThreadReadByDealer({ threadId: threadInfo.thread._id });
     }
   }, [open, threadInfo?.thread, messages?.length, markThreadReadByDealer]);
+
+  // Sound + tab-title flash when a new agent message (or close notice)
+  // arrives while the widget is closed or the tab isn't focused.
+  const prevUnreadRef = useRef(0);
+  useEffect(() => {
+    const hidden = typeof document !== "undefined" && document.visibilityState === "hidden";
+    if (unreadCount > prevUnreadRef.current && (!open || hidden)) {
+      playChatMessagePing();
+    }
+    prevUnreadRef.current = unreadCount;
+  }, [unreadCount, open]);
+
+  useEffect(() => {
+    if (unreadCount === 0 || open) return;
+    const original = document.title;
+    let toggled = false;
+    const id = setInterval(() => {
+      document.title = toggled ? original : `(${unreadCount}) ${t("LiveChatWidgetTitle")}`;
+      toggled = !toggled;
+    }, 1500);
+    return () => {
+      clearInterval(id);
+      document.title = original;
+    };
+  }, [unreadCount, open, t]);
+
+  // Report presence (active/idle) to the agent while the widget is open.
+  useEffect(() => {
+    const threadId = threadInfo?.thread?._id;
+    if (!open || !threadId) return;
+
+    const report = () => {
+      const state = document.visibilityState === "visible" ? "active" : "idle";
+      updateDealerPresence({ threadId, state });
+    };
+    report();
+    const interval = setInterval(report, PRESENCE_REPORT_INTERVAL_MS);
+    document.addEventListener("visibilitychange", report);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", report);
+    };
+  }, [open, threadInfo?.thread?._id, updateDealerPresence]);
+
+  const lastTypingSentRef = useRef(0);
+  function handleTyping(value: string) {
+    setMessage(value);
+    const threadId = threadInfo?.thread?._id;
+    if (!threadId) return;
+    const now = Date.now();
+    if (now - lastTypingSentRef.current > TYPING_THROTTLE_MS) {
+      lastTypingSentRef.current = now;
+      setDealerTyping({ threadId });
+    }
+  }
 
   async function handleOpen() {
     setOpen(true);
@@ -66,6 +131,10 @@ export function LiveChatWidget() {
   if (!activeOrgId) return null;
 
   const thread = threadInfo?.thread;
+  const agentDisplayName = firstName(threadInfo?.claimedByName) ?? "Support";
+  const agentIsTyping = Boolean(
+    thread?.agentTypingAt && Date.now() - thread.agentTypingAt < TYPING_TIMEOUT_MS
+  );
 
   let statusText = t("LiveChatConnecting");
   if (!thread) {
@@ -75,7 +144,9 @@ export function LiveChatWidget() {
       ? t("LiveChatQueuePosition").replace("{position}", String(threadInfo?.queuePosition ?? 1))
       : t("LiveChatNoAgentsOnline");
   } else if (thread.status === "ACTIVE") {
-    statusText = t("LiveChatAgentConnected").replace("{name}", threadInfo?.claimedByName ?? "Support");
+    statusText = agentIsTyping
+      ? t("LiveChatAgentTyping").replace("{name}", agentDisplayName)
+      : t("LiveChatAgentConnected").replace("{name}", agentDisplayName);
   } else if (thread.status === "CLOSED") {
     statusText = t("LiveChatConversationEnded");
   }
@@ -111,19 +182,41 @@ export function LiveChatWidget() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 min-h-[200px]">
-              {messages?.map((m) => (
-                <div
-                  key={m._id}
-                  className={cn(
-                    "max-w-[80%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap",
-                    m.senderType === "DEALER" ? "self-end bg-primary text-primary-foreground" : "self-start bg-muted"
-                  )}
-                >
-                  {m.bodyText}
-                </div>
-              ))}
+              {messages?.map((m) =>
+                m.isSystem ? (
+                  <p key={m._id} className="self-center text-[11px] text-muted-foreground italic">
+                    {m.bodyText}
+                  </p>
+                ) : (
+                  <div
+                    key={m._id}
+                    className={cn(
+                      "max-w-[80%] flex flex-col gap-0.5",
+                      m.senderType === "DEALER" ? "self-end items-end" : "self-start items-start"
+                    )}
+                  >
+                    {m.senderType === "AGENT" && (
+                      <span className="text-[10px] text-muted-foreground px-1">{firstName(m.senderName) ?? "Support"}</span>
+                    )}
+                    <div
+                      className={cn(
+                        "rounded-lg px-3 py-2 text-sm whitespace-pre-wrap",
+                        m.senderType === "DEALER" ? "bg-primary text-primary-foreground" : "bg-muted"
+                      )}
+                    >
+                      {m.bodyText}
+                    </div>
+                    <span className="text-[10px] text-muted-foreground px-1">{format(m.createdAt, "p")}</span>
+                  </div>
+                )
+              )}
               {(!messages || messages.length === 0) && (
                 <p className="text-sm text-muted-foreground">{t("LiveChatStartPrompt")}</p>
+              )}
+              {agentIsTyping && (
+                <p className="self-start text-[11px] text-muted-foreground italic">
+                  {t("LiveChatAgentTyping").replace("{name}", agentDisplayName)}
+                </p>
               )}
             </div>
 
@@ -131,7 +224,7 @@ export function LiveChatWidget() {
               <Textarea
                 placeholder={t("LiveChatMessagePlaceholder")}
                 value={message}
-                onChange={(e) => setMessage(e.target.value)}
+                onChange={(e) => handleTyping(e.target.value)}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();

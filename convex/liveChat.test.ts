@@ -142,6 +142,77 @@ describe("liveChat routing", () => {
   });
 });
 
+describe("liveChat agent status (break/offline deferral)", () => {
+  test("requesting BREAK while handling an active chat is deferred, not applied immediately", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asDealer } = await seedOrgAndDealer(t, "9");
+    const agent = await seedAgent(t, "A9");
+
+    const threadId = await asDealer.mutation(api.liveChat.startOrGetMyThread, { orgId });
+    await flushImmediate(t);
+    await agent.asAgent.mutation(api.liveChat.acceptOffer, { threadId });
+
+    const result = await agent.asAgent.mutation(api.liveChat.setAgentStatus, { status: "BREAK" });
+    expect(result).toEqual({ applied: false, deferred: true });
+
+    const agentRow = await t.run(async (ctx) => ctx.db.get(agent.agentId));
+    expect(agentRow?.pendingBreak).toBe(true);
+    expect(agentRow?.isOnline).toBe(true); // still online, just excluded from new offers
+
+    const status = await agent.asAgent.query(api.liveChat.getMyAgentStatus, {});
+    expect(status.pendingBreak).toBe(true);
+    expect(status.activeChatCount).toBe(1);
+  });
+
+  test("a pending-break agent is excluded from new offers", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId: org1, asDealer: dealer1 } = await seedOrgAndDealer(t, "10a");
+    const { orgId: org2, asDealer: dealer2 } = await seedOrgAndDealer(t, "10b");
+    const agent = await seedAgent(t, "A10");
+
+    const thread1 = await dealer1.mutation(api.liveChat.startOrGetMyThread, { orgId: org1 });
+    await flushImmediate(t);
+    await agent.asAgent.mutation(api.liveChat.acceptOffer, { threadId: thread1 });
+    await agent.asAgent.mutation(api.liveChat.setAgentStatus, { status: "BREAK" });
+
+    const thread2 = await dealer2.mutation(api.liveChat.startOrGetMyThread, { orgId: org2 });
+    await flushImmediate(t);
+
+    const thread2Doc = await t.run(async (ctx) => ctx.db.get(thread2));
+    expect(thread2Doc?.status).toBe("WAITING"); // no eligible agent — the only one is pending-break
+  });
+
+  test("closing the last active chat applies the deferred break", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asDealer } = await seedOrgAndDealer(t, "11");
+    const agent = await seedAgent(t, "A11");
+
+    const threadId = await asDealer.mutation(api.liveChat.startOrGetMyThread, { orgId });
+    await flushImmediate(t);
+    await agent.asAgent.mutation(api.liveChat.acceptOffer, { threadId });
+    await agent.asAgent.mutation(api.liveChat.setAgentStatus, { status: "BREAK" });
+
+    await agent.asAgent.mutation(api.liveChat.closeThread, { threadId });
+
+    const agentRow = await t.run(async (ctx) => ctx.db.get(agent.agentId));
+    expect(agentRow?.status).toBe("BREAK");
+    expect(agentRow?.isOnline).toBe(false);
+    expect(agentRow?.pendingBreak).toBe(false);
+  });
+
+  test("setAgentStatus applies immediately when the agent has no active chats", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const agent = await seedAgent(t, "A12");
+
+    const result = await agent.asAgent.mutation(api.liveChat.setAgentStatus, { status: "OFFLINE" });
+    expect(result).toEqual({ applied: true });
+
+    const agentRow = await t.run(async (ctx) => ctx.db.get(agent.agentId));
+    expect(agentRow?.status).toBe("OFFLINE");
+    expect(agentRow?.isOnline).toBe(false);
+  });
+});
+
 describe("liveChat org access grant", () => {
   test("requestOrgAccess fails if the thread isn't ACTIVE and claimed by the caller", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));

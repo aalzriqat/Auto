@@ -10,15 +10,33 @@ export const listSupportAgents = query({
     await requireSuperAdmin(ctx);
 
     const agents = await ctx.db.query("supportAgents").collect();
+    const now = Date.now();
     return await Promise.all(
       agents.map(async (agent) => {
         const user = await ctx.db.get(agent.userId);
+        const isOnlineNow = Boolean(
+          agent.isOnline && agent.lastHeartbeatAt && now - agent.lastHeartbeatAt < 45_000
+        );
+        // A stale heartbeat (closed tab, crashed browser) always wins over
+        // whatever status was last recorded — they're not really online.
+        const presence = !isOnlineNow ? "OFFLINE" : agent.status ?? "ONLINE";
+
+        const activeThreads = await ctx.db
+          .query("liveChatThreads")
+          .withIndex("by_claimedByUserId", (q) => q.eq("claimedByUserId", agent.userId))
+          .filter((q) => q.eq(q.field("status"), "ACTIVE"))
+          .collect();
+        const activeChatSince = activeThreads.length
+          ? Math.min(...activeThreads.map((t) => t.claimedAt ?? t.createdAt))
+          : undefined;
+
         return {
           ...agent,
           name: user?.name,
-          isOnlineNow: Boolean(
-            agent.isOnline && agent.lastHeartbeatAt && Date.now() - agent.lastHeartbeatAt < 45_000
-          ),
+          isOnlineNow,
+          presence,
+          activeChatCount: activeThreads.length,
+          activeChatSince,
         };
       })
     );

@@ -784,6 +784,14 @@ export default defineSchema({
     isOnline: v.optional(v.boolean()),
     lastHeartbeatAt: v.optional(v.number()),
     lastOfferedAt: v.optional(v.number()), // round-robin fairness for chat routing
+    // Richer presence than isOnline: ONLINE accepts new offers, BREAK and
+    // OFFLINE don't (isOnline is kept in sync with status === "ONLINE" so
+    // existing isOnline-based routing/eligibility checks stay correct).
+    status: v.optional(v.union(v.literal("ONLINE"), v.literal("BREAK"), v.literal("OFFLINE"))),
+    // Set when the agent asks to go on break/offline while still handling an
+    // active chat — excluded from new offers immediately, but the status
+    // change itself is deferred until their last active chat closes.
+    pendingBreak: v.optional(v.boolean()),
   })
     .index("by_userId", ["userId"])
     .index("by_email", ["email"]),
@@ -805,6 +813,16 @@ export default defineSchema({
     lastMessageAt: v.number(),
     closedAt: v.optional(v.number()),
     dealerLastReadAt: v.optional(v.number()),
+    agentLastReadAt: v.optional(v.number()),
+    // Typing indicators — last keystroke timestamp from each side; the
+    // client treats this as "stopped typing" once it's a few seconds stale.
+    dealerTypingAt: v.optional(v.number()),
+    agentTypingAt: v.optional(v.number()),
+    // Dealer presence within this thread's chat widget — self-reported by
+    // the client (active = window open+focused, idle = open but unfocused)
+    // and treated as "away" once dealerPresenceAt goes stale.
+    dealerPresence: v.optional(v.union(v.literal("active"), v.literal("idle"))),
+    dealerPresenceAt: v.optional(v.number()),
   })
     .index("by_dealerUserId", ["dealerUserId"])
     .index("by_status", ["status", "createdAt"])
@@ -817,6 +835,10 @@ export default defineSchema({
     senderName: v.optional(v.string()),
     bodyText: v.string(),
     createdAt: v.number(),
+    // System notices (e.g. "agent ended the conversation") — rendered
+    // centered/muted instead of as a chat bubble, but still an AGENT-typed
+    // message so it flows through the existing unread/sound/notification path.
+    isSystem: v.optional(v.boolean()),
   }).index("by_thread", ["threadId"]),
 
   // Temporary, audited "view/act as" access: while actively handling a

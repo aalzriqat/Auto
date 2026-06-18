@@ -9,6 +9,9 @@ export const chatEn = {
   LiveChatSend: "Send",
   LiveChatStartPrompt: "Need help? Start a conversation with our support team.",
   SupportAccessBannerText: "An AutoFlow support agent has temporary access to help with your account, until {time}.",
+  LiveChatAgentTyping: "{name} is typing…",
+  LiveChatOnline: "Online",
+  LiveChatAway: "Away",
 };
 
 export const chatAr = {
@@ -22,4 +25,7 @@ export const chatAr = {
   LiveChatSend: "إرسال",
   LiveChatStartPrompt: "هل تحتاج مساعدة؟ ابدأ محادثة مع فريق الدعم.",
   SupportAccessBannerText: "لدى أحد موظفي دعم AutoFlow وصول مؤقت للمساعدة في حسابك حتى {time}.",
+  LiveChatAgentTyping: "{name} يكتب الآن…",
+  LiveChatOnline: "متصل",
+  LiveChatAway: "غير متصل",
 };

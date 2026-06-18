@@ -10,6 +10,20 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { toast } from "@/components/ui/sonner";
+import { useTicker } from "@/hooks/useTicker";
+
+function formatDuration(sinceMs: number) {
+  const minutes = Math.max(0, Math.floor((Date.now() - sinceMs) / 60_000));
+  if (minutes < 1) return "<1m";
+  if (minutes < 60) return `${minutes}m`;
+  return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
+}
+
+function PresenceBadge({ presence }: { presence: "ONLINE" | "BREAK" | "OFFLINE" }) {
+  if (presence === "ONLINE") return <Badge variant="secondary" className="bg-emerald-500/20 text-emerald-300 border-emerald-500/30">Online</Badge>;
+  if (presence === "BREAK") return <Badge variant="secondary" className="bg-amber-500/20 text-amber-300 border-amber-500/30">On break</Badge>;
+  return <Badge variant="outline">Offline</Badge>;
+}
 
 export default function AdminSupportAgentsPage() {
   const agents = useQuery(api.adminSupportAgents.listSupportAgents, {});
@@ -19,6 +33,7 @@ export default function AdminSupportAgentsPage() {
 
   const [email, setEmail] = useState("");
   const [isAdding, setIsAdding] = useState(false);
+  useTicker(15_000);
 
   async function handleAdd() {
     if (!email.trim()) return;
@@ -71,7 +86,8 @@ export default function AdminSupportAgentsPage() {
             <TableRow>
               <TableHead>Email</TableHead>
               <TableHead>Name</TableHead>
-              <TableHead>Online</TableHead>
+              <TableHead>Presence</TableHead>
+              <TableHead>Active chats</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="text-end">Actions</TableHead>
             </TableRow>
@@ -82,10 +98,23 @@ export default function AdminSupportAgentsPage() {
                 <TableCell className="font-medium">{agent.email}</TableCell>
                 <TableCell>{agent.name ?? "—"}</TableCell>
                 <TableCell>
-                  {agent.isOnlineNow ? (
-                    <Badge variant="secondary">Online</Badge>
+                  <div className="flex items-center gap-2">
+                    <PresenceBadge presence={agent.presence as "ONLINE" | "BREAK" | "OFFLINE"} />
+                    {agent.pendingBreak && (
+                      <span className="text-[10px] text-amber-400">break pending</span>
+                    )}
+                  </div>
+                </TableCell>
+                <TableCell>
+                  {agent.activeChatCount > 0 ? (
+                    <span className="text-sm text-slate-300">
+                      {agent.activeChatCount} {agent.activeChatCount === 1 ? "chat" : "chats"}
+                      {agent.activeChatSince && (
+                        <span className="text-slate-500"> · {formatDuration(agent.activeChatSince)}</span>
+                      )}
+                    </span>
                   ) : (
-                    <Badge variant="outline">Offline</Badge>
+                    <span className="text-sm text-slate-500">—</span>
                   )}
                 </TableCell>
                 <TableCell>
@@ -107,7 +136,7 @@ export default function AdminSupportAgentsPage() {
             ))}
             {agents?.length === 0 && (
               <TableRow>
-                <TableCell colSpan={5} className="text-center text-sm text-slate-500 py-8">
+                <TableCell colSpan={6} className="text-center text-sm text-slate-500 py-8">
                   No support agents yet.
                 </TableCell>
               </TableRow>

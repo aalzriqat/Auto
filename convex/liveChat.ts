@@ -1,5 +1,5 @@
 import { v, ConvexError } from "convex/values";
-import { query, mutation, internalMutation } from "./_generated/server";
+import { query, mutation, internalMutation, MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { requireTenantAuth, requireSupportAgent } from "./utils/tenancy";
 import { rateLimiter } from "./rateLimit";
@@ -8,6 +8,7 @@ import { logAdminAction } from "./adminAudit";
 const OFFER_TIMEOUT_MS = 30_000;
 const GRANT_DURATION_MS = 60 * 60_000;
 const ONLINE_THRESHOLD_MS = 45_000;
+const DEALER_PRESENCE_STALE_MS = 25_000;
 
 // ─── Dealer-facing ──────────────────────────────────────────────────────────
 
@@ -113,6 +114,7 @@ export const sendDealerMessage = mutation({
     const wasClosed = thread.status === "CLOSED";
     await ctx.db.patch(args.threadId, {
       lastMessageAt: now,
+      dealerTypingAt: undefined,
       // Re-queue a closed conversation if the dealer writes again instead of
       // silently dropping the message into a dead thread.
       ...(wasClosed
@@ -144,6 +146,32 @@ export const markThreadReadByDealer = mutation({
       throw new ConvexError("Thread not found.");
     }
     await ctx.db.patch(args.threadId, { dealerLastReadAt: Date.now() });
+  },
+});
+
+export const setDealerTyping = mutation({
+  args: { threadId: v.id("liveChatThreads") },
+  handler: async (ctx, args) => {
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread) throw new ConvexError("Thread not found.");
+    const { user } = await requireTenantAuth(ctx, thread.orgId);
+    if (thread.dealerUserId !== user._id) {
+      throw new ConvexError("Thread not found.");
+    }
+    await ctx.db.patch(args.threadId, { dealerTypingAt: Date.now() });
+  },
+});
+
+export const updateDealerPresence = mutation({
+  args: { threadId: v.id("liveChatThreads"), state: v.union(v.literal("active"), v.literal("idle")) },
+  handler: async (ctx, args) => {
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread) throw new ConvexError("Thread not found.");
+    const { user } = await requireTenantAuth(ctx, thread.orgId);
+    if (thread.dealerUserId !== user._id) {
+      throw new ConvexError("Thread not found.");
+    }
+    await ctx.db.patch(args.threadId, { dealerPresence: args.state, dealerPresenceAt: Date.now() });
   },
 });
 
@@ -194,6 +222,35 @@ export const getThreadMessages = query({
 });
 
 // ─── Agent-facing: queue + routing ─────────────────────────────────────────
+
+/** Single-thread fetch for the agent console's header (presence/typing/unread state). */
+export const getThreadForAgent = query({
+  args: { threadId: v.id("liveChatThreads") },
+  handler: async (ctx, args) => {
+    await requireSupportAgent(ctx);
+    return await ctx.db.get(args.threadId);
+  },
+});
+
+export const setAgentTyping = mutation({
+  args: { threadId: v.id("liveChatThreads") },
+  handler: async (ctx, args) => {
+    const { user } = await requireSupportAgent(ctx);
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread || thread.claimedByUserId !== user._id) return;
+    await ctx.db.patch(args.threadId, { agentTypingAt: Date.now() });
+  },
+});
+
+export const markThreadReadByAgent = mutation({
+  args: { threadId: v.id("liveChatThreads") },
+  handler: async (ctx, args) => {
+    const { user } = await requireSupportAgent(ctx);
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread || thread.claimedByUserId !== user._id) return;
+    await ctx.db.patch(args.threadId, { agentLastReadAt: Date.now() });
+  },
+});
 
 export const listQueue = query({
   args: {},
@@ -326,6 +383,7 @@ export const offerToNextAgent = internalMutation({
       (a) =>
         a.isActive &&
         a.isOnline &&
+        !a.pendingBreak &&
         a.lastHeartbeatAt &&
         now - a.lastHeartbeatAt < ONLINE_THRESHOLD_MS &&
         !rejected.has(a.userId)
@@ -413,7 +471,7 @@ export const sendAgentMessage = mutation({
       createdAt: now,
     });
 
-    await ctx.db.patch(args.threadId, { lastMessageAt: now });
+    await ctx.db.patch(args.threadId, { lastMessageAt: now, agentLastReadAt: now, agentTypingAt: undefined });
   },
 });
 
@@ -424,7 +482,21 @@ export const closeThread = mutation({
     const thread = await ctx.db.get(args.threadId);
     if (!thread) throw new ConvexError("Thread not found.");
 
-    await ctx.db.patch(args.threadId, { status: "CLOSED", closedAt: Date.now() });
+    const now = Date.now();
+    await ctx.db.patch(args.threadId, { status: "CLOSED", closedAt: now, lastMessageAt: now });
+
+    // Let the dealer know the agent ended things, via the same channel as a
+    // normal agent message — so it surfaces through the existing
+    // unread badge / sound / tab-title notification path automatically.
+    await ctx.db.insert("liveChatMessages", {
+      threadId: args.threadId,
+      senderType: "AGENT",
+      senderUserId: user._id,
+      senderName: user.name,
+      bodyText: `${user.name ?? "Support"} ended the conversation.`,
+      createdAt: now,
+      isSystem: true,
+    });
 
     await logAdminAction(ctx, user, {
       action: "live_chat.close",
@@ -445,6 +517,40 @@ export const closeThread = mutation({
         await ctx.db.patch(grant._id, { revokedAt: Date.now() });
       }
     }
+
+    // If the agent had asked for a break/offline while this was their last
+    // active chat, apply that deferred status change now.
+    const agentRow = await ctx.db
+      .query("supportAgents")
+      .withIndex("by_userId", (q) => q.eq("userId", user._id))
+      .unique();
+    if (agentRow?.pendingBreak) {
+      const stillActive = await ctx.db
+        .query("liveChatThreads")
+        .withIndex("by_claimedByUserId", (q) => q.eq("claimedByUserId", user._id))
+        .filter((q) => q.eq(q.field("status"), "ACTIVE"))
+        .collect();
+      if (stillActive.length === 0) {
+        await ctx.db.patch(agentRow._id, { status: "BREAK", isOnline: false, pendingBreak: false });
+      }
+    }
+  },
+});
+
+export const getMyAgentStatus = query({
+  args: {},
+  handler: async (ctx) => {
+    const { agent } = await requireSupportAgent(ctx);
+    const activeThreads = await ctx.db
+      .query("liveChatThreads")
+      .withIndex("by_claimedByUserId", (q) => q.eq("claimedByUserId", agent.userId))
+      .filter((q) => q.eq(q.field("status"), "ACTIVE"))
+      .collect();
+    return {
+      status: agent.status ?? (agent.isOnline ? "ONLINE" : "OFFLINE"),
+      pendingBreak: agent.pendingBreak ?? false,
+      activeChatCount: activeThreads.length,
+    };
   },
 });
 
@@ -460,15 +566,69 @@ export const heartbeat = mutation({
     // Sweep the backlog when an agent newly comes online, so unassigned
     // threads don't sit idle waiting for the next dealer message.
     if (args.isOnline && !wasOnline) {
-      const unassigned = await ctx.db
-        .query("liveChatThreads")
-        .withIndex("by_status", (q) => q.eq("status", "WAITING"))
-        .order("asc")
-        .first();
-      if (unassigned) {
-        await ctx.scheduler.runAfter(0, internal.liveChat.offerToNextAgent, { threadId: unassigned._id });
-      }
+      await sweepBacklogFor(ctx);
     }
+  },
+});
+
+async function sweepBacklogFor(ctx: MutationCtx) {
+  const unassigned = await ctx.db
+    .query("liveChatThreads")
+    .withIndex("by_status", (q) => q.eq("status", "WAITING"))
+    .order("asc")
+    .first();
+  if (unassigned) {
+    await ctx.scheduler.runAfter(0, internal.liveChat.offerToNextAgent, { threadId: unassigned._id });
+  }
+}
+
+/**
+ * Explicit status control for the agent console (Online / Break / Offline).
+ * Going to BREAK or OFFLINE while the agent still has an active claimed
+ * chat is deferred — they keep that one conversation but stop receiving new
+ * offers immediately, and the status change applies automatically once
+ * their last active chat is closed (see closeThread).
+ */
+export const setAgentStatus = mutation({
+  args: { status: v.union(v.literal("ONLINE"), v.literal("BREAK"), v.literal("OFFLINE")) },
+  handler: async (ctx, args) => {
+    const { agent } = await requireSupportAgent(ctx);
+    const now = Date.now();
+
+    if (args.status === "ONLINE") {
+      const wasOnline = Boolean(
+        agent.isOnline && agent.lastHeartbeatAt && now - agent.lastHeartbeatAt < ONLINE_THRESHOLD_MS
+      );
+      await ctx.db.patch(agent._id, {
+        status: "ONLINE",
+        isOnline: true,
+        pendingBreak: false,
+        lastHeartbeatAt: now,
+      });
+      if (!wasOnline) await sweepBacklogFor(ctx);
+      return { applied: true };
+    }
+
+    const activeThreads = await ctx.db
+      .query("liveChatThreads")
+      .withIndex("by_claimedByUserId", (q) => q.eq("claimedByUserId", agent.userId))
+      .filter((q) => q.eq(q.field("status"), "ACTIVE"))
+      .collect();
+
+    if (activeThreads.length > 0) {
+      // Stop receiving new offers right away, but let them finish the
+      // conversation they're already in before fully going offline/on break.
+      await ctx.db.patch(agent._id, { pendingBreak: true, lastHeartbeatAt: now });
+      return { applied: false, deferred: true };
+    }
+
+    await ctx.db.patch(agent._id, {
+      status: args.status,
+      isOnline: false,
+      pendingBreak: false,
+      lastHeartbeatAt: now,
+    });
+    return { applied: true };
   },
 });
 
