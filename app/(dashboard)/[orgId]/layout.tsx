@@ -7,6 +7,8 @@ import { OrgProvider, useOrg } from "@/components/providers/OrgProvider";
 import { Toaster } from "@/components/ui/sonner";
 import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { FeedbackWidget } from "@/components/feedback/FeedbackWidget";
+import { LiveChatWidget } from "@/components/support/LiveChatWidget";
+import { SupportAccessBanner } from "@/components/support/SupportAccessBanner";
 import { hexToHslString } from "@/lib/colorUtils";
 
 function DashboardWrapper({ children }: { children: React.ReactNode }) {
@@ -40,6 +42,7 @@ function DashboardWrapper({ children }: { children: React.ReactNode }) {
     >
       <Sidebar />
       <div className="flex flex-col flex-1 w-full overflow-hidden">
+        <SupportAccessBanner />
         <TopNav />
         <main className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 lg:p-8 relative pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:pb-8">
           {children}
@@ -47,6 +50,7 @@ function DashboardWrapper({ children }: { children: React.ReactNode }) {
       </div>
       <Toaster />
       <FeedbackWidget />
+      <LiveChatWidget />
     </div>
   );
 }

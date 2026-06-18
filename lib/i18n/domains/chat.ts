@@ -1,0 +1,25 @@
+export const chatEn = {
+  LiveChatWidgetTitle: "Live Support",
+  LiveChatConnecting: "Connecting…",
+  LiveChatQueuePosition: "You're #{position} in line",
+  LiveChatNoAgentsOnline: "Support will reply as soon as someone's online",
+  LiveChatAgentConnected: "{name} is helping you",
+  LiveChatConversationEnded: "Conversation ended — send a message to start a new one",
+  LiveChatMessagePlaceholder: "Type your message…",
+  LiveChatSend: "Send",
+  LiveChatStartPrompt: "Need help? Start a conversation with our support team.",
+  SupportAccessBannerText: "An AutoFlow support agent has temporary access to help with your account, until {time}.",
+};
+
+export const chatAr = {
+  LiveChatWidgetTitle: "الدعم المباشر",
+  LiveChatConnecting: "جارٍ الاتصال…",
+  LiveChatQueuePosition: "أنت في المرتبة #{position} في الانتظار",
+  LiveChatNoAgentsOnline: "سيرد الدعم بمجرد توفر أحد الموظفين",
+  LiveChatAgentConnected: "{name} يساعدك الآن",
+  LiveChatConversationEnded: "انتهت المحادثة — أرسل رسالة لبدء محادثة جديدة",
+  LiveChatMessagePlaceholder: "اكتب رسالتك…",
+  LiveChatSend: "إرسال",
+  LiveChatStartPrompt: "هل تحتاج مساعدة؟ ابدأ محادثة مع فريق الدعم.",
+  SupportAccessBannerText: "لدى أحد موظفي دعم AutoFlow وصول مؤقت للمساعدة في حسابك حتى {time}.",
+};

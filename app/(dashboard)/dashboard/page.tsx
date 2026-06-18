@@ -255,14 +255,23 @@ export default function DashboardEntryPage() {
   const router = useRouter();
   const { isAuthenticated } = useConvexAuth();
   const orgs = useQuery(api.organizations.listMine, isAuthenticated ? undefined : "skip");
+  // Support agents have zero org memberships by design — route them to the
+  // agent console instead of the dealership-onboarding wizard below.
+  const isSupportAgent = useQuery(api.supportAgentAuth.isSupportAgent, isAuthenticated ? {} : "skip");
 
   useEffect(() => {
     if (orgs && orgs.length > 0) {
       router.replace(`/${orgs[0]!._id}/dashboard`);
+    } else if (orgs && orgs.length === 0 && isSupportAgent === true) {
+      router.replace("/support");
     }
-  }, [orgs, router]);
+  }, [orgs, isSupportAgent, router]);
 
-  if (orgs === undefined) {
+  if (orgs === undefined || (orgs.length === 0 && isSupportAgent === undefined)) {
+    return <Spinner />;
+  }
+
+  if (orgs.length === 0 && isSupportAgent === true) {
     return <Spinner />;
   }
 

@@ -8,4 +8,5 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
   heavyRead: { kind: "token bucket", rate: 20, period: 60000, capacity: 20 }, // For reports and massive aggregations
   standardApi: { kind: "token bucket", rate: 100, period: 60000, capacity: 200 }, // General mutations (updates, deletes)
   webhook: { kind: "token bucket", rate: 60, period: 60000, capacity: 60 }, // Inbound webhooks (Clerk, WhatsApp), keyed by source
+  chatMessage: { kind: "token bucket", rate: 20, period: 60000, capacity: 20 }, // Live chat messages, keyed by sender userId
 });

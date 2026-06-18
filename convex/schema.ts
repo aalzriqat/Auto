@@ -771,4 +771,68 @@ export default defineSchema({
     sentByUserId: v.optional(v.id("users")),
     createdAt: v.number(),
   }).index("by_thread", ["threadId"]),
+
+  // ─── Live chat support (in-app, real-time) ─────────────────────────────────
+  // Separate from the email support inbox above. Dealers chat from inside the
+  // dashboard; a small team of support agents (gated by requireSupportAgent,
+  // narrower than requireSuperAdmin) claim threads from a queue and reply live.
+
+  supportAgents: defineTable({
+    userId: v.id("users"),
+    email: v.string(),
+    isActive: v.boolean(),
+    isOnline: v.optional(v.boolean()),
+    lastHeartbeatAt: v.optional(v.number()),
+    lastOfferedAt: v.optional(v.number()), // round-robin fairness for chat routing
+  })
+    .index("by_userId", ["userId"])
+    .index("by_email", ["email"]),
+
+  liveChatThreads: defineTable({
+    orgId: v.id("organizations"),
+    dealerUserId: v.id("users"),
+    dealerName: v.optional(v.string()),
+    status: v.union(v.literal("WAITING"), v.literal("OFFERED"), v.literal("ACTIVE"), v.literal("CLOSED")),
+    // Offer/accept/reject routing — a thread is offered to one agent at a
+    // time; rejecting or timing out re-offers to the next eligible agent.
+    offeredToUserId: v.optional(v.id("users")),
+    offeredAt: v.optional(v.number()),
+    offerExpiresAt: v.optional(v.number()),
+    rejectedByUserIds: v.optional(v.array(v.id("users"))),
+    claimedByUserId: v.optional(v.id("users")),
+    claimedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    lastMessageAt: v.number(),
+    closedAt: v.optional(v.number()),
+    dealerLastReadAt: v.optional(v.number()),
+  })
+    .index("by_dealerUserId", ["dealerUserId"])
+    .index("by_status", ["status", "createdAt"])
+    .index("by_claimedByUserId", ["claimedByUserId"]),
+
+  liveChatMessages: defineTable({
+    threadId: v.id("liveChatThreads"),
+    senderType: v.union(v.literal("DEALER"), v.literal("AGENT")),
+    senderUserId: v.id("users"),
+    senderName: v.optional(v.string()),
+    bodyText: v.string(),
+    createdAt: v.number(),
+  }).index("by_thread", ["threadId"]),
+
+  // Temporary, audited "view/act as" access: while actively handling a
+  // dealer's live chat, an agent can request a real (time-limited) OWNER-role
+  // membership in that dealer's org to fix things directly. See
+  // requestOrgAccess/revokeOrgAccess/expireOrgAccessGrant in convex/liveChat.ts.
+  supportOrgAccessGrants: defineTable({
+    agentUserId: v.id("users"),
+    orgId: v.id("organizations"),
+    threadId: v.id("liveChatThreads"),
+    membershipId: v.id("memberships"),
+    grantedAt: v.number(),
+    expiresAt: v.number(),
+    revokedAt: v.optional(v.number()),
+  })
+    .index("by_agentUserId_org", ["agentUserId", "orgId"])
+    .index("by_orgId", ["orgId"])
+    .index("by_threadId", ["threadId"]),
 });

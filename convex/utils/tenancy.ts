@@ -65,6 +65,31 @@ export async function requireSuperAdmin(ctx: QueryCtx | MutationCtx): Promise<Do
   return user;
 }
 
+// ─── Support-agent guard (cross-tenant, narrower than super-admin) ──────────
+
+/**
+ * Restricts access to users with an active `supportAgents` row — managed by
+ * a super admin via /admin/support-agents. Used only by the live chat system
+ * (queue, claim, reply); deliberately cannot see/edit tenant data the way
+ * requireSuperAdmin can.
+ */
+export async function requireSupportAgent(
+  ctx: QueryCtx | MutationCtx
+): Promise<{ user: Doc<"users">; agent: Doc<"supportAgents"> }> {
+  const user = await requireAuth(ctx);
+
+  const agent = await ctx.db
+    .query("supportAgents")
+    .withIndex("by_userId", (q) => q.eq("userId", user._id))
+    .unique();
+
+  if (!agent || !agent.isActive) {
+    throwAppError(AppErrorCode.FORBIDDEN, "Forbidden: Support-agent access only.");
+  }
+
+  return { user, agent };
+}
+
 // ─── Full tenant-scoped auth ─────────────────────────────────────────────────
 
 /**
