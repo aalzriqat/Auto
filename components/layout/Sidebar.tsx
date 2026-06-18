@@ -25,16 +25,22 @@ const navigation = [
   { name: "Approvals", href: "/approvals", icon: Shield, permission: "manage:users" },
 ];
 
+// Every /settings/* route is gated to the OWNER role at the layout level
+// (app/(dashboard)/[orgId]/settings/layout.tsx uses RoleGuard ownerOnly),
+// since settings administration can't be delegated. "Team" is the
+// exception — it lives outside /settings and gates itself internally
+// (Members tab stays open to anyone with manage:users; only its own
+// Roles & Permissions tab is OWNER-only).
 const settingsNavigation = [
   { name: "Team", href: "/team", icon: Users, permission: "manage:users" },
-  { name: "GeneralSettings", href: "/settings/general", icon: Settings, permission: "view:settings" },
-  { name: "FinanceSettings", href: "/settings/finance", icon: Building2, permission: "view:settings" },
-  { name: "Pipeline", href: "/settings/pipeline", icon: GitBranch, permission: "view:settings" },
-  { name: "LeadSources", href: "/settings/lead-sources", icon: Sliders, permission: "view:settings" },
-  { name: "CustomFields", href: "/settings/custom-fields", icon: FormInput, permission: "view:settings" },
-  { name: "Commission", href: "/settings/commission", icon: Percent, permission: "view:settings" },
-  { name: "Branches", href: "/settings/branches", icon: Store, permission: "manage:users" },
-  { name: "FeedbackInbox", href: "/settings/feedback", icon: MessageSquarePlus, permission: "manage:users" },
+  { name: "GeneralSettings", href: "/settings/general", icon: Settings, ownerOnly: true },
+  { name: "FinanceSettings", href: "/settings/finance", icon: Building2, ownerOnly: true },
+  { name: "Pipeline", href: "/settings/pipeline", icon: GitBranch, ownerOnly: true },
+  { name: "LeadSources", href: "/settings/lead-sources", icon: Sliders, ownerOnly: true },
+  { name: "CustomFields", href: "/settings/custom-fields", icon: FormInput, ownerOnly: true },
+  { name: "Commission", href: "/settings/commission", icon: Percent, ownerOnly: true },
+  { name: "Branches", href: "/settings/branches", icon: Store, ownerOnly: true },
+  { name: "FeedbackInbox", href: "/settings/feedback", icon: MessageSquarePlus, ownerOnly: true },
 ];
 
 export function Sidebar() {
@@ -44,6 +50,7 @@ export function Sidebar() {
 
   const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
   const permissions = myMembership?.permissions || [];
+  const isOwner = myMembership?.roleName === "OWNER";
   const logoUrl = useQuery(
     api.orgSettings.getLogoUrl,
     activeOrgId ? { orgId: activeOrgId } : "skip"
@@ -61,11 +68,12 @@ export function Sidebar() {
   });
 
   const visibleSettings = settingsNavigation.filter(item => {
+    if ((item as { ownerOnly?: boolean }).ownerOnly) return isOwner;
     if (!item.permission) return true;
     return permissions.includes(item.permission);
   });
 
-  const renderNavItem = (item: typeof navigation[0]) => {
+  const renderNavItem = (item: { name: string; href: string; icon: typeof navigation[0]["icon"] }) => {
     const href = `/${activeOrgId}${item.href}`;
     const isActive = pathname.startsWith(href);
     const isApprovals = item.name === "Approvals";
