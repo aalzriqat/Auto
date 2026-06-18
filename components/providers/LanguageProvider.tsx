@@ -14,14 +14,17 @@ type LanguageContextType = {
 const LanguageContext = createContext<LanguageContextType | undefined>(undefined);
 
 export function LanguageProvider({ children }: { children: React.ReactNode }) {
-  // Always start with "en" so SSR and the initial client render agree.
-  // Read the saved preference from localStorage after mount to avoid hydration mismatch.
-  const [locale, setLocaleState] = useState<Locale>("en");
+  // Default to Arabic everywhere for a first-time visitor (no saved
+  // preference yet) — our primary audience. Start with "ar" on both SSR and
+  // the initial client render so they agree; the saved-preference check
+  // below (English or Arabic) only overrides it after mount, once we can
+  // actually read localStorage.
+  const [locale, setLocaleState] = useState<Locale>("ar");
   const [mounted, setMounted] = useState(false);
 
   useEffect(() => {
-    const saved = localStorage.getItem("autoflow-locale") as Locale;
-    if (saved === "ar") setLocaleState("ar");
+    const saved = localStorage.getItem("autoflow-locale") as Locale | null;
+    if (saved === "en" || saved === "ar") setLocaleState(saved);
     setMounted(true);
   }, []);
 
@@ -36,13 +39,15 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
     if (mounted) {
       document.documentElement.dir = isRtl ? "rtl" : "ltr";
       document.documentElement.lang = locale;
-      // Add font class based on locale
+      // Font class lives on <body> (set there in app/layout.tsx), so toggle
+      // it there too — switching it on <html> alone has no visual effect
+      // since body's own font-* class always wins over an inherited one.
       if (isRtl) {
-        document.documentElement.classList.add("font-cairo");
-        document.documentElement.classList.remove("font-inter");
+        document.body.classList.add("font-cairo");
+        document.body.classList.remove("font-inter");
       } else {
-        document.documentElement.classList.add("font-inter");
-        document.documentElement.classList.remove("font-cairo");
+        document.body.classList.add("font-inter");
+        document.body.classList.remove("font-cairo");
       }
     }
   }, [locale, mounted, isRtl]);
@@ -54,7 +59,7 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <LanguageContext.Provider value={{ locale, setLocale, t, isRtl }}>
-      <div dir={mounted ? (isRtl ? "rtl" : "ltr") : "ltr"} className="h-full w-full">
+      <div dir={isRtl ? "rtl" : "ltr"} className="h-full w-full">
         {children}
       </div>
     </LanguageContext.Provider>
