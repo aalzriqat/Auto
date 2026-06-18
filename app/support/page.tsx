@@ -8,7 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { cn } from "@/lib/utils";
+import { cn, formatElapsed } from "@/lib/utils";
 import { toast } from "@/components/ui/sonner";
 import { format } from "date-fns";
 import { playChatOfferChime, playChatMessagePing } from "@/lib/chatSound";
@@ -78,6 +78,17 @@ export default function SupportConsolePage() {
   const claimThread = useMutation(api.liveChat.claimThread);
 
   const [activeThreadId, setActiveThreadId] = useState<Id<"liveChatThreads"> | null>(null);
+
+  // Restore the selected conversation after a refresh — activeThreadId is
+  // plain component state, so a reload would otherwise drop back to "Select
+  // a conversation" even though the chat itself is still active server-side.
+  // Only runs once, on first load, so it doesn't fight a deliberate close.
+  const didRestoreSelectionRef = useRef(false);
+  useEffect(() => {
+    if (didRestoreSelectionRef.current || myActive === undefined) return;
+    didRestoreSelectionRef.current = true;
+    if (myActive.length > 0) setActiveThreadId(myActive[0]._id);
+  }, [myActive]);
 
   // Ring on a new offer, and keep gently ringing every few seconds while one
   // is still pending — like an incoming call — until it's accepted/rejected/expires.
@@ -194,6 +205,7 @@ function ThreadView({ threadId, onClosed }: { threadId: Id<"liveChatThreads">; o
   const revokeOrgAccess = useMutation(api.liveChat.revokeOrgAccess);
   const markThreadReadByAgent = useMutation(api.liveChat.markThreadReadByAgent);
   const setAgentTyping = useMutation(api.liveChat.setAgentTyping);
+  const updateAgentPresence = useMutation(api.liveChat.updateAgentPresence);
   useTicker(1000);
 
   const [reply, setReply] = useState("");
@@ -204,6 +216,22 @@ function ThreadView({ threadId, onClosed }: { threadId: Id<"liveChatThreads">; o
   useEffect(() => {
     markThreadReadByAgent({ threadId });
   }, [threadId, messages?.length, markThreadReadByAgent]);
+
+  // Report presence (active/idle) for this specific conversation while it's
+  // the one selected — lets the dealer see when the agent steps away.
+  useEffect(() => {
+    const report = () => {
+      const state = document.visibilityState === "visible" ? "active" : "idle";
+      updateAgentPresence({ threadId, state });
+    };
+    report();
+    const interval = setInterval(report, 10_000);
+    document.addEventListener("visibilitychange", report);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", report);
+    };
+  }, [threadId, updateAgentPresence]);
 
   const lastTypingSentRef = useRef(0);
   function handleReplyChange(value: string) {
@@ -259,9 +287,13 @@ function ThreadView({ threadId, onClosed }: { threadId: Id<"liveChatThreads">; o
     thread?.dealerPresenceAt && Date.now() - thread.dealerPresenceAt < DEALER_PRESENCE_STALE_MS
   );
   const dealerPresenceLabel = !dealerIsPresent
-    ? "Away"
+    ? thread?.dealerPresenceAt
+      ? `Away ${formatElapsed(Date.now() - thread.dealerPresenceAt)}`
+      : "Away"
     : thread?.dealerPresence === "idle"
-    ? "Idle"
+    ? thread.dealerPresenceSince
+      ? `Idle ${formatElapsed(Date.now() - thread.dealerPresenceSince)}`
+      : "Idle"
     : "Online";
   const dealerPresenceColor = !dealerIsPresent
     ? "bg-slate-400"

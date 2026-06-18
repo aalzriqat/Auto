@@ -1,6 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { query, mutation, internalMutation, MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
 import { requireTenantAuth, requireSupportAgent } from "./utils/tenancy";
 import { rateLimiter } from "./rateLimit";
 import { logAdminAction } from "./adminAudit";
@@ -171,7 +172,42 @@ export const updateDealerPresence = mutation({
     if (thread.dealerUserId !== user._id) {
       throw new ConvexError("Thread not found.");
     }
-    await ctx.db.patch(args.threadId, { dealerPresence: args.state, dealerPresenceAt: Date.now() });
+    const now = Date.now();
+    const stateChanged = thread.dealerPresence !== args.state;
+    await ctx.db.patch(args.threadId, {
+      dealerPresence: args.state,
+      dealerPresenceAt: now,
+      ...(stateChanged ? { dealerPresenceSince: now } : {}),
+    });
+  },
+});
+
+/** Dealer-initiated end — mirrors the agent's closeThread, including revoking any live org-access grant. */
+export const endThreadByDealer = mutation({
+  args: { threadId: v.id("liveChatThreads") },
+  handler: async (ctx, args) => {
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread) throw new ConvexError("Thread not found.");
+    const { user } = await requireTenantAuth(ctx, thread.orgId);
+    if (thread.dealerUserId !== user._id) {
+      throw new ConvexError("Thread not found.");
+    }
+    if (thread.status === "CLOSED") return;
+
+    const now = Date.now();
+    await ctx.db.patch(args.threadId, { status: "CLOSED", closedAt: now, lastMessageAt: now });
+
+    await ctx.db.insert("liveChatMessages", {
+      threadId: args.threadId,
+      senderType: "DEALER",
+      senderUserId: user._id,
+      senderName: user.name,
+      bodyText: `${user.name ?? "The dealer"} ended the conversation.`,
+      createdAt: now,
+      isSystem: true,
+    });
+
+    await revokeGrantsForThread(ctx, args.threadId);
   },
 });
 
@@ -249,6 +285,23 @@ export const markThreadReadByAgent = mutation({
     const thread = await ctx.db.get(args.threadId);
     if (!thread || thread.claimedByUserId !== user._id) return;
     await ctx.db.patch(args.threadId, { agentLastReadAt: Date.now() });
+  },
+});
+
+/** Per-thread presence for the claiming agent — are they currently looking at *this* conversation. */
+export const updateAgentPresence = mutation({
+  args: { threadId: v.id("liveChatThreads"), state: v.union(v.literal("active"), v.literal("idle")) },
+  handler: async (ctx, args) => {
+    const { user } = await requireSupportAgent(ctx);
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread || thread.claimedByUserId !== user._id) return;
+    const now = Date.now();
+    const stateChanged = thread.agentPresence !== args.state;
+    await ctx.db.patch(args.threadId, {
+      agentPresence: args.state,
+      agentPresenceAt: now,
+      ...(stateChanged ? { agentPresenceSince: now } : {}),
+    });
   },
 });
 
@@ -507,16 +560,7 @@ export const closeThread = mutation({
 
     // Closing the conversation always ends any org-access grant tied to it,
     // even if the agent forgot to revoke manually.
-    const grants = await ctx.db
-      .query("supportOrgAccessGrants")
-      .withIndex("by_threadId", (q) => q.eq("threadId", args.threadId))
-      .collect();
-    for (const grant of grants) {
-      if (!grant.revokedAt) {
-        await ctx.db.delete(grant.membershipId);
-        await ctx.db.patch(grant._id, { revokedAt: Date.now() });
-      }
-    }
+    await revokeGrantsForThread(ctx, args.threadId);
 
     // If the agent had asked for a break/offline while this was their last
     // active chat, apply that deferred status change now.
@@ -570,6 +614,19 @@ export const heartbeat = mutation({
     }
   },
 });
+
+async function revokeGrantsForThread(ctx: MutationCtx, threadId: Id<"liveChatThreads">) {
+  const grants = await ctx.db
+    .query("supportOrgAccessGrants")
+    .withIndex("by_threadId", (q) => q.eq("threadId", threadId))
+    .collect();
+  for (const grant of grants) {
+    if (!grant.revokedAt) {
+      await ctx.db.delete(grant.membershipId);
+      await ctx.db.patch(grant._id, { revokedAt: Date.now() });
+    }
+  }
+}
 
 async function sweepBacklogFor(ctx: MutationCtx) {
   const unassigned = await ctx.db

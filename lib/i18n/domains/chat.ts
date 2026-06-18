@@ -12,6 +12,9 @@ export const chatEn = {
   LiveChatAgentTyping: "{name} is typing…",
   LiveChatOnline: "Online",
   LiveChatAway: "Away",
+  LiveChatEndChat: "End chat",
+  LiveChatIdleFor: "Idle {time}",
+  LiveChatAwayFor: "Away {time}",
 };
 
 export const chatAr = {
@@ -28,4 +31,7 @@ export const chatAr = {
   LiveChatAgentTyping: "{name} يكتب الآن…",
   LiveChatOnline: "متصل",
   LiveChatAway: "غير متصل",
+  LiveChatEndChat: "إنهاء المحادثة",
+  LiveChatIdleFor: "خامل {time}",
+  LiveChatAwayFor: "غائب {time}",
 };

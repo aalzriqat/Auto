@@ -213,6 +213,62 @@ describe("liveChat agent status (break/offline deferral)", () => {
   });
 });
 
+describe("liveChat dealer-initiated end", () => {
+  test("a dealer can end their own active chat, posting a system notice", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asDealer } = await seedOrgAndDealer(t, "13");
+    const agent = await seedAgent(t, "A13");
+
+    const threadId = await asDealer.mutation(api.liveChat.startOrGetMyThread, { orgId });
+    await flushImmediate(t);
+    await agent.asAgent.mutation(api.liveChat.acceptOffer, { threadId });
+
+    await asDealer.mutation(api.liveChat.endThreadByDealer, { threadId });
+
+    const thread = await t.run(async (ctx) => ctx.db.get(threadId));
+    expect(thread?.status).toBe("CLOSED");
+
+    const messages = await t.run(async (ctx) =>
+      ctx.db.query("liveChatMessages").withIndex("by_thread", (q) => q.eq("threadId", threadId)).collect()
+    );
+    const notice = messages.find((m) => m.isSystem);
+    expect(notice).toBeDefined();
+    expect(notice?.senderType).toBe("DEALER");
+  });
+
+  test("ending a chat from the dealer side also revokes any active org-access grant", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asDealer } = await seedOrgAndDealer(t, "14");
+    const agent = await seedAgent(t, "A14");
+
+    const threadId = await asDealer.mutation(api.liveChat.startOrGetMyThread, { orgId });
+    await flushImmediate(t);
+    await agent.asAgent.mutation(api.liveChat.acceptOffer, { threadId });
+    await agent.asAgent.mutation(api.liveChat.requestOrgAccess, { threadId });
+
+    await asDealer.mutation(api.liveChat.endThreadByDealer, { threadId });
+
+    const membership = await t.run(async (ctx) =>
+      ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", agent.userId))
+        .unique()
+    );
+    expect(membership).toBeNull();
+  });
+
+  test("a dealer cannot end another dealer's thread", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asDealer } = await seedOrgAndDealer(t, "15a");
+    const { asDealer: otherDealer } = await seedOrgAndDealer(t, "15b");
+
+    const threadId = await asDealer.mutation(api.liveChat.startOrGetMyThread, { orgId });
+    await flushImmediate(t);
+
+    await expect(otherDealer.mutation(api.liveChat.endThreadByDealer, { threadId })).rejects.toThrow();
+  });
+});
+
 describe("liveChat org access grant", () => {
   test("requestOrgAccess fails if the thread isn't ACTIVE and claimed by the caller", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));

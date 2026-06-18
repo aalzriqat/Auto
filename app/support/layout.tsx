@@ -35,14 +35,20 @@ export default function SupportLayout({ children }: { children: React.ReactNode 
   }, [isLoading, isAuthenticated, isSupportAgent, router]);
 
   useEffect(() => {
-    if (!isSupportAgent) return;
+    // Wait for myStatus to actually load before sending any heartbeat —
+    // otherwise isOnlineRef.current is still its pre-load default (false)
+    // and we'd incorrectly flip a genuinely online agent offline on every
+    // mount (including React's dev-mode double-invoke on refresh).
+    if (!isSupportAgent || myStatus === undefined) return;
+    heartbeat({ isOnline: isOnlineRef.current });
     const interval = setInterval(() => heartbeat({ isOnline: isOnlineRef.current }), HEARTBEAT_INTERVAL_MS);
-    return () => {
-      clearInterval(interval);
-      heartbeat({ isOnline: false });
-    };
+    // No "set offline" on cleanup: every consumer of isOnline already also
+    // checks lastHeartbeatAt staleness (see ONLINE_THRESHOLD_MS), so simply
+    // letting heartbeats stop is what marks a truly-gone agent as offline —
+    // without misfiring on remounts that aren't really a disconnect.
+    return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSupportAgent]);
+  }, [isSupportAgent, myStatus === undefined]);
 
   async function handleSetStatus(next: "ONLINE" | "BREAK" | "OFFLINE") {
     try {

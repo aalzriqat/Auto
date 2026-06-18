@@ -823,6 +823,12 @@ export default defineSchema({
     // and treated as "away" once dealerPresenceAt goes stale.
     dealerPresence: v.optional(v.union(v.literal("active"), v.literal("idle"))),
     dealerPresenceAt: v.optional(v.number()),
+    dealerPresenceSince: v.optional(v.number()), // when dealerPresence last changed — drives the idle/away timer
+    // Mirror of the above, but for the claiming agent's view of *this*
+    // specific conversation (they may have several open elsewhere).
+    agentPresence: v.optional(v.union(v.literal("active"), v.literal("idle"))),
+    agentPresenceAt: v.optional(v.number()),
+    agentPresenceSince: v.optional(v.number()),
   })
     .index("by_dealerUserId", ["dealerUserId"])
     .index("by_status", ["status", "createdAt"])

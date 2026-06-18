@@ -8,7 +8,7 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { MessageCircle, X } from "lucide-react";
-import { cn, firstName } from "@/lib/utils";
+import { cn, firstName, formatElapsed } from "@/lib/utils";
 import { playChatMessagePing } from "@/lib/chatSound";
 import { useTicker } from "@/hooks/useTicker";
 import { format } from "date-fns";
@@ -16,6 +16,7 @@ import { format } from "date-fns";
 const TYPING_TIMEOUT_MS = 4_000;
 const TYPING_THROTTLE_MS = 2_000;
 const PRESENCE_REPORT_INTERVAL_MS = 10_000;
+const AGENT_PRESENCE_STALE_MS = 25_000;
 
 export function LiveChatWidget() {
   const { activeOrgId } = useOrg();
@@ -29,6 +30,7 @@ export function LiveChatWidget() {
   const markThreadReadByDealer = useMutation(api.liveChat.markThreadReadByDealer);
   const setDealerTyping = useMutation(api.liveChat.setDealerTyping);
   const updateDealerPresence = useMutation(api.liveChat.updateDealerPresence);
+  const endThreadByDealer = useMutation(api.liveChat.endThreadByDealer);
 
   const threadInfo = useQuery(api.liveChat.getMyThread, activeOrgId ? { orgId: activeOrgId } : "skip");
   const messages = useQuery(
@@ -135,6 +137,17 @@ export function LiveChatWidget() {
   const agentIsTyping = Boolean(
     thread?.agentTypingAt && Date.now() - thread.agentTypingAt < TYPING_TIMEOUT_MS
   );
+  const agentIsPresent = Boolean(
+    thread?.agentPresenceAt && Date.now() - thread.agentPresenceAt < AGENT_PRESENCE_STALE_MS
+  );
+  const agentIdleText =
+    thread?.status === "ACTIVE" && !agentIsTyping
+      ? agentIsPresent && thread.agentPresence === "idle" && thread.agentPresenceSince
+        ? t("LiveChatIdleFor").replace("{time}", formatElapsed(Date.now() - thread.agentPresenceSince))
+        : !agentIsPresent && thread.agentPresenceAt
+        ? t("LiveChatAwayFor").replace("{time}", formatElapsed(Date.now() - thread.agentPresenceAt))
+        : null
+      : null;
 
   let statusText = t("LiveChatConnecting");
   if (!thread) {
@@ -175,10 +188,21 @@ export function LiveChatWidget() {
               <div>
                 <p className="text-sm font-semibold">{t("LiveChatWidgetTitle")}</p>
                 <p className="text-xs text-muted-foreground">{statusText}</p>
+                {agentIdleText && <p className="text-[10px] text-muted-foreground">{agentIdleText}</p>}
               </div>
-              <button onClick={() => setOpen(false)} className="rounded-md p-1 hover:bg-muted text-muted-foreground">
-                <X className="h-4 w-4" />
-              </button>
+              <div className="flex items-center gap-1">
+                {thread && thread.status !== "CLOSED" && (
+                  <button
+                    onClick={() => endThreadByDealer({ threadId: thread._id })}
+                    className="rounded-md px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+                  >
+                    {t("LiveChatEndChat")}
+                  </button>
+                )}
+                <button onClick={() => setOpen(false)} className="rounded-md p-1 hover:bg-muted text-muted-foreground">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 min-h-[200px]">
