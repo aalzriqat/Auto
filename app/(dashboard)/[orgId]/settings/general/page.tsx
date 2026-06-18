@@ -19,8 +19,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { Settings, Palette, CreditCard, Upload, ShieldCheck, MessageCircle } from "lucide-react";
+import { Settings, Palette, CreditCard, Upload, ShieldCheck, MessageCircle, Sparkles, MessageSquareText, UserPlus, Send } from "lucide-react";
 
 const CURRENCIES = [
   { code: "JOD", symbol: "د.أ", label: "Jordanian Dinar (JOD)" },
@@ -71,11 +72,6 @@ export default function GeneralSettingsPage() {
   const [approvalThresholdEnabled, setApprovalThresholdEnabled] = useState(false);
   const [approvalMinProfitPercent, setApprovalMinProfitPercent] = useState("");
 
-  // WhatsApp tab state
-  const [waPhoneNumberId, setWaPhoneNumberId] = useState("");
-  const [waApiToken, setWaApiToken] = useState("");
-  const [waWebhookSecret, setWaWebhookSecret] = useState("");
-
   const [isSaving, setIsSaving] = useState(false);
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
 
@@ -99,9 +95,6 @@ export default function GeneralSettingsPage() {
           ? String(settings.approvalMinProfitPercent)
           : ""
       );
-      setWaPhoneNumberId(settings.whatsappPhoneNumberId ?? "");
-      setWaApiToken(settings.whatsappApiToken ?? "");
-      setWaWebhookSecret(settings.whatsappWebhookSecret ?? "");
     }
   }, [settings]);
 
@@ -177,24 +170,6 @@ export default function GeneralSettingsPage() {
     }
   };
 
-  const handleSaveWhatsApp = async () => {
-    if (!activeOrgId) return;
-    setIsSaving(true);
-    try {
-      await upsert({
-        orgId: activeOrgId,
-        whatsappPhoneNumberId: waPhoneNumberId || undefined,
-        whatsappApiToken: waApiToken || undefined,
-        whatsappWebhookSecret: waWebhookSecret || undefined,
-      });
-      toast.success(t("WhatsAppSettingsSaved"));
-    } catch (error: any) {
-      toast.error(error.message || t("FailedToSaveSettings"));
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!activeOrgId || !e.target.files?.[0]) return;
     const file = e.target.files[0];
@@ -246,6 +221,7 @@ export default function GeneralSettingsPage() {
             <TabsTrigger value="whatsapp" className="flex items-center gap-2">
               <MessageCircle className="h-4 w-4" />
               {t("WhatsAppTab")}
+              <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{t("ComingSoonBadge")}</Badge>
             </TabsTrigger>
           </TabsList>
         </div>
@@ -498,57 +474,42 @@ export default function GeneralSettingsPage() {
           </Card>
         </TabsContent>
 
-        {/* ── WhatsApp Tab ─────────────────────────────────────────────── */}
+        {/* ── WhatsApp Tab (Coming Soon) ──────────────────────────────── */}
         <TabsContent value="whatsapp">
           <Card>
             <CardHeader>
-              <CardTitle>{t("WhatsAppTab")}</CardTitle>
-              <CardDescription>
-                {t("WhatsAppTabDesc")}{" "}
-                <code className="text-xs bg-muted px-1 py-0.5 rounded">
-                  {process.env.NEXT_PUBLIC_CONVEX_URL?.replace("convex.cloud", "convex.site")}/whatsapp-webhook?orgId=YOUR_ORG_ID
-                </code>
-              </CardDescription>
+              <CardTitle className="flex items-center gap-2">
+                {t("WhatsAppTab")}
+                <Badge variant="secondary" className="gap-1">
+                  <Sparkles className="h-3 w-3" />
+                  {t("ComingSoonBadge")}
+                </Badge>
+              </CardTitle>
+              <CardDescription>{t("WhatsAppComingSoonDesc")}</CardDescription>
             </CardHeader>
-            <CardContent className="space-y-6">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="space-y-2">
-                  <Label>{t("PhoneNumberId")}</Label>
-                  <Input
-                    placeholder="e.g. 123456789012345"
-                    value={waPhoneNumberId}
-                    onChange={(e) => setWaPhoneNumberId(e.target.value)}
-                  />
-                  <p className="text-xs text-muted-foreground">{t("PhoneNumberIdDesc")}</p>
+            <CardContent>
+              <div className="rounded-xl border border-dashed border-border bg-muted/30 p-6 space-y-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary">
+                    <MessageCircle className="h-5 w-5" />
+                  </div>
+                  <p className="font-semibold">{t("WhatsAppComingSoonTitle")}</p>
                 </div>
 
-                <div className="space-y-2">
-                  <Label>{t("WebhookVerifyToken")}</Label>
-                  <Input
-                    type="password"
-                    placeholder={t("WebhookVerifyTokenPlaceholder")}
-                    value={waWebhookSecret}
-                    onChange={(e) => setWaWebhookSecret(e.target.value)}
-                  />
-                  <p className="text-xs text-muted-foreground">{t("WebhookVerifyTokenDesc")}</p>
-                </div>
-
-                <div className="space-y-2 md:col-span-2">
-                  <Label>{t("PermanentAccessToken")}</Label>
-                  <Input
-                    type="password"
-                    placeholder="EAAxxxxxxxx..."
-                    value={waApiToken}
-                    onChange={(e) => setWaApiToken(e.target.value)}
-                  />
-                  <p className="text-xs text-muted-foreground">{t("PermanentAccessTokenDesc")}</p>
-                </div>
-              </div>
-
-              <div className="flex justify-end">
-                <Button onClick={handleSaveWhatsApp} disabled={isSaving}>
-                  {isSaving ? t("Saving") : t("SaveWhatsAppSettings")}
-                </Button>
+                <ul className="space-y-2 text-sm text-muted-foreground">
+                  <li className="flex items-start gap-2">
+                    <MessageSquareText className="h-4 w-4 mt-0.5 shrink-0" />
+                    {t("WhatsAppComingSoonFeature1")}
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <UserPlus className="h-4 w-4 mt-0.5 shrink-0" />
+                    {t("WhatsAppComingSoonFeature2")}
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <Send className="h-4 w-4 mt-0.5 shrink-0" />
+                    {t("WhatsAppComingSoonFeature3")}
+                  </li>
+                </ul>
               </div>
             </CardContent>
           </Card>

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Check, Search, UserPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Doc } from "@/convex/_generated/dataModel";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 
 type Customer = Doc<"customers">;
 
@@ -24,6 +25,7 @@ export default function CustomerSearch({
   onCreateNew,
   accentClass = "border-indigo-500 bg-indigo-500/10",
 }: CustomerSearchProps) {
+  const { t } = useLanguage();
   const [query, setQuery] = useState("");
 
   const filtered = useMemo(() => {
@@ -48,7 +50,7 @@ export default function CustomerSearch({
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
         <Input
-          placeholder="Search by name, phone, or national ID…"
+          placeholder={t("CustomerSearchPlaceholder")}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           className="ps-10 bg-background"
@@ -60,7 +62,7 @@ export default function CustomerSearch({
         <div className="space-y-2 max-h-64 overflow-y-auto pe-1">
           {filtered.length === 0 ? (
             <p className="text-sm text-center py-6 text-muted-foreground">
-              No customers found.
+              {t("NoCustomersFoundWizard")}
             </p>
           ) : (
             filtered.map((c) => {
@@ -114,7 +116,7 @@ export default function CustomerSearch({
         onClick={onCreateNew}
       >
         <UserPlus className="w-4 h-4 me-2" />
-        Create a new customer
+        {t("CreateNewCustomerBtn")}
       </Button>
     </div>
   );

@@ -37,6 +37,7 @@ export function Step3Review({
   }) => void;
 }) {
   const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
   const saveQuote = useMutation(api.quotes.saveQuote);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -70,7 +71,7 @@ export function Step3Review({
     if (paymentType === "CASH") {
       return {
         isCash: true,
-        companyName: "Cash Deal",
+        companyName: t("CashDeal"),
         totalFinancedAmount: wizardData.vehiclePrice,
         monthlyInstallment: 0,
         totalProfit: 0,
@@ -113,10 +114,10 @@ export function Step3Review({
     documentRules,
     wizardData,
     effectivePrice,
+    t,
   ]);
 
   const [recipientName, setRecipientName] = useState("");
-  const { t } = useLanguage();
 
   const handleGenerate = async () => {
     if (!activeOrgId || !selectedResult) return;
@@ -144,7 +145,7 @@ export function Step3Review({
         recipientName: recipientName.trim() || undefined,
       });
 
-      toast.success("Quote generated successfully");
+      toast.success(t("QuoteSavedSuccess"));
       onSuccess({
         quoteId: quoteId as Id<"quotes">,
         selectedVehicle,
@@ -155,7 +156,7 @@ export function Step3Review({
         },
       });
     } catch (err: any) {
-      toast.error(err.message || "Failed to generate quote");
+      toast.error(err.message || t("QuoteSaveFail"));
     } finally {
       setIsSubmitting(false);
     }
@@ -194,7 +195,7 @@ export function Step3Review({
         <div className={cn("border rounded-xl p-4", accentClass)}>
           <p className="text-xs font-semibold uppercase text-muted-foreground mb-2 flex items-center gap-1">
             <FileText className="w-3.5 h-3.5" />
-            Required Documents
+            {t("RequiredDocuments")}
           </p>
 
           <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-sm">
@@ -233,7 +234,7 @@ export function Step3Review({
       <div className="flex flex-col-reverse sm:flex-row justify-between gap-3 pt-4 border-t">
         <Button variant="outline" onClick={onBack} disabled={isSubmitting} className="w-full sm:w-auto">
           <ArrowLeft className="w-4 h-4 me-2" />
-          Back
+          {t("Back")}
         </Button>
 
         <Button
@@ -247,7 +248,7 @@ export function Step3Review({
           )}
         >
           <CheckCircle2 className="w-4 h-4 me-2" />
-          {isSubmitting ? "Generating..." : "Generate Quote"}
+          {isSubmitting ? t("GeneratingQuote") : t("GenerateQuote")}
         </Button>
       </div>
     </div>

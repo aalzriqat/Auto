@@ -26,6 +26,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { VehicleCostBar } from "../components/VehicleCostBar";
+import { translateCustomerStatusLabel } from "@/lib/i18n/defaultLabels";
 
 export type Step1Values = z.infer<typeof step1Schema>;
 
@@ -49,7 +50,7 @@ export default function Step1QuoteSetup({
   onNext,
 }: Step1QuoteSetupProps) {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
 
   const isCash = paymentType === "CASH";
 
@@ -321,7 +322,7 @@ export default function Step1QuoteSetup({
                       htmlFor={`status-${option._id}`}
                       className="font-normal text-sm cursor-pointer select-none leading-none"
                     >
-                      {option.label}
+                      {translateCustomerStatusLabel(option.label, locale)}
                     </label>
                   </div>
                 ))}

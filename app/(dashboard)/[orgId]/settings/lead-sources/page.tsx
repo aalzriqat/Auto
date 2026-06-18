@@ -12,10 +12,11 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { toast } from "sonner";
 import { Plus, Trash2, ChevronUp, ChevronDown, Loader2 } from "lucide-react";
 import { Id } from "@/convex/_generated/dataModel";
+import { translateLeadSourceLabel } from "@/lib/i18n/defaultLabels";
 
 export default function LeadSourcesPage() {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
 
   const sources = useQuery(
     api.orgLeadSources.list,
@@ -178,7 +179,7 @@ export default function LeadSourcesPage() {
                   </button>
                 </div>
 
-                <span className="flex-1 text-sm font-medium">{source.label}</span>
+                <span className="flex-1 text-sm font-medium">{translateLeadSourceLabel(source.label, locale)}</span>
 
                 <Switch
                   checked={source.isActive}

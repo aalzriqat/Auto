@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/select";
 import { toast } from "@/components/ui/sonner";
 import { Id } from "@/convex/_generated/dataModel";
+import { translateCustomerStatusLabel } from "@/lib/i18n/defaultLabels";
 
 export function FinanceCompanyDialog({
   open,
@@ -47,7 +48,7 @@ export function FinanceCompanyDialog({
   };
 }) {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
 
   const createCompany = useMutation(api.finance.createCompany);
   const updateCompany = useMutation(api.finance.updateCompany);
@@ -209,7 +210,7 @@ export function FinanceCompanyDialog({
                       onChange={() => toggleAcceptedStatus(option._id)}
                     />
                     <Label htmlFor={`accepted-status-${option._id}`} className="font-normal">
-                      {option.label}
+                      {translateCustomerStatusLabel(option.label, locale)}
                     </Label>
                   </div>
                 ))}

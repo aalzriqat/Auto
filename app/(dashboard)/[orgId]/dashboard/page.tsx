@@ -42,11 +42,12 @@ import {
 } from "@/components/ui/table";
 import { RoleGuard } from "@/components/auth/RoleGuard";
 import { useRouter } from "next/navigation";
+import { translateLeadSourceLabel } from "@/lib/i18n/defaultLabels";
 
 
 export default function DashboardPage() {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const { formatCompact } = useCurrency();
   const router = useRouter();
   const [timeRange, setTimeRange] = useState<"DAY" | "MONTH" | "YEAR" | "ALL_TIME">("MONTH");
@@ -131,7 +132,7 @@ export default function DashboardPage() {
   const lineChartData = stats?.salesTrend?.length ? stats.salesTrend.map(t => ({ name: t.name, value: t.Revenue })) : [];
   const trendRange = (stats?.salesTrend?.length || 0) > 1
     ? `${stats!.salesTrend![0].name} - ${stats!.salesTrend![stats!.salesTrend!.length - 1].name}`
-    : timeRange === "DAY" ? "Today" : timeRange === "MONTH" ? "Last 30 Days" : timeRange === "YEAR" ? "Last 12 Months" : "All Time";
+    : timeRange === "DAY" ? t("Today") : timeRange === "MONTH" ? t("ThisMonth") : timeRange === "YEAR" ? t("ThisYear") : t("AllTime");
   const newLeadsCount = leads?.filter(l => l.stage === "NEW").length || 0;
   const qualifiedLeadsCount = leads?.filter(l => l.stage === "INTERESTED" || l.stage === "TEST_DRIVE").length || 0;
 
@@ -425,7 +426,7 @@ export default function DashboardPage() {
                     </TableCell>
                     <TableCell className="font-medium text-slate-600">
 
-                      {t(lead.source as any) || lead.source}
+                      {translateLeadSourceLabel(lead.source, locale)}
                     </TableCell>
                     <TableCell>
                       <span className={`px-2.5 py-1 rounded-md font-bold text-[11px] ${lead.status === "New Lead" ? "bg-[#ffedd5] text-[#ea580c]" :

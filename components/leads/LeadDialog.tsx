@@ -39,11 +39,12 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 
 import { leadSchema, LeadFormValues, LeadDialogProps } from "./lead.schema";
 import { CustomFieldsSection, useSaveCustomFieldValues } from "@/components/custom-fields/CustomFieldsSection";
+import { translateLeadSourceLabel, translatePipelineStageLabel } from "@/lib/i18n/defaultLabels";
 
 
 export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
 
   // Data for dropdowns
   const { results: customers } = usePaginatedQuery(
@@ -254,7 +255,7 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                             ]
                         ).map((s) => (
                           <SelectItem key={s.stageKey} value={s.stageKey}>
-                            {s.label}
+                            {translatePipelineStageLabel(s.label, locale)}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -290,7 +291,7 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                             ]
                         ).map((s) => (
                           <SelectItem key={s.label} value={s.label}>
-                            {s.label}
+                            {translateLeadSourceLabel(s.label, locale)}
                           </SelectItem>
                         ))}
                       </SelectContent>

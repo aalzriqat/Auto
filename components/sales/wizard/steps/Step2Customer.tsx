@@ -5,6 +5,7 @@ import { usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 import { PaymentType } from "../types";
 
 import { Button } from "@/components/ui/button";
@@ -39,6 +40,7 @@ export default function Step2Customer({
   onBack,
 }: Step2CustomerProps) {
   const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
 
   const [showCreateForm, setShowCreateForm] = useState(false);
 
@@ -101,7 +103,7 @@ export default function Step2Customer({
       <div className="flex flex-col-reverse sm:flex-row justify-between gap-3 pt-4 border-t">
         <Button variant="outline" onClick={onBack} className="w-full sm:w-auto">
           <ArrowLeft className="w-4 h-4 me-2" />
-          Back
+          {t("Back")}
         </Button>
 
         <Button
@@ -109,7 +111,7 @@ export default function Step2Customer({
           disabled={!selectedCustomer}
           className={cn(nextBtnClass, "w-full sm:w-auto")}
         >
-          Next
+          {t("Next")}
           <ArrowRight className="w-4 h-4 ms-2" />
         </Button>
       </div>

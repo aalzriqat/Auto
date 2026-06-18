@@ -13,10 +13,11 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { toast } from "sonner";
 import { ChevronUp, ChevronDown, Loader2 } from "lucide-react";
 import { Id } from "@/convex/_generated/dataModel";
+import { translatePipelineStageLabel } from "@/lib/i18n/defaultLabels";
 
 export default function PipelineSettingsPage() {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
 
   const stages = useQuery(
     api.orgPipelineStages.list,
@@ -126,7 +127,7 @@ export default function PipelineSettingsPage() {
             </div>
           ) : (
             stages.map((stage, index) => {
-              const currentLabel = editingLabel[stage._id] ?? stage.label;
+              const currentLabel = editingLabel[stage._id] ?? translatePipelineStageLabel(stage.label, locale);
 
               return (
                 <div

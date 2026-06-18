@@ -251,6 +251,12 @@ export const settingsEn = {
   PermanentAccessTokenDesc: "Generate a permanent token from Meta Business Manager → System Users. Never share this value.",
   SaveWhatsAppSettings: "Save WhatsApp Settings",
   WhatsAppSettingsSaved: "WhatsApp settings saved.",
+  ComingSoonBadge: "Coming Soon",
+  WhatsAppComingSoonTitle: "WhatsApp Integration is Coming Soon",
+  WhatsAppComingSoonDesc: "We're building direct WhatsApp Business integration for AutoFlow. This tab will let you connect your WhatsApp Business account so you can message customers and have new conversations turn into leads automatically. Configuration is disabled until the feature launches.",
+  WhatsAppComingSoonFeature1: "Reply to customer WhatsApp messages directly from AutoFlow",
+  WhatsAppComingSoonFeature2: "Automatically create leads from new WhatsApp conversations",
+  WhatsAppComingSoonFeature3: "Send price quotes and offers straight to a customer's WhatsApp",
 
   // Custom Fields page
   CustomFieldsDesc: "Define extra fields that appear in vehicle, customer, and lead forms.",
@@ -598,6 +604,12 @@ export const settingsAr = {
   PermanentAccessTokenDesc: "أنشئ رمزًا دائمًا من مدير أعمال Meta ← مستخدمو النظام. لا تشارك هذه القيمة أبدًا.",
   SaveWhatsAppSettings: "حفظ إعدادات واتساب",
   WhatsAppSettingsSaved: "تم حفظ إعدادات واتساب.",
+  ComingSoonBadge: "قريبًا",
+  WhatsAppComingSoonTitle: "تكامل واتساب قادم قريبًا",
+  WhatsAppComingSoonDesc: "نعمل حاليًا على بناء تكامل مباشر مع واتساب للأعمال في AutoFlow. سيتيح لك هذا التبويب ربط حساب واتساب للأعمال الخاص بك لمراسلة العملاء، وتحويل المحادثات الجديدة تلقائيًا إلى عملاء محتملين. الإعدادات معطّلة حتى إطلاق هذه الميزة.",
+  WhatsAppComingSoonFeature1: "الرد على رسائل واتساب الخاصة بالعملاء مباشرة من AutoFlow",
+  WhatsAppComingSoonFeature2: "إنشاء عملاء محتملين تلقائيًا من محادثات واتساب الجديدة",
+  WhatsAppComingSoonFeature3: "إرسال عروض الأسعار مباشرة إلى واتساب العميل",
 
   // Custom Fields page
   CustomFieldsDesc: "تعريف حقول إضافية تظهر في نماذج المركبات والعملاء والعملاء المحتملين.",

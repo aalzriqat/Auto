@@ -24,10 +24,11 @@ import { Id } from "@/convex/_generated/dataModel";
 import { DocumentRuleDialog } from "@/components/settings/DocumentRuleDialog";
 import { FileCheck } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
+import { translateCustomerStatusLabel } from "@/lib/i18n/defaultLabels";
 
 export default function FinanceCompaniesPage() {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
 
   const companies = useQuery(api.finance.listCompanies, activeOrgId ? { orgId: activeOrgId } : "skip");
   const deleteCompany = useMutation(api.finance.deleteCompany);
@@ -365,7 +366,7 @@ export default function FinanceCompaniesPage() {
                   </button>
                 </div>
 
-                <span className="flex-1 text-sm font-medium">{status.label}</span>
+                <span className="flex-1 text-sm font-medium">{translateCustomerStatusLabel(status.label, locale)}</span>
 
                 <Switch
                   checked={status.isActive}
