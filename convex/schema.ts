@@ -754,6 +754,7 @@ export default defineSchema({
     subject: v.string(),
     status: v.union(v.literal("OPEN"), v.literal("CLOSED")),
     lastMessageAt: v.number(),
+    autoRepliedAt: v.optional(v.number()),
   })
     .index("by_participantEmail", ["participantEmail"])
     .index("by_lastMessageAt", ["lastMessageAt"])

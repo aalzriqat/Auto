@@ -247,6 +247,64 @@ export const sendSupportReply = internalAction({
   },
 });
 
+/** Professional acknowledgment sent automatically the first time a new sender emails support@autoflowdealer.com. */
+export const sendAutoReplyEmail = internalAction({
+  args: {
+    toEmail: v.string(),
+    participantName: v.optional(v.string()),
+    subject: v.string(),
+  },
+  handler: async (ctx, args): Promise<{ success: boolean; resendEmailId?: string; error?: string }> => {
+    const status = await rateLimiter.limit(ctx, "email");
+    if (!status.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(status.retryAfter / 1000)}s`);
+    }
+    const env = getValidatedEnv();
+    const resendApiKey = env.RESEND_API_KEY;
+
+    const greetingName = args.participantName?.trim().split(" ")[0];
+    const safeGreetingName = greetingName ? escapeHtml(greetingName) : null;
+    const safeSubject = escapeHtml(args.subject);
+    const replySubject = args.subject.toLowerCase().startsWith("re:") ? args.subject : `Re: ${args.subject}`;
+
+    const emailHtml = wrapEmailHtml(
+      "We've received your message",
+      `
+        <h1 style="margin:0 0 16px; font-size:20px; font-weight:700; color:#111827;">Thanks for reaching out</h1>
+        <p style="margin:0 0 16px;">Hi${safeGreetingName ? ` ${safeGreetingName}` : ""},</p>
+        <p style="margin:0 0 20px;">This confirms we've received your message. A member of the AutoFlow team will get back to you within 1 business day.</p>
+        <div style="background-color:#f9fafb; border-radius:8px; padding:16px; margin:0 0 20px;">
+          <p style="margin:0 0 4px; font-size:12px; color:#6b7280; text-transform:uppercase; letter-spacing:0.05em;">Your message</p>
+          <p style="margin:0; font-size:14px; color:#111827;">${safeSubject}</p>
+        </div>
+        <p style="margin:0; font-size:14px; color:#374151;">If anything else comes up in the meantime, just reply directly to this email — it'll be added to the same conversation.</p>
+        <p style="margin:20px 0 0; font-size:14px; color:#374151;">— The AutoFlow Team</p>
+      `
+    );
+
+    const textBody = `Hi${greetingName ? ` ${greetingName}` : ""},\n\nThis confirms we've received your message: "${args.subject}". A member of the AutoFlow team will get back to you within 1 business day.\n\nIf anything else comes up in the meantime, just reply directly to this email.\n\n— The AutoFlow Team`;
+
+    if (!resendApiKey) {
+      return { success: true };
+    }
+
+    const resend = new Resend(resendApiKey);
+
+    try {
+      const result = await resend.emails.send({
+        from: 'AutoFlow Support <support@autoflowdealer.com>',
+        to: args.toEmail,
+        subject: replySubject,
+        html: emailHtml,
+        text: textBody,
+      });
+      return { success: true, resendEmailId: result.data?.id };
+    } catch (error) {
+      return { success: false, error: String(error) };
+    }
+  },
+});
+
 export const sendTeamInvite = internalAction({
   args: {
     toEmail: v.string(),

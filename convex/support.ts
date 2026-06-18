@@ -1,6 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
-import { query, mutation, action, internalMutation, internalQuery } from "./_generated/server";
+import { query, mutation, action, internalMutation, internalQuery, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { requireSuperAdmin } from "./utils/tenancy";
 
@@ -53,6 +53,18 @@ export const recordInboundMessage = internalMutation({
       resendEmailId: args.resendEmailId,
       createdAt: now,
     });
+
+    // Acknowledge first contact only — once per thread, regardless of how many
+    // messages arrive before a human admin (or this auto-reply) responds.
+    if (!thread!.autoRepliedAt) {
+      await ctx.db.patch(thread!._id, { autoRepliedAt: now });
+      await ctx.scheduler.runAfter(0, internal.support.sendAutoReply, {
+        threadId: thread!._id,
+        toEmail: email,
+        participantName: args.fromName,
+        subject: args.subject,
+      });
+    }
   },
 });
 
@@ -128,7 +140,7 @@ export const recordOutboundMessage = internalMutation({
     toEmail: v.string(),
     bodyText: v.string(),
     resendEmailId: v.optional(v.string()),
-    sentByUserId: v.id("users"),
+    sentByUserId: v.optional(v.id("users")),
   },
   handler: async (ctx, args) => {
     await ctx.db.insert("supportMessages", {
@@ -184,5 +196,32 @@ export const getThreadForReply = internalQuery({
   args: { threadId: v.id("supportThreads") },
   handler: async (ctx, args) => {
     return await ctx.db.get(args.threadId);
+  },
+});
+
+// ─── Auto-reply (scheduled from recordInboundMessage on first contact) ────────
+
+export const sendAutoReply = internalAction({
+  args: {
+    threadId: v.id("supportThreads"),
+    toEmail: v.string(),
+    participantName: v.optional(v.string()),
+    subject: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const result = await ctx.runAction(internal.email.sendAutoReplyEmail, {
+      toEmail: args.toEmail,
+      participantName: args.participantName,
+      subject: args.subject,
+    });
+
+    if (result.success) {
+      await ctx.runMutation(internal.support.recordOutboundMessage, {
+        threadId: args.threadId,
+        toEmail: args.toEmail,
+        bodyText: "(Automated acknowledgment — your message was received and a team member will follow up shortly.)",
+        resendEmailId: result.resendEmailId,
+      });
+    }
   },
 });
