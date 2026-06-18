@@ -47,6 +47,7 @@ interface LocalCopy {
   navWorkflow: string;
   navReports: string;
   navPricing: string;
+  navContact: string;
   navLogin: string;
   navStart: string;
   heroBadge: string;
@@ -116,6 +117,7 @@ const copy: Record<"en" | "ar", LocalCopy> = {
     navWorkflow: "Deal Flow",
     navReports: "Reports",
     navPricing: "Pricing",
+    navContact: "Contact",
     navLogin: "Sign In",
     navStart: "Get Started",
     heroBadge: "AUTOFLOW OS • THE DEALERSHIP STANDARD",
@@ -183,6 +185,7 @@ const copy: Record<"en" | "ar", LocalCopy> = {
     navWorkflow: "دورة العمل",
     navReports: "التقارير",
     navPricing: "الأسعار",
+    navContact: "تواصل معنا",
     navLogin: "دخول",
     navStart: "ابدأ الآن",
     heroBadge: "نظام أوتوفلو • المعيار الحديث لإدارة المعارض",
@@ -596,6 +599,10 @@ export default function CreativeMarketingPage() {
               {t.navReports}
               <span className="absolute bottom-0 left-0 w-0 h-0.5 bg-blue-500 group-hover:w-full transition-all duration-300" />
             </a>
+            <Link href="/contact" className="hover:text-white transition-colors duration-300 relative group py-2">
+              {t.navContact}
+              <span className="absolute bottom-0 left-0 w-0 h-0.5 bg-blue-500 group-hover:w-full transition-all duration-300" />
+            </Link>
           </nav>
 
           <div className="flex items-center gap-4 z-10">
@@ -669,6 +676,13 @@ export default function CreativeMarketingPage() {
             >
               {t.navReports}
             </a>
+            <Link
+              href="/contact"
+              onClick={() => setMobileMenuOpen(false)}
+              className="py-2.5 text-sm font-semibold hover:text-blue-400 transition-colors"
+            >
+              {t.navContact}
+            </Link>
           </motion.div>
         )}
       </AnimatePresence>
