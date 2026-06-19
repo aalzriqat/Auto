@@ -11,6 +11,7 @@
 import type * as adminAudit from "../adminAudit.js";
 import type * as adminAuth from "../adminAuth.js";
 import type * as adminData from "../adminData.js";
+import type * as adminImpersonation from "../adminImpersonation.js";
 import type * as adminOrgs from "../adminOrgs.js";
 import type * as adminSupportAgents from "../adminSupportAgents.js";
 import type * as adminSystem from "../adminSystem.js";
@@ -58,6 +59,7 @@ import type * as tasks from "../tasks.js";
 import type * as test_drives from "../test_drives.js";
 import type * as transactions from "../transactions.js";
 import type * as users from "../users.js";
+import type * as utils_auditLog from "../utils/auditLog.js";
 import type * as utils_commission from "../utils/commission.js";
 import type * as utils_env from "../utils/env.js";
 import type * as utils_errors from "../utils/errors.js";
@@ -87,6 +89,7 @@ declare const fullApi: ApiFromModules<{
   adminAudit: typeof adminAudit;
   adminAuth: typeof adminAuth;
   adminData: typeof adminData;
+  adminImpersonation: typeof adminImpersonation;
   adminOrgs: typeof adminOrgs;
   adminSupportAgents: typeof adminSupportAgents;
   adminSystem: typeof adminSystem;
@@ -134,6 +137,7 @@ declare const fullApi: ApiFromModules<{
   test_drives: typeof test_drives;
   transactions: typeof transactions;
   users: typeof users;
+  "utils/auditLog": typeof utils_auditLog;
   "utils/commission": typeof utils_commission;
   "utils/env": typeof utils_env;
   "utils/errors": typeof utils_errors;

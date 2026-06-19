@@ -23,6 +23,7 @@ function ManageUserOrgsDialog({ userId, onClose }: { userId: Id<"users">; onClos
   const detail = useQuery(api.adminUsers.getUserDetail, { userId });
   const changeUserRole = useMutation(api.adminUsers.changeUserRole);
   const removeMembership = useMutation(api.adminUsers.removeMembership);
+  const startImpersonation = useMutation(api.adminImpersonation.startImpersonation);
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -42,6 +43,11 @@ function ManageUserOrgsDialog({ userId, onClose }: { userId: Id<"users">; onClos
               onRemove={async () => {
                 await removeMembership({ userId, orgId: o.orgId });
                 toast.success(`Removed from ${o.orgName}`);
+              }}
+              onImpersonate={async (reason) => {
+                await startImpersonation({ targetUserId: userId, orgId: o.orgId, reason });
+                toast.success(`Impersonating ${detail?.user.email} in ${o.orgName}`);
+                window.open(`/${o.orgId}`, "_blank");
               }}
             />
           ))}
@@ -63,38 +69,71 @@ function OrgMembershipRow({
   roleName,
   onChangeRole,
   onRemove,
+  onImpersonate,
 }: {
   orgName: string;
   orgId: Id<"organizations">;
   roleName: string;
   onChangeRole: (roleId: Id<"roles">) => Promise<void>;
   onRemove: () => Promise<void>;
+  onImpersonate: (reason: string) => Promise<void>;
 }) {
   const roles = useQuery(api.adminUsers.listRolesForOrg, { orgId });
+  const [reason, setReason] = useState("");
+  const [impersonating, setImpersonating] = useState(false);
+
+  async function handleImpersonate() {
+    if (!reason.trim()) {
+      toast.error("Enter a reason before impersonating.");
+      return;
+    }
+    setImpersonating(true);
+    try {
+      await onImpersonate(reason.trim());
+      setReason("");
+    } catch (e: any) {
+      toast.error(e?.data?.message ?? e?.message ?? "Failed to start impersonation");
+    } finally {
+      setImpersonating(false);
+    }
+  }
 
   return (
-    <div className="flex items-center justify-between gap-3 border rounded-md p-3">
-      <div>
-        <p className="text-sm font-medium">{orgName}</p>
-        <p className="text-xs text-muted-foreground">Current role: {roleName}</p>
+    <div className="flex flex-col gap-2 border rounded-md p-3">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium">{orgName}</p>
+          <p className="text-xs text-muted-foreground">Current role: {roleName}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <select
+            className="text-sm border rounded-md px-2 py-1 bg-background"
+            defaultValue=""
+            onChange={async (e) => {
+              if (!e.target.value) return;
+              await onChangeRole(e.target.value as Id<"roles">);
+              toast.success(`Role updated for ${orgName}`);
+              e.target.value = "";
+            }}
+          >
+            <option value="" disabled>Change role…</option>
+            {roles?.map((r) => (
+              <option key={r._id} value={r._id}>{r.name}</option>
+            ))}
+          </select>
+          <Button size="sm" variant="destructive" onClick={onRemove}>Remove</Button>
+        </div>
       </div>
       <div className="flex items-center gap-2">
-        <select
-          className="text-sm border rounded-md px-2 py-1 bg-background"
-          defaultValue=""
-          onChange={async (e) => {
-            if (!e.target.value) return;
-            await onChangeRole(e.target.value as Id<"roles">);
-            toast.success(`Role updated for ${orgName}`);
-            e.target.value = "";
-          }}
-        >
-          <option value="" disabled>Change role…</option>
-          {roles?.map((r) => (
-            <option key={r._id} value={r._id}>{r.name}</option>
-          ))}
-        </select>
-        <Button size="sm" variant="destructive" onClick={onRemove}>Remove</Button>
+        <Input
+          placeholder="Reason for impersonating (required, audited)"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          className="h-8 text-xs"
+        />
+        <Button size="sm" variant="outline" disabled={impersonating} onClick={handleImpersonate}>
+          Impersonate
+        </Button>
       </div>
     </div>
   );
@@ -171,11 +210,6 @@ export default function AdminUsersPage() {
                   >
                     {user.disabled ? "Enable" : "Disable"}
                   </Button>
-                  <Button size="sm" variant="outline" asChild>
-                    <a href="https://dashboard.clerk.com/~/users" target="_blank" rel="noreferrer">
-                      Impersonate
-                    </a>
-                  </Button>
                   <Button size="sm" variant="destructive" onClick={() => setDeleteTarget({ id: user._id, email: user.email })}>
                     Delete
                   </Button>
@@ -211,7 +245,8 @@ export default function AdminUsersPage() {
       </Dialog>
 
       <p className="text-xs text-slate-500 mt-4">
-        &ldquo;Impersonate&rdquo; opens the Clerk Dashboard&apos;s Users page — search by email, then use the row menu → Impersonate user.
+        To impersonate a user, click Manage on their row, enter a reason, and click Impersonate next to the
+        organization — opens a new tab with their exact role/permissions, audited, and expires after 30 minutes.
       </p>
 
       {manageTarget && <ManageUserOrgsDialog userId={manageTarget} onClose={() => setManageTarget(null)} />}

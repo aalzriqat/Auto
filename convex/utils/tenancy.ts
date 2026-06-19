@@ -3,6 +3,12 @@ import { Id, Doc } from "../_generated/dataModel";
 import { Permission } from "./permissions";
 import { throwAppError, AppErrorCode } from "./errors";
 import { getValidatedEnv } from "./env";
+import { writeAuditLog } from "./auditLog";
+
+/** True at runtime/type-level only for MutationCtx, which exposes ctx.db.insert. */
+function isMutationCtx(ctx: QueryCtx | MutationCtx): ctx is MutationCtx {
+  return "insert" in ctx.db;
+}
 
 /**
  * Result returned by all auth helpers so callers have typed access
@@ -138,6 +144,21 @@ export async function requireTenantAuth(
         `Forbidden: Missing required permissions: ${missing.join(", ")}`
       );
     }
+  }
+
+  // membership.impersonationGrantId means this is a super admin's temporary
+  // membership from an active impersonation session (see
+  // convex/adminImpersonation.ts) — audit every write made under it. `user`
+  // here is the real admin, since the temp membership belongs to their own
+  // userId, so this never misattributes the write to the impersonated member.
+  if (membership.impersonationGrantId && isMutationCtx(ctx)) {
+    const label = requiredPermissions.length > 0 ? requiredPermissions.join(",") : "tenant-write";
+    await writeAuditLog(ctx, user, {
+      action: `impersonated-write:${label}`,
+      orgId,
+      targetTable: "impersonationGrants",
+      targetId: membership.impersonationGrantId,
+    });
   }
 
   return { user, membership, role };

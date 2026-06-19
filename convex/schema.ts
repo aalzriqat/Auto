@@ -34,6 +34,7 @@ export default defineSchema({
     roleId: v.id("roles"),
     branchId: v.optional(v.id("branches")),
     commissionRate: v.optional(v.number()), // % of gross profit per sale
+    impersonationGrantId: v.optional(v.id("impersonationGrants")), // set when this membership exists only for an active super-admin impersonation session
   })
     .index("by_user", ["userId"])
     .index("by_org", ["orgId"])
@@ -875,4 +876,21 @@ export default defineSchema({
     .index("by_agentUserId_org", ["agentUserId", "orgId"])
     .index("by_orgId", ["orgId"])
     .index("by_threadId", ["threadId"]),
+
+  // Temporary, audited "act as a specific real member" access for super
+  // admins: same real-membership-grant pattern as supportOrgAccessGrants
+  // above, but grants the target member's exact role rather than a fixed
+  // OWNER role. See convex/adminImpersonation.ts.
+  impersonationGrants: defineTable({
+    actorUserId: v.id("users"), // the super admin
+    targetUserId: v.id("users"), // the real member being impersonated
+    orgId: v.id("organizations"),
+    membershipId: v.id("memberships"), // the temp membership created for actorUserId
+    reason: v.string(),
+    grantedAt: v.number(),
+    expiresAt: v.number(),
+    revokedAt: v.optional(v.number()),
+  })
+    .index("by_actorUserId", ["actorUserId"])
+    .index("by_orgId", ["orgId"]),
 });
