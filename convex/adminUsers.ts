@@ -6,6 +6,24 @@ import { requireSuperAdmin } from "./utils/tenancy";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { logAdminAction } from "./adminAudit";
 
+/**
+ * Recovery escape hatch for a super admin who locked themselves out by
+ * disabling their own account (requireAuth rejects disabled users before
+ * requireSuperAdmin even runs, so no authenticated mutation can undo it).
+ * Internal only — not reachable from the client, just `npx convex run`.
+ */
+export const setDisabledByEmailInternal = internalMutation({
+  args: { email: v.string(), disabled: v.boolean() },
+  handler: async (ctx, args) => {
+    const target = args.email.toLowerCase().trim();
+    const allUsers = await ctx.db.query("users").collect();
+    const user = allUsers.find((u) => u.email.toLowerCase() === target);
+    if (!user) throw new ConvexError(`No user found with email ${args.email}`);
+    await ctx.db.patch(user._id, { disabled: args.disabled });
+    return { userId: user._id, disabled: args.disabled };
+  },
+});
+
 export const listUsers = query({
   args: { paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
@@ -75,6 +93,9 @@ export const disableUser = mutation({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
     const admin = await requireSuperAdmin(ctx);
+    if (args.userId === admin._id) {
+      throwAppError(AppErrorCode.FORBIDDEN, "Forbidden: You cannot disable your own account.");
+    }
     const user = await ctx.db.get(args.userId);
     if (!user) throwAppError(AppErrorCode.USER_NOT_FOUND, "User not found.");
 
@@ -193,6 +214,9 @@ export const deleteUser = action({
   args: { userId: v.id("users"), confirmEmail: v.string() },
   handler: async (ctx, args): Promise<{ success: true }> => {
     const admin = await ctx.runQuery(internal.adminUsers.requireSuperAdminForAction, {});
+    if (args.userId === admin._id) {
+      throw new ConvexError("You cannot delete your own account.");
+    }
     const target = await ctx.runQuery(internal.adminUsers.getUserForDeleteCheck, { userId: args.userId });
 
     if (!target || target.email.toLowerCase() !== args.confirmEmail.toLowerCase().trim()) {

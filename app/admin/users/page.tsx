@@ -145,6 +145,7 @@ export default function AdminUsersPage() {
     {},
     { initialNumItems: 50 }
   );
+  const me = useQuery(api.users.getMe);
 
   const [deleteTarget, setDeleteTarget] = useState<{ id: Id<"users">; email: string } | null>(null);
   const [confirmEmail, setConfirmEmail] = useState("");
@@ -182,9 +183,11 @@ export default function AdminUsersPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {users.map((user) => (
+            {users.map((user) => {
+              const isSelf = me?._id === user._id;
+              return (
               <TableRow key={user._id}>
-                <TableCell className="font-medium">{user.email}</TableCell>
+                <TableCell className="font-medium">{user.email}{isSelf && <span className="text-muted-foreground"> (you)</span>}</TableCell>
                 <TableCell>{user.name ?? "—"}</TableCell>
                 <TableCell>
                   <div className="flex flex-wrap gap-1">
@@ -206,16 +209,25 @@ export default function AdminUsersPage() {
                   <Button
                     size="sm"
                     variant="outline"
+                    disabled={isSelf}
+                    title={isSelf ? "You cannot disable your own account" : undefined}
                     onClick={() => (user.disabled ? enableUser({ userId: user._id }) : disableUser({ userId: user._id }))}
                   >
                     {user.disabled ? "Enable" : "Disable"}
                   </Button>
-                  <Button size="sm" variant="destructive" onClick={() => setDeleteTarget({ id: user._id, email: user.email })}>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    disabled={isSelf}
+                    title={isSelf ? "You cannot delete your own account" : undefined}
+                    onClick={() => setDeleteTarget({ id: user._id, email: user.email })}
+                  >
                     Delete
                   </Button>
                 </TableCell>
               </TableRow>
-            ))}
+              );
+            })}
           </TableBody>
         </Table>
       </Card>
