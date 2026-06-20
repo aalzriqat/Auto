@@ -269,7 +269,10 @@ export default function DashboardEntryPage() {
 
   useEffect(() => {
     if (orgs && orgs.length > 0 && !isOnboarding) {
-      router.replace(`/${orgs[0]!._id}/dashboard`);
+      const firstOrg = orgs[0]!;
+      const role = firstOrg.roleName?.toUpperCase();
+      const landingPage = role === "SALES" || role === "SALESPERSON" ? "sales" : "dashboard";
+      router.replace(`/${firstOrg._id}/${landingPage}`);
     } else if (orgs && orgs.length === 0 && isSupportAgent === true) {
       router.replace("/support");
     }

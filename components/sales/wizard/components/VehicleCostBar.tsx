@@ -6,6 +6,8 @@ import { Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
+import { usePermissions } from "@/hooks/use-permissions";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 import { Info, TrendingUp, TrendingDown } from "lucide-react";
 
 interface VehicleCostBarProps {
@@ -18,14 +20,20 @@ export function VehicleCostBar({ vehicleId, purchasePrice, salePrice }: VehicleC
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const formatCurrency = useCurrencyFormatter();
+  const { hasPermission, isLoading: permissionsLoading } = usePermissions();
+
+  const canViewExpenses = !permissionsLoading && hasPermission(PERMISSIONS.VIEW_EXPENSES);
 
   const totalExpenses = useQuery(
     api.expenses.totalByVehicle,
-    activeOrgId && vehicleId
+    activeOrgId && vehicleId && canViewExpenses
       ? { orgId: activeOrgId, vehicleId: vehicleId as Id<"vehicles"> }
       : "skip"
   );
 
+  // Cost/profit data is sensitive — don't show this bar at all to roles
+  // without VIEW_EXPENSES (e.g. SALES), rather than crash on the query.
+  if (permissionsLoading || !canViewExpenses) return null;
   if (totalExpenses === undefined) return null;
 
   const hasCostData = purchasePrice != null;
