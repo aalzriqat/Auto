@@ -35,7 +35,9 @@ function SupportLayoutImpl({ children }: { children: React.ReactNode }) {
   const status = myStatus?.status ?? "OFFLINE";
   const isOnline = status === "ONLINE";
   const isOnlineRef = useRef(isOnline);
-  isOnlineRef.current = isOnline;
+  useEffect(() => {
+    isOnlineRef.current = isOnline;
+  }, [isOnline]);
 
   const isLoading = authLoading || (isAuthenticated && isSupportAgent === undefined);
 

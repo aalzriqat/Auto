@@ -7,7 +7,7 @@ export default defineConfig([
   ...nextCoreWebVitals,
   ...nextTypescript,
   ...convexPlugin.configs.recommended,
-  globalIgnores(["convex/_generated", "scratch"]),
+  globalIgnores(["convex/_generated", "scratch", "marketing/render-cover.js", "testsprite_tests/get_token.js"]),
   {
     rules: {
       "@typescript-eslint/no-explicit-any": "warn",
