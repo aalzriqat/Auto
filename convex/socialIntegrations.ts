@@ -15,7 +15,11 @@ const INSTAGRAM_GRAPH_VERSION = "v21.0";
 // instagram.com — no linked Facebook Page involved — and uses the
 // `instagram_business_*`-prefixed scopes, not the older `instagram_basic`/
 // `pages_*` scopes used by the Facebook Login flow.
-const INSTAGRAM_SCOPES = ["instagram_business_basic", "instagram_business_content_publish"].join(",");
+const INSTAGRAM_SCOPES = [
+  "instagram_business_basic",
+  "instagram_business_content_publish",
+  "instagram_business_manage_comments",
+].join(",");
 
 // ─── Public ───────────────────────────────────────────────────────────────────
 
@@ -78,6 +82,31 @@ export const getConnectionStatus = query({
       instagramPageName: settings?.instagramPageName,
       socialAutoPostEnabled: settings?.socialAutoPostEnabled ?? false,
     };
+  },
+});
+
+/**
+ * Clears stored Instagram credentials by IG business account ID rather than
+ * orgId — used by the deauthorize and data-deletion HTTP callbacks Meta
+ * requires for every Instagram Login app, which only identify the user via
+ * their signed `user_id`, not our internal orgId.
+ */
+export const disconnectByInstagramUserId = internalMutation({
+  args: { instagramBusinessAccountId: v.string() },
+  handler: async (ctx, args) => {
+    const settings = await ctx.db
+      .query("orgSettings")
+      .filter((q) => q.eq(q.field("instagramBusinessAccountId"), args.instagramBusinessAccountId))
+      .first();
+    if (!settings) return;
+
+    await ctx.db.patch(settings._id, {
+      instagramBusinessAccountId: undefined,
+      instagramAccessToken: undefined,
+      instagramTokenExpiresAt: undefined,
+      instagramPageName: undefined,
+      socialAutoPostEnabled: false,
+    });
   },
 });
 

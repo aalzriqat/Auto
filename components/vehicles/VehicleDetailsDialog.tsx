@@ -72,7 +72,7 @@ export function VehicleDetailsDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl max-h-[90vh] flex flex-col p-0">
+      <DialogContent className="max-w-5xl max-h-[90vh] flex flex-col p-0">
         <div className="p-6 pb-2 shrink-0">
           <DialogHeader>
             <DialogTitle className="text-xl">
@@ -85,7 +85,7 @@ export function VehicleDetailsDialog({
         </div>
 
         <Tabs defaultValue="overview" className="flex-1 flex flex-col min-h-0">
-          <div className="px-6 border-b overflow-x-auto [&::-webkit-scrollbar]:hidden shrink-0">
+          <div className="px-6 border-b overflow-x-auto shrink-0">
             <TabsList className="bg-transparent h-12 p-0 -mb-px flex w-max min-w-full justify-start">
               {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_INFO)) && (
                 <TabsTrigger

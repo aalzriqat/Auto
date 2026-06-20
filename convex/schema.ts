@@ -637,6 +637,9 @@ export default defineSchema({
     requestedBy: v.id("users"),
     requestedAt: v.number(),
     publishedAt: v.optional(v.number()),
+    likeCount: v.optional(v.number()),
+    commentsCount: v.optional(v.number()),
+    engagementSyncedAt: v.optional(v.number()),
   })
     .index("by_org", ["orgId"])
     .index("by_org_vehicle", ["orgId", "vehicleId"]),

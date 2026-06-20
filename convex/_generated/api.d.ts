@@ -53,6 +53,7 @@ import type * as reports from "../reports.js";
 import type * as roles from "../roles.js";
 import type * as sales from "../sales.js";
 import type * as seedDocuments from "../seedDocuments.js";
+import type * as socialEngagement from "../socialEngagement.js";
 import type * as socialIntegrations from "../socialIntegrations.js";
 import type * as socialPosting from "../socialPosting.js";
 import type * as socialPostingData from "../socialPostingData.js";
@@ -136,6 +137,7 @@ declare const fullApi: ApiFromModules<{
   roles: typeof roles;
   sales: typeof sales;
   seedDocuments: typeof seedDocuments;
+  socialEngagement: typeof socialEngagement;
   socialIntegrations: typeof socialIntegrations;
   socialPosting: typeof socialPosting;
   socialPostingData: typeof socialPostingData;

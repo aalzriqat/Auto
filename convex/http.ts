@@ -13,6 +13,38 @@ function clientIp(request: Request): string {
   return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
 }
 
+function base64UrlDecode(input: string): Uint8Array {
+  const padded = input.replace(/-/g, "+").replace(/_/g, "/").padEnd(input.length + ((4 - (input.length % 4)) % 4), "=");
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+// Meta's "signed_request" format used by Instagram's deauthorize and data
+// deletion callbacks: base64url(HMAC-SHA256 signature) + "." + base64url(JSON payload).
+async function verifyMetaSignedRequest(signedRequest: string, appSecret: string): Promise<Record<string, unknown> | null> {
+  const [encodedSig, encodedPayload] = signedRequest.split(".");
+  if (!encodedSig || !encodedPayload) return null;
+
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(appSecret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const expectedSig = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(encodedPayload)));
+  const actualSig = base64UrlDecode(encodedSig);
+
+  if (expectedSig.length !== actualSig.length) return null;
+  let diff = 0;
+  for (let i = 0; i < expectedSig.length; i++) diff |= expectedSig[i] ^ actualSig[i];
+  if (diff !== 0) return null;
+
+  return JSON.parse(new TextDecoder().decode(base64UrlDecode(encodedPayload)));
+}
+
 http.route({
   path: "/clerk-webhook",
   method: "POST",
@@ -366,6 +398,80 @@ http.route({
     });
 
     return Response.redirect(`${settingsUrl}?connected=instagram`, 302);
+  }),
+});
+
+// ─── Instagram deauthorize + data deletion callbacks ──────────────────────────
+// Required dashboard fields for every Instagram Login app (Instagram API
+// product → "Set up Instagram business login"):
+//   Deauthorize callback URL:    https://<convex-site>/instagram-deauthorize
+//   Data Deletion Request URL:   https://<convex-site>/instagram-data-deletion
+// Meta POSTs a form-encoded `signed_request` to both when a user revokes
+// access or requests data deletion from inside Instagram's own settings.
+
+http.route({
+  path: "/instagram-deauthorize",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const env = getValidatedEnv();
+    if (!env.INSTAGRAM_APP_SECRET) return new Response("Not configured", { status: 500 });
+
+    const form = await request.formData().catch(() => null);
+    const signedRequest = form?.get("signed_request")?.toString();
+    if (!signedRequest) return new Response("Bad request", { status: 400 });
+
+    const payload = await verifyMetaSignedRequest(signedRequest, env.INSTAGRAM_APP_SECRET);
+    if (!payload?.user_id) return new Response("Invalid signature", { status: 400 });
+
+    await ctx.runMutation(internal.socialIntegrations.disconnectByInstagramUserId, {
+      instagramBusinessAccountId: String(payload.user_id),
+    });
+    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+      source: "instagram-oauth",
+      status: "success",
+      summary: `Deauthorized by Instagram user ${payload.user_id}`,
+    });
+
+    return new Response(null, { status: 200 });
+  }),
+});
+
+http.route({
+  path: "/instagram-data-deletion",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const env = getValidatedEnv();
+    if (!env.INSTAGRAM_APP_SECRET) return new Response("Not configured", { status: 500 });
+
+    const form = await request.formData().catch(() => null);
+    const signedRequest = form?.get("signed_request")?.toString();
+    if (!signedRequest) return new Response("Bad request", { status: 400 });
+
+    const payload = await verifyMetaSignedRequest(signedRequest, env.INSTAGRAM_APP_SECRET);
+    if (!payload?.user_id) return new Response("Invalid signature", { status: 400 });
+
+    // We only ever stored the dealer's own IG business account ID, access
+    // token, and display name on orgSettings — clearing those is a complete
+    // erasure, no async job needed.
+    await ctx.runMutation(internal.socialIntegrations.disconnectByInstagramUserId, {
+      instagramBusinessAccountId: String(payload.user_id),
+    });
+
+    const confirmationCode = `${payload.user_id}-${Date.now()}`;
+    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+      source: "instagram-oauth",
+      status: "success",
+      summary: `Data deletion requested by Instagram user ${payload.user_id}`,
+    });
+
+    const appUrl = (env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/$/, "");
+    return new Response(
+      JSON.stringify({
+        url: `${appUrl}/data-deletion-status?id=${confirmationCode}`,
+        confirmation_code: confirmationCode,
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
   }),
 });
 
