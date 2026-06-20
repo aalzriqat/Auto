@@ -215,9 +215,15 @@ export const exchangeCodeForToken = internalAction({
         code: args.code,
       }).toString(),
     });
-    const tokenJson = await tokenRes.json();
+    // Instagram user IDs can exceed Number.MAX_SAFE_INTEGER (17 digits) — if
+    // Meta's response has `user_id` as an unquoted JSON number, `.json()`
+    // would silently round it to a different, wrong ID before we ever see
+    // it. Quote it in the raw text first so JSON.parse treats it as a string.
+    const tokenRawText = await tokenRes.text();
+    const tokenSafeText = tokenRawText.replace(/"user_id"\s*:\s*(\d+)/, '"user_id":"$1"');
+    const tokenJson = JSON.parse(tokenSafeText);
     const shortLivedToken: string | undefined = tokenJson.access_token;
-    const igUserId: string | undefined = tokenJson.user_id?.toString();
+    const igUserId: string | undefined = tokenJson.user_id;
     if (!tokenRes.ok || !shortLivedToken || !igUserId) {
       throw new ConvexError(`Instagram token exchange failed: ${tokenJson?.error_message ?? tokenJson?.error?.message ?? tokenRes.statusText}`);
     }
