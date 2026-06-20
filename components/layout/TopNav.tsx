@@ -1,6 +1,6 @@
 "use client";
 
-import { Menu, Car, Users, LayoutDashboard, Target, BadgeDollarSign, Shield, Receipt, ClipboardList, LineChart, Settings, Store, Search, X } from "lucide-react";
+import { Menu, Search, X } from "lucide-react";
 import Image from "next/image";
 import { UserButton } from "@clerk/nextjs";
 import { usePathname } from "next/navigation";
@@ -16,22 +16,11 @@ import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { useState, useRef } from "react";
+import { mainNavigation, settingsNavigation, type NavItem } from "@/lib/navigation";
 
-const navigation = [
-  { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, permission: "manage:users" },
-  { name: "Vehicles", href: "/vehicles", icon: Car, permission: "view:vehicles" },
-  { name: "Customers", href: "/customers", icon: Users, permission: "view:customers" },
-  { name: "Leads", href: "/leads", icon: Target, permission: "view:leads" },
-  { name: "Applications", href: "/applications", icon: ClipboardList, permission: "view:sales" },
-  { name: "Sales", href: "/sales", icon: BadgeDollarSign, permission: "view:sales" },
-  { name: "Tasks", href: "/tasks", icon: ClipboardList, permission: "view:tasks" },
-  { name: "Expenses", href: "/expenses", icon: Receipt, permission: "view:expenses" },
-  { name: "Team", href: "/team", icon: Shield, permission: "manage:users" },
-  { name: "Accounting", href: "/accounting", icon: BadgeDollarSign, permission: "view:finance" },
-  { name: "Reports", href: "/reports", icon: LineChart, permission: "view:reports" },
-  { name: "FinanceSettings", href: "/settings/finance", icon: Settings, permission: "view:settings" },
-  { name: "Branches", href: "/settings/branches", icon: Store, permission: "manage:users" },
-];
+// Flat list (main + settings) used only to resolve the current page title —
+// the drawer itself renders the two sections separately, same as the desktop Sidebar.
+const navigation = [...mainNavigation, ...settingsNavigation];
 
 export function TopNav() {
   const { t, isRtl } = useLanguage();
@@ -46,15 +35,55 @@ export function TopNav() {
 
   const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
   const permissions = myMembership?.permissions || [];
+  const isOwner = myMembership?.roleName === "OWNER";
   const logoUrl = useQuery(
     api.orgSettings.getLogoUrl,
     activeOrgId ? { orgId: activeOrgId } : "skip"
   );
 
-  const visibleNavigation = navigation.filter(item => {
+  const canSeeApprovals = permissions.includes("approve:requests");
+  const pendingCount = useQuery(
+    api.approvals.countPending,
+    activeOrgId && canSeeApprovals ? { orgId: activeOrgId } : "skip"
+  );
+
+  const visibleMainNavigation = mainNavigation.filter(item => {
     if (!item.permission) return true;
     return permissions.includes(item.permission);
   });
+
+  const visibleSettingsNavigation = settingsNavigation.filter(item => {
+    if (item.ownerOnly) return isOwner;
+    if (!item.permission) return true;
+    return permissions.includes(item.permission);
+  });
+
+  const renderMobileNavItem = (item: NavItem) => {
+    const href = `/${activeOrgId}${item.href}`;
+    const isActive = pathname.startsWith(href);
+    const isApprovals = item.name === "Approvals";
+    return (
+      <Link
+        key={item.name}
+        href={href}
+        onClick={() => setIsMobileMenuOpen(false)}
+        className={cn(
+          "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors",
+          isActive
+            ? "bg-primary/10 text-primary"
+            : "hover:bg-slate-50 text-slate-600 hover:text-slate-900"
+        )}
+      >
+        <item.icon className={cn("h-4 w-4 shrink-0", isActive ? "text-primary" : "text-slate-400")} />
+        <span className="flex-1">{t(item.name as any)}</span>
+        {isApprovals && pendingCount != null && pendingCount > 0 && (
+          <span className="bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
+            {pendingCount}
+          </span>
+        )}
+      </Link>
+    );
+  };
 
   return (
     <header className="sticky top-0 z-30 w-full border-b border-slate-200/50 bg-white/95 backdrop-blur shadow-sm shrink-0">
@@ -80,28 +109,22 @@ export function TopNav() {
                   )}
                 </SheetTitle>
               </SheetHeader>
-              <nav className="flex-1 overflow-y-auto flex flex-col gap-1 p-3">
-                {visibleNavigation.map((item) => {
-                  const href = `/${activeOrgId}${item.href}`;
-                  const isActive = pathname.startsWith(href);
-                  return (
-                    <Link
-                      key={item.name}
-                      href={href}
-                      onClick={() => setIsMobileMenuOpen(false)}
-                      className={cn(
-                        "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors",
-                        isActive
-                          ? "bg-primary/10 text-primary"
-                          : "hover:bg-slate-50 text-slate-600 hover:text-slate-900"
-                      )}
-                    >
-                      <item.icon className={cn("h-4 w-4", isActive ? "text-primary" : "text-slate-400")} />
-                      {t(item.name as any)}
-                    </Link>
-                  );
-                })}
-              </nav>
+              <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-1">
+                <nav className="flex flex-col gap-1">
+                  {visibleMainNavigation.map(renderMobileNavItem)}
+                </nav>
+
+                {visibleSettingsNavigation.length > 0 && (
+                  <div className="mt-4">
+                    <p className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                      {t("Settings" as any)}
+                    </p>
+                    <nav className="flex flex-col gap-1 mt-1">
+                      {visibleSettingsNavigation.map(renderMobileNavItem)}
+                    </nav>
+                  </div>
+                )}
+              </div>
             </SheetContent>
           </Sheet>
 

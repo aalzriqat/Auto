@@ -1,6 +1,5 @@
 "use client";
 
-import { Car, Users, LayoutDashboard, Target, BadgeDollarSign, Shield, Receipt, ClipboardList, LineChart, Settings, Store, BookOpen, TrendingUp, Sliders, GitBranch, FormInput, Percent, Building2, MessageSquarePlus, Camera } from "lucide-react";
 import Image from "next/image";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
@@ -9,40 +8,7 @@ import { useOrg } from "@/components/providers/OrgProvider";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { cn } from "@/lib/utils";
-
-const navigation = [
-  { name: "Dashboard", href: "/dashboard", icon: LayoutDashboard, permission: "manage:users" },
-  { name: "Vehicles", href: "/vehicles", icon: Car, permission: "view:vehicles" },
-  { name: "Customers", href: "/customers", icon: Users, permission: "view:customers" },
-  { name: "Leads", href: "/leads", icon: Target, permission: "view:leads" },
-  { name: "FinanceApplications", href: "/applications", icon: ClipboardList, permission: "view:sales" },
-  { name: "Sales", href: "/sales", icon: BadgeDollarSign, permission: "view:sales" },
-  { name: "Commissions", href: "/commissions", icon: TrendingUp, permission: "view:commissions" },
-  { name: "Tasks", href: "/tasks", icon: ClipboardList, permission: "view:tasks" },
-  { name: "Expenses", href: "/expenses", icon: Receipt, permission: "view:expenses" },
-  { name: "Accounting", href: "/accounting", icon: BookOpen, permission: "view:finance" },
-  { name: "Reports", href: "/reports", icon: LineChart, permission: "view:reports" },
-  { name: "Approvals", href: "/approvals", icon: Shield, permission: "manage:users" },
-];
-
-// Every /settings/* route is gated to the OWNER role at the layout level
-// (app/(dashboard)/[orgId]/settings/layout.tsx uses RoleGuard ownerOnly),
-// since settings administration can't be delegated. "Team" is the
-// exception — it lives outside /settings and gates itself internally
-// (Members tab stays open to anyone with manage:users; only its own
-// Roles & Permissions tab is OWNER-only).
-const settingsNavigation = [
-  { name: "Team", href: "/team", icon: Users, permission: "manage:users" },
-  { name: "GeneralSettings", href: "/settings/general", icon: Settings, ownerOnly: true },
-  { name: "FinanceSettings", href: "/settings/finance", icon: Building2, ownerOnly: true },
-  { name: "Pipeline", href: "/settings/pipeline", icon: GitBranch, ownerOnly: true },
-  { name: "LeadSources", href: "/settings/lead-sources", icon: Sliders, ownerOnly: true },
-  { name: "CustomFields", href: "/settings/custom-fields", icon: FormInput, ownerOnly: true },
-  { name: "Commission", href: "/settings/commission", icon: Percent, ownerOnly: true },
-  { name: "Branches", href: "/settings/branches", icon: Store, ownerOnly: true },
-  { name: "Integrations", href: "/settings/integrations", icon: Camera, ownerOnly: true },
-  { name: "FeedbackInbox", href: "/settings/feedback", icon: MessageSquarePlus, ownerOnly: true },
-];
+import { mainNavigation as navigation, settingsNavigation } from "@/lib/navigation";
 
 export function Sidebar() {
   const { t } = useLanguage();
