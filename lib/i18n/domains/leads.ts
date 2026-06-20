@@ -50,6 +50,10 @@ export const leadsEn = {
 
   // Duplicate detection
   ExistingOpenLeadWarning: "This customer already has an open lead in the pipeline.",
+
+  // Lead-to-sale conversion visibility
+  ConvertedToSale: "Converted to Sale",
+  OnDate: "on",
 };
 
 export const leadsAr = {
@@ -104,4 +108,8 @@ export const leadsAr = {
 
   // Duplicate detection
   ExistingOpenLeadWarning: "لدى هذا العميل بالفعل عميل محتمل مفتوح في مسار المبيعات.",
+
+  // Lead-to-sale conversion visibility
+  ConvertedToSale: "تم تحويله إلى عملية بيع",
+  OnDate: "بتاريخ",
 };

@@ -33,6 +33,10 @@
 | 22 | main | Social Integrations Settings + Instagram OAuth Connect | ✅ Done |
 | 23 | main | Manual "Post to Instagram" Action | ✅ Done |
 | 24 | main | Auto-Post Toggle on Vehicle Status → AVAILABLE | ✅ Done |
+| — | main | Instagram Post Engagement (likes/comments) + Deauth/Data-Deletion Callbacks | ✅ Done |
+| 19a | main | Customer Merge Tool (CRM data quality, part 3) | ✅ Done |
+| 19b | main | Lead → Sale Conversion Visibility (CRM data quality, part 4) | ✅ Done |
+| 21 | main | Data Quality Dashboard Widget (CRM data quality, part 5) | ✅ Done |
 
 ---
 
@@ -615,3 +619,53 @@ Disabled fully and reversibly via a kill switch, not a deletion — the Phase 18
 - [x] Full suite green (170 passed, 22 skipped intentionally), clean typecheck, no new lint errors
 
 **To re-enable:** flip `LIVE_CHAT_ENABLED` to `true` in both `convex/liveChat.ts` and `lib/featureFlags.ts`, unskip `convex/liveChat.test.ts`, and — before doing so — fix the underlying reactivity issue (move presence/typing off the actively-broadly-queried `liveChatThreads` row, e.g. a separate sparse presence table or a `patch` that doesn't touch fields `listQueue`/`getMyThread` read) so it doesn't immediately reproduce the same usage spike.
+
+## Operational — Instagram Post Engagement + Required Deauth/Data-Deletion Callbacks ✅
+
+**Branch:** `main`
+
+Extends Phase 23's Marketing tab with read access to a published post's performance, plus the two dashboard endpoints Meta requires for every Instagram Login app before App Review can even be submitted.
+
+### Delivered
+- [x] `convex/socialIntegrations.ts` — added `instagram_business_manage_comments` to the requested OAuth scope (orgs connected before this change must reconnect to pick it up); new `disconnectByInstagramUserId` internal mutation used by the callbacks below (looks up by IG business account ID, not orgId, since that's all Meta's signed payload identifies)
+- [x] `convex/http.ts` — `POST /instagram-deauthorize` and `POST /instagram-data-deletion`, both verifying Meta's `signed_request` (base64url HMAC-SHA256 via Web Crypto, no Node runtime needed) before clearing stored credentials
+- [x] `app/data-deletion-status/page.tsx` (new) — minimal confirmation page Meta's data-deletion flow links users back to
+- [x] `convex/schema.ts` — `socialPosts` gains `likeCount`/`commentsCount`/`engagementSyncedAt`
+- [x] `convex/socialEngagement.ts` (new) — `refreshEngagement` (like/comment counts, needs only the basic scope already in use), `listComments`/`replyToComment`/`setCommentHidden` (need the new comments scope)
+- [x] `components/vehicles/VehicleMarketingTab.tsx` — post history rows now show like/comment counts with a refresh button, and an expandable comment thread with reply + hide/unhide
+- [x] `components/vehicles/VehicleDetailsDialog.tsx` — widened `max-w-4xl` → `max-w-5xl` and removed the hidden-scrollbar trick on the tab bar, fixing the Marketing tab being clipped with no visible scroll affordance
+- [x] CI lint gate fix (was failing since the gate was added in `c3bf0f7`, unrelated to this work but found while verifying): excluded the two standalone CommonJS tooling scripts (`marketing/render-cover.js`, `testsprite_tests/get_token.js`) from ESLint scope; fixed a real `react-hooks/refs` error in `app/support/layout.tsx` (ref write moved from render into a `useEffect`)
+- [x] Full suite green, clean typecheck/lint/build
+
+## Phase 19a — CRM Data Quality: Customer Merge Tool ✅
+
+**Branch:** `main` · Third phase of the CRM Data Quality bundle.
+
+- [x] `convex/schema.ts` — new `customerMerges` audit table (`orgId`, `survivorId`, `loserId`, `mergedBy`, `mergedAt`, `reassignedCounts`), indexed `by_org`, added to `adminOrgs.ts`'s `ORG_SCOPED_TABLES`; new `by_org_customer` indexes on `leads`, `sales`, and `tasks` (replacing `.filter()`-after-`by_org` scans in the new merge code and in `checkExistingOpenLead`/`softDelete`/`getLinkedSale`, per the Convex guideline to index rather than filter)
+- [x] `convex/utils/permissions.ts` — new `PERMISSIONS.MERGE_CUSTOMERS`, granted to OWNER (automatic — OWNER bypasses the permissions array entirely) and added to the MANAGER default role template
+- [x] `convex/utils/mergeHelpers.ts` (new) — `CUSTOMER_REFERENCING_TABLES`, an explicit list (mirroring `ORG_SCOPED_TABLES`) of every table with a `customerId` FK and how to look it up by the most specific available index
+- [x] `convex/customers.ts` — `findMergeCandidates` (groups customers by normalized name), `previewMerge` (per-table reassignment counts before confirming), `mergeCustomers` (reassigns every FK, merges scalar fields — survivor's non-empty values win unless `fieldOverrides` picks the loser's, with a guard against violating the phone/email uniqueness constraint against an unrelated third customer — soft-deletes the loser, writes the audit row)
+- [x] `components/customers/MergeCustomersDialog.tsx` (new) — duplicate-candidate list → pick survivor/loser (or pick manually) → field-by-field comparison with per-field radio → impact preview → confirm
+- [x] `app/(dashboard)/[orgId]/customers/page.tsx` — "Merge Duplicates" entry point gated by `PERMISSIONS.MERGE_CUSTOMERS`
+- [x] `lib/i18n/domains/customers.ts` — new EN + AR strings
+- [x] `convex/customers.test.ts` — FK reassignment correctness across leads/sales/guarantors, soft-delete of the loser, audit row, self-merge rejection, cross-org rejection, permission rejection
+
+## Phase 19b — CRM Data Quality: Lead → Sale Conversion Visibility ✅
+
+**Branch:** `main` · Fourth phase of the CRM Data Quality bundle. No schema change — `closeLeadsAsWon` (`convex/utils/saleHelpers.ts`) already deterministically links every closed lead to its sale via shared `customerId`+`vehicleId`, so this is a read-side lookup, not a stored FK.
+
+- [x] `convex/leads.ts` — `getLinkedSale` query (single-lead lookup via the new `sales.by_org_customer` index)
+- [x] `components/leads/LeadDialog.tsx` — WON leads show "Converted to Sale — $X on [date]" instead of a static stage badge
+- [x] `lib/i18n/domains/leads.ts` — new EN + AR strings
+- [x] `convex/leads.test.ts` — null for non-WON leads, finds the correct sale for a WON lead
+
+## Phase 21 — CRM Data Quality: Data Quality Dashboard Widget ✅
+
+**Branch:** `main` · Fifth and final phase of the CRM Data Quality bundle.
+
+- [x] `convex/dashboard.ts` — `dataQualityStats` query (bounded scans): customers missing phone/email, vehicles with a VIN checksum warning (reuses Phase 20's `validateVinChecksum` from `lib/vinHelpers.ts`, imported directly into a Convex query — VIN is a required field so "missing VIN" can't happen, the checksum warning is the actually-useful signal)
+- [x] `app/(dashboard)/[orgId]/dashboard/page.tsx` — new amber nudge card, only rendered when there's actually something to flag, links to the customers page
+- [x] `lib/i18n/domains/dashboard.ts` — new EN + AR strings
+- [x] `convex/dashboard.test.ts` (new) — counts match seeded data
+
+**CRM Data Quality bundle (Phases 19, 19a, 19b, 20, 21) is now fully shipped.**

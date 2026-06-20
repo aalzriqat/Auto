@@ -123,6 +123,12 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
       : "skip"
   );
 
+  // For a WON lead, surface the sale that closed it instead of just a static badge.
+  const linkedSale = useQuery(
+    api.leads.getLinkedSale,
+    activeOrgId && lead && lead.stage === "WON" ? { orgId: activeOrgId, leadId: lead._id } : "skip"
+  );
+
   const onSubmit = async (values: LeadFormValues) => {
     if (!activeOrgId) return;
     setIsSubmitting(true);
@@ -342,6 +348,12 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
             {existingOpenLead && (
               <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                 {t("ExistingOpenLeadWarning" as any) || "This customer already has an open lead in the pipeline."}
+              </div>
+            )}
+            {lead?.stage === "WON" && linkedSale && (
+              <div className="rounded-md border border-green-300 bg-green-50 px-3 py-2 text-sm text-green-800">
+                {t("ConvertedToSale" as any) || "Converted to Sale"} — {linkedSale.salePrice.toLocaleString()} JOD{" "}
+                {t("OnDate" as any) || "on"} {new Date(linkedSale.saleDate).toLocaleDateString(locale === "ar" ? "ar" : "en-US")}
               </div>
             )}
             <div className="flex justify-end gap-2 pt-4">

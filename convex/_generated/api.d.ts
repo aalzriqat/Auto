@@ -68,6 +68,7 @@ import type * as utils_commission from "../utils/commission.js";
 import type * as utils_dedup from "../utils/dedup.js";
 import type * as utils_env from "../utils/env.js";
 import type * as utils_errors from "../utils/errors.js";
+import type * as utils_mergeHelpers from "../utils/mergeHelpers.js";
 import type * as utils_notifications from "../utils/notifications.js";
 import type * as utils_permissions from "../utils/permissions.js";
 import type * as utils_saleHelpers from "../utils/saleHelpers.js";
@@ -152,6 +153,7 @@ declare const fullApi: ApiFromModules<{
   "utils/dedup": typeof utils_dedup;
   "utils/env": typeof utils_env;
   "utils/errors": typeof utils_errors;
+  "utils/mergeHelpers": typeof utils_mergeHelpers;
   "utils/notifications": typeof utils_notifications;
   "utils/permissions": typeof utils_permissions;
   "utils/saleHelpers": typeof utils_saleHelpers;

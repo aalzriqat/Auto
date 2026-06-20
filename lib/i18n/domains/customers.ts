@@ -111,6 +111,24 @@ export const customersEn = {
 
   // Duplicate detection
   DuplicateCustomerFound: "A customer with this phone or email already exists:",
+
+  // Merge tool
+  MergeDuplicates: "Merge Duplicates",
+  MergeDuplicateCustomers: "Merge Duplicate Customers",
+  MergeCustomersDesc: "Combine two customer records into one. The merged-away record is soft-deleted and recoverable.",
+  PossibleDuplicates: "Possible duplicates",
+  ReviewThisPair: "Review this pair",
+  NoDuplicateCandidates: "No likely duplicates found by name. You can still pick any two customers below.",
+  KeepThisCustomer: "Keep (survivor)",
+  MergeAwayThisCustomer: "Merge away",
+  Field: "Field",
+  Survivor: "Keep",
+  MergedAway: "Merging away",
+  Empty: "(empty)",
+  WillBeReassigned: "The following records will be reassigned to the surviving customer:",
+  NoLinkedRecords: "No linked records to reassign — this customer has no leads, sales, or other history.",
+  ConfirmMerge: "Confirm Merge",
+  CustomersMergedSuccess: "Customers merged successfully.",
 };
 
 export const customersAr = {
@@ -226,4 +244,22 @@ export const customersAr = {
 
   // Duplicate detection
   DuplicateCustomerFound: "يوجد بالفعل عميل بنفس رقم الهاتف أو البريد الإلكتروني:",
+
+  // Merge tool
+  MergeDuplicates: "دمج العملاء المكررين",
+  MergeDuplicateCustomers: "دمج العملاء المكررين",
+  MergeCustomersDesc: "دمج سجلّي عميل في سجل واحد. السجل المُدمَج يُحذف حذفًا ناعمًا ويمكن استرجاعه.",
+  PossibleDuplicates: "تكرارات محتملة",
+  ReviewThisPair: "مراجعة هذا الزوج",
+  NoDuplicateCandidates: "لم يتم العثور على تكرارات محتملة بالاسم. يمكنك اختيار أي عميلين أدناه.",
+  KeepThisCustomer: "الاحتفاظ به",
+  MergeAwayThisCustomer: "الدمج وإزالته",
+  Field: "الحقل",
+  Survivor: "محتفَظ به",
+  MergedAway: "تم دمجه وإزالته",
+  Empty: "(فارغ)",
+  WillBeReassigned: "سيتم نقل السجلات التالية إلى العميل المحتفَظ به:",
+  NoLinkedRecords: "لا توجد سجلات مرتبطة لنقلها — هذا العميل ليس له عملاء محتملون أو مبيعات أو سجل آخر.",
+  ConfirmMerge: "تأكيد الدمج",
+  CustomersMergedSuccess: "تم دمج العملاء بنجاح.",
 };

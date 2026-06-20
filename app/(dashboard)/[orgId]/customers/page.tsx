@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { CustomerDialog } from "@/components/customers/CustomerDialog";
 import { CustomerDetailsDialog } from "@/components/customers/CustomerDetailsDialog";
+import { MergeCustomersDialog } from "@/components/customers/MergeCustomersDialog";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import {
   Table,
@@ -20,7 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, Search, Pencil, Trash2, Mail, Phone, FileSpreadsheet } from "lucide-react";
+import { Plus, Search, Pencil, Trash2, Mail, Phone, FileSpreadsheet, Merge } from "lucide-react";
 import { CustomerImportDialog } from "@/components/customers/CustomerImportDialog";
 import { toast } from "@/components/ui/sonner";
 import {
@@ -31,6 +32,8 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { usePermissions } from "@/hooks/use-permissions";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 
 export default function CustomersPage() {
   const searchParams = useSearchParams();
@@ -53,6 +56,8 @@ export default function CustomersPage() {
   
   const [customerToDelete, setCustomerToDelete] = useState<Doc<"customers"> | null>(null);
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
+  const [isMergeDialogOpen, setIsMergeDialogOpen] = useState(false);
+  const { hasPermission } = usePermissions();
 
   const filteredCustomers = customers?.filter(c => {
     const fullName = `${c.firstName} ${c.lastName}`.toLowerCase();
@@ -103,6 +108,11 @@ export default function CustomersPage() {
     <RoleGuard permissions={["view:customers"]}>
       <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-end gap-4">
+        {hasPermission(PERMISSIONS.MERGE_CUSTOMERS) && (
+          <Button variant="outline" onClick={() => setIsMergeDialogOpen(true)}>
+            <Merge className="me-2 h-4 w-4" /> {t("MergeDuplicates" as any) || "Merge Duplicates"}
+          </Button>
+        )}
         <Button variant="outline" onClick={() => setIsImportDialogOpen(true)}>
           <FileSpreadsheet className="me-2 h-4 w-4" /> Import
         </Button>
@@ -273,6 +283,8 @@ export default function CustomersPage() {
       </Dialog>
 
       <CustomerImportDialog open={isImportDialogOpen} onOpenChange={setIsImportDialogOpen} />
+
+      <MergeCustomersDialog open={isMergeDialogOpen} onOpenChange={setIsMergeDialogOpen} />
     </div>
     </RoleGuard>
   );

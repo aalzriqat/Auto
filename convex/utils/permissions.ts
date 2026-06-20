@@ -40,6 +40,7 @@ export const PERMISSIONS = {
   EDIT_CUSTOMERS: "edit:customers",
   EDIT_CUSTOMERS_REQUEST: "edit:customers:request",
   DELETE_CUSTOMERS: "delete:customers",
+  MERGE_CUSTOMERS: "merge:customers",
 
   // Leads
   VIEW_LEADS: "view:leads",
@@ -124,6 +125,7 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.CREATE_CUSTOMERS,
       PERMISSIONS.EDIT_CUSTOMERS,
       PERMISSIONS.DELETE_CUSTOMERS,
+      PERMISSIONS.MERGE_CUSTOMERS,
       PERMISSIONS.VIEW_LEADS,
       PERMISSIONS.CREATE_LEADS,
       PERMISSIONS.EDIT_LEADS,

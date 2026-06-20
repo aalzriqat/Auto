@@ -103,6 +103,12 @@ export const dashboardEn = {
   WON: "Won (Sale)",
   Reserved: "Reserved",
   Lost: "Lost",
+
+  // Data quality widget
+  DataQualityUpper: "DATA QUALITY",
+  CustomersMissingPhone: "Customers missing phone",
+  CustomersMissingEmail: "Customers missing email",
+  VehiclesVinWarning: "Vehicles with a VIN checksum warning",
 };
 
 export const dashboardAr = {
@@ -210,4 +216,10 @@ export const dashboardAr = {
   WON: "مكتسب",
   Reserved: "محجوز",
   Lost: "مفقود",
+
+  // Data quality widget
+  DataQualityUpper: "جودة البيانات",
+  CustomersMissingPhone: "عملاء بلا رقم هاتف",
+  CustomersMissingEmail: "عملاء بلا بريد إلكتروني",
+  VehiclesVinWarning: "مركبات بتحذير في رقم الهيكل (VIN)",
 };

@@ -20,6 +20,7 @@ const ORG_SCOPED_TABLES: { table: TableNames; index: string }[] = [
   { table: "vehicleStatusRequests", index: "by_org" },
   { table: "vehicleEdits", index: "by_org" },
   { table: "customers", index: "by_org" },
+  { table: "customerMerges", index: "by_org" },
   { table: "leads", index: "by_org" },
   { table: "sales", index: "by_org" },
   { table: "expenses", index: "by_org" },

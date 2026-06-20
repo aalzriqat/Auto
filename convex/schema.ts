@@ -169,6 +169,15 @@ export default defineSchema({
     .index("by_org_email", ["orgId", "email"])
     .index("by_org_phone", ["orgId", "phone"]),
 
+  customerMerges: defineTable({
+    orgId: v.id("organizations"),
+    survivorId: v.id("customers"),
+    loserId: v.id("customers"),
+    mergedBy: v.id("users"),
+    mergedAt: v.number(),
+    reassignedCounts: v.record(v.string(), v.number()),
+  }).index("by_org", ["orgId"]),
+
   leads: defineTable({
     orgId: v.id("organizations"),
     branchId: v.optional(v.id("branches")),
@@ -193,7 +202,8 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_org_stage", ["orgId", "stage"])
-    .index("by_org_assigned", ["orgId", "assignedUserId"]),
+    .index("by_org_assigned", ["orgId", "assignedUserId"])
+    .index("by_org_customer", ["orgId", "customerId"]),
 
   sales: defineTable({
     orgId: v.id("organizations"),
@@ -228,7 +238,8 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_org_salesperson", ["orgId", "salespersonId"])
-    .index("by_org_saleDate", ["orgId", "saleDate"]),
+    .index("by_org_saleDate", ["orgId", "saleDate"])
+    .index("by_org_customer", ["orgId", "customerId"]),
 
   expenses: defineTable({
     orgId: v.id("organizations"),
@@ -288,7 +299,8 @@ export default defineSchema({
     .index("by_org_assignedTo", ["orgId", "assignedTo"])
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_vehicle", ["orgId", "vehicleId"])
-    .index("by_status_alarm", ["status", "alarmTriggered"]),
+    .index("by_status_alarm", ["status", "alarmTriggered"])
+    .index("by_org_customer", ["orgId", "customerId"]),
 
   taskHistory: defineTable({
     orgId: v.id("organizations"),

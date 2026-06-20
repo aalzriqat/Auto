@@ -9,7 +9,7 @@ vi.mock("./rateLimit", () => ({
 
 const PERMISSIONS = [
   "create:customers", "edit:customers", "delete:customers",
-  "view:customers", "view:users",
+  "view:customers", "view:users", "merge:customers",
 ];
 
 async function setup() {
@@ -222,5 +222,151 @@ describe("customers.checkDuplicates", () => {
     });
 
     expect(result.exactPhoneMatch).toBeNull();
+  });
+});
+
+describe("customers.findMergeCandidates", () => {
+  test("groups customers with a matching normalized name", async () => {
+    const { orgId, asUser } = await setup();
+
+    await asUser.mutation(api.customers.create, { orgId, firstName: "Sara", lastName: "Khalil", phone: "+962790000001" });
+    await asUser.mutation(api.customers.create, { orgId, firstName: "sara", lastName: "khalil", phone: "+962790000002" });
+    await asUser.mutation(api.customers.create, { orgId, firstName: "Unique", lastName: "Person", phone: "+962790000003" });
+
+    const candidates = await asUser.query(api.customers.findMergeCandidates, { orgId });
+
+    expect(candidates.length).toBe(1);
+    expect(candidates[0].customers.length).toBe(2);
+  });
+});
+
+describe("customers.mergeCustomers", () => {
+  test("reassigns leads, sales, and guarantors, soft-deletes the loser, and writes an audit row", async () => {
+    const { t, orgId, userId, asUser } = await setup();
+
+    const survivorId = await asUser.mutation(api.customers.create, {
+      orgId,
+      firstName: "Survivor",
+      lastName: "Customer",
+      phone: "+962790000010",
+    });
+    const loserId = await asUser.mutation(api.customers.create, {
+      orgId,
+      firstName: "Loser",
+      lastName: "Customer",
+      email: "loser@test.com",
+    });
+
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "1HGCM82633A004352",
+        make: "Honda",
+        model: "Accord",
+        year: 2020,
+        mileage: 10000,
+        color: "Black",
+        fuelType: "Petrol",
+        transmission: "Automatic",
+        sellingPrice: 15000,
+        status: "AVAILABLE",
+      })
+    );
+
+    const leadId = await t.run((ctx) =>
+      ctx.db.insert("leads", { orgId, customerId: loserId, source: "Walk-in", stage: "NEW" })
+    );
+    const saleId = await t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId,
+        vehicleId,
+        customerId: loserId,
+        salespersonId: userId,
+        salePrice: 15000,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+      })
+    );
+    const guarantorId = await t.run((ctx) =>
+      ctx.db.insert("guarantors", {
+        orgId,
+        customerId: loserId,
+        firstName: "G",
+        lastName: "Tor",
+        nationalId: "123",
+        phone: "+962790000099",
+      })
+    );
+
+    const preview = await asUser.query(api.customers.previewMerge, { orgId, survivorId, loserId });
+    expect(preview.reassignedCounts.leads).toBe(1);
+    expect(preview.reassignedCounts.sales).toBe(1);
+    expect(preview.reassignedCounts.guarantors).toBe(1);
+
+    const result = await asUser.mutation(api.customers.mergeCustomers, { orgId, survivorId, loserId });
+    expect(result.reassignedCounts.leads).toBe(1);
+
+    await t.run(async (ctx) => {
+      expect((await ctx.db.get(leadId))?.customerId).toBe(survivorId);
+      expect((await ctx.db.get(saleId))?.customerId).toBe(survivorId);
+      expect((await ctx.db.get(guarantorId))?.customerId).toBe(survivorId);
+
+      const loser = await ctx.db.get(loserId);
+      expect(loser?.isDeleted).toBe(true);
+
+      const survivor = await ctx.db.get(survivorId);
+      expect(survivor?.email).toBe("loser@test.com");
+
+      const merges = await ctx.db.query("customerMerges").collect();
+      expect(merges.length).toBe(1);
+      expect(merges[0].survivorId).toBe(survivorId);
+      expect(merges[0].loserId).toBe(loserId);
+    });
+  });
+
+  test("rejects merging a customer with itself", async () => {
+    const { orgId, asUser } = await setup();
+    const customerId = await asUser.mutation(api.customers.create, { orgId, firstName: "A", lastName: "B" });
+
+    await expect(
+      asUser.mutation(api.customers.mergeCustomers, { orgId, survivorId: customerId, loserId: customerId })
+    ).rejects.toThrow();
+  });
+
+  test("rejects merging a customer from a different organization", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    const survivorId = await asUser.mutation(api.customers.create, { orgId, firstName: "A", lastName: "B" });
+
+    const otherOrgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Other Org", createdAt: Date.now() })
+    );
+    const otherCustomerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId: otherOrgId, firstName: "C", lastName: "D" })
+    );
+
+    await expect(
+      asUser.mutation(api.customers.mergeCustomers, { orgId, survivorId, loserId: otherCustomerId })
+    ).rejects.toThrow();
+  });
+
+  test("rejects merge without merge:customers permission", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    const survivorId = await asUser.mutation(api.customers.create, { orgId, firstName: "A", lastName: "B" });
+    const loserId = await asUser.mutation(api.customers.create, { orgId, firstName: "C", lastName: "D" });
+
+    const userId2 = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "user_no_merge", email: "nm@test.com", name: "No Merge" })
+    );
+    const roleId2 = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "SALES", permissions: ["view:customers"] })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: userId2, roleId: roleId2 }));
+    const asLimitedUser = t.withIdentity({ subject: "user_no_merge" });
+
+    await expect(
+      asLimitedUser.mutation(api.customers.mergeCustomers, { orgId, survivorId, loserId })
+    ).rejects.toThrow();
   });
 });

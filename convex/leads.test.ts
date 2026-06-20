@@ -195,3 +195,52 @@ describe("leads.checkExistingOpenLead", () => {
     expect(result).toBeNull();
   });
 });
+
+describe("leads.getLinkedSale", () => {
+  test("returns null for a lead that isn't WON", async () => {
+    const { orgId, customerId, asUser } = await setup();
+
+    const leadId = await asUser.mutation(api.leads.create, { orgId, customerId, source: "Walk-in" });
+
+    const result = await asUser.query(api.leads.getLinkedSale, { orgId, leadId });
+    expect(result).toBeNull();
+  });
+
+  test("finds the sale that closed a WON lead via shared customerId+vehicleId", async () => {
+    const { t, orgId, userId, customerId, asUser } = await setup();
+
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "1HGCM82633A004352",
+        make: "Honda",
+        model: "Accord",
+        year: 2020,
+        mileage: 10000,
+        color: "Black",
+        fuelType: "Petrol",
+        transmission: "Automatic",
+        sellingPrice: 15000,
+        status: "SOLD",
+      })
+    );
+
+    const leadId = await asUser.mutation(api.leads.create, { orgId, customerId, vehicleId, source: "Walk-in" });
+    await t.run((ctx) => ctx.db.patch(leadId, { stage: "WON" }));
+
+    const saleId = await t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId,
+        vehicleId,
+        customerId,
+        salespersonId: userId,
+        salePrice: 15000,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+      })
+    );
+
+    const result = await asUser.query(api.leads.getLinkedSale, { orgId, leadId });
+    expect(result?._id).toBe(saleId);
+  });
+});

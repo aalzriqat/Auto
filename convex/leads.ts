@@ -142,8 +142,7 @@ export const checkExistingOpenLead = query({
 
     const candidates = await ctx.db
       .query("leads")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.eq(q.field("customerId"), args.customerId))
+      .withIndex("by_org_customer", (q) => q.eq("orgId", args.orgId).eq("customerId", args.customerId))
       .filter((q) => q.neq(q.field("isDeleted"), true))
       .collect();
 
@@ -156,6 +155,38 @@ export const checkExistingOpenLead = query({
     );
 
     return openLead ?? null;
+  },
+});
+
+/**
+ * For a WON lead, finds the sale that closed it. `closeLeadsAsWon`
+ * (convex/utils/saleHelpers.ts) deterministically links every open lead to
+ * its sale via shared customerId+vehicleId at sale time, so this is a
+ * read-side lookup rather than a stored FK — single-lead, bounded cost.
+ */
+export const getLinkedSale = query({
+  args: { orgId: v.id("organizations"), leadId: v.id("leads") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
+
+    const lead = await ctx.db.get(args.leadId);
+    if (!lead || lead.orgId !== args.orgId) {
+      throw new ConvexError("Lead not found in this organization.");
+    }
+    if (lead.stage !== "WON" || !lead.vehicleId) return null;
+
+    const sale = await ctx.db
+      .query("sales")
+      .withIndex("by_org_customer", (q) => q.eq("orgId", args.orgId).eq("customerId", lead.customerId))
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("vehicleId"), lead.vehicleId),
+          q.neq(q.field("isDeleted"), true)
+        )
+      )
+      .first();
+
+    return sale;
   },
 });
 

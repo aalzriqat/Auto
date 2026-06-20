@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
+import { validateVinChecksum } from "../lib/vinHelpers";
 
 /**
  * Retrieves aggregate statistics for the dashboard.
@@ -223,6 +224,44 @@ export const stats = query({
         overdue: overdueTasks,
       },
       teamTasks,
+    };
+  },
+});
+
+/**
+ * Surfaces cheap, actionable data-quality gaps for the dashboard nudge card.
+ * Bounded scans (`.take(N)`) — this is a count/sample, not a list endpoint.
+ */
+export const dataQualityStats = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId);
+
+    const customers = await ctx.db
+      .query("customers")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .filter((q) => q.neq(q.field("isDeleted"), true))
+      .take(2000);
+
+    let customersMissingPhone = 0;
+    let customersMissingEmail = 0;
+    for (const c of customers) {
+      if (!c.phone) customersMissingPhone++;
+      if (!c.email) customersMissingEmail++;
+    }
+
+    const vehicles = await ctx.db
+      .query("vehicles")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .filter((q) => q.neq(q.field("isDeleted"), true))
+      .take(2000);
+
+    const vehiclesWithVinWarning = vehicles.filter((v) => !validateVinChecksum(v.vin)).length;
+
+    return {
+      customersMissingPhone,
+      customersMissingEmail,
+      vehiclesWithVinWarning,
     };
   },
 });

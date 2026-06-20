@@ -9,6 +9,7 @@ import { rateLimiter } from "./rateLimit";
 import { validateInput } from "./utils/validation";
 import { CreateCustomerSchema, UpdateCustomerSchema } from "./validations/customers";
 import { normalizePhone, namesSimilar } from "./utils/dedup";
+import { CUSTOMER_REFERENCING_TABLES } from "./utils/mergeHelpers";
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
@@ -354,8 +355,7 @@ export const softDelete = mutation({
     // Check for associated leads
     const lead = await ctx.db
       .query("leads")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.eq(q.field("customerId"), args.customerId))
+      .withIndex("by_org_customer", (q) => q.eq("orgId", args.orgId).eq("customerId", args.customerId))
       .first();
 
     if (lead && !lead.isDeleted) {
@@ -367,8 +367,7 @@ export const softDelete = mutation({
     // Check for associated sales
     const sale = await ctx.db
       .query("sales")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.eq(q.field("customerId"), args.customerId))
+      .withIndex("by_org_customer", (q) => q.eq("orgId", args.orgId).eq("customerId", args.customerId))
       .first();
 
     if (sale && !sale.isDeleted) {
@@ -540,5 +539,214 @@ export const importBulk = mutation({
     }
 
     return { inserted, skipped };
+  },
+});
+
+// ─── Merge tool (Phase 19a) ─────────────────────────────────────────────────
+// Scoped to customers only — a duplicate lead is just two pipeline entries
+// for the same customer, not worth a separate merge engine. One explicit,
+// auditable mutation rather than a generic/reflective merge framework,
+// mirroring the explicit ORG_SCOPED_TABLES list pattern in adminOrgs.ts.
+
+/**
+ * Groups customers in the org by normalized first+last name to surface
+ * likely-duplicate clusters for the merge tool. Bounded scan — this powers
+ * an occasional review screen, not a live list.
+ */
+export const findMergeCandidates = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MERGE_CUSTOMERS]);
+
+    const customers = await ctx.db
+      .query("customers")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .filter((q) => q.neq(q.field("isDeleted"), true))
+      .take(500);
+
+    const groups = new Map<string, Doc<"customers">[]>();
+    for (const customer of customers) {
+      const first = customer.firstName.trim();
+      const last = customer.lastName.trim();
+      if (!first || !last) continue;
+      const key = `${first.toLowerCase()}|${last.toLowerCase()}`;
+      const existing = groups.get(key);
+      if (existing) {
+        existing.push(customer);
+      } else {
+        groups.set(key, [customer]);
+      }
+    }
+
+    return Array.from(groups.values())
+      .filter((group) => group.length > 1)
+      .map((group) => ({
+        firstName: group[0].firstName,
+        lastName: group[0].lastName,
+        customers: group.map((c) => ({
+          _id: c._id,
+          _creationTime: c._creationTime,
+          phone: c.phone,
+          email: c.email,
+        })),
+      }));
+  },
+});
+
+/**
+ * Returns per-table reassignment counts for a prospective merge, so the UI
+ * can show the impact before the user confirms a destructive action.
+ */
+export const previewMerge = query({
+  args: {
+    orgId: v.id("organizations"),
+    survivorId: v.id("customers"),
+    loserId: v.id("customers"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MERGE_CUSTOMERS]);
+
+    if (args.survivorId === args.loserId) {
+      throw new ConvexError("Cannot merge a customer with itself.");
+    }
+
+    const survivor = await ctx.db.get(args.survivorId);
+    if (!survivor || survivor.isDeleted || survivor.orgId !== args.orgId) {
+      throw new ConvexError("Survivor customer not found in this organization.");
+    }
+    const loser = await ctx.db.get(args.loserId);
+    if (!loser || loser.isDeleted || loser.orgId !== args.orgId) {
+      throw new ConvexError("Customer to merge not found in this organization.");
+    }
+
+    const reassignedCounts: Record<string, number> = {};
+    for (const ref of CUSTOMER_REFERENCING_TABLES) {
+      const rows = await ref.find(ctx, args.orgId, args.loserId);
+      reassignedCounts[ref.table] = rows.length;
+    }
+
+    return { survivor, loser, reassignedCounts };
+  },
+});
+
+/**
+ * Merges `loserId` into `survivorId`: reassigns every FK in
+ * CUSTOMER_REFERENCING_TABLES to the survivor, fills any blank survivor
+ * scalar fields from the loser (or from `fieldOverrides` if the caller
+ * picked a specific value per field), soft-deletes the loser, and writes an
+ * audit row. Requires PERMISSIONS.MERGE_CUSTOMERS — destructive, so OWNER
+ * by default with MANAGER opted in via the default role template.
+ */
+export const mergeCustomers = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    survivorId: v.id("customers"),
+    loserId: v.id("customers"),
+    fieldOverrides: v.optional(
+      v.object({
+        firstName: v.optional(v.string()),
+        lastName: v.optional(v.string()),
+        phone: v.optional(v.string()),
+        whatsapp: v.optional(v.string()),
+        email: v.optional(v.string()),
+        nationalId: v.optional(v.string()),
+        address: v.optional(v.string()),
+      })
+    ),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MERGE_CUSTOMERS]);
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new ConvexError("Unauthenticated");
+
+    if (args.survivorId === args.loserId) {
+      throw new ConvexError("Cannot merge a customer with itself.");
+    }
+
+    const survivor = await ctx.db.get(args.survivorId);
+    if (!survivor || survivor.isDeleted || survivor.orgId !== args.orgId) {
+      throw new ConvexError("Survivor customer not found in this organization.");
+    }
+    const loser = await ctx.db.get(args.loserId);
+    if (!loser || loser.isDeleted || loser.orgId !== args.orgId) {
+      throw new ConvexError("Customer to merge not found in this organization.");
+    }
+
+    const fieldKeys = ["firstName", "lastName", "phone", "whatsapp", "email", "nationalId", "address"] as const;
+    const mergedFields: Record<string, string> = {};
+    for (const key of fieldKeys) {
+      const override = args.fieldOverrides?.[key];
+      if (override !== undefined) {
+        mergedFields[key] = override;
+      } else if (!survivor[key] && loser[key]) {
+        mergedFields[key] = loser[key]!;
+      }
+    }
+
+    // Don't let the merge violate the phone/email hard-uniqueness constraint
+    // against some unrelated third customer — drop the field instead.
+    if (mergedFields.phone) {
+      const normalizedPhone = normalizePhone(mergedFields.phone);
+      const existing = await ctx.db
+        .query("customers")
+        .withIndex("by_org_phone", (q) => q.eq("orgId", args.orgId).eq("phone", normalizedPhone))
+        .unique();
+      if (existing && existing._id !== survivor._id && existing._id !== loser._id) {
+        delete mergedFields.phone;
+      } else {
+        mergedFields.phone = normalizedPhone;
+      }
+    }
+    if (mergedFields.email) {
+      const normalizedEmail = mergedFields.email.toLowerCase().trim();
+      const existing = await ctx.db
+        .query("customers")
+        .withIndex("by_org_email", (q) => q.eq("orgId", args.orgId).eq("email", normalizedEmail))
+        .unique();
+      if (existing && existing._id !== survivor._id && existing._id !== loser._id) {
+        delete mergedFields.email;
+      } else {
+        mergedFields.email = normalizedEmail;
+      }
+    }
+
+    if (Object.keys(mergedFields).length > 0) {
+      await ctx.db.patch(survivor._id, mergedFields);
+    }
+
+    const reassignedCounts: Record<string, number> = {};
+    for (const ref of CUSTOMER_REFERENCING_TABLES) {
+      const rows = await ref.find(ctx, args.orgId, args.loserId);
+      for (const row of rows) {
+        await ctx.db.patch(row._id, { customerId: args.survivorId });
+      }
+      reassignedCounts[ref.table] = rows.length;
+    }
+
+    await ctx.db.patch(loser._id, {
+      isDeleted: true,
+      deletedAt: Date.now(),
+      deletedBy: identity.subject,
+    });
+
+    await ctx.db.insert("customerMerges", {
+      orgId: args.orgId,
+      survivorId: survivor._id,
+      loserId: loser._id,
+      mergedBy: user._id,
+      mergedAt: Date.now(),
+      reassignedCounts,
+    });
+
+    const actorName = await getActorName(ctx);
+    await notifyManagers(
+      ctx,
+      args.orgId,
+      "Customers Merged",
+      `${actorName} merged "${loser.firstName} ${loser.lastName}" into "${survivor.firstName} ${survivor.lastName}".`,
+      `/${args.orgId}/customers?highlightId=${survivor._id}`
+    );
+
+    return { survivorId: survivor._id, reassignedCounts };
   },
 });

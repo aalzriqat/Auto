@@ -60,6 +60,11 @@ export default function DashboardPage() {
     activeOrgId ? { orgId: activeOrgId, timeRange } : "skip"
   );
 
+  const dataQuality = useQuery(
+    api.dashboard.dataQualityStats,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
+
   const { results: leads } = usePaginatedQuery(
     api.leads.list,
     activeOrgId ? { orgId: activeOrgId } : "skip",
@@ -373,6 +378,47 @@ export default function DashboardPage() {
           </div>
         </motion.div>
       </div>
+
+      {dataQuality &&
+        (dataQuality.customersMissingPhone > 0 ||
+          dataQuality.customersMissingEmail > 0 ||
+          dataQuality.vehiclesWithVinWarning > 0) && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.45 }}
+            className="rounded-2xl bg-[#fef3c7] p-5 shadow-sm border border-[#fde68a]/50 cursor-pointer"
+            onClick={() => activeOrgId && router.push(`/${activeOrgId}/customers`)}
+          >
+            <h3 className="text-xs font-bold text-slate-700 tracking-wider uppercase mb-3">
+              {t("DataQualityUpper" as any) || "DATA QUALITY"}
+            </h3>
+            <div className="flex flex-wrap gap-x-8 gap-y-3">
+              {dataQuality.customersMissingPhone > 0 && (
+                <div>
+                  <div className="text-xl font-bold text-slate-900">{dataQuality.customersMissingPhone}</div>
+                  <p className="text-xs text-slate-600 font-medium">
+                    {t("CustomersMissingPhone" as any) || "Customers missing phone"}
+                  </p>
+                </div>
+              )}
+              {dataQuality.customersMissingEmail > 0 && (
+                <div>
+                  <div className="text-xl font-bold text-slate-900">{dataQuality.customersMissingEmail}</div>
+                  <p className="text-xs text-slate-600 font-medium">
+                    {t("CustomersMissingEmail" as any) || "Customers missing email"}
+                  </p>
+                </div>
+              )}
+              {dataQuality.vehiclesWithVinWarning > 0 && (
+                <div>
+                  <div className="text-xl font-bold text-slate-900">{dataQuality.vehiclesWithVinWarning}</div>
+                  <p className="text-xs text-slate-600 font-medium">
+                    {t("VehiclesVinWarning" as any) || "Vehicles with a VIN checksum warning"}
+                  </p>
+                </div>
+              )}
+            </div>
+          </motion.div>
+        )}
 
       {/* Row 3: Recent Leads Table (Full Width) */}
       <motion.div
