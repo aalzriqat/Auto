@@ -2,6 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { maybeAutoPostToInstagram } from "./utils/socialAutoPost";
 
 const vehicleStatus = v.union(
   v.literal("AVAILABLE"),
@@ -121,6 +122,14 @@ export const resolve = mutation({
         await ctx.db.patch(request.vehicleId, {
           status: request.requestedStatus,
         });
+
+        if (request.requestedStatus === "AVAILABLE" && vehicle.status !== "AVAILABLE") {
+          await maybeAutoPostToInstagram(ctx, {
+            orgId: args.orgId,
+            vehicle: { ...vehicle, status: "AVAILABLE" },
+            triggeredByUserId: user._id,
+          });
+        }
       }
     }
   },

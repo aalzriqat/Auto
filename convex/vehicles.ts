@@ -6,6 +6,7 @@ import { notifyManagers, getActorName } from "./utils/notifications";
 import { rateLimiter } from "./rateLimit";
 import { validateInput } from "./utils/validation";
 import { CreateVehicleSchema, UpdateVehicleSchema } from "./validations/vehicles";
+import { maybeAutoPostToInstagram } from "./utils/socialAutoPost";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -385,6 +386,14 @@ export const update = mutation({
         `${actorName} updated details for the ${vehicle.year} ${vehicle.make} ${vehicle.model}`,
         `/${args.orgId}/vehicles?highlightId=${args.vehicleId}`
       );
+
+      if (patch.status === "AVAILABLE" && vehicle.status !== "AVAILABLE") {
+        await maybeAutoPostToInstagram(ctx, {
+          orgId: args.orgId,
+          vehicle: { ...vehicle, ...patch } as typeof vehicle,
+          triggeredByUserId: user._id,
+        });
+      }
     }
   },
 });

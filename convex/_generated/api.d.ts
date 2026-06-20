@@ -70,6 +70,7 @@ import type * as utils_errors from "../utils/errors.js";
 import type * as utils_notifications from "../utils/notifications.js";
 import type * as utils_permissions from "../utils/permissions.js";
 import type * as utils_saleHelpers from "../utils/saleHelpers.js";
+import type * as utils_socialAutoPost from "../utils/socialAutoPost.js";
 import type * as utils_tenancy from "../utils/tenancy.js";
 import type * as utils_validation from "../utils/validation.js";
 import type * as validations_customers from "../validations/customers.js";
@@ -152,6 +153,7 @@ declare const fullApi: ApiFromModules<{
   "utils/notifications": typeof utils_notifications;
   "utils/permissions": typeof utils_permissions;
   "utils/saleHelpers": typeof utils_saleHelpers;
+  "utils/socialAutoPost": typeof utils_socialAutoPost;
   "utils/tenancy": typeof utils_tenancy;
   "utils/validation": typeof utils_validation;
   "validations/customers": typeof validations_customers;

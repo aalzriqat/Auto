@@ -138,3 +138,138 @@ describe("vehicles.softDelete", () => {
     ).rejects.toThrow();
   });
 });
+
+describe("vehicles.update — auto-post on status → AVAILABLE", () => {
+  test("queues an auto-post when enabled, connected, and the vehicle has photos", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    const storageId = await t.run((ctx) => ctx.storage.store(new Blob(["fake-image"])));
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      orgId,
+      ...baseVehicle,
+      status: "IN_INSPECTION",
+    });
+    await t.run((ctx) => ctx.db.patch(vehicleId, { imageIds: [storageId] }));
+    await t.run((ctx) =>
+      ctx.db.insert("orgSettings", {
+        orgId,
+        currency: "JOD",
+        currencySymbol: "د.أ",
+        enabledPaymentTypes: ["CASH"],
+        instagramBusinessAccountId: "ig_123",
+        instagramAccessToken: "token_abc",
+        socialAutoPostEnabled: true,
+      })
+    );
+
+    await asUser.mutation(api.vehicles.update, { orgId, vehicleId, status: "AVAILABLE" });
+
+    await t.run(async (ctx) => {
+      const posts = await ctx.db
+        .query("socialPosts")
+        .withIndex("by_org_vehicle", (q) => q.eq("orgId", orgId).eq("vehicleId", vehicleId))
+        .collect();
+      expect(posts.length).toBe(1);
+      expect(posts[0].status).toBe("PENDING");
+      expect(posts[0].triggeredBy).toBe("auto");
+    });
+  });
+
+  test("does not queue a post when auto-post is disabled", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    const storageId = await t.run((ctx) => ctx.storage.store(new Blob(["fake-image"])));
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      orgId,
+      ...baseVehicle,
+      status: "IN_INSPECTION",
+    });
+    await t.run((ctx) => ctx.db.patch(vehicleId, { imageIds: [storageId] }));
+    await t.run((ctx) =>
+      ctx.db.insert("orgSettings", {
+        orgId,
+        currency: "JOD",
+        currencySymbol: "د.أ",
+        enabledPaymentTypes: ["CASH"],
+        instagramBusinessAccountId: "ig_123",
+        instagramAccessToken: "token_abc",
+        socialAutoPostEnabled: false,
+      })
+    );
+
+    await asUser.mutation(api.vehicles.update, { orgId, vehicleId, status: "AVAILABLE" });
+
+    await t.run(async (ctx) => {
+      const posts = await ctx.db
+        .query("socialPosts")
+        .withIndex("by_org_vehicle", (q) => q.eq("orgId", orgId).eq("vehicleId", vehicleId))
+        .collect();
+      expect(posts.length).toBe(0);
+    });
+  });
+
+  test("does not queue a post when the vehicle has no photos", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      orgId,
+      ...baseVehicle,
+      status: "IN_INSPECTION",
+    });
+    await t.run((ctx) =>
+      ctx.db.insert("orgSettings", {
+        orgId,
+        currency: "JOD",
+        currencySymbol: "د.أ",
+        enabledPaymentTypes: ["CASH"],
+        instagramBusinessAccountId: "ig_123",
+        instagramAccessToken: "token_abc",
+        socialAutoPostEnabled: true,
+      })
+    );
+
+    await asUser.mutation(api.vehicles.update, { orgId, vehicleId, status: "AVAILABLE" });
+
+    await t.run(async (ctx) => {
+      const posts = await ctx.db
+        .query("socialPosts")
+        .withIndex("by_org_vehicle", (q) => q.eq("orgId", orgId).eq("vehicleId", vehicleId))
+        .collect();
+      expect(posts.length).toBe(0);
+    });
+  });
+
+  test("does not re-trigger when the vehicle was already AVAILABLE", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    const storageId = await t.run((ctx) => ctx.storage.store(new Blob(["fake-image"])));
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      orgId,
+      ...baseVehicle,
+      status: "AVAILABLE",
+    });
+    await t.run((ctx) => ctx.db.patch(vehicleId, { imageIds: [storageId] }));
+    await t.run((ctx) =>
+      ctx.db.insert("orgSettings", {
+        orgId,
+        currency: "JOD",
+        currencySymbol: "د.أ",
+        enabledPaymentTypes: ["CASH"],
+        instagramBusinessAccountId: "ig_123",
+        instagramAccessToken: "token_abc",
+        socialAutoPostEnabled: true,
+      })
+    );
+
+    // Already AVAILABLE — an unrelated field update shouldn't re-trigger a post.
+    await asUser.mutation(api.vehicles.update, { orgId, vehicleId, status: "AVAILABLE", mileage: 11000 });
+
+    await t.run(async (ctx) => {
+      const posts = await ctx.db
+        .query("socialPosts")
+        .withIndex("by_org_vehicle", (q) => q.eq("orgId", orgId).eq("vehicleId", vehicleId))
+        .collect();
+      expect(posts.length).toBe(0);
+    });
+  });
+});

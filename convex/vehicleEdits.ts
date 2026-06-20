@@ -4,6 +4,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { ConvexError } from "convex/values";
+import { maybeAutoPostToInstagram } from "./utils/socialAutoPost";
 
 export const requestCreate = mutation({
   args: {
@@ -185,11 +186,25 @@ export const resolve = mutation({
           updatedAt: Date.now(),
         });
       } else if (request.type === "UPDATE" && request.vehicleId) {
+        const previousVehicle = await ctx.db.get(request.vehicleId);
+
         await ctx.db.patch(request.vehicleId, {
           ...(request.payload as any),
           updatedBy: user._id, // Manager who approved it
           updatedAt: Date.now(),
         });
+
+        const payload = request.payload as { status?: string };
+        if (payload.status === "AVAILABLE" && previousVehicle && previousVehicle.status !== "AVAILABLE") {
+          const updatedVehicle = await ctx.db.get(request.vehicleId);
+          if (updatedVehicle) {
+            await maybeAutoPostToInstagram(ctx, {
+              orgId: args.orgId,
+              vehicle: updatedVehicle,
+              triggeredByUserId: user._id,
+            });
+          }
+        }
       }
     }
   },

@@ -32,6 +32,7 @@
 | 20 | main | VIN Checksum Validation (CRM data quality, part 2) | ✅ Done |
 | 22 | main | Social Integrations Settings + Instagram OAuth Connect | ✅ Done |
 | 23 | main | Manual "Post to Instagram" Action | ✅ Done |
+| 24 | main | Auto-Post Toggle on Vehicle Status → AVAILABLE | ✅ Done |
 
 ---
 
@@ -581,6 +582,22 @@ Manual-trigger posting (per the earlier design call: Instagram's container → p
 - [x] `lib/i18n/domains/vehicles.ts` — new EN + AR strings
 - [x] `convex/socialPostingData.test.ts` (new, 7 tests) — rejects when disconnected, rejects empty selection, rejects photos not belonging to the vehicle, queues correctly, `listForVehicle` ordering, `markPostResult` PUBLISHED/FAILED + notification
 - [x] Full suite green (192/192 tests), clean typecheck
+
+## Phase 24 — Social Posting Automation: Auto-Post Toggle on Status → AVAILABLE ✅
+
+**Branch:** `main`
+
+Wires up the `socialAutoPostEnabled` toggle that Phase 22 already exposed in Settings > Integrations but didn't actually do anything — completing the bundle. Opt-in only (off by default), and only takes effect once Instagram is connected and the toggle is explicitly turned on.
+
+A vehicle's status can become AVAILABLE through three different mutations in this codebase, not just one — all three are wired to the same shared, no-throw helper so the behavior is consistent regardless of which path a dealer used:
+
+### Delivered
+- [x] `convex/utils/socialAutoPost.ts` (new) — `maybeAutoPostToInstagram()`, mirroring the existing `saleHelpers.ts` shared-helper pattern. No-ops silently (never throws) unless auto-post is enabled, Instagram is connected, and the vehicle has photos; builds the same caption template as the manual-post UI default and queues a `socialPosts` row tagged `triggeredBy: "auto"`, fully `ctx.scheduler.runAfter(0, ...)`-deferred so it can never block or fail the status-change mutation it's called from
+- [x] `convex/vehicles.ts` — `update` (direct status edit, for users with full `EDIT_VEHICLES`) now calls the helper when `patch.status` transitions to `AVAILABLE`
+- [x] `convex/vehicleRequests.ts` — `resolve` (the dedicated status-approval workflow) calls the helper when an `AVAILABLE` request is approved
+- [x] `convex/vehicleEdits.ts` — `resolve` (the general edit-approval workflow, whose payload can also include a status change for non-privileged requesters) calls the helper too, for consistency across all three status-changing paths
+- [x] `convex/vehicles.test.ts`, `convex/vehicleRequests.test.ts` (new) — 7 tests: queues on enabled+connected+has-photos, skips when disabled / not connected / no photos / already-AVAILABLE (no-op re-trigger), skips on rejection, skips for non-AVAILABLE approvals
+- [x] Full suite green (177 passed, 22 intentionally skipped — see live chat note below), clean typecheck
 
 ## Operational — Live Chat Disabled (Excessive Convex Usage) ✅
 
