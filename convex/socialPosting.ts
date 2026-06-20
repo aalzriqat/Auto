@@ -4,13 +4,17 @@ import { v, ConvexError } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 
-const META_GRAPH_VERSION = "v21.0";
+const INSTAGRAM_GRAPH_VERSION = "v21.0";
 const CONTAINER_POLL_INTERVAL_MS = 1500;
 const CONTAINER_POLL_MAX_ATTEMPTS = 10;
 
+// This app is on Meta's "API setup with Instagram Login" flow (see
+// socialIntegrations.ts), whose tokens are issued for graph.instagram.com,
+// not graph.facebook.com — same endpoint shapes, different host.
+
 async function waitForContainerReady(containerId: string, accessToken: string): Promise<void> {
   for (let attempt = 0; attempt < CONTAINER_POLL_MAX_ATTEMPTS; attempt++) {
-    const url = new URL(`https://graph.facebook.com/${META_GRAPH_VERSION}/${containerId}`);
+    const url = new URL(`https://graph.instagram.com/${INSTAGRAM_GRAPH_VERSION}/${containerId}`);
     url.searchParams.set("fields", "status_code");
     url.searchParams.set("access_token", accessToken);
     const res = await fetch(url.toString());
@@ -29,7 +33,7 @@ async function createMediaContainer(
   accessToken: string,
   params: Record<string, string>
 ): Promise<string> {
-  const url = new URL(`https://graph.facebook.com/${META_GRAPH_VERSION}/${igUserId}/media`);
+  const url = new URL(`https://graph.instagram.com/${INSTAGRAM_GRAPH_VERSION}/${igUserId}/media`);
   for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
   url.searchParams.set("access_token", accessToken);
 
@@ -105,7 +109,7 @@ export const publishToInstagram = internalAction({
         await waitForContainerReady(creationId, accessToken);
       }
 
-      const publishUrl = new URL(`https://graph.facebook.com/${META_GRAPH_VERSION}/${igUserId}/media_publish`);
+      const publishUrl = new URL(`https://graph.instagram.com/${INSTAGRAM_GRAPH_VERSION}/${igUserId}/media_publish`);
       publishUrl.searchParams.set("creation_id", creationId);
       publishUrl.searchParams.set("access_token", accessToken);
       const publishRes = await fetch(publishUrl.toString(), { method: "POST" });
@@ -117,7 +121,7 @@ export const publishToInstagram = internalAction({
       const mediaId: string = publishJson.id;
       let permalink: string | undefined;
       try {
-        const permalinkUrl = new URL(`https://graph.facebook.com/${META_GRAPH_VERSION}/${mediaId}`);
+        const permalinkUrl = new URL(`https://graph.instagram.com/${INSTAGRAM_GRAPH_VERSION}/${mediaId}`);
         permalinkUrl.searchParams.set("fields", "permalink");
         permalinkUrl.searchParams.set("access_token", accessToken);
         const permalinkRes = await fetch(permalinkUrl.toString());

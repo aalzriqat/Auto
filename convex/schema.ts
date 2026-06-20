@@ -612,8 +612,6 @@ export default defineSchema({
     instagramAccessToken: v.optional(v.string()),
     instagramTokenExpiresAt: v.optional(v.number()),
     instagramPageName: v.optional(v.string()),
-    facebookPageId: v.optional(v.string()),
-    facebookPageAccessToken: v.optional(v.string()),
     socialAutoPostEnabled: v.optional(v.boolean()),
   }).index("by_org", ["orgId"]),
 

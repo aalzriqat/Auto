@@ -7,20 +7,21 @@ import { getValidatedEnv } from "./utils/env";
 import { DEFAULT_SETTINGS } from "./orgSettings";
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-const META_GRAPH_VERSION = "v21.0";
+const INSTAGRAM_GRAPH_VERSION = "v21.0";
 
-const INSTAGRAM_SCOPES = [
-  "instagram_basic",
-  "instagram_content_publish",
-  "pages_show_list",
-  "pages_read_engagement",
-].join(",");
+// This app is configured as "API setup with Instagram Login" in the Meta
+// dashboard (confirmed live — "API setup with Facebook Login" scopes were
+// rejected with "Invalid Scopes"). That flow authenticates directly against
+// instagram.com — no linked Facebook Page involved — and uses the
+// `instagram_business_*`-prefixed scopes, not the older `instagram_basic`/
+// `pages_*` scopes used by the Facebook Login flow.
+const INSTAGRAM_SCOPES = ["instagram_business_basic", "instagram_business_content_publish"].join(",");
 
 // ─── Public ───────────────────────────────────────────────────────────────────
 
 /**
- * Generates a CSRF state token and returns the Meta OAuth dialog URL the
- * client redirects the browser to. Owner-only — only the org owner can
+ * Generates a CSRF state token and returns the Instagram OAuth dialog URL
+ * the client redirects the browser to. Owner-only — only the org owner can
  * connect a social account.
  */
 export const createConnectUrl = mutation({
@@ -47,7 +48,7 @@ export const createConnectUrl = mutation({
     });
 
     const redirectUri = `${env.CONVEX_SITE_URL}/instagram-oauth-callback`;
-    const url = new URL(`https://www.facebook.com/${META_GRAPH_VERSION}/dialog/oauth`);
+    const url = new URL("https://www.instagram.com/oauth/authorize");
     url.searchParams.set("client_id", env.INSTAGRAM_APP_ID);
     url.searchParams.set("redirect_uri", redirectUri);
     url.searchParams.set("state", state);
@@ -80,7 +81,7 @@ export const getConnectionStatus = query({
   },
 });
 
-/** Disconnects Instagram/Facebook for the org. Owner-only. */
+/** Disconnects Instagram for the org. Owner-only. */
 export const disconnect = mutation({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
@@ -97,8 +98,6 @@ export const disconnect = mutation({
       instagramAccessToken: undefined,
       instagramTokenExpiresAt: undefined,
       instagramPageName: undefined,
-      facebookPageId: undefined,
-      facebookPageAccessToken: undefined,
       socialAutoPostEnabled: false,
     });
   },
@@ -154,8 +153,6 @@ export const saveInstagramCredentials = internalMutation({
     instagramAccessToken: v.string(),
     instagramTokenExpiresAt: v.optional(v.number()),
     instagramPageName: v.optional(v.string()),
-    facebookPageId: v.string(),
-    facebookPageAccessToken: v.string(),
   },
   handler: async (ctx, args) => {
     const { orgId, ...fields } = args;
@@ -194,73 +191,70 @@ export const getEnvForExchange = internalQuery({
 });
 
 /**
- * Exchanges the OAuth `code` for a long-lived Page access token, resolves
- * the linked Instagram Business Account, and persists everything. Runs as
- * a Node action since it needs `fetch` to Meta's Graph API.
+ * Exchanges the OAuth `code` for a long-lived Instagram access token and
+ * persists it. Instagram Login (unlike Facebook Login) authenticates
+ * directly against the Instagram account — the `user_id` returned by the
+ * very first exchange *is* the Instagram Business Account ID, no Facebook
+ * Page lookup involved. Runs as a Node action since it needs `fetch`.
  */
 export const exchangeCodeForToken = internalAction({
   args: { orgId: v.id("organizations"), code: v.string() },
   handler: async (ctx, args): Promise<void> => {
     const { appId, appSecret, redirectUri } = await ctx.runQuery(internal.socialIntegrations.getEnvForExchange, {});
 
-    // 1. Exchange the authorization code for a short-lived user access token.
-    const tokenUrl = new URL(`https://graph.facebook.com/${META_GRAPH_VERSION}/oauth/access_token`);
-    tokenUrl.searchParams.set("client_id", appId);
-    tokenUrl.searchParams.set("client_secret", appSecret);
-    tokenUrl.searchParams.set("redirect_uri", redirectUri);
-    tokenUrl.searchParams.set("code", args.code);
-
-    const tokenRes = await fetch(tokenUrl.toString());
+    // 1. Exchange the authorization code for a short-lived access token.
+    //    This is a POST with a form-encoded body, not a GET with query params.
+    const tokenRes = await fetch("https://api.instagram.com/oauth/access_token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: appId,
+        client_secret: appSecret,
+        grant_type: "authorization_code",
+        redirect_uri: redirectUri,
+        code: args.code,
+      }).toString(),
+    });
     const tokenJson = await tokenRes.json();
-    if (!tokenRes.ok || !tokenJson.access_token) {
-      throw new ConvexError(`Instagram token exchange failed: ${tokenJson?.error?.message ?? tokenRes.statusText}`);
+    const shortLivedToken: string | undefined = tokenJson.access_token;
+    const igUserId: string | undefined = tokenJson.user_id?.toString();
+    if (!tokenRes.ok || !shortLivedToken || !igUserId) {
+      throw new ConvexError(`Instagram token exchange failed: ${tokenJson?.error_message ?? tokenJson?.error?.message ?? tokenRes.statusText}`);
     }
-    const shortLivedToken: string = tokenJson.access_token;
 
-    // 2. Exchange for a long-lived user access token (~60 days).
-    const longLivedUrl = new URL(`https://graph.facebook.com/${META_GRAPH_VERSION}/oauth/access_token`);
-    longLivedUrl.searchParams.set("grant_type", "fb_exchange_token");
-    longLivedUrl.searchParams.set("client_id", appId);
+    // 2. Exchange for a long-lived access token (~60 days).
+    const longLivedUrl = new URL("https://graph.instagram.com/access_token");
+    longLivedUrl.searchParams.set("grant_type", "ig_exchange_token");
     longLivedUrl.searchParams.set("client_secret", appSecret);
-    longLivedUrl.searchParams.set("fb_exchange_token", shortLivedToken);
+    longLivedUrl.searchParams.set("access_token", shortLivedToken);
 
     const longLivedRes = await fetch(longLivedUrl.toString());
     const longLivedJson = await longLivedRes.json();
     if (!longLivedRes.ok || !longLivedJson.access_token) {
       throw new ConvexError(`Instagram long-lived token exchange failed: ${longLivedJson?.error?.message ?? longLivedRes.statusText}`);
     }
-    const longLivedUserToken: string = longLivedJson.access_token;
+    const longLivedToken: string = longLivedJson.access_token;
     const expiresInSeconds: number | undefined = longLivedJson.expires_in;
 
-    // 3. Find the Facebook Page(s) this user manages.
-    const pagesUrl = new URL(`https://graph.facebook.com/${META_GRAPH_VERSION}/me/accounts`);
-    pagesUrl.searchParams.set("access_token", longLivedUserToken);
-    const pagesRes = await fetch(pagesUrl.toString());
-    const pagesJson = await pagesRes.json();
-    const page = pagesJson?.data?.[0];
-    if (!pagesRes.ok || !page) {
-      throw new ConvexError("No Facebook Page found for this account — link a Page to your Instagram Business account first.");
-    }
-
-    // 4. Resolve the Instagram Business Account linked to that Page.
-    const igLookupUrl = new URL(`https://graph.facebook.com/${META_GRAPH_VERSION}/${page.id}`);
-    igLookupUrl.searchParams.set("fields", "instagram_business_account");
-    igLookupUrl.searchParams.set("access_token", page.access_token);
-    const igRes = await fetch(igLookupUrl.toString());
-    const igJson = await igRes.json();
-    const igAccountId: string | undefined = igJson?.instagram_business_account?.id;
-    if (!igRes.ok || !igAccountId) {
-      throw new ConvexError("This Facebook Page has no linked Instagram Business account.");
+    // 3. Fetch the username for display purposes ("Connected as @handle").
+    let username: string | undefined;
+    try {
+      const profileUrl = new URL(`https://graph.instagram.com/${INSTAGRAM_GRAPH_VERSION}/${igUserId}`);
+      profileUrl.searchParams.set("fields", "username");
+      profileUrl.searchParams.set("access_token", longLivedToken);
+      const profileRes = await fetch(profileUrl.toString());
+      const profileJson = await profileRes.json();
+      username = profileJson.username;
+    } catch {
+      // Non-fatal — connection still succeeds without a display name.
     }
 
     await ctx.runMutation(internal.socialIntegrations.saveInstagramCredentials, {
       orgId: args.orgId,
-      instagramBusinessAccountId: igAccountId,
-      instagramAccessToken: page.access_token,
+      instagramBusinessAccountId: igUserId,
+      instagramAccessToken: longLivedToken,
       instagramTokenExpiresAt: expiresInSeconds ? Date.now() + expiresInSeconds * 1000 : undefined,
-      instagramPageName: page.name,
-      facebookPageId: page.id,
-      facebookPageAccessToken: page.access_token,
+      instagramPageName: username,
     });
   },
 });

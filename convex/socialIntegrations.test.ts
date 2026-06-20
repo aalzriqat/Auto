@@ -37,7 +37,7 @@ describe("socialIntegrations.createConnectUrl", () => {
 
     const url = await asOwner.mutation(api.socialIntegrations.createConnectUrl, { orgId });
 
-    expect(url).toContain("facebook.com");
+    expect(url).toContain("instagram.com");
     expect(url).toContain("client_id=test_app_id");
     expect(url).toContain("redirect_uri=");
     expect(url).toContain("state=");
@@ -83,8 +83,6 @@ describe("socialIntegrations.getConnectionStatus / disconnect", () => {
         instagramBusinessAccountId: "ig_123",
         instagramAccessToken: "token_abc",
         instagramPageName: "My Dealership",
-        facebookPageId: "page_123",
-        facebookPageAccessToken: "token_abc",
       })
     );
 
@@ -102,8 +100,6 @@ describe("socialIntegrations.getConnectionStatus / disconnect", () => {
         orgId,
         instagramBusinessAccountId: "ig_123",
         instagramAccessToken: "token_abc",
-        facebookPageId: "page_123",
-        facebookPageAccessToken: "token_abc",
       })
     );
 
@@ -133,8 +129,6 @@ describe("socialIntegrations.setAutoPostEnabled", () => {
         orgId,
         instagramBusinessAccountId: "ig_123",
         instagramAccessToken: "token_abc",
-        facebookPageId: "page_123",
-        facebookPageAccessToken: "token_abc",
       })
     );
 
