@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { decodeVinYear, toCarBrand, cleanMfrName } from "./vinHelpers";
+import { decodeVinYear, toCarBrand, cleanMfrName, hasInvalidVinCharacters, validateVinChecksum } from "./vinHelpers";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -99,5 +99,40 @@ describe("cleanMfrName", () => {
     const result = cleanMfrName("CORP LTD INC");
     // cleaned string would be empty, fallback: first word of original
     expect(result).toBe("CORP");
+  });
+});
+
+describe("hasInvalidVinCharacters", () => {
+  it("flags I, O, and Q", () => {
+    expect(hasInvalidVinCharacters("1HGCM82633A00435I")).toBe(true);
+    expect(hasInvalidVinCharacters("1HGCM82633A00435O")).toBe(true);
+    expect(hasInvalidVinCharacters("1HGCM82633A00435Q")).toBe(true);
+  });
+
+  it("is case-insensitive", () => {
+    expect(hasInvalidVinCharacters("1hgcm82633a00435i")).toBe(true);
+  });
+
+  it("returns false for a VIN with none of those letters", () => {
+    expect(hasInvalidVinCharacters("1HGCM82633A004352")).toBe(false);
+  });
+});
+
+describe("validateVinChecksum", () => {
+  it("validates a known-good NA VIN checksum", () => {
+    expect(validateVinChecksum("1HGCM82633A004352")).toBe(true);
+  });
+
+  it("rejects a VIN with a typo'd digit", () => {
+    expect(validateVinChecksum("1HGCM82633A004353")).toBe(false);
+  });
+
+  it("rejects VINs with invalid characters or wrong length", () => {
+    expect(validateVinChecksum("1HGCM82633A00435I")).toBe(false);
+    expect(validateVinChecksum("SHORT")).toBe(false);
+  });
+
+  it("is case-insensitive", () => {
+    expect(validateVinChecksum("1hgcm82633a004352")).toBe(true);
   });
 });

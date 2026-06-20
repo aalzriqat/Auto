@@ -83,6 +83,26 @@ describe("customers.create", () => {
     ).rejects.toThrow(/already exists/i);
   });
 
+  test("rejects duplicate phone within the same org, regardless of formatting", async () => {
+    const { orgId, asUser } = await setup();
+
+    await asUser.mutation(api.customers.create, {
+      orgId,
+      firstName: "Alice",
+      lastName: "Dupont",
+      phone: "+1 (234) 567-8900",
+    });
+
+    await expect(
+      asUser.mutation(api.customers.create, {
+        orgId,
+        firstName: "Bob",
+        lastName: "Dupont",
+        phone: "+1-234-567-8900",
+      })
+    ).rejects.toThrow(/already exists/i);
+  });
+
   test("allows same email in a different org", async () => {
     const { t, orgId, asUser } = await setup();
 
@@ -157,5 +177,50 @@ describe("customers.update", () => {
       expect(customer?.firstName).toBe("New");
       expect(customer?.phone).toBe("+9876543210");
     });
+  });
+});
+
+describe("customers.checkDuplicates", () => {
+  test("returns exact phone/email matches and possible name matches, non-blocking", async () => {
+    const { orgId, asUser } = await setup();
+
+    await asUser.mutation(api.customers.create, {
+      orgId,
+      firstName: "Sara",
+      lastName: "Khalil",
+      phone: "+962791234567",
+      email: "sara@example.com",
+    });
+
+    const result = await asUser.query(api.customers.checkDuplicates, {
+      orgId,
+      phone: "+962-79-1234567",
+      email: "sara@example.com",
+      firstName: "Sara",
+      lastName: "Khalil",
+    });
+
+    expect(result.exactPhoneMatch?.firstName).toBe("Sara");
+    expect(result.exactEmailMatch?.firstName).toBe("Sara");
+    expect(result.possibleNameMatches.length).toBe(1);
+  });
+
+  test("excludes the record being edited from its own duplicate check", async () => {
+    const { orgId, asUser } = await setup();
+
+    const customerId = await asUser.mutation(api.customers.create, {
+      orgId,
+      firstName: "Omar",
+      lastName: "Nasser",
+      phone: "+962790000000",
+    });
+
+    const result = await asUser.query(api.customers.checkDuplicates, {
+      orgId,
+      phone: "+962790000000",
+      excludeCustomerId: customerId,
+    });
+
+    expect(result.exactPhoneMatch).toBeNull();
   });
 });

@@ -166,7 +166,8 @@ export default defineSchema({
     deletedBy: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
-    .index("by_org_email", ["orgId", "email"]),
+    .index("by_org_email", ["orgId", "email"])
+    .index("by_org_phone", ["orgId", "phone"]),
 
   leads: defineTable({
     orgId: v.id("organizations"),
@@ -607,7 +608,40 @@ export default defineSchema({
       v.array(v.object({ minProfitAmount: v.number(), commissionPct: v.number() }))
     ),
     commissionMode: v.optional(v.union(v.literal("AUTO_TIERS"), v.literal("AUTO_MEMBER"), v.literal("MANUAL"))),
+    instagramBusinessAccountId: v.optional(v.string()),
+    instagramAccessToken: v.optional(v.string()),
+    instagramTokenExpiresAt: v.optional(v.number()),
+    instagramPageName: v.optional(v.string()),
+    facebookPageId: v.optional(v.string()),
+    facebookPageAccessToken: v.optional(v.string()),
+    socialAutoPostEnabled: v.optional(v.boolean()),
   }).index("by_org", ["orgId"]),
+
+  oauthStates: defineTable({
+    orgId: v.id("organizations"),
+    state: v.string(),
+    provider: v.union(v.literal("instagram"), v.literal("facebook")),
+    createdAt: v.number(),
+    expiresAt: v.number(),
+  }).index("by_state", ["state"]),
+
+  socialPosts: defineTable({
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    platform: v.union(v.literal("instagram"), v.literal("facebook")),
+    status: v.union(v.literal("PENDING"), v.literal("PUBLISHED"), v.literal("FAILED")),
+    caption: v.optional(v.string()),
+    imageStorageIds: v.array(v.id("_storage")),
+    externalPostId: v.optional(v.string()),
+    externalPermalink: v.optional(v.string()),
+    errorMessage: v.optional(v.string()),
+    triggeredBy: v.union(v.literal("manual"), v.literal("auto")),
+    requestedBy: v.id("users"),
+    requestedAt: v.number(),
+    publishedAt: v.optional(v.number()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_vehicle", ["orgId", "vehicleId"]),
 
   orgCustomFields: defineTable({
     orgId: v.id("organizations"),
@@ -738,7 +772,7 @@ export default defineSchema({
   }).index("by_job", ["jobName"]),
 
   webhookLogs: defineTable({
-    source: v.union(v.literal("clerk"), v.literal("whatsapp"), v.literal("resend")),
+    source: v.union(v.literal("clerk"), v.literal("whatsapp"), v.literal("resend"), v.literal("instagram-oauth")),
     status: v.union(v.literal("success"), v.literal("error")),
     summary: v.string(),
     error: v.optional(v.string()),

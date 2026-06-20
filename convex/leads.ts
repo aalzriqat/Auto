@@ -124,6 +124,41 @@ export const get = query({
   },
 });
 
+/**
+ * Pre-submit check for an existing open lead for the same customer (and,
+ * if given, the same vehicle). Non-blocking — a returning customer or a
+ * re-engagement after LOST is legitimate, so this only powers a UI nudge,
+ * never a hard block.
+ */
+export const checkExistingOpenLead = query({
+  args: {
+    orgId: v.id("organizations"),
+    customerId: v.id("customers"),
+    vehicleId: v.optional(v.id("vehicles")),
+    excludeLeadId: v.optional(v.id("leads")),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
+
+    const candidates = await ctx.db
+      .query("leads")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .filter((q) => q.eq(q.field("customerId"), args.customerId))
+      .filter((q) => q.neq(q.field("isDeleted"), true))
+      .collect();
+
+    const openLead = candidates.find(
+      (lead) =>
+        lead._id !== args.excludeLeadId &&
+        lead.stage !== "WON" &&
+        lead.stage !== "LOST" &&
+        (args.vehicleId ? lead.vehicleId === args.vehicleId : true)
+    );
+
+    return openLead ?? null;
+  },
+});
+
 // ─── Mutations ───────────────────────────────────────────────────────────────
 
 /**

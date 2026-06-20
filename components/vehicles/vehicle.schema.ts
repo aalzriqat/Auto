@@ -2,7 +2,10 @@ import * as z from "zod";
 import { Doc } from "@/convex/_generated/dataModel";
 
 export const vehicleSchema = z.object({
-  vin: z.string().min(17, "VIN must be at least 17 characters").max(17, "VIN must be exactly 17 characters"),
+  vin: z.string()
+    .min(17, "VIN must be at least 17 characters")
+    .max(17, "VIN must be exactly 17 characters")
+    .refine((vin) => !/[IOQ]/i.test(vin), "VIN cannot contain the letters I, O, or Q"),
   make: z.string().min(1, "Make is required"),
   model: z.string().min(1, "Model is required"),
   year: z.coerce.number().min(1900).max(new Date().getFullYear() + 1),

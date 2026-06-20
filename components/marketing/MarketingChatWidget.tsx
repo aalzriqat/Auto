@@ -8,6 +8,7 @@ import { marketingFaqCategories } from "@/lib/marketingFaq";
 import { playChatMessagePing } from "@/lib/chatSound";
 import { useTicker } from "@/hooks/useTicker";
 import { firstName } from "@/lib/utils";
+import { LIVE_CHAT_ENABLED } from "@/lib/featureFlags";
 import {
   MessageCircle,
   X,
@@ -95,6 +96,11 @@ function getOrCreateLeadId(): string {
 }
 
 export function MarketingChatWidget() {
+  if (!LIVE_CHAT_ENABLED) return null;
+  return <MarketingChatWidgetImpl />;
+}
+
+function MarketingChatWidgetImpl() {
   const { locale, isRtl } = useLanguage();
   const t = copy[locale] || copy.en;
   useTicker(1000);

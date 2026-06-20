@@ -13,6 +13,7 @@ import { toast } from "@/components/ui/sonner";
 import { format } from "date-fns";
 import { playChatOfferChime, playChatMessagePing } from "@/lib/chatSound";
 import { useTicker } from "@/hooks/useTicker";
+import { LIVE_CHAT_ENABLED } from "@/lib/featureFlags";
 
 const TYPING_TIMEOUT_MS = 4_000;
 const TYPING_THROTTLE_MS = 2_000;
@@ -77,6 +78,17 @@ function OfferedCard({ thread }: { thread: any }) {
 }
 
 export default function SupportConsolePage() {
+  if (!LIVE_CHAT_ENABLED) {
+    return (
+      <div className="h-full flex items-center justify-center text-sm text-slate-400">
+        Live chat is currently disabled.
+      </div>
+    );
+  }
+  return <SupportConsoleImpl />;
+}
+
+function SupportConsoleImpl() {
   const queue = useQuery(api.liveChat.listQueue, {});
   const myActive = useQuery(api.liveChat.listMyActiveThreads, {});
   const claimThread = useMutation(api.liveChat.claimThread);

@@ -28,6 +28,10 @@
 | 14 | main | Feedback Widget (floating bug/feature reporter + admin inbox) | ✅ Done |
 | 15 | main | Commission Mode (AUTO tier-based vs MANUAL per-sale editing) | ✅ Done |
 | 17 | feature/phase-17-super-admin | Super Admin Dashboard (cross-tenant developer control panel) | ✅ Done |
+| 19 | main | Duplicate Detection on Create (CRM data quality, part 1) | ✅ Done |
+| 20 | main | VIN Checksum Validation (CRM data quality, part 2) | ✅ Done |
+| 22 | main | Social Integrations Settings + Instagram OAuth Connect | ✅ Done |
+| 23 | main | Manual "Post to Instagram" Action | ✅ Done |
 
 ---
 
@@ -510,3 +514,87 @@ Public-facing additions to the marketing landing page: a working Privacy Policy 
 - [x] 18.6 — `components/marketing/MarketingChatWidget.tsx`: floating chat bot on the landing page — sends a greeting, offers FAQ category/question chips (`lib/marketingFaq.ts`), replies inline, and escalates to the real-time agent queue ("Talk to a human") with an optional name/email capture step
 - [x] 18.7 — `app/support/page.tsx`: agent console now labels LEAD threads ("Website Lead" badge + captured email) and hides the dealer-only "Get access to dealer's dashboard" action for them
 - [x] 18.8 — Full suite green (164/164 tests, clean typecheck/lint); graph updated via `python -m graphify update .`
+
+## Phase 19 — CRM Data Quality: Duplicate Detection on Create ✅
+
+**Branch:** `main` · First phase of the CRM Data Quality bundle (dedup → merge tool → lead/sale linking → VIN checksum → dashboard widget).
+
+Customers already hard-blocked duplicate `email` on create; this phase extends the same hard-block to `phone` (a more reliable identifier in this market), and adds non-blocking advisory signals for fuzzy/name-based duplicates and redundant open leads — never hard-blocking on a fuzzy match, since dealerships legitimately have repeat customers and common names.
+
+### Delivered
+- [x] `convex/schema.ts` — `customers` table gains `.index("by_org_phone", ["orgId", "phone"])`
+- [x] `convex/utils/dedup.ts` (new) — `normalizePhone()` (strips formatting, preserves leading `+`) and `namesSimilar()`, shared across customers/leads and reserved for the future merge tool (Phase 19a)
+- [x] `convex/customers.ts` — `create`/`update`/`importBulk` now hard-block on duplicate phone (mirroring the existing email check) and store phone in normalized form; new `checkDuplicates` query (bounded `.take(50)` scan) returns exact phone/email matches + possible name matches for client-side pre-submit warnings
+- [x] `convex/leads.ts` — new `checkExistingOpenLead` query surfaces a non-blocking "this customer already has an open lead" nudge (ignores WON/LOST leads)
+- [x] `components/customers/CustomerDialog.tsx`, `components/leads/LeadDialog.tsx` — debounced duplicate checks wired to the new queries with inline amber warning banners
+- [x] `lib/i18n/domains/customers.ts`, `lib/i18n/domains/leads.ts` — `DuplicateCustomerFound`, `ExistingOpenLeadWarning` (EN + AR)
+- [x] `convex/customers.test.ts`, `convex/leads.test.ts` — phone hard-block (including format-insensitivity), `checkDuplicates` exact/fuzzy/exclude-self coverage, `checkExistingOpenLead` open/WON-LOST/exclude-self coverage
+- [x] Full suite green (170/170 tests), clean typecheck, no new lint issues
+
+## Phase 20 — CRM Data Quality: VIN Checksum Validation ✅
+
+**Branch:** `main` · Second phase of the CRM Data Quality bundle.
+
+Adds ISO 3779 / NHTSA VIN check-digit validation. Scoped deliberately: the check-digit convention is North-America-specific (many non-NA-built vehicles, common in this market, legitimately fail it), so checksum mismatches are a **soft, non-blocking warning** — never a hard rejection. The I/O/Q character rule, by contrast, is universally invalid in *every* VIN scheme, so that one is enforced as a hard rule both client- and server-side.
+
+### Delivered
+- [x] `lib/vinHelpers.ts` — `hasInvalidVinCharacters()` and `validateVinChecksum()` (ISO 3779 transliteration table, position weights, mod-11 check digit)
+- [x] `lib/vinHelpers.test.ts` — known-good/known-bad checksum vectors, I/O/Q rejection, case-insensitivity
+- [x] `components/vehicles/vehicle.schema.ts` and `convex/validations/vehicles.ts` — both gain a hard `.refine()` rejecting I/O/Q (client + server, defense in depth)
+- [x] `components/vehicles/VehicleDialog.tsx` — live, non-blocking amber warning under the VIN field when the checksum doesn't match
+- [x] `lib/i18n/domains/vehicles.ts` — `VinChecksumWarning` (EN + AR)
+- [x] Full suite green (177/177 tests), clean typecheck
+
+## Phase 22 — Social Posting Automation: Integrations Settings + Instagram OAuth Connect ✅
+
+**Branch:** `main` · First phase of the Social Posting Automation bundle (Instagram/Facebook only — Dubizzle/OpenSooq/YallaMotor marketplace syndication and Haraj are explicitly parked/dropped, see PROJECT_PLAN.md scope notes from the planning session).
+
+Lays the OAuth/credentials foundation an org owner uses to connect their Instagram Business account, ahead of the actual posting feature (Phase 23). Buildable and testable entirely in Meta's development mode (no App Review needed yet — that's only required before *other* AutoFlow orgs can connect their own accounts in production).
+
+### Delivered
+- [x] `convex/schema.ts` — `orgSettings` gains `instagramBusinessAccountId`, `instagramAccessToken`, `instagramTokenExpiresAt`, `instagramPageName`, `facebookPageId`, `facebookPageAccessToken`, `socialAutoPostEnabled` (all optional); new `oauthStates` table (CSRF protection for the OAuth redirect, one-time-use, 10-min TTL); `webhookLogs.source` union extended with `"instagram-oauth"`
+- [x] `convex/utils/env.ts` — optional `INSTAGRAM_APP_ID`, `INSTAGRAM_APP_SECRET`, `CONVEX_SITE_URL` added to the validated env schema
+- [x] `convex/socialIntegrations.ts` (new) — `createConnectUrl` (owner-only, generates CSRF state + the Meta OAuth dialog URL), `getConnectionStatus`/`disconnect`/`setAutoPostEnabled` (public), `consumeOAuthState`/`saveInstagramCredentials`/`exchangeCodeForToken` (internal — the token exchange calls Meta's Graph API directly via `fetch`, no Node runtime needed)
+- [x] `convex/http.ts` — `GET /instagram-oauth-callback`: validates state, exchanges the code, redirects back to `/{orgId}/settings/integrations` with a status query param; always resolves via redirect (never throws), logs via the existing `webhookLogs` convention
+- [x] `app/(dashboard)/[orgId]/settings/integrations/{page,client}.tsx` (new) — Connect/Disconnect card + an auto-post toggle (wired to `socialAutoPostEnabled`, disabled until connected); `components/layout/Sidebar.tsx` gains the nav entry (lucide-react has no Instagram/Facebook brand icons — used `Camera` instead, with the connect card's gradient circle carrying the Instagram visual cue)
+- [x] `lib/i18n/domains/settings.ts` — Integrations strings (EN + AR)
+- [x] `.env.example` — `INSTAGRAM_APP_ID`/`INSTAGRAM_APP_SECRET` placeholders
+- [x] `convex/socialIntegrations.test.ts` (new, 8 tests) — owner-gating, connect/disconnect status, auto-post-requires-connection guard, OAuth state one-time-use/expiry
+- [x] Full suite green (185/185 tests), clean typecheck
+- [x] Meta App created (dev mode) with the "Manage messaging & content on Instagram" use case (API setup with Facebook Login); redirect URI registered against the production deployment's site URL; `INSTAGRAM_APP_ID`/`INSTAGRAM_APP_SECRET` set on the dev deployment via `npx convex env set`
+
+**Design note:** "select the details to post + custom message" (raised mid-build) is addressed in Phase 23, not here — the manual post dialog will include a per-photo checkbox picker (default: all selected) and an editable caption field, not just a caption override.
+
+## Phase 23 — Social Posting Automation: Manual "Post to Instagram" Action ✅
+
+**Branch:** `main`
+
+Manual-trigger posting (per the earlier design call: Instagram's container → poll → publish flow is async and can fail for reasons unrelated to AutoFlow, so it gets its own button/state rather than being wired into the vehicle status-change mutation). Includes a per-photo picker and editable caption, addressing the mid-build requirement that the dealer control exactly what gets posted, not just an auto-generated caption override.
+
+### Delivered
+- [x] `convex/schema.ts` — new `socialPosts` table (`orgId`, `vehicleId`, `platform`, `status: PENDING|PUBLISHED|FAILED`, `caption`, `imageStorageIds`, `externalPostId`, `externalPermalink`, `errorMessage`, `triggeredBy: manual|auto`, `requestedBy`, `requestedAt`, `publishedAt`), indexed `by_org` + `by_org_vehicle`; added to `adminOrgs.ts`'s `ORG_SCOPED_TABLES` for cascade-delete
+- [x] `convex/rateLimit.ts` — new `socialPosting` bucket (10/min per org)
+- [x] `convex/socialPostingData.ts` (new) — `requestPost` (validates connection + selected photos actually belong to the vehicle, inserts PENDING row, schedules the publish action via `ctx.scheduler.runAfter(0, ...)`), `listForVehicle`, plus internal `getPostContext`/`getImageUrls`/`markPostResult` (patches status, notifies the requester on completion either way)
+- [x] `convex/socialPosting.ts` (new, `"use node"`) — `publishToInstagram`: builds a single-image or carousel container, polls for `FINISHED` status, publishes, fetches the permalink. Node runtime chosen over the lighter V8 action runtime specifically because the container-polling retry loop needs `setTimeout`
+- [x] `components/vehicles/VehicleMarketingTab.tsx` (new) — photo checkbox grid (all selected by default), editable caption textarea (pre-filled with a year/make/model/price template), "Post to Instagram" button, post history with status badges + "View on Instagram" links; shows a connect-prompt empty state if Instagram isn't connected
+- [x] `components/vehicles/VehicleDetailsDialog.tsx` — new "Marketing" tab (reuses `VIEW_VEHICLE_INFO` permission rather than adding a new one)
+- [x] `lib/i18n/domains/vehicles.ts` — new EN + AR strings
+- [x] `convex/socialPostingData.test.ts` (new, 7 tests) — rejects when disconnected, rejects empty selection, rejects photos not belonging to the vehicle, queues correctly, `listForVehicle` ordering, `markPostResult` PUBLISHED/FAILED + notification
+- [x] Full suite green (192/192 tests), clean typecheck
+
+## Operational — Live Chat Disabled (Excessive Convex Usage) ✅
+
+**Branch:** `main`
+
+The live chat system (Phase 18's dealer + marketing-site widgets, plus the `/support` agent console) was driving excessive Convex function-call usage. Root cause: presence (`updateDealerPresence`/`updateAgentPresence`, every 10s) and typing (`setDealerTyping`/`setAgentTyping`, throttled ~2s) pings write directly onto the `liveChatThreads` row that broader queries (`listQueue`, `getMyThread`, `getThreadForAgent`) subscribe to — every ping fans out into a re-run of every subscribed client's query. The dominant source wasn't the widgets (which, investigation found, are actually **not mounted anywhere in the app** — orphaned since Phase 18 despite being documented as wired up) but **`SupportAccessBanner`**, mounted globally in `app/(dashboard)/[orgId]/layout.tsx`, meaning it ran a live query for every dealer user on every page of the entire app. `app/support/layout.tsx`'s 25s agent heartbeat (fires just from having `/support` open, no active chat needed) was the second contributor.
+
+Disabled fully and reversibly via a kill switch, not a deletion — the Phase 18 implementation is untouched underneath.
+
+### Delivered
+- [x] `convex/liveChat.ts` — `LIVE_CHAT_ENABLED = false` constant + `assertLiveChatEnabled()` guard inserted as the first line of all 36 exported query/mutation/internalMutation handlers (backend defense-in-depth — throws `ConvexError("Live chat is currently disabled.")`)
+- [x] `lib/featureFlags.ts` (new) — frontend-side mirror of the same flag (separate bundles, can't share the Convex-side constant directly)
+- [x] Gated every frontend call site behind the flag (outer wrapper component with no hooks → renders the real implementation only when enabled, avoiding Rules-of-Hooks issues): `components/support/SupportAccessBanner.tsx` (the global one — fixed *before* it could break the dashboard for every user, since the backend guard alone would have made its `useQuery` throw on every page load), `app/support/layout.tsx`, `app/support/page.tsx`, `components/support/LiveChatWidget.tsx`, `components/marketing/MarketingChatWidget.tsx`
+- [x] `convex/liveChat.test.ts` — all 22 tests skipped (not deleted) via a local `describe = vitestDescribe.skip` shadow, with a comment pointing back to the flag
+- [x] Full suite green (170 passed, 22 skipped intentionally), clean typecheck, no new lint errors
+
+**To re-enable:** flip `LIVE_CHAT_ENABLED` to `true` in both `convex/liveChat.ts` and `lib/featureFlags.ts`, unskip `convex/liveChat.test.ts`, and — before doing so — fix the underlying reactivity issue (move presence/typing off the actively-broadly-queried `liveChatThreads` row, e.g. a separate sparse presence table or a `patch` that doesn't touch fields `listQueue`/`getMyThread` read) so it doesn't immediately reproduce the same usage spike.

@@ -13,6 +13,7 @@ import { playChatMessagePing } from "@/lib/chatSound";
 import { useTicker } from "@/hooks/useTicker";
 import { format } from "date-fns";
 import { supportFaqCategories } from "@/lib/supportFaq";
+import { LIVE_CHAT_ENABLED } from "@/lib/featureFlags";
 
 const TYPING_TIMEOUT_MS = 4_000;
 const TYPING_THROTTLE_MS = 2_000;
@@ -34,6 +35,11 @@ type FaqStep =
   | { step: "answer"; categoryId: string; entryId: string };
 
 export function LiveChatWidget() {
+  if (!LIVE_CHAT_ENABLED) return null;
+  return <LiveChatWidgetImpl />;
+}
+
+function LiveChatWidgetImpl() {
   const { activeOrgId } = useOrg();
   const { t, locale } = useLanguage();
   const [open, setOpen] = useState(false);

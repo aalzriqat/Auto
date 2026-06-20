@@ -54,7 +54,7 @@ export const listWebhookLogs = query({
 // webhook delivery outcomes for the admin Overview page.
 export const logWebhookEvent = internalMutation({
   args: {
-    source: v.union(v.literal("clerk"), v.literal("whatsapp"), v.literal("resend")),
+    source: v.union(v.literal("clerk"), v.literal("whatsapp"), v.literal("resend"), v.literal("instagram-oauth")),
     status: v.union(v.literal("success"), v.literal("error")),
     summary: v.string(),
     error: v.optional(v.string()),

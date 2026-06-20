@@ -51,6 +51,10 @@ const ORG_SCOPED_TABLES: { table: TableNames; index: string }[] = [
   { table: "orgCustomerStatuses", index: "by_org" },
   { table: "profitApprovalRequests", index: "by_org" },
   { table: "feedback", index: "by_org" },
+  { table: "socialPosts", index: "by_org" },
+  // oauthStates is intentionally excluded — it's keyed by `state`, not `orgId`
+  // (no orgId-prefixed index exists), and rows are short-lived (10-min TTL,
+  // deleted immediately on use), so cascade-delete isn't needed for it.
 ];
 
 async function deleteAllByOrg(ctx: MutationCtx, table: TableNames, index: string, orgId: Id<"organizations">) {

@@ -11,12 +11,29 @@ const GRANT_DURATION_MS = 60 * 60_000;
 const ONLINE_THRESHOLD_MS = 45_000;
 const DEALER_PRESENCE_STALE_MS = 25_000;
 
+/**
+ * Kill switch — the whole live chat system (dealer widget, marketing-site
+ * widget, agent console) is disabled because its 10s presence + ~2s typing
+ * pings, written directly onto the actively-queried `liveChatThreads` row,
+ * fanned out into excessive Convex function-call usage. Flip back to `true`
+ * once that reactivity pattern is fixed (e.g. move presence/typing to a
+ * separate sparsely-read table instead of the row `listQueue` subscribes to).
+ */
+const LIVE_CHAT_ENABLED = false;
+
+function assertLiveChatEnabled() {
+  if (!LIVE_CHAT_ENABLED) {
+    throw new ConvexError("Live chat is currently disabled.");
+  }
+}
+
 // ─── Dealer-facing ──────────────────────────────────────────────────────────
 
 /** Finds the dealer's most recent non-closed thread, or starts a new (WAITING) one. */
 export const startOrGetMyThread = mutation({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const { user } = await requireTenantAuth(ctx, args.orgId);
 
     const existing = await ctx.db
@@ -46,6 +63,7 @@ export const startOrGetMyThread = mutation({
 export const getMyThread = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const { user } = await requireTenantAuth(ctx, args.orgId);
 
     const thread = await ctx.db
@@ -89,6 +107,7 @@ export const getMyThread = query({
 export const sendDealerMessage = mutation({
   args: { threadId: v.id("liveChatThreads"), bodyText: v.string() },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const thread = await ctx.db.get(args.threadId);
     if (!thread || !thread.orgId) throw new ConvexError("Thread not found.");
     const { user } = await requireTenantAuth(ctx, thread.orgId);
@@ -140,6 +159,7 @@ export const sendDealerMessage = mutation({
 export const markThreadReadByDealer = mutation({
   args: { threadId: v.id("liveChatThreads") },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const thread = await ctx.db.get(args.threadId);
     if (!thread || !thread.orgId) throw new ConvexError("Thread not found.");
     const { user } = await requireTenantAuth(ctx, thread.orgId);
@@ -153,6 +173,7 @@ export const markThreadReadByDealer = mutation({
 export const setDealerTyping = mutation({
   args: { threadId: v.id("liveChatThreads") },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const thread = await ctx.db.get(args.threadId);
     if (!thread || !thread.orgId) throw new ConvexError("Thread not found.");
     const { user } = await requireTenantAuth(ctx, thread.orgId);
@@ -166,6 +187,7 @@ export const setDealerTyping = mutation({
 export const updateDealerPresence = mutation({
   args: { threadId: v.id("liveChatThreads"), state: v.union(v.literal("active"), v.literal("idle")) },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const thread = await ctx.db.get(args.threadId);
     if (!thread || !thread.orgId) throw new ConvexError("Thread not found.");
     const { user } = await requireTenantAuth(ctx, thread.orgId);
@@ -186,6 +208,7 @@ export const updateDealerPresence = mutation({
 export const endThreadByDealer = mutation({
   args: { threadId: v.id("liveChatThreads") },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const thread = await ctx.db.get(args.threadId);
     if (!thread || !thread.orgId) throw new ConvexError("Thread not found.");
     const { user } = await requireTenantAuth(ctx, thread.orgId);
@@ -214,6 +237,7 @@ export const endThreadByDealer = mutation({
 export const getActiveOrgAccessGrant = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     await requireTenantAuth(ctx, args.orgId);
 
     const grants = await ctx.db
@@ -289,6 +313,7 @@ async function buildThreadStatusInfo(ctx: QueryCtx, thread: Doc<"liveChatThreads
 export const startOrGetLeadThread = mutation({
   args: { leadId: v.string(), name: v.optional(v.string()), email: v.optional(v.string()) },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const leadId = normalizeLeadId(args.leadId);
     const name = args.name?.trim().slice(0, LEAD_NAME_MAX_LENGTH) || undefined;
     const email = args.email?.trim().toLowerCase().slice(0, LEAD_EMAIL_MAX_LENGTH) || undefined;
@@ -336,6 +361,7 @@ export const startOrGetLeadThread = mutation({
 export const getLeadThread = query({
   args: { leadId: v.string() },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const leadId = normalizeLeadId(args.leadId);
     const thread = await ctx.db
       .query("liveChatThreads")
@@ -351,6 +377,7 @@ export const getLeadThread = query({
 export const getLeadThreadMessages = query({
   args: { threadId: v.id("liveChatThreads"), leadId: v.string() },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const leadId = normalizeLeadId(args.leadId);
     const thread = await ctx.db.get(args.threadId);
     if (!thread || thread.kind !== "LEAD" || thread.leadId !== leadId) {
@@ -367,6 +394,7 @@ export const getLeadThreadMessages = query({
 export const sendLeadMessage = mutation({
   args: { threadId: v.id("liveChatThreads"), leadId: v.string(), bodyText: v.string() },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const leadId = normalizeLeadId(args.leadId);
     const thread = await ctx.db.get(args.threadId);
     if (!thread || thread.kind !== "LEAD" || thread.leadId !== leadId) {
@@ -420,6 +448,7 @@ export const sendLeadMessage = mutation({
 export const markLeadThreadRead = mutation({
   args: { threadId: v.id("liveChatThreads"), leadId: v.string() },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const leadId = normalizeLeadId(args.leadId);
     const thread = await ctx.db.get(args.threadId);
     if (!thread || thread.kind !== "LEAD" || thread.leadId !== leadId) return;
@@ -430,6 +459,7 @@ export const markLeadThreadRead = mutation({
 export const setLeadTyping = mutation({
   args: { threadId: v.id("liveChatThreads"), leadId: v.string() },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const leadId = normalizeLeadId(args.leadId);
     const thread = await ctx.db.get(args.threadId);
     if (!thread || thread.kind !== "LEAD" || thread.leadId !== leadId) return;
@@ -444,6 +474,7 @@ export const updateLeadPresence = mutation({
     state: v.union(v.literal("active"), v.literal("idle")),
   },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const leadId = normalizeLeadId(args.leadId);
     const thread = await ctx.db.get(args.threadId);
     if (!thread || thread.kind !== "LEAD" || thread.leadId !== leadId) return;
@@ -461,6 +492,7 @@ export const updateLeadPresence = mutation({
 export const endThreadByLead = mutation({
   args: { threadId: v.id("liveChatThreads"), leadId: v.string() },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const leadId = normalizeLeadId(args.leadId);
     const thread = await ctx.db.get(args.threadId);
     if (!thread || thread.kind !== "LEAD" || thread.leadId !== leadId) {
@@ -487,6 +519,7 @@ export const endThreadByLead = mutation({
 export const getThreadMessages = query({
   args: { threadId: v.id("liveChatThreads") },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const thread = await ctx.db.get(args.threadId);
     if (!thread) throw new ConvexError("Thread not found.");
 
@@ -516,6 +549,7 @@ export const getThreadMessages = query({
 export const getThreadForAgent = query({
   args: { threadId: v.id("liveChatThreads") },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     await requireSupportAgent(ctx);
     return await ctx.db.get(args.threadId);
   },
@@ -524,6 +558,7 @@ export const getThreadForAgent = query({
 export const setAgentTyping = mutation({
   args: { threadId: v.id("liveChatThreads") },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const { user } = await requireSupportAgent(ctx);
     const thread = await ctx.db.get(args.threadId);
     if (!thread || thread.claimedByUserId !== user._id) return;
@@ -534,6 +569,7 @@ export const setAgentTyping = mutation({
 export const markThreadReadByAgent = mutation({
   args: { threadId: v.id("liveChatThreads") },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const { user } = await requireSupportAgent(ctx);
     const thread = await ctx.db.get(args.threadId);
     if (!thread || thread.claimedByUserId !== user._id) return;
@@ -545,6 +581,7 @@ export const markThreadReadByAgent = mutation({
 export const updateAgentPresence = mutation({
   args: { threadId: v.id("liveChatThreads"), state: v.union(v.literal("active"), v.literal("idle")) },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const { user } = await requireSupportAgent(ctx);
     const thread = await ctx.db.get(args.threadId);
     if (!thread || thread.claimedByUserId !== user._id) return;
@@ -561,6 +598,7 @@ export const updateAgentPresence = mutation({
 export const listQueue = query({
   args: {},
   handler: async (ctx) => {
+    assertLiveChatEnabled();
     const { user } = await requireSupportAgent(ctx);
 
     const offered = await ctx.db
@@ -582,6 +620,7 @@ export const listQueue = query({
 export const listMyActiveThreads = query({
   args: {},
   handler: async (ctx) => {
+    assertLiveChatEnabled();
     const { user } = await requireSupportAgent(ctx);
     return await ctx.db
       .query("liveChatThreads")
@@ -596,6 +635,7 @@ export const listMyActiveThreads = query({
 export const claimThread = mutation({
   args: { threadId: v.id("liveChatThreads") },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const { user } = await requireSupportAgent(ctx);
     const thread = await ctx.db.get(args.threadId);
     if (!thread) throw new ConvexError("Thread not found.");
@@ -622,6 +662,7 @@ export const claimThread = mutation({
 export const acceptOffer = mutation({
   args: { threadId: v.id("liveChatThreads") },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const { user } = await requireSupportAgent(ctx);
     const thread = await ctx.db.get(args.threadId);
     if (!thread) throw new ConvexError("Thread not found.");
@@ -651,6 +692,7 @@ export const acceptOffer = mutation({
 export const rejectOffer = mutation({
   args: { threadId: v.id("liveChatThreads") },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const { user } = await requireSupportAgent(ctx);
     const thread = await ctx.db.get(args.threadId);
     if (!thread) throw new ConvexError("Thread not found.");
@@ -681,6 +723,7 @@ export const rejectOffer = mutation({
 export const offerToNextAgent = internalMutation({
   args: { threadId: v.id("liveChatThreads") },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const thread = await ctx.db.get(args.threadId);
     if (!thread || (thread.status !== "WAITING" && thread.status !== "OFFERED")) return;
 
@@ -744,6 +787,7 @@ export const offerToNextAgent = internalMutation({
 export const expireOffer = internalMutation({
   args: { threadId: v.id("liveChatThreads"), offeredToUserId: v.id("users") },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const thread = await ctx.db.get(args.threadId);
     if (!thread || thread.status !== "OFFERED" || thread.offeredToUserId !== args.offeredToUserId) {
       return; // already accepted/rejected/closed in the meantime
@@ -764,6 +808,7 @@ export const expireOffer = internalMutation({
 export const sendAgentMessage = mutation({
   args: { threadId: v.id("liveChatThreads"), bodyText: v.string() },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const { user } = await requireSupportAgent(ctx);
     const thread = await ctx.db.get(args.threadId);
     if (!thread) throw new ConvexError("Thread not found.");
@@ -786,6 +831,7 @@ export const sendAgentMessage = mutation({
 export const closeThread = mutation({
   args: { threadId: v.id("liveChatThreads") },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const { user } = await requireSupportAgent(ctx);
     const thread = await ctx.db.get(args.threadId);
     if (!thread) throw new ConvexError("Thread not found.");
@@ -839,6 +885,7 @@ export const closeThread = mutation({
 export const getMyAgentStatus = query({
   args: {},
   handler: async (ctx) => {
+    assertLiveChatEnabled();
     const { agent } = await requireSupportAgent(ctx);
     const activeThreads = await ctx.db
       .query("liveChatThreads")
@@ -856,6 +903,7 @@ export const getMyAgentStatus = query({
 export const heartbeat = mutation({
   args: { isOnline: v.boolean() },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const { agent } = await requireSupportAgent(ctx);
     const wasOnline = Boolean(
       agent.isOnline && agent.lastHeartbeatAt && Date.now() - agent.lastHeartbeatAt < ONLINE_THRESHOLD_MS
@@ -923,6 +971,7 @@ async function sweepBacklogFor(ctx: MutationCtx) {
 export const setAgentStatus = mutation({
   args: { status: v.union(v.literal("ONLINE"), v.literal("BREAK"), v.literal("OFFLINE")) },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const { agent } = await requireSupportAgent(ctx);
     const now = Date.now();
 
@@ -968,6 +1017,7 @@ export const setAgentStatus = mutation({
 export const requestOrgAccess = mutation({
   args: { threadId: v.id("liveChatThreads") },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const { user } = await requireSupportAgent(ctx);
     const thread = await ctx.db.get(args.threadId);
     if (!thread) throw new ConvexError("Thread not found.");
@@ -1048,6 +1098,7 @@ export const requestOrgAccess = mutation({
 export const revokeOrgAccess = mutation({
   args: { threadId: v.id("liveChatThreads") },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const { user } = await requireSupportAgent(ctx);
     const thread = await ctx.db.get(args.threadId);
     if (!thread || !thread.orgId) return;
@@ -1076,6 +1127,7 @@ export const revokeOrgAccess = mutation({
 export const expireOrgAccessGrant = internalMutation({
   args: { agentUserId: v.id("users"), orgId: v.id("organizations") },
   handler: async (ctx, args) => {
+    assertLiveChatEnabled();
     const grants = await ctx.db
       .query("supportOrgAccessGrants")
       .withIndex("by_agentUserId_org", (q) => q.eq("agentUserId", args.agentUserId).eq("orgId", args.orgId))

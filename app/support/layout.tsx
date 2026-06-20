@@ -9,10 +9,22 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { toast } from "@/components/ui/sonner";
 import { Headset } from "lucide-react";
+import { LIVE_CHAT_ENABLED } from "@/lib/featureFlags";
 
 const HEARTBEAT_INTERVAL_MS = 25_000;
 
 export default function SupportLayout({ children }: { children: React.ReactNode }) {
+  if (!LIVE_CHAT_ENABLED) {
+    return (
+      <div className="flex h-screen items-center justify-center bg-slate-50">
+        <p className="text-sm text-slate-500">Live chat is currently disabled.</p>
+      </div>
+    );
+  }
+  return <SupportLayoutImpl>{children}</SupportLayoutImpl>;
+}
+
+function SupportLayoutImpl({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const { isAuthenticated, isLoading: authLoading } = useConvexAuth();
   const isSupportAgent = useQuery(api.supportAgentAuth.isSupportAgent, isAuthenticated ? {} : "skip");

@@ -4,8 +4,14 @@ import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { LIVE_CHAT_ENABLED } from "@/lib/featureFlags";
 
 export function SupportAccessBanner() {
+  if (!LIVE_CHAT_ENABLED) return null;
+  return <SupportAccessBannerImpl />;
+}
+
+function SupportAccessBannerImpl() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const grant = useQuery(api.liveChat.getActiveOrgAccessGrant, activeOrgId ? { orgId: activeOrgId } : "skip");

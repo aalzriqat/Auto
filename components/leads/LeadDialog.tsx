@@ -107,6 +107,22 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
     }
   }, [lead, open, form]);
 
+  // Non-blocking nudge: warn if this customer already has an open lead
+  // (optionally for the same vehicle) before the user creates a duplicate.
+  const watchedCustomerId = form.watch("customerId");
+  const watchedVehicleId = form.watch("vehicleId");
+  const existingOpenLead = useQuery(
+    api.leads.checkExistingOpenLead,
+    activeOrgId && open && watchedCustomerId
+      ? {
+          orgId: activeOrgId,
+          customerId: watchedCustomerId as Id<"customers">,
+          vehicleId: watchedVehicleId && watchedVehicleId !== "none" ? (watchedVehicleId as Id<"vehicles">) : undefined,
+          excludeLeadId: lead?._id,
+        }
+      : "skip"
+  );
+
   const onSubmit = async (values: LeadFormValues) => {
     if (!activeOrgId) return;
     setIsSubmitting(true);
@@ -322,6 +338,11 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                 entityId={lead?._id}
                 onChange={setCustomFieldValues}
               />
+            )}
+            {existingOpenLead && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                {t("ExistingOpenLeadWarning" as any) || "This customer already has an open lead in the pipeline."}
+              </div>
             )}
             <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>

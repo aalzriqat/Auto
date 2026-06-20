@@ -7,6 +7,7 @@ import {
   Wrench,
   Users,
   Car,
+  Camera,
 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import { Doc } from "@/convex/_generated/dataModel";
@@ -34,6 +35,7 @@ import { useState } from "react";
 import { TestDriveDialog } from "@/components/test_drives/TestDriveDialog";
 import { WorkOrderDialog } from "@/components/work_orders/WorkOrderDialog";
 import { VehicleValuationsTab } from "@/components/vehicles/VehicleValuationsTab";
+import { VehicleMarketingTab } from "@/components/vehicles/VehicleMarketingTab";
 import { EmptyState } from "@/components/ui/empty-state";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
@@ -154,6 +156,14 @@ export function VehicleDetailsDialog({
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
                   {t("Valuations" as any)}
+                </TabsTrigger>
+              )}
+              {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_INFO)) && (
+                <TabsTrigger
+                  value="marketing"
+                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
+                >
+                  {t("Marketing" as any) || "Marketing"}
                 </TabsTrigger>
               )}
             </TabsList>
@@ -459,6 +469,9 @@ export function VehicleDetailsDialog({
             </TabsContent>
             <TabsContent value="valuations" className="m-0 focus-visible:outline-none p-4">
               <VehicleValuationsTab vehicleId={vehicle._id} />
+            </TabsContent>
+            <TabsContent value="marketing" className="m-0 focus-visible:outline-none">
+              <VehicleMarketingTab vehicleId={vehicle._id} />
             </TabsContent>
           </div>
         </Tabs>

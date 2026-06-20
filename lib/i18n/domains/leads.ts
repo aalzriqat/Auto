@@ -47,6 +47,9 @@ export const leadsEn = {
   NotesPlaceholder: "Customer preferences, budget, etc.",
   EditLead: "Edit Lead",
   VehicleOfInterest: "Vehicle of Interest",
+
+  // Duplicate detection
+  ExistingOpenLeadWarning: "This customer already has an open lead in the pipeline.",
 };
 
 export const leadsAr = {
@@ -98,4 +101,7 @@ export const leadsAr = {
   NotesPlaceholder: "تفضيلات العميل، الميزانية، إلخ.",
   EditLead: "تعديل العميل المحتمل",
   VehicleOfInterest: "المركبة المطلوبة",
+
+  // Duplicate detection
+  ExistingOpenLeadWarning: "لدى هذا العميل بالفعل عميل محتمل مفتوح في مسار المبيعات.",
 };

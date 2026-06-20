@@ -355,6 +355,21 @@ export const settingsEn = {
   AppliedTier: "Applied tier",
   CommissionTiersSaved: "Commission tiers saved.",
   FailedToSaveCommissionTiers: "Failed to save commission tiers.",
+
+  // Integrations
+  Integrations: "Integrations",
+  IntegrationsDesc: "Connect social accounts to share your inventory directly from AutoFlow.",
+  InstagramBusinessAccount: "Instagram Business Account",
+  ConnectInstagram: "Connect Instagram",
+  Connected: "Connected",
+  Disconnect: "Disconnect",
+  InstagramConnectedAs: "Connected as",
+  InstagramNotConnected: "Not connected — connect your Instagram Business account to post vehicles directly to Instagram.",
+  InstagramConnectedSuccess: "Instagram connected successfully.",
+  InstagramConnectFailed: "Failed to connect Instagram. Please try again.",
+  InstagramDisconnectedSuccess: "Instagram disconnected.",
+  AutoPostInstagram: "Auto-post to Instagram",
+  AutoPostInstagramDescription: "Automatically post a vehicle to Instagram when its status changes to Available.",
 };
 
 export const settingsAr = {
@@ -714,4 +729,19 @@ export const settingsAr = {
   AppliedTier: "الشريحة المطبقة",
   CommissionTiersSaved: "تم حفظ شرائح العمولة.",
   FailedToSaveCommissionTiers: "فشل في حفظ شرائح العمولة.",
+
+  // Integrations
+  Integrations: "التكاملات",
+  IntegrationsDesc: "اربط حسابات التواصل الاجتماعي لمشاركة مخزونك مباشرة من AutoFlow.",
+  InstagramBusinessAccount: "حساب إنستغرام للأعمال",
+  ConnectInstagram: "ربط إنستغرام",
+  Connected: "متصل",
+  Disconnect: "قطع الاتصال",
+  InstagramConnectedAs: "متصل باسم",
+  InstagramNotConnected: "غير متصل — اربط حساب إنستغرام للأعمال الخاص بك لنشر المركبات مباشرة على إنستغرام.",
+  InstagramConnectedSuccess: "تم ربط إنستغرام بنجاح.",
+  InstagramConnectFailed: "فشل ربط إنستغرام. يرجى المحاولة مرة أخرى.",
+  InstagramDisconnectedSuccess: "تم قطع اتصال إنستغرام.",
+  AutoPostInstagram: "النشر التلقائي على إنستغرام",
+  AutoPostInstagramDescription: "نشر المركبة تلقائيًا على إنستغرام عند تغيير حالتها إلى متاحة.",
 };

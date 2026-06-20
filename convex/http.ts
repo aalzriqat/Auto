@@ -316,4 +316,57 @@ http.route({
   }),
 });
 
+// ─── Instagram OAuth callback ─────────────────────────────────────────────────
+// Registered as a Valid OAuth Redirect URI in the Meta App's
+// "Facebook Login for Business" settings:
+//   https://<convex-site>/instagram-oauth-callback
+
+http.route({
+  path: "/instagram-oauth-callback",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const url = new URL(request.url);
+    const code = url.searchParams.get("code");
+    const state = url.searchParams.get("state");
+    const oauthError = url.searchParams.get("error");
+
+    const env = getValidatedEnv();
+    const appUrl = (env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/$/, "");
+
+    if (oauthError || !code || !state) {
+      return Response.redirect(`${appUrl}/?instagramConnectError=1`, 302);
+    }
+
+    const stateRecord = await ctx.runMutation(internal.socialIntegrations.consumeOAuthState, { state });
+    if (!stateRecord) {
+      return Response.redirect(`${appUrl}/?instagramConnectError=1`, 302);
+    }
+
+    const settingsUrl = `${appUrl}/${stateRecord.orgId}/settings/integrations`;
+
+    try {
+      await ctx.runAction(internal.socialIntegrations.exchangeCodeForToken, {
+        orgId: stateRecord.orgId,
+        code,
+      });
+    } catch (err) {
+      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+        source: "instagram-oauth",
+        status: "error",
+        summary: "Token exchange failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return Response.redirect(`${settingsUrl}?connected=instagram&error=1`, 302);
+    }
+
+    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+      source: "instagram-oauth",
+      status: "success",
+      summary: `Connected for org ${stateRecord.orgId}`,
+    });
+
+    return Response.redirect(`${settingsUrl}?connected=instagram`, 302);
+  }),
+});
+
 export default http;

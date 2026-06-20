@@ -108,6 +108,9 @@ export const customersEn = {
   ImportingEllipsis: "Importing...",
   ImportCustomersAction: "Import Customers",
   Status: "Status",
+
+  // Duplicate detection
+  DuplicateCustomerFound: "A customer with this phone or email already exists:",
 };
 
 export const customersAr = {
@@ -220,4 +223,7 @@ export const customersAr = {
   ImportingEllipsis: "جاري الاستيراد...",
   ImportCustomersAction: "استيراد العملاء",
   Status: "الحالة",
+
+  // Duplicate detection
+  DuplicateCustomerFound: "يوجد بالفعل عميل بنفس رقم الهاتف أو البريد الإلكتروني:",
 };

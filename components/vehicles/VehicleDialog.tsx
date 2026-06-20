@@ -38,7 +38,7 @@ import {
 
 import { vehicleSchema, VehicleFormValues, VehicleDialogProps } from "./vehicle.schema";
 import { CustomFieldsSection, useSaveCustomFieldValues } from "@/components/custom-fields/CustomFieldsSection";
-import { decodeVinYear, toCarBrand, cleanMfrName } from "@/lib/vinHelpers";
+import { decodeVinYear, toCarBrand, cleanMfrName, validateVinChecksum } from "@/lib/vinHelpers";
 
 export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, canEdit = false }: VehicleDialogProps) {
   const { activeOrgId } = useOrg();
@@ -123,6 +123,11 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
       setImageUrls([]);
     }
   }, [vehicle, open, form]);
+
+  // Soft, non-blocking ISO 3779 check-digit warning — many non-North-American
+  // VINs legitimately fail this, so it must never block submission.
+  const watchedVin = form.watch("vin");
+  const showVinChecksumWarning = watchedVin.length === 17 && !validateVinChecksum(watchedVin);
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -324,6 +329,11 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                         </Button>
                       </div>
                     </FormControl>
+                    {showVinChecksumWarning && (
+                      <p className="text-xs text-amber-700">
+                        {t("VinChecksumWarning" as any) || "This VIN's check digit doesn't match — common for non-North-American vehicles, please double-check."}
+                      </p>
+                    )}
                     <FormMessage />
                   </FormItem>
                 )}

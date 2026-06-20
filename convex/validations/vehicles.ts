@@ -3,7 +3,10 @@ import { z } from "zod";
 export const CreateVehicleSchema = z.object({
   orgId: z.string().min(1, "Organization ID is required"),
   branchId: z.string().optional(),
-  vin: z.string().min(1, "VIN is required").max(17, "VIN cannot exceed 17 characters"),
+  vin: z.string()
+    .min(1, "VIN is required")
+    .max(17, "VIN cannot exceed 17 characters")
+    .refine((vin) => !/[IOQ]/i.test(vin), "VIN cannot contain the letters I, O, or Q"),
   make: z.string().min(1, "Make is required"),
   model: z.string().min(1, "Model is required"),
   year: z.number().min(1900, "Year must be valid").max(2100, "Year must be valid"),

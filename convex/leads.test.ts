@@ -152,3 +152,46 @@ describe("leads.softDelete", () => {
     });
   });
 });
+
+describe("leads.checkExistingOpenLead", () => {
+  test("finds an open lead for the same customer", async () => {
+    const { orgId, customerId, asUser } = await setup();
+
+    await asUser.mutation(api.leads.create, { orgId, customerId, source: "Walk-in" });
+
+    const result = await asUser.query(api.leads.checkExistingOpenLead, {
+      orgId,
+      customerId,
+    });
+
+    expect(result?.customerId).toBe(customerId);
+  });
+
+  test("ignores WON/LOST leads", async () => {
+    const { t, orgId, customerId, asUser } = await setup();
+
+    const leadId = await asUser.mutation(api.leads.create, { orgId, customerId, source: "Walk-in" });
+    await t.run((ctx) => ctx.db.patch(leadId, { stage: "WON" }));
+
+    const result = await asUser.query(api.leads.checkExistingOpenLead, {
+      orgId,
+      customerId,
+    });
+
+    expect(result).toBeNull();
+  });
+
+  test("excludes the lead being edited from its own check", async () => {
+    const { orgId, customerId, asUser } = await setup();
+
+    const leadId = await asUser.mutation(api.leads.create, { orgId, customerId, source: "Walk-in" });
+
+    const result = await asUser.query(api.leads.checkExistingOpenLead, {
+      orgId,
+      customerId,
+      excludeLeadId: leadId,
+    });
+
+    expect(result).toBeNull();
+  });
+});

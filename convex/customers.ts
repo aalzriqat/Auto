@@ -1,5 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { Doc } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -7,6 +8,7 @@ import { notifyManagers, getActorName } from "./utils/notifications";
 import { rateLimiter } from "./rateLimit";
 import { validateInput } from "./utils/validation";
 import { CreateCustomerSchema, UpdateCustomerSchema } from "./validations/customers";
+import { normalizePhone, namesSimilar } from "./utils/dedup";
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
@@ -70,6 +72,67 @@ export const getByEmail = query({
   },
 });
 
+/**
+ * Pre-submit duplicate check for the customer create/edit form. Returns
+ * exact phone/email matches (the same conditions `create`/`update` hard-block
+ * on) plus non-blocking possible name matches, so the UI can warn before
+ * the user even submits. This is advisory only — `create`/`update` remain
+ * the authoritative server-side guard.
+ */
+export const checkDuplicates = query({
+  args: {
+    orgId: v.id("organizations"),
+    phone: v.optional(v.string()),
+    email: v.optional(v.string()),
+    firstName: v.optional(v.string()),
+    lastName: v.optional(v.string()),
+    excludeCustomerId: v.optional(v.id("customers")),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_CUSTOMERS]);
+
+    const normalizedPhone = args.phone?.trim() ? normalizePhone(args.phone) : undefined;
+    const normalizedEmail = args.email?.toLowerCase().trim() || undefined;
+
+    let exactPhoneMatch = null;
+    if (normalizedPhone) {
+      const match = await ctx.db
+        .query("customers")
+        .withIndex("by_org_phone", (q) => q.eq("orgId", args.orgId).eq("phone", normalizedPhone))
+        .filter((q) => q.neq(q.field("isDeleted"), true))
+        .unique();
+      if (match && match._id !== args.excludeCustomerId) exactPhoneMatch = match;
+    }
+
+    let exactEmailMatch = null;
+    if (normalizedEmail) {
+      const match = await ctx.db
+        .query("customers")
+        .withIndex("by_org_email", (q) => q.eq("orgId", args.orgId).eq("email", normalizedEmail))
+        .filter((q) => q.neq(q.field("isDeleted"), true))
+        .unique();
+      if (match && match._id !== args.excludeCustomerId) exactEmailMatch = match;
+    }
+
+    let possibleNameMatches: Doc<"customers">[] = [];
+    if (args.firstName?.trim() && args.lastName?.trim()) {
+      const candidates = await ctx.db
+        .query("customers")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .filter((q) => q.neq(q.field("isDeleted"), true))
+        .take(50);
+      possibleNameMatches = candidates.filter(
+        (c) =>
+          c._id !== args.excludeCustomerId &&
+          namesSimilar(c.firstName, args.firstName!) &&
+          namesSimilar(c.lastName, args.lastName!)
+      );
+    }
+
+    return { exactPhoneMatch, exactEmailMatch, possibleNameMatches };
+  },
+});
+
 // ─── Mutations ───────────────────────────────────────────────────────────────
 
 /**
@@ -97,6 +160,7 @@ export const create = mutation({
     validateInput(CreateCustomerSchema, args);
 
     const normalizedEmail = args.email?.toLowerCase().trim() || undefined;
+    const normalizedPhone = args.phone?.trim() ? normalizePhone(args.phone) : undefined;
 
     // If email is provided, check for duplicates within the org
     if (normalizedEmail) {
@@ -114,11 +178,28 @@ export const create = mutation({
       }
     }
 
+    // If phone is provided, check for duplicates within the org (phone is the
+    // more reliable identifier in this market, so it gets the same hard block as email)
+    if (normalizedPhone) {
+      const existingByPhone = await ctx.db
+        .query("customers")
+        .withIndex("by_org_phone", (q) =>
+          q.eq("orgId", args.orgId).eq("phone", normalizedPhone)
+        )
+        .unique();
+
+      if (existingByPhone) {
+        throw new ConvexError(
+          `A customer with phone "${normalizedPhone}" already exists in this organization.`
+        );
+      }
+    }
+
     const id = await ctx.db.insert("customers", {
       orgId: args.orgId,
       firstName: args.firstName.trim(),
       lastName: args.lastName.trim(),
-      phone: args.phone?.trim(),
+      phone: normalizedPhone,
       whatsapp: args.whatsapp?.trim(),
       email: normalizedEmail,
       nationalId: args.nationalId?.trim(),
@@ -201,10 +282,29 @@ export const update = mutation({
       }
     }
 
+    // If phone is being changed, check for duplicates
+    if (args.phone !== undefined) {
+      const normalizedPhone = args.phone.trim() ? normalizePhone(args.phone) : "";
+      if (normalizedPhone && normalizedPhone !== customer.phone) {
+        const existingByPhone = await ctx.db
+          .query("customers")
+          .withIndex("by_org_phone", (q) =>
+            q.eq("orgId", args.orgId).eq("phone", normalizedPhone)
+          )
+          .unique();
+
+        if (existingByPhone) {
+          throw new ConvexError(
+            `A customer with phone "${normalizedPhone}" already exists in this organization.`
+          );
+        }
+      }
+    }
+
     const patch: Record<string, unknown> = {};
     if (args.firstName !== undefined) patch.firstName = args.firstName.trim();
     if (args.lastName !== undefined) patch.lastName = args.lastName.trim();
-    if (args.phone !== undefined) patch.phone = args.phone.trim();
+    if (args.phone !== undefined) patch.phone = args.phone.trim() ? normalizePhone(args.phone) : undefined;
     if (args.whatsapp !== undefined) patch.whatsapp = args.whatsapp.trim();
     if (args.email !== undefined) patch.email = args.email.toLowerCase().trim();
     if (args.nationalId !== undefined) patch.nationalId = args.nationalId.trim();
@@ -408,6 +508,7 @@ export const importBulk = mutation({
 
     for (const row of args.customers) {
       const normalizedEmail = row.email?.toLowerCase().trim() || undefined;
+      const normalizedPhone = row.phone?.trim() ? normalizePhone(row.phone) : undefined;
 
       if (normalizedEmail) {
         const existing = await ctx.db
@@ -417,11 +518,19 @@ export const importBulk = mutation({
         if (existing) { skipped++; continue; }
       }
 
+      if (normalizedPhone) {
+        const existingByPhone = await ctx.db
+          .query("customers")
+          .withIndex("by_org_phone", (q) => q.eq("orgId", args.orgId).eq("phone", normalizedPhone))
+          .unique();
+        if (existingByPhone) { skipped++; continue; }
+      }
+
       await ctx.db.insert("customers", {
         orgId: args.orgId,
         firstName: row.firstName.trim(),
         lastName: row.lastName.trim(),
-        phone: row.phone?.trim(),
+        phone: normalizedPhone,
         whatsapp: row.whatsapp?.trim(),
         email: normalizedEmail,
         nationalId: row.nationalId?.trim(),
