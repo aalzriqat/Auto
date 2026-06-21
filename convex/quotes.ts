@@ -18,6 +18,21 @@ export const listQuotesByCustomer = query({
   },
 });
 
+export const get = query({
+  args: {
+    orgId: v.id("organizations"),
+    quoteId: v.id("quotes"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_CUSTOMERS]);
+    const quote = await ctx.db.get(args.quoteId);
+    if (!quote || quote.orgId !== args.orgId) {
+      throw new ConvexError("Quote not found.");
+    }
+    return quote;
+  },
+});
+
 export const saveQuote = mutation({
   args: {
     orgId: v.id("organizations"),

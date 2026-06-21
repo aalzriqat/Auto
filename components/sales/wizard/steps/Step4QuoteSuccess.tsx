@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { PaymentType, WizardData } from "../types";
 import { Button } from "@/components/ui/button";
-import { CheckCircle2, FileDown, LogOut, HandCoins, FileText } from "lucide-react";
+import { CheckCircle2, FileDown, LogOut, HandCoins, FileText, BadgeCheck } from "lucide-react";
 import { QuotePrintTemplate } from "../../QuotePrintTemplate";
 import { RecordDepositDialog } from "../components/RecordDepositDialog";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -50,6 +50,15 @@ export function Step4QuoteSuccess({
   const [isStartingApplication, setIsStartingApplication] = useState(false);
   const createApplication = useMutation(api.applications.createFromQuote);
 
+  const [saleId, setSaleId] = useState<Id<"sales"> | null>(null);
+  const [isCompletingSale, setIsCompletingSale] = useState(false);
+  const createSale = useMutation(api.sales.create);
+  const quote = useQuery(
+    api.quotes.get,
+    activeOrgId ? { orgId: activeOrgId, quoteId } : "skip"
+  );
+  const me = useQuery(api.users.getMe);
+
   const handleStartApplication = async () => {
     if (!activeOrgId) return;
     setIsStartingApplication(true);
@@ -61,6 +70,31 @@ export function Step4QuoteSuccess({
       toast.error(error.message || (t("ApplicationStartFail" as any) ?? "Failed to start finance application"));
     } finally {
       setIsStartingApplication(false);
+    }
+  };
+
+  const handleCompleteCashSale = async () => {
+    if (!activeOrgId || !quote || !me) return;
+    setIsCompletingSale(true);
+    try {
+      const id = await createSale({
+        orgId: activeOrgId,
+        vehicleId: wizardData.vehicleId as Id<"vehicles">,
+        customerId: selectedCustomer._id,
+        salespersonId: me._id,
+        salePrice: quote.vehiclePrice,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+        financingType: "CASH",
+        downPayment: quote.downPayment,
+        quoteId,
+      });
+      setSaleId(id);
+      toast.success(t("SaleCompletedSuccess" as any) ?? "Cash sale completed");
+    } catch (error: any) {
+      toast.error(error.message || (t("SaleCompleteFail" as any) ?? "Failed to complete sale"));
+    } finally {
+      setIsCompletingSale(false);
     }
   };
 
@@ -136,7 +170,7 @@ export function Step4QuoteSuccess({
 
           <Button
             onClick={() => setDepositDialogOpen(true)}
-            disabled={depositRecorded}
+            disabled={depositRecorded || !!saleId}
             variant="outline"
             size="lg"
             className="min-w-[200px] border-amber-500/40 text-amber-600 hover:bg-amber-500/10"
@@ -167,6 +201,30 @@ export function Step4QuoteSuccess({
                 {isStartingApplication
                   ? (t("Saving" as any) || "Saving...")
                   : (t("StartFinanceApplication" as any) ?? "Start Finance Application")}
+              </Button>
+            )
+          )}
+
+          {paymentType === "CASH" && (
+            saleId ? (
+              <Button asChild variant="outline" size="lg" className="min-w-[200px] border-emerald-500/40 text-emerald-600 hover:bg-emerald-500/10">
+                <Link href={activeOrgId ? `/${activeOrgId}/sales?highlightId=${saleId}` : "#"}>
+                  <BadgeCheck className="w-4 h-4 me-2" />
+                  {t("SaleCompleted" as any) ?? "Sale Completed ✓"}
+                </Link>
+              </Button>
+            ) : (
+              <Button
+                onClick={handleCompleteCashSale}
+                disabled={isCompletingSale || !quote || !me}
+                variant="outline"
+                size="lg"
+                className="min-w-[200px] border-emerald-500/40 text-emerald-600 hover:bg-emerald-500/10"
+              >
+                <BadgeCheck className="w-4 h-4 me-2" />
+                {isCompletingSale
+                  ? (t("Saving" as any) || "Saving...")
+                  : (t("CompleteCashSale" as any) ?? "Complete Cash Sale")}
               </Button>
             )
           )}

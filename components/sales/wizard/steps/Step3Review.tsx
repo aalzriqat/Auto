@@ -44,7 +44,7 @@ export function Step3Review({
 
   const availableVehicles = useQuery(
     api.vehicles.listAll,
-    activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE" } : "skip"
+    activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE", includeReserved: true } : "skip"
   );
 
   const financeCompanies = useQuery(
