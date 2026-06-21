@@ -2,14 +2,28 @@
 
 /**
  * Calculates profit and installment based on the Unified Murabaha Engine.
- * 
- * 1. Financed Amount = Vehicle Price - Down Payment + Commission + Processing Fees
- * 2. Profit = Financed Amount * Annual Rate * Years
- * 3. Debt Before Insurance = Financed Amount + Profit
- * 4. Insurance = Insurance Rate * Years * Debt Before Insurance
- * 5. Total Debt = Debt Before Insurance + Insurance
- * 6. If includesCommissionInDebt: Total Debt += Commission
- * 7. Monthly Installment = Total Debt / (Months - Grace Period)
+ *
+ * Commission can be treated two ways, matching the two patterns in the source
+ * spreadsheet (most companies vs. Dar Al Tamweel):
+ *
+ * - includesCommissionInDebt = false (default): commission is capitalized into
+ *   the financed amount, so profit and insurance accrue on it.
+ *     1. Financed Amount = Vehicle Price - Down Payment + Commission + Processing Fees
+ *     2. Profit = Financed Amount * Annual Rate * Years
+ *     3. Debt Before Insurance = Financed Amount + Profit
+ *     4. Insurance = Insurance Rate * Years * Debt Before Insurance
+ *     5. Total Debt = Debt Before Insurance + Insurance
+ *
+ * - includesCommissionInDebt = true (Dar Al Tamweel logic): commission is paid
+ *   as a flat amount on top of the contract value, excluded from the financed
+ *   base so no profit or insurance accrues on it.
+ *     1. Financed Amount = Vehicle Price - Down Payment + Processing Fees
+ *     2. Profit = Financed Amount * Annual Rate * Years
+ *     3. Debt Before Insurance = Financed Amount + Profit
+ *     4. Insurance = Insurance Rate * Years * Debt Before Insurance
+ *     5. Total Debt = Debt Before Insurance + Insurance + Commission
+ *
+ * 6. Monthly Installment = Total Debt / (Months - Grace Period)
  */
 export function calculateUnifiedMurabaha({
   vehiclePrice,
@@ -46,8 +60,12 @@ export function calculateUnifiedMurabaha({
   const profitRateDecimal = annualProfitRate / 100;
   const insuranceRateDecimal = annualInsuranceRate / 100;
 
-  // 1. Determine Financing Amount
-  const financedAmount = vehiclePrice - downPayment + commission + processingFees;
+  // 1. Determine Financing Amount. When includesCommissionInDebt is set
+  // (Dar Al Tamweel logic), commission is kept out of the financed base so
+  // profit/insurance don't accrue on it, and is added flat in step 5 instead.
+  const financedAmount = includesCommissionInDebt
+    ? vehiclePrice - downPayment + processingFees
+    : vehiclePrice - downPayment + commission + processingFees;
 
   // 2. Calculate Total Profit
   const totalProfit = financedAmount * profitRateDecimal * years;
@@ -60,13 +78,11 @@ export function calculateUnifiedMurabaha({
 
   // 5. Produce Total Debt
   let totalContractValue = debtBeforeInsurance + takafulAmount;
-
-  // 6. Commission Handling (Dar Al Tamweel logic)
   if (includesCommissionInDebt) {
     totalContractValue += commission;
   }
 
-  // 7. Divide By Repayment Months
+  // 6. Divide By Repayment Months
   const payingMonths = termMonths - gracePeriodMonths;
   const monthlyInstallment = payingMonths > 0 ? totalContractValue / payingMonths : 0;
 

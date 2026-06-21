@@ -11,6 +11,8 @@ const wizardSnapshotValidator = v.optional(v.object({
   downPayment: v.number(),
   termMonths: v.number(),
   selectedCompanyId: v.optional(v.string()),
+  manualProfitRate: v.optional(v.number()),
+  manualInsuranceRate: v.optional(v.number()),
 }));
 
 export const requestProfitApproval = mutation({

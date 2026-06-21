@@ -58,6 +58,13 @@ export default function Step1QuoteSetup({
     string | undefined
   >(initialData.selectedCompanyId);
 
+  const [manualProfitRate, setManualProfitRate] = useState(
+    initialData.manualProfitRate || 0
+  );
+  const [manualInsuranceRate, setManualInsuranceRate] = useState(
+    initialData.manualInsuranceRate || 0
+  );
+
   const [customerStatuses, setCustomerStatuses] = useState<string[]>([]);
 
   const toggleStatus = (id: string) => {
@@ -126,6 +133,8 @@ export default function Step1QuoteSetup({
           downPayment: Number(watchedDown) || 0,
           termMonths: Number(watchedTerm) || 84,
           selectedCompanyId: selectedCompanyId,
+          manualProfitRate,
+          manualInsuranceRate,
         },
       });
     } finally {
@@ -148,6 +157,8 @@ export default function Step1QuoteSetup({
     onNext({
       ...values,
       selectedCompanyId,
+      manualProfitRate,
+      manualInsuranceRate,
     });
   };
 
@@ -342,6 +353,10 @@ export default function Step1QuoteSetup({
             selectedCompanyId={selectedCompanyId}
             onSelectCompany={setSelectedCompanyId}
             customerStatuses={customerStatuses}
+            manualProfitRate={manualProfitRate}
+            manualInsuranceRate={manualInsuranceRate}
+            onChangeManualProfitRate={setManualProfitRate}
+            onChangeManualInsuranceRate={setManualInsuranceRate}
           />
         )}
 

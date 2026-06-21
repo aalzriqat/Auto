@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import { calculateUnifiedMurabaha } from "@/lib/financing";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { OTHER_COMPANY_ID } from "../types";
 
 import { ArrowLeft, CheckCircle2, Car, User, TrendingUp, FileText } from "lucide-react";
 
@@ -60,6 +61,8 @@ export function Step3Review({
     (v) => v._id === wizardData.vehicleId
   );
 
+  const isManualFinance = wizardData.selectedCompanyId === OTHER_COMPANY_ID;
+
   const selectedCompany = financeCompanies?.find(
     (c) => c._id === wizardData.selectedCompanyId
   );
@@ -76,6 +79,31 @@ export function Step3Review({
         monthlyInstallment: 0,
         totalProfit: 0,
         takafulAmount: 0,
+      };
+    }
+
+    if (isManualFinance) {
+      const result = calculateUnifiedMurabaha({
+        vehiclePrice: effectivePrice,
+        downPayment: wizardData.downPayment,
+        commission: 0,
+        processingFees: 0,
+        annualProfitRate: wizardData.manualProfitRate || 0,
+        annualInsuranceRate: wizardData.manualInsuranceRate || 0,
+        termMonths: wizardData.termMonths,
+        gracePeriodMonths: 0,
+        includesCommissionInDebt: false,
+      });
+
+      return {
+        isCash: false,
+        companyName: t("OtherFinanceOption" as any),
+        profitRateApplied: wizardData.manualProfitRate || 0,
+        totalFinancedAmount: result.financedAmount,
+        monthlyInstallment: result.monthlyInstallment,
+        totalProfit: result.totalProfit,
+        takafulAmount: result.takafulAmount,
+        companyDocs: [] as any[],
       };
     }
 
@@ -110,6 +138,7 @@ export function Step3Review({
     };
   }, [
     paymentType,
+    isManualFinance,
     selectedCompany,
     documentRules,
     wizardData,
@@ -130,7 +159,7 @@ export function Step3Review({
         vehicleId: wizardData.vehicleId as Id<"vehicles">,
         customerId: selectedCustomer._id,
         companyId:
-          paymentType === "CASH"
+          paymentType === "CASH" || isManualFinance
             ? undefined
             : (wizardData.selectedCompanyId as Id<"financeCompanies">),
 

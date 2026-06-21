@@ -9,6 +9,8 @@ const wizardDataValidator = v.object({
   downPayment: v.number(),
   termMonths: v.number(),
   selectedCompanyId: v.optional(v.string()),
+  manualProfitRate: v.optional(v.number()),
+  manualInsuranceRate: v.optional(v.number()),
   recipientName: v.optional(v.string()),
 });
 

@@ -1,8 +1,9 @@
 "use client";
 
-import { LayoutDashboard, Building2, Users, Database, History, Inbox, Headset } from "lucide-react";
-import { usePathname } from "next/navigation";
+import { LayoutDashboard, Building2, Users, Database, History, Inbox, Headset, LogOut } from "lucide-react";
+import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
+import { useClerk } from "@clerk/nextjs";
 import { cn } from "@/lib/utils";
 
 const navigation = [
@@ -17,6 +18,8 @@ const navigation = [
 
 export function AdminSidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const { signOut } = useClerk();
 
   return (
     <aside className="hidden md:flex flex-col w-64 border-e border-slate-800 bg-slate-900 shrink-0">
@@ -41,7 +44,15 @@ export function AdminSidebar() {
           );
         })}
       </nav>
-      <div className="p-4 border-t border-slate-800">
+      <div className="p-4 border-t border-slate-800 flex flex-col gap-3">
+        <button
+          type="button"
+          onClick={() => signOut(() => router.replace("/sign-in"))}
+          className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-400 hover:bg-slate-800 hover:text-slate-100 transition-all"
+        >
+          <LogOut className="h-4 w-4 shrink-0 text-slate-500" />
+          Log out
+        </button>
         <p className="text-[10px] text-slate-500">Cross-tenant access — every action here is audit-logged.</p>
       </div>
     </aside>

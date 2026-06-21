@@ -591,6 +591,8 @@ export default defineSchema({
       downPayment: v.number(),
       termMonths: v.number(),
       selectedCompanyId: v.optional(v.string()),
+      manualProfitRate: v.optional(v.number()),
+      manualInsuranceRate: v.optional(v.number()),
       recipientName: v.optional(v.string()),
     }),
     selectedCustomerId: v.optional(v.string()),
@@ -741,6 +743,8 @@ export default defineSchema({
       downPayment: v.number(),
       termMonths: v.number(),
       selectedCompanyId: v.optional(v.string()),
+      manualProfitRate: v.optional(v.number()),
+      manualInsuranceRate: v.optional(v.number()),
     })),
   })
     .index("by_org", ["orgId"])

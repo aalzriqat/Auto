@@ -56,7 +56,7 @@ describe("Financing Logic", () => {
       expect(result2.financedAmount).toBe(0);
     });
 
-    it("should handle includesCommissionInDebt logic correctly", () => {
+    it("should handle includesCommissionInDebt logic correctly (commission excluded from financed base, added flat)", () => {
       const result = calculateUnifiedMurabaha({
         vehiclePrice: 10000,
         downPayment: 2000,
@@ -68,15 +68,38 @@ describe("Financing Logic", () => {
         includesCommissionInDebt: true,
       });
 
-      // Same logic, but totalContractValue is increased by 500 at the end
-      const financedAmount = 10000 - 2000 + 500 + 50; // 8550
-      const totalProfit = 8550 * 0.05 * 5; // 2137.5
-      const debtBeforeInsurance = 8550 + 2137.5; // 10687.5
-      const takafulAmount = 0.015 * 5 * debtBeforeInsurance; // 801.5625
-      const totalContractValue = 10687.5 + 801.5625 + 500; // 11989.0625
+      // Commission is excluded from the financed base (no profit/insurance accrues on it)
+      // and added once, flat, to the total contract value at the end.
+      const financedAmount = 10000 - 2000 + 50; // 8050
+      const totalProfit = 8050 * 0.05 * 5; // 2012.5
+      const debtBeforeInsurance = 8050 + 2012.5; // 10062.5
+      const takafulAmount = 0.015 * 5 * debtBeforeInsurance; // 754.6875
+      const totalContractValue = 10062.5 + 754.6875 + 500; // 11317.1875
 
+      expect(result.financedAmount).toBeCloseTo(financedAmount);
       expect(result.totalContractValue).toBeCloseTo(totalContractValue);
       expect(result.monthlyInstallment).toBeCloseTo(totalContractValue / 60);
+    });
+
+    it("matches the Dar Al Tamweel sheet from blom cars.xlsx exactly", () => {
+      // السماحة... no, دار التمويل sheet: price 11300, down 1000, commission 275,
+      // processing fees 500, annual rate 8.8%, insurance 0.65%, 60 months, no grace.
+      const result = calculateUnifiedMurabaha({
+        vehiclePrice: 11300,
+        downPayment: 1000,
+        commission: 275,
+        processingFees: 500,
+        annualProfitRate: 8.8,
+        annualInsuranceRate: 0.65,
+        termMonths: 60,
+        includesCommissionInDebt: true,
+      });
+
+      expect(result.financedAmount).toBeCloseTo(10800); // E16
+      expect(result.totalProfit).toBeCloseTo(4752); // E18
+      expect(result.takafulAmount).toBeCloseTo(505.44); // E19
+      expect(result.totalContractValue).toBeCloseTo(16332.44); // I19
+      expect(result.monthlyInstallment).toBeCloseTo(272.2073333, 5); // I18
     });
 
     it("should correctly handle grace periods", () => {

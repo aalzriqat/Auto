@@ -63,6 +63,8 @@ export function SalesWizard({
       downPayment: initialDraft?.downPayment ?? 0,
       termMonths: initialDraft?.termMonths ?? 84,
       selectedCompanyId: initialDraft?.selectedCompanyId,
+      manualProfitRate: initialDraft?.manualProfitRate,
+      manualInsuranceRate: initialDraft?.manualInsuranceRate,
     };
   });
   const [selectedCustomer, setSelectedCustomer] = useState<Doc<"customers"> | null>(null);

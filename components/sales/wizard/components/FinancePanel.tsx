@@ -2,8 +2,10 @@
 
 import { Badge } from "@/components/ui/badge";
 import { FinanceCompanyCard } from "./FinanceCompanyCard";
+import { ManualFinanceCard } from "./ManualFinanceCard";
 import { useFinanceComparison } from "../hooks/useFinanceComparison";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { OTHER_COMPANY_ID } from "../types";
 
 interface FinancePanelProps {
   vehiclePrice: number;
@@ -15,6 +17,11 @@ interface FinancePanelProps {
   selectedCompanyId?: string;
   onSelectCompany: (companyId: string) => void;
   customerStatuses?: string[];
+
+  manualProfitRate: number;
+  manualInsuranceRate: number;
+  onChangeManualProfitRate: (value: number) => void;
+  onChangeManualInsuranceRate: (value: number) => void;
 }
 
 export function FinancePanel({
@@ -26,6 +33,10 @@ export function FinancePanel({
   selectedCompanyId,
   onSelectCompany,
   customerStatuses = [],
+  manualProfitRate,
+  manualInsuranceRate,
+  onChangeManualProfitRate,
+  onChangeManualInsuranceRate,
 }: FinancePanelProps) {
   const { t } = useLanguage();
 
@@ -47,30 +58,6 @@ export function FinancePanel({
     return (
       <div className="rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
         {t("SelectVehiclePrice" as any)}
-      </div>
-    );
-  }
-
-  if (loading) {
-    return (
-      <div className="text-sm text-muted-foreground text-center py-4">
-        {t("LoadingFinance" as any)}
-      </div>
-    );
-  }
-
-  if (customerStatuses.length === 0) {
-    return (
-      <div className="rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-        {t("SelectStatusFilter")}
-      </div>
-    );
-  }
-
-  if (comparisons.length === 0) {
-    return (
-      <div className="rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
-        {t("NoFinanceCompanies" as any)}
       </div>
     );
   }
@@ -103,14 +90,41 @@ export function FinancePanel({
 
       {/* Finance Company Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-        {comparisons.map((comparison) => (
-          <FinanceCompanyCard
-            key={comparison.companyId}
-            result={comparison}
-            selected={selectedCompanyId === comparison.companyId}
-            onSelect={onSelectCompany}
-          />
-        ))}
+        {loading ? (
+          <div className="col-span-full text-sm text-muted-foreground text-center py-4">
+            {t("LoadingFinance" as any)}
+          </div>
+        ) : customerStatuses.length === 0 ? (
+          <div className="col-span-full rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+            {t("SelectStatusFilter")}
+          </div>
+        ) : comparisons.length === 0 ? (
+          <div className="col-span-full rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+            {t("NoFinanceCompanies" as any)}
+          </div>
+        ) : (
+          comparisons.map((comparison) => (
+            <FinanceCompanyCard
+              key={comparison.companyId}
+              result={comparison}
+              selected={selectedCompanyId === comparison.companyId}
+              onSelect={onSelectCompany}
+            />
+          ))
+        )}
+
+        {/* Manual "Others" card — always available regardless of company/status matching */}
+        <ManualFinanceCard
+          vehiclePrice={effectivePrice}
+          downPayment={downPayment}
+          termMonths={termMonths}
+          selected={selectedCompanyId === OTHER_COMPANY_ID}
+          profitRate={manualProfitRate}
+          insuranceRate={manualInsuranceRate}
+          onChangeProfitRate={onChangeManualProfitRate}
+          onChangeInsuranceRate={onChangeManualInsuranceRate}
+          onSelect={() => onSelectCompany(OTHER_COMPANY_ID)}
+        />
       </div>
 
       {/* Legend */}

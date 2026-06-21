@@ -41,6 +41,7 @@ export function FinanceCompanyDialog({
     gracePeriodMonths: number;
     insuranceRate?: number;
     adminFees?: number;
+    commission?: number;
     includesCommissionInDebt?: boolean;
     maxFinancingLTV?: number;
     isActive: boolean;
@@ -65,6 +66,7 @@ export function FinanceCompanyDialog({
     gracePeriodMonths: company?.gracePeriodMonths || 0,
     insuranceRate: company?.insuranceRate || 0,
     adminFees: company?.adminFees || 0,
+    commission: company?.commission || 0,
     includesCommissionInDebt: company?.includesCommissionInDebt || false,
     maxFinancingLTV: company?.maxFinancingLTV || 100,
     isActive: company?.isActive ?? true,
@@ -188,6 +190,14 @@ export function FinanceCompanyDialog({
                 onChange={(e) => setFormData({ ...formData, maxFinancingLTV: parseFloat(e.target.value) || 0 })}
               />
             </div>
+          </div>
+          <div className="grid gap-2">
+            <Label>{t("Commission" as any)}</Label>
+            <Input
+              type="number"
+              value={formData.commission}
+              onChange={(e) => setFormData({ ...formData, commission: parseFloat(e.target.value) || 0 })}
+            />
           </div>
           <div className="grid gap-2">
             <Label>{t("AcceptedCustomerStatuses" as any)}</Label>
