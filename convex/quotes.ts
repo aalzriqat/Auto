@@ -24,6 +24,7 @@ export const saveQuote = mutation({
     customerId: v.id("customers"),
     vehicleId: v.id("vehicles"),
     companyId: v.optional(v.id("financeCompanies")),
+    leadId: v.optional(v.id("leads")),
     vehiclePrice: v.number(),
     downPayment: v.number(),
     termMonths: v.number(),
@@ -40,7 +41,14 @@ export const saveQuote = mutation({
     // "Did you mean 'MANAGE_USERS'?" for MANAGE_SALES.
     // I will use MANAGE_VEHICLES for now to represent sales staff.
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
-    
+
+    if (args.leadId) {
+      const lead = await ctx.db.get(args.leadId);
+      if (!lead || lead.orgId !== args.orgId) {
+        throw new ConvexError("Lead not found in this organization.");
+      }
+    }
+
     return await ctx.db.insert("quotes", {
       ...args,
       status: "DRAFT",

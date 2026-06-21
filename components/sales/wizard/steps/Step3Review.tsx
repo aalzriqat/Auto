@@ -88,6 +88,7 @@ export function Step3Review({
         downPayment: wizardData.downPayment,
         commission: 0,
         processingFees: 0,
+        executionCommission: wizardData.manualExecutionCommission || 0,
         annualProfitRate: wizardData.manualProfitRate || 0,
         annualInsuranceRate: wizardData.manualInsuranceRate || 0,
         termMonths: wizardData.termMonths,
@@ -158,6 +159,7 @@ export function Step3Review({
         orgId: activeOrgId,
         vehicleId: wizardData.vehicleId as Id<"vehicles">,
         customerId: selectedCustomer._id,
+        leadId: wizardData.leadId as Id<"leads"> | undefined,
         companyId:
           paymentType === "CASH" || isManualFinance
             ? undefined

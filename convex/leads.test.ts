@@ -243,4 +243,56 @@ describe("leads.getLinkedSale", () => {
     const result = await asUser.query(api.leads.getLinkedSale, { orgId, leadId });
     expect(result?._id).toBe(saleId);
   });
+
+  test("prefers the exact leadId match over the customerId+vehicleId fallback", async () => {
+    const { t, orgId, userId, customerId, asUser } = await setup();
+
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "1HGCM82633A009999",
+        make: "Toyota",
+        model: "Camry",
+        year: 2022,
+        mileage: 5000,
+        color: "Silver",
+        fuelType: "Petrol",
+        transmission: "Automatic",
+        sellingPrice: 18000,
+        status: "SOLD",
+      })
+    );
+
+    const leadId = await asUser.mutation(api.leads.create, { orgId, customerId, vehicleId, source: "Walk-in" });
+    await t.run((ctx) => ctx.db.patch(leadId, { stage: "WON" }));
+
+    // A fuzzy-match candidate that the old logic would have returned, plus the
+    // real, directly-linked sale stamped with this lead's id.
+    await t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId,
+        vehicleId,
+        customerId,
+        salespersonId: userId,
+        salePrice: 17000,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+      })
+    );
+    const linkedSaleId = await t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId,
+        vehicleId,
+        customerId,
+        salespersonId: userId,
+        salePrice: 18000,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+        leadId,
+      })
+    );
+
+    const result = await asUser.query(api.leads.getLinkedSale, { orgId, leadId });
+    expect(result?._id).toBe(linkedSaleId);
+  });
 });

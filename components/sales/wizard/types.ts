@@ -7,7 +7,10 @@ export interface WizardData {
   selectedCompanyId?: string;
   manualProfitRate?: number;
   manualInsuranceRate?: number;
+  manualExecutionCommission?: number;
   recipientName?: string;
+  /** Set when the wizard was launched from a lead's context, so the resulting quote links back to it. */
+  leadId?: string;
 }
 export type PaymentType = "CASH" | "INSTALLMENT";
 

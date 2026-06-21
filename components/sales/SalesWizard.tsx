@@ -32,6 +32,7 @@ export function SalesWizard({
   onClose,
   initialDraft,
   resumeDraft,
+  initialCustomer,
 }: {
   paymentType: PaymentType;
   onClose: () => void;
@@ -39,6 +40,8 @@ export function SalesWizard({
   initialDraft?: Partial<WizardData>;
   /** Direct resume from the sales page draft card — restores step + customer */
   resumeDraft?: WizardDraft;
+  /** Pre-selected customer when launching from a lead's context */
+  initialCustomer?: Doc<"customers"> | null;
 }) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
@@ -65,9 +68,13 @@ export function SalesWizard({
       selectedCompanyId: initialDraft?.selectedCompanyId,
       manualProfitRate: initialDraft?.manualProfitRate,
       manualInsuranceRate: initialDraft?.manualInsuranceRate,
+      manualExecutionCommission: initialDraft?.manualExecutionCommission,
+      leadId: initialDraft?.leadId,
     };
   });
-  const [selectedCustomer, setSelectedCustomer] = useState<Doc<"customers"> | null>(null);
+  const [selectedCustomer, setSelectedCustomer] = useState<Doc<"customers"> | null>(
+    resumeDraft ? null : initialCustomer ?? null
+  );
   const [finalQuoteData, setFinalQuoteData] = useState<{
     quoteId: Id<"quotes">;
     selectedVehicle?: Doc<"vehicles">;

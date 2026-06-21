@@ -46,8 +46,18 @@ export async function closeLeadsAsWon(
     orgId: Id<"organizations">;
     customerId: Id<"customers">;
     vehicleId: Id<"vehicles">;
+    leadId?: Id<"leads">;
   }
 ): Promise<void> {
+  if (args.leadId) {
+    const lead = await ctx.db.get(args.leadId);
+    if (lead && lead.orgId === args.orgId && lead.stage !== "WON" && lead.stage !== "LOST") {
+      await ctx.db.patch(args.leadId, { stage: "WON" as const });
+    }
+    return;
+  }
+
+  // Fallback for sales/quotes created before the explicit leadId link existed.
   const leads = await ctx.db
     .query("leads")
     .withIndex("by_org", (q) => q.eq("orgId", args.orgId))

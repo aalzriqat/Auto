@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -127,6 +128,7 @@ export const create = mutation({
     salePrice: v.number(),
     saleDate: v.number(),
     status: v.optional(saleStatus),
+    quoteId: v.optional(v.id("quotes")),
     taxRate: v.optional(v.number()),
     taxAmount: v.optional(v.number()),
     dealerFees: v.optional(v.number()),
@@ -166,6 +168,16 @@ export const create = mutation({
     const customer = await ctx.db.get(args.customerId);
     if (!customer || customer.orgId !== args.orgId) {
       throwAppError(AppErrorCode.CUSTOMER_NOT_FOUND, "Customer not found in this organization.");
+    }
+
+    // Validate quote belongs to org, and derive the originating lead from it
+    let leadId: Id<"leads"> | undefined;
+    if (args.quoteId) {
+      const quote = await ctx.db.get(args.quoteId);
+      if (!quote || quote.orgId !== args.orgId) {
+        throwAppError(AppErrorCode.QUOTE_NOT_FOUND, "Quote not found in this organization.");
+      }
+      leadId = quote!.leadId;
     }
 
     // Validate salesperson is a member of the org
@@ -229,6 +241,8 @@ export const create = mutation({
       warrantySold: args.warrantySold,
       gapSold: args.gapSold,
       commissionAmount,
+      quoteId: args.quoteId,
+      leadId,
     });
 
     await markVehicleAsSold(ctx, args.vehicleId);
@@ -243,6 +257,7 @@ export const create = mutation({
       orgId: args.orgId,
       customerId: args.customerId,
       vehicleId: args.vehicleId,
+      leadId,
     });
 
     const actorName = await getActorName(ctx);

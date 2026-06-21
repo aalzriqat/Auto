@@ -229,6 +229,8 @@ export default defineSchema({
     warrantySold: v.optional(v.number()),
     gapSold: v.optional(v.number()),
     applicationId: v.optional(v.id("financeApplications")),
+    quoteId: v.optional(v.id("quotes")),
+    leadId: v.optional(v.id("leads")),
     commissionAmount: v.optional(v.number()), // Calculated at sale time
     commissionPaidAt: v.optional(v.number()),
     commissionPaidBy: v.optional(v.id("users")),
@@ -239,7 +241,9 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_salesperson", ["orgId", "salespersonId"])
     .index("by_org_saleDate", ["orgId", "saleDate"])
-    .index("by_org_customer", ["orgId", "customerId"]),
+    .index("by_org_customer", ["orgId", "customerId"])
+    .index("by_quote", ["quoteId"])
+    .index("by_lead", ["leadId"]),
 
   expenses: defineTable({
     orgId: v.id("organizations"),
@@ -420,6 +424,7 @@ export default defineSchema({
     customerId: v.id("customers"),
     vehicleId: v.id("vehicles"),
     companyId: v.optional(v.id("financeCompanies")), // Null if cash deal
+    leadId: v.optional(v.id("leads")), // Set when the quote was generated from a lead's context
 
     // Core parameters
     vehiclePrice: v.number(),
@@ -432,7 +437,7 @@ export default defineSchema({
     profitRateApplied: v.optional(v.number()),
     totalProfit: v.optional(v.number()),
 
-    recipientName: v.optional(v.string()), // Who the quote is addressed to (e.g. a bank, for installment deals)
+    recipientName: v.optional(v.string()), // Who the quote is addressed to (e.g. a financing company, for installment deals)
 
     status: v.union(v.literal("DRAFT"), v.literal("SHARED"), v.literal("ACCEPTED"), v.literal("EXPIRED")),
     expiresAt: v.optional(v.number()),
@@ -442,7 +447,8 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_customer", ["customerId"])
     .index("by_vehicle", ["vehicleId"])
-    .index("by_status", ["status"]),
+    .index("by_status", ["status"])
+    .index("by_lead", ["leadId"]),
 
   financeApplications: defineTable({
     orgId: v.id("organizations"),
@@ -896,7 +902,24 @@ export default defineSchema({
     .index("by_dealerUserId", ["dealerUserId"])
     .index("by_leadId", ["leadId"])
     .index("by_status", ["status", "createdAt"])
-    .index("by_claimedByUserId", ["claimedByUserId"]),
+    .index("by_claimedByUserId", ["claimedByUserId"])
+    .index("by_claimedByUserId_status", ["claimedByUserId", "status"]),
+
+  // Typing/active-idle presence pings, split off liveChatThreads (one row per
+  // thread+side) so a dealer's or agent's heartbeat never write-conflicts with
+  // the other side, and so queries that don't display live presence (message
+  // lists, thread lists) aren't invalidated by every ~10s heartbeat tick.
+  // dealerLastReadAt/agentLastReadAt stay on liveChatThreads — they're low
+  // frequency (only on actual reads, not heartbeats) and listMyActiveThreads
+  // needs agentLastReadAt for its unread badges without an extra join.
+  liveChatPresence: defineTable({
+    threadId: v.id("liveChatThreads"),
+    side: v.union(v.literal("DEALER"), v.literal("AGENT")),
+    typingAt: v.optional(v.number()),
+    presence: v.optional(v.union(v.literal("active"), v.literal("idle"))),
+    presenceAt: v.optional(v.number()),
+    presenceSince: v.optional(v.number()),
+  }).index("by_thread_side", ["threadId", "side"]),
 
   liveChatMessages: defineTable({
     threadId: v.id("liveChatThreads"),

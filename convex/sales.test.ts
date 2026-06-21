@@ -120,4 +120,94 @@ describe("Sales Mutations", () => {
       expect(tx?.type).toBe("IN");
     });
   });
+
+  test("Creating a sale from a quote closes the quote's exact lead as WON", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Test Dealer", createdAt: Date.now() })
+    );
+    const userId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "user_quote_1", email: "quote@example.com", name: "Quote User" })
+    );
+    const roleId = await t.run((ctx) =>
+      ctx.db.insert("roles", {
+        orgId,
+        name: "Admin",
+        permissions: [
+          "create:sales",
+          "view:sales",
+          "edit:sales",
+          "create:vehicles",
+          "view:vehicles",
+          "edit:vehicles",
+        ],
+      })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+    const asAdmin = t.withIdentity({ subject: "user_quote_1", clerkId: "user_quote_1" });
+
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "1HGCM82633A111111",
+        make: "Honda",
+        model: "Civic",
+        year: 2021,
+        color: "White",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        mileage: 10000,
+        sellingPrice: 12000,
+        status: "AVAILABLE",
+      })
+    );
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Jane", lastName: "Smith" })
+    );
+
+    // A second, unrelated open lead for the same customer+vehicle pair — the
+    // exact leadId match should close ONLY the lead the quote came from,
+    // unlike the old fuzzy customerId+vehicleId match which would close both.
+    const otherLeadId = await t.run((ctx) =>
+      ctx.db.insert("leads", { orgId, customerId, vehicleId, source: "Walk-in", stage: "NEW" })
+    );
+    const leadId = await t.run((ctx) =>
+      ctx.db.insert("leads", { orgId, customerId, vehicleId, source: "Walk-in", stage: "NEGOTIATION" })
+    );
+
+    const quoteId = await asAdmin.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      leadId,
+      vehiclePrice: 12000,
+      downPayment: 2000,
+      termMonths: 0,
+    });
+
+    const saleId = await asAdmin.mutation(api.sales.create, {
+      orgId,
+      vehicleId,
+      customerId,
+      salespersonId: userId,
+      salePrice: 12000,
+      saleDate: Date.now(),
+      status: "COMPLETED",
+      financingType: "CASH",
+      quoteId,
+    });
+
+    await t.run(async (ctx) => {
+      const sale = await ctx.db.get(saleId);
+      expect(sale?.quoteId).toBe(quoteId);
+      expect(sale?.leadId).toBe(leadId);
+
+      const closedLead = await ctx.db.get(leadId);
+      expect(closedLead?.stage).toBe("WON");
+
+      const untouchedLead = await ctx.db.get(otherLeadId);
+      expect(untouchedLead?.stage).toBe("NEW");
+    });
+  });
 });

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { RoleGuard } from "@/components/auth/RoleGuard";
 import { usePaginatedQuery, useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -29,6 +30,20 @@ export default function SalesHomePage() {
     const installmentEnabled = enabledPaymentTypes.includes("INSTALLMENT");
     const [wizardInitialDraft, setWizardInitialDraft] = useState<Partial<WizardData> | undefined>();
     const [wizardResumeDraft, setWizardResumeDraft] = useState<WizardDraft | undefined>();
+
+    // Pre-fill from a lead's "Create Quote" action (see LeadDialog)
+    const searchParams = useSearchParams();
+    const prefillLeadId = searchParams.get("leadId");
+    const prefillCustomerId = searchParams.get("customerId");
+    const prefillVehicleId = searchParams.get("vehicleId");
+    const hasPrefill = !!(prefillLeadId || prefillCustomerId || prefillVehicleId);
+
+    const prefillCustomer = useQuery(
+        api.customers.get,
+        activeOrgId && prefillCustomerId
+            ? { orgId: activeOrgId, customerId: prefillCustomerId as Id<"customers"> }
+            : "skip"
+    );
 
     const { results: recentSales } = usePaginatedQuery(
         api.sales.list,
@@ -70,7 +85,14 @@ export default function SalesHomePage() {
     }
 
     function openFreshWizard(type: PaymentType) {
-        setWizardInitialDraft(undefined);
+        setWizardInitialDraft(
+            hasPrefill
+                ? {
+                      vehicleId: prefillVehicleId ?? undefined,
+                      leadId: prefillLeadId ?? undefined,
+                  }
+                : undefined
+        );
         setWizardResumeDraft(undefined);
         setActiveWizard(type);
     }
@@ -111,6 +133,7 @@ export default function SalesHomePage() {
                     onClose={() => { setActiveWizard(null); setWizardInitialDraft(undefined); setWizardResumeDraft(undefined); }}
                     initialDraft={wizardInitialDraft}
                     resumeDraft={wizardResumeDraft}
+                    initialCustomer={wizardInitialDraft ? prefillCustomer : undefined}
                 />
             </RoleGuard>
         );
@@ -119,6 +142,13 @@ export default function SalesHomePage() {
     return (
         <RoleGuard permissions={["view:sales"]}>
             <div className="space-y-10 pb-10">
+
+                {hasPrefill && (
+                    <div className="rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-4 py-3 text-sm text-indigo-300">
+                        {t("CreatingQuoteForLead" as any) ??
+                            `Creating a quote for ${prefillCustomer ? `${prefillCustomer.firstName} ${prefillCustomer.lastName}` : "this lead"} — choose a payment type to continue.`}
+                    </div>
+                )}
 
                 {/* ─── Hero Section ─────────────────────────────────────────── */}
                 <div className="relative overflow-hidden rounded-2xl bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 border border-white/10 p-8 md:p-12">
@@ -191,7 +221,7 @@ export default function SalesHomePage() {
                                 <div>
                                     <p className="text-white font-bold text-xl">{t("Installment" as any)}</p>
                                     <p className="text-slate-400 text-sm mt-1">
-                                        {t("FinanceThroughBank" as any)}
+                                        {t("FinanceThroughCompany" as any)}
                                     </p>
                                 </div>
                                 <div className="text-xs font-medium text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 rounded-full px-3 py-1">

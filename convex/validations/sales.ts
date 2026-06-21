@@ -8,6 +8,7 @@ const BaseSaleSchema = z.object({
   salePrice: z.number().min(0, "Sale price cannot be negative"),
   saleDate: z.number(),
   status: z.enum(["PENDING", "COMPLETED", "CANCELLED"]).optional(),
+  quoteId: z.string().optional(),
   taxRate: z.number().min(0).max(100).optional(),
   taxAmount: z.number().min(0).optional(),
   dealerFees: z.number().min(0).optional(),

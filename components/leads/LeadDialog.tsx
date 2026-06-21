@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -45,6 +46,7 @@ import { translateLeadSourceLabel, translatePipelineStageLabel } from "@/lib/i18
 export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
   const { activeOrgId } = useOrg();
   const { t, locale } = useLanguage();
+  const router = useRouter();
 
   // Data for dropdowns
   const { results: customers } = usePaginatedQuery(
@@ -164,6 +166,14 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleCreateQuote = () => {
+    if (!activeOrgId || !lead || !lead.vehicleId) return;
+    router.push(
+      `/${activeOrgId}/sales?leadId=${lead._id}&customerId=${lead.customerId}&vehicleId=${lead.vehicleId}`
+    );
+    onOpenChange(false);
   };
 
   return (
@@ -357,6 +367,11 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
               </div>
             )}
             <div className="flex justify-end gap-2 pt-4">
+              {lead && lead.vehicleId && (
+                <Button type="button" variant="outline" onClick={handleCreateQuote} className="me-auto">
+                  {t("CreateQuote" as any) || "Create Quote"}
+                </Button>
+              )}
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 {t("Cancel" as any) || "Cancel"}
               </Button>

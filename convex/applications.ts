@@ -4,6 +4,7 @@ import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
+import { closeLeadsAsWon } from "./utils/saleHelpers";
 
 export const list = query({
   args: {
@@ -244,6 +245,15 @@ export const finalizeDeal = mutation({
       loanAmount: quote.totalFinancedAmount,
       termMonths: quote.termMonths,
       applicationId: args.applicationId,
+      quoteId: app.quoteId,
+      leadId: quote.leadId,
+    });
+
+    await closeLeadsAsWon(ctx, {
+      orgId: args.orgId,
+      customerId: app.customerId,
+      vehicleId: app.vehicleId,
+      leadId: quote.leadId,
     });
 
     return true;

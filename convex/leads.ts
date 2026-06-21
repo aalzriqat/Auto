@@ -159,10 +159,11 @@ export const checkExistingOpenLead = query({
 });
 
 /**
- * For a WON lead, finds the sale that closed it. `closeLeadsAsWon`
- * (convex/utils/saleHelpers.ts) deterministically links every open lead to
- * its sale via shared customerId+vehicleId at sale time, so this is a
- * read-side lookup rather than a stored FK — single-lead, bounded cost.
+ * For a WON lead, finds the sale that closed it. Sales created since the
+ * quote/lead FK threading was added stamp `leadId` directly, so this is
+ * looked up via the `by_lead` index first. Sales that predate that change
+ * (or were created without ever going through a quote) fall back to the
+ * older customerId+vehicleId match that `closeLeadsAsWon` also used to rely on.
  */
 export const getLinkedSale = query({
   args: { orgId: v.id("organizations"), leadId: v.id("leads") },
@@ -174,6 +175,13 @@ export const getLinkedSale = query({
       throw new ConvexError("Lead not found in this organization.");
     }
     if (lead.stage !== "WON" || !lead.vehicleId) return null;
+
+    const linkedSale = await ctx.db
+      .query("sales")
+      .withIndex("by_lead", (q) => q.eq("leadId", args.leadId))
+      .filter((q) => q.neq(q.field("isDeleted"), true))
+      .first();
+    if (linkedSale) return linkedSale;
 
     const sale = await ctx.db
       .query("sales")
