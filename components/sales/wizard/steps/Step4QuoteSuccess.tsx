@@ -53,6 +53,7 @@ export function Step4QuoteSuccess({
   const [saleId, setSaleId] = useState<Id<"sales"> | null>(null);
   const [isCompletingSale, setIsCompletingSale] = useState(false);
   const createSale = useMutation(api.sales.create);
+  const markQuoteShared = useMutation(api.quotes.updateQuoteStatus);
   const quote = useQuery(
     api.quotes.get,
     activeOrgId ? { orgId: activeOrgId, quoteId } : "skip"
@@ -128,6 +129,13 @@ export function Step4QuoteSuccess({
       const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
       pdf.addImage(imgData, "PNG", 0, 0, pdfWidth, pdfHeight);
       pdf.save(`Quote_${selectedCustomer.firstName}.pdf`);
+
+      // Downloading the quote means it's being handed to the customer — mark it
+      // SHARED so the originating lead (if any) advances to NEGOTIATION. The PDF
+      // already saved successfully, so a failure here shouldn't surface as an error.
+      if (activeOrgId) {
+        markQuoteShared({ orgId: activeOrgId, quoteId, status: "SHARED" }).catch(() => {});
+      }
     } catch {
       // silently fail — browser PDF generation
     } finally {

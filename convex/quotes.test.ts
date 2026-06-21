@@ -1,9 +1,13 @@
 import { convexTest } from "convex-test";
-import { expect, test, describe } from "vitest";
+import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 
-const PERMISSIONS = ["edit:vehicles", "view:customers"];
+vi.mock("./rateLimit", () => ({
+  rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
+}));
+
+const PERMISSIONS = ["edit:vehicles", "view:customers", "view:vehicles", "create:leads", "view:leads"];
 
 async function setup() {
   const t = convexTest(schema, import.meta.glob("./**/*.*s"));
@@ -78,5 +82,81 @@ describe("quotes.get", () => {
     await expect(
       asUser.query(api.quotes.get, { orgId: orgId2, quoteId })
     ).rejects.toThrow();
+  });
+});
+
+describe("quotes.updateQuoteStatus lead stage advance", () => {
+  test("marking a quote SHARED advances its linked lead to NEGOTIATION", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+
+    const leadId = await asUser.mutation(api.leads.create, {
+      orgId,
+      customerId,
+      vehicleId,
+      source: "Walk-in",
+    });
+
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      leadId,
+      vehiclePrice: 19000,
+      downPayment: 1000,
+      termMonths: 0,
+    });
+
+    await asUser.mutation(api.quotes.updateQuoteStatus, { orgId, quoteId, status: "SHARED" });
+
+    await t.run(async (ctx) => {
+      const lead = await ctx.db.get(leadId);
+      expect(lead?.stage).toBe("NEGOTIATION");
+    });
+  });
+
+  test("no-ops when the quote has no linked lead", async () => {
+    const { orgId, customerId, vehicleId, asUser } = await setup();
+
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 19000,
+      downPayment: 1000,
+      termMonths: 0,
+    });
+
+    await expect(
+      asUser.mutation(api.quotes.updateQuoteStatus, { orgId, quoteId, status: "SHARED" })
+    ).resolves.not.toThrow();
+  });
+
+  test("does not move a lead backward when it's already past NEGOTIATION", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+
+    const leadId = await asUser.mutation(api.leads.create, {
+      orgId,
+      customerId,
+      vehicleId,
+      source: "Walk-in",
+    });
+    await t.run((ctx) => ctx.db.patch(leadId, { stage: "RESERVED" }));
+
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      leadId,
+      vehiclePrice: 19000,
+      downPayment: 1000,
+      termMonths: 0,
+    });
+
+    await asUser.mutation(api.quotes.updateQuoteStatus, { orgId, quoteId, status: "SHARED" });
+
+    await t.run(async (ctx) => {
+      const lead = await ctx.db.get(leadId);
+      expect(lead?.stage).toBe("RESERVED");
+    });
   });
 });

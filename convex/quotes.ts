@@ -2,6 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { advanceLeadStage } from "./utils/leadStageHelpers";
 
 export const listQuotesByCustomer = query({
   args: { 
@@ -83,7 +84,11 @@ export const updateQuoteStatus = mutation({
     await requireTenantAuth(ctx, orgId, [PERMISSIONS.EDIT_VEHICLES]);
     const existing = await ctx.db.get(quoteId);
     if (!existing || existing.orgId !== orgId) throw new ConvexError("Not found");
-    
+
     await ctx.db.patch(quoteId, { status });
+
+    if (status === "SHARED" && existing.leadId) {
+      await advanceLeadStage(ctx, { leadId: existing.leadId, targetStage: "NEGOTIATION" });
+    }
   },
 });

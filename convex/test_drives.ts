@@ -2,6 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { advanceLeadStageForCustomerVehicle } from "./utils/leadStageHelpers";
 
 export const list = query({
   args: {
@@ -69,7 +70,7 @@ export const create = mutation({
     const customer = await ctx.db.get(args.customerId);
     if (!customer || customer.isDeleted || customer.orgId !== args.orgId) throw new ConvexError("Customer not found");
 
-    return await ctx.db.insert("test_drives", {
+    const testDriveId = await ctx.db.insert("test_drives", {
       orgId: args.orgId,
       vehicleId: args.vehicleId,
       customerId: args.customerId,
@@ -78,6 +79,15 @@ export const create = mutation({
       demoPlateNumber: args.demoPlateNumber,
       notes: args.notes,
     });
+
+    await advanceLeadStageForCustomerVehicle(ctx, {
+      orgId: args.orgId,
+      customerId: args.customerId,
+      vehicleId: args.vehicleId,
+      targetStage: "TEST_DRIVE",
+    });
+
+    return testDriveId;
   },
 });
 
