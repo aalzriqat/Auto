@@ -14,6 +14,8 @@ interface ManualFinanceCardProps {
   insuranceRate: number;
   onChangeProfitRate: (value: number) => void;
   onChangeInsuranceRate: (value: number) => void;
+  executionCommission: number;
+  onChangeExecutionCommission: (value: number) => void;
   onSelect: () => void;
 }
 
@@ -26,6 +28,8 @@ export function ManualFinanceCard({
   insuranceRate,
   onChangeProfitRate,
   onChangeInsuranceRate,
+  executionCommission,
+  onChangeExecutionCommission,
   onSelect,
 }: ManualFinanceCardProps) {
   const { t } = useLanguage();
@@ -35,6 +39,7 @@ export function ManualFinanceCard({
     downPayment,
     commission: 0,
     processingFees: 0,
+    executionCommission,
     annualProfitRate: profitRate,
     annualInsuranceRate: insuranceRate,
     termMonths,
@@ -108,6 +113,25 @@ export function ManualFinanceCard({
             className="flex h-8 w-full rounded-md border border-input bg-transparent px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           />
         </div>
+
+        <div className="grid gap-1 col-span-2">
+          <label
+            className="text-[11px] text-muted-foreground"
+            title={t("ExecutionCommissionHint" as any)}
+          >
+            {t("ExecutionCommission" as any)}
+          </label>
+          <input
+            type="number"
+            step="0.01"
+            value={executionCommission || ""}
+            onChange={(e) => {
+              onChangeExecutionCommission(parseFloat(e.target.value) || 0);
+              onSelect();
+            }}
+            className="flex h-8 w-full rounded-md border border-input bg-transparent px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          />
+        </div>
       </div>
 
       {/* Monthly installment */}
@@ -129,7 +153,7 @@ export function ManualFinanceCard({
         </div>
 
         <div className="flex justify-between text-muted-foreground">
-          <span>{t("TotalProfit" as any) || "Bank Profit"}</span>
+          <span>{t("TotalProfit" as any) || "Total Profit"}</span>
           <span className="font-medium text-foreground">
             {result.totalProfit.toLocaleString(undefined, { minimumFractionDigits: 2 })}
           </span>

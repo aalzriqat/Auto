@@ -374,8 +374,8 @@ export default function CreativeMarketingPage() {
       labelAr: "قرار التمويل",
       statusEn: "Terms Configured",
       statusAr: "تم تحديد الشروط",
-      descEn: "AutoFlow coordinates with underwriting banks to compute payment approval thresholds.",
-      descAr: "حساب فوري للأرباح وهوامش التمويل بالتنسيق مع البنوك المعتمدة.",
+      descEn: "AutoFlow coordinates with underwriting financing companies to compute payment approval thresholds.",
+      descAr: "حساب فوري للأرباح وهوامش التمويل بالتنسيق مع شركات التمويل المعتمدة.",
     },
     {
       labelEn: "Delivered",

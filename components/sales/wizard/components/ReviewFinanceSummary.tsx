@@ -93,7 +93,7 @@ export default function ReviewFinanceSummary({
 
             {/* Profit */}
             <div className="text-center">
-              <p className="text-xs text-muted-foreground mb-1">{t("BankProfit" as any)}</p>
+              <p className="text-xs text-muted-foreground mb-1">{t("FinanceCompanyProfit" as any)}</p>
               <p className="text-sm font-semibold">
                 {(totalProfit || 0).toLocaleString(undefined, {
                   minimumFractionDigits: 2,

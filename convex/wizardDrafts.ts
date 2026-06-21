@@ -11,6 +11,7 @@ const wizardDataValidator = v.object({
   selectedCompanyId: v.optional(v.string()),
   manualProfitRate: v.optional(v.number()),
   manualInsuranceRate: v.optional(v.number()),
+  manualExecutionCommission: v.optional(v.number()),
   recipientName: v.optional(v.string()),
 });
 

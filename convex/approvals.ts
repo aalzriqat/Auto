@@ -13,6 +13,7 @@ const wizardSnapshotValidator = v.optional(v.object({
   selectedCompanyId: v.optional(v.string()),
   manualProfitRate: v.optional(v.number()),
   manualInsuranceRate: v.optional(v.number()),
+  manualExecutionCommission: v.optional(v.number()),
 }));
 
 export const requestProfitApproval = mutation({

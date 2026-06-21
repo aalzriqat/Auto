@@ -88,7 +88,7 @@ const PREVIEW_COLUMNS = [
   { key: "mileage", label: "KM" },
   { key: "purchasePrice", label: "Cost", align: "end" as const },
   { key: "sellingPrice", label: "Selling Price", align: "end" as const },
-  { key: "valuations", label: "Bank Valuations" },
+  { key: "valuations", label: "Financing Company Valuations" },
 ];
 
 /**
@@ -105,7 +105,7 @@ function parseVehicleWorksheet(ws: XLSX.WorkSheet): { headers: string[]; rows: a
 
   // Only these three trigger double-header detection (matches the dealership's
   // known template), but once triggered, EVERY non-empty row-2 cell becomes a
-  // valuation column — so a dealer typing a 4th bank name in row 2 just works.
+  // valuation column — so a dealer typing a 4th financing company name in row 2 just works.
   const VALUATION_SUB_HEADERS = new Set(["بندار", "تمكين", "السماحة"]);
   const primaryHeaders: string[] = (rawRows[0] ?? []).map((c: any) => String(c ?? "").trim());
   const secondRow: string[] = (rawRows[1] ?? []).map((c: any) => String(c ?? "").trim());

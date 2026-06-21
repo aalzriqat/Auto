@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -72,6 +72,24 @@ export function FinanceCompanyDialog({
     isActive: company?.isActive ?? true,
     acceptedStatuses: company?.acceptedStatuses || [],
   });
+
+  useEffect(() => {
+    if (!open) return;
+    setFormData({
+      name: company?.name || "",
+      profitRate: company?.profitRate || 0,
+      maxTermMonths: company?.maxTermMonths || 72,
+      gracePeriodMonths: company?.gracePeriodMonths || 0,
+      insuranceRate: company?.insuranceRate || 0,
+      adminFees: company?.adminFees || 0,
+      commission: company?.commission || 0,
+      includesCommissionInDebt: company?.includesCommissionInDebt || false,
+      maxFinancingLTV: company?.maxFinancingLTV || 100,
+      isActive: company?.isActive ?? true,
+      acceptedStatuses: company?.acceptedStatuses || [],
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, company?._id]);
 
   const toggleAcceptedStatus = (id: string) => {
     setFormData((prev) => ({

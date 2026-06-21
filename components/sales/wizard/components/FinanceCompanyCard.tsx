@@ -133,7 +133,7 @@ export function FinanceCompanyCard({
         </div>
 
         <div className="flex justify-between text-muted-foreground">
-          <span>{t("TotalProfit" as any) || "Bank Profit"}</span>
+          <span>{t("TotalProfit" as any) || "Total Profit"}</span>
 
           <span className="font-medium text-foreground">
             {result.totalProfit.toLocaleString(
@@ -162,7 +162,7 @@ export function FinanceCompanyCard({
 
         {result.actualValuation > 0 && (
           <div className="flex justify-between text-muted-foreground">
-            <span>{t("BankValuation" as any)}</span>
+            <span>{t("FinanceCompanyValuation" as any)}</span>
 
             <span
               className={cn(
@@ -186,7 +186,7 @@ export function FinanceCompanyCard({
         {result.exceedsValuation && (
           <div className="rounded-md bg-red-950/40 border border-red-500/30 p-2 mt-2 space-y-0.5">
             <p className="font-semibold text-red-400">
-              {t("ExceedsLimit" as any) || "Exceeds Bank Limit"}
+              {t("ExceedsLimit" as any) || "Exceeds Financing Limit"}
             </p>
 
             <p className="text-red-300/80">

@@ -69,7 +69,7 @@ interface ImportWizardProps {
   /**
    * Lets the entity-specific dialog inject extra mapping targets discovered
    * only after parsing this file (e.g. one "Valuation: <company>" option per
-   * bank-valuation column detected in the sheet). Called synchronously right
+   * finance-company-valuation column detected in the sheet). Called synchronously right
    * after parsing so the returned autoGuess entries can seed initialMapping.
    */
   resolveDynamicFields?: (info: { headers: string[]; valuationHeaders: string[] }) => {

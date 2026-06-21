@@ -75,6 +75,21 @@ export function SalesWizard({
   const [selectedCustomer, setSelectedCustomer] = useState<Doc<"customers"> | null>(
     resumeDraft ? null : initialCustomer ?? null
   );
+
+  // Draft only stores selectedCustomerId — re-fetch the full customer doc to restore it.
+  const resumeCustomerId = resumeDraft?.selectedCustomerId;
+  const resumeCustomer = useQuery(
+    api.customers.get,
+    activeOrgId && resumeCustomerId
+      ? { orgId: activeOrgId as Id<"organizations">, customerId: resumeCustomerId as Id<"customers"> }
+      : "skip"
+  );
+
+  useEffect(() => {
+    if (resumeDraft && resumeCustomer) {
+      setSelectedCustomer(resumeCustomer);
+    }
+  }, [resumeDraft, resumeCustomer]);
   const [finalQuoteData, setFinalQuoteData] = useState<{
     quoteId: Id<"quotes">;
     selectedVehicle?: Doc<"vehicles">;

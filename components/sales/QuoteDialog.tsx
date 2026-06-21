@@ -312,7 +312,7 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
                             </div>
                           )}
                           <div className="flex justify-between text-sm border-b pb-1">
-                            <span className="text-muted-foreground">{t("BankValuation" as any)}:</span>
+                            <span className="text-muted-foreground">{t("FinanceCompanyValuation" as any)}:</span>
                             <span className="font-medium">{result.actualValuation > 0 ? result.actualValuation.toLocaleString(undefined, { minimumFractionDigits: 2 }) : (t("NotSet" as any))}</span>
                           </div>
 
