@@ -13,14 +13,18 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - uses: pnpm/action-setup@v4
+      with:
+        version: 10
+
     - name: Use Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '20.x'
-        cache: 'npm'
+        cache: 'pnpm'
 
     - name: Install dependencies
-      run: npm install -g pnpm && pnpm install
+      run: pnpm install
 
     - name: Run unit + integration tests with coverage
       run: pnpm test --coverage
@@ -58,14 +62,18 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - uses: pnpm/action-setup@v4
+      with:
+        version: 10
+
     - name: Use Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '20.x'
-        cache: 'npm'
+        cache: 'pnpm'
 
     - name: Install dependencies
-      run: npm install -g pnpm && pnpm install
+      run: pnpm install
 
     - name: TypeScript type check
       run: pnpm exec tsc --noEmit
@@ -76,14 +84,18 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - uses: pnpm/action-setup@v4
+      with:
+        version: 10
+
     - name: Use Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '20.x'
-        cache: 'npm'
+        cache: 'pnpm'
 
     - name: Install dependencies
-      run: npm install -g pnpm && pnpm install
+      run: pnpm install
 
     - name: Lint
       run: pnpm lint
@@ -94,14 +106,18 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
+    - uses: pnpm/action-setup@v4
+      with:
+        version: 10
+
     - name: Use Node.js
       uses: actions/setup-node@v4
       with:
         node-version: '20.x'
-        cache: 'npm'
+        cache: 'pnpm'
 
     - name: Install dependencies
-      run: npm install -g pnpm && pnpm install
+      run: pnpm install
 
     # Non-blocking for now: there are pre-existing advisories in transitive
     # deps (vite>esbuild, convex>ws, next>postcss, sentry>opentelemetry) that
