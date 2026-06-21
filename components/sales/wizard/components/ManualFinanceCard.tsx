@@ -16,6 +16,8 @@ interface ManualFinanceCardProps {
   onChangeInsuranceRate: (value: number) => void;
   executionCommission: number;
   onChangeExecutionCommission: (value: number) => void;
+  executionFees: number;
+  onChangeExecutionFees: (value: number) => void;
   onSelect: () => void;
 }
 
@@ -30,6 +32,8 @@ export function ManualFinanceCard({
   onChangeInsuranceRate,
   executionCommission,
   onChangeExecutionCommission,
+  executionFees,
+  onChangeExecutionFees,
   onSelect,
 }: ManualFinanceCardProps) {
   const { t } = useLanguage();
@@ -40,6 +44,7 @@ export function ManualFinanceCard({
     commission: 0,
     processingFees: 0,
     executionCommission,
+    executionFees,
     annualProfitRate: profitRate,
     annualInsuranceRate: insuranceRate,
     termMonths,
@@ -114,19 +119,28 @@ export function ManualFinanceCard({
           />
         </div>
 
-        <div className="grid gap-1 col-span-2">
-          <label
-            className="text-[11px] text-muted-foreground"
-            title={t("ExecutionCommissionHint" as any)}
-          >
-            {t("ExecutionCommission" as any)}
-          </label>
+        <div className="grid gap-1">
+          <label className="text-[11px] text-muted-foreground">{t("ExecutionCommission" as any)}</label>
           <input
             type="number"
             step="0.01"
             value={executionCommission || ""}
             onChange={(e) => {
               onChangeExecutionCommission(parseFloat(e.target.value) || 0);
+              onSelect();
+            }}
+            className="flex h-8 w-full rounded-md border border-input bg-transparent px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          />
+        </div>
+
+        <div className="grid gap-1">
+          <label className="text-[11px] text-muted-foreground">{t("ExecutionFees" as any)}</label>
+          <input
+            type="number"
+            step="0.01"
+            value={executionFees || ""}
+            onChange={(e) => {
+              onChangeExecutionFees(parseFloat(e.target.value) || 0);
               onSelect();
             }}
             className="flex h-8 w-full rounded-md border border-input bg-transparent px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"

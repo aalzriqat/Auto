@@ -24,6 +24,8 @@ interface FinancePanelProps {
   onChangeManualInsuranceRate: (value: number) => void;
   manualExecutionCommission: number;
   onChangeManualExecutionCommission: (value: number) => void;
+  manualExecutionFees: number;
+  onChangeManualExecutionFees: (value: number) => void;
 }
 
 export function FinancePanel({
@@ -41,6 +43,8 @@ export function FinancePanel({
   onChangeManualInsuranceRate,
   manualExecutionCommission,
   onChangeManualExecutionCommission,
+  manualExecutionFees,
+  onChangeManualExecutionFees,
 }: FinancePanelProps) {
   const { t } = useLanguage();
 
@@ -129,6 +133,8 @@ export function FinancePanel({
           onChangeInsuranceRate={onChangeManualInsuranceRate}
           executionCommission={manualExecutionCommission}
           onChangeExecutionCommission={onChangeManualExecutionCommission}
+          executionFees={manualExecutionFees}
+          onChangeExecutionFees={onChangeManualExecutionFees}
           onSelect={() => onSelectCompany(OTHER_COMPANY_ID)}
         />
       </div>

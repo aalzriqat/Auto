@@ -31,6 +31,7 @@ export function calculateUnifiedMurabaha({
   commission,
   processingFees,
   executionCommission = 0,
+  executionFees = 0,
   annualProfitRate,
   annualInsuranceRate,
   termMonths,
@@ -41,8 +42,10 @@ export function calculateUnifiedMurabaha({
   downPayment: number;
   commission: number;
   processingFees: number;
-  /** Execution commission (عمولات تنفيذ) — always capitalized into the financed amount, regardless of includesCommissionInDebt. */
+  /** Execution commission (عمولات تنفيذ مضافة على التمويل) — always capitalized into the financed amount, regardless of includesCommissionInDebt. */
   executionCommission?: number;
+  /** Execution fees (مصاريف التنفيذ) — a separate manual line item, also always capitalized into the financed amount. */
+  executionFees?: number;
   annualProfitRate: number;
   annualInsuranceRate: number;
   termMonths: number;
@@ -67,8 +70,8 @@ export function calculateUnifiedMurabaha({
   // (Dar Al Tamweel logic), commission is kept out of the financed base so
   // profit/insurance don't accrue on it, and is added flat in step 5 instead.
   const financedAmount = includesCommissionInDebt
-    ? vehiclePrice - downPayment + processingFees + executionCommission
-    : vehiclePrice - downPayment + commission + processingFees + executionCommission;
+    ? vehiclePrice - downPayment + processingFees + executionCommission + executionFees
+    : vehiclePrice - downPayment + commission + processingFees + executionCommission + executionFees;
 
   // 2. Calculate Total Profit
   const totalProfit = financedAmount * profitRateDecimal * years;

@@ -67,6 +67,9 @@ export default function Step1QuoteSetup({
   const [manualExecutionCommission, setManualExecutionCommission] = useState(
     initialData.manualExecutionCommission || 0
   );
+  const [manualExecutionFees, setManualExecutionFees] = useState(
+    initialData.manualExecutionFees || 0
+  );
 
   const [customerStatuses, setCustomerStatuses] = useState<string[]>([]);
 
@@ -139,6 +142,7 @@ export default function Step1QuoteSetup({
           manualProfitRate,
           manualInsuranceRate,
           manualExecutionCommission,
+          manualExecutionFees,
         },
       });
     } finally {
@@ -164,6 +168,7 @@ export default function Step1QuoteSetup({
       manualProfitRate,
       manualInsuranceRate,
       manualExecutionCommission,
+      manualExecutionFees,
     });
   };
 
@@ -364,6 +369,8 @@ export default function Step1QuoteSetup({
             onChangeManualInsuranceRate={setManualInsuranceRate}
             manualExecutionCommission={manualExecutionCommission}
             onChangeManualExecutionCommission={setManualExecutionCommission}
+            manualExecutionFees={manualExecutionFees}
+            onChangeManualExecutionFees={setManualExecutionFees}
           />
         )}
 

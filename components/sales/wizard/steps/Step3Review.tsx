@@ -89,6 +89,7 @@ export function Step3Review({
         commission: 0,
         processingFees: 0,
         executionCommission: wizardData.manualExecutionCommission || 0,
+        executionFees: wizardData.manualExecutionFees || 0,
         annualProfitRate: wizardData.manualProfitRate || 0,
         annualInsuranceRate: wizardData.manualInsuranceRate || 0,
         termMonths: wizardData.termMonths,
