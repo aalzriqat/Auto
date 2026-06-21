@@ -192,7 +192,7 @@ export function FinanceCompanyDialog({
           </div>
           <div className="grid grid-cols-2 gap-4">
             <div className="grid gap-2">
-              <Label>{t("Admin Fees" as any)}</Label>
+              <Label>{t("ExecutionFees" as any)}</Label>
               <Input
                 type="number"
                 value={formData.adminFees}
@@ -210,7 +210,7 @@ export function FinanceCompanyDialog({
             </div>
           </div>
           <div className="grid gap-2">
-            <Label>{t("Commission" as any)}</Label>
+            <Label>{t("ExecutionCommission" as any)}</Label>
             <Input
               type="number"
               value={formData.commission}
