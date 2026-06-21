@@ -18,6 +18,8 @@ interface ManualFinanceCardProps {
   onChangeExecutionCommission: (value: number) => void;
   executionFees: number;
   onChangeExecutionFees: (value: number) => void;
+  includesCommissionInDebt: boolean;
+  onChangeIncludesCommissionInDebt: (value: boolean) => void;
   onSelect: () => void;
 }
 
@@ -34,6 +36,8 @@ export function ManualFinanceCard({
   onChangeExecutionCommission,
   executionFees,
   onChangeExecutionFees,
+  includesCommissionInDebt,
+  onChangeIncludesCommissionInDebt,
   onSelect,
 }: ManualFinanceCardProps) {
   const { t } = useLanguage();
@@ -47,7 +51,7 @@ export function ManualFinanceCard({
     annualInsuranceRate: insuranceRate,
     termMonths,
     gracePeriodMonths: 0,
-    includesCommissionInDebt: false,
+    includesCommissionInDebt,
   });
 
   return (
@@ -144,6 +148,29 @@ export function ManualFinanceCard({
             className="flex h-8 w-full rounded-md border border-input bg-transparent px-2 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
           />
         </div>
+      </div>
+
+      {/* Commission treatment */}
+      <div
+        className="px-4 pt-3 flex items-center gap-2"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <input
+          type="checkbox"
+          id="manualIncludesCommissionInDebt"
+          className="w-4 h-4"
+          checked={includesCommissionInDebt}
+          onChange={(e) => {
+            onChangeIncludesCommissionInDebt(e.target.checked);
+            onSelect();
+          }}
+        />
+        <label
+          htmlFor="manualIncludesCommissionInDebt"
+          className="text-[11px] text-muted-foreground"
+        >
+          {t("CapitalizesCommissionIntoDebt" as any)}
+        </label>
       </div>
 
       {/* Monthly installment */}

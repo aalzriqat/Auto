@@ -13,6 +13,7 @@ const wizardDataValidator = v.object({
   manualInsuranceRate: v.optional(v.number()),
   manualExecutionCommission: v.optional(v.number()),
   manualExecutionFees: v.optional(v.number()),
+  manualIncludesCommissionInDebt: v.optional(v.boolean()),
   recipientName: v.optional(v.string()),
 });
 

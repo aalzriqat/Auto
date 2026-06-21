@@ -70,6 +70,7 @@ export function SalesWizard({
       manualInsuranceRate: initialDraft?.manualInsuranceRate,
       manualExecutionCommission: initialDraft?.manualExecutionCommission,
       manualExecutionFees: initialDraft?.manualExecutionFees,
+      manualIncludesCommissionInDebt: initialDraft?.manualIncludesCommissionInDebt,
       leadId: initialDraft?.leadId,
     };
   });

@@ -9,6 +9,7 @@ export interface WizardData {
   manualInsuranceRate?: number;
   manualExecutionCommission?: number;
   manualExecutionFees?: number;
+  manualIncludesCommissionInDebt?: boolean;
   recipientName?: string;
   /** Set when the wizard was launched from a lead's context, so the resulting quote links back to it. */
   leadId?: string;

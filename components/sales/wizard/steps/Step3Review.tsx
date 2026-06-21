@@ -92,7 +92,7 @@ export function Step3Review({
         annualInsuranceRate: wizardData.manualInsuranceRate || 0,
         termMonths: wizardData.termMonths,
         gracePeriodMonths: 0,
-        includesCommissionInDebt: false,
+        includesCommissionInDebt: wizardData.manualIncludesCommissionInDebt ?? true,
       });
 
       return {

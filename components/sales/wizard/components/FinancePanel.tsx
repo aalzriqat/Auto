@@ -26,6 +26,8 @@ interface FinancePanelProps {
   onChangeManualExecutionCommission: (value: number) => void;
   manualExecutionFees: number;
   onChangeManualExecutionFees: (value: number) => void;
+  manualIncludesCommissionInDebt: boolean;
+  onChangeManualIncludesCommissionInDebt: (value: boolean) => void;
 }
 
 export function FinancePanel({
@@ -45,6 +47,8 @@ export function FinancePanel({
   onChangeManualExecutionCommission,
   manualExecutionFees,
   onChangeManualExecutionFees,
+  manualIncludesCommissionInDebt,
+  onChangeManualIncludesCommissionInDebt,
 }: FinancePanelProps) {
   const { t } = useLanguage();
 
@@ -135,6 +139,8 @@ export function FinancePanel({
           onChangeExecutionCommission={onChangeManualExecutionCommission}
           executionFees={manualExecutionFees}
           onChangeExecutionFees={onChangeManualExecutionFees}
+          includesCommissionInDebt={manualIncludesCommissionInDebt}
+          onChangeIncludesCommissionInDebt={onChangeManualIncludesCommissionInDebt}
           onSelect={() => onSelectCompany(OTHER_COMPANY_ID)}
         />
       </div>
