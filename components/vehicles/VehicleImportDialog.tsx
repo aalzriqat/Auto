@@ -1,11 +1,14 @@
 "use client";
 
 import * as XLSX from "xlsx";
-import { useMutation } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
-import { ImportWizard, ImportFieldConfig, ImportRow } from "@/components/import/ImportWizard";
+import { ImportWizard, ImportFieldConfig, ImportRow, normalizeKey } from "@/components/import/ImportWizard";
+
+const NEW_COMPANY_PREFIX = "valuation:new:";
+const EXISTING_COMPANY_PREFIX = "valuation:id:";
 
 // ---------------------------------------------------------------------------
 // Column name auto-guess — handles Arabic + English header variations.
@@ -56,9 +59,9 @@ const COL_MAP: Record<string, string> = {
   status: "status", الحالة: "status",
   notes: "notes", comments: "notes", remarks: "notes", ملاحظات: "notes",
 
-  // Finance-company valuations have no home in the vehicles table today, so
-  // they're intentionally left out of the auto-guess (the dealer can still
-  // map them manually, but they default to "Ignore").
+  // Finance-company valuation columns (بندار / تمكين / السماحة / ...) are not
+  // listed here — they're injected dynamically per-file by resolveDynamicFields
+  // below, since the set of companies/columns varies per sheet and per org.
 };
 
 const VEHICLE_FIELDS: ImportFieldConfig[] = [
@@ -85,6 +88,7 @@ const PREVIEW_COLUMNS = [
   { key: "mileage", label: "KM" },
   { key: "purchasePrice", label: "Cost", align: "end" as const },
   { key: "sellingPrice", label: "Selling Price", align: "end" as const },
+  { key: "valuations", label: "Bank Valuations" },
 ];
 
 /**
@@ -95,10 +99,13 @@ const PREVIEW_COLUMNS = [
  * When row 2 contains Arabic valuation sub-headers, we merge both rows into
  * a single header and start data from row 3.
  */
-function parseVehicleWorksheet(ws: XLSX.WorkSheet): { headers: string[]; rows: any[][] } {
+function parseVehicleWorksheet(ws: XLSX.WorkSheet): { headers: string[]; rows: any[][]; valuationHeaders: string[] } {
   const rawRows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
-  if (rawRows.length === 0) return { headers: [], rows: [] };
+  if (rawRows.length === 0) return { headers: [], rows: [], valuationHeaders: [] };
 
+  // Only these three trigger double-header detection (matches the dealership's
+  // known template), but once triggered, EVERY non-empty row-2 cell becomes a
+  // valuation column — so a dealer typing a 4th bank name in row 2 just works.
   const VALUATION_SUB_HEADERS = new Set(["بندار", "تمكين", "السماحة"]);
   const primaryHeaders: string[] = (rawRows[0] ?? []).map((c: any) => String(c ?? "").trim());
   const secondRow: string[] = (rawRows[1] ?? []).map((c: any) => String(c ?? "").trim());
@@ -106,8 +113,10 @@ function parseVehicleWorksheet(ws: XLSX.WorkSheet): { headers: string[]; rows: a
 
   let finalHeaders: string[];
   let dataStartRow: number;
+  let valuationHeaders: string[] = [];
   if (isDoubleHeader) {
     finalHeaders = primaryHeaders.map((h, i) => secondRow[i] || h);
+    valuationHeaders = finalHeaders.filter((_, i) => secondRow[i] !== "");
     dataStartRow = 2;
   } else {
     finalHeaders = primaryHeaders;
@@ -115,7 +124,7 @@ function parseVehicleWorksheet(ws: XLSX.WorkSheet): { headers: string[]; rows: a
   }
 
   const dataRows = rawRows.slice(dataStartRow).filter((row) => row.some((cell: any) => cell !== ""));
-  return { headers: finalHeaders, rows: dataRows };
+  return { headers: finalHeaders, rows: dataRows, valuationHeaders };
 }
 
 /**
@@ -148,6 +157,23 @@ function deriveVehicleRow(mapped: Record<string, any>): Record<string, any> {
     ? parseFloat(String(mapped.purchasePrice).replace(/,/g, ""))
     : undefined;
 
+  const valuations: Array<{ companyId?: string; companyName?: string; valuationAmount: number }> = [];
+  Object.entries(mapped).forEach(([key, value]) => {
+    if (!key.startsWith(NEW_COMPANY_PREFIX) && !key.startsWith(EXISTING_COMPANY_PREFIX)) return;
+    const amount = parseFloat(String(value ?? "").replace(/,/g, ""));
+    if (isNaN(amount) || amount <= 0) return;
+    if (key.startsWith(NEW_COMPANY_PREFIX)) {
+      valuations.push({ companyName: key.slice(NEW_COMPANY_PREFIX.length), valuationAmount: amount });
+    } else {
+      // Encoded as "<companyId>:<headerText>" so the preview can still show a name.
+      const rest = key.slice(EXISTING_COMPANY_PREFIX.length);
+      const sepIdx = rest.indexOf(":");
+      const companyId = sepIdx >= 0 ? rest.slice(0, sepIdx) : rest;
+      const companyName = sepIdx >= 0 ? rest.slice(sepIdx + 1) : undefined;
+      valuations.push({ companyId, companyName, valuationAmount: amount });
+    }
+  });
+
   return {
     make, model, year, vin,
     color: color || "Unknown",
@@ -157,6 +183,7 @@ function deriveVehicleRow(mapped: Record<string, any>): Record<string, any> {
     purchasePrice: purchasePrice && !isNaN(purchasePrice) ? purchasePrice : undefined,
     status: mapped.status ? String(mapped.status).toUpperCase() : undefined,
     notes: mapped.notes ? String(mapped.notes).trim() : undefined,
+    valuations,
   };
 }
 
@@ -182,6 +209,15 @@ function renderVehiclePreviewCell(row: ImportRow, key: string) {
         : <span className="text-muted-foreground text-xs">TBD</span>;
     case "purchasePrice": return row.purchasePrice ? row.purchasePrice.toLocaleString() : "—";
     case "sellingPrice": return row.sellingPrice > 0 ? row.sellingPrice.toLocaleString() : "—";
+    case "valuations": {
+      const valuations = (row.valuations ?? []) as Array<{ companyName?: string; valuationAmount: number }>;
+      if (valuations.length === 0) return <span className="text-muted-foreground text-xs">—</span>;
+      return (
+        <span className="text-xs">
+          {valuations.map((v) => `${v.companyName ?? "?"}: ${v.valuationAmount.toLocaleString()}`).join(", ")}
+        </span>
+      );
+    }
     default: return null;
   }
 }
@@ -229,6 +265,10 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
   const { t } = useLanguage();
   const { activeOrgId } = useOrg();
   const importBulk = useMutation(api.vehicles.importBulk);
+  const financeCompanies = useQuery(
+    api.finance.listCompanies,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
 
   return (
     <ImportWizard
@@ -245,6 +285,27 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
       previewColumns={PREVIEW_COLUMNS}
       renderPreviewCell={renderVehiclePreviewCell}
       templateBuilder={downloadTemplate}
+      resolveDynamicFields={({ valuationHeaders }) => {
+        const extraFields: ImportFieldConfig[] = [];
+        const extraAutoGuess: Record<string, string> = {};
+        const companies = financeCompanies ?? [];
+
+        valuationHeaders.forEach((h) => {
+          const name = h.trim();
+          if (!name) return;
+          const match = companies.find((c) => c.name.trim() === name);
+          const key = match
+            ? `${EXISTING_COMPANY_PREFIX}${match._id}:${name}`
+            : `${NEW_COMPANY_PREFIX}${name}`;
+          const label = match
+            ? `${t("Valuations" as any)}: ${match.name}`
+            : `${t("Valuations" as any)}: ${name} (${t("NewFinanceCompanyTag" as any)})`;
+          extraFields.push({ key, label });
+          extraAutoGuess[normalizeKey(h)] = key;
+        });
+
+        return { extraFields, extraAutoGuess };
+      }}
       onImport={(vehicles) => {
         if (!activeOrgId) return Promise.resolve({ inserted: 0, skipped: 0 });
         return importBulk({ orgId: activeOrgId, vehicles: vehicles as any });

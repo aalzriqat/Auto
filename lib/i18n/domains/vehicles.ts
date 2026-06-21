@@ -155,6 +155,7 @@ export const vehiclesEn = {
   BankValuations: "Bank Valuations",
   BankValuationsDesc: "Current bank valuations for financing this vehicle.",
   NoActiveFinanceCompanies: "No active finance companies. Configure them in Settings → Finance.",
+  NewFinanceCompanyTag: "new company",
 };
 
 export const vehiclesAr = {
@@ -314,4 +315,5 @@ export const vehiclesAr = {
   BankValuations: "تقييمات البنك",
   BankValuationsDesc: "تقييمات البنك الحالية لتمويل هذه المركبة.",
   NoActiveFinanceCompanies: "لا توجد شركات تمويل نشطة. قم بتكوينها في الإعدادات ← المالية.",
+  NewFinanceCompanyTag: "شركة جديدة",
 };

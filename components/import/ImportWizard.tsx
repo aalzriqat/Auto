@@ -60,27 +60,37 @@ interface ImportWizardProps {
   description: string;
   fields: ImportFieldConfig[];
   autoGuess: Record<string, string>;
-  parseWorksheet?: (ws: XLSX.WorkSheet) => { headers: string[]; rows: any[][] };
+  parseWorksheet?: (ws: XLSX.WorkSheet) => { headers: string[]; rows: any[][]; valuationHeaders?: string[] };
   deriveRow?: (mapped: Record<string, any>) => Record<string, any>;
   validateRow: (mapped: Record<string, any>) => string[];
   previewColumns: ImportPreviewColumn[];
   renderPreviewCell: (row: ImportRow, columnKey: string) => React.ReactNode;
   templateBuilder: () => void;
-  onImport: (validRows: Record<string, any>[]) => Promise<{ inserted: number; skipped: number }>;
+  /**
+   * Lets the entity-specific dialog inject extra mapping targets discovered
+   * only after parsing this file (e.g. one "Valuation: <company>" option per
+   * bank-valuation column detected in the sheet). Called synchronously right
+   * after parsing so the returned autoGuess entries can seed initialMapping.
+   */
+  resolveDynamicFields?: (info: { headers: string[]; valuationHeaders: string[] }) => {
+    extraFields: ImportFieldConfig[];
+    extraAutoGuess: Record<string, string>;
+  };
+  onImport: (validRows: Record<string, any>[]) => Promise<{ inserted: number; skipped: number; companiesCreated?: number }>;
 }
 
 const IGNORE = "__IGNORE__";
 
-function normalizeKey(key: string): string {
+export function normalizeKey(key: string): string {
   return key.toLowerCase().trim().replace(/\s+/g, " ");
 }
 
-function defaultParseWorksheet(ws: XLSX.WorkSheet): { headers: string[]; rows: any[][] } {
+function defaultParseWorksheet(ws: XLSX.WorkSheet): { headers: string[]; rows: any[][]; valuationHeaders: string[] } {
   const rawRows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
-  if (rawRows.length === 0) return { headers: [], rows: [] };
+  if (rawRows.length === 0) return { headers: [], rows: [], valuationHeaders: [] };
   const headers = (rawRows[0] ?? []).map((c: any) => String(c ?? "").trim());
   const rows = rawRows.slice(1).filter((row) => row.some((cell: any) => cell !== ""));
-  return { headers, rows };
+  return { headers, rows, valuationHeaders: [] };
 }
 
 // Shared dialog for bulk-importing an entity from Excel/CSV. Detects the
@@ -91,7 +101,7 @@ export function ImportWizard(props: ImportWizardProps) {
   const {
     open, onOpenChange, entityType, title, description, fields, autoGuess,
     parseWorksheet = defaultParseWorksheet, deriveRow, validateRow,
-    previewColumns, renderPreviewCell, templateBuilder, onImport,
+    previewColumns, renderPreviewCell, templateBuilder, resolveDynamicFields, onImport,
   } = props;
 
   const { activeOrgId } = useOrg();
@@ -106,6 +116,9 @@ export function ImportWizard(props: ImportWizardProps) {
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [importing, setImporting] = useState(false);
   const [rows, setRows] = useState<ImportRow[]>([]);
+  const [dynamicFields, setDynamicFields] = useState<ImportFieldConfig[]>([]);
+
+  const allFields = [...fields, ...dynamicFields];
 
   const savedMapping = useQuery(
     api.importMappings.get,
@@ -121,6 +134,7 @@ export function ImportWizard(props: ImportWizardProps) {
     setRawRows([]);
     setMapping({});
     setRows([]);
+    setDynamicFields([]);
   }
 
   function handleFile(file: File) {
@@ -130,7 +144,14 @@ export function ImportWizard(props: ImportWizardProps) {
       const data = e.target?.result;
       const wb = XLSX.read(data, { type: "binary" });
       const ws = wb.Sheets[wb.SheetNames[0]];
-      const { headers: detectedHeaders, rows: detectedRows } = parseWorksheet(ws);
+      const { headers: detectedHeaders, rows: detectedRows, valuationHeaders } = parseWorksheet(ws);
+
+      const dynamic = resolveDynamicFields?.({
+        headers: detectedHeaders,
+        valuationHeaders: valuationHeaders ?? [],
+      }) ?? { extraFields: [], extraAutoGuess: {} };
+      setDynamicFields(dynamic.extraFields);
+      const effectiveAutoGuess = { ...autoGuess, ...dynamic.extraAutoGuess };
 
       const savedDict: Record<string, string> = {};
       (savedMapping ?? []).forEach((m: any) => {
@@ -140,7 +161,7 @@ export function ImportWizard(props: ImportWizardProps) {
       const initialMapping: Record<string, string> = {};
       detectedHeaders.forEach((h) => {
         const norm = normalizeKey(h);
-        initialMapping[norm] = savedDict[norm] ?? autoGuess[norm] ?? IGNORE;
+        initialMapping[norm] = savedDict[norm] ?? effectiveAutoGuess[norm] ?? IGNORE;
       });
 
       setHeaders(detectedHeaders);
@@ -187,7 +208,10 @@ export function ImportWizard(props: ImportWizardProps) {
     setImporting(true);
     try {
       const result = await onImport(validRows.map(({ _errors, ...r }) => r));
-      toast.success(`Imported ${result.inserted}${result.skipped > 0 ? `, skipped ${result.skipped} duplicates` : ""}.`);
+      const companiesNote = result.companiesCreated
+        ? `, created ${result.companiesCreated} new finance compan${result.companiesCreated === 1 ? "y" : "ies"} (configure rates in Settings → Finance)`
+        : "";
+      toast.success(`Imported ${result.inserted}${result.skipped > 0 ? `, skipped ${result.skipped} duplicates` : ""}${companiesNote}.`);
       onOpenChange(false);
       resetAll();
     } catch (err: any) {
@@ -279,7 +303,7 @@ export function ImportWizard(props: ImportWizardProps) {
                                 <SelectItem value={IGNORE}>
                                   {t("IgnoreColumn" as any) ?? "Ignore this column"}
                                 </SelectItem>
-                                {fields.map((f) => (
+                                {allFields.map((f) => (
                                   <SelectItem key={f.key} value={f.key}>
                                     {f.label}{f.required ? " *" : ""}
                                   </SelectItem>

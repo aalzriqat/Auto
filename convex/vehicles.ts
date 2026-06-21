@@ -1,5 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
@@ -634,10 +635,48 @@ export const importBulk = mutation({
       purchasePrice: v.optional(v.number()),
       status: v.optional(v.string()),
       notes: v.optional(v.string()),
+      // Per-company bank valuations carried over from the spreadsheet's
+      // valuation columns. `companyId` targets an existing finance company;
+      // `companyName` (no companyId) means the column's header didn't match
+      // any existing company and a placeholder one should be auto-created.
+      valuations: v.optional(v.array(v.object({
+        companyId: v.optional(v.id("financeCompanies")),
+        companyName: v.optional(v.string()),
+        valuationAmount: v.number(),
+      }))),
     })),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
+
+    // Resolve (and lazily create) finance companies referenced by name only.
+    // Created inert (isActive: false, zero rates) — an Owner must configure
+    // and activate them from Settings → Finance before they affect quotes.
+    const existingCompanies = await ctx.db
+      .query("financeCompanies")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    const companyIdByName = new Map<string, Id<"financeCompanies">>();
+    existingCompanies.forEach((c) => companyIdByName.set(c.name.trim(), c._id));
+
+    let companiesCreated = 0;
+    for (const row of args.vehicles) {
+      for (const val of row.valuations ?? []) {
+        if (val.companyId || !val.companyName) continue;
+        const name = val.companyName.trim();
+        if (!name || companyIdByName.has(name)) continue;
+        const newId = await ctx.db.insert("financeCompanies", {
+          orgId: args.orgId,
+          name,
+          profitRate: 0,
+          maxTermMonths: 84,
+          gracePeriodMonths: 0,
+          isActive: false,
+        });
+        companyIdByName.set(name, newId);
+        companiesCreated++;
+      }
+    }
 
     let inserted = 0;
     let skipped = 0;
@@ -645,41 +684,70 @@ export const importBulk = mutation({
     for (const row of args.vehicles) {
       const normalizedVin = row.vin.trim().toUpperCase();
 
-      // Skip duplicate VINs within the org (or blank VINs treated as unique)
+      // Skip duplicate VINs within the org (or blank VINs treated as unique),
+      // but still refresh that vehicle's valuations from this import.
+      let vehicleId: Id<"vehicles"> | null = null;
       if (normalizedVin) {
         const existing = await ctx.db
           .query("vehicles")
           .withIndex("by_org_vin", (q) => q.eq("orgId", args.orgId).eq("vin", normalizedVin))
           .unique();
-        if (existing) { skipped++; continue; }
+        if (existing) {
+          skipped++;
+          vehicleId = existing._id;
+        }
       }
 
-      const validStatuses = ["AVAILABLE", "RESERVED", "SOLD", "IN_INSPECTION", "IN_REPAIR", "ARCHIVED"];
-      const status = row.status && validStatuses.includes(row.status.toUpperCase())
-        ? (row.status.toUpperCase() as "AVAILABLE" | "RESERVED" | "SOLD" | "IN_INSPECTION" | "IN_REPAIR" | "ARCHIVED")
-        : "AVAILABLE";
+      if (!vehicleId) {
+        const validStatuses = ["AVAILABLE", "RESERVED", "SOLD", "IN_INSPECTION", "IN_REPAIR", "ARCHIVED"];
+        const status = row.status && validStatuses.includes(row.status.toUpperCase())
+          ? (row.status.toUpperCase() as "AVAILABLE" | "RESERVED" | "SOLD" | "IN_INSPECTION" | "IN_REPAIR" | "ARCHIVED")
+          : "AVAILABLE";
 
-      await ctx.db.insert("vehicles", {
-        orgId: args.orgId,
-        vin: normalizedVin || `IMPORT-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-        make: row.make.trim(),
-        model: row.model.trim(),
-        year: row.year,
-        mileage: row.mileage ?? 0,
-        color: row.color.trim(),
-        fuelType: row.fuelType,
-        transmission: row.transmission,
-        sellingPrice: row.sellingPrice,
-        purchasePrice: row.purchasePrice,
-        status,
-        notes: row.notes,
-        addedBy: user._id,
-        updatedBy: user._id,
-        updatedAt: Date.now(),
-      });
-      inserted++;
+        vehicleId = await ctx.db.insert("vehicles", {
+          orgId: args.orgId,
+          vin: normalizedVin || `IMPORT-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          make: row.make.trim(),
+          model: row.model.trim(),
+          year: row.year,
+          mileage: row.mileage ?? 0,
+          color: row.color.trim(),
+          fuelType: row.fuelType,
+          transmission: row.transmission,
+          sellingPrice: row.sellingPrice,
+          purchasePrice: row.purchasePrice,
+          status,
+          notes: row.notes,
+          addedBy: user._id,
+          updatedBy: user._id,
+          updatedAt: Date.now(),
+        });
+        inserted++;
+      }
+
+      for (const val of row.valuations ?? []) {
+        const companyId = val.companyId ?? (val.companyName ? companyIdByName.get(val.companyName.trim()) : undefined);
+        if (!companyId || val.valuationAmount <= 0) continue;
+
+        const existingValuation = await ctx.db
+          .query("vehicleValuations")
+          .withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicleId!))
+          .filter((q) => q.eq(q.field("companyId"), companyId))
+          .first();
+
+        if (existingValuation) {
+          await ctx.db.patch(existingValuation._id, { valuationAmount: val.valuationAmount });
+        } else {
+          await ctx.db.insert("vehicleValuations", {
+            orgId: args.orgId,
+            vehicleId: vehicleId!,
+            companyId,
+            valuationAmount: val.valuationAmount,
+          });
+        }
+      }
     }
 
-    return { inserted, skipped };
+    return { inserted, skipped, companiesCreated };
   },
 });
