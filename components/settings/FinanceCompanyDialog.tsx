@@ -246,15 +246,20 @@ export function FinanceCompanyDialog({
             )}
           </div>
           <div className="flex flex-col gap-3 pt-2">
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                id="includesCommissionInDebt"
-                className="w-4 h-4"
-                checked={formData.includesCommissionInDebt}
-                onChange={(e) => setFormData({ ...formData, includesCommissionInDebt: e.target.checked })}
-              />
-              <Label htmlFor="includesCommissionInDebt">{t("CapitalizesCommissionIntoDebt" as any)}</Label>
+            <div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="includesCommissionInDebt"
+                  className="w-4 h-4"
+                  checked={formData.includesCommissionInDebt}
+                  onChange={(e) => setFormData({ ...formData, includesCommissionInDebt: e.target.checked })}
+                />
+                <Label htmlFor="includesCommissionInDebt">{t("CapitalizesCommissionIntoDebt" as any)}</Label>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1 ms-6">
+                {t("CapitalizesCommissionIntoDebtHint" as any)}
+              </p>
             </div>
             <div className="flex items-center gap-2">
               <input

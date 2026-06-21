@@ -152,25 +152,30 @@ export function ManualFinanceCard({
 
       {/* Commission treatment */}
       <div
-        className="px-4 pt-3 flex items-center gap-2"
+        className="px-4 pt-3"
         onClick={(e) => e.stopPropagation()}
       >
-        <input
-          type="checkbox"
-          id="manualIncludesCommissionInDebt"
-          className="w-4 h-4"
-          checked={includesCommissionInDebt}
-          onChange={(e) => {
-            onChangeIncludesCommissionInDebt(e.target.checked);
-            onSelect();
-          }}
-        />
-        <label
-          htmlFor="manualIncludesCommissionInDebt"
-          className="text-[11px] text-muted-foreground"
-        >
-          {t("CapitalizesCommissionIntoDebt" as any)}
-        </label>
+        <div className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            id="manualIncludesCommissionInDebt"
+            className="w-4 h-4"
+            checked={includesCommissionInDebt}
+            onChange={(e) => {
+              onChangeIncludesCommissionInDebt(e.target.checked);
+              onSelect();
+            }}
+          />
+          <label
+            htmlFor="manualIncludesCommissionInDebt"
+            className="text-[11px] text-muted-foreground"
+          >
+            {t("CapitalizesCommissionIntoDebt" as any)}
+          </label>
+        </div>
+        <p className="text-[10px] text-muted-foreground/70 mt-1 ms-6">
+          {t("CapitalizesCommissionIntoDebtHint" as any)}
+        </p>
       </div>
 
       {/* Monthly installment */}
