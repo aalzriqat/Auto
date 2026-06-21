@@ -1,4 +1,4 @@
-import { useQuery } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import {
   ExternalLink,
   Printer,
@@ -8,7 +8,9 @@ import {
   Users,
   Car,
   Camera,
+  HandCoins,
 } from "lucide-react";
+import { toast } from "@/components/ui/sonner";
 import { api } from "@/convex/_generated/api";
 import { Doc } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -61,6 +63,30 @@ export function VehicleDetailsDialog({
     api.vehicles.getRelations,
     activeOrgId && vehicle ? { orgId: activeOrgId, vehicleId: vehicle._id } : "skip"
   );
+
+  const deposits = useQuery(
+    api.deposits.listByVehicle,
+    activeOrgId && vehicle ? { orgId: activeOrgId, vehicleId: vehicle._id } : "skip"
+  );
+  const releaseDeposit = useMutation(api.deposits.release);
+  const [releasingDepositId, setReleasingDepositId] = useState<string | null>(null);
+
+  const handleReleaseDeposit = async (depositId: any, resolution: "REFUNDED" | "FORFEITED") => {
+    if (!activeOrgId) return;
+    setReleasingDepositId(depositId);
+    try {
+      await releaseDeposit({ orgId: activeOrgId, depositId, resolution });
+      toast.success(
+        resolution === "REFUNDED"
+          ? (t("DepositRefundedSuccess" as any) ?? "Deposit refunded")
+          : (t("DepositForfeitedSuccess" as any) ?? "Deposit forfeited")
+      );
+    } catch (error: any) {
+      toast.error(error.message || (t("DepositReleaseFail" as any) ?? "Failed to release deposit"));
+    } finally {
+      setReleasingDepositId(null);
+    }
+  };
 
   const [testDriveOpen, setTestDriveOpen] = useState(false);
   const [selectedTestDrive, setSelectedTestDrive] = useState(null);
@@ -247,6 +273,61 @@ export function VehicleDetailsDialog({
                   <div className="col-span-2 space-y-1 mt-2 bg-muted/50 p-3 rounded-lg border">
                     <span className="text-sm font-medium text-muted-foreground block mb-1">{t("Notes" as any)}</span>
                     <p className="text-sm whitespace-pre-wrap">{vehicle.notes}</p>
+                  </div>
+                )}
+
+                {deposits && deposits.length > 0 && (
+                  <div className="col-span-2 space-y-2 mt-2">
+                    <span className="text-sm font-medium text-muted-foreground flex items-center gap-1.5">
+                      <HandCoins className="w-3.5 h-3.5" />
+                      {t("Deposits" as any) ?? "Deposits"}
+                    </span>
+                    <div className="space-y-2">
+                      {deposits.map((deposit) => (
+                        <div key={deposit._id} className="bg-muted/30 p-3 rounded-lg border text-sm flex items-center justify-between gap-3">
+                          <div>
+                            <p className="font-medium">
+                              {deposit.amount.toLocaleString()} JOD{" "}
+                              <span
+                                className={`text-[10px] px-1.5 py-0.5 rounded ms-1 ${deposit.status === "HELD"
+                                    ? "bg-amber-100 text-amber-800"
+                                    : deposit.status === "APPLIED"
+                                      ? "bg-green-100 text-green-800"
+                                      : deposit.status === "REFUNDED"
+                                        ? "bg-blue-100 text-blue-800"
+                                        : "bg-gray-100 text-gray-800"
+                                  }`}
+                              >
+                                {deposit.status}
+                              </span>
+                            </p>
+                            {deposit.notes && <p className="text-xs text-muted-foreground mt-0.5 italic">"{deposit.notes}"</p>}
+                          </div>
+                          {deposit.status === "HELD" && !permissionsLoading && hasPermission(PERMISSIONS.APPROVE_REQUESTS) && (
+                            <div className="flex gap-2 shrink-0">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 text-xs"
+                                disabled={releasingDepositId === deposit._id}
+                                onClick={() => handleReleaseDeposit(deposit._id, "REFUNDED")}
+                              >
+                                {t("Refund" as any) ?? "Refund"}
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 text-xs text-destructive hover:text-destructive"
+                                disabled={releasingDepositId === deposit._id}
+                                onClick={() => handleReleaseDeposit(deposit._id, "FORFEITED")}
+                              >
+                                {t("Forfeit" as any) ?? "Forfeit"}
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>

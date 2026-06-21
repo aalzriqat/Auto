@@ -27,12 +27,14 @@ export async function createSaleTransaction(
     salePrice: number;
     saleDate: number;
     vehicle: Doc<"vehicles">;
+    /** Amount already booked as separate DEPOSIT transactions for this deal — subtracted so it isn't double-counted as revenue. */
+    previouslyCollected?: number;
   }
 ): Promise<void> {
   await ctx.db.insert("transactions", {
     orgId: args.orgId,
     type: "IN",
-    amount: args.salePrice,
+    amount: args.salePrice - (args.previouslyCollected ?? 0),
     date: args.saleDate,
     category: "VEHICLE_SALE",
     description: `Sale of vehicle ${args.vehicle.year} ${args.vehicle.make} ${args.vehicle.model} (VIN: ${args.vehicle.vin})`,

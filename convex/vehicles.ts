@@ -89,23 +89,33 @@ export const listAll = query({
   args: {
     orgId: v.id("organizations"),
     status: v.optional(vehicleStatus),
+    /** When status is "AVAILABLE", also include RESERVED vehicles (soft-warning hold, not a hard block on deal-entry pickers). */
+    includeReserved: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
     const canViewCostPrice = role.permissions.includes(PERMISSIONS.VIEW_COST_PRICE);
 
-    let q;
+    let vehicles;
 
-    if (args.status) {
-      q = ctx.db.query("vehicles").withIndex("by_org_status", (q) =>
+    if (args.status === "AVAILABLE" && args.includeReserved) {
+      const [availableVehicles, reservedVehicles] = await Promise.all([
+        ctx.db.query("vehicles").withIndex("by_org_status", (q) =>
+          q.eq("orgId", args.orgId).eq("status", "AVAILABLE")
+        ).filter(q => q.neq(q.field("isDeleted"), true)).order("desc").take(200),
+        ctx.db.query("vehicles").withIndex("by_org_status", (q) =>
+          q.eq("orgId", args.orgId).eq("status", "RESERVED")
+        ).filter(q => q.neq(q.field("isDeleted"), true)).order("desc").take(200),
+      ]);
+      vehicles = [...availableVehicles, ...reservedVehicles];
+    } else if (args.status) {
+      vehicles = await ctx.db.query("vehicles").withIndex("by_org_status", (q) =>
         q.eq("orgId", args.orgId).eq("status", args.status!)
-      ).filter(q => q.neq(q.field("isDeleted"), true));
+      ).filter(q => q.neq(q.field("isDeleted"), true)).order("desc").take(200);
     } else {
-      q = ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .filter(q => q.neq(q.field("isDeleted"), true));
+      vehicles = await ctx.db.query("vehicles").withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .filter(q => q.neq(q.field("isDeleted"), true)).order("desc").take(200);
     }
-
-    const vehicles = await q.order("desc").take(200);
 
     const pendingRequests = await ctx.db
       .query("vehicleStatusRequests")
@@ -635,7 +645,7 @@ export const importBulk = mutation({
       purchasePrice: v.optional(v.number()),
       status: v.optional(v.string()),
       notes: v.optional(v.string()),
-      // Per-company bank valuations carried over from the spreadsheet's
+      // Per-company financing valuations carried over from the spreadsheet's
       // valuation columns. `companyId` targets an existing finance company;
       // `companyName` (no companyId) means the column's header didn't match
       // any existing company and a placeholder one should be auto-created.

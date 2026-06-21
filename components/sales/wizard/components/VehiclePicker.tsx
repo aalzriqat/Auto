@@ -53,10 +53,15 @@ export default function VehiclePicker({
           open ? "border-indigo-500 ring-1 ring-indigo-500/30" : "border-border hover:border-muted-foreground/60"
         )}
       >
-        <span className={selected ? "text-foreground" : "text-muted-foreground"}>
+        <span className={cn("flex items-center gap-2", selected ? "text-foreground" : "text-muted-foreground")}>
           {selected
             ? `${selected.year} ${selected.make} ${selected.model} — ${selected.vin}`
             : "Select an available vehicle…"}
+          {selected?.status === "RESERVED" && (
+            <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-500">
+              Reserved — pending deal
+            </span>
+          )}
         </span>
         <ChevronDown className={cn("w-4 h-4 text-muted-foreground transition-transform", open && "rotate-180")} />
       </button>
@@ -100,9 +105,14 @@ export default function VehiclePicker({
                     )}
                   >
                     <div>
-                      <p className="font-medium">
+                      <p className="font-medium flex items-center gap-2">
                         {v.year} {v.make} {v.model}
                         {v.trim ? ` ${v.trim}` : ""}
+                        {v.status === "RESERVED" && (
+                          <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-500">
+                            Reserved — pending deal
+                          </span>
+                        )}
                       </p>
                       <p className="text-xs text-muted-foreground">{v.vin} · {v.color}</p>
                     </div>

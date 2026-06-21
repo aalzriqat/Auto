@@ -15,6 +15,7 @@ import {
   createSaleTransaction,
   closeLeadsAsWon,
 } from "./utils/saleHelpers";
+import { resolveDepositsForQuote } from "./utils/depositHelpers";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
@@ -148,7 +149,7 @@ export const create = mutation({
       throwAppError(AppErrorCode.RATE_LIMIT_EXCEEDED, `Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
     }
 
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
 
     validateInput(CreateSaleSchema, args);
 
@@ -246,12 +247,23 @@ export const create = mutation({
     });
 
     await markVehicleAsSold(ctx, args.vehicleId);
+
+    let previouslyCollected = 0;
+    if (args.quoteId) {
+      previouslyCollected = await resolveDepositsForQuote(ctx, {
+        quoteId: args.quoteId,
+        resolution: "APPLIED",
+        actorId: user._id,
+      });
+    }
+
     await createSaleTransaction(ctx, {
       orgId: args.orgId,
       vehicleId: args.vehicleId,
       salePrice: args.salePrice,
       saleDate: args.saleDate,
       vehicle,
+      previouslyCollected,
     });
     await closeLeadsAsWon(ctx, {
       orgId: args.orgId,

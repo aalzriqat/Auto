@@ -64,6 +64,9 @@ export default function Step1QuoteSetup({
   const [manualInsuranceRate, setManualInsuranceRate] = useState(
     initialData.manualInsuranceRate || 0
   );
+  const [manualExecutionCommission, setManualExecutionCommission] = useState(
+    initialData.manualExecutionCommission || 0
+  );
 
   const [customerStatuses, setCustomerStatuses] = useState<string[]>([]);
 
@@ -81,7 +84,7 @@ export default function Step1QuoteSetup({
 
   const availableVehicles = useQuery(
     api.vehicles.listAll,
-    activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE" } : "skip"
+    activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE", includeReserved: true } : "skip"
   );
 
   const form = useForm<Step1Values>({
@@ -135,6 +138,7 @@ export default function Step1QuoteSetup({
           selectedCompanyId: selectedCompanyId,
           manualProfitRate,
           manualInsuranceRate,
+          manualExecutionCommission,
         },
       });
     } finally {
@@ -159,6 +163,7 @@ export default function Step1QuoteSetup({
       selectedCompanyId,
       manualProfitRate,
       manualInsuranceRate,
+      manualExecutionCommission,
     });
   };
 
@@ -357,6 +362,8 @@ export default function Step1QuoteSetup({
             manualInsuranceRate={manualInsuranceRate}
             onChangeManualProfitRate={setManualProfitRate}
             onChangeManualInsuranceRate={setManualInsuranceRate}
+            manualExecutionCommission={manualExecutionCommission}
+            onChangeManualExecutionCommission={setManualExecutionCommission}
           />
         )}
 

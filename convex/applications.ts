@@ -5,6 +5,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { closeLeadsAsWon } from "./utils/saleHelpers";
+import { releaseHoldForRejectedQuote, resolveDepositsForQuote } from "./utils/depositHelpers";
 
 export const list = query({
   args: {
@@ -192,6 +193,10 @@ export const updateStatus = mutation({
       approvedBy,
       approvedAt,
     });
+
+    if (args.status === "REJECTED" && app.status !== "REJECTED") {
+      await releaseHoldForRejectedQuote(ctx, { quoteId: app.quoteId });
+    }
   },
 });
 
@@ -254,6 +259,12 @@ export const finalizeDeal = mutation({
       customerId: app.customerId,
       vehicleId: app.vehicleId,
       leadId: quote.leadId,
+    });
+
+    await resolveDepositsForQuote(ctx, {
+      quoteId: app.quoteId,
+      resolution: "APPLIED",
+      actorId: auth.user._id,
     });
 
     return true;

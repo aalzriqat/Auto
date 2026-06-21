@@ -273,3 +273,27 @@ describe("vehicles.update — auto-post on status → AVAILABLE", () => {
     });
   });
 });
+
+describe("vehicles.listAll includeReserved", () => {
+  test("status AVAILABLE without includeReserved excludes RESERVED vehicles", async () => {
+    const { orgId, asUser } = await setup();
+
+    await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle, vin: "1HGCM82633A700001", status: "AVAILABLE" });
+    await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle, vin: "1HGCM82633A700002", status: "RESERVED" });
+
+    const results = await asUser.query(api.vehicles.listAll, { orgId, status: "AVAILABLE" });
+    expect(results.every((v) => v.status === "AVAILABLE")).toBe(true);
+    expect(results.length).toBe(1);
+  });
+
+  test("status AVAILABLE with includeReserved also returns RESERVED vehicles", async () => {
+    const { orgId, asUser } = await setup();
+
+    await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle, vin: "1HGCM82633A700003", status: "AVAILABLE" });
+    await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle, vin: "1HGCM82633A700004", status: "RESERVED" });
+
+    const results = await asUser.query(api.vehicles.listAll, { orgId, status: "AVAILABLE", includeReserved: true });
+    const statuses = results.map((v) => v.status).sort();
+    expect(statuses).toEqual(["AVAILABLE", "RESERVED"]);
+  });
+});

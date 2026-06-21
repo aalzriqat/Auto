@@ -1,15 +1,19 @@
 "use client";
 
+import { useState } from "react";
+import Link from "next/link";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { PaymentType, WizardData } from "../types";
 import { Button } from "@/components/ui/button";
-import { CheckCircle2, FileDown, LogOut } from "lucide-react";
+import { CheckCircle2, FileDown, LogOut, HandCoins, FileText } from "lucide-react";
 import { QuotePrintTemplate } from "../../QuotePrintTemplate";
+import { RecordDepositDialog } from "../components/RecordDepositDialog";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
-import { useQuery } from "convex/react";
+import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrgSettings } from "@/hooks/useOrgSettings";
+import { toast } from "@/components/ui/sonner";
 
 interface Step4QuoteSuccessProps {
   paymentType: PaymentType;
@@ -26,7 +30,7 @@ export function Step4QuoteSuccess({
   paymentType,
   wizardData,
   selectedCustomer,
-  quoteId: _quoteId,
+  quoteId,
   selectedVehicle,
   selectedCompany,
   selectedResult,
@@ -39,6 +43,26 @@ export function Step4QuoteSuccess({
     api.orgSettings.getLogoUrl,
     activeOrgId ? { orgId: activeOrgId } : "skip"
   );
+
+  const [depositDialogOpen, setDepositDialogOpen] = useState(false);
+  const [depositRecorded, setDepositRecorded] = useState(false);
+  const [applicationId, setApplicationId] = useState<Id<"financeApplications"> | null>(null);
+  const [isStartingApplication, setIsStartingApplication] = useState(false);
+  const createApplication = useMutation(api.applications.createFromQuote);
+
+  const handleStartApplication = async () => {
+    if (!activeOrgId) return;
+    setIsStartingApplication(true);
+    try {
+      const id = await createApplication({ orgId: activeOrgId, quoteId });
+      setApplicationId(id);
+      toast.success(t("ApplicationStartedSuccess" as any) ?? "Finance application started");
+    } catch (error: any) {
+      toast.error(error.message || (t("ApplicationStartFail" as any) ?? "Failed to start finance application"));
+    } finally {
+      setIsStartingApplication(false);
+    }
+  };
 
   const orgBranding = {
     name: orgSettings?.dealershipName,
@@ -100,7 +124,7 @@ export function Step4QuoteSuccess({
           </p>
         </div>
 
-        <div className="pt-6 flex flex-col sm:flex-row gap-4 justify-center items-center">
+        <div className="pt-6 flex flex-wrap gap-4 justify-center items-center">
           <Button
             onClick={handleDownload}
             className="bg-indigo-600 hover:bg-indigo-700 min-w-[200px]"
@@ -110,12 +134,56 @@ export function Step4QuoteSuccess({
             {t("DownloadPDFQuote" as any)}
           </Button>
 
+          <Button
+            onClick={() => setDepositDialogOpen(true)}
+            disabled={depositRecorded}
+            variant="outline"
+            size="lg"
+            className="min-w-[200px] border-amber-500/40 text-amber-600 hover:bg-amber-500/10"
+          >
+            <HandCoins className="w-4 h-4 me-2" />
+            {depositRecorded
+              ? (t("DepositRecorded" as any) ?? "Deposit Recorded ✓")
+              : (t("RecordDeposit" as any) ?? "Record Deposit")}
+          </Button>
+
+          {paymentType === "INSTALLMENT" && (
+            applicationId ? (
+              <Button asChild variant="outline" size="lg" className="min-w-[200px] border-emerald-500/40 text-emerald-600 hover:bg-emerald-500/10">
+                <Link href={activeOrgId ? `/${activeOrgId}/applications` : "#"}>
+                  <FileText className="w-4 h-4 me-2" />
+                  {t("ViewApplication" as any) ?? "View Application →"}
+                </Link>
+              </Button>
+            ) : (
+              <Button
+                onClick={handleStartApplication}
+                disabled={isStartingApplication}
+                variant="outline"
+                size="lg"
+                className="min-w-[200px]"
+              >
+                <FileText className="w-4 h-4 me-2" />
+                {isStartingApplication
+                  ? (t("Saving" as any) || "Saving...")
+                  : (t("StartFinanceApplication" as any) ?? "Start Finance Application")}
+              </Button>
+            )
+          )}
+
           <Button onClick={onClose} variant="outline" size="lg" className="min-w-[200px]">
             <LogOut className="w-4 h-4 me-2" />
             {t("DoneClose" as any)}
           </Button>
         </div>
       </div>
+
+      <RecordDepositDialog
+        open={depositDialogOpen}
+        onOpenChange={setDepositDialogOpen}
+        quoteId={quoteId}
+        onRecorded={() => setDepositRecorded(true)}
+      />
 
       <QuotePrintTemplate
         paymentType={paymentType}

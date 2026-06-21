@@ -479,6 +479,34 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_org_status", ["orgId", "status"]),
 
+  deposits: defineTable({
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    customerId: v.id("customers"),
+    quoteId: v.id("quotes"),
+    amount: v.number(),
+    status: v.union(
+      v.literal("HELD"),
+      v.literal("APPLIED"),
+      v.literal("REFUNDED"),
+      v.literal("FORFEITED")
+    ),
+    // Whether this deposit is currently contributing to the vehicle's RESERVED
+    // hold. Kept separate from `status` so a rejected application can release
+    // the vehicle immediately while the deposit itself stays HELD pending a
+    // manager's manual refund/forfeit decision.
+    holdActive: v.boolean(),
+    notes: v.optional(v.string()),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    resolvedBy: v.optional(v.id("users")),
+    resolvedAt: v.optional(v.number()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_quote", ["quoteId"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_vehicle_hold", ["vehicleId", "holdActive"]),
+
   companyDocumentRules: defineTable({
     orgId: v.id("organizations"),
     companyId: v.optional(v.id("financeCompanies")), // Null means required for ALL deals (e.g., ID)

@@ -54,7 +54,7 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
     activeOrgId ? { orgId: activeOrgId } : "skip",
     { initialNumItems: 100 }
   );
-  const vehicles = useQuery(api.vehicles.listAll, activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE" } : "skip");
+  const vehicles = useQuery(api.vehicles.listAll, activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE", includeReserved: true } : "skip");
   const dynamicLeadSources = useQuery(
     api.orgLeadSources.list,
     activeOrgId ? { orgId: activeOrgId } : "skip"
@@ -227,7 +227,7 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                         options={vehicles?.map((v) => ({
                           value: v._id,
                           label: `${v.year} ${v.make} ${v.model}`,
-                          subLabel: `${v.vin} · ${v.sellingPrice.toLocaleString()} JOD`,
+                          subLabel: `${v.vin} · ${v.sellingPrice.toLocaleString()} JOD${v.status === "RESERVED" ? " · Reserved (pending deal)" : ""}`,
                         })) ?? []}
                       />
                     </FormControl>
