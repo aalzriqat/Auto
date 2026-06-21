@@ -41,10 +41,8 @@ export function ManualFinanceCard({
   const result = calculateUnifiedMurabaha({
     vehiclePrice,
     downPayment,
-    commission: 0,
-    processingFees: 0,
-    executionCommission,
-    executionFees,
+    commission: executionCommission,
+    processingFees: executionFees,
     annualProfitRate: profitRate,
     annualInsuranceRate: insuranceRate,
     termMonths,

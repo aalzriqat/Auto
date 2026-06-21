@@ -86,10 +86,8 @@ export function Step3Review({
       const result = calculateUnifiedMurabaha({
         vehiclePrice: effectivePrice,
         downPayment: wizardData.downPayment,
-        commission: 0,
-        processingFees: 0,
-        executionCommission: wizardData.manualExecutionCommission || 0,
-        executionFees: wizardData.manualExecutionFees || 0,
+        commission: wizardData.manualExecutionCommission || 0,
+        processingFees: wizardData.manualExecutionFees || 0,
         annualProfitRate: wizardData.manualProfitRate || 0,
         annualInsuranceRate: wizardData.manualInsuranceRate || 0,
         termMonths: wizardData.termMonths,
