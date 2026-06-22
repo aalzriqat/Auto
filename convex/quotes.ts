@@ -51,12 +51,10 @@ export const saveQuote = mutation({
     recipientName: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    // We don't have MANAGE_SALES in permissions yet, using MANAGE_VEHICLES/VIEW_CUSTOMERS
-    // Wait, let's use a generic permission we know exists or just MANAGE_VEHICLES for now.
-    // Let me check what permissions exist... Wait, earlier TS error said:
-    // "Did you mean 'MANAGE_USERS'?" for MANAGE_SALES.
-    // I will use MANAGE_VEHICLES for now to represent sales staff.
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+    // A quote is an informational financing draft, not a committed sale —
+    // gated to VIEW_SALES (held by SALES/MANAGER/ACCOUNTANT/OWNER) rather
+    // than CREATE_SALES, which is reserved for finalizing an actual sale.
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
 
     if (args.leadId) {
       const lead = await ctx.db.get(args.leadId);
@@ -81,7 +79,7 @@ export const updateQuoteStatus = mutation({
     status: v.union(v.literal("DRAFT"), v.literal("SHARED"), v.literal("ACCEPTED"), v.literal("EXPIRED")),
   },
   handler: async (ctx, { orgId, quoteId, status }) => {
-    await requireTenantAuth(ctx, orgId, [PERMISSIONS.EDIT_VEHICLES]);
+    await requireTenantAuth(ctx, orgId, [PERMISSIONS.VIEW_SALES]);
     const existing = await ctx.db.get(quoteId);
     if (!existing || existing.orgId !== orgId) throw new ConvexError("Not found");
 

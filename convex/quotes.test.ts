@@ -7,7 +7,7 @@ vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
 }));
 
-const PERMISSIONS = ["edit:vehicles", "view:customers", "view:vehicles", "create:leads", "view:leads"];
+const PERMISSIONS = ["view:sales", "view:customers", "view:vehicles", "create:leads", "view:leads"];
 
 async function setup() {
   const t = convexTest(schema, import.meta.glob("./**/*.*s"));
