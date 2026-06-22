@@ -27,7 +27,16 @@ export const requestCreate = mutation({
     }), // The vehicle creation payload
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId);
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+    if (
+      role.name !== "OWNER" &&
+      !role.permissions.includes(PERMISSIONS.CREATE_VEHICLES) &&
+      !role.permissions.includes(PERMISSIONS.CREATE_VEHICLES_REQUEST)
+    ) {
+      throw new ConvexError(
+        `Forbidden: Missing required permissions: ${PERMISSIONS.CREATE_VEHICLES_REQUEST}`
+      );
+    }
 
     const requestId = await ctx.db.insert("vehicleEdits", {
       orgId: args.orgId,
@@ -73,7 +82,16 @@ export const requestUpdate = mutation({
     }), // The vehicle update payload (patch)
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId);
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+    if (
+      role.name !== "OWNER" &&
+      !role.permissions.includes(PERMISSIONS.EDIT_VEHICLES) &&
+      !role.permissions.includes(PERMISSIONS.EDIT_VEHICLES_REQUEST)
+    ) {
+      throw new ConvexError(
+        `Forbidden: Missing required permissions: ${PERMISSIONS.EDIT_VEHICLES_REQUEST}`
+      );
+    }
 
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.orgId !== args.orgId) {

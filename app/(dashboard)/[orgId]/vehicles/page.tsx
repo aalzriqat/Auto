@@ -93,6 +93,12 @@ export default function VehiclesPage() {
   const canCreate = permissions.includes("create:vehicles");
   const canEdit = permissions.includes("edit:vehicles");
   const canDelete = permissions.includes("delete:vehicles");
+  // Distinct from canCreate/canEdit above: those gate which mutation gets
+  // called (direct vs. request-for-approval), these gate whether the
+  // Add/Edit buttons appear at all — a "Requires Approval" role still needs
+  // to see and use them, just routed through requestCreate/requestUpdate.
+  const canCreateOrRequest = canCreate || permissions.includes("create:vehicles:request");
+  const canEditOrRequest = canEdit || permissions.includes("edit:vehicles:request");
 
   const pendingRequests = useQuery(api.vehicleRequests.listPending, activeOrgId && canEdit ? { orgId: activeOrgId } : "skip");
   const pendingEdits = useQuery(api.vehicleEdits.listPending, activeOrgId && canEdit ? { orgId: activeOrgId } : "skip");
@@ -239,14 +245,14 @@ export default function VehiclesPage() {
             </Button>
           )}
           {canCreate && (
-            <>
-              <Button variant="outline" onClick={() => setIsImportDialogOpen(true)}>
-                <FileSpreadsheet className="me-2 h-4 w-4" /> {t("Import" as any)}
-              </Button>
-              <Button onClick={handleAddNew}>
-                <Plus className="me-2 h-4 w-4" /> {t("AddVehicle")}
-              </Button>
-            </>
+            <Button variant="outline" onClick={() => setIsImportDialogOpen(true)}>
+              <FileSpreadsheet className="me-2 h-4 w-4" /> {t("Import" as any)}
+            </Button>
+          )}
+          {canCreateOrRequest && (
+            <Button onClick={handleAddNew}>
+              <Plus className="me-2 h-4 w-4" /> {t("AddVehicle")}
+            </Button>
           )}
         </div>
       </div>
@@ -297,7 +303,7 @@ export default function VehiclesPage() {
                 <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => setGalleryVehicle(vehicle)}>
                   <ImageIcon className="h-4 w-4 text-muted-foreground" />
                 </Button>
-                {canEdit && (
+                {canEditOrRequest && (
                   <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => handleEdit(vehicle)}>
                     <Pencil className="h-4 w-4 text-muted-foreground" />
                   </Button>
@@ -362,21 +368,33 @@ export default function VehiclesPage() {
                   </TableCell>
                   <TableCell>{vehicle.sellingPrice.toLocaleString()} JOD</TableCell>
                   <TableCell>
-                    <button
-                      onClick={() => {
-                        setStatusRequestVehicle(vehicle);
-                        setSelectedStatus(vehicle.status);
-                      }}
-                      className="hover:opacity-80 transition-opacity flex flex-col items-start text-left gap-1"
-                    >
-                      <StatusBadge status={vehicle.status} t={t} />
-                      {vehicle.pendingStatusRequest && (
-                        <span className="text-[10px] text-muted-foreground font-medium flex items-center mt-1">
-                          <Hourglass className="h-3 w-3 me-1 inline" />
-                          {t("Pending" as any)}: {vehicle.pendingStatusRequest}
-                        </span>
-                      )}
-                    </button>
+                    {canEditOrRequest ? (
+                      <button
+                        onClick={() => {
+                          setStatusRequestVehicle(vehicle);
+                          setSelectedStatus(vehicle.status);
+                        }}
+                        className="hover:opacity-80 transition-opacity flex flex-col items-start text-left gap-1"
+                      >
+                        <StatusBadge status={vehicle.status} t={t} />
+                        {vehicle.pendingStatusRequest && (
+                          <span className="text-[10px] text-muted-foreground font-medium flex items-center mt-1">
+                            <Hourglass className="h-3 w-3 me-1 inline" />
+                            {t("Pending" as any)}: {vehicle.pendingStatusRequest}
+                          </span>
+                        )}
+                      </button>
+                    ) : (
+                      <div className="flex flex-col items-start gap-1">
+                        <StatusBadge status={vehicle.status} t={t} />
+                        {vehicle.pendingStatusRequest && (
+                          <span className="text-[10px] text-muted-foreground font-medium flex items-center mt-1">
+                            <Hourglass className="h-3 w-3 me-1 inline" />
+                            {t("Pending" as any)}: {vehicle.pendingStatusRequest}
+                          </span>
+                        )}
+                      </div>
+                    )}
                   </TableCell>
                   <TableCell className="max-w-[200px] truncate" title={vehicle.notes}>
                     {vehicle.notes ? vehicle.notes : <span className="text-muted-foreground italic text-xs">{t("NoNotes" as any)}</span>}
@@ -391,7 +409,7 @@ export default function VehiclesPage() {
                     <Button variant="ghost" size="icon" onClick={() => setHistoryVehicle(vehicle)} title={t("ViewAuditTrail" as any)}>
                       <History className="h-4 w-4 text-muted-foreground" />
                     </Button>
-                    {canEdit && (
+                    {canEditOrRequest && (
                       <Button variant="ghost" size="icon" onClick={() => handleEdit(vehicle)} title={t("EditVehicle" as any)}>
                         <Pencil className="h-4 w-4 text-muted-foreground" />
                       </Button>

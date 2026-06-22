@@ -14,7 +14,9 @@ const vehicleStatus = v.union(
 );
 
 /**
- * Any user with view:vehicles can submit a status change request.
+ * Submitting a status change request requires Edit Vehicles to be set to
+ * either Direct Access or Requires Approval — a role with No Access
+ * shouldn't be able to request changes just because it can view vehicles.
  */
 export const create = mutation({
   args: {
@@ -24,7 +26,16 @@ export const create = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+    if (
+      role.name !== "OWNER" &&
+      !role.permissions.includes(PERMISSIONS.EDIT_VEHICLES) &&
+      !role.permissions.includes(PERMISSIONS.EDIT_VEHICLES_REQUEST)
+    ) {
+      throw new ConvexError(
+        `Forbidden: Missing required permissions: ${PERMISSIONS.EDIT_VEHICLES_REQUEST}`
+      );
+    }
 
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.orgId !== args.orgId) {
