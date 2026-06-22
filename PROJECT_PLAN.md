@@ -38,6 +38,7 @@
 | 19b | main | Lead → Sale Conversion Visibility (CRM data quality, part 4) | ✅ Done |
 | 21 | main | Data Quality Dashboard Widget (CRM data quality, part 5) | ✅ Done |
 | 25 | main | Instagram Engagement: Comments/DMs Capture, Auto-Reply, Lead Creation, Social Inbox | ✅ Done |
+| 26 | main | Facebook Page Integration: Connect, Post, Inbound Engagement + Lead-Creation Toggles | ✅ Done |
 
 ---
 
@@ -692,4 +693,31 @@ Built and debugged live in production. Two undocumented Meta API quirks were fou
 
 **Known gap:** the self-reply-loop fix has no automated test — this codebase has no httpAction-level test harness for any webhook route (`convex/http.ts` isn't exercised via `t.fetch` anywhere), so it was verified by reasoning about the documented Graph API behavior and needs live production confirmation, same as the earlier dual-ID bug.
 
-**Not yet pursued:** `instagram_business_manage_messages` App Review submission (still Tester-only). **Next up:** Phase 26 — Facebook Page integration (OAuth + webhook, same shape as this phase but on `graph.facebook.com`; see [[project-instagram-integration]] memory for scope research already done).
+**Not yet pursued:** `instagram_business_manage_messages` App Review submission (still Tester-only).
+
+## Phase 26 — Facebook Page Integration: Connect, Post, Inbound Engagement ✅
+
+**Branch:** `main` · Brings Facebook Pages to parity with Instagram (Phases 22-25) in one pass — connect, manual + auto posting, and inbound comment/Messenger DM engagement — reusing Instagram's proven architecture rather than redesigning from scratch. Also adds a per-platform, per-event-kind toggle for whether inbound comments/DMs create a CRM lead at all (requested mid-build), and reworks the Social Inbox's grouping key from `leadId` to `customerId` to support that.
+
+Key structural difference from Instagram: Facebook Login authenticates a person who may manage multiple Pages, so token exchange has an extra `GET /me/accounts` step to resolve the Page + its own Page Access Token (non-expiring, unlike Instagram's 60-day token) — the first Page returned is used, no multi-page picker. The Instagram self-reply webhook loop (Phase 25 bug) was built in as a day-one guard here, not a follow-up fix.
+
+### Delivered
+- [x] `convex/schema.ts` — `orgSettings` gains `facebookPageId`/`facebookPageAccessToken`/`facebookPageName`/`facebookConnectedByUserId`/`facebookTokenExpiresAt`/`facebookAutoReply*` + per-platform `instagramLeadFromCommentsEnabled`/`instagramLeadFromDmsEnabled`/`facebookLeadFromCommentsEnabled`/`facebookLeadFromDmsEnabled` (undefined defaults to `true`, preserving pre-toggle behavior); `customers.facebookUserId`; new `facebookEvents` table mirroring `instagramEvents` (kept separate, not merged, to avoid touching tested live Instagram code); `by_org_customer` index added to both event tables; `webhookLogs.source` gains `facebook`/`facebook-oauth` (in both `schema.ts` and `adminSystem.ts`'s duplicated validator)
+- [x] `convex/facebookIntegrations.ts` (new) — OAuth connect (Facebook Login, `pages_show_list`/`pages_manage_posts`/`pages_manage_engagement`/`pages_messaging`/`pages_read_engagement`), token exchange (`/me/accounts` → Page token, `/me` → connecting user ID for deauth/data-deletion resolution), `subscribed_apps` opt-in, `setFacebookLeadCreationConfig`
+- [x] `convex/utils/facebookApi.ts` (new) — `postCommentReply`/`postDirectMessage` Graph API helpers
+- [x] `convex/facebookEngagement.ts` (new) — `handleIncomingFacebookEvent` (find/create customer+lead-if-enabled+vehicle-link+auto-reply), manual reply/DM actions keyed by `customerId`
+- [x] `convex/facebookPosting.ts` (new) — `publishToFacebook`, synchronous (no container-polling needed unlike Instagram): single photo via `/photos`, multi-photo via unpublished photos + `/feed` with `attached_media`
+- [x] `convex/http.ts` — `/facebook-oauth-callback`, `/facebook-deauthorize`, `/facebook-data-deletion` (reusing the generic `verifyMetaSignedRequest`/`verifyHubSignature256` helpers as-is), `/facebook-webhook` GET+POST — comment branch includes the self-reply-loop guard from day one (skips events where `from.id` matches the org's own `facebookPageId`)
+- [x] `convex/socialPostingData.ts` — `requestPost` takes a `platform` arg, branches connection-check and scheduled action; `markPostResult` notification text is platform-labeled
+- [x] `convex/utils/socialAutoPost.ts` — `maybeAutoPostToFacebook`, called alongside `maybeAutoPostToInstagram` at all 3 existing call sites (`vehicles.ts`, `vehicleEdits.ts`, `vehicleRequests.ts`); `socialIntegrations.setAutoPostEnabled`'s connect-gate fixed to accept either platform (was Instagram-only, a real gap for Facebook-only orgs)
+- [x] `convex/instagramEngagement.ts`/`facebookEngagement.ts` — lead creation is now independently toggleable per event kind; when off, the event is still captured and still auto-replied to, it just doesn't create a Lead or fire a notification
+- [x] `convex/socialInbox.ts` (new) — cross-platform `listConversations`/`listEventsForCustomer`, grouped by `customerId` (not `leadId`, since lead creation is now optional), merging `instagramEvents` + `facebookEvents` in JS and tagging each row with `platform`
+- [x] `components/leads/SocialConversationDialog.tsx`, `app/(dashboard)/[orgId]/social-inbox/page.tsx`, `app/(dashboard)/[orgId]/leads/page.tsx` — switched to `socialInbox`/`customerId`, dialog reply/DM actions dispatch by `event.platform`; platform badge (lucide-react has no IG/FB brand icons, used colored initial badges)
+- [x] `app/(dashboard)/[orgId]/settings/integrations/client.tsx` — Facebook connect/disconnect card mirroring Instagram's, shared auto-post toggle (gated on either connection, not duplicated per card), per-platform lead-creation toggles
+- [x] `components/vehicles/VehicleMarketingTab.tsx` — "Post to Facebook" button alongside Instagram's, platform badge on post history, engagement (likes/comments) panel scoped to Instagram posts only (Facebook has no equivalent wired up)
+- [x] `lib/i18n/domains/settings.ts`, `socialInbox.ts`, `vehicles.ts` — new EN + AR strings
+- [x] `convex/_generated/api.d.ts` — hand-extended with the new modules; full `npx convex codegen` push was blocked by an unrelated pre-existing gap (the dev deployment was missing several optional env vars `auth.config.ts` transitively references), not pursued further since it's outside this phase's scope
+- [x] New test files: `facebookIntegrations.test.ts`, `facebookEngagement.test.ts`, `socialInbox.test.ts` (28 new tests); extended `instagramEngagement.test.ts`, `socialIntegrations.test.ts`, `socialPostingData.test.ts` for the new signatures/toggles
+- [x] Full suite green (255 passed, 22 skipped), clean typecheck/lint/build
+
+**Known gaps, same category as Phase 25's:** the self-reply-loop guard has no automated test (no httpAction test harness in this codebase); unconfirmed whether Facebook Login can be added as a second product on the existing Instagram-configured Meta App or needs a separate App — user should expect live Meta dashboard setup, same as every prior integration round. Multi-Page orgs aren't given a picker (first Page returned is used).

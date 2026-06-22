@@ -18,35 +18,49 @@ import {
 import { Send, Loader2, MessageCircle, Car } from "lucide-react";
 
 interface SocialConversationDialogProps {
-  leadId: Id<"leads"> | null;
+  customerId: Id<"customers"> | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
 
-export function SocialConversationDialog({ leadId, open, onOpenChange }: SocialConversationDialogProps) {
+export function SocialConversationDialog({ customerId, open, onOpenChange }: SocialConversationDialogProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
 
   const events = useQuery(
-    api.instagramEngagement.listEventsForLead,
-    activeOrgId && leadId ? { orgId: activeOrgId, leadId } : "skip"
+    api.socialInbox.listEventsForCustomer,
+    activeOrgId && customerId ? { orgId: activeOrgId, customerId } : "skip"
   );
-  const replyToComment = useAction(api.instagramEngagement.replyToInstagramComment);
-  const sendDirectMessage = useAction(api.instagramEngagement.sendInstagramDirectMessage);
+  const replyToInstagramComment = useAction(api.instagramEngagement.replyToInstagramComment);
+  const sendInstagramDirectMessage = useAction(api.instagramEngagement.sendInstagramDirectMessage);
+  const replyToFacebookComment = useAction(api.facebookEngagement.replyToFacebookComment);
+  const sendFacebookDirectMessage = useAction(api.facebookEngagement.sendFacebookDirectMessage);
 
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
   const [busyEventId, setBusyEventId] = useState<string | null>(null);
   const [dmDraft, setDmDraft] = useState("");
   const [sendingDm, setSendingDm] = useState(false);
 
-  const handleReply = async (eventId: Id<"instagramEvents">) => {
+  const handleReply = async (event: { _id: string; platform: "instagram" | "facebook" }) => {
     if (!activeOrgId) return;
-    const message = (replyDrafts[eventId] ?? "").trim();
+    const message = (replyDrafts[event._id] ?? "").trim();
     if (!message) return;
-    setBusyEventId(eventId);
+    setBusyEventId(event._id);
     try {
-      await replyToComment({ orgId: activeOrgId, instagramEventId: eventId, message });
-      setReplyDrafts((prev) => ({ ...prev, [eventId]: "" }));
+      if (event.platform === "facebook") {
+        await replyToFacebookComment({
+          orgId: activeOrgId,
+          facebookEventId: event._id as Id<"facebookEvents">,
+          message,
+        });
+      } else {
+        await replyToInstagramComment({
+          orgId: activeOrgId,
+          instagramEventId: event._id as Id<"instagramEvents">,
+          message,
+        });
+      }
+      setReplyDrafts((prev) => ({ ...prev, [event._id]: "" }));
       toast.success(t("ReplySentSuccess" as any));
     } catch (error: any) {
       toast.error(error.message || t("SomethingWentWrong" as any));
@@ -55,13 +69,19 @@ export function SocialConversationDialog({ leadId, open, onOpenChange }: SocialC
     }
   };
 
+  const dmEvent = events?.find((e) => e.kind === "dm");
+
   const handleSendDm = async () => {
-    if (!activeOrgId || !leadId) return;
+    if (!activeOrgId || !customerId || !dmEvent) return;
     const message = dmDraft.trim();
     if (!message) return;
     setSendingDm(true);
     try {
-      await sendDirectMessage({ orgId: activeOrgId, leadId, message: dmDraft });
+      if (dmEvent.platform === "facebook") {
+        await sendFacebookDirectMessage({ orgId: activeOrgId, customerId, message: dmDraft });
+      } else {
+        await sendInstagramDirectMessage({ orgId: activeOrgId, customerId, message: dmDraft });
+      }
       setDmDraft("");
       toast.success(t("MessageSentSuccess" as any));
     } catch (error: any) {
@@ -71,7 +91,7 @@ export function SocialConversationDialog({ leadId, open, onOpenChange }: SocialC
     }
   };
 
-  const hasDmEvent = events?.some((e) => e.kind === "dm") ?? false;
+  const hasDmEvent = Boolean(dmEvent);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -152,7 +172,7 @@ export function SocialConversationDialog({ leadId, open, onOpenChange }: SocialC
                         size="sm"
                         className="h-7 w-7 p-0 shrink-0"
                         disabled={busyEventId === event._id || !(replyDrafts[event._id] ?? "").trim()}
-                        onClick={() => handleReply(event._id)}
+                        onClick={() => handleReply(event)}
                       >
                         <Send className="h-3.5 w-3.5" />
                       </Button>

@@ -40,6 +40,10 @@ export function VehicleMarketingTab({ vehicleId }: VehicleMarketingTabProps) {
     api.socialIntegrations.getConnectionStatus,
     activeOrgId ? { orgId: activeOrgId } : "skip"
   );
+  const fbConnection = useQuery(
+    api.facebookIntegrations.getConnectionStatus,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
   const history = useQuery(
     api.socialPostingData.listForVehicle,
     activeOrgId ? { orgId: activeOrgId, vehicleId } : "skip"
@@ -49,6 +53,7 @@ export function VehicleMarketingTab({ vehicleId }: VehicleMarketingTabProps) {
   const [selectedImageIds, setSelectedImageIds] = useState<string[]>([]);
   const [caption, setCaption] = useState("");
   const [isPosting, setIsPosting] = useState(false);
+  const [isPostingFacebook, setIsPostingFacebook] = useState(false);
 
   // Default: all photos selected, caption pre-filled from vehicle details.
   useEffect(() => {
@@ -79,6 +84,7 @@ export function VehicleMarketingTab({ vehicleId }: VehicleMarketingTabProps) {
       await requestPost({
         orgId: activeOrgId,
         vehicleId,
+        platform: "instagram",
         caption,
         imageStorageIds: selectedImageIds as Id<"_storage">[],
       });
@@ -90,7 +96,26 @@ export function VehicleMarketingTab({ vehicleId }: VehicleMarketingTabProps) {
     }
   };
 
-  if (!connection?.instagramConnected) {
+  const handlePostFacebook = async () => {
+    if (!activeOrgId || selectedImageIds.length === 0) return;
+    setIsPostingFacebook(true);
+    try {
+      await requestPost({
+        orgId: activeOrgId,
+        vehicleId,
+        platform: "facebook",
+        caption,
+        imageStorageIds: selectedImageIds as Id<"_storage">[],
+      });
+      toast.success(t("InstagramPostQueued" as any) || "Queued — you'll be notified when it's posted.");
+    } catch (error: any) {
+      toast.error(error.message || t("SomethingWentWrong" as any));
+    } finally {
+      setIsPostingFacebook(false);
+    }
+  };
+
+  if (!connection?.instagramConnected && !fbConnection?.facebookConnected) {
     return (
       <EmptyState
         icon={Camera}
@@ -142,10 +167,30 @@ export function VehicleMarketingTab({ vehicleId }: VehicleMarketingTabProps) {
         />
       </div>
 
-      <Button onClick={handlePost} disabled={isPosting || selectedImageIds.length === 0}>
-        {isPosting ? <Loader2 className="h-4 w-4 me-2 animate-spin" /> : <Camera className="h-4 w-4 me-2" />}
-        {t("PostToInstagram" as any) || "Post to Instagram"}
-      </Button>
+      <div className="flex flex-wrap gap-2">
+        {connection?.instagramConnected && (
+          <Button onClick={handlePost} disabled={isPosting || selectedImageIds.length === 0}>
+            {isPosting ? <Loader2 className="h-4 w-4 me-2 animate-spin" /> : <Camera className="h-4 w-4 me-2" />}
+            {t("PostToInstagram" as any) || "Post to Instagram"}
+          </Button>
+        )}
+        {fbConnection?.facebookConnected && (
+          <Button
+            variant={connection?.instagramConnected ? "outline" : "default"}
+            onClick={handlePostFacebook}
+            disabled={isPostingFacebook || selectedImageIds.length === 0}
+          >
+            {isPostingFacebook ? (
+              <Loader2 className="h-4 w-4 me-2 animate-spin" />
+            ) : (
+              <span className="h-4 w-4 me-2 inline-flex items-center justify-center rounded-full bg-blue-600 text-white text-[9px] font-bold">
+                f
+              </span>
+            )}
+            {t("PostToFacebook" as any) || "Post to Facebook"}
+          </Button>
+        )}
+      </div>
 
       {history && history.length > 0 && (
         <div className="space-y-2 pt-4 border-t">
@@ -246,7 +291,16 @@ function PostHistoryItem({ post }: { post: Doc<"socialPosts"> }) {
           {post.status === "FAILED" && <XCircle className="h-4 w-4 text-destructive" />}
           {post.status === "PENDING" && <Clock className="h-4 w-4 text-amber-500" />}
           <div>
-            <Badge variant="secondary" className="text-xs">{post.status}</Badge>
+            <div className="flex items-center gap-1.5">
+              <Badge variant="secondary" className="text-xs">{post.status}</Badge>
+              <span
+                className={`inline-flex items-center justify-center h-4 w-4 rounded-full text-[8px] font-bold text-white ${
+                  post.platform === "facebook" ? "bg-blue-600" : "bg-pink-600"
+                }`}
+              >
+                {post.platform === "facebook" ? "f" : "ig"}
+              </span>
+            </div>
             {post.status === "FAILED" && post.errorMessage && (
               <p className="text-xs text-destructive mt-1">{post.errorMessage}</p>
             )}
@@ -259,7 +313,7 @@ function PostHistoryItem({ post }: { post: Doc<"socialPosts"> }) {
         )}
       </div>
 
-      {post.status === "PUBLISHED" && post.externalPostId && (
+      {post.platform === "instagram" && post.status === "PUBLISHED" && post.externalPostId && (
         <div className="flex items-center gap-4 text-xs text-muted-foreground">
           <span className="flex items-center gap-1">
             <Heart className="h-3.5 w-3.5" /> {post.likeCount ?? "—"}

@@ -137,6 +137,57 @@ describe("socialIntegrations.setAutoPostEnabled", () => {
     const status = await asOwner.query(api.socialIntegrations.getConnectionStatus, { orgId });
     expect(status.socialAutoPostEnabled).toBe(true);
   });
+
+  test("allows enabling when only Facebook is connected (shared flag, not Instagram-specific)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asOwner } = await seedOwner(t);
+
+    await t.run((ctx) =>
+      ctx.runMutation(internal.facebookIntegrations.saveFacebookCredentials, {
+        orgId,
+        facebookPageId: "page_123",
+        facebookPageAccessToken: "page_token_abc",
+      })
+    );
+
+    await asOwner.mutation(api.socialIntegrations.setAutoPostEnabled, { orgId, enabled: true });
+
+    const status = await asOwner.query(api.socialIntegrations.getConnectionStatus, { orgId });
+    expect(status.socialAutoPostEnabled).toBe(true);
+  });
+});
+
+describe("socialIntegrations.setInstagramLeadCreationConfig", () => {
+  test("requires a connection before configuring, then persists the toggles", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asOwner } = await seedOwner(t);
+
+    await expect(
+      asOwner.mutation(api.socialIntegrations.setInstagramLeadCreationConfig, {
+        orgId,
+        leadFromCommentsEnabled: false,
+        leadFromDmsEnabled: true,
+      })
+    ).rejects.toThrow(/connect instagram/i);
+
+    await t.run((ctx) =>
+      ctx.runMutation(internal.socialIntegrations.saveInstagramCredentials, {
+        orgId,
+        instagramBusinessAccountId: "ig_123",
+        instagramAccessToken: "token_abc",
+      })
+    );
+
+    await asOwner.mutation(api.socialIntegrations.setInstagramLeadCreationConfig, {
+      orgId,
+      leadFromCommentsEnabled: false,
+      leadFromDmsEnabled: true,
+    });
+
+    const status = await asOwner.query(api.socialIntegrations.getConnectionStatus, { orgId });
+    expect(status.instagramLeadFromCommentsEnabled).toBe(false);
+    expect(status.instagramLeadFromDmsEnabled).toBe(true);
+  });
 });
 
 describe("socialIntegrations.consumeOAuthState", () => {

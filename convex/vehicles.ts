@@ -7,7 +7,7 @@ import { notifyManagers, getActorName } from "./utils/notifications";
 import { rateLimiter } from "./rateLimit";
 import { validateInput } from "./utils/validation";
 import { CreateVehicleSchema, UpdateVehicleSchema } from "./validations/vehicles";
-import { maybeAutoPostToInstagram } from "./utils/socialAutoPost";
+import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socialAutoPost";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -399,9 +399,15 @@ export const update = mutation({
       );
 
       if (patch.status === "AVAILABLE" && vehicle.status !== "AVAILABLE") {
+        const updatedVehicle = { ...vehicle, ...patch } as typeof vehicle;
         await maybeAutoPostToInstagram(ctx, {
           orgId: args.orgId,
-          vehicle: { ...vehicle, ...patch } as typeof vehicle,
+          vehicle: updatedVehicle,
+          triggeredByUserId: user._id,
+        });
+        await maybeAutoPostToFacebook(ctx, {
+          orgId: args.orgId,
+          vehicle: updatedVehicle,
           triggeredByUserId: user._id,
         });
       }

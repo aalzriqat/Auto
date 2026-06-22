@@ -683,4 +683,284 @@ http.route({
   }),
 });
 
+// ─── Facebook OAuth callback ────────────────────────────────────────────────
+// Registered as a Valid OAuth Redirect URI in the Meta App's
+// "Facebook Login for Business" settings:
+//   https://<convex-site>/facebook-oauth-callback
+
+http.route({
+  path: "/facebook-oauth-callback",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const url = new URL(request.url);
+    const code = url.searchParams.get("code");
+    const state = url.searchParams.get("state");
+    const oauthError = url.searchParams.get("error");
+
+    const env = getValidatedEnv();
+    const appUrl = (env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/$/, "");
+
+    if (oauthError || !code || !state) {
+      return Response.redirect(`${appUrl}/?facebookConnectError=1`, 302);
+    }
+
+    const stateRecord = await ctx.runMutation(internal.facebookIntegrations.consumeOAuthState, { state });
+    if (!stateRecord) {
+      return Response.redirect(`${appUrl}/?facebookConnectError=1`, 302);
+    }
+
+    const settingsUrl = `${appUrl}/${stateRecord.orgId}/settings/integrations`;
+
+    try {
+      await ctx.runAction(internal.facebookIntegrations.exchangeCodeForToken, {
+        orgId: stateRecord.orgId,
+        code,
+      });
+    } catch (err) {
+      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+        source: "facebook-oauth",
+        status: "error",
+        summary: "Token exchange failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return Response.redirect(`${settingsUrl}?connected=facebook&error=1`, 302);
+    }
+
+    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+      source: "facebook-oauth",
+      status: "success",
+      summary: `Connected for org ${stateRecord.orgId}`,
+    });
+
+    return Response.redirect(`${settingsUrl}?connected=facebook`, 302);
+  }),
+});
+
+// ─── Facebook deauthorize + data deletion callbacks ────────────────────────
+// Required dashboard fields for every Facebook Login app:
+//   Deauthorize callback URL:    https://<convex-site>/facebook-deauthorize
+//   Data Deletion Request URL:   https://<convex-site>/facebook-data-deletion
+// Meta POSTs a form-encoded `signed_request` to both when a user revokes
+// access or requests data deletion. Reuses the same signed_request verifier
+// Instagram's callbacks use — it's a generic Meta format, not platform-specific.
+
+http.route({
+  path: "/facebook-deauthorize",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const env = getValidatedEnv();
+    if (!env.FACEBOOK_APP_SECRET) return new Response("Not configured", { status: 500 });
+
+    const form = await request.formData().catch(() => null);
+    const signedRequest = form?.get("signed_request")?.toString();
+    if (!signedRequest) return new Response("Bad request", { status: 400 });
+
+    const payload = await verifyMetaSignedRequest(signedRequest, env.FACEBOOK_APP_SECRET);
+    if (!payload?.user_id) return new Response("Invalid signature", { status: 400 });
+
+    await ctx.runMutation(internal.facebookIntegrations.disconnectByFacebookConnectedUserId, {
+      facebookConnectedByUserId: String(payload.user_id),
+    });
+    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+      source: "facebook-oauth",
+      status: "success",
+      summary: `Deauthorized by Facebook user ${payload.user_id}`,
+    });
+
+    return new Response(null, { status: 200 });
+  }),
+});
+
+http.route({
+  path: "/facebook-data-deletion",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    const env = getValidatedEnv();
+    if (!env.FACEBOOK_APP_SECRET) return new Response("Not configured", { status: 500 });
+
+    const form = await request.formData().catch(() => null);
+    const signedRequest = form?.get("signed_request")?.toString();
+    if (!signedRequest) return new Response("Bad request", { status: 400 });
+
+    const payload = await verifyMetaSignedRequest(signedRequest, env.FACEBOOK_APP_SECRET);
+    if (!payload?.user_id) return new Response("Invalid signature", { status: 400 });
+
+    // We only ever stored the dealer's own Page ID, access token, and
+    // display name on orgSettings — clearing those is a complete erasure,
+    // no async job needed.
+    await ctx.runMutation(internal.facebookIntegrations.disconnectByFacebookConnectedUserId, {
+      facebookConnectedByUserId: String(payload.user_id),
+    });
+
+    const confirmationCode = `${payload.user_id}-${Date.now()}`;
+    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+      source: "facebook-oauth",
+      status: "success",
+      summary: `Data deletion requested by Facebook user ${payload.user_id}`,
+    });
+
+    const appUrl = (env.NEXT_PUBLIC_APP_URL ?? "").replace(/\/$/, "");
+    return new Response(
+      JSON.stringify({
+        url: `${appUrl}/data-deletion-status?id=${confirmationCode}`,
+        confirmation_code: confirmationCode,
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+  }),
+});
+
+// ─── Facebook Page comments + Messenger DMs webhook ────────────────────────
+// Single app-level callback URL, subscribed to the "feed" and "messages"
+// fields on the Page object in the Meta dashboard's Webhooks product:
+//   GET  https://<convex-site>/facebook-webhook  (verification)
+//   POST https://<convex-site>/facebook-webhook  (comments + DMs)
+// orgId is resolved per-event by reverse-looking-up the Page ID Meta
+// includes in every payload (entry[].id) against orgSettings.
+
+http.route({
+  path: "/facebook-webhook",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const url = new URL(request.url);
+    const mode = url.searchParams.get("hub.mode");
+    const token = url.searchParams.get("hub.verify_token");
+    const challenge = url.searchParams.get("hub.challenge");
+
+    if (mode !== "subscribe" || !token || !challenge) {
+      return new Response("Bad request", { status: 400 });
+    }
+
+    const env = getValidatedEnv();
+    if (!env.FACEBOOK_WEBHOOK_VERIFY_TOKEN || env.FACEBOOK_WEBHOOK_VERIFY_TOKEN !== token) {
+      return new Response("Forbidden", { status: 403 });
+    }
+
+    return new Response(challenge, { status: 200 });
+  }),
+});
+
+http.route({
+  path: "/facebook-webhook",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    let appSecret: string;
+    try {
+      const env = getValidatedEnv();
+      if (!env.FACEBOOK_APP_SECRET) throw new ConvexError("FACEBOOK_APP_SECRET not set");
+      appSecret = env.FACEBOOK_APP_SECRET;
+    } catch {
+      return new Response("Webhook secret not set or invalid env", { status: 500 });
+    }
+
+    const rawBody = await request.text();
+    const signature = request.headers.get("x-hub-signature-256");
+    if (!(await verifyHubSignature256(rawBody, signature, appSecret))) {
+      return new Response("Invalid signature", { status: 401 });
+    }
+
+    let body: any;
+    try {
+      body = JSON.parse(rawBody);
+    } catch {
+      return new Response("Invalid JSON", { status: 400 });
+    }
+
+    const entry = body?.entry?.[0];
+    const pageId: string | undefined = entry?.id;
+    if (!pageId) return new Response(null, { status: 200 });
+
+    const limitStatus = await rateLimiter.limit(ctx, "webhook", { key: pageId });
+    if (!limitStatus.ok) {
+      return new Response("Too many requests", { status: 429 });
+    }
+
+    const settings = await ctx.runQuery(internal.facebookEngagement.getSettingsByFacebookPageId, {
+      facebookPageId: pageId,
+    });
+    if (!settings) {
+      // Unrecognized Page (not connected to any org, or already
+      // disconnected) — acknowledge so Meta doesn't retry forever.
+      return new Response(null, { status: 200 });
+    }
+    const orgId = settings.orgId;
+
+    // Page comments arrive via entry[].changes[] (field === "feed",
+    // value.item === "comment"); Messenger DMs arrive via entry[].messaging[]
+    // (same shape Instagram DMs use — both ride the Messenger Platform).
+    const feedChange = entry?.changes?.find((c: any) => c.field === "feed" && c.value?.item === "comment");
+    const messagingEvent = entry?.messaging?.[0];
+
+    let summary = "Unrecognized event";
+    try {
+      if (feedChange?.value?.comment_id && feedChange.value.verb === "add") {
+        const value = feedChange.value;
+        const fromId = String(value.from?.id ?? "");
+        const isOwnPage = fromId !== "" && fromId === settings.facebookPageId;
+        if (isOwnPage) {
+          // Our own auto/manual reply re-arriving as a webhook (replying to a
+          // comment via the Graph API fires a fresh "feed" event for it too)
+          // — acknowledge without reprocessing it as a new inbound comment,
+          // the exact loop bug found and fixed on the Instagram side.
+          return new Response(null, { status: 200 });
+        }
+
+        const result = await ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+          orgId,
+          kind: "comment",
+          externalId: String(value.comment_id),
+          senderFacebookId: fromId,
+          senderName: value.from?.name,
+          text: value.message,
+          mediaId: value.post_id ? String(value.post_id) : undefined,
+        });
+        summary = `Comment from ${value.from?.name ?? fromId}`;
+        if (result?.shouldAutoReply && result.replyText) {
+          await ctx.runAction(internal.facebookEngagement.sendCommentReply, {
+            orgId,
+            commentId: String(value.comment_id),
+            message: result.replyText,
+          });
+        }
+      } else if (messagingEvent?.message?.text && !messagingEvent.message.is_echo) {
+        const senderId = String(messagingEvent.sender?.id ?? "");
+        const result = await ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+          orgId,
+          kind: "dm",
+          externalId: String(messagingEvent.message.mid ?? `${senderId}-${messagingEvent.timestamp}`),
+          senderFacebookId: senderId,
+          text: messagingEvent.message.text,
+        });
+        summary = `DM from ${senderId}`;
+        if (result?.shouldAutoReply && result.replyText) {
+          await ctx.runAction(internal.facebookEngagement.sendDirectMessage, {
+            orgId,
+            recipientFacebookId: senderId,
+            message: result.replyText,
+          });
+        }
+      } else {
+        // Edits, removals, reactions, read receipts, etc. — acknowledge silently.
+        return new Response(null, { status: 200 });
+      }
+    } catch (err) {
+      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+        source: "facebook",
+        status: "error",
+        summary,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return new Response(null, { status: 200 });
+    }
+
+    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+      source: "facebook",
+      status: "success",
+      summary,
+    });
+
+    return new Response(null, { status: 200 });
+  }),
+});
+
 export default http;

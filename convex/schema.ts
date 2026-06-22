@@ -145,6 +145,7 @@ export default defineSchema({
     phone: v.optional(v.string()),
     whatsapp: v.optional(v.string()),
     instagramUserId: v.optional(v.string()),
+    facebookUserId: v.optional(v.string()),
     email: v.optional(v.string()),
     nationalId: v.optional(v.string()),
     address: v.optional(v.string()),
@@ -670,10 +671,37 @@ export default defineSchema({
     instagramAutoReplyEnabled: v.optional(v.boolean()),
     instagramAutoReplyMessages: v.optional(v.array(v.string())),
     instagramAutoReplyLastIndex: v.optional(v.number()),
+    // Whether an inbound comment/DM creates a CRM lead. Undefined is treated
+    // as true (preserves pre-toggle behavior for orgs that connected before
+    // this setting existed) — the interaction is always captured in the
+    // Social Inbox and still gets auto-replied to either way; this only
+    // gates whether it also produces a Lead in the pipeline + notification.
+    instagramLeadFromCommentsEnabled: v.optional(v.boolean()),
+    instagramLeadFromDmsEnabled: v.optional(v.boolean()),
+    facebookPageId: v.optional(v.string()),
+    facebookPageAccessToken: v.optional(v.string()),
+    facebookPageName: v.optional(v.string()),
+    // The Facebook user ID of whoever connected the Page (from GET /me
+    // during token exchange) — distinct from facebookPageId. Needed because
+    // Meta's deauthorize/data-deletion signed_request payloads only carry
+    // the connecting user's ID, not the Page ID, so this is the only way to
+    // resolve which org's connection to clear from those callbacks.
+    facebookConnectedByUserId: v.optional(v.string()),
+    // Page tokens derived from a long-lived user token typically don't
+    // expire, but kept optional/nullable for parity with Instagram and in
+    // case Meta changes that behavior.
+    facebookTokenExpiresAt: v.optional(v.number()),
+    facebookAutoReplyEnabled: v.optional(v.boolean()),
+    facebookAutoReplyMessages: v.optional(v.array(v.string())),
+    facebookAutoReplyLastIndex: v.optional(v.number()),
+    facebookLeadFromCommentsEnabled: v.optional(v.boolean()),
+    facebookLeadFromDmsEnabled: v.optional(v.boolean()),
   })
     .index("by_org", ["orgId"])
     .index("by_instagram_business_account_id", ["instagramBusinessAccountId"])
-    .index("by_instagram_webhook_account_id", ["instagramWebhookAccountId"]),
+    .index("by_instagram_webhook_account_id", ["instagramWebhookAccountId"])
+    .index("by_facebook_page_id", ["facebookPageId"])
+    .index("by_facebook_connected_user_id", ["facebookConnectedByUserId"]),
 
   oauthStates: defineTable({
     orgId: v.id("organizations"),
@@ -702,7 +730,30 @@ export default defineSchema({
     .index("by_org_external", ["orgId", "externalId"])
     .index("by_org_sender", ["orgId", "senderInstagramId"])
     .index("by_org", ["orgId"])
-    .index("by_org_lead", ["orgId", "leadId"]),
+    .index("by_org_lead", ["orgId", "leadId"])
+    .index("by_org_customer", ["orgId", "customerId"]),
+
+  facebookEvents: defineTable({
+    orgId: v.id("organizations"),
+    externalId: v.string(),
+    kind: v.union(v.literal("comment"), v.literal("dm")),
+    senderFacebookId: v.string(),
+    senderName: v.optional(v.string()),
+    customerId: v.optional(v.id("customers")),
+    leadId: v.optional(v.id("leads")),
+    vehicleId: v.optional(v.id("vehicles")),
+    text: v.optional(v.string()),
+    autoRepliedAt: v.optional(v.number()),
+    autoReplyText: v.optional(v.string()),
+    manualReplyText: v.optional(v.string()),
+    manualRepliedAt: v.optional(v.number()),
+    manualRepliedByUserId: v.optional(v.id("users")),
+  })
+    .index("by_org_external", ["orgId", "externalId"])
+    .index("by_org_sender", ["orgId", "senderFacebookId"])
+    .index("by_org", ["orgId"])
+    .index("by_org_lead", ["orgId", "leadId"])
+    .index("by_org_customer", ["orgId", "customerId"]),
 
   socialPosts: defineTable({
     orgId: v.id("organizations"),
@@ -862,7 +913,9 @@ export default defineSchema({
       v.literal("whatsapp"),
       v.literal("resend"),
       v.literal("instagram-oauth"),
-      v.literal("instagram")
+      v.literal("instagram"),
+      v.literal("facebook-oauth"),
+      v.literal("facebook")
     ),
     status: v.union(v.literal("success"), v.literal("error")),
     summary: v.string(),

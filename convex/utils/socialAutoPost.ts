@@ -45,3 +45,45 @@ export async function maybeAutoPostToInstagram(
 
   await ctx.scheduler.runAfter(0, internal.socialPosting.publishToInstagram, { socialPostId });
 }
+
+/**
+ * Queues an auto-post to Facebook when a vehicle transitions to AVAILABLE,
+ * under the same shared `socialAutoPostEnabled` toggle Instagram uses — each
+ * platform independently no-ops if its own connection isn't active. Mirrors
+ * `maybeAutoPostToInstagram` exactly; called alongside it at every call site.
+ */
+export async function maybeAutoPostToFacebook(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicle: Doc<"vehicles">;
+    triggeredByUserId: Id<"users">;
+  }
+): Promise<void> {
+  const { orgId, vehicle, triggeredByUserId } = args;
+
+  const orgSettings = await ctx.db
+    .query("orgSettings")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .unique();
+
+  if (!orgSettings?.socialAutoPostEnabled) return;
+  if (!orgSettings.facebookPageAccessToken || !orgSettings.facebookPageId) return;
+  if (!vehicle.imageIds || vehicle.imageIds.length === 0) return;
+
+  const caption = `${vehicle.year} ${vehicle.make} ${vehicle.model}${vehicle.trim ? ` ${vehicle.trim}` : ""} — ${vehicle.sellingPrice.toLocaleString()} JOD\n${vehicle.mileage.toLocaleString()} km · ${vehicle.transmission} · ${vehicle.fuelType}\n\n#${vehicle.make.replace(/\s+/g, "")} #${vehicle.model.replace(/\s+/g, "")} #ForSale`;
+
+  const socialPostId = await ctx.db.insert("socialPosts", {
+    orgId,
+    vehicleId: vehicle._id,
+    platform: "facebook",
+    status: "PENDING",
+    caption,
+    imageStorageIds: vehicle.imageIds,
+    triggeredBy: "auto",
+    requestedBy: triggeredByUserId,
+    requestedAt: Date.now(),
+  });
+
+  await ctx.scheduler.runAfter(0, internal.facebookPosting.publishToFacebook, { socialPostId });
+}

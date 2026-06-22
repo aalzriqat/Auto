@@ -54,6 +54,7 @@ describe("socialPostingData.requestPost", () => {
       asUser.mutation(api.socialPostingData.requestPost, {
         orgId,
         vehicleId,
+        platform: "instagram",
         caption: "Check out this car!",
         imageStorageIds: [storageId],
       })
@@ -77,6 +78,7 @@ describe("socialPostingData.requestPost", () => {
       asUser.mutation(api.socialPostingData.requestPost, {
         orgId,
         vehicleId,
+        platform: "instagram",
         caption: "Check out this car!",
         imageStorageIds: [],
       })
@@ -101,6 +103,7 @@ describe("socialPostingData.requestPost", () => {
       asUser.mutation(api.socialPostingData.requestPost, {
         orgId,
         vehicleId,
+        platform: "instagram",
         caption: "Check out this car!",
         imageStorageIds: [otherStorageId],
       })
@@ -123,6 +126,7 @@ describe("socialPostingData.requestPost", () => {
     const socialPostId = await asUser.mutation(api.socialPostingData.requestPost, {
       orgId,
       vehicleId,
+      platform: "instagram",
       caption: "Check out this car!",
       imageStorageIds: [storageId],
     });
@@ -140,6 +144,49 @@ describe("socialPostingData.requestPost", () => {
     // Not flushing the scheduled `publishToInstagram` action here — it makes
     // real `fetch` calls to Meta's Graph API, which is out of scope for a
     // unit test. Queuing behavior (PENDING row above) is what's under test.
+  });
+
+  test("rejects when Facebook isn't connected for a facebook post", async () => {
+    const { orgId, vehicleId, storageId, asUser } = await setup();
+
+    await expect(
+      asUser.mutation(api.socialPostingData.requestPost, {
+        orgId,
+        vehicleId,
+        platform: "facebook",
+        caption: "Check out this car!",
+        imageStorageIds: [storageId],
+      })
+    ).rejects.toThrow(/not connected/i);
+  });
+
+  test("queues a PENDING facebook post and schedules publishToFacebook", async () => {
+    const { t, orgId, vehicleId, storageId, userId, asUser } = await setup();
+    await t.run((ctx) =>
+      ctx.db.insert("orgSettings", {
+        orgId,
+        currency: "JOD",
+        currencySymbol: "د.أ",
+        enabledPaymentTypes: ["CASH"],
+        facebookPageId: "page_123",
+        facebookPageAccessToken: "page_token_abc",
+      })
+    );
+
+    const socialPostId = await asUser.mutation(api.socialPostingData.requestPost, {
+      orgId,
+      vehicleId,
+      platform: "facebook",
+      caption: "Check out this car!",
+      imageStorageIds: [storageId],
+    });
+
+    await t.run(async (ctx) => {
+      const post = await ctx.db.get(socialPostId);
+      expect(post?.status).toBe("PENDING");
+      expect(post?.platform).toBe("facebook");
+      expect(post?.requestedBy).toBe(userId);
+    });
   });
 });
 
@@ -252,6 +299,39 @@ describe("socialPostingData.markPostResult", () => {
         .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
         .collect();
       expect(notifications.some((n) => n.title === "Instagram post failed")).toBe(true);
+    });
+  });
+
+  test("notifies with Facebook-labeled text for a facebook post", async () => {
+    const { t, orgId, vehicleId, storageId, userId } = await setup();
+
+    const socialPostId = await t.run((ctx) =>
+      ctx.db.insert("socialPosts", {
+        orgId,
+        vehicleId,
+        platform: "facebook",
+        status: "PENDING",
+        imageStorageIds: [storageId],
+        triggeredBy: "manual",
+        requestedBy: userId,
+        requestedAt: Date.now(),
+      })
+    );
+
+    await t.run((ctx) =>
+      ctx.runMutation(internal.socialPostingData.markPostResult, {
+        socialPostId,
+        status: "PUBLISHED",
+        externalPostId: "fb_post_123",
+      })
+    );
+
+    await t.run(async (ctx) => {
+      const notifications = await ctx.db
+        .query("notifications")
+        .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
+        .collect();
+      expect(notifications.some((n) => n.title === "Posted to Facebook")).toBe(true);
     });
   });
 });

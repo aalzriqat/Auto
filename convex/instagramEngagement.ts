@@ -108,13 +108,10 @@ export const handleIncomingInstagramEvent = internalMutation({
     const needsProfileEnrichment =
       !senderUsername && customer.firstName === PLACEHOLDER_FIRST_NAME && customer.lastName === PLACEHOLDER_LAST_NAME;
 
-    // Find or create an open lead
-    const existingLeads = await ctx.db
-      .query("leads")
-      .withIndex("by_org_customer", (q) => q.eq("orgId", orgId).eq("customerId", customer!._id))
-      .collect();
-
-    const openLead = existingLeads.find((l) => !l.isDeleted && l.stage !== "WON" && l.stage !== "LOST");
+    const settings = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .unique();
 
     let vehicleId: Id<"vehicles"> | undefined;
     if (mediaId) {
@@ -126,33 +123,47 @@ export const handleIncomingInstagramEvent = internalMutation({
       vehicleId = socialPost?.vehicleId;
     }
 
-    const label = kind === "dm" ? "Instagram DM" : "Instagram Comment";
-    let leadId = openLead?._id;
-    if (!leadId) {
-      leadId = await ctx.db.insert("leads", {
-        orgId,
-        customerId: customer._id,
-        vehicleId,
-        source: label,
-        stage: "NEW",
-        notes: text ? `First ${label}: "${text.slice(0, 200)}"` : `Lead created from ${label}`,
-      });
+    // Lead creation is independently toggleable per event kind (comments vs
+    // DMs) — undefined defaults to true so orgs connected before this
+    // setting existed keep their current behavior. Off doesn't mean ignored:
+    // the event is still captured below and still eligible for auto-reply,
+    // it just doesn't produce a Lead in the pipeline or a notification.
+    const leadCreationEnabled =
+      kind === "comment"
+        ? settings?.instagramLeadFromCommentsEnabled !== false
+        : settings?.instagramLeadFromDmsEnabled !== false;
 
-      await notifyManagers(
-        ctx,
-        orgId,
-        `New ${label} Lead`,
-        `New ${label.toLowerCase()} from ${senderUsername ?? senderInstagramId}.`,
-        `/${orgId}/leads?highlightId=${leadId}`
-      );
+    const label = kind === "dm" ? "Instagram DM" : "Instagram Comment";
+    let leadId: Id<"leads"> | undefined;
+    if (leadCreationEnabled) {
+      const existingLeads = await ctx.db
+        .query("leads")
+        .withIndex("by_org_customer", (q) => q.eq("orgId", orgId).eq("customerId", customer!._id))
+        .collect();
+      const openLead = existingLeads.find((l) => !l.isDeleted && l.stage !== "WON" && l.stage !== "LOST");
+      leadId = openLead?._id;
+
+      if (!leadId) {
+        leadId = await ctx.db.insert("leads", {
+          orgId,
+          customerId: customer._id,
+          vehicleId,
+          source: label,
+          stage: "NEW",
+          notes: text ? `First ${label}: "${text.slice(0, 200)}"` : `Lead created from ${label}`,
+        });
+
+        await notifyManagers(
+          ctx,
+          orgId,
+          `New ${label} Lead`,
+          `New ${label.toLowerCase()} from ${senderUsername ?? senderInstagramId}.`,
+          `/${orgId}/leads?highlightId=${leadId}`
+        );
+      }
     }
 
     // Auto-reply eligibility: enabled, has messages, and sender not replied-to in the last 24h
-    const settings = await ctx.db
-      .query("orgSettings")
-      .withIndex("by_org", (q) => q.eq("orgId", orgId))
-      .unique();
-
     const messages = settings?.instagramAutoReplyMessages ?? [];
     let shouldAutoReply = false;
     let replyText: string | undefined;
@@ -507,19 +518,21 @@ export const replyToInstagramComment = action({
 
 /**
  * Auth gate + data load for a manual DM send. Resolves the most recent
- * inbound DM event for the lead (Instagram DMs aren't threaded per-message
- * like comments, so this is how the UI knows the customer's
+ * inbound DM event for the customer (Instagram DMs aren't threaded
+ * per-message like comments, so this is how the UI knows the customer's
  * senderInstagramId in the first place, and purely to have somewhere to
- * record the reply for display) and the org's Instagram credentials.
+ * record the reply for display) and the org's Instagram credentials. Keyed
+ * by customerId rather than leadId since lead creation is optional —
+ * a conversation can exist with no lead at all.
  */
 export const requireSendDmAccess = internalQuery({
-  args: { orgId: v.id("organizations"), leadId: v.id("leads") },
+  args: { orgId: v.id("organizations"), customerId: v.id("customers") },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_LEADS]);
 
     const events = await ctx.db
       .query("instagramEvents")
-      .withIndex("by_org_lead", (q) => q.eq("orgId", args.orgId).eq("leadId", args.leadId))
+      .withIndex("by_org_customer", (q) => q.eq("orgId", args.orgId).eq("customerId", args.customerId))
       .order("desc")
       .collect();
     const dmEvent = events.find((e) => e.kind === "dm") ?? null;
@@ -533,16 +546,16 @@ export const requireSendDmAccess = internalQuery({
   },
 });
 
-/** Sends a new DM to the customer tied to a lead, from the Social Inbox / lead dialog UI. */
+/** Sends a new DM to a customer, from the Social Inbox / conversation dialog UI. */
 export const sendInstagramDirectMessage = action({
-  args: { orgId: v.id("organizations"), leadId: v.id("leads"), message: v.string() },
+  args: { orgId: v.id("organizations"), customerId: v.id("customers"), message: v.string() },
   handler: async (ctx, args): Promise<void> => {
     const { dmEvent, orgSettings, userId } = await ctx.runQuery(
       internal.instagramEngagement.requireSendDmAccess,
-      { orgId: args.orgId, leadId: args.leadId }
+      { orgId: args.orgId, customerId: args.customerId }
     );
     if (!dmEvent) {
-      throw new ConvexError("No Instagram DM conversation found for this lead.");
+      throw new ConvexError("No Instagram DM conversation found for this customer.");
     }
     if (!args.message.trim()) {
       throw new ConvexError("Message cannot be empty.");

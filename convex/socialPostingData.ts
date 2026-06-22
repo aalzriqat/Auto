@@ -9,15 +9,17 @@ import { rateLimiter } from "./rateLimit";
 // ─── Public ───────────────────────────────────────────────────────────────────
 
 /**
- * Queues a vehicle to be posted to Instagram. Inserts a PENDING row and
- * hands off to the async `publishToInstagram` action (Instagram's container
- * → poll → publish flow can take several seconds and shouldn't block this
- * mutation or risk failing alongside an unrelated vehicle edit).
+ * Queues a vehicle to be posted to Instagram or Facebook. Inserts a PENDING
+ * row and hands off to the platform-specific publish action — Instagram's
+ * container → poll → publish flow and Facebook's photo/feed calls can both
+ * take a moment and shouldn't block this mutation or risk failing alongside
+ * an unrelated vehicle edit.
  */
 export const requestPost = mutation({
   args: {
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
+    platform: v.union(v.literal("instagram"), v.literal("facebook")),
     caption: v.string(),
     imageStorageIds: v.array(v.id("_storage")),
   },
@@ -37,8 +39,14 @@ export const requestPost = mutation({
       .query("orgSettings")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .unique();
-    if (!orgSettings?.instagramAccessToken || !orgSettings?.instagramBusinessAccountId) {
-      throw new ConvexError("Instagram is not connected — go to Settings > Integrations to connect it.");
+    if (args.platform === "instagram") {
+      if (!orgSettings?.instagramAccessToken || !orgSettings?.instagramBusinessAccountId) {
+        throw new ConvexError("Instagram is not connected — go to Settings > Integrations to connect it.");
+      }
+    } else {
+      if (!orgSettings?.facebookPageAccessToken || !orgSettings?.facebookPageId) {
+        throw new ConvexError("Facebook is not connected — go to Settings > Integrations to connect it.");
+      }
     }
 
     const vehicle = await ctx.db.get(args.vehicleId);
@@ -56,7 +64,7 @@ export const requestPost = mutation({
     const socialPostId = await ctx.db.insert("socialPosts", {
       orgId: args.orgId,
       vehicleId: args.vehicleId,
-      platform: "instagram",
+      platform: args.platform,
       status: "PENDING",
       caption: args.caption,
       imageStorageIds: args.imageStorageIds,
@@ -65,7 +73,11 @@ export const requestPost = mutation({
       requestedAt: Date.now(),
     });
 
-    await ctx.scheduler.runAfter(0, internal.socialPosting.publishToInstagram, { socialPostId });
+    if (args.platform === "instagram") {
+      await ctx.scheduler.runAfter(0, internal.socialPosting.publishToInstagram, { socialPostId });
+    } else {
+      await ctx.scheduler.runAfter(0, internal.facebookPosting.publishToFacebook, { socialPostId });
+    }
 
     return socialPostId;
   },
@@ -132,14 +144,15 @@ export const markPostResult = internalMutation({
 
     const vehicle = await ctx.db.get(post.vehicleId);
     const vehicleLabel = vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "your vehicle";
+    const platformLabel = post.platform === "instagram" ? "Instagram" : "Facebook";
 
     if (args.status === "PUBLISHED") {
       await notifyUser(
         ctx,
         post.orgId,
         post.requestedBy,
-        "Posted to Instagram",
-        `${vehicleLabel} was posted to Instagram successfully.`,
+        `Posted to ${platformLabel}`,
+        `${vehicleLabel} was posted to ${platformLabel} successfully.`,
         `/${post.orgId}/vehicles?highlightId=${post.vehicleId}`
       );
     } else {
@@ -147,8 +160,8 @@ export const markPostResult = internalMutation({
         ctx,
         post.orgId,
         post.requestedBy,
-        "Instagram post failed",
-        `${vehicleLabel} could not be posted to Instagram: ${args.errorMessage ?? "Unknown error"}`,
+        `${platformLabel} post failed`,
+        `${vehicleLabel} could not be posted to ${platformLabel}: ${args.errorMessage ?? "Unknown error"}`,
         `/${post.orgId}/vehicles?highlightId=${post.vehicleId}`
       );
     }

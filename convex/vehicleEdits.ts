@@ -4,7 +4,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { ConvexError } from "convex/values";
-import { maybeAutoPostToInstagram } from "./utils/socialAutoPost";
+import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socialAutoPost";
 
 export const requestCreate = mutation({
   args: {
@@ -199,6 +199,11 @@ export const resolve = mutation({
           const updatedVehicle = await ctx.db.get(request.vehicleId);
           if (updatedVehicle) {
             await maybeAutoPostToInstagram(ctx, {
+              orgId: args.orgId,
+              vehicle: updatedVehicle,
+              triggeredByUserId: user._id,
+            });
+            await maybeAutoPostToFacebook(ctx, {
               orgId: args.orgId,
               vehicle: updatedVehicle,
               triggeredByUserId: user._id,

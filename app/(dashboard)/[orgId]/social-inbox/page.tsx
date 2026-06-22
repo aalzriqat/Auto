@@ -21,7 +21,9 @@ import {
 } from "@/components/ui/table";
 
 type ConversationRow = {
-  leadId: Id<"leads">;
+  customerId: Id<"customers">;
+  leadId: Id<"leads"> | null;
+  platform: "instagram" | "facebook";
   senderDisplayName: string;
   latestText: string | undefined;
   latestKind: "comment" | "dm";
@@ -37,12 +39,12 @@ export default function SocialInboxPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const { results: conversations, status, loadMore } = usePaginatedQuery(
-    api.instagramEngagement.listConversations,
+    api.socialInbox.listConversations,
     activeOrgId ? { orgId: activeOrgId } : "skip",
     { initialNumItems: 25 }
   );
 
-  const [conversationLeadId, setConversationLeadId] = useState<Id<"leads"> | null>(null);
+  const [conversationCustomerId, setConversationCustomerId] = useState<Id<"customers"> | null>(null);
 
   const statusBadge = (conversation: ConversationRow) =>
     conversation.needsReply ? (
@@ -56,6 +58,19 @@ export default function SocialInboxPage() {
     const extra = conversation.vehicleCount - 1;
     return extra > 0 ? `${conversation.vehicleSummary} +${extra} ${t("MoreVehicles" as any)}` : conversation.vehicleSummary;
   };
+
+  // lucide-react has no Instagram/Facebook brand icons (confirmed, same gap
+  // noted when the Integrations settings card was built) — a small colored
+  // initials badge is the lightest substitute that still reads at a glance.
+  const PlatformIcon = ({ platform }: { platform: "instagram" | "facebook" }) => (
+    <span
+      className={`shrink-0 inline-flex items-center justify-center h-4 w-4 rounded-full text-[8px] font-bold text-white ${
+        platform === "facebook" ? "bg-blue-600" : "bg-pink-600"
+      }`}
+    >
+      {platform === "facebook" ? "f" : "ig"}
+    </span>
+  );
 
   return (
     <RoleGuard permissions={["view:leads"]}>
@@ -75,12 +90,15 @@ export default function SocialInboxPage() {
           ) : (
             (conversations as ConversationRow[]).map((conversation) => (
               <div
-                key={conversation.leadId}
+                key={conversation.customerId}
                 className="rounded-xl border bg-card p-4 space-y-2 cursor-pointer active:bg-muted/30"
-                onClick={() => setConversationLeadId(conversation.leadId)}
+                onClick={() => setConversationCustomerId(conversation.customerId)}
               >
                 <div className="flex items-start justify-between gap-2">
-                  <p className="font-semibold text-sm truncate">{conversation.senderDisplayName}</p>
+                  <p className="font-semibold text-sm truncate flex items-center gap-1.5">
+                    <PlatformIcon platform={conversation.platform} />
+                    {conversation.senderDisplayName}
+                  </p>
                   <Badge variant="secondary" className="text-[10px] shrink-0">
                     {conversation.eventCount} {t("Messages" as any)}
                   </Badge>
@@ -130,12 +148,15 @@ export default function SocialInboxPage() {
               ) : (
                 (conversations as ConversationRow[]).map((conversation) => (
                   <TableRow
-                    key={conversation.leadId}
+                    key={conversation.customerId}
                     className="cursor-pointer group"
-                    onClick={() => setConversationLeadId(conversation.leadId)}
+                    onClick={() => setConversationCustomerId(conversation.customerId)}
                   >
                     <TableCell className="py-4 px-6 font-medium">
-                      {conversation.senderDisplayName}
+                      <span className="flex items-center gap-1.5">
+                        <PlatformIcon platform={conversation.platform} />
+                        {conversation.senderDisplayName}
+                      </span>
                     </TableCell>
                     <TableCell className="py-4 px-6">
                       <Badge variant="secondary">{conversation.eventCount} {t("Messages" as any)}</Badge>
@@ -167,9 +188,9 @@ export default function SocialInboxPage() {
         </div>
 
         <SocialConversationDialog
-          leadId={conversationLeadId}
-          open={!!conversationLeadId}
-          onOpenChange={(o) => !o && setConversationLeadId(null)}
+          customerId={conversationCustomerId}
+          open={!!conversationCustomerId}
+          onOpenChange={(o) => !o && setConversationCustomerId(null)}
         />
       </div>
     </RoleGuard>

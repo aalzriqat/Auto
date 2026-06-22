@@ -233,6 +233,68 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
     expect(events.length).toBe(2);
   });
 
+  test("lead creation toggle off for comments: still captures the event, no lead, no notification", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, userId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, {
+      instagramLeadFromCommentsEnabled: false,
+      instagramAutoReplyEnabled: true,
+      instagramAutoReplyMessages: ["Thanks for the comment!"],
+    });
+
+    const result = await t.run((ctx) =>
+      ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+        orgId,
+        kind: "comment",
+        externalId: "ig_no_lead_comment",
+        senderInstagramId: "ig_user_no_lead",
+        text: "nice car",
+      })
+    );
+    expect(result?.leadId).toBeUndefined();
+    expect(result?.shouldAutoReply).toBe(true); // auto-reply is independent of lead creation
+    expect(result?.customerId).toBeDefined();
+
+    const leads = await t.run((ctx) => ctx.db.query("leads").collect());
+    expect(leads.length).toBe(0);
+
+    const notifications = await t.run((ctx) =>
+      ctx.db
+        .query("notifications")
+        .withIndex("by_user", (q) => q.eq("userId", userId))
+        .collect()
+    );
+    expect(notifications.length).toBe(0);
+  });
+
+  test("lead creation toggle off for DMs only: comments still create leads, DMs don't", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, { instagramLeadFromDmsEnabled: false });
+
+    const commentResult = await t.run((ctx) =>
+      ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+        orgId,
+        kind: "comment",
+        externalId: "ig_mixed_comment",
+        senderInstagramId: "ig_user_mixed",
+        text: "comment",
+      })
+    );
+    expect(commentResult?.leadId).toBeDefined();
+
+    const dmResult = await t.run((ctx) =>
+      ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+        orgId,
+        kind: "dm",
+        externalId: "ig_mixed_dm",
+        senderInstagramId: "ig_user_mixed_2",
+        text: "dm",
+      })
+    );
+    expect(dmResult?.leadId).toBeUndefined();
+  });
+
   test("rotates round-robin through active auto-reply messages and skips when disabled", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
@@ -639,15 +701,15 @@ describe("instagramEngagement.sendInstagramDirectMessage", () => {
       ctx.db.insert("leads", { orgId, customerId, source: "Instagram DM", stage: "NEW" })
     );
     const olderDmId = await t.run((ctx) =>
-      ctx.db.insert("instagramEvents", { orgId, externalId: "dm_old", kind: "dm", senderInstagramId: "sender_dm2", leadId, text: "first" })
+      ctx.db.insert("instagramEvents", { orgId, externalId: "dm_old", kind: "dm", senderInstagramId: "sender_dm2", customerId, leadId, text: "first" })
     );
     const newerDmId = await t.run((ctx) =>
-      ctx.db.insert("instagramEvents", { orgId, externalId: "dm_new", kind: "dm", senderInstagramId: "sender_dm2", leadId, text: "second" })
+      ctx.db.insert("instagramEvents", { orgId, externalId: "dm_new", kind: "dm", senderInstagramId: "sender_dm2", customerId, leadId, text: "second" })
     );
 
     await asEditor.action(api.instagramEngagement.sendInstagramDirectMessage, {
       orgId,
-      leadId,
+      customerId,
       message: "On our way!",
     });
 
@@ -665,14 +727,11 @@ describe("instagramEngagement.sendInstagramDirectMessage", () => {
     const customerId = await t.run((ctx) =>
       ctx.db.insert("customers", { orgId, firstName: "A", lastName: "B" })
     );
-    const leadId = await t.run((ctx) =>
-      ctx.db.insert("leads", { orgId, customerId, source: "Walk-in", stage: "NEW" })
-    );
 
     await expect(
       asEditor.action(api.instagramEngagement.sendInstagramDirectMessage, {
         orgId,
-        leadId,
+        customerId,
         message: "hello",
       })
     ).rejects.toThrow(/no instagram dm conversation/i);

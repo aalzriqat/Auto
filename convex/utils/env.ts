@@ -19,6 +19,14 @@ const backendEnvSchema = z.object({
   INSTAGRAM_APP_ID: z.string().optional(),
   INSTAGRAM_APP_SECRET: z.string().optional(),
 
+  // Facebook Login for Pages — kept as a separate Meta App from Instagram's
+  // (the Instagram app is configured specifically for "API setup with
+  // Instagram Login"; Facebook Login may or may not coexist as a second
+  // product on it, unconfirmed) — so these are independent env vars.
+  FACEBOOK_APP_ID: z.string().optional(),
+  FACEBOOK_APP_SECRET: z.string().optional(),
+  FACEBOOK_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
+
   // Meta App Secret used to verify the `X-Hub-Signature-256` header Meta
   // sends on every WhatsApp Cloud API webhook POST — required before the
   // /whatsapp-webhook route will accept inbound messages.
@@ -44,6 +52,9 @@ export function getValidatedEnv() {
     SUPER_ADMIN_EMAILS: process.env.SUPER_ADMIN_EMAILS,
     INSTAGRAM_APP_ID: process.env.INSTAGRAM_APP_ID,
     INSTAGRAM_APP_SECRET: process.env.INSTAGRAM_APP_SECRET,
+    FACEBOOK_APP_ID: process.env.FACEBOOK_APP_ID,
+    FACEBOOK_APP_SECRET: process.env.FACEBOOK_APP_SECRET,
+    FACEBOOK_WEBHOOK_VERIFY_TOKEN: process.env.FACEBOOK_WEBHOOK_VERIFY_TOKEN,
     WHATSAPP_APP_SECRET: process.env.WHATSAPP_APP_SECRET,
     INSTAGRAM_WEBHOOK_VERIFY_TOKEN: process.env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN,
     CONVEX_SITE_URL: process.env.CONVEX_SITE_URL,

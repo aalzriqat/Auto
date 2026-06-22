@@ -84,6 +84,8 @@ export const getConnectionStatus = query({
       socialAutoPostEnabled: settings?.socialAutoPostEnabled ?? false,
       instagramAutoReplyEnabled: settings?.instagramAutoReplyEnabled ?? false,
       instagramAutoReplyMessages: settings?.instagramAutoReplyMessages ?? [],
+      instagramLeadFromCommentsEnabled: settings?.instagramLeadFromCommentsEnabled !== false,
+      instagramLeadFromDmsEnabled: settings?.instagramLeadFromDmsEnabled !== false,
     };
   },
 });
@@ -121,6 +123,36 @@ export const setInstagramAutoReplyConfig = mutation({
     await ctx.db.patch(settings._id, {
       instagramAutoReplyEnabled: args.enabled,
       instagramAutoReplyMessages: cleaned,
+    });
+  },
+});
+
+/**
+ * Sets whether inbound Instagram comments/DMs create a CRM lead. Off doesn't
+ * mean ignored — the interaction is still captured in the Social Inbox and
+ * still eligible for auto-reply either way; this only gates whether it also
+ * produces a Lead in the pipeline + notification. Owner-only.
+ */
+export const setInstagramLeadCreationConfig = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    leadFromCommentsEnabled: v.boolean(),
+    leadFromDmsEnabled: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    await requireOwner(ctx, args.orgId);
+
+    const settings = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .unique();
+    if (!settings) {
+      throw new ConvexError("Connect Instagram before configuring lead creation.");
+    }
+
+    await ctx.db.patch(settings._id, {
+      instagramLeadFromCommentsEnabled: args.leadFromCommentsEnabled,
+      instagramLeadFromDmsEnabled: args.leadFromDmsEnabled,
     });
   },
 });
@@ -178,7 +210,13 @@ export const disconnect = mutation({
   },
 });
 
-/** Toggles auto-posting on vehicle status → AVAILABLE. Owner-only, requires an active connection. */
+/**
+ * Toggles auto-posting on vehicle status → AVAILABLE. Owner-only. Shared
+ * across both Instagram and Facebook — each platform's own auto-post helper
+ * (`maybeAutoPostToInstagram`/`maybeAutoPostToFacebook`) independently
+ * no-ops if that specific platform isn't connected, so this only requires
+ * at least one of the two to be active.
+ */
 export const setAutoPostEnabled = mutation({
   args: { orgId: v.id("organizations"), enabled: v.boolean() },
   handler: async (ctx, args) => {
@@ -189,8 +227,9 @@ export const setAutoPostEnabled = mutation({
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .unique();
 
-    if (args.enabled && !settings?.instagramAccessToken) {
-      throw new ConvexError("Connect Instagram before enabling auto-post.");
+    const hasAnyConnection = settings?.instagramAccessToken || settings?.facebookPageAccessToken;
+    if (args.enabled && !hasAnyConnection) {
+      throw new ConvexError("Connect Instagram or Facebook before enabling auto-post.");
     }
     if (!settings) return;
 

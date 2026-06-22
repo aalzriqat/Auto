@@ -61,7 +61,7 @@ export default function LeadsPage() {
   const [editingLead, setEditingLead] = useState<any>(null);
   const [leadToDelete, setLeadToDelete] = useState<any>(null);
   const [view, setView] = useState<"table" | "kanban">("table");
-  const [conversationLeadId, setConversationLeadId] = useState<Id<"leads"> | null>(null);
+  const [conversationCustomerId, setConversationCustomerId] = useState<Id<"customers"> | null>(null);
   const [highlightedLeadId, setHighlightedLeadId] = useState<string | null>(null);
   const rowRefs = useRef<Record<string, HTMLElement | null>>({});
 
@@ -216,9 +216,9 @@ export default function LeadsPage() {
                     </span>
                   ) : <span />}
                   <div className="flex items-center">
-                    {lead.source?.startsWith("Instagram") && (
+                    {(lead.source?.startsWith("Instagram") || lead.source?.startsWith("Facebook")) && (
                       <button
-                        onClick={(e) => { e.stopPropagation(); setConversationLeadId(lead._id); }}
+                        onClick={(e) => { e.stopPropagation(); setConversationCustomerId(lead.customerId); }}
                         className="p-3 rounded-md text-muted-foreground hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
                         title={t("ViewConversation" as any)}
                       >
@@ -304,9 +304,9 @@ export default function LeadsPage() {
                       </TableCell>
                       <TableCell className="py-4 px-6 text-end">
                         <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          {lead.source?.startsWith("Instagram") && (
+                          {(lead.source?.startsWith("Instagram") || lead.source?.startsWith("Facebook")) && (
                             <button
-                              onClick={(e) => { e.stopPropagation(); setConversationLeadId(lead._id); }}
+                              onClick={(e) => { e.stopPropagation(); setConversationCustomerId(lead.customerId); }}
                               className="p-2 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-md text-muted-foreground hover:text-blue-600 transition-colors"
                               title={t("ViewConversation" as any)}
                             >
@@ -375,9 +375,9 @@ export default function LeadsPage() {
                                 {lead.customerName?.charAt(0)?.toUpperCase() ?? "?"}
                               </div>
                               <span className="text-sm font-medium truncate flex-1">{lead.customerName}</span>
-                              {lead.source?.startsWith("Instagram") && (
+                              {(lead.source?.startsWith("Instagram") || lead.source?.startsWith("Facebook")) && (
                                 <button
-                                  onClick={(e) => { e.stopPropagation(); setConversationLeadId(lead._id); }}
+                                  onClick={(e) => { e.stopPropagation(); setConversationCustomerId(lead.customerId); }}
                                   className="p-1 rounded text-muted-foreground hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors shrink-0"
                                   title={t("ViewConversation" as any)}
                                 >
@@ -415,9 +415,9 @@ export default function LeadsPage() {
         />
 
         <SocialConversationDialog
-          leadId={conversationLeadId}
-          open={!!conversationLeadId}
-          onOpenChange={(o) => !o && setConversationLeadId(null)}
+          customerId={conversationCustomerId}
+          open={!!conversationCustomerId}
+          onOpenChange={(o) => !o && setConversationCustomerId(null)}
         />
 
         <Dialog open={!!leadToDelete} onOpenChange={(open) => !open && setLeadToDelete(null)}>
