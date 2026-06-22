@@ -18,6 +18,10 @@ export const socialInboxEn = {
   ReplySentSuccess: "Reply sent.",
   MessageSentSuccess: "Message sent.",
   ViewConversation: "View conversation",
+  Messages: "messages",
+  MoreVehicles: "more",
+  AutoReply: "Auto-reply",
+  You: "You",
 };
 
 export const socialInboxAr = {
@@ -40,4 +44,8 @@ export const socialInboxAr = {
   ReplySentSuccess: "تم إرسال الرد.",
   MessageSentSuccess: "تم إرسال الرسالة.",
   ViewConversation: "عرض المحادثة",
+  Messages: "رسائل",
+  MoreVehicles: "أخرى",
+  AutoReply: "رد تلقائي",
+  You: "أنت",
 };

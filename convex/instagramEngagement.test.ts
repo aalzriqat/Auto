@@ -406,6 +406,129 @@ describe("instagramEngagement.listEvents", () => {
   });
 });
 
+describe("instagramEngagement.listConversations", () => {
+  test("collapses multiple events on one lead into a single conversation row", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asEditor } = await seedOrgWithEditor(t);
+
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "VIN_CONV_1",
+        make: "Kia",
+        model: "Sportage",
+        year: 2024,
+        mileage: 0,
+        color: "White",
+        fuelType: "Petrol",
+        transmission: "Automatic",
+        sellingPrice: 20000,
+        status: "AVAILABLE",
+      })
+    );
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Test", lastName: "Buyer", instagramUserId: "sender_conv" })
+    );
+    const leadId = await t.run((ctx) =>
+      ctx.db.insert("leads", { orgId, customerId, vehicleId, source: "Instagram Comment", stage: "NEW" })
+    );
+
+    await t.run((ctx) =>
+      ctx.db.insert("instagramEvents", {
+        orgId,
+        externalId: "conv1",
+        kind: "comment",
+        senderInstagramId: "sender_conv",
+        leadId,
+        customerId,
+        vehicleId,
+        text: "first",
+        autoRepliedAt: Date.now(),
+        autoReplyText: "thanks!",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("instagramEvents", {
+        orgId,
+        externalId: "conv2",
+        kind: "dm",
+        senderInstagramId: "sender_conv",
+        leadId,
+        customerId,
+        vehicleId,
+        text: "second",
+      })
+    );
+
+    const result = await asEditor.query(api.instagramEngagement.listConversations, {
+      orgId,
+      paginationOpts: { numItems: 25, cursor: null },
+    });
+
+    expect(result.page.length).toBe(1);
+    expect(result.page[0].leadId).toBe(leadId);
+    expect(result.page[0].eventCount).toBe(2);
+    expect(result.page[0].needsReply).toBe(true); // the DM has no reply yet
+    expect(result.page[0].vehicleCount).toBe(1);
+    expect(result.page[0].latestText).toBe("second"); // most recently inserted
+  });
+
+  test("keeps separate leads as separate conversations, most recent first", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asEditor } = await seedOrgWithEditor(t);
+
+    const customerAId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "A", lastName: "Buyer", instagramUserId: "sender_a" })
+    );
+    const customerBId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "B", lastName: "Buyer", instagramUserId: "sender_b" })
+    );
+    const leadAId = await t.run((ctx) =>
+      ctx.db.insert("leads", { orgId, customerId: customerAId, source: "Instagram Comment", stage: "NEW" })
+    );
+    const leadBId = await t.run((ctx) =>
+      ctx.db.insert("leads", { orgId, customerId: customerBId, source: "Instagram Comment", stage: "NEW" })
+    );
+
+    await t.run((ctx) =>
+      ctx.db.insert("instagramEvents", {
+        orgId,
+        externalId: "leadA-1",
+        kind: "comment",
+        senderInstagramId: "sender_a",
+        leadId: leadAId,
+        customerId: customerAId,
+        text: "from A",
+        manualRepliedAt: Date.now(),
+        manualReplyText: "reply to A",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("instagramEvents", {
+        orgId,
+        externalId: "leadB-1",
+        kind: "comment",
+        senderInstagramId: "sender_b",
+        leadId: leadBId,
+        customerId: customerBId,
+        text: "from B",
+      })
+    );
+
+    const result = await asEditor.query(api.instagramEngagement.listConversations, {
+      orgId,
+      paginationOpts: { numItems: 25, cursor: null },
+    });
+
+    expect(result.page.length).toBe(2);
+    // Most recently active conversation (leadB, inserted last) comes first.
+    expect(result.page[0].leadId).toBe(leadBId);
+    expect(result.page[0].needsReply).toBe(true);
+    expect(result.page[1].leadId).toBe(leadAId);
+    expect(result.page[1].needsReply).toBe(false);
+  });
+});
+
 describe("instagramEngagement.listEventsForLead", () => {
   test("returns only events for the given lead, oldest first", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));

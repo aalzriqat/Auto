@@ -8,7 +8,7 @@ import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Doc, Id } from "@/convex/_generated/dataModel";
+import { Id } from "@/convex/_generated/dataModel";
 import { Car, MessageCircle } from "lucide-react";
 import { SocialConversationDialog } from "@/components/leads/SocialConversationDialog";
 import {
@@ -20,27 +20,41 @@ import {
   TableCell,
 } from "@/components/ui/table";
 
-type EventRow = Doc<"instagramEvents"> & {
-  vehicleSummary: string | null;
-  leadStage: string | null;
+type ConversationRow = {
+  leadId: Id<"leads">;
   senderDisplayName: string;
+  latestText: string | undefined;
+  latestKind: "comment" | "dm";
+  latestCreationTime: number;
+  vehicleSummary: string | null;
+  vehicleCount: number;
+  eventCount: number;
+  needsReply: boolean;
+  leadStage: string | null;
 };
 
 export default function SocialInboxPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const { results: events, status, loadMore } = usePaginatedQuery(
-    api.instagramEngagement.listEvents,
+  const { results: conversations, status, loadMore } = usePaginatedQuery(
+    api.instagramEngagement.listConversations,
     activeOrgId ? { orgId: activeOrgId } : "skip",
     { initialNumItems: 25 }
   );
 
   const [conversationLeadId, setConversationLeadId] = useState<Id<"leads"> | null>(null);
 
-  const statusBadge = (event: EventRow) => {
-    if (event.autoRepliedAt) return <Badge className="bg-emerald-50 text-emerald-700">{t("AutoReplied" as any)}</Badge>;
-    if (event.manualRepliedAt) return <Badge className="bg-emerald-50 text-emerald-700">{t("Replied" as any)}</Badge>;
-    return <Badge variant="secondary">{t("NeedsReply" as any)}</Badge>;
+  const statusBadge = (conversation: ConversationRow) =>
+    conversation.needsReply ? (
+      <Badge variant="secondary">{t("NeedsReply" as any)}</Badge>
+    ) : (
+      <Badge className="bg-emerald-50 text-emerald-700">{t("Replied" as any)}</Badge>
+    );
+
+  const vehicleLabel = (conversation: ConversationRow) => {
+    if (!conversation.vehicleSummary) return null;
+    const extra = conversation.vehicleCount - 1;
+    return extra > 0 ? `${conversation.vehicleSummary} +${extra} ${t("MoreVehicles" as any)}` : conversation.vehicleSummary;
   };
 
   return (
@@ -56,32 +70,32 @@ export default function SocialInboxPage() {
 
         {/* Mobile card list */}
         <div className="flex flex-col gap-3 md:hidden">
-          {!events || events.length === 0 ? (
+          {!conversations || conversations.length === 0 ? (
             <p className="text-center py-12 text-muted-foreground">{t("NoSocialEvents" as any)}</p>
           ) : (
-            (events as EventRow[]).map((event) => (
+            (conversations as ConversationRow[]).map((conversation) => (
               <div
-                key={event._id}
+                key={conversation.leadId}
                 className="rounded-xl border bg-card p-4 space-y-2 cursor-pointer active:bg-muted/30"
-                onClick={() => event.leadId && setConversationLeadId(event.leadId)}
+                onClick={() => setConversationLeadId(conversation.leadId)}
               >
                 <div className="flex items-start justify-between gap-2">
-                  <p className="font-semibold text-sm truncate">{event.senderDisplayName}</p>
+                  <p className="font-semibold text-sm truncate">{conversation.senderDisplayName}</p>
                   <Badge variant="secondary" className="text-[10px] shrink-0">
-                    {event.kind === "dm" ? t("DM" as any) : t("Comment" as any)}
+                    {conversation.eventCount} {t("Messages" as any)}
                   </Badge>
                 </div>
-                {event.vehicleSummary && (
+                {vehicleLabel(conversation) && (
                   <p className="text-xs text-muted-foreground flex items-center gap-1">
-                    <Car className="h-3 w-3 shrink-0" />{event.vehicleSummary}
+                    <Car className="h-3 w-3 shrink-0" />{vehicleLabel(conversation)}
                   </p>
                 )}
-                <p className="text-sm truncate">{event.text}</p>
+                <p className="text-sm truncate">{conversation.latestText}</p>
                 <div className="flex items-center justify-between">
                   <span className="text-[10px] text-muted-foreground">
-                    {new Date(event._creationTime).toLocaleString()}
+                    {new Date(conversation.latestCreationTime).toLocaleString()}
                   </span>
-                  {statusBadge(event)}
+                  {statusBadge(conversation)}
                 </div>
               </div>
             ))
@@ -99,7 +113,7 @@ export default function SocialInboxPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>{t("Sender" as any)}</TableHead>
-                <TableHead>{t("Kind" as any)}</TableHead>
+                <TableHead>{t("Messages" as any)}</TableHead>
                 <TableHead>{t("Vehicle" as any) || "Vehicle"}</TableHead>
                 <TableHead>{t("Notes" as any) || "Text"}</TableHead>
                 <TableHead>{t("Date" as any) || "Date"}</TableHead>
@@ -107,39 +121,39 @@ export default function SocialInboxPage() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {!events || events.length === 0 ? (
+              {!conversations || conversations.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={6} className="text-center py-12 text-muted-foreground">
                     {t("NoSocialEvents" as any)}
                   </TableCell>
                 </TableRow>
               ) : (
-                (events as EventRow[]).map((event) => (
+                (conversations as ConversationRow[]).map((conversation) => (
                   <TableRow
-                    key={event._id}
+                    key={conversation.leadId}
                     className="cursor-pointer group"
-                    onClick={() => event.leadId && setConversationLeadId(event.leadId)}
+                    onClick={() => setConversationLeadId(conversation.leadId)}
                   >
                     <TableCell className="py-4 px-6 font-medium">
-                      {event.senderDisplayName}
+                      {conversation.senderDisplayName}
                     </TableCell>
                     <TableCell className="py-4 px-6">
-                      <Badge variant="secondary">{event.kind === "dm" ? t("DM" as any) : t("Comment" as any)}</Badge>
+                      <Badge variant="secondary">{conversation.eventCount} {t("Messages" as any)}</Badge>
                     </TableCell>
                     <TableCell className="py-4 px-6">
-                      {event.vehicleSummary ? (
+                      {vehicleLabel(conversation) ? (
                         <span className="flex items-center gap-1 text-muted-foreground">
-                          <Car className="h-3.5 w-3.5" />{event.vehicleSummary}
+                          <Car className="h-3.5 w-3.5" />{vehicleLabel(conversation)}
                         </span>
                       ) : (
                         <span className="text-muted-foreground/50">-</span>
                       )}
                     </TableCell>
-                    <TableCell className="py-4 px-6 max-w-[280px] truncate">{event.text}</TableCell>
+                    <TableCell className="py-4 px-6 max-w-[280px] truncate">{conversation.latestText}</TableCell>
                     <TableCell className="py-4 px-6 text-muted-foreground text-xs">
-                      {new Date(event._creationTime).toLocaleString()}
+                      {new Date(conversation.latestCreationTime).toLocaleString()}
                     </TableCell>
-                    <TableCell className="py-4 px-6">{statusBadge(event)}</TableCell>
+                    <TableCell className="py-4 px-6">{statusBadge(conversation)}</TableCell>
                   </TableRow>
                 ))
               )}

@@ -15,7 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Send, Loader2, MessageCircle, CheckCircle2 } from "lucide-react";
+import { Send, Loader2, MessageCircle, Car } from "lucide-react";
 
 interface SocialConversationDialogProps {
   leadId: Id<"leads"> | null;
@@ -83,7 +83,7 @@ export function SocialConversationDialog({ leadId, open, onOpenChange }: SocialC
           </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-2">
+        <div className="space-y-3">
           {events === undefined && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Loader2 className="h-3.5 w-3.5 animate-spin" /> {t("Loading" as any)}
@@ -92,61 +92,76 @@ export function SocialConversationDialog({ leadId, open, onOpenChange }: SocialC
           {events && events.length === 0 && (
             <p className="text-sm text-muted-foreground">{t("NoConversation" as any)}</p>
           )}
-          {events?.map((event) => (
-            <div key={event._id} className="bg-muted/30 p-3 rounded-lg border text-sm space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-xs">
-                  <span className="font-semibold">{event.senderDisplayName}</span>{" "}
-                  <Badge variant="secondary" className="text-[10px] py-0">
-                    {event.kind === "dm" ? t("DM" as any) : t("Comment" as any)}
-                  </Badge>
-                </p>
-                <span className="text-[10px] text-muted-foreground">
-                  {new Date(event._creationTime).toLocaleString()}
-                </span>
-              </div>
-              <p className="text-sm">{event.text}</p>
+          {events?.map((event, index) => {
+            const replied = event.autoRepliedAt ? "auto" : event.manualRepliedAt ? "manual" : null;
+            const showVehicleLabel =
+              event.vehicleSummary && event.vehicleSummary !== events[index - 1]?.vehicleSummary;
+            return (
+              <div key={event._id} className="space-y-1.5">
+                {showVehicleLabel && (
+                  <div className="flex items-center justify-center gap-1 text-[10px] text-muted-foreground py-1">
+                    <Car className="h-3 w-3" />
+                    {event.vehicleSummary}
+                  </div>
+                )}
 
-              {event.autoRepliedAt && (
-                <div className="bg-background p-2 rounded border text-xs flex items-start gap-1.5">
-                  <CheckCircle2 className="h-3.5 w-3.5 text-green-600 shrink-0 mt-0.5" />
-                  <div>
-                    <span className="text-muted-foreground">{t("AutoReplied" as any)}: </span>
-                    {event.autoReplyText}
+                {/* Customer bubble (start-aligned) */}
+                <div className="flex justify-start">
+                  <div className="max-w-[85%] bg-muted rounded-2xl rounded-bl-sm px-3 py-2 space-y-1">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs font-semibold">{event.senderDisplayName}</span>
+                      <Badge variant="secondary" className="text-[9px] py-0 px-1.5">
+                        {event.kind === "dm" ? t("DM" as any) : t("Comment" as any)}
+                      </Badge>
+                    </div>
+                    <p className="text-sm">{event.text}</p>
+                    <p className="text-[10px] text-muted-foreground">
+                      {new Date(event._creationTime).toLocaleString()}
+                    </p>
                   </div>
                 </div>
-              )}
-              {!event.autoRepliedAt && event.manualRepliedAt && (
-                <div className="bg-background p-2 rounded border text-xs flex items-start gap-1.5">
-                  <CheckCircle2 className="h-3.5 w-3.5 text-green-600 shrink-0 mt-0.5" />
-                  <div>
-                    <span className="text-muted-foreground">{t("Replied" as any)}: </span>
-                    {event.manualReplyText}
+
+                {/* Our reply bubble (end-aligned) — visually distinct so staff can tell their own replies apart */}
+                {replied && (
+                  <div className="flex justify-end">
+                    <div className="max-w-[85%] bg-primary text-primary-foreground rounded-2xl rounded-br-sm px-3 py-2 space-y-1">
+                      <span className="text-[10px] opacity-80 font-medium">
+                        {replied === "auto" ? t("AutoReply" as any) : event.manualRepliedByName ?? t("You" as any)}
+                      </span>
+                      <p className="text-sm">{replied === "auto" ? event.autoReplyText : event.manualReplyText}</p>
+                      <p className="text-[10px] opacity-70">
+                        {new Date((replied === "auto" ? event.autoRepliedAt : event.manualRepliedAt) ?? 0).toLocaleString()}
+                      </p>
+                    </div>
                   </div>
-                </div>
-              )}
-              {!event.autoRepliedAt && !event.manualRepliedAt && event.kind === "comment" && (
-                <div className="flex items-center gap-1.5">
-                  <input
-                    type="text"
-                    value={replyDrafts[event._id] ?? ""}
-                    onChange={(e) => setReplyDrafts((prev) => ({ ...prev, [event._id]: e.target.value }))}
-                    placeholder={t("WriteAReply" as any)}
-                    className="flex-1 h-7 text-xs px-2 rounded border bg-background"
-                  />
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="h-7 w-7 p-0 shrink-0"
-                    disabled={busyEventId === event._id || !(replyDrafts[event._id] ?? "").trim()}
-                    onClick={() => handleReply(event._id)}
-                  >
-                    <Send className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              )}
-            </div>
-          ))}
+                )}
+
+                {/* Inline reply composer — only when this comment hasn't been replied to yet */}
+                {!replied && event.kind === "comment" && (
+                  <div className="flex justify-start">
+                    <div className="max-w-[85%] w-full flex items-center gap-1.5">
+                      <input
+                        type="text"
+                        value={replyDrafts[event._id] ?? ""}
+                        onChange={(e) => setReplyDrafts((prev) => ({ ...prev, [event._id]: e.target.value }))}
+                        placeholder={t("WriteAReply" as any)}
+                        className="flex-1 h-7 text-xs px-2 rounded border bg-background"
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-7 w-7 p-0 shrink-0"
+                        disabled={busyEventId === event._id || !(replyDrafts[event._id] ?? "").trim()}
+                        onClick={() => handleReply(event._id)}
+                      >
+                        <Send className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
 
         {hasDmEvent && (

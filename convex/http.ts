@@ -601,6 +601,16 @@ http.route({
     try {
       if (commentChange?.value?.id) {
         const value = commentChange.value;
+        const fromId = String(value.from?.id ?? "");
+        const isOwnAccount =
+          fromId !== "" &&
+          (fromId === settings.instagramBusinessAccountId || fromId === settings.instagramWebhookAccountId);
+        if (isOwnAccount) {
+          // Our own auto/manual reply re-arriving as a webhook (Instagram fires a
+          // "comments" event for replies we post too) — acknowledge without
+          // reprocessing it as a new inbound comment, or we'd auto-reply to ourselves.
+          return new Response(null, { status: 200 });
+        }
         const result = await ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
           orgId,
           kind: "comment",

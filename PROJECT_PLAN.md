@@ -37,6 +37,7 @@
 | 19a | main | Customer Merge Tool (CRM data quality, part 3) | ✅ Done |
 | 19b | main | Lead → Sale Conversion Visibility (CRM data quality, part 4) | ✅ Done |
 | 21 | main | Data Quality Dashboard Widget (CRM data quality, part 5) | ✅ Done |
+| 25 | main | Instagram Engagement: Comments/DMs Capture, Auto-Reply, Lead Creation, Social Inbox | ✅ Done |
 
 ---
 
@@ -669,3 +670,26 @@ Extends Phase 23's Marketing tab with read access to a published post's performa
 - [x] `convex/dashboard.test.ts` (new) — counts match seeded data
 
 **CRM Data Quality bundle (Phases 19, 19a, 19b, 20, 21) is now fully shipped.**
+
+## Phase 25 — Instagram Engagement: Comments/DMs Capture, Auto-Reply, Lead Creation, Social Inbox ✅
+
+**Branch:** `main` · Extends the Social Posting Automation bundle (Phases 22-24) from outbound posting into inbound engagement — capturing customer comments/DMs on dealership posts, replying automatically, and turning them into leads.
+
+Built and debugged live in production. Two undocumented Meta API quirks were found and fixed along the way: (1) Instagram uses two different IDs for the same connected account — the OAuth token exchange's `id` (for outbound Graph API calls) vs. the profile's `user_id` (used in webhook `entry[].id` for routing) — captured separately as `instagramBusinessAccountId`/`instagramWebhookAccountId`; (2) replying to a comment via the Graph API causes Instagram to fire a fresh `comments` webhook for our own reply, which without a guard gets reprocessed as a new inbound comment and auto-replies to itself in a loop.
+
+### Delivered
+- [x] `convex/schema.ts` — new `instagramEvents` table (`kind: "comment"|"dm"`, sender info, `customerId`/`leadId`/`vehicleId` links, auto/manual reply fields), indexed `by_org_external` (dedup), `by_org_sender` (cooldown), `by_org`, `by_org_lead`; `orgSettings` gained `instagramWebhookAccountId` + index, `instagramAutoReplyEnabled/Messages/LastIndex`; `customers` gained `instagramUserId`
+- [x] `convex/instagramEngagement.ts` (new) — `handleIncomingInstagramEvent` (find/create customer+lead, dedup, vehicle-linking via `socialPosts.by_external_post_id`, round-robin auto-reply with 24h per-sender cooldown shared across comments+DMs), `enrichCustomerProfile` (fetches the sender's real name from Instagram's profile API for DM-only senders, since DM payloads never carry a username), `sendCommentReply`/`sendDirectMessage` (auto-reply actions), `listConversations` (paginated, org-wide, one row per customer conversation — groups all of a lead's events in JS since Convex has no native GROUP BY), `listEventsForLead`, `replyToInstagramComment`/`sendInstagramDirectMessage` (manual reply actions used by the UI)
+- [x] `convex/utils/instagramApi.ts` (new) — shared `postCommentReply`/`postDirectMessage` Graph API helpers used by both auto- and manual-reply paths
+- [x] `convex/http.ts` — `/instagram-webhook` GET (handshake) + POST (routes comments via `entry[].changes`, DMs via `entry[].messaging`; DM branch skips `is_echo` messages, comment branch skips our own account's `from.id` to prevent the self-reply loop)
+- [x] `convex/socialIntegrations.ts` — corrected OAuth scope to `instagram_business_manage_messages`; added the required per-account `POST /{ig-user-id}/subscribed_apps` opt-in call (separate from app-level webhook config) during token exchange
+- [x] `app/(dashboard)/[orgId]/social-inbox/page.tsx` (new) — dedicated nav page, one row per conversation (sender, message count, vehicle(s), latest text, status), desktop table + mobile cards
+- [x] `components/leads/SocialConversationDialog.tsx` (new) — per-lead conversation view, chat-bubble layout (customer messages start-aligned, our auto/manual replies end-aligned and visually distinct, labeled with the replying staff member's name or "Auto-reply"), per-vehicle context label when a conversation spans more than one post, inline comment-reply composer + bottom DM composer
+- [x] `app/(dashboard)/[orgId]/leads/page.tsx` — conversation icon button on Instagram-sourced leads opening the dialog; `?highlightId=` from notification links now scrolls to and highlights the matching row
+- [x] `lib/i18n/domains/socialInbox.ts` (new) — EN + AR strings
+- [x] `convex/instagramEngagement.test.ts` (new, 22 tests) — webhook event handling, dedup, vehicle linking, auto-reply cooldown, profile enrichment, `listConversations` grouping/ordering, manual reply actions, permission gating
+- [x] Full suite green, clean typecheck/lint/build
+
+**Known gap:** the self-reply-loop fix has no automated test — this codebase has no httpAction-level test harness for any webhook route (`convex/http.ts` isn't exercised via `t.fetch` anywhere), so it was verified by reasoning about the documented Graph API behavior and needs live production confirmation, same as the earlier dual-ID bug.
+
+**Not yet pursued:** `instagram_business_manage_messages` App Review submission (still Tester-only). **Next up:** Phase 26 — Facebook Page integration (OAuth + webhook, same shape as this phase but on `graph.facebook.com`; see [[project-instagram-integration]] memory for scope research already done).

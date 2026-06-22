@@ -325,6 +325,78 @@ export const listEvents = query({
 });
 
 /**
+ * Paginated, org-wide list of Instagram conversations for the Social Inbox page —
+ * one row per lead, combining all of that customer's comments and DMs (even across
+ * different posts/vehicles) rather than one row per raw event. Convex has no native
+ * GROUP BY, so this collects the org's events (already small/bounded per org) and
+ * groups them in JS; pagination is a synthetic numeric offset over the grouped array.
+ */
+export const listConversations = query({
+  args: { orgId: v.id("organizations"), paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
+
+    const events = await ctx.db
+      .query("instagramEvents")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .order("desc")
+      .collect();
+
+    // Events arrive desc (newest first), so the first event pushed into each
+    // lead's bucket is that conversation's most recent activity, and the Map's
+    // insertion order is already recency-sorted — no extra sort needed.
+    const grouped = new Map<Id<"leads">, Doc<"instagramEvents">[]>();
+    for (const ev of events) {
+      if (!ev.leadId) continue;
+      const bucket = grouped.get(ev.leadId);
+      if (bucket) bucket.push(ev);
+      else grouped.set(ev.leadId, [ev]);
+    }
+
+    const conversations = Array.from(grouped.entries()).map(([leadId, evs]) => {
+      const vehicleIds = new Set(evs.filter((e) => e.vehicleId).map((e) => e.vehicleId as Id<"vehicles">));
+      return {
+        leadId,
+        latest: evs[0],
+        eventCount: evs.length,
+        needsReply: evs.some((e) => !e.autoRepliedAt && !e.manualRepliedAt),
+        vehicleIds,
+      };
+    });
+
+    const start = Number(args.paginationOpts.cursor ?? "0");
+    const numItems = args.paginationOpts.numItems;
+    const pageSlice = conversations.slice(start, start + numItems);
+
+    const page = await Promise.all(
+      pageSlice.map(async (c) => {
+        const customer = c.latest.customerId ? await ctx.db.get(c.latest.customerId) : null;
+        const lead = await ctx.db.get(c.leadId);
+        const vehicle = c.latest.vehicleId ? await ctx.db.get(c.latest.vehicleId) : null;
+        return {
+          leadId: c.leadId,
+          senderDisplayName: resolveSenderDisplayName(c.latest, customer),
+          latestText: c.latest.text,
+          latestKind: c.latest.kind,
+          latestCreationTime: c.latest._creationTime,
+          vehicleSummary: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : null,
+          vehicleCount: c.vehicleIds.size,
+          eventCount: c.eventCount,
+          needsReply: c.needsReply,
+          leadStage: lead?.stage ?? null,
+        };
+      })
+    );
+
+    return {
+      page,
+      isDone: start + numItems >= conversations.length,
+      continueCursor: String(start + numItems),
+    };
+  },
+});
+
+/**
  * Prefers the event's own captured username (comments always have one),
  * then the customer's resolved name (real once `enrichCustomerProfile` has
  * run for DM-only senders, the generic placeholder until then), then the
@@ -357,7 +429,14 @@ export const listEventsForLead = query({
     return await Promise.all(
       events.map(async (ev) => {
         const customer = ev.customerId ? await ctx.db.get(ev.customerId) : null;
-        return { ...ev, senderDisplayName: resolveSenderDisplayName(ev, customer) };
+        const vehicle = ev.vehicleId ? await ctx.db.get(ev.vehicleId) : null;
+        const repliedByUser = ev.manualRepliedByUserId ? await ctx.db.get(ev.manualRepliedByUserId) : null;
+        return {
+          ...ev,
+          senderDisplayName: resolveSenderDisplayName(ev, customer),
+          vehicleSummary: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : null,
+          manualRepliedByName: repliedByUser?.name ?? null,
+        };
       })
     );
   },
