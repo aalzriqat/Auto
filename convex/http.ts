@@ -422,13 +422,17 @@ http.route({
         code,
       });
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
         source: "instagram-oauth",
         status: "error",
         summary: "Token exchange failed",
-        error: err instanceof Error ? err.message : String(err),
+        error: message,
       });
-      return Response.redirect(`${settingsUrl}?connected=instagram&error=1`, 302);
+      return Response.redirect(
+        `${settingsUrl}?connected=instagram&error=1&errorMessage=${encodeURIComponent(message)}`,
+        302
+      );
     }
 
     await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
@@ -717,13 +721,17 @@ http.route({
         code,
       });
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
         source: "facebook-oauth",
         status: "error",
         summary: "Token exchange failed",
-        error: err instanceof Error ? err.message : String(err),
+        error: message,
       });
-      return Response.redirect(`${settingsUrl}?connected=facebook&error=1`, 302);
+      return Response.redirect(
+        `${settingsUrl}?connected=facebook&error=1&errorMessage=${encodeURIComponent(message)}`,
+        302
+      );
     }
 
     await ctx.runMutation(internal.adminSystem.logWebhookEvent, {

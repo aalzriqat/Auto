@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -104,7 +104,7 @@ export const update = mutation({
 
     const status = await ctx.db.get(args.statusId);
     if (!status || status.orgId !== args.orgId) {
-      throw new Error("Customer status not found.");
+      throw new ConvexError("Customer status not found.");
     }
 
     const patch: Record<string, unknown> = {};
@@ -129,7 +129,7 @@ export const remove = mutation({
 
     const status = await ctx.db.get(args.statusId);
     if (!status || status.orgId !== args.orgId) {
-      throw new Error("Customer status not found.");
+      throw new ConvexError("Customer status not found.");
     }
 
     await ctx.db.delete(args.statusId);
@@ -150,7 +150,7 @@ export const reorder = mutation({
     for (let i = 0; i < args.orderedIds.length; i++) {
       const status = await ctx.db.get(args.orderedIds[i]);
       if (!status || status.orgId !== args.orgId) {
-        throw new Error("Customer status not found or does not belong to this org.");
+        throw new ConvexError("Customer status not found or does not belong to this org.");
       }
       await ctx.db.patch(args.orderedIds[i], { order: i });
     }

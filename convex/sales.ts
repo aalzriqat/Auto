@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
@@ -481,10 +481,10 @@ export const markCommissionPaid = mutation({
 
     const sale = await ctx.db.get(args.saleId);
     if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
-      throw new Error("Sale not found.");
+      throw new ConvexError("Sale not found.");
     }
     if (sale.commissionPaidAt != null) {
-      throw new Error("Commission already marked as paid.");
+      throw new ConvexError("Commission already marked as paid.");
     }
 
     await ctx.db.patch(args.saleId, {
@@ -504,7 +504,7 @@ export const markCommissionUnpaid = mutation({
 
     const sale = await ctx.db.get(args.saleId);
     if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
-      throw new Error("Sale not found.");
+      throw new ConvexError("Sale not found.");
     }
 
     await ctx.db.patch(args.saleId, {
@@ -525,7 +525,7 @@ export const setCommissionAmount = mutation({
 
     const sale = await ctx.db.get(args.saleId);
     if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
-      throw new Error("Sale not found.");
+      throw new ConvexError("Sale not found.");
     }
 
     await ctx.db.patch(args.saleId, {

@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -98,7 +98,7 @@ export const update = mutation({
 
     const company = await ctx.db.get(args.companyId);
     if (!company || company.orgId !== args.orgId) {
-      throw new Error("Valuation company not found.");
+      throw new ConvexError("Valuation company not found.");
     }
 
     const patch: Record<string, unknown> = {};
@@ -123,7 +123,7 @@ export const remove = mutation({
 
     const company = await ctx.db.get(args.companyId);
     if (!company || company.orgId !== args.orgId) {
-      throw new Error("Valuation company not found.");
+      throw new ConvexError("Valuation company not found.");
     }
 
     await ctx.db.delete(args.companyId);

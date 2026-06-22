@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -107,7 +107,7 @@ export const update = mutation({
 
     const source = await ctx.db.get(args.sourceId);
     if (!source || source.orgId !== args.orgId) {
-      throw new Error("Lead source not found.");
+      throw new ConvexError("Lead source not found.");
     }
 
     const patch: Record<string, unknown> = {};
@@ -132,7 +132,7 @@ export const remove = mutation({
 
     const source = await ctx.db.get(args.sourceId);
     if (!source || source.orgId !== args.orgId) {
-      throw new Error("Lead source not found.");
+      throw new ConvexError("Lead source not found.");
     }
 
     await ctx.db.delete(args.sourceId);
@@ -153,7 +153,7 @@ export const reorder = mutation({
     for (let i = 0; i < args.orderedIds.length; i++) {
       const source = await ctx.db.get(args.orderedIds[i]);
       if (!source || source.orgId !== args.orgId) {
-        throw new Error("Lead source not found or does not belong to this org.");
+        throw new ConvexError("Lead source not found or does not belong to this org.");
       }
       await ctx.db.patch(args.orderedIds[i], { order: i });
     }

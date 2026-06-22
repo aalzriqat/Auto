@@ -80,12 +80,21 @@ export function IntegrationsClient() {
   useEffect(() => {
     const connected = searchParams.get("connected");
     const error = searchParams.get("error");
+    const errorMessage = searchParams.get("errorMessage");
     if (!connected) return;
 
     if (connected === "facebook") {
-      toast[error ? "error" : "success"](t(error ? ("FacebookConnectFailed" as any) : ("FacebookConnectedSuccess" as any)));
+      if (error) {
+        toast.error(errorMessage ? `${t("FacebookConnectFailed" as any)} ${errorMessage}` : t("FacebookConnectFailed" as any));
+      } else {
+        toast.success(t("FacebookConnectedSuccess" as any));
+      }
     } else {
-      toast[error ? "error" : "success"](t(error ? ("InstagramConnectFailed" as any) : ("InstagramConnectedSuccess" as any)));
+      if (error) {
+        toast.error(errorMessage ? `${t("InstagramConnectFailed" as any)} ${errorMessage}` : t("InstagramConnectFailed" as any));
+      } else {
+        toast.success(t("InstagramConnectedSuccess" as any));
+      }
     }
     router.replace(`/${activeOrgId}/settings/integrations`);
     // eslint-disable-next-line react-hooks/exhaustive-deps
