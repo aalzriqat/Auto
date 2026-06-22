@@ -20,6 +20,10 @@ const FACEBOOK_GRAPH_VERSION = "v25.0";
 // moderating comments, not receiving the webhook events themselves). This
 // is the Facebook-side equivalent of the missing-scope webhook silent-
 // failure already hit once on the Instagram integration.
+// business_management is required for /me/accounts to list Pages whose
+// access comes from a Business Manager assignment rather than a classic
+// personal Page role — without it, /me/accounts silently returns an empty
+// list for Business-owned Pages even when the user has Full Access there.
 const FACEBOOK_SCOPES = [
   "pages_show_list",
   "pages_manage_metadata",
@@ -28,6 +32,7 @@ const FACEBOOK_SCOPES = [
   "pages_messaging",
   "pages_read_engagement",
   "pages_read_user_content",
+  "business_management",
 ].join(",");
 
 // ─── Public ───────────────────────────────────────────────────────────────────
