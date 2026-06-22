@@ -10,7 +10,7 @@ vi.mock("./rateLimit", () => ({
 vi.mock("./utils/facebookApi", () => ({
   postCommentReply: vi.fn().mockResolvedValue({ ok: true }),
   postDirectMessage: vi.fn().mockResolvedValue({ ok: true }),
-  FACEBOOK_GRAPH_VERSION: "v21.0",
+  FACEBOOK_GRAPH_VERSION: "v25.0",
 }));
 
 async function seedOrgWithManager(t: ReturnType<typeof convexTest>) {

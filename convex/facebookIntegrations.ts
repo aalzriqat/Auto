@@ -7,7 +7,7 @@ import { getValidatedEnv } from "./utils/env";
 import { DEFAULT_SETTINGS } from "./orgSettings";
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
-const FACEBOOK_GRAPH_VERSION = "v21.0";
+const FACEBOOK_GRAPH_VERSION = "v25.0";
 
 // Facebook Login for Pages: authenticates a person, who may manage several
 // Pages. Unlike Instagram Login (whose token exchange returns the IG

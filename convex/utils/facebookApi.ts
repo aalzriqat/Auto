@@ -1,4 +1,4 @@
-export const FACEBOOK_GRAPH_VERSION = "v21.0";
+export const FACEBOOK_GRAPH_VERSION = "v25.0";
 
 /** Posts a reply to a specific Facebook Page comment via the Graph API. */
 export async function postCommentReply(

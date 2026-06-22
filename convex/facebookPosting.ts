@@ -2,7 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 
-const FACEBOOK_GRAPH_VERSION = "v21.0";
+const FACEBOOK_GRAPH_VERSION = "v25.0";
 
 /**
  * Publishes a vehicle to a Facebook Page. Unlike Instagram's container/poll/
