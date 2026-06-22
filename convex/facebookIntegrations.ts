@@ -13,8 +13,16 @@ const FACEBOOK_GRAPH_VERSION = "v21.0";
 // Pages. Unlike Instagram Login (whose token exchange returns the IG
 // Business Account directly), this requires a follow-up /me/accounts call
 // to list the person's Pages and their individual Page Access Tokens.
+//
+// pages_manage_metadata is required for Page "feed" webhooks (comments) to
+// be delivered at all — confirmed via Meta's Page Webhooks docs 2026-06-22,
+// distinct from pages_manage_engagement (which only covers replying to/
+// moderating comments, not receiving the webhook events themselves). This
+// is the Facebook-side equivalent of the missing-scope webhook silent-
+// failure already hit once on the Instagram integration.
 const FACEBOOK_SCOPES = [
   "pages_show_list",
+  "pages_manage_metadata",
   "pages_manage_posts",
   "pages_manage_engagement",
   "pages_messaging",
