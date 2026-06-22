@@ -13,7 +13,10 @@ export const create = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
+    // Recording a deposit while working a deal in the wizard is normal
+    // day-to-day sales activity, not a committed sale — VIEW_SALES (held by
+    // SALES/MANAGER/ACCOUNTANT/OWNER) is the right bar, same as quotes.ts.
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
 
     const quote = await ctx.db.get(args.quoteId);
     if (!quote || quote.orgId !== args.orgId) {
