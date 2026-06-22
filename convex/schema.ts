@@ -695,10 +695,14 @@ export default defineSchema({
     text: v.optional(v.string()),
     autoRepliedAt: v.optional(v.number()),
     autoReplyText: v.optional(v.string()),
+    manualReplyText: v.optional(v.string()),
+    manualRepliedAt: v.optional(v.number()),
+    manualRepliedByUserId: v.optional(v.id("users")),
   })
     .index("by_org_external", ["orgId", "externalId"])
     .index("by_org_sender", ["orgId", "senderInstagramId"])
-    .index("by_org", ["orgId"]),
+    .index("by_org", ["orgId"])
+    .index("by_org_lead", ["orgId", "leadId"]),
 
   socialPosts: defineTable({
     orgId: v.id("organizations"),

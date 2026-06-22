@@ -1,10 +1,13 @@
-import { v } from "convex/values";
-import { internalMutation, internalQuery, internalAction } from "./_generated/server";
+import { v, ConvexError } from "convex/values";
+import { paginationOptsValidator } from "convex/server";
+import { internalMutation, internalQuery, internalAction, query, action } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { notifyManagers } from "./utils/notifications";
+import { requireTenantAuth } from "./utils/tenancy";
+import { PERMISSIONS } from "./utils/permissions";
+import { postCommentReply, postDirectMessage } from "./utils/instagramApi";
 
-const INSTAGRAM_GRAPH_VERSION = "v21.0";
 const AUTO_REPLY_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 1 reply per sender per 24h
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
@@ -188,24 +191,20 @@ export const getTokenForOrg = internalQuery({
 
 // ─── Outbound (Graph API calls — actions only, mutations can't fetch) ─────────
 
-/** Auto-replies to an inbound comment. Same Graph endpoint as the manual reply in socialEngagement.ts. */
+/** Auto-replies to an inbound comment. Same Graph endpoint as the manual reply below. */
 export const sendCommentReply = internalAction({
   args: { orgId: v.id("organizations"), commentId: v.string(), message: v.string() },
   handler: async (ctx, args): Promise<void> => {
     const token = await ctx.runQuery(internal.instagramEngagement.getTokenForOrg, { orgId: args.orgId });
     if (!token) return;
 
-    const url = new URL(`https://graph.instagram.com/${INSTAGRAM_GRAPH_VERSION}/${args.commentId}/replies`);
-    url.searchParams.set("message", args.message);
-    url.searchParams.set("access_token", token.instagramAccessToken);
-    const res = await fetch(url.toString(), { method: "POST" });
-    if (!res.ok) {
-      const json = await res.json().catch(() => null);
+    const result = await postCommentReply(args.commentId, args.message, token.instagramAccessToken);
+    if (!result.ok) {
       await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
         source: "instagram",
         status: "error",
         summary: `Auto-reply to comment ${args.commentId} failed`,
-        error: json?.error?.message ?? res.statusText,
+        error: result.error,
       });
     }
   },
@@ -218,26 +217,190 @@ export const sendDirectMessage = internalAction({
     const token = await ctx.runQuery(internal.instagramEngagement.getTokenForOrg, { orgId: args.orgId });
     if (!token) return;
 
-    const url = new URL(
-      `https://graph.instagram.com/${INSTAGRAM_GRAPH_VERSION}/${token.instagramBusinessAccountId}/messages`
+    const result = await postDirectMessage(
+      args.recipientInstagramId,
+      args.message,
+      token.instagramBusinessAccountId,
+      token.instagramAccessToken
     );
-    url.searchParams.set("access_token", token.instagramAccessToken);
-    const res = await fetch(url.toString(), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        recipient: { id: args.recipientInstagramId },
-        message: { text: args.message },
-      }),
-    });
-    if (!res.ok) {
-      const json = await res.json().catch(() => null);
+    if (!result.ok) {
       await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
         source: "instagram",
         status: "error",
         summary: `Auto-reply DM to ${args.recipientInstagramId} failed`,
-        error: json?.error?.message ?? res.statusText,
+        error: result.error,
       });
     }
+  },
+});
+
+// ─── Social Inbox UI: listing + manual replies ─────────────────────────────────
+
+/** Paginated, org-wide list of inbound Instagram events for the Social Inbox page. */
+export const listEvents = query({
+  args: { orgId: v.id("organizations"), paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
+
+    const pageResult = await ctx.db
+      .query("instagramEvents")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .order("desc")
+      .paginate(args.paginationOpts);
+
+    const page = await Promise.all(
+      pageResult.page.map(async (ev) => {
+        const vehicle = ev.vehicleId ? await ctx.db.get(ev.vehicleId) : null;
+        const lead = ev.leadId ? await ctx.db.get(ev.leadId) : null;
+        return {
+          ...ev,
+          vehicleSummary: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : null,
+          leadStage: lead?.stage ?? null,
+        };
+      })
+    );
+
+    return { ...pageResult, page };
+  },
+});
+
+/** All inbound Instagram events tied to a single lead, oldest first, for the conversation dialog. */
+export const listEventsForLead = query({
+  args: { orgId: v.id("organizations"), leadId: v.id("leads") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
+
+    return await ctx.db
+      .query("instagramEvents")
+      .withIndex("by_org_lead", (q) => q.eq("orgId", args.orgId).eq("leadId", args.leadId))
+      .order("asc")
+      .collect();
+  },
+});
+
+/** Auth gate for the manual-reply actions below — actions can't call ctx.db/ctx.auth directly. */
+export const requireReplyAccessForEvent = internalQuery({
+  args: { instagramEventId: v.id("instagramEvents") },
+  handler: async (ctx, args) => {
+    const event = await ctx.db.get(args.instagramEventId);
+    if (!event) throw new ConvexError("Event not found.");
+    const { user } = await requireTenantAuth(ctx, event.orgId, [PERMISSIONS.EDIT_LEADS]);
+
+    const orgSettings = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", event.orgId))
+      .unique();
+
+    return { event, orgSettings, userId: user._id };
+  },
+});
+
+export const saveManualReply = internalMutation({
+  args: {
+    instagramEventId: v.id("instagramEvents"),
+    manualReplyText: v.string(),
+    manualRepliedByUserId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.instagramEventId, {
+      manualReplyText: args.manualReplyText,
+      manualRepliedAt: Date.now(),
+      manualRepliedByUserId: args.manualRepliedByUserId,
+    });
+  },
+});
+
+/** Manually replies to a specific inbound comment from the Social Inbox / lead dialog UI. */
+export const replyToInstagramComment = action({
+  args: { orgId: v.id("organizations"), instagramEventId: v.id("instagramEvents"), message: v.string() },
+  handler: async (ctx, args): Promise<void> => {
+    const { event, orgSettings, userId } = await ctx.runQuery(
+      internal.instagramEngagement.requireReplyAccessForEvent,
+      { instagramEventId: args.instagramEventId }
+    );
+    if (event.kind !== "comment") {
+      throw new ConvexError("This event is not a comment.");
+    }
+    if (!orgSettings?.instagramAccessToken) {
+      throw new ConvexError("Instagram is not connected for this organization.");
+    }
+    if (!args.message.trim()) {
+      throw new ConvexError("Reply cannot be empty.");
+    }
+
+    const result = await postCommentReply(event.externalId, args.message, orgSettings.instagramAccessToken);
+    if (!result.ok) {
+      throw new ConvexError(`Failed to reply: ${result.error}`);
+    }
+
+    await ctx.runMutation(internal.instagramEngagement.saveManualReply, {
+      instagramEventId: args.instagramEventId,
+      manualReplyText: args.message,
+      manualRepliedByUserId: userId,
+    });
+  },
+});
+
+/**
+ * Auth gate + data load for a manual DM send. Resolves the most recent
+ * inbound DM event for the lead (Instagram DMs aren't threaded per-message
+ * like comments, so this is how the UI knows the customer's
+ * senderInstagramId in the first place, and purely to have somewhere to
+ * record the reply for display) and the org's Instagram credentials.
+ */
+export const requireSendDmAccess = internalQuery({
+  args: { orgId: v.id("organizations"), leadId: v.id("leads") },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_LEADS]);
+
+    const events = await ctx.db
+      .query("instagramEvents")
+      .withIndex("by_org_lead", (q) => q.eq("orgId", args.orgId).eq("leadId", args.leadId))
+      .order("desc")
+      .collect();
+    const dmEvent = events.find((e) => e.kind === "dm") ?? null;
+
+    const orgSettings = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .unique();
+
+    return { dmEvent, orgSettings, userId: user._id };
+  },
+});
+
+/** Sends a new DM to the customer tied to a lead, from the Social Inbox / lead dialog UI. */
+export const sendInstagramDirectMessage = action({
+  args: { orgId: v.id("organizations"), leadId: v.id("leads"), message: v.string() },
+  handler: async (ctx, args): Promise<void> => {
+    const { dmEvent, orgSettings, userId } = await ctx.runQuery(
+      internal.instagramEngagement.requireSendDmAccess,
+      { orgId: args.orgId, leadId: args.leadId }
+    );
+    if (!dmEvent) {
+      throw new ConvexError("No Instagram DM conversation found for this lead.");
+    }
+    if (!args.message.trim()) {
+      throw new ConvexError("Message cannot be empty.");
+    }
+    if (!orgSettings?.instagramAccessToken || !orgSettings?.instagramBusinessAccountId) {
+      throw new ConvexError("Instagram is not connected for this organization.");
+    }
+
+    const result = await postDirectMessage(
+      dmEvent.senderInstagramId,
+      args.message,
+      orgSettings.instagramBusinessAccountId,
+      orgSettings.instagramAccessToken
+    );
+    if (!result.ok) {
+      throw new ConvexError(`Failed to send message: ${result.error}`);
+    }
+
+    await ctx.runMutation(internal.instagramEngagement.saveManualReply, {
+      instagramEventId: dmEvent._id,
+      manualReplyText: args.message,
+      manualRepliedByUserId: userId,
+    });
   },
 });

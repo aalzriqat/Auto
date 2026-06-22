@@ -1,14 +1,16 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { RoleGuard } from "@/components/auth/RoleGuard";
 import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { Button } from "@/components/ui/button";
 import { LeadDialog } from "@/components/leads/LeadDialog";
-import { Doc } from "@/convex/_generated/dataModel";
-import { Plus, User, Car, Trash2, FileText, LayoutList, Kanban } from "lucide-react";
+import { SocialConversationDialog } from "@/components/leads/SocialConversationDialog";
+import { Doc, Id } from "@/convex/_generated/dataModel";
+import { Plus, User, Car, Trash2, FileText, LayoutList, Kanban, MessageCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { toast } from "@/components/ui/sonner";
@@ -52,11 +54,25 @@ export default function LeadsPage() {
     { initialNumItems: 25 }
   );
   const removeLead = useMutation(api.leads.softDelete);
+  const searchParams = useSearchParams();
+  const highlightId = searchParams.get("highlightId");
 
   const [isLeadDialogOpen, setIsLeadDialogOpen] = useState(false);
   const [editingLead, setEditingLead] = useState<any>(null);
   const [leadToDelete, setLeadToDelete] = useState<any>(null);
   const [view, setView] = useState<"table" | "kanban">("table");
+  const [conversationLeadId, setConversationLeadId] = useState<Id<"leads"> | null>(null);
+  const [highlightedLeadId, setHighlightedLeadId] = useState<string | null>(null);
+  const rowRefs = useRef<Record<string, HTMLElement | null>>({});
+
+  useEffect(() => {
+    if (!highlightId || !leads?.some((l) => l._id === highlightId)) return;
+    setHighlightedLeadId(highlightId);
+    rowRefs.current[highlightId]?.scrollIntoView({ behavior: "smooth", block: "center" });
+    const timeout = setTimeout(() => setHighlightedLeadId(null), 4000);
+    return () => clearTimeout(timeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightId, leads]);
 
   const handleEdit = (lead: any) => {
     setEditingLead(lead);
@@ -171,7 +187,8 @@ export default function LeadsPage() {
             ) : leads.map((lead) => (
               <div
                 key={lead._id}
-                className="rounded-xl border bg-card p-4 space-y-3 cursor-pointer active:bg-muted/30"
+                ref={(el) => { rowRefs.current[lead._id] = el; }}
+                className={`rounded-xl border bg-card p-4 space-y-3 cursor-pointer active:bg-muted/30 transition-shadow ${highlightedLeadId === lead._id ? "ring-2 ring-amber-400" : ""}`}
                 onClick={() => handleEdit(lead)}
               >
                 <div className="flex items-start justify-between gap-2">
@@ -198,12 +215,23 @@ export default function LeadsPage() {
                       <User className="h-3 w-3" />{lead.assignedUserName}
                     </span>
                   ) : <span />}
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setLeadToDelete(lead); }}
-                    className="p-3 rounded-md text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  <div className="flex items-center">
+                    {lead.source?.startsWith("Instagram") && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setConversationLeadId(lead._id); }}
+                        className="p-3 rounded-md text-muted-foreground hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"
+                        title={t("ViewConversation" as any)}
+                      >
+                        <MessageCircle className="w-4 h-4" />
+                      </button>
+                    )}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setLeadToDelete(lead); }}
+                      className="p-3 rounded-md text-muted-foreground hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}
@@ -235,7 +263,12 @@ export default function LeadsPage() {
                   </TableRow>
                 ) : (
                   leads?.map((lead) => (
-                    <TableRow key={lead._id} className="cursor-pointer group hover:bg-slate-50/50 dark:hover:bg-zinc-900/50 transition-colors" onClick={() => handleEdit(lead)}>
+                    <TableRow
+                      key={lead._id}
+                      ref={(el) => { rowRefs.current[lead._id] = el; }}
+                      className={`cursor-pointer group hover:bg-slate-50/50 dark:hover:bg-zinc-900/50 transition-colors ${highlightedLeadId === lead._id ? "ring-2 ring-inset ring-amber-400" : ""}`}
+                      onClick={() => handleEdit(lead)}
+                    >
                       <TableCell className="py-4 px-6 font-medium">
                         <div className="flex items-center gap-3">
                           <div className="w-8 h-8 rounded-full bg-slate-100 dark:bg-zinc-800 flex items-center justify-center text-slate-500 font-medium text-xs flex-shrink-0">
@@ -271,6 +304,15 @@ export default function LeadsPage() {
                       </TableCell>
                       <TableCell className="py-4 px-6 text-end">
                         <div className="flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                          {lead.source?.startsWith("Instagram") && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setConversationLeadId(lead._id); }}
+                              className="p-2 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-md text-muted-foreground hover:text-blue-600 transition-colors"
+                              title={t("ViewConversation" as any)}
+                            >
+                              <MessageCircle className="w-4 h-4" />
+                            </button>
+                          )}
                           <button
                             onClick={(e) => { e.stopPropagation(); try { generateQuote("AutoFlow Dealership", lead.customerName, lead.vehicleSummary || "Unknown Vehicle", "TBD", 0); toast.success(t("QuoteGenerated" as any) || "Quote generated"); } catch { toast.error(t("FailedGenerateQuote" as any) || "Failed to generate Quote"); } }}
                             className="p-2 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-md text-muted-foreground hover:text-blue-600 transition-colors"
@@ -332,7 +374,16 @@ export default function LeadsPage() {
                               <div className="w-6 h-6 rounded-full bg-slate-100 dark:bg-zinc-700 flex items-center justify-center text-[10px] font-medium flex-shrink-0">
                                 {lead.customerName?.charAt(0)?.toUpperCase() ?? "?"}
                               </div>
-                              <span className="text-sm font-medium truncate">{lead.customerName}</span>
+                              <span className="text-sm font-medium truncate flex-1">{lead.customerName}</span>
+                              {lead.source?.startsWith("Instagram") && (
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); setConversationLeadId(lead._id); }}
+                                  className="p-1 rounded text-muted-foreground hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors shrink-0"
+                                  title={t("ViewConversation" as any)}
+                                >
+                                  <MessageCircle className="w-3.5 h-3.5" />
+                                </button>
+                              )}
                             </div>
                             {lead.vehicleSummary && (
                               <div className="flex items-center gap-1 text-[11px] text-muted-foreground truncate">
@@ -361,6 +412,12 @@ export default function LeadsPage() {
           open={isLeadDialogOpen}
           onOpenChange={setIsLeadDialogOpen}
           lead={editingLead}
+        />
+
+        <SocialConversationDialog
+          leadId={conversationLeadId}
+          open={!!conversationLeadId}
+          onOpenChange={(o) => !o && setConversationLeadId(null)}
         />
 
         <Dialog open={!!leadToDelete} onOpenChange={(open) => !open && setLeadToDelete(null)}>
