@@ -371,6 +371,15 @@ export const settingsEn = {
   InstagramDisconnectedSuccess: "Instagram disconnected.",
   AutoPostInstagram: "Auto-post to Instagram",
   AutoPostInstagramDescription: "Automatically post a vehicle to Instagram when its status changes to Available.",
+  InstagramAutoReply: "Auto-reply to comments & DMs",
+  InstagramAutoReplyDescription:
+    "When someone comments on a post or sends a DM, automatically send one of the replies below (rotated in order) and create a lead.",
+  InstagramAutoReplyMessagePlaceholder: "Write a canned reply, e.g. \"Thanks for reaching out! We'll get back to you shortly.\"",
+  AddReply: "Add reply",
+  RemoveReply: "Remove",
+  SaveAutoReplies: "Save",
+  AutoRepliesSaved: "Auto-reply settings saved.",
+  AutoReplyMaxMessages: "Up to 5 auto-reply messages are allowed.",
 };
 
 export const settingsAr = {
@@ -746,4 +755,13 @@ export const settingsAr = {
   InstagramDisconnectedSuccess: "تم قطع اتصال إنستغرام.",
   AutoPostInstagram: "النشر التلقائي على إنستغرام",
   AutoPostInstagramDescription: "نشر المركبة تلقائيًا على إنستغرام عند تغيير حالتها إلى متاحة.",
+  InstagramAutoReply: "الرد التلقائي على التعليقات والرسائل المباشرة",
+  InstagramAutoReplyDescription:
+    "عند تعليق أحدهم على منشور أو إرسال رسالة مباشرة، يتم إرسال أحد الردود أدناه تلقائيًا (بالتناوب) وإنشاء عميل محتمل.",
+  InstagramAutoReplyMessagePlaceholder: "اكتب ردًا جاهزًا، مثل \"شكرًا لتواصلك! سنرد عليك قريبًا.\"",
+  AddReply: "إضافة رد",
+  RemoveReply: "إزالة",
+  SaveAutoReplies: "حفظ",
+  AutoRepliesSaved: "تم حفظ إعدادات الرد التلقائي.",
+  AutoReplyMaxMessages: "يُسمح بحد أقصى 5 رسائل رد تلقائي.",
 };

@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery } from "./_generated/server";
 import { Doc } from "./_generated/dataModel";
+import { notifyManagers } from "./utils/notifications";
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -79,7 +80,7 @@ export const handleIncomingMessage = internalMutation({
     );
 
     if (!hasOpenLead) {
-      await ctx.db.insert("leads", {
+      const leadId = await ctx.db.insert("leads", {
         orgId,
         customerId: customer._id,
         source: "WhatsApp",
@@ -88,6 +89,14 @@ export const handleIncomingMessage = internalMutation({
           ? `First WhatsApp message: "${messageText.slice(0, 200)}"`
           : "Lead created from WhatsApp message",
       });
+
+      await notifyManagers(
+        ctx,
+        orgId,
+        "New WhatsApp Lead",
+        `New WhatsApp message from ${senderName ?? senderPhone}.`,
+        `/${orgId}/leads?highlightId=${leadId}`
+      );
     }
   },
 });

@@ -19,6 +19,7 @@ const INSTAGRAM_SCOPES = [
   "instagram_business_basic",
   "instagram_business_content_publish",
   "instagram_business_manage_comments",
+  "instagram_business_manage_messages",
 ].join(",");
 
 // ─── Public ───────────────────────────────────────────────────────────────────
@@ -81,7 +82,46 @@ export const getConnectionStatus = query({
       instagramConnected: Boolean(settings?.instagramAccessToken && settings?.instagramBusinessAccountId),
       instagramPageName: settings?.instagramPageName,
       socialAutoPostEnabled: settings?.socialAutoPostEnabled ?? false,
+      instagramAutoReplyEnabled: settings?.instagramAutoReplyEnabled ?? false,
+      instagramAutoReplyMessages: settings?.instagramAutoReplyMessages ?? [],
     };
+  },
+});
+
+/**
+ * Saves the dealer's static auto-reply config for incoming Instagram
+ * comments/DMs (up to 5 canned messages, sent round-robin). Owner-only, same
+ * gating as the other Instagram connection settings.
+ */
+export const setInstagramAutoReplyConfig = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    enabled: v.boolean(),
+    messages: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireOwner(ctx, args.orgId);
+
+    const cleaned = args.messages.map((m) => m.trim()).filter(Boolean);
+    if (cleaned.length > 5) {
+      throw new ConvexError("Up to 5 auto-reply messages are allowed.");
+    }
+    if (args.enabled && cleaned.length === 0) {
+      throw new ConvexError("Add at least one auto-reply message before enabling.");
+    }
+
+    const settings = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .unique();
+    if (!settings) {
+      throw new ConvexError("Connect Instagram before configuring auto-replies.");
+    }
+
+    await ctx.db.patch(settings._id, {
+      instagramAutoReplyEnabled: args.enabled,
+      instagramAutoReplyMessages: cleaned,
+    });
   },
 });
 
@@ -96,7 +136,9 @@ export const disconnectByInstagramUserId = internalMutation({
   handler: async (ctx, args) => {
     const settings = await ctx.db
       .query("orgSettings")
-      .filter((q) => q.eq(q.field("instagramBusinessAccountId"), args.instagramBusinessAccountId))
+      .withIndex("by_instagram_business_account_id", (q) =>
+        q.eq("instagramBusinessAccountId", args.instagramBusinessAccountId)
+      )
       .first();
     if (!settings) return;
 
@@ -106,6 +148,7 @@ export const disconnectByInstagramUserId = internalMutation({
       instagramTokenExpiresAt: undefined,
       instagramPageName: undefined,
       socialAutoPostEnabled: false,
+      instagramAutoReplyEnabled: false,
     });
   },
 });
@@ -128,6 +171,7 @@ export const disconnect = mutation({
       instagramTokenExpiresAt: undefined,
       instagramPageName: undefined,
       socialAutoPostEnabled: false,
+      instagramAutoReplyEnabled: false,
     });
   },
 });
@@ -291,5 +335,32 @@ export const exchangeCodeForToken = internalAction({
       instagramTokenExpiresAt: expiresInSeconds ? Date.now() + expiresInSeconds * 1000 : undefined,
       instagramPageName: username,
     });
+
+    // 4. Subscribe this specific IG account to webhook delivery. The
+    // app-level Webhooks product config (callback URL + verify token +
+    // field selection in the Meta dashboard) is necessary but not
+    // sufficient — each connected account must also opt in via this call,
+    // or comments/messages will never be delivered to /instagram-webhook
+    // even though the OAuth scopes were granted.
+    try {
+      const subscribeUrl = new URL(`https://graph.instagram.com/${INSTAGRAM_GRAPH_VERSION}/${igUserId}/subscribed_apps`);
+      subscribeUrl.searchParams.set("subscribed_fields", "comments,messages");
+      subscribeUrl.searchParams.set("access_token", longLivedToken);
+      const subscribeRes = await fetch(subscribeUrl.toString(), { method: "POST" });
+      const subscribeJson = await subscribeRes.json();
+      if (!subscribeRes.ok || subscribeJson?.success !== true) {
+        throw new ConvexError(subscribeJson?.error?.message ?? subscribeRes.statusText);
+      }
+    } catch (err) {
+      // Non-fatal — the account is connected and posting/comment-viewing
+      // still work; only inbound webhook delivery is affected. Logged so
+      // it's visible in the admin Overview rather than silently swallowed.
+      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+        source: "instagram",
+        status: "error",
+        summary: `subscribed_apps failed for IG account ${igUserId}`,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   },
 });

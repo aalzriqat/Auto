@@ -45,6 +45,31 @@ async function verifyMetaSignedRequest(signedRequest: string, appSecret: string)
   return JSON.parse(new TextDecoder().decode(base64UrlDecode(encodedPayload)));
 }
 
+// Verifies Meta's `X-Hub-Signature-256` header — a hex-encoded HMAC-SHA256 of
+// the raw request body, keyed with the Meta App Secret — sent on every
+// WhatsApp Cloud API webhook POST. This is the only thing that proves a
+// webhook call actually came from Meta; the `orgId` query param and message
+// body are otherwise fully attacker-controlled.
+async function verifyHubSignature256(rawBody: string, signatureHeader: string | null, appSecret: string): Promise<boolean> {
+  if (!signatureHeader?.startsWith("sha256=")) return false;
+  const provided = signatureHeader.slice("sha256=".length);
+
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(appSecret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const expectedBytes = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(rawBody)));
+  const expectedHex = Array.from(expectedBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+
+  if (expectedHex.length !== provided.length) return false;
+  let diff = 0;
+  for (let i = 0; i < expectedHex.length; i++) diff |= expectedHex.charCodeAt(i) ^ provided.charCodeAt(i);
+  return diff === 0;
+}
+
 http.route({
   path: "/clerk-webhook",
   method: "POST",
@@ -298,9 +323,24 @@ http.route({
       return new Response("Too many requests", { status: 429 });
     }
 
+    let appSecret: string;
+    try {
+      const env = getValidatedEnv();
+      if (!env.WHATSAPP_APP_SECRET) throw new ConvexError("WHATSAPP_APP_SECRET not set");
+      appSecret = env.WHATSAPP_APP_SECRET;
+    } catch {
+      return new Response("Webhook secret not set or invalid env", { status: 500 });
+    }
+
+    const rawBody = await request.text();
+    const signature = request.headers.get("x-hub-signature-256");
+    if (!(await verifyHubSignature256(rawBody, signature, appSecret))) {
+      return new Response("Invalid signature", { status: 401 });
+    }
+
     let body: any;
     try {
-      body = await request.json();
+      body = JSON.parse(rawBody);
     } catch {
       return new Response("Invalid JSON", { status: 400 });
     }
@@ -472,6 +512,149 @@ http.route({
       }),
       { status: 200, headers: { "Content-Type": "application/json" } }
     );
+  }),
+});
+
+// ─── Instagram comments + DMs webhook ──────────────────────────────────────────
+// Meta allows only one webhook callback URL per App (unlike WhatsApp, which
+// gets one per org via ?orgId=) — subscribe this single URL to the
+// "comments" and "messages" fields on the Instagram object in the Meta
+// dashboard's Webhooks product:
+//   GET  https://<convex-site>/instagram-webhook  (verification)
+//   POST https://<convex-site>/instagram-webhook  (comments + DMs)
+// orgId is resolved per-event by reverse-looking-up the IG business account
+// ID Meta includes in every payload against orgSettings.
+
+http.route({
+  path: "/instagram-webhook",
+  method: "GET",
+  handler: httpAction(async (ctx, request) => {
+    const url = new URL(request.url);
+    const mode = url.searchParams.get("hub.mode");
+    const token = url.searchParams.get("hub.verify_token");
+    const challenge = url.searchParams.get("hub.challenge");
+
+    if (mode !== "subscribe" || !token || !challenge) {
+      return new Response("Bad request", { status: 400 });
+    }
+
+    const env = getValidatedEnv();
+    if (!env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN || env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN !== token) {
+      return new Response("Forbidden", { status: 403 });
+    }
+
+    return new Response(challenge, { status: 200 });
+  }),
+});
+
+http.route({
+  path: "/instagram-webhook",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    let appSecret: string;
+    try {
+      const env = getValidatedEnv();
+      if (!env.INSTAGRAM_APP_SECRET) throw new ConvexError("INSTAGRAM_APP_SECRET not set");
+      appSecret = env.INSTAGRAM_APP_SECRET;
+    } catch {
+      return new Response("Webhook secret not set or invalid env", { status: 500 });
+    }
+
+    const rawBody = await request.text();
+    const signature = request.headers.get("x-hub-signature-256");
+    if (!(await verifyHubSignature256(rawBody, signature, appSecret))) {
+      return new Response("Invalid signature", { status: 401 });
+    }
+
+    let body: any;
+    try {
+      body = JSON.parse(rawBody);
+    } catch {
+      return new Response("Invalid JSON", { status: 400 });
+    }
+
+    const entry = body?.entry?.[0];
+    const igAccountId: string | undefined = entry?.id;
+    if (!igAccountId) return new Response(null, { status: 200 });
+
+    const limitStatus = await rateLimiter.limit(ctx, "webhook", { key: igAccountId });
+    if (!limitStatus.ok) {
+      return new Response("Too many requests", { status: 429 });
+    }
+
+    const settings = await ctx.runQuery(internal.instagramEngagement.getSettingsByInstagramAccountId, {
+      instagramBusinessAccountId: igAccountId,
+    });
+    if (!settings) {
+      // Unrecognized account (not connected to any org, or already
+      // disconnected) — acknowledge so Meta doesn't retry forever.
+      return new Response(null, { status: 200 });
+    }
+    const orgId = settings.orgId;
+
+    // Comments arrive via entry[].changes[] (field === "comments");
+    // DMs arrive via entry[].messaging[] (Messenger-style payload shape).
+    const commentChange = entry?.changes?.find((c: any) => c.field === "comments");
+    const messagingEvent = entry?.messaging?.[0];
+
+    let summary = "Unrecognized event";
+    try {
+      if (commentChange?.value?.id) {
+        const value = commentChange.value;
+        const result = await ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+          orgId,
+          kind: "comment",
+          externalId: String(value.id),
+          senderInstagramId: String(value.from?.id ?? ""),
+          senderUsername: value.from?.username,
+          text: value.text,
+        });
+        summary = `Comment from ${value.from?.username ?? value.from?.id}`;
+        if (result?.shouldAutoReply && result.replyText) {
+          await ctx.runAction(internal.instagramEngagement.sendCommentReply, {
+            orgId,
+            commentId: String(value.id),
+            message: result.replyText,
+          });
+        }
+      } else if (messagingEvent?.message?.text && !messagingEvent.message.is_echo) {
+        const senderId = String(messagingEvent.sender?.id ?? "");
+        const result = await ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+          orgId,
+          kind: "dm",
+          externalId: String(messagingEvent.message.mid ?? `${senderId}-${messagingEvent.timestamp}`),
+          senderInstagramId: senderId,
+          text: messagingEvent.message.text,
+        });
+        summary = `DM from ${senderId}`;
+        if (result?.shouldAutoReply && result.replyText) {
+          await ctx.runAction(internal.instagramEngagement.sendDirectMessage, {
+            orgId,
+            recipientInstagramId: senderId,
+            message: result.replyText,
+          });
+        }
+      } else {
+        // Echoes, reactions, read receipts, etc. — acknowledge silently.
+        return new Response(null, { status: 200 });
+      }
+    } catch (err) {
+      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+        source: "instagram",
+        status: "error",
+        summary,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return new Response(null, { status: 200 });
+    }
+
+    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+      source: "instagram",
+      status: "success",
+      summary,
+    });
+
+    return new Response(null, { status: 200 });
   }),
 });
 

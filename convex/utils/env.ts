@@ -18,6 +18,17 @@ const backendEnvSchema = z.object({
   // social posting integration (Settings > Integrations)
   INSTAGRAM_APP_ID: z.string().optional(),
   INSTAGRAM_APP_SECRET: z.string().optional(),
+
+  // Meta App Secret used to verify the `X-Hub-Signature-256` header Meta
+  // sends on every WhatsApp Cloud API webhook POST — required before the
+  // /whatsapp-webhook route will accept inbound messages.
+  WHATSAPP_APP_SECRET: z.string().optional(),
+
+  // Verify token for the Instagram webhook (comments + DMs) handshake. Meta
+  // only allows one webhook callback URL per App, so this is a single
+  // app-level secret, not per-org like WHATSAPP_WEBHOOK_SECRET. Signature
+  // verification on the POST body reuses INSTAGRAM_APP_SECRET.
+  INSTAGRAM_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
   // Auto-injected by Convex at runtime; validated here so a missing value
   // fails loudly instead of producing a broken OAuth redirect URI.
   CONVEX_SITE_URL: z.string().url().optional(),
@@ -33,6 +44,8 @@ export function getValidatedEnv() {
     SUPER_ADMIN_EMAILS: process.env.SUPER_ADMIN_EMAILS,
     INSTAGRAM_APP_ID: process.env.INSTAGRAM_APP_ID,
     INSTAGRAM_APP_SECRET: process.env.INSTAGRAM_APP_SECRET,
+    WHATSAPP_APP_SECRET: process.env.WHATSAPP_APP_SECRET,
+    INSTAGRAM_WEBHOOK_VERIFY_TOKEN: process.env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN,
     CONVEX_SITE_URL: process.env.CONVEX_SITE_URL,
   });
   

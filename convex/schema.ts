@@ -144,6 +144,7 @@ export default defineSchema({
     lastName: v.string(),
     phone: v.optional(v.string()),
     whatsapp: v.optional(v.string()),
+    instagramUserId: v.optional(v.string()),
     email: v.optional(v.string()),
     nationalId: v.optional(v.string()),
     address: v.optional(v.string()),
@@ -661,7 +662,12 @@ export default defineSchema({
     instagramTokenExpiresAt: v.optional(v.number()),
     instagramPageName: v.optional(v.string()),
     socialAutoPostEnabled: v.optional(v.boolean()),
-  }).index("by_org", ["orgId"]),
+    instagramAutoReplyEnabled: v.optional(v.boolean()),
+    instagramAutoReplyMessages: v.optional(v.array(v.string())),
+    instagramAutoReplyLastIndex: v.optional(v.number()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_instagram_business_account_id", ["instagramBusinessAccountId"]),
 
   oauthStates: defineTable({
     orgId: v.id("organizations"),
@@ -670,6 +676,19 @@ export default defineSchema({
     createdAt: v.number(),
     expiresAt: v.number(),
   }).index("by_state", ["state"]),
+
+  instagramEvents: defineTable({
+    orgId: v.id("organizations"),
+    externalId: v.string(),
+    kind: v.union(v.literal("comment"), v.literal("dm")),
+    senderInstagramId: v.string(),
+    customerId: v.optional(v.id("customers")),
+    leadId: v.optional(v.id("leads")),
+    text: v.optional(v.string()),
+    autoRepliedAt: v.optional(v.number()),
+  })
+    .index("by_org_external", ["orgId", "externalId"])
+    .index("by_org_sender", ["orgId", "senderInstagramId"]),
 
   socialPosts: defineTable({
     orgId: v.id("organizations"),
@@ -823,7 +842,13 @@ export default defineSchema({
   }).index("by_job", ["jobName"]),
 
   webhookLogs: defineTable({
-    source: v.union(v.literal("clerk"), v.literal("whatsapp"), v.literal("resend"), v.literal("instagram-oauth")),
+    source: v.union(
+      v.literal("clerk"),
+      v.literal("whatsapp"),
+      v.literal("resend"),
+      v.literal("instagram-oauth"),
+      v.literal("instagram")
+    ),
     status: v.union(v.literal("success"), v.literal("error")),
     summary: v.string(),
     error: v.optional(v.string()),
