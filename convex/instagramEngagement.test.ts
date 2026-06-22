@@ -10,6 +10,7 @@ vi.mock("./rateLimit", () => ({
 vi.mock("./utils/instagramApi", () => ({
   postCommentReply: vi.fn().mockResolvedValue({ ok: true }),
   postDirectMessage: vi.fn().mockResolvedValue({ ok: true }),
+  INSTAGRAM_GRAPH_VERSION: "v21.0",
 }));
 
 async function seedOrgWithManager(t: ReturnType<typeof convexTest>) {
@@ -94,6 +95,35 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
     );
     expect(notifications.length).toBe(1);
     expect(notifications[0].title).toContain("Instagram Comment");
+  });
+
+  test("flags needsProfileEnrichment for a DM with no username, not for a comment with one", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+
+    const dmResult = await t.run((ctx) =>
+      ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+        orgId,
+        kind: "dm",
+        externalId: "dm_no_username",
+        senderInstagramId: "ig_user_dm",
+        text: "hi",
+      })
+    );
+    expect(dmResult?.needsProfileEnrichment).toBe(true);
+    expect(dmResult?.customerId).toBeDefined();
+
+    const commentResult = await t.run((ctx) =>
+      ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+        orgId,
+        kind: "comment",
+        externalId: "comment_with_username",
+        senderInstagramId: "ig_user_comment",
+        senderUsername: "real_handle",
+        text: "hi",
+      })
+    );
+    expect(commentResult?.needsProfileEnrichment).toBe(false);
   });
 
   test("links the new lead to the vehicle via the comment's media id", async () => {
@@ -523,5 +553,124 @@ describe("instagramEngagement.sendInstagramDirectMessage", () => {
         message: "hello",
       })
     ).rejects.toThrow(/no instagram dm conversation/i);
+  });
+});
+
+describe("instagramEngagement.enrichCustomerProfile", () => {
+  test("fetches the sender's real name and applies it to the placeholder customer", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId);
+
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: "Instagram",
+        lastName: "Contact",
+        instagramUserId: "ig_user_enrich",
+      })
+    );
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ username: "real_username" }) })
+    );
+
+    await t.action(internal.instagramEngagement.enrichCustomerProfile, {
+      orgId,
+      customerId,
+      senderInstagramId: "ig_user_enrich",
+    });
+
+    const customer = await t.run((ctx) => ctx.db.get(customerId));
+    expect(customer?.firstName).toBe("real_username");
+
+    vi.unstubAllGlobals();
+  });
+
+  test("does not overwrite a name that's already been resolved", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId);
+
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", {
+        orgId,
+        firstName: "Already",
+        lastName: "Named",
+        instagramUserId: "ig_user_named",
+      })
+    );
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: true, json: async () => ({ username: "should_not_apply" }) })
+    );
+
+    await t.action(internal.instagramEngagement.enrichCustomerProfile, {
+      orgId,
+      customerId,
+      senderInstagramId: "ig_user_named",
+    });
+
+    const customer = await t.run((ctx) => ctx.db.get(customerId));
+    expect(customer?.firstName).toBe("Already");
+
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("instagramEngagement.listEvents / listEventsForLead — senderDisplayName", () => {
+  test("prefers the event's username, falls back to the customer's resolved name, then the raw id", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asEditor } = await seedOrgWithEditor(t);
+
+    const namedCustomerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Resolved", lastName: "Name", instagramUserId: "ig_named" })
+    );
+    const placeholderCustomerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Instagram", lastName: "Contact", instagramUserId: "ig_unresolved" })
+    );
+
+    await t.run((ctx) =>
+      ctx.db.insert("instagramEvents", {
+        orgId,
+        externalId: "disp_1",
+        kind: "comment",
+        senderInstagramId: "ig_with_username",
+        senderUsername: "has_username",
+        text: "hi",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("instagramEvents", {
+        orgId,
+        externalId: "disp_2",
+        kind: "dm",
+        senderInstagramId: "ig_named",
+        customerId: namedCustomerId,
+        text: "hi",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("instagramEvents", {
+        orgId,
+        externalId: "disp_3",
+        kind: "dm",
+        senderInstagramId: "ig_unresolved",
+        customerId: placeholderCustomerId,
+        text: "hi",
+      })
+    );
+
+    const result = await asEditor.query(api.instagramEngagement.listEvents, {
+      orgId,
+      paginationOpts: { numItems: 25, cursor: null },
+    });
+    const byExternalId = Object.fromEntries(result.page.map((e: any) => [e.externalId, e.senderDisplayName]));
+
+    expect(byExternalId["disp_1"]).toBe("has_username");
+    expect(byExternalId["disp_2"]).toBe("Resolved Name");
+    expect(byExternalId["disp_3"]).toBe("ig_unresolved");
   });
 });

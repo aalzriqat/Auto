@@ -96,7 +96,7 @@ export function SocialConversationDialog({ leadId, open, onOpenChange }: SocialC
             <div key={event._id} className="bg-muted/30 p-3 rounded-lg border text-sm space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <p className="text-xs">
-                  <span className="font-semibold">{event.senderUsername ?? event.senderInstagramId}</span>{" "}
+                  <span className="font-semibold">{event.senderDisplayName}</span>{" "}
                   <Badge variant="secondary" className="text-[10px] py-0">
                     {event.kind === "dm" ? t("DM" as any) : t("Comment" as any)}
                   </Badge>

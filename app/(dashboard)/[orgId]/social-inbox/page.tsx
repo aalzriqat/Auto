@@ -20,7 +20,11 @@ import {
   TableCell,
 } from "@/components/ui/table";
 
-type EventRow = Doc<"instagramEvents"> & { vehicleSummary: string | null; leadStage: string | null };
+type EventRow = Doc<"instagramEvents"> & {
+  vehicleSummary: string | null;
+  leadStage: string | null;
+  senderDisplayName: string;
+};
 
 export default function SocialInboxPage() {
   const { activeOrgId } = useOrg();
@@ -62,7 +66,7 @@ export default function SocialInboxPage() {
                 onClick={() => event.leadId && setConversationLeadId(event.leadId)}
               >
                 <div className="flex items-start justify-between gap-2">
-                  <p className="font-semibold text-sm truncate">{event.senderUsername ?? event.senderInstagramId}</p>
+                  <p className="font-semibold text-sm truncate">{event.senderDisplayName}</p>
                   <Badge variant="secondary" className="text-[10px] shrink-0">
                     {event.kind === "dm" ? t("DM" as any) : t("Comment" as any)}
                   </Badge>
@@ -117,7 +121,7 @@ export default function SocialInboxPage() {
                     onClick={() => event.leadId && setConversationLeadId(event.leadId)}
                   >
                     <TableCell className="py-4 px-6 font-medium">
-                      {event.senderUsername ?? event.senderInstagramId}
+                      {event.senderDisplayName}
                     </TableCell>
                     <TableCell className="py-4 px-6">
                       <Badge variant="secondary">{event.kind === "dm" ? t("DM" as any) : t("Comment" as any)}</Badge>

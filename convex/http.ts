@@ -618,6 +618,13 @@ http.route({
             message: result.replyText,
           });
         }
+        if (result?.needsProfileEnrichment && result.customerId) {
+          await ctx.runAction(internal.instagramEngagement.enrichCustomerProfile, {
+            orgId,
+            customerId: result.customerId,
+            senderInstagramId: String(value.from?.id ?? ""),
+          });
+        }
       } else if (messagingEvent?.message?.text && !messagingEvent.message.is_echo) {
         const senderId = String(messagingEvent.sender?.id ?? "");
         const result = await ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
@@ -633,6 +640,13 @@ http.route({
             orgId,
             recipientInstagramId: senderId,
             message: result.replyText,
+          });
+        }
+        if (result?.needsProfileEnrichment && result.customerId) {
+          await ctx.runAction(internal.instagramEngagement.enrichCustomerProfile, {
+            orgId,
+            customerId: result.customerId,
+            senderInstagramId: senderId,
           });
         }
       } else {

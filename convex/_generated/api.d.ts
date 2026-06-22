@@ -71,6 +71,7 @@ import type * as utils_dedup from "../utils/dedup.js";
 import type * as utils_depositHelpers from "../utils/depositHelpers.js";
 import type * as utils_env from "../utils/env.js";
 import type * as utils_errors from "../utils/errors.js";
+import type * as utils_instagramApi from "../utils/instagramApi.js";
 import type * as utils_leadStageHelpers from "../utils/leadStageHelpers.js";
 import type * as utils_mergeHelpers from "../utils/mergeHelpers.js";
 import type * as utils_notifications from "../utils/notifications.js";
@@ -160,6 +161,7 @@ declare const fullApi: ApiFromModules<{
   "utils/depositHelpers": typeof utils_depositHelpers;
   "utils/env": typeof utils_env;
   "utils/errors": typeof utils_errors;
+  "utils/instagramApi": typeof utils_instagramApi;
   "utils/leadStageHelpers": typeof utils_leadStageHelpers;
   "utils/mergeHelpers": typeof utils_mergeHelpers;
   "utils/notifications": typeof utils_notifications;
