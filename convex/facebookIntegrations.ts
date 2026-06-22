@@ -27,6 +27,7 @@ const FACEBOOK_SCOPES = [
   "pages_manage_engagement",
   "pages_messaging",
   "pages_read_engagement",
+  "pages_read_user_content",
 ].join(",");
 
 // ─── Public ───────────────────────────────────────────────────────────────────
