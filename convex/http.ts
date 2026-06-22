@@ -608,6 +608,7 @@ http.route({
           senderInstagramId: String(value.from?.id ?? ""),
           senderUsername: value.from?.username,
           text: value.text,
+          mediaId: value.media?.id ? String(value.media.id) : undefined,
         });
         summary = `Comment from ${value.from?.username ?? value.from?.id}`;
         if (result?.shouldAutoReply && result.replyText) {

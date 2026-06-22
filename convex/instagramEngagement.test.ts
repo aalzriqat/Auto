@@ -33,6 +33,7 @@ async function seedSettings(
       currencySymbol: "د.أ",
       enabledPaymentTypes: ["CASH"],
       instagramBusinessAccountId: "ig_business_1",
+      instagramWebhookAccountId: "ig_webhook_1",
       instagramAccessToken: "token_abc",
       ...overrides,
     })
@@ -73,6 +74,62 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
     );
     expect(notifications.length).toBe(1);
     expect(notifications[0].title).toContain("Instagram Comment");
+  });
+
+  test("links the new lead to the vehicle via the comment's media id", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, userId } = await seedOrgWithManager(t);
+
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "1HGCM82633A004444",
+        make: "BYD",
+        model: "Qin L",
+        year: 2025,
+        mileage: 0,
+        color: "Black",
+        fuelType: "Electric",
+        transmission: "Automatic",
+        sellingPrice: 25000,
+        status: "AVAILABLE",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("socialPosts", {
+        orgId,
+        vehicleId,
+        platform: "instagram",
+        status: "PUBLISHED",
+        imageStorageIds: [],
+        externalPostId: "media_123",
+        triggeredBy: "manual",
+        requestedBy: userId,
+        requestedAt: Date.now(),
+      })
+    );
+
+    const result = await t.run((ctx) =>
+      ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+        orgId,
+        kind: "comment",
+        externalId: "comment_with_media",
+        senderInstagramId: "ig_user_vehicle_test",
+        text: "Is this available?",
+        mediaId: "media_123",
+      })
+    );
+
+    const lead = await t.run((ctx) => ctx.db.get(result!.leadId!));
+    expect(lead?.vehicleId).toBe(vehicleId);
+
+    const event = await t.run((ctx) =>
+      ctx.db
+        .query("instagramEvents")
+        .withIndex("by_org_external", (q) => q.eq("orgId", orgId).eq("externalId", "comment_with_media"))
+        .unique()
+    );
+    expect(event?.vehicleId).toBe(vehicleId);
   });
 
   test("dedupes redelivered webhook events (same externalId processed once)", async () => {
@@ -229,14 +286,14 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
 });
 
 describe("instagramEngagement.getSettingsByInstagramAccountId", () => {
-  test("reverse-looks-up orgSettings by the Instagram business account id", async () => {
+  test("reverse-looks-up orgSettings by the webhook account id (not the OAuth business account id)", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId);
 
     const found = await t.run((ctx) =>
       ctx.runQuery(internal.instagramEngagement.getSettingsByInstagramAccountId, {
-        instagramBusinessAccountId: "ig_business_1",
+        instagramBusinessAccountId: "ig_webhook_1",
       })
     );
     expect(found?.orgId).toBe(orgId);

@@ -9,14 +9,20 @@ const AUTO_REPLY_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 1 reply per sender per 24
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
-/** Reverse-lookup used by the webhook: maps Meta's IG business account ID back to an org. */
+/**
+ * Reverse-lookup used by the webhook: maps the IG account ID Meta sends in
+ * entry[].id back to an org. This is `instagramWebhookAccountId` (the
+ * profile's "user_id" field) — NOT `instagramBusinessAccountId` (the OAuth
+ * "id" field used for outbound Graph API path calls). Confirmed via direct
+ * API probe 2026-06-22 that these are two different IDs for the same account.
+ */
 export const getSettingsByInstagramAccountId = internalQuery({
   args: { instagramBusinessAccountId: v.string() },
   handler: async (ctx, args) => {
     return await ctx.db
       .query("orgSettings")
-      .withIndex("by_instagram_business_account_id", (q) =>
-        q.eq("instagramBusinessAccountId", args.instagramBusinessAccountId)
+      .withIndex("by_instagram_webhook_account_id", (q) =>
+        q.eq("instagramWebhookAccountId", args.instagramBusinessAccountId)
       )
       .unique();
   },
@@ -43,12 +49,16 @@ export const handleIncomingInstagramEvent = internalMutation({
     senderInstagramId: v.string(),
     senderUsername: v.optional(v.string()),
     text: v.optional(v.string()),
+    // The IG media (post) ID a comment was made on — absent for plain-text
+    // DMs, which generally have no post reference. Used to link the lead
+    // back to the vehicle that post was about, via socialPosts.externalPostId.
+    mediaId: v.optional(v.string()),
   },
   handler: async (
     ctx,
     args
   ): Promise<{ shouldAutoReply: boolean; replyText?: string; leadId?: Id<"leads"> } | null> => {
-    const { orgId, kind, externalId, senderInstagramId, senderUsername, text } = args;
+    const { orgId, kind, externalId, senderInstagramId, senderUsername, text, mediaId } = args;
 
     const duplicate = await ctx.db
       .query("instagramEvents")
@@ -85,12 +95,23 @@ export const handleIncomingInstagramEvent = internalMutation({
 
     const openLead = existingLeads.find((l) => !l.isDeleted && l.stage !== "WON" && l.stage !== "LOST");
 
+    let vehicleId: Id<"vehicles"> | undefined;
+    if (mediaId) {
+      const socialPost = await ctx.db
+        .query("socialPosts")
+        .withIndex("by_external_post_id", (q) => q.eq("externalPostId", mediaId))
+        .filter((q) => q.eq(q.field("orgId"), orgId))
+        .first();
+      vehicleId = socialPost?.vehicleId;
+    }
+
     const label = kind === "dm" ? "Instagram DM" : "Instagram Comment";
     let leadId = openLead?._id;
     if (!leadId) {
       leadId = await ctx.db.insert("leads", {
         orgId,
         customerId: customer._id,
+        vehicleId,
         source: label,
         stage: "NEW",
         notes: text ? `First ${label}: "${text.slice(0, 200)}"` : `Lead created from ${label}`,
@@ -137,10 +158,13 @@ export const handleIncomingInstagramEvent = internalMutation({
       externalId,
       kind,
       senderInstagramId,
+      senderUsername,
       customerId: customer._id,
       leadId,
+      vehicleId,
       text,
       autoRepliedAt: shouldAutoReply ? Date.now() : undefined,
+      autoReplyText: shouldAutoReply ? replyText : undefined,
     });
 
     return { shouldAutoReply, replyText, leadId };

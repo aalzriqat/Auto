@@ -144,6 +144,7 @@ export const disconnectByInstagramUserId = internalMutation({
 
     await ctx.db.patch(settings._id, {
       instagramBusinessAccountId: undefined,
+      instagramWebhookAccountId: undefined,
       instagramAccessToken: undefined,
       instagramTokenExpiresAt: undefined,
       instagramPageName: undefined,
@@ -167,6 +168,7 @@ export const disconnect = mutation({
 
     await ctx.db.patch(settings._id, {
       instagramBusinessAccountId: undefined,
+      instagramWebhookAccountId: undefined,
       instagramAccessToken: undefined,
       instagramTokenExpiresAt: undefined,
       instagramPageName: undefined,
@@ -223,6 +225,7 @@ export const saveInstagramCredentials = internalMutation({
   args: {
     orgId: v.id("organizations"),
     instagramBusinessAccountId: v.string(),
+    instagramWebhookAccountId: v.optional(v.string()),
     instagramAccessToken: v.string(),
     instagramTokenExpiresAt: v.optional(v.number()),
     instagramPageName: v.optional(v.string()),
@@ -315,15 +318,21 @@ export const exchangeCodeForToken = internalAction({
     const longLivedToken: string = longLivedJson.access_token;
     const expiresInSeconds: number | undefined = longLivedJson.expires_in;
 
-    // 3. Fetch the username for display purposes ("Connected as @handle").
+    // 3. Fetch the username for display purposes ("Connected as @handle"),
+    // and the profile's "user_id" field — a *different* ID from `igUserId`
+    // above. Confirmed by direct API probe: `id` (igUserId) is what Graph
+    // API path calls (subscribed_apps, messages) expect, but Meta's webhook
+    // payloads use `user_id` in entry[].id. Both must be captured.
     let username: string | undefined;
+    let webhookAccountId: string | undefined;
     try {
       const profileUrl = new URL(`https://graph.instagram.com/${INSTAGRAM_GRAPH_VERSION}/${igUserId}`);
-      profileUrl.searchParams.set("fields", "username");
+      profileUrl.searchParams.set("fields", "username,user_id");
       profileUrl.searchParams.set("access_token", longLivedToken);
       const profileRes = await fetch(profileUrl.toString());
       const profileJson = await profileRes.json();
       username = profileJson.username;
+      webhookAccountId = profileJson.user_id;
     } catch {
       // Non-fatal — connection still succeeds without a display name.
     }
@@ -331,6 +340,7 @@ export const exchangeCodeForToken = internalAction({
     await ctx.runMutation(internal.socialIntegrations.saveInstagramCredentials, {
       orgId: args.orgId,
       instagramBusinessAccountId: igUserId,
+      instagramWebhookAccountId: webhookAccountId,
       instagramAccessToken: longLivedToken,
       instagramTokenExpiresAt: expiresInSeconds ? Date.now() + expiresInSeconds * 1000 : undefined,
       instagramPageName: username,

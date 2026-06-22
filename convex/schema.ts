@@ -658,6 +658,11 @@ export default defineSchema({
     ),
     commissionMode: v.optional(v.union(v.literal("AUTO_TIERS"), v.literal("AUTO_MEMBER"), v.literal("MANUAL"))),
     instagramBusinessAccountId: v.optional(v.string()),
+    // The IG profile's "user_id" field — distinct from instagramBusinessAccountId
+    // (the OAuth-returned "id"). Meta uses *this* ID in webhook entry[].id;
+    // the other one is used for outbound Graph API path calls. Confirmed by
+    // direct API probe 2026-06-22 — not documented anywhere obvious.
+    instagramWebhookAccountId: v.optional(v.string()),
     instagramAccessToken: v.optional(v.string()),
     instagramTokenExpiresAt: v.optional(v.number()),
     instagramPageName: v.optional(v.string()),
@@ -667,7 +672,8 @@ export default defineSchema({
     instagramAutoReplyLastIndex: v.optional(v.number()),
   })
     .index("by_org", ["orgId"])
-    .index("by_instagram_business_account_id", ["instagramBusinessAccountId"]),
+    .index("by_instagram_business_account_id", ["instagramBusinessAccountId"])
+    .index("by_instagram_webhook_account_id", ["instagramWebhookAccountId"]),
 
   oauthStates: defineTable({
     orgId: v.id("organizations"),
@@ -682,13 +688,17 @@ export default defineSchema({
     externalId: v.string(),
     kind: v.union(v.literal("comment"), v.literal("dm")),
     senderInstagramId: v.string(),
+    senderUsername: v.optional(v.string()),
     customerId: v.optional(v.id("customers")),
     leadId: v.optional(v.id("leads")),
+    vehicleId: v.optional(v.id("vehicles")),
     text: v.optional(v.string()),
     autoRepliedAt: v.optional(v.number()),
+    autoReplyText: v.optional(v.string()),
   })
     .index("by_org_external", ["orgId", "externalId"])
-    .index("by_org_sender", ["orgId", "senderInstagramId"]),
+    .index("by_org_sender", ["orgId", "senderInstagramId"])
+    .index("by_org", ["orgId"]),
 
   socialPosts: defineTable({
     orgId: v.id("organizations"),
@@ -709,7 +719,8 @@ export default defineSchema({
     engagementSyncedAt: v.optional(v.number()),
   })
     .index("by_org", ["orgId"])
-    .index("by_org_vehicle", ["orgId", "vehicleId"]),
+    .index("by_org_vehicle", ["orgId", "vehicleId"])
+    .index("by_external_post_id", ["externalPostId"]),
 
   orgCustomFields: defineTable({
     orgId: v.id("organizations"),
