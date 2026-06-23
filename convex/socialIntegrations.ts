@@ -86,6 +86,11 @@ export const getConnectionStatus = query({
       instagramAutoReplyMessages: settings?.instagramAutoReplyMessages ?? [],
       instagramLeadFromCommentsEnabled: settings?.instagramLeadFromCommentsEnabled !== false,
       instagramLeadFromDmsEnabled: settings?.instagramLeadFromDmsEnabled !== false,
+      instagramSmartReplyEnabled: settings?.instagramSmartReplyEnabled ?? false,
+      smartReplyFinancingMode: settings?.smartReplyFinancingMode ?? "generic",
+      smartReplyDefaultDownPaymentPercent: settings?.smartReplyDefaultDownPaymentPercent,
+      smartReplyDefaultFinanceCompanyId: settings?.smartReplyDefaultFinanceCompanyId,
+      smartReplyVisibility: settings?.smartReplyVisibility ?? "public",
     };
   },
 });

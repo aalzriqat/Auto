@@ -9,6 +9,7 @@ import { expensesEn, expensesAr } from "./domains/expenses";
 import { reportsEn, reportsAr } from "./domains/reports";
 import { chatEn, chatAr } from "./domains/chat";
 import { socialInboxEn, socialInboxAr } from "./domains/socialInbox";
+import { socialSmartReplyEn, socialSmartReplyAr } from "./domains/socialSmartReply";
 
 export type Locale = "en" | "ar";
 
@@ -24,6 +25,7 @@ const en = {
   ...reportsEn,
   ...chatEn,
   ...socialInboxEn,
+  ...socialSmartReplyEn,
 };
 
 const ar = {
@@ -38,6 +40,7 @@ const ar = {
   ...reportsAr,
   ...chatAr,
   ...socialInboxAr,
+  ...socialSmartReplyAr,
 } as unknown as typeof en;
 
 export const dictionaries = {

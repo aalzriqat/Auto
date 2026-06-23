@@ -5,6 +5,7 @@ import { api, internal } from "./_generated/api";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
+  checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 
 vi.mock("./utils/facebookApi", () => ({
@@ -265,6 +266,271 @@ describe("facebookEngagement.handleIncomingFacebookEvent", () => {
       })
     );
     expect(dmResult?.leadId).toBeUndefined();
+  });
+});
+
+async function seedVehicle(
+  t: ReturnType<typeof convexTest>,
+  orgId: any,
+  overrides: Record<string, unknown> = {}
+) {
+  return await t.run((ctx) =>
+    ctx.db.insert("vehicles", {
+      orgId,
+      vin: `VIN_${Math.random().toString(36).slice(2)}`,
+      make: "BYD",
+      model: "Qin L",
+      year: 2025,
+      mileage: 1200,
+      color: "Black",
+      fuelType: "Electric",
+      transmission: "Automatic",
+      sellingPrice: 25000,
+      status: "AVAILABLE",
+      ...overrides,
+    })
+  );
+}
+
+async function seedFinanceCompany(
+  t: ReturnType<typeof convexTest>,
+  orgId: any,
+  overrides: Record<string, unknown> = {}
+) {
+  return await t.run((ctx) =>
+    ctx.db.insert("financeCompanies", {
+      orgId,
+      name: "Test Bank",
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      insuranceRate: 1,
+      adminFees: 100,
+      commission: 0,
+      isActive: true,
+      ...overrides,
+    })
+  );
+}
+
+async function seedSocialPost(t: ReturnType<typeof convexTest>, orgId: any, vehicleId: any, externalPostId: string) {
+  const requestedBy = await t.run((ctx) =>
+    ctx.db.insert("users", { clerkId: `fb_poster_${externalPostId}`, email: `${externalPostId}@test.com`, name: "Poster" })
+  );
+  await t.run((ctx) =>
+    ctx.db.insert("socialPosts", {
+      orgId,
+      vehicleId,
+      platform: "facebook",
+      status: "PUBLISHED",
+      imageStorageIds: [],
+      externalPostId,
+      triggeredBy: "manual",
+      requestedBy,
+      requestedAt: Date.now(),
+    })
+  );
+}
+
+async function postCommentAboutVehicle(
+  t: ReturnType<typeof convexTest>,
+  orgId: any,
+  vehicleId: any,
+  externalId: string,
+  text: string,
+  senderFacebookId = `sender_${externalId}`
+) {
+  await seedSocialPost(t, orgId, vehicleId, `media_${externalId}`);
+  return t.run((ctx) =>
+    ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+      orgId,
+      kind: "comment",
+      externalId,
+      senderFacebookId,
+      text,
+      mediaId: `media_${externalId}`,
+    })
+  );
+}
+
+describe("facebookEngagement.handleIncomingFacebookEvent — Smart Reply", () => {
+  test("price match on an available vehicle returns the price template", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, { facebookSmartReplyEnabled: true });
+    const vehicleId = await seedVehicle(t, orgId, { sellingPrice: 25000 });
+
+    const result = await postCommentAboutVehicle(t, orgId, vehicleId, "fb_sr_price", "بكم هاي السيارة");
+
+    expect(result?.shouldAutoReply).toBe(true);
+    expect(result?.replyText).toContain("25000");
+
+    const event = await t.run((ctx) =>
+      ctx.db
+        .query("facebookEvents")
+        .withIndex("by_org_external", (q) => q.eq("orgId", orgId).eq("externalId", "fb_sr_price"))
+        .unique()
+    );
+    expect(event?.autoReplySource).toBe("smart");
+  });
+
+  test("price match on a sold vehicle falls back to the unavailable template instead of a price", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, { facebookSmartReplyEnabled: true });
+    const vehicleId = await seedVehicle(t, orgId, { status: "SOLD" });
+
+    const result = await postCommentAboutVehicle(t, orgId, vehicleId, "fb_sr_price_sold", "how much is it");
+
+    expect(result?.shouldAutoReply).toBe(true);
+    expect(result?.replyText).not.toContain("25000");
+  });
+
+  test("financing match in calculated mode computes a monthly figure from the default finance company", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    const financeCompanyId = await seedFinanceCompany(t, orgId);
+    await seedSettings(t, orgId, {
+      facebookSmartReplyEnabled: true,
+      smartReplyFinancingMode: "calculated",
+      smartReplyDefaultFinanceCompanyId: financeCompanyId,
+      smartReplyDefaultDownPaymentPercent: 20,
+    });
+    const vehicleId = await seedVehicle(t, orgId, { sellingPrice: 25000 });
+
+    const result = await postCommentAboutVehicle(t, orgId, vehicleId, "fb_sr_finance", "monthly installment please");
+
+    expect(result?.shouldAutoReply).toBe(true);
+    expect(result?.replyText).toContain("/month");
+  });
+
+  test("a complaint suppresses both smart reply and canned reply and escalates to managers", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, userId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, {
+      facebookSmartReplyEnabled: true,
+      facebookAutoReplyEnabled: true,
+      facebookAutoReplyMessages: ["Thanks for reaching out!"],
+    });
+
+    const result = await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+        orgId,
+        kind: "comment",
+        externalId: "fb_sr_complaint",
+        senderFacebookId: "sender_complaint",
+        text: "there is a serious problem with this car",
+      })
+    );
+
+    expect(result?.shouldAutoReply).toBe(false);
+    expect(result?.replyText).toBeUndefined();
+
+    const notifications = await t.run((ctx) =>
+      ctx.db
+        .query("notifications")
+        .withIndex("by_user", (q) => q.eq("userId", userId))
+        .collect()
+    );
+    expect(notifications.some((n) => n.title.includes("complaint"))).toBe(true);
+  });
+
+  test("falls back to the canned reply when no vehicle is linked or no intent matches", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, {
+      facebookSmartReplyEnabled: true,
+      facebookAutoReplyEnabled: true,
+      facebookAutoReplyMessages: ["Canned reply"],
+    });
+
+    const noVehicle = await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+        orgId,
+        kind: "comment",
+        externalId: "fb_sr_no_vehicle",
+        senderFacebookId: "sender_no_vehicle",
+        text: "how much is this car",
+      })
+    );
+    expect(noVehicle?.replyText).toBe("Canned reply");
+
+    const noIntent = await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+        orgId,
+        kind: "comment",
+        externalId: "fb_sr_no_intent",
+        senderFacebookId: "sender_no_intent",
+        text: "nice car!",
+      })
+    );
+    expect(noIntent?.replyText).toBe("Canned reply");
+  });
+
+  test("Smart Reply disabled leaves the canned reply path fully unaffected (regression guard)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, {
+      facebookSmartReplyEnabled: false,
+      facebookAutoReplyEnabled: true,
+      facebookAutoReplyMessages: ["Canned reply"],
+    });
+    const vehicleId = await seedVehicle(t, orgId);
+
+    const result = await postCommentAboutVehicle(t, orgId, vehicleId, "fb_sr_disabled", "how much is it");
+
+    expect(result?.shouldAutoReply).toBe(true);
+    expect(result?.replyText).toBe("Canned reply");
+  });
+
+  test("visibility defaults to public, can be overridden to dm", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, { facebookSmartReplyEnabled: true });
+    const vehicleId = await seedVehicle(t, orgId);
+
+    const defaultResult = await postCommentAboutVehicle(t, orgId, vehicleId, "fb_sr_vis_default", "is it available?");
+    expect(defaultResult?.smartReplyVisibility).toBe("public");
+
+    const t2 = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId: orgId2 } = await seedOrgWithManager(t2);
+    await seedSettings(t2, orgId2, { facebookSmartReplyEnabled: true, smartReplyVisibility: "dm" });
+    const vehicleId2 = await seedVehicle(t2, orgId2);
+    await seedSocialPost(t2, orgId2, vehicleId2, "media_fb_sr_vis_dm");
+
+    const dmResult = await t2.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+        orgId: orgId2,
+        kind: "comment",
+        externalId: "fb_sr_vis_dm",
+        senderFacebookId: "sender_vis_dm",
+        text: "is it available?",
+        mediaId: "media_fb_sr_vis_dm",
+      })
+    );
+    expect(dmResult?.smartReplyVisibility).toBe("dm");
+  });
+
+  test("DM-kind events always resolve to dm visibility, regardless of the visibility setting", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, { facebookSmartReplyEnabled: true, smartReplyVisibility: "public" });
+    const vehicleId = await seedVehicle(t, orgId);
+    await seedSocialPost(t, orgId, vehicleId, "media_fb_sr_dm_kind");
+
+    const result = await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+        orgId,
+        kind: "dm",
+        externalId: "fb_sr_dm_kind",
+        senderFacebookId: "sender_dm_kind",
+        text: "is it available?",
+        mediaId: "media_fb_sr_dm_kind",
+      })
+    );
+
+    expect(result?.shouldAutoReply).toBe(true);
+    expect(result?.smartReplyVisibility).toBe("dm");
   });
 });
 

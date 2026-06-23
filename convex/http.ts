@@ -577,111 +577,154 @@ http.route({
       return new Response("Invalid JSON", { status: 400 });
     }
 
-    const entry = body?.entry?.[0];
-    const igAccountId: string | undefined = entry?.id;
-    if (!igAccountId) return new Response(null, { status: 200 });
+    // Meta batches multiple accounts' events into entry[], and multiple
+    // comments/DMs for one account into changes[]/messaging[], when volume is
+    // high. Processing only [0] of each would silently drop the rest of a
+    // burst — so we iterate everything in the payload.
+    const entries: any[] = Array.isArray(body?.entry) ? body.entry : [];
+    let anyRateLimited = false;
 
-    const limitStatus = await rateLimiter.limit(ctx, "webhook", { key: igAccountId });
-    if (!limitStatus.ok) {
+    for (const entry of entries) {
+      const igAccountId: string | undefined = entry?.id;
+      if (!igAccountId) continue;
+
+      const limitStatus = await rateLimiter.limit(ctx, "webhook", { key: igAccountId });
+      if (!limitStatus.ok) {
+        // Skip this account's events for now but signal the batch as
+        // rate-limited so we return 429 below — Meta will redeliver the
+        // whole payload later. Safe to redeliver: handleIncomingInstagramEvent
+        // dedupes by externalId, so events already processed in this pass
+        // won't be reprocessed.
+        anyRateLimited = true;
+        continue;
+      }
+
+      const settings = await ctx.runQuery(internal.instagramEngagement.getSettingsByInstagramAccountId, {
+        instagramBusinessAccountId: igAccountId,
+      });
+      if (!settings) {
+        // Unrecognized account (not connected to any org, or already
+        // disconnected) — acknowledge so Meta doesn't retry forever.
+        continue;
+      }
+      const orgId = settings.orgId;
+
+      // Comments arrive via entry[].changes[] (field === "comments");
+      // DMs arrive via entry[].messaging[] (Messenger-style payload shape).
+      const commentChanges = (entry?.changes ?? []).filter((c: any) => c.field === "comments");
+      const messagingEvents: any[] = entry?.messaging ?? [];
+
+      for (const commentChange of commentChanges) {
+        const value = commentChange?.value;
+        if (!value?.id) continue;
+
+        const summary = `Comment from ${value.from?.username ?? value.from?.id}`;
+        try {
+          const fromId = String(value.from?.id ?? "");
+          const isOwnAccount =
+            fromId !== "" &&
+            (fromId === settings.instagramBusinessAccountId || fromId === settings.instagramWebhookAccountId);
+          if (isOwnAccount) {
+            // Our own auto/manual reply re-arriving as a webhook (Instagram fires a
+            // "comments" event for replies we post too) — acknowledge without
+            // reprocessing it as a new inbound comment, or we'd auto-reply to ourselves.
+            continue;
+          }
+          const result = await ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+            orgId,
+            kind: "comment",
+            externalId: String(value.id),
+            senderInstagramId: String(value.from?.id ?? ""),
+            senderUsername: value.from?.username,
+            text: value.text,
+            mediaId: value.media?.id ? String(value.media.id) : undefined,
+          });
+          if (result?.shouldAutoReply && result.replyText) {
+            if (result.smartReplyVisibility === "dm") {
+              await ctx.runAction(internal.instagramEngagement.sendDirectMessage, {
+                orgId,
+                recipientInstagramId: String(value.from?.id ?? ""),
+                message: result.replyText,
+              });
+            } else {
+              await ctx.runAction(internal.instagramEngagement.sendCommentReply, {
+                orgId,
+                commentId: String(value.id),
+                message: result.replyText,
+              });
+            }
+          }
+          if (result?.needsProfileEnrichment && result.customerId) {
+            await ctx.runAction(internal.instagramEngagement.enrichCustomerProfile, {
+              orgId,
+              customerId: result.customerId,
+              senderInstagramId: String(value.from?.id ?? ""),
+            });
+          }
+          await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+            source: "instagram",
+            status: "success",
+            summary,
+          });
+        } catch (err) {
+          await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+            source: "instagram",
+            status: "error",
+            summary,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      for (const messagingEvent of messagingEvents) {
+        if (!messagingEvent?.message?.text || messagingEvent.message.is_echo) {
+          // Echoes, reactions, read receipts, etc. — skip silently.
+          continue;
+        }
+
+        const senderId = String(messagingEvent.sender?.id ?? "");
+        const summary = `DM from ${senderId}`;
+        try {
+          const result = await ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+            orgId,
+            kind: "dm",
+            externalId: String(messagingEvent.message.mid ?? `${senderId}-${messagingEvent.timestamp}`),
+            senderInstagramId: senderId,
+            text: messagingEvent.message.text,
+          });
+          if (result?.shouldAutoReply && result.replyText) {
+            await ctx.runAction(internal.instagramEngagement.sendDirectMessage, {
+              orgId,
+              recipientInstagramId: senderId,
+              message: result.replyText,
+            });
+          }
+          if (result?.needsProfileEnrichment && result.customerId) {
+            await ctx.runAction(internal.instagramEngagement.enrichCustomerProfile, {
+              orgId,
+              customerId: result.customerId,
+              senderInstagramId: senderId,
+            });
+          }
+          await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+            source: "instagram",
+            status: "success",
+            summary,
+          });
+        } catch (err) {
+          await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+            source: "instagram",
+            status: "error",
+            summary,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+
+    if (anyRateLimited) {
       return new Response("Too many requests", { status: 429 });
     }
-
-    const settings = await ctx.runQuery(internal.instagramEngagement.getSettingsByInstagramAccountId, {
-      instagramBusinessAccountId: igAccountId,
-    });
-    if (!settings) {
-      // Unrecognized account (not connected to any org, or already
-      // disconnected) — acknowledge so Meta doesn't retry forever.
-      return new Response(null, { status: 200 });
-    }
-    const orgId = settings.orgId;
-
-    // Comments arrive via entry[].changes[] (field === "comments");
-    // DMs arrive via entry[].messaging[] (Messenger-style payload shape).
-    const commentChange = entry?.changes?.find((c: any) => c.field === "comments");
-    const messagingEvent = entry?.messaging?.[0];
-
-    let summary = "Unrecognized event";
-    try {
-      if (commentChange?.value?.id) {
-        const value = commentChange.value;
-        const fromId = String(value.from?.id ?? "");
-        const isOwnAccount =
-          fromId !== "" &&
-          (fromId === settings.instagramBusinessAccountId || fromId === settings.instagramWebhookAccountId);
-        if (isOwnAccount) {
-          // Our own auto/manual reply re-arriving as a webhook (Instagram fires a
-          // "comments" event for replies we post too) — acknowledge without
-          // reprocessing it as a new inbound comment, or we'd auto-reply to ourselves.
-          return new Response(null, { status: 200 });
-        }
-        const result = await ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
-          orgId,
-          kind: "comment",
-          externalId: String(value.id),
-          senderInstagramId: String(value.from?.id ?? ""),
-          senderUsername: value.from?.username,
-          text: value.text,
-          mediaId: value.media?.id ? String(value.media.id) : undefined,
-        });
-        summary = `Comment from ${value.from?.username ?? value.from?.id}`;
-        if (result?.shouldAutoReply && result.replyText) {
-          await ctx.runAction(internal.instagramEngagement.sendCommentReply, {
-            orgId,
-            commentId: String(value.id),
-            message: result.replyText,
-          });
-        }
-        if (result?.needsProfileEnrichment && result.customerId) {
-          await ctx.runAction(internal.instagramEngagement.enrichCustomerProfile, {
-            orgId,
-            customerId: result.customerId,
-            senderInstagramId: String(value.from?.id ?? ""),
-          });
-        }
-      } else if (messagingEvent?.message?.text && !messagingEvent.message.is_echo) {
-        const senderId = String(messagingEvent.sender?.id ?? "");
-        const result = await ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
-          orgId,
-          kind: "dm",
-          externalId: String(messagingEvent.message.mid ?? `${senderId}-${messagingEvent.timestamp}`),
-          senderInstagramId: senderId,
-          text: messagingEvent.message.text,
-        });
-        summary = `DM from ${senderId}`;
-        if (result?.shouldAutoReply && result.replyText) {
-          await ctx.runAction(internal.instagramEngagement.sendDirectMessage, {
-            orgId,
-            recipientInstagramId: senderId,
-            message: result.replyText,
-          });
-        }
-        if (result?.needsProfileEnrichment && result.customerId) {
-          await ctx.runAction(internal.instagramEngagement.enrichCustomerProfile, {
-            orgId,
-            customerId: result.customerId,
-            senderInstagramId: senderId,
-          });
-        }
-      } else {
-        // Echoes, reactions, read receipts, etc. — acknowledge silently.
-        return new Response(null, { status: 200 });
-      }
-    } catch (err) {
-      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
-        source: "instagram",
-        status: "error",
-        summary,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return new Response(null, { status: 200 });
-    }
-
-    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
-      source: "instagram",
-      status: "success",
-      summary,
-    });
 
     return new Response(null, { status: 200 });
   }),
@@ -874,98 +917,144 @@ http.route({
       return new Response("Invalid JSON", { status: 400 });
     }
 
-    const entry = body?.entry?.[0];
-    const pageId: string | undefined = entry?.id;
-    if (!pageId) return new Response(null, { status: 200 });
+    // Meta batches multiple pages' events into entry[], and multiple
+    // comments/DMs for one page into changes[]/messaging[], when volume is
+    // high. Processing only [0] of each would silently drop the rest of a
+    // burst — so we iterate everything in the payload (mirrors the
+    // Instagram handler above).
+    const entries: any[] = Array.isArray(body?.entry) ? body.entry : [];
+    let anyRateLimited = false;
 
-    const limitStatus = await rateLimiter.limit(ctx, "webhook", { key: pageId });
-    if (!limitStatus.ok) {
+    for (const entry of entries) {
+      const pageId: string | undefined = entry?.id;
+      if (!pageId) continue;
+
+      const limitStatus = await rateLimiter.limit(ctx, "webhook", { key: pageId });
+      if (!limitStatus.ok) {
+        // Skip this page's events for now but signal the batch as
+        // rate-limited so we return 429 below — Meta will redeliver the
+        // whole payload later. Safe to redeliver: handleIncomingFacebookEvent
+        // dedupes by externalId, so events already processed in this pass
+        // won't be reprocessed.
+        anyRateLimited = true;
+        continue;
+      }
+
+      const settings = await ctx.runQuery(internal.facebookEngagement.getSettingsByFacebookPageId, {
+        facebookPageId: pageId,
+      });
+      if (!settings) {
+        // Unrecognized Page (not connected to any org, or already
+        // disconnected) — acknowledge so Meta doesn't retry forever.
+        continue;
+      }
+      const orgId = settings.orgId;
+
+      // Page comments arrive via entry[].changes[] (field === "feed",
+      // value.item === "comment"); Messenger DMs arrive via entry[].messaging[]
+      // (same shape Instagram DMs use — both ride the Messenger Platform).
+      const feedChanges = (entry?.changes ?? []).filter(
+        (c: any) => c.field === "feed" && c.value?.item === "comment"
+      );
+      const messagingEvents: any[] = entry?.messaging ?? [];
+
+      for (const feedChange of feedChanges) {
+        const value = feedChange?.value;
+        if (!value?.comment_id || value.verb !== "add") continue;
+
+        const fromId = String(value.from?.id ?? "");
+        const summary = `Comment from ${value.from?.name ?? fromId}`;
+        try {
+          const isOwnPage = fromId !== "" && fromId === settings.facebookPageId;
+          if (isOwnPage) {
+            // Our own auto/manual reply re-arriving as a webhook (replying to a
+            // comment via the Graph API fires a fresh "feed" event for it too)
+            // — acknowledge without reprocessing it as a new inbound comment,
+            // the exact loop bug found and fixed on the Instagram side.
+            continue;
+          }
+
+          const result = await ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+            orgId,
+            kind: "comment",
+            externalId: String(value.comment_id),
+            senderFacebookId: fromId,
+            senderName: value.from?.name,
+            text: value.message,
+            mediaId: value.post_id ? String(value.post_id) : undefined,
+          });
+          if (result?.shouldAutoReply && result.replyText) {
+            if (result.smartReplyVisibility === "dm") {
+              await ctx.runAction(internal.facebookEngagement.sendDirectMessage, {
+                orgId,
+                recipientFacebookId: fromId,
+                message: result.replyText,
+              });
+            } else {
+              await ctx.runAction(internal.facebookEngagement.sendCommentReply, {
+                orgId,
+                commentId: String(value.comment_id),
+                message: result.replyText,
+              });
+            }
+          }
+          await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+            source: "facebook",
+            status: "success",
+            summary,
+          });
+        } catch (err) {
+          await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+            source: "facebook",
+            status: "error",
+            summary,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
+      for (const messagingEvent of messagingEvents) {
+        if (!messagingEvent?.message?.text || messagingEvent.message.is_echo) {
+          // Edits, removals, reactions, read receipts, etc. — skip silently.
+          continue;
+        }
+
+        const senderId = String(messagingEvent.sender?.id ?? "");
+        const summary = `DM from ${senderId}`;
+        try {
+          const result = await ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+            orgId,
+            kind: "dm",
+            externalId: String(messagingEvent.message.mid ?? `${senderId}-${messagingEvent.timestamp}`),
+            senderFacebookId: senderId,
+            text: messagingEvent.message.text,
+          });
+          if (result?.shouldAutoReply && result.replyText) {
+            await ctx.runAction(internal.facebookEngagement.sendDirectMessage, {
+              orgId,
+              recipientFacebookId: senderId,
+              message: result.replyText,
+            });
+          }
+          await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+            source: "facebook",
+            status: "success",
+            summary,
+          });
+        } catch (err) {
+          await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+            source: "facebook",
+            status: "error",
+            summary,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+
+    if (anyRateLimited) {
       return new Response("Too many requests", { status: 429 });
     }
-
-    const settings = await ctx.runQuery(internal.facebookEngagement.getSettingsByFacebookPageId, {
-      facebookPageId: pageId,
-    });
-    if (!settings) {
-      // Unrecognized Page (not connected to any org, or already
-      // disconnected) — acknowledge so Meta doesn't retry forever.
-      return new Response(null, { status: 200 });
-    }
-    const orgId = settings.orgId;
-
-    // Page comments arrive via entry[].changes[] (field === "feed",
-    // value.item === "comment"); Messenger DMs arrive via entry[].messaging[]
-    // (same shape Instagram DMs use — both ride the Messenger Platform).
-    const feedChange = entry?.changes?.find((c: any) => c.field === "feed" && c.value?.item === "comment");
-    const messagingEvent = entry?.messaging?.[0];
-
-    let summary = "Unrecognized event";
-    try {
-      if (feedChange?.value?.comment_id && feedChange.value.verb === "add") {
-        const value = feedChange.value;
-        const fromId = String(value.from?.id ?? "");
-        const isOwnPage = fromId !== "" && fromId === settings.facebookPageId;
-        if (isOwnPage) {
-          // Our own auto/manual reply re-arriving as a webhook (replying to a
-          // comment via the Graph API fires a fresh "feed" event for it too)
-          // — acknowledge without reprocessing it as a new inbound comment,
-          // the exact loop bug found and fixed on the Instagram side.
-          return new Response(null, { status: 200 });
-        }
-
-        const result = await ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
-          orgId,
-          kind: "comment",
-          externalId: String(value.comment_id),
-          senderFacebookId: fromId,
-          senderName: value.from?.name,
-          text: value.message,
-          mediaId: value.post_id ? String(value.post_id) : undefined,
-        });
-        summary = `Comment from ${value.from?.name ?? fromId}`;
-        if (result?.shouldAutoReply && result.replyText) {
-          await ctx.runAction(internal.facebookEngagement.sendCommentReply, {
-            orgId,
-            commentId: String(value.comment_id),
-            message: result.replyText,
-          });
-        }
-      } else if (messagingEvent?.message?.text && !messagingEvent.message.is_echo) {
-        const senderId = String(messagingEvent.sender?.id ?? "");
-        const result = await ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
-          orgId,
-          kind: "dm",
-          externalId: String(messagingEvent.message.mid ?? `${senderId}-${messagingEvent.timestamp}`),
-          senderFacebookId: senderId,
-          text: messagingEvent.message.text,
-        });
-        summary = `DM from ${senderId}`;
-        if (result?.shouldAutoReply && result.replyText) {
-          await ctx.runAction(internal.facebookEngagement.sendDirectMessage, {
-            orgId,
-            recipientFacebookId: senderId,
-            message: result.replyText,
-          });
-        }
-      } else {
-        // Edits, removals, reactions, read receipts, etc. — acknowledge silently.
-        return new Response(null, { status: 200 });
-      }
-    } catch (err) {
-      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
-        source: "facebook",
-        status: "error",
-        summary,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return new Response(null, { status: 200 });
-    }
-
-    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
-      source: "facebook",
-      status: "success",
-      summary,
-    });
 
     return new Response(null, { status: 200 });
   }),

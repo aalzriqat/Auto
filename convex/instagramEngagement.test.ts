@@ -5,6 +5,7 @@ import { api, internal } from "./_generated/api";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
+  checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 
 vi.mock("./utils/instagramApi", () => ({
@@ -56,6 +57,50 @@ async function seedSettings(
       instagramBusinessAccountId: "ig_business_1",
       instagramWebhookAccountId: "ig_webhook_1",
       instagramAccessToken: "token_abc",
+      ...overrides,
+    })
+  );
+}
+
+async function seedVehicle(
+  t: ReturnType<typeof convexTest>,
+  orgId: any,
+  overrides: Record<string, unknown> = {}
+) {
+  return await t.run((ctx) =>
+    ctx.db.insert("vehicles", {
+      orgId,
+      vin: `VIN_${Math.random().toString(36).slice(2)}`,
+      make: "BYD",
+      model: "Qin L",
+      year: 2025,
+      mileage: 1200,
+      color: "Black",
+      fuelType: "Electric",
+      transmission: "Automatic",
+      sellingPrice: 25000,
+      status: "AVAILABLE",
+      ...overrides,
+    })
+  );
+}
+
+async function seedFinanceCompany(
+  t: ReturnType<typeof convexTest>,
+  orgId: any,
+  overrides: Record<string, unknown> = {}
+) {
+  return await t.run((ctx) =>
+    ctx.db.insert("financeCompanies", {
+      orgId,
+      name: "Test Bank",
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      insuranceRate: 1,
+      adminFees: 100,
+      commission: 0,
+      isActive: true,
       ...overrides,
     })
   );
@@ -394,6 +439,378 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
     );
 
     expect(result?.shouldAutoReply).toBe(false);
+  });
+});
+
+async function seedSocialPost(t: ReturnType<typeof convexTest>, orgId: any, vehicleId: any, externalPostId: string) {
+  const requestedBy = await t.run((ctx) =>
+    ctx.db.insert("users", { clerkId: `poster_${externalPostId}`, email: `${externalPostId}@test.com`, name: "Poster" })
+  );
+  await t.run((ctx) =>
+    ctx.db.insert("socialPosts", {
+      orgId,
+      vehicleId,
+      platform: "instagram",
+      status: "PUBLISHED",
+      imageStorageIds: [],
+      externalPostId,
+      triggeredBy: "manual",
+      requestedBy,
+      requestedAt: Date.now(),
+    })
+  );
+}
+
+async function postCommentAboutVehicle(
+  t: ReturnType<typeof convexTest>,
+  orgId: any,
+  vehicleId: any,
+  externalId: string,
+  text: string,
+  senderInstagramId = `sender_${externalId}`
+) {
+  await seedSocialPost(t, orgId, vehicleId, `media_${externalId}`);
+  return t.run((ctx) =>
+    ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+      orgId,
+      kind: "comment",
+      externalId,
+      senderInstagramId,
+      text,
+      mediaId: `media_${externalId}`,
+    })
+  );
+}
+
+describe("instagramEngagement.handleIncomingInstagramEvent — Smart Reply", () => {
+  test("price match on an available vehicle returns the price template", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, { instagramSmartReplyEnabled: true });
+    const vehicleId = await seedVehicle(t, orgId, { sellingPrice: 25000 });
+
+    const result = await postCommentAboutVehicle(t, orgId, vehicleId, "sr_price", "كم سعرها؟");
+
+    expect(result?.shouldAutoReply).toBe(true);
+    expect(result?.replyText).toContain("25000");
+
+    const event = await t.run((ctx) =>
+      ctx.db
+        .query("instagramEvents")
+        .withIndex("by_org_external", (q) => q.eq("orgId", orgId).eq("externalId", "sr_price"))
+        .unique()
+    );
+    expect(event?.autoReplySource).toBe("smart");
+  });
+
+  test("price match on a sold vehicle falls back to the unavailable template instead of a price", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, { instagramSmartReplyEnabled: true });
+    const vehicleId = await seedVehicle(t, orgId, { status: "SOLD" });
+
+    const result = await postCommentAboutVehicle(t, orgId, vehicleId, "sr_price_sold", "how much is it");
+
+    expect(result?.shouldAutoReply).toBe(true);
+    expect(result?.replyText).not.toContain("25000");
+  });
+
+  test("financing match in calculated mode computes a monthly figure from the default finance company", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    const financeCompanyId = await seedFinanceCompany(t, orgId);
+    await seedSettings(t, orgId, {
+      instagramSmartReplyEnabled: true,
+      smartReplyFinancingMode: "calculated",
+      smartReplyDefaultFinanceCompanyId: financeCompanyId,
+      smartReplyDefaultDownPaymentPercent: 20,
+    });
+    const vehicleId = await seedVehicle(t, orgId, { sellingPrice: 25000 });
+
+    const result = await postCommentAboutVehicle(t, orgId, vehicleId, "sr_finance_calc", "monthly installment please");
+
+    expect(result?.shouldAutoReply).toBe(true);
+    expect(result?.replyText).toMatch(/\d/); // contains a computed number
+  });
+
+  test("financing match in generic mode (default) has no computed number", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, { instagramSmartReplyEnabled: true });
+    const vehicleId = await seedVehicle(t, orgId);
+
+    const result = await postCommentAboutVehicle(t, orgId, vehicleId, "sr_finance_generic", "تقسيط");
+
+    expect(result?.shouldAutoReply).toBe(true);
+    expect(result?.replyText).not.toContain("/month");
+  });
+
+  test("financing calculated mode without a configured finance company falls back to generic, does not throw", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, {
+      instagramSmartReplyEnabled: true,
+      smartReplyFinancingMode: "calculated",
+    });
+    const vehicleId = await seedVehicle(t, orgId);
+
+    const result = await postCommentAboutVehicle(t, orgId, vehicleId, "sr_finance_nocompany", "financing?");
+
+    expect(result?.shouldAutoReply).toBe(true);
+    expect(result?.replyText).not.toContain("/month");
+  });
+
+  test("availability match reflects each vehicle status", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, { instagramSmartReplyEnabled: true });
+
+    const availableId = await seedVehicle(t, orgId, { status: "AVAILABLE" });
+    const soldId = await seedVehicle(t, orgId, { status: "SOLD" });
+    const reservedId = await seedVehicle(t, orgId, { status: "RESERVED" });
+
+    const r1 = await postCommentAboutVehicle(t, orgId, availableId, "sr_avail_1", "is it still available?");
+    const r2 = await postCommentAboutVehicle(t, orgId, soldId, "sr_avail_2", "available?");
+    const r3 = await postCommentAboutVehicle(t, orgId, reservedId, "sr_avail_3", "still have it?");
+
+    expect(r1?.replyText).toBeDefined();
+    expect(r2?.replyText).toBeDefined();
+    expect(r3?.replyText).toBeDefined();
+    expect(r1?.replyText).not.toBe(r2?.replyText);
+    expect(r2?.replyText).not.toBe(r3?.replyText);
+  });
+
+  test("vehicleInfo match returns vehicle spec details", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, { instagramSmartReplyEnabled: true });
+    const vehicleId = await seedVehicle(t, orgId, { mileage: 4500 });
+
+    const result = await postCommentAboutVehicle(t, orgId, vehicleId, "sr_vehicleinfo", "كم ماشيتها");
+
+    expect(result?.shouldAutoReply).toBe(true);
+    expect(result?.replyText).toContain("4500");
+  });
+
+  test("location match uses dealershipAddress when set, falls back to a generic message otherwise", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId: orgWithAddress } = await seedOrgWithManager(t);
+    await seedSettings(t, orgWithAddress, {
+      instagramSmartReplyEnabled: true,
+      dealershipName: "AutoFlow Motors",
+      dealershipAddress: "Amman, Jordan",
+    });
+
+    const withAddress = await t.run((ctx) =>
+      ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+        orgId: orgWithAddress,
+        kind: "comment",
+        externalId: "sr_location_1",
+        senderInstagramId: "sender_loc_1",
+        text: "where is your showroom",
+      })
+    );
+    expect(withAddress?.replyText).toContain("Amman, Jordan");
+
+    const t2 = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId: orgNoAddress } = await seedOrgWithManager(t2);
+    await seedSettings(t2, orgNoAddress, { instagramSmartReplyEnabled: true });
+
+    const noAddress = await t2.run((ctx) =>
+      ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+        orgId: orgNoAddress,
+        kind: "comment",
+        externalId: "sr_location_2",
+        senderInstagramId: "sender_loc_2",
+        text: "وين موقعكم",
+      })
+    );
+    expect(noAddress?.shouldAutoReply).toBe(true);
+    expect(noAddress?.replyText).not.toContain("Amman");
+  });
+
+  test("greeting only fires when no higher-priority intent also matches", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, { instagramSmartReplyEnabled: true });
+
+    const greetingOnly = await t.run((ctx) =>
+      ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+        orgId,
+        kind: "comment",
+        externalId: "sr_greet_1",
+        senderInstagramId: "sender_greet_1",
+        text: "hello!",
+      })
+    );
+    expect(greetingOnly?.shouldAutoReply).toBe(true);
+
+    const vehicleId = await seedVehicle(t, orgId);
+    const greetingAndPrice = await postCommentAboutVehicle(t, orgId, vehicleId, "sr_greet_2", "hi, how much is it");
+    expect(greetingAndPrice?.replyText).toMatch(/\d/); // resolved to price, not the static greeting
+  });
+
+  test("a complaint suppresses both smart reply and canned reply and escalates to managers", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, userId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, {
+      instagramSmartReplyEnabled: true,
+      instagramAutoReplyEnabled: true,
+      instagramAutoReplyMessages: ["Thanks for reaching out!"],
+    });
+
+    const result = await t.run((ctx) =>
+      ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+        orgId,
+        kind: "comment",
+        externalId: "sr_complaint",
+        senderInstagramId: "sender_complaint",
+        text: "there is a serious problem with this car",
+      })
+    );
+
+    expect(result?.shouldAutoReply).toBe(false);
+    expect(result?.replyText).toBeUndefined();
+
+    const notifications = await t.run((ctx) =>
+      ctx.db
+        .query("notifications")
+        .withIndex("by_user", (q) => q.eq("userId", userId))
+        .collect()
+    );
+    expect(notifications.some((n) => n.title.includes("complaint"))).toBe(true);
+  });
+
+  test("Smart Reply enabled but no vehicle linked falls back to the canned reply for vehicle-dependent intents", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, {
+      instagramSmartReplyEnabled: true,
+      instagramAutoReplyEnabled: true,
+      instagramAutoReplyMessages: ["Canned reply"],
+    });
+
+    const result = await t.run((ctx) =>
+      ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+        orgId,
+        kind: "comment",
+        externalId: "sr_no_vehicle",
+        senderInstagramId: "sender_no_vehicle",
+        text: "how much is this car",
+      })
+    );
+
+    expect(result?.shouldAutoReply).toBe(true);
+    expect(result?.replyText).toBe("Canned reply");
+  });
+
+  test("Smart Reply enabled but no intent matched falls back to the canned reply", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, {
+      instagramSmartReplyEnabled: true,
+      instagramAutoReplyEnabled: true,
+      instagramAutoReplyMessages: ["Canned reply"],
+    });
+
+    const result = await t.run((ctx) =>
+      ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+        orgId,
+        kind: "comment",
+        externalId: "sr_no_intent",
+        senderInstagramId: "sender_no_intent",
+        text: "nice car!",
+      })
+    );
+
+    expect(result?.shouldAutoReply).toBe(true);
+    expect(result?.replyText).toBe("Canned reply");
+
+    const event = await t.run((ctx) =>
+      ctx.db
+        .query("instagramEvents")
+        .withIndex("by_org_external", (q) => q.eq("orgId", orgId).eq("externalId", "sr_no_intent"))
+        .unique()
+    );
+    expect(event?.autoReplySource).toBe("canned");
+  });
+
+  test("Smart Reply disabled leaves the canned reply path fully unaffected (regression guard)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, {
+      instagramSmartReplyEnabled: false,
+      instagramAutoReplyEnabled: true,
+      instagramAutoReplyMessages: ["Canned reply"],
+    });
+    const vehicleId = await seedVehicle(t, orgId);
+
+    const result = await postCommentAboutVehicle(t, orgId, vehicleId, "sr_disabled", "how much is it");
+
+    expect(result?.shouldAutoReply).toBe(true);
+    expect(result?.replyText).toBe("Canned reply");
+  });
+
+  test("visibility defaults to public, can be overridden to dm, for comment-kind matches", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, { instagramSmartReplyEnabled: true });
+    const vehicleId = await seedVehicle(t, orgId);
+
+    const defaultResult = await postCommentAboutVehicle(t, orgId, vehicleId, "sr_vis_default", "is it available?");
+    expect(defaultResult?.smartReplyVisibility).toBe("public");
+
+    const t2 = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId: orgId2 } = await seedOrgWithManager(t2);
+    await seedSettings(t2, orgId2, { instagramSmartReplyEnabled: true, smartReplyVisibility: "dm" });
+    const vehicleId2 = await seedVehicle(t2, orgId2);
+    await seedSocialPost(t2, orgId2, vehicleId2, "media_sr_vis_dm");
+    const dmResult = await t2.run((ctx) =>
+      ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+        orgId: orgId2,
+        kind: "comment",
+        externalId: "sr_vis_dm",
+        senderInstagramId: "sender_vis_dm",
+        text: "is it available?",
+        mediaId: "media_sr_vis_dm",
+      })
+    );
+    expect(dmResult?.smartReplyVisibility).toBe("dm");
+  });
+
+  test("DM-kind events always resolve to dm visibility, regardless of the visibility setting", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, { instagramSmartReplyEnabled: true, smartReplyVisibility: "public" });
+    const vehicleId = await seedVehicle(t, orgId);
+    await seedSocialPost(t, orgId, vehicleId, "media_sr_dm_kind");
+
+    const result = await t.run((ctx) =>
+      ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+        orgId,
+        kind: "dm",
+        externalId: "sr_dm_kind",
+        senderInstagramId: "sender_dm_kind",
+        text: "is it available?",
+        mediaId: "media_sr_dm_kind",
+      })
+    );
+
+    expect(result?.shouldAutoReply).toBe(true);
+    expect(result?.smartReplyVisibility).toBe("dm");
+  });
+
+  test("Smart Reply is not subject to the 24h canned-reply cooldown — two distinct questions both get answered", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, { instagramSmartReplyEnabled: true });
+    const vehicleId = await seedVehicle(t, orgId);
+
+    const first = await postCommentAboutVehicle(t, orgId, vehicleId, "sr_cooldown_1", "how much is it?", "sender_cooldown");
+    const second = await postCommentAboutVehicle(t, orgId, vehicleId, "sr_cooldown_2", "is it still available?", "sender_cooldown");
+
+    expect(first?.shouldAutoReply).toBe(true);
+    expect(second?.shouldAutoReply).toBe(true);
   });
 });
 

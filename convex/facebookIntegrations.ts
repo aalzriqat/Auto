@@ -98,6 +98,11 @@ export const getConnectionStatus = query({
       facebookAutoReplyMessages: settings?.facebookAutoReplyMessages ?? [],
       facebookLeadFromCommentsEnabled: settings?.facebookLeadFromCommentsEnabled !== false,
       facebookLeadFromDmsEnabled: settings?.facebookLeadFromDmsEnabled !== false,
+      facebookSmartReplyEnabled: settings?.facebookSmartReplyEnabled ?? false,
+      smartReplyFinancingMode: settings?.smartReplyFinancingMode ?? "generic",
+      smartReplyDefaultDownPaymentPercent: settings?.smartReplyDefaultDownPaymentPercent,
+      smartReplyDefaultFinanceCompanyId: settings?.smartReplyDefaultFinanceCompanyId,
+      smartReplyVisibility: settings?.smartReplyVisibility ?? "public",
     };
   },
 });

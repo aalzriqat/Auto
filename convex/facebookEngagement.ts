@@ -6,6 +6,8 @@ import { notifyManagers } from "./utils/notifications";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { postCommentReply, postDirectMessage } from "./utils/facebookApi";
+import { matchIntent, detectLocale } from "./utils/smartReplyIntent";
+import { buildSmartReplyText } from "./utils/smartReplyBuilder";
 
 const AUTO_REPLY_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 1 reply per sender per 24h
 
@@ -54,6 +56,7 @@ export const handleIncomingFacebookEvent = internalMutation({
   ): Promise<{
     shouldAutoReply: boolean;
     replyText?: string;
+    smartReplyVisibility?: "public" | "dm";
     leadId?: Id<"leads">;
     customerId?: Id<"customers">;
   } | null> => {
@@ -140,12 +143,60 @@ export const handleIncomingFacebookEvent = internalMutation({
       }
     }
 
-    // Auto-reply eligibility: enabled, has messages, and sender not replied-to in the last 24h
-    const messages = settings?.facebookAutoReplyMessages ?? [];
+    // Smart Reply: rule-based price/financing/availability/vehicleInfo/
+    // location answers, tried before the generic canned round-robin
+    // auto-reply. Not subject to AUTO_REPLY_COOLDOWN_MS below — these are
+    // on-demand factual lookups, not repetitive canned messages, so two
+    // distinct questions from the same sender within 24h should both be
+    // answered. A complaint match suppresses BOTH this and the canned
+    // reply and escalates to managers instead — never answer a complaint
+    // with a cheerful templated reply.
     let shouldAutoReply = false;
     let replyText: string | undefined;
+    let smartReplyVisibility: "public" | "dm" | undefined;
+    let suppressCannedReply = false;
+    let smartReplySource = false;
 
-    if (settings?.facebookAutoReplyEnabled && messages.length > 0) {
+    const smartReplyEnabled = settings?.facebookSmartReplyEnabled === true;
+
+    if (smartReplyEnabled && text) {
+      const intent = matchIntent(text);
+
+      if (intent === "complaint") {
+        suppressCannedReply = true;
+        await notifyManagers(
+          ctx,
+          orgId,
+          `Urgent: possible complaint`,
+          `${senderName ?? senderFacebookId} may have a complaint: "${text.slice(0, 200)}"`,
+          leadId ? `/${orgId}/leads?highlightId=${leadId}` : `/${orgId}/leads`
+        );
+      } else if (intent && (intent === "location" || intent === "greeting" || vehicleId)) {
+        const vehicle = vehicleId ? await ctx.db.get(vehicleId) : null;
+        const financeCompany = settings?.smartReplyDefaultFinanceCompanyId
+          ? await ctx.db.get(settings.smartReplyDefaultFinanceCompanyId)
+          : null;
+        const locale = detectLocale(text) ?? settings?.smartReplyDefaultLocale ?? "en";
+        const built = buildSmartReplyText({
+          intent,
+          vehicle,
+          orgSettings: settings,
+          financeCompany: financeCompany?.isActive ? financeCompany : null,
+          locale,
+        });
+        if (built) {
+          replyText = built;
+          shouldAutoReply = true;
+          smartReplySource = true;
+          smartReplyVisibility = kind === "comment" ? (settings?.smartReplyVisibility ?? "public") : "dm";
+        }
+      }
+    }
+
+    // Auto-reply eligibility: enabled, has messages, and sender not replied-to in the last 24h
+    const messages = settings?.facebookAutoReplyMessages ?? [];
+
+    if (!shouldAutoReply && !suppressCannedReply && settings?.facebookAutoReplyEnabled && messages.length > 0) {
       const recentEvents = await ctx.db
         .query("facebookEvents")
         .withIndex("by_org_sender", (q) => q.eq("orgId", orgId).eq("senderFacebookId", senderFacebookId))
@@ -174,9 +225,10 @@ export const handleIncomingFacebookEvent = internalMutation({
       text,
       autoRepliedAt: shouldAutoReply ? Date.now() : undefined,
       autoReplyText: shouldAutoReply ? replyText : undefined,
+      autoReplySource: shouldAutoReply ? (smartReplySource ? "smart" : "canned") : undefined,
     });
 
-    return { shouldAutoReply, replyText, leadId, customerId: customer._id };
+    return { shouldAutoReply, replyText, smartReplyVisibility, leadId, customerId: customer._id };
   },
 });
 

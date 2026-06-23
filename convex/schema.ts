@@ -699,6 +699,26 @@ export default defineSchema({
     facebookAutoReplyLastIndex: v.optional(v.number()),
     facebookLeadFromCommentsEnabled: v.optional(v.boolean()),
     facebookLeadFromDmsEnabled: v.optional(v.boolean()),
+    // Smart Reply: rule-based price/financing/availability/vehicleInfo/location
+    // auto-answers, distinct from the canned round-robin auto-reply above --
+    // requires a vehicleId match (except location/greeting) and only fires for
+    // keyword-matched questions. Off by default for all orgs.
+    instagramSmartReplyEnabled: v.optional(v.boolean()),
+    facebookSmartReplyEnabled: v.optional(v.boolean()),
+    // "calculated": compute a "starting from X/month" figure via
+    // calculateUnifiedMurabaha using smartReplyDefaultFinanceCompanyId + that
+    // company's own maxTermMonths + smartReplyDefaultDownPaymentPercent.
+    // "generic": static financing copy, no computed number. Default when unset: generic.
+    smartReplyFinancingMode: v.optional(v.union(v.literal("calculated"), v.literal("generic"))),
+    smartReplyDefaultDownPaymentPercent: v.optional(v.number()), // e.g. 20 for 20%
+    smartReplyDefaultFinanceCompanyId: v.optional(v.id("financeCompanies")),
+    // "public": comment-triggered smart replies post publicly under the comment
+    // (current canned-reply behavior). "dm": sent privately via DM instead.
+    // Shared across both platforms. Default when unset: public.
+    smartReplyVisibility: v.optional(v.union(v.literal("public"), v.literal("dm"))),
+    // Fallback language for a reply when the inbound text has no detectable
+    // script (emoji-only, numeric-only, etc). Default when unset: "en".
+    smartReplyDefaultLocale: v.optional(v.union(v.literal("en"), v.literal("ar"))),
   })
     .index("by_org", ["orgId"])
     .index("by_instagram_business_account_id", ["instagramBusinessAccountId"])
@@ -726,6 +746,7 @@ export default defineSchema({
     text: v.optional(v.string()),
     autoRepliedAt: v.optional(v.number()),
     autoReplyText: v.optional(v.string()),
+    autoReplySource: v.optional(v.union(v.literal("smart"), v.literal("canned"))),
     manualReplyText: v.optional(v.string()),
     manualRepliedAt: v.optional(v.number()),
     manualRepliedByUserId: v.optional(v.id("users")),
@@ -748,6 +769,7 @@ export default defineSchema({
     text: v.optional(v.string()),
     autoRepliedAt: v.optional(v.number()),
     autoReplyText: v.optional(v.string()),
+    autoReplySource: v.optional(v.union(v.literal("smart"), v.literal("canned"))),
     manualReplyText: v.optional(v.string()),
     manualRepliedAt: v.optional(v.number()),
     manualRepliedByUserId: v.optional(v.id("users")),

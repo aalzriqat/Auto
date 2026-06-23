@@ -11,7 +11,9 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
-import { Camera, CheckCircle2, Plus, Trash2 } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Sparkles, Camera, CheckCircle2, Plus, Trash2 } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
 
 const MAX_AUTO_REPLY_MESSAGES = 5;
@@ -30,6 +32,7 @@ export function IntegrationsClient() {
     api.facebookIntegrations.getConnectionStatus,
     activeOrgId ? { orgId: activeOrgId } : "skip"
   );
+  const financeCompanies = useQuery(api.finance.listCompanies, activeOrgId ? { orgId: activeOrgId } : "skip");
 
   const createInstagramConnectUrl = useMutation(api.socialIntegrations.createConnectUrl);
   const disconnectInstagram = useMutation(api.socialIntegrations.disconnect);
@@ -41,6 +44,8 @@ export function IntegrationsClient() {
   const disconnectFacebook = useMutation(api.facebookIntegrations.disconnect);
   const setFacebookAutoReplyConfig = useMutation(api.facebookIntegrations.setFacebookAutoReplyConfig);
   const setFacebookLeadCreationConfig = useMutation(api.facebookIntegrations.setFacebookLeadCreationConfig);
+
+  const setSmartReplyConfig = useMutation(api.smartReply.setSmartReplyConfig);
 
   const [igAutoReplyEnabled, setIgAutoReplyEnabled] = useState(false);
   const [igAutoReplyMessages, setIgAutoReplyMessages] = useState<string[]>([]);
@@ -55,6 +60,15 @@ export function IntegrationsClient() {
   const [fbSavingAutoReply, setFbSavingAutoReply] = useState(false);
   const [fbLeadFromComments, setFbLeadFromComments] = useState(true);
   const [fbLeadFromDms, setFbLeadFromDms] = useState(true);
+
+  const [smartReplyLoaded, setSmartReplyLoaded] = useState(false);
+  const [igSmartReplyEnabled, setIgSmartReplyEnabled] = useState(false);
+  const [fbSmartReplyEnabled, setFbSmartReplyEnabled] = useState(false);
+  const [smartReplyFinancingMode, setSmartReplyFinancingMode] = useState<"calculated" | "generic">("generic");
+  const [smartReplyDownPaymentPercent, setSmartReplyDownPaymentPercent] = useState("20");
+  const [smartReplyFinanceCompanyId, setSmartReplyFinanceCompanyId] = useState<string>("");
+  const [smartReplyVisibility, setSmartReplyVisibility] = useState<"public" | "dm">("public");
+  const [savingSmartReply, setSavingSmartReply] = useState(false);
 
   // Sync local editable state from the server exactly once, the first time
   // it loads — re-syncing on every reactive update would clobber in-progress edits.
@@ -75,6 +89,17 @@ export function IntegrationsClient() {
     setFbLeadFromDms(fbStatus.facebookLeadFromDmsEnabled);
     setFbAutoReplyLoaded(true);
   }, [fbStatus, fbAutoReplyLoaded]);
+
+  useEffect(() => {
+    if (smartReplyLoaded || !igStatus || !fbStatus) return;
+    setIgSmartReplyEnabled(igStatus.instagramSmartReplyEnabled);
+    setFbSmartReplyEnabled(fbStatus.facebookSmartReplyEnabled);
+    setSmartReplyFinancingMode(igStatus.smartReplyFinancingMode);
+    setSmartReplyDownPaymentPercent(String(igStatus.smartReplyDefaultDownPaymentPercent ?? 20));
+    setSmartReplyFinanceCompanyId(igStatus.smartReplyDefaultFinanceCompanyId ?? "");
+    setSmartReplyVisibility(igStatus.smartReplyVisibility);
+    setSmartReplyLoaded(true);
+  }, [igStatus, fbStatus, smartReplyLoaded]);
 
   // Surface the OAuth callback's redirect result, then clean the URL.
   useEffect(() => {
@@ -210,6 +235,34 @@ export function IntegrationsClient() {
       await setFacebookLeadCreationConfig({ orgId: activeOrgId, leadFromCommentsEnabled, leadFromDmsEnabled });
     } catch (error: any) {
       toast.error(error.message || t("SomethingWentWrong" as any));
+    }
+  };
+
+  const handleSaveSmartReply = async (overrides?: {
+    instagramEnabled?: boolean;
+    facebookEnabled?: boolean;
+    financingMode?: "calculated" | "generic";
+    visibility?: "public" | "dm";
+  }) => {
+    if (!activeOrgId) return;
+    const financingMode = overrides?.financingMode ?? smartReplyFinancingMode;
+    const downPaymentPercent = Number(smartReplyDownPaymentPercent);
+    setSavingSmartReply(true);
+    try {
+      await setSmartReplyConfig({
+        orgId: activeOrgId,
+        instagramEnabled: overrides?.instagramEnabled ?? igSmartReplyEnabled,
+        facebookEnabled: overrides?.facebookEnabled ?? fbSmartReplyEnabled,
+        financingMode,
+        defaultDownPaymentPercent: Number.isFinite(downPaymentPercent) ? downPaymentPercent : undefined,
+        defaultFinanceCompanyId: smartReplyFinanceCompanyId ? (smartReplyFinanceCompanyId as any) : undefined,
+        visibility: overrides?.visibility ?? smartReplyVisibility,
+      });
+      toast.success(t("SmartReplySaved" as any));
+    } catch (error: any) {
+      toast.error(error.message || t("SomethingWentWrong" as any));
+    } finally {
+      setSavingSmartReply(false);
     }
   };
 
@@ -477,6 +530,131 @@ export function IntegrationsClient() {
               </div>
             )}
           </div>
+
+          {/* Smart Reply — rule-based price/financing/availability auto-answers, shared across both platforms */}
+          {anyConnected && (
+            <div className="rounded-xl border border-border p-6 space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-full bg-violet-100 text-violet-700">
+                  <Sparkles className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="font-semibold">{t("SmartReplyTitle" as any)}</p>
+                  <p className="text-sm text-muted-foreground">{t("SmartReplyDescription" as any)}</p>
+                </div>
+              </div>
+
+              <div className="space-y-3 border-t border-border pt-4">
+                {igStatus?.instagramConnected && (
+                  <div className="flex items-center justify-between gap-4">
+                    <p className="text-sm font-medium">{t("SmartReplyEnableInstagram" as any)}</p>
+                    <Switch
+                      checked={igSmartReplyEnabled}
+                      onCheckedChange={(v) => {
+                        setIgSmartReplyEnabled(v);
+                        void handleSaveSmartReply({ instagramEnabled: v });
+                      }}
+                    />
+                  </div>
+                )}
+                {fbStatus?.facebookConnected && (
+                  <div className="flex items-center justify-between gap-4">
+                    <p className="text-sm font-medium">{t("SmartReplyEnableFacebook" as any)}</p>
+                    <Switch
+                      checked={fbSmartReplyEnabled}
+                      onCheckedChange={(v) => {
+                        setFbSmartReplyEnabled(v);
+                        void handleSaveSmartReply({ facebookEnabled: v });
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-3 border-t border-border pt-4">
+                <div>
+                  <p className="text-sm font-medium mb-1">{t("SmartReplyFinancingModeLabel" as any)}</p>
+                  <Select
+                    value={smartReplyFinancingMode}
+                    onValueChange={(v) => {
+                      const mode = v as "calculated" | "generic";
+                      setSmartReplyFinancingMode(mode);
+                      void handleSaveSmartReply({ financingMode: mode });
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="generic">{t("SmartReplyFinancingModeGeneric" as any)}</SelectItem>
+                      <SelectItem value="calculated">{t("SmartReplyFinancingModeCalculated" as any)}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {smartReplyFinancingMode === "calculated" && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <p className="text-sm font-medium mb-1">{t("SmartReplyDownPaymentLabel" as any)}</p>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={99}
+                        value={smartReplyDownPaymentPercent}
+                        onChange={(e) => setSmartReplyDownPaymentPercent(e.target.value)}
+                        onBlur={() => void handleSaveSmartReply()}
+                      />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium mb-1">{t("SmartReplyFinanceCompanyLabel" as any)}</p>
+                      <Select
+                        value={smartReplyFinanceCompanyId}
+                        onValueChange={(v) => {
+                          setSmartReplyFinanceCompanyId(v);
+                          void handleSaveSmartReply();
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(financeCompanies ?? [])
+                            .filter((c) => c.isActive)
+                            .map((c) => (
+                              <SelectItem key={c._id} value={c._id}>
+                                {c.name}
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <p className="text-sm font-medium mb-1">{t("SmartReplyVisibilityLabel" as any)}</p>
+                  <Select
+                    value={smartReplyVisibility}
+                    onValueChange={(v) => {
+                      const visibility = v as "public" | "dm";
+                      setSmartReplyVisibility(visibility);
+                      void handleSaveSmartReply({ visibility });
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="public">{t("SmartReplyVisibilityPublic" as any)}</SelectItem>
+                      <SelectItem value="dm">{t("SmartReplyVisibilityDm" as any)}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {savingSmartReply && <p className="text-xs text-muted-foreground">{t("Saving" as any)}</p>}
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
