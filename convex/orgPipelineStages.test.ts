@@ -6,6 +6,7 @@ import { DEFAULT_STAGES } from "./orgPipelineStages";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
+  checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 
 async function seedOwner(t: ReturnType<typeof convexTest>) {

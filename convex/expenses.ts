@@ -6,7 +6,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { validateInput } from "./utils/validation";
 import { CreateExpenseSchema, UpdateExpenseSchema } from "./validations/expenses";
-import { rateLimiter } from "./rateLimit";
+import { checkTenantWriteLimit } from "./rateLimit";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -192,12 +192,12 @@ export const update = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const statusLimit = await rateLimiter.limit(ctx, "standardApi");
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_EXPENSES]);
+
+    const statusLimit = await checkTenantWriteLimit(ctx, "standardApi", args.orgId);
     if (!statusLimit.ok) {
       throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
     }
-
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_EXPENSES]);
 
     // Note: Zod schema might not expect `null` for vehicleId or payerId directly if not configured,
     // but the schema is typed using .optional(). We may need to filter out nulls or the schema might pass.
@@ -264,12 +264,12 @@ export const remove = mutation({
     expenseId: v.id("expenses"),
   },
   handler: async (ctx, args) => {
-    const statusLimit = await rateLimiter.limit(ctx, "standardApi");
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_EXPENSES]);
+
+    const statusLimit = await checkTenantWriteLimit(ctx, "standardApi", args.orgId);
     if (!statusLimit.ok) {
       throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
     }
-
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_EXPENSES]);
 
     const expense = await ctx.db.get(args.expenseId);
     if (!expense || expense.isDeleted || expense.orgId !== args.orgId) {

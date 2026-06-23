@@ -11,6 +11,7 @@ const describe = vitestDescribe.skip;
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
+  checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 
 beforeEach(() => {

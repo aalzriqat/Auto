@@ -6,6 +6,7 @@ import { Id } from "./_generated/dataModel";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
+  checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 
 const ADMIN_PERMISSIONS = ["manage:users", "view:users", "manage:roles"];

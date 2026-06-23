@@ -4,7 +4,7 @@ import { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
-import { rateLimiter } from "./rateLimit";
+import { checkTenantWriteLimit } from "./rateLimit";
 import { validateInput } from "./utils/validation";
 import { CreateVehicleSchema, UpdateVehicleSchema } from "./validations/vehicles";
 import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socialAutoPost";
@@ -224,12 +224,12 @@ export const create = mutation({
     imageIds: v.optional(v.array(v.id("_storage"))),
   },
   handler: async (ctx, args) => {
-    const statusLimit = await rateLimiter.limit(ctx, "create");
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
+
+    const statusLimit = await checkTenantWriteLimit(ctx, "create", args.orgId);
     if (!statusLimit.ok) {
       throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
     }
-
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
 
     validateInput(CreateVehicleSchema, args);
 
@@ -318,12 +318,12 @@ export const update = mutation({
     imageIds: v.optional(v.array(v.id("_storage"))),
   },
   handler: async (ctx, args) => {
-    const statusLimit = await rateLimiter.limit(ctx, "standardApi");
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+
+    const statusLimit = await checkTenantWriteLimit(ctx, "standardApi", args.orgId);
     if (!statusLimit.ok) {
       throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
     }
-
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
 
     validateInput(UpdateVehicleSchema, args);
 
@@ -425,14 +425,14 @@ export const softDelete = mutation({
     vehicleId: v.id("vehicles"),
   },
   handler: async (ctx, args) => {
-    const statusLimit = await rateLimiter.limit(ctx, "standardApi");
-    if (!statusLimit.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
-    }
-
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_VEHICLES]);
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new ConvexError("Unauthenticated");
+
+    const statusLimit = await checkTenantWriteLimit(ctx, "standardApi", args.orgId);
+    if (!statusLimit.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+    }
 
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
@@ -472,12 +472,12 @@ export const generateUploadUrl = mutation({
     sizeInBytes: v.number(),
   },
   handler: async (ctx, args) => {
-    const statusLimit = await rateLimiter.limit(ctx, "upload");
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+
+    const statusLimit = await checkTenantWriteLimit(ctx, "upload", args.orgId);
     if (!statusLimit.ok) {
       throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
     }
-
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
 
     // 5MB limit
     if (args.sizeInBytes > 5 * 1024 * 1024) {

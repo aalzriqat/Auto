@@ -5,6 +5,7 @@ import { api } from "./_generated/api";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
+  checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 
 const PERMISSIONS = ["create:vehicles", "edit:vehicles", "view:vehicles", "view:users", "manage:users"];

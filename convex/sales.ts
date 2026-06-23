@@ -5,7 +5,7 @@ import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
-import { rateLimiter } from "./rateLimit";
+import { checkTenantWriteLimit } from "./rateLimit";
 import { validateInput } from "./utils/validation";
 import { CreateSaleSchema, UpdateSaleSchema } from "./validations/sales";
 import { calculateCommissionFromTiers } from "./utils/commission";
@@ -144,12 +144,12 @@ export const create = mutation({
     gapSold: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const statusLimit = await rateLimiter.limit(ctx, "create");
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
+
+    const statusLimit = await checkTenantWriteLimit(ctx, "create", args.orgId);
     if (!statusLimit.ok) {
       throwAppError(AppErrorCode.RATE_LIMIT_EXCEEDED, `Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
     }
-
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
 
     validateInput(CreateSaleSchema, args);
 
@@ -310,12 +310,12 @@ export const update = mutation({
     gapSold: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const statusLimit = await rateLimiter.limit(ctx, "standardApi");
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_SALES]);
+
+    const statusLimit = await checkTenantWriteLimit(ctx, "standardApi", args.orgId);
     if (!statusLimit.ok) {
       throwAppError(AppErrorCode.RATE_LIMIT_EXCEEDED, `Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
     }
-
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_SALES]);
 
     validateInput(UpdateSaleSchema, args);
 
@@ -373,14 +373,14 @@ export const softDelete = mutation({
     saleId: v.id("sales"),
   },
   handler: async (ctx, args) => {
-    const statusLimit = await rateLimiter.limit(ctx, "standardApi");
-    if (!statusLimit.ok) {
-      throwAppError(AppErrorCode.RATE_LIMIT_EXCEEDED, `Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
-    }
-
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_SALES]);
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throwAppError(AppErrorCode.UNAUTHENTICATED, "Unauthenticated");
+
+    const statusLimit = await checkTenantWriteLimit(ctx, "standardApi", args.orgId);
+    if (!statusLimit.ok) {
+      throwAppError(AppErrorCode.RATE_LIMIT_EXCEEDED, `Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+    }
 
     const sale = await ctx.db.get(args.saleId);
     if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {

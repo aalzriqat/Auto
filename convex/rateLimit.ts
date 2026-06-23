@@ -1,14 +1,39 @@
 import { RateLimiter } from "@convex-dev/rate-limiter";
 import { components } from "./_generated/api";
+import type { MutationCtx } from "./_generated/server";
 
 export const rateLimiter = new RateLimiter(components.rateLimiter, {
   email: { kind: "token bucket", rate: 5, period: 60000, capacity: 5 }, // 5 emails per minute
-  create: { kind: "token bucket", rate: 30, period: 60000, capacity: 30 }, // 30 creates per minute
-  upload: { kind: "token bucket", rate: 10, period: 60000, capacity: 10 }, // 10 uploads per minute
+  create: { kind: "token bucket", rate: 30, period: 60000, capacity: 30 }, // per-org: 30 creates per minute
+  upload: { kind: "token bucket", rate: 10, period: 60000, capacity: 10 }, // per-org: 10 uploads per minute
   heavyRead: { kind: "token bucket", rate: 20, period: 60000, capacity: 20 }, // For reports and massive aggregations
-  standardApi: { kind: "token bucket", rate: 100, period: 60000, capacity: 200 }, // General mutations (updates, deletes)
-  webhook: { kind: "token bucket", rate: 60, period: 60000, capacity: 60 }, // Inbound webhooks (Clerk, WhatsApp), keyed by source
+  standardApi: { kind: "token bucket", rate: 100, period: 60000, capacity: 200 }, // per-org: general mutations (updates, deletes)
+  webhook: { kind: "token bucket", rate: 60, period: 60000, capacity: 60 }, // Inbound webhooks (Clerk, WhatsApp, Meta), keyed by source
   chatMessage: { kind: "token bucket", rate: 20, period: 60000, capacity: 20 }, // Live chat messages, keyed by sender userId
   contactForm: { kind: "token bucket", rate: 3, period: 600000, capacity: 3 }, // Public contact form, keyed by submitter email
   socialPosting: { kind: "token bucket", rate: 10, period: 60000, capacity: 10 }, // Instagram/Facebook posts, keyed by orgId — stays well under Meta's own API limits
+  // System-wide circuit breaker for create/standardApi/upload, checked in addition to
+  // the per-org bucket above. Per-org limits give tenant fairness; this protects the
+  // underlying Convex deployment from an aggregate spike across many orgs at once
+  // (e.g. several large imports running concurrently, or a runaway client bug).
+  // Sized well above expected combined traffic — tune from production telemetry once
+  // real multi-tenant load data exists.
+  globalWrites: { kind: "token bucket", rate: 3000, period: 60000, capacity: 3000 },
 });
+
+export type TenantWriteLimitName = "create" | "standardApi" | "upload";
+
+/**
+ * Two-tier write rate limit: a per-org bucket (fairness between tenants) plus the
+ * shared globalWrites bucket (protects the platform from aggregate overload). Call
+ * after auth so an unauthorized caller can't spend down a target org's budget.
+ */
+export async function checkTenantWriteLimit(
+  ctx: MutationCtx,
+  name: TenantWriteLimitName,
+  orgId: string
+): Promise<{ ok: true; retryAfter?: number } | { ok: false; retryAfter: number }> {
+  const globalStatus = await rateLimiter.limit(ctx, "globalWrites");
+  if (!globalStatus.ok) return globalStatus;
+  return rateLimiter.limit(ctx, name, { key: orgId });
+}

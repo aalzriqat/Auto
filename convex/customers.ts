@@ -5,7 +5,7 @@ import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
-import { rateLimiter } from "./rateLimit";
+import { checkTenantWriteLimit } from "./rateLimit";
 import { validateInput } from "./utils/validation";
 import { CreateCustomerSchema, UpdateCustomerSchema } from "./validations/customers";
 import { normalizePhone, namesSimilar } from "./utils/dedup";
@@ -151,12 +151,12 @@ export const create = mutation({
     address: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const statusLimit = await rateLimiter.limit(ctx, "create");
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_CUSTOMERS]);
+
+    const statusLimit = await checkTenantWriteLimit(ctx, "create", args.orgId);
     if (!statusLimit.ok) {
       throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
     }
-
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_CUSTOMERS]);
 
     validateInput(CreateCustomerSchema, args);
 
@@ -250,12 +250,12 @@ export const update = mutation({
     ),
   },
   handler: async (ctx, args) => {
-    const statusLimit = await rateLimiter.limit(ctx, "standardApi");
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_CUSTOMERS]);
+
+    const statusLimit = await checkTenantWriteLimit(ctx, "standardApi", args.orgId);
     if (!statusLimit.ok) {
       throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
     }
-
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_CUSTOMERS]);
 
     validateInput(UpdateCustomerSchema, args);
 
@@ -338,14 +338,14 @@ export const softDelete = mutation({
     customerId: v.id("customers"),
   },
   handler: async (ctx, args) => {
-    const statusLimit = await rateLimiter.limit(ctx, "standardApi");
-    if (!statusLimit.ok) {
-      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
-    }
-
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.DELETE_CUSTOMERS]);
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new ConvexError("Unauthenticated");
+
+    const statusLimit = await checkTenantWriteLimit(ctx, "standardApi", args.orgId);
+    if (!statusLimit.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+    }
 
     const customer = await ctx.db.get(args.customerId);
     if (!customer || customer.isDeleted || customer.orgId !== args.orgId) {

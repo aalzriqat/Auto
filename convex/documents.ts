@@ -2,7 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
-import { rateLimiter } from "./rateLimit";
+import { checkTenantWriteLimit } from "./rateLimit";
 
 // --- Rules ---
 
@@ -104,13 +104,13 @@ export const generateUploadUrl = mutation({
     sizeInBytes: v.number(),
   },
   handler: async (ctx, args) => {
-    const statusLimit = await rateLimiter.limit(ctx, "upload");
+    // Any user who can view sales can upload documents for applications
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+
+    const statusLimit = await checkTenantWriteLimit(ctx, "upload", args.orgId);
     if (!statusLimit.ok) {
       throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
     }
-
-    // Any user who can view sales can upload documents for applications
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
 
     // 10MB limit for documents
     if (args.sizeInBytes > 10 * 1024 * 1024) {

@@ -4,7 +4,7 @@ import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, notifyUser, getActorName } from "./utils/notifications";
-import { rateLimiter } from "./rateLimit";
+import { checkTenantWriteLimit } from "./rateLimit";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -215,12 +215,12 @@ export const create = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const statusLimit = await rateLimiter.limit(ctx, "create");
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_LEADS]);
+
+    const statusLimit = await checkTenantWriteLimit(ctx, "create", args.orgId);
     if (!statusLimit.ok) {
       throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
     }
-
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_LEADS]);
 
     // Validate customer belongs to this org
     const customer = await ctx.db.get(args.customerId);
