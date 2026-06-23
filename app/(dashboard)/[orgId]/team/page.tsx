@@ -32,6 +32,28 @@ import { EditRoleDialog } from "@/components/team/EditRoleDialog";
 import { ChangeMemberRoleDialog } from "@/components/team/ChangeMemberRoleDialog";
 import { RoleGuard } from "@/components/auth/RoleGuard";
 
+// lastSeenAt is throttled to a write at most every few minutes (see
+// memberships.touchLastSeen), so "active now" below lines up with that
+// window rather than claiming second-by-second accuracy.
+function getLastSeenInfo(t: (key: any) => string, lastSeenAt: number | undefined) {
+  if (!lastSeenAt) {
+    return { label: t("Offline"), dotClass: "bg-muted-foreground/30" };
+  }
+  const minutes = Math.floor((Date.now() - lastSeenAt) / 60_000);
+  if (minutes < 5) {
+    return { label: t("ActiveNow"), dotClass: "bg-green-500" };
+  }
+  if (minutes < 60) {
+    return { label: t("ActiveMinutesAgo").replace("{0}", String(minutes)), dotClass: "bg-amber-500" };
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return { label: t("ActiveHoursAgo").replace("{0}", String(hours)), dotClass: "bg-muted-foreground/40" };
+  }
+  const days = Math.floor(hours / 24);
+  return { label: t("ActiveDaysAgo").replace("{0}", String(days)), dotClass: "bg-muted-foreground/30" };
+}
+
 export default function TeamPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
@@ -127,6 +149,7 @@ export default function TeamPage() {
                 <TableRow>
                   <TableHead>{t("Member" as any)}</TableHead>
                   <TableHead>{t("Role" as any)}</TableHead>
+                  <TableHead>{t("LastSeen" as any)}</TableHead>
                   <TableHead>
                     <div className="flex items-center gap-1.5">
                       {t("CommissionPct" as any)}
@@ -147,13 +170,13 @@ export default function TeamPage() {
               <TableBody>
                 {memberships === undefined ? (
                   <TableRow>
-                    <TableCell colSpan={canManageUsers ? 4 : 3} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={canManageUsers ? 5 : 4} className="text-center py-8 text-muted-foreground">
                       {t("LoadingTeam" as any)}
                     </TableCell>
                   </TableRow>
                 ) : memberships.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={canManageUsers ? 4 : 3} className="text-center py-8 text-muted-foreground">
+                    <TableCell colSpan={canManageUsers ? 5 : 4} className="text-center py-8 text-muted-foreground">
                       {t("NoTeamMembersFound" as any)}
                     </TableCell>
                   </TableRow>
@@ -180,6 +203,18 @@ export default function TeamPage() {
                             <ShieldAlert className="h-4 w-4 text-primary" />
                           )}
                         </div>
+                      </TableCell>
+
+                      <TableCell>
+                        {(() => {
+                          const { label, dotClass } = getLastSeenInfo(t, (member as any).lastSeenAt);
+                          return (
+                            <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                              <span className={`h-2 w-2 rounded-full ${dotClass}`} />
+                              {label}
+                            </div>
+                          );
+                        })()}
                       </TableCell>
 
                       <TableCell>

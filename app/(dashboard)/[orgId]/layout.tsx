@@ -9,6 +9,7 @@ import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { FeedbackWidget } from "@/components/feedback/FeedbackWidget";
 import { SupportAccessBanner } from "@/components/support/SupportAccessBanner";
 import { ImpersonationBanner } from "@/components/admin/ImpersonationBanner";
+import { PresenceTracker } from "@/components/providers/PresenceTracker";
 import { hexToHslString } from "@/lib/colorUtils";
 
 function DashboardWrapper({ children }: { children: React.ReactNode }) {
@@ -40,6 +41,7 @@ function DashboardWrapper({ children }: { children: React.ReactNode }) {
       className="flex h-screen w-full overflow-hidden bg-slate-50 dark:bg-zinc-950/40"
       style={brandStyle}
     >
+      <PresenceTracker orgId={activeOrgId} />
       <Sidebar />
       <div className="flex flex-col flex-1 w-full overflow-hidden">
         <SupportAccessBanner />

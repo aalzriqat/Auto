@@ -37,6 +37,7 @@ export const list = query({
           userImage: user?.imageUrl,
           roleName: role?.name ?? "UNKNOWN",
           commissionRate: m.commissionRate ?? 0,
+          lastSeenAt: m.lastSeenAt,
         };
       })
     );
@@ -593,6 +594,32 @@ export const syncRolePermissionsToTemplate = mutation({
       updated++;
     }
     return updated;
+  },
+});
+
+// Server-side floor under the client's own throttle (PresenceTracker uses a
+// 5-minute localStorage debounce) — keeps writes bounded even if a user has
+// several tabs/devices open at once, each tracking its own localStorage.
+const LAST_SEEN_THROTTLE_MS = 4 * 60 * 1000;
+
+/**
+ * Records that the calling user is actively using the org workspace right
+ * now, for the "last seen" indicator on Team > Members. Deliberately not a
+ * live heartbeat: called only on page mount / tab-focus-regain (throttled
+ * client-side), and a no-op here if the membership was already touched
+ * recently, so this stays a handful of tiny writes per user per hour.
+ */
+export const touchLastSeen = mutation({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const { membership } = await requireTenantAuth(ctx, args.orgId);
+
+    const now = Date.now();
+    if (membership.lastSeenAt && now - membership.lastSeenAt < LAST_SEEN_THROTTLE_MS) {
+      return;
+    }
+
+    await ctx.db.patch(membership._id, { lastSeenAt: now });
   },
 });
 

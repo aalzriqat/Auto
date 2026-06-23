@@ -35,6 +35,12 @@ export default defineSchema({
     branchId: v.optional(v.id("branches")),
     commissionRate: v.optional(v.number()), // % of gross profit per sale
     impersonationGrantId: v.optional(v.id("impersonationGrants")), // set when this membership exists only for an active super-admin impersonation session
+    // "Last seen" timestamp for the Team > Members presence indicator. Written
+    // by memberships.touchLastSeen, throttled client-side (PresenceTracker)
+    // and server-side to a few writes per user per hour — deliberately NOT a
+    // live heartbeat/interval, to avoid repeating the liveChatPresence cost
+    // (see convex/schema.ts liveChatPresence comment) on a much lower-value feature.
+    lastSeenAt: v.optional(v.number()),
   })
     .index("by_user", ["userId"])
     .index("by_org", ["orgId"])
