@@ -539,6 +539,15 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
               />
             </div>
 
+            {activeOrgId && (
+              <CustomFieldsSection
+                orgId={activeOrgId}
+                entityType="vehicle"
+                entityId={vehicle?._id}
+                onChange={setCustomFieldValues}
+              />
+            )}
+
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">{t("VehicleImages" as any) || "Vehicle Images"}</label>
@@ -586,15 +595,6 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                 </div>
               )}
             </div>
-
-            {activeOrgId && (
-              <CustomFieldsSection
-                orgId={activeOrgId}
-                entityType="vehicle"
-                entityId={vehicle?._id}
-                onChange={setCustomFieldValues}
-              />
-            )}
 
             <div className="flex justify-end gap-2 pt-4">
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>

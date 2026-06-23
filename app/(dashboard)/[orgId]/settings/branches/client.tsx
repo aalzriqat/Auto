@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -14,6 +14,8 @@ import { toast } from "@/components/ui/sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { SearchableSelect } from "@/components/ui/searchable-select";
+import { Id } from "@/convex/_generated/dataModel";
 
 export function BranchesClient() {
   const { activeOrgId } = useOrg();
@@ -24,19 +26,29 @@ export function BranchesClient() {
   const addBranch = useMutation(api.branches.add);
   const updateBranch = useMutation(api.branches.update);
 
+  const { results: memberships } = usePaginatedQuery(
+    api.memberships.list,
+    activeOrgId ? { orgId: activeOrgId } : "skip",
+    { initialNumItems: 100 }
+  );
+  const managerOptions = (memberships || [])
+    .filter((m) => m.roleName === "MANAGER" || m.roleName === "OWNER")
+    .map((m) => ({ value: m.userId, label: m.userName, subLabel: m.roleName }));
+
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [editingBranch, setEditingBranch] = useState<any>(null);
-  
+
   const [formData, setFormData] = useState({
     name: "",
     address: "",
     phone: "",
+    managerId: "none",
     isActive: true,
   });
 
   const handleOpenAdd = () => {
     setEditingBranch(null);
-    setFormData({ name: "", address: "", phone: "", isActive: true });
+    setFormData({ name: "", address: "", phone: "", managerId: "none", isActive: true });
     setIsDialogOpen(true);
   };
 
@@ -46,6 +58,7 @@ export function BranchesClient() {
       name: branch.name,
       address: branch.address || "",
       phone: branch.phone || "",
+      managerId: branch.managerId || "none",
       isActive: branch.isActive,
     });
     setIsDialogOpen(true);
@@ -54,17 +67,19 @@ export function BranchesClient() {
   const handleSave = async () => {
     if (!activeOrgId || !formData.name) return;
     try {
+      const { managerId, ...rest } = formData;
+      const payload = { ...rest, managerId: managerId === "none" ? undefined : (managerId as Id<"users">) };
       if (editingBranch) {
         await updateBranch({
           orgId: activeOrgId,
           id: editingBranch._id,
-          ...formData,
+          ...payload,
         });
         toast.success(t("BranchUpdatedSuccess" as any));
       } else {
         await addBranch({
           orgId: activeOrgId,
-          ...formData,
+          ...payload,
         });
         toast.success(t("BranchCreatedSuccess" as any));
       }
@@ -204,6 +219,16 @@ export function BranchesClient() {
                 value={formData.phone}
                 onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                 placeholder="+1 234 567 890"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>{t("Manager" as any)}</Label>
+              <SearchableSelect
+                value={formData.managerId}
+                onValueChange={(val) => setFormData({ ...formData, managerId: val })}
+                placeholder={t("SelectManager" as any) || "Select manager"}
+                noneLabel={t("Unassigned" as any) || "Unassigned"}
+                options={managerOptions}
               />
             </div>
             <div className="flex items-center space-x-2 pt-2">
