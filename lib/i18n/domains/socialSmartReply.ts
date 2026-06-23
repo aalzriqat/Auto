@@ -20,7 +20,7 @@ export const socialSmartReplyEn = {
   SmartReplyGreeting: "Hi! 👋 Ask us about price, financing, or availability for any vehicle.",
 
   SmartReplyTitle: "Instant Auto-Reply",
-  SmartReplyDescription: "Automatically answer price, financing, and availability questions on Instagram and Facebook comments and DMs — no AI subscription required.",
+  SmartReplyDescription: "Automatically answer price, financing, and availability questions on Instagram and Facebook comments and DMs.",
   SmartReplyEnableInstagram: "Enable for Instagram",
   SmartReplyEnableFacebook: "Enable for Facebook",
   SmartReplyFinancingModeLabel: "Financing reply",
@@ -47,7 +47,7 @@ export const socialSmartReplyAr = {
   SmartReplyGreeting: "أهلاً! 👋 اسألنا عن السعر أو التمويل أو التوفر لأي سيارة.",
 
   SmartReplyTitle: "الرد التلقائي الفوري",
-  SmartReplyDescription: "الرد تلقائياً على أسئلة السعر والتمويل والتوفر في تعليقات ورسائل إنستغرام وفيسبوك — دون الحاجة لاشتراك ذكاء اصطناعي.",
+  SmartReplyDescription: "الرد تلقائياً على أسئلة السعر والتمويل والتوفر في تعليقات ورسائل إنستغرام وفيسبوك.",
   SmartReplyEnableInstagram: "تفعيل لإنستغرام",
   SmartReplyEnableFacebook: "تفعيل لفيسبوك",
   SmartReplyFinancingModeLabel: "رد التمويل",
