@@ -1,7 +1,7 @@
 import { AuthConfig } from "convex/server";
-import { getValidatedEnv } from "./utils/env";
+import { getAuthConfigEnv } from "./utils/env";
 
-const env = getValidatedEnv();
+const env = getAuthConfigEnv();
 
 export default {
   providers: [

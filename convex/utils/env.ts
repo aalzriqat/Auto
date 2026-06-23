@@ -42,6 +42,31 @@ const backendEnvSchema = z.object({
   CONVEX_SITE_URL: z.string().url().optional(),
 });
 
+// auth.config.ts is special: Convex statically scans every process.env
+// reference reachable from it and requires each one to be set in the
+// deployment's dashboard before ANY function (not just auth) will deploy —
+// it ignores .optional() in the schema above. Routing auth.config.ts through
+// the full getValidatedEnv() meant an unset, unrelated integration secret
+// (e.g. WHATSAPP_APP_SECRET) could take down the entire backend. This
+// validates only what auth bootstrapping actually needs.
+const authConfigEnvSchema = z.object({
+  CLERK_JWT_ISSUER_DOMAIN: z.string().url(),
+});
+
+export function getAuthConfigEnv() {
+  const result = authConfigEnvSchema.safeParse({
+    CLERK_JWT_ISSUER_DOMAIN: process.env.CLERK_JWT_ISSUER_DOMAIN,
+  });
+
+  if (!result.success) {
+    const errorMsg = "Auth Environment Variable Missing/Invalid: " +
+      result.error.errors.map(e => e.path.join('.')).join(', ');
+    throw new ConvexError(errorMsg);
+  }
+
+  return result.data;
+}
+
 export function getValidatedEnv() {
   const result = backendEnvSchema.safeParse({
     CLERK_JWT_ISSUER_DOMAIN: process.env.CLERK_JWT_ISSUER_DOMAIN,
