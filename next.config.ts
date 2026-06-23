@@ -3,6 +3,13 @@ import { withSentryConfig } from "@sentry/nextjs";
 import "./lib/env";
 
 const nextConfig: NextConfig = {
+  // Baked into the client bundle at build time — compared at runtime against
+  // /api/build-id (read fresh on every request) to detect when a tab is
+  // running an older build than what's currently deployed. Falls back to a
+  // constant outside Vercel (local dev) where this never differs.
+  env: {
+    NEXT_PUBLIC_BUILD_SHA: process.env.VERCEL_GIT_COMMIT_SHA ?? "dev",
+  },
   async headers() {
     return [
       {

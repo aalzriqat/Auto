@@ -348,6 +348,12 @@ export const commonEn = {
   CommissionUpdateFailed: "Failed to update commission.",
   ManualCommissionLabel: "Commission Amount",
   SaveCommission: "Save",
+
+  // Update banner
+  UpdateBannerMessage: "A new version of AutoFlow is available. You will not be logged out.",
+  UpdateBannerWarning: "Don't update now if you have unsaved work in progress — it will be lost.",
+  UpdateBannerButton: "Update",
+  UpdateBannerDismiss: "Dismiss",
 };
 
 export const commonAr = {
@@ -700,4 +706,10 @@ export const commonAr = {
   CommissionUpdateFailed: "فشل في تحديث العمولة.",
   ManualCommissionLabel: "مبلغ العمولة",
   SaveCommission: "حفظ",
+
+  // Update banner
+  UpdateBannerMessage: "يتوفر إصدار جديد من AutoFlow. لن يتم تسجيل خروجك.",
+  UpdateBannerWarning: "لا تقم بالتحديث الآن إذا كان لديك عمل غير محفوظ قيد التنفيذ — سيتم فقدانه.",
+  UpdateBannerButton: "تحديث",
+  UpdateBannerDismiss: "تجاهل",
 };

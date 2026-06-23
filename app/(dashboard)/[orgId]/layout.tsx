@@ -10,6 +10,7 @@ import { FeedbackWidget } from "@/components/feedback/FeedbackWidget";
 import { SupportAccessBanner } from "@/components/support/SupportAccessBanner";
 import { ImpersonationBanner } from "@/components/admin/ImpersonationBanner";
 import { PresenceTracker } from "@/components/providers/PresenceTracker";
+import { UpdateBanner } from "@/components/layout/UpdateBanner";
 import { hexToHslString } from "@/lib/colorUtils";
 
 function DashboardWrapper({ children }: { children: React.ReactNode }) {
@@ -44,6 +45,7 @@ function DashboardWrapper({ children }: { children: React.ReactNode }) {
       <PresenceTracker orgId={activeOrgId} />
       <Sidebar />
       <div className="flex flex-col flex-1 w-full overflow-hidden">
+        <UpdateBanner />
         <SupportAccessBanner />
         <ImpersonationBanner />
         <TopNav />
