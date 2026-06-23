@@ -271,7 +271,11 @@ export default function DashboardEntryPage() {
     if (orgs && orgs.length > 0 && !isOnboarding) {
       const firstOrg = orgs[0]!;
       const role = firstOrg.roleName?.toUpperCase();
-      const landingPage = role === "SALES" || role === "SALESPERSON" ? "sales" : "dashboard";
+      const landingPage =
+        role === "SALES" || role === "SALESPERSON" ? "sales" :
+        role === "RECEPTION" ? "leads" :
+        role === "ACCOUNTANT" ? "accounting" :
+        "dashboard";
       router.replace(`/${firstOrg._id}/${landingPage}`);
     } else if (orgs && orgs.length === 0 && isSupportAgent === true) {
       router.replace("/support");

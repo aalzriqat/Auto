@@ -81,6 +81,10 @@ export default function DashboardPage() {
       const role = myMembership.roleName?.toUpperCase();
       if (role === "SALES" || role === "SALESPERSON") {
         router.replace(`/${activeOrgId}/sales`);
+      } else if (role === "RECEPTION") {
+        router.replace(`/${activeOrgId}/leads`);
+      } else if (role === "ACCOUNTANT") {
+        router.replace(`/${activeOrgId}/accounting`);
       }
     }
   }, [myMembership, activeOrgId, router]);
@@ -205,12 +209,14 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            <div className="flex items-center gap-3 mt-3 md:mt-0">
-              <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-xs font-bold border border-white/30">
-                {stats?.teamTasks?.[0]?.name ? stats.teamTasks[0].name.substring(0, 2).toUpperCase() : "SJ"}
+            {stats?.topPerformer && (
+              <div className="flex items-center gap-3 mt-3 md:mt-0">
+                <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center text-xs font-bold border border-white/30">
+                  {stats.topPerformer.name.substring(0, 2).toUpperCase()}
+                </div>
+                <span className="text-sm font-medium text-white/90">{t("TopPerformer" as any) || "Top Performer"}: {stats.topPerformer.name}</span>
               </div>
-              <span className="text-sm font-medium text-white/90">{t("TopPerformer" as any) || "Top Performer"}: {stats?.teamTasks?.[0]?.name || "Sarah J."}</span>
-            </div>
+            )}
           </div>
 
           {/* Right Column (Graph) — desktop only */}
