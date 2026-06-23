@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { notifyUser, getActorName } from "./utils/notifications";
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
@@ -112,6 +113,18 @@ export const create = mutation({
       details: "Created the task.",
     });
 
+    if (args.assignedTo !== user._id) {
+      const actorName = await getActorName(ctx);
+      await notifyUser(
+        ctx,
+        args.orgId,
+        args.assignedTo,
+        "task.assigned",
+        { actorName, taskTitle: args.title },
+        { link: `/${args.orgId}/tasks`, relatedTaskId: taskId }
+      );
+    }
+
     return taskId;
   },
 });
@@ -204,6 +217,18 @@ export const update = mutation({
         details,
         note: args.statusNote,
       });
+
+      if (args.assignedTo !== undefined && args.assignedTo !== task.assignedTo && args.assignedTo !== user._id) {
+        const actorName = await getActorName(ctx);
+        await notifyUser(
+          ctx,
+          args.orgId,
+          args.assignedTo,
+          "task.assigned",
+          { actorName, taskTitle: patch.title ?? task.title },
+          { link: `/${args.orgId}/tasks`, relatedTaskId: args.taskId }
+        );
+      }
     }
   },
 });

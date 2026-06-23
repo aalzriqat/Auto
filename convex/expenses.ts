@@ -165,9 +165,9 @@ export const create = mutation({
     await notifyManagers(
       ctx,
       args.orgId,
-      "New Expense Added",
-      `${actorName} added a new expense: ${args.title} ($${args.amount})`,
-      `/${args.orgId}/expenses?highlightId=${id}`
+      "expense.created",
+      { actorName, expenseTitle: args.title, amount: `$${args.amount}` },
+      { link: `/${args.orgId}/expenses?highlightId=${id}` }
     );
 
     return id;
@@ -246,9 +246,9 @@ export const update = mutation({
       await notifyManagers(
         ctx,
         args.orgId,
-        "Expense Updated",
-        `${actorName} updated an expense record.`,
-        `/${args.orgId}/expenses?highlightId=${args.expenseId}`
+        "expense.updated",
+        { actorName },
+        { link: `/${args.orgId}/expenses?highlightId=${args.expenseId}` }
       );
     }
   },
@@ -288,8 +288,8 @@ export const remove = mutation({
     await notifyManagers(
       ctx,
       args.orgId,
-      "Expense Deleted",
-      `${actorName} deleted expense: ${expense.title}`
+      "expense.deleted",
+      { actorName, expenseTitle: expense.title }
     );
   },
 });

@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { checkTenantWriteLimit } from "./rateLimit";
+import { notifyUser } from "./utils/notifications";
 
 // --- Rules ---
 
@@ -171,5 +172,18 @@ export const updateDocumentStatus = mutation({
       rejectionReason: args.status === "REJECTED" ? args.rejectionReason : undefined,
       verifiedBy: args.status === "VERIFIED" ? auth.user._id : undefined,
     });
+
+    const application = await ctx.db.get(doc.applicationId);
+    const rule = await ctx.db.get(doc.ruleId);
+    if (application) {
+      await notifyUser(
+        ctx,
+        args.orgId,
+        application.salespersonId,
+        "document.status_changed",
+        { documentLabel: rule?.documentName ?? "Document", status: args.status.toLowerCase() },
+        { link: `/${args.orgId}/applications` }
+      );
+    }
   },
 });

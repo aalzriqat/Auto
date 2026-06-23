@@ -20,6 +20,7 @@ import {
   MessageSquarePlus,
   Camera,
   MessageCircle,
+  Bell,
   type LucideIcon,
 } from "lucide-react";
 
@@ -43,6 +44,7 @@ export const mainNavigation: NavItem[] = [
   { name: "FinanceApplications", href: "/applications", icon: ClipboardList, permission: "view:sales" },
   { name: "Sales", href: "/sales", icon: BadgeDollarSign, permission: "view:sales" },
   { name: "Commissions", href: "/commissions", icon: TrendingUp, permission: "view:commissions" },
+  { name: "Notifications", href: "/notifications", icon: Bell },
   { name: "Tasks", href: "/tasks", icon: ClipboardList, permission: "view:tasks" },
   { name: "Expenses", href: "/expenses", icon: Receipt, permission: "view:expenses" },
   { name: "Accounting", href: "/accounting", icon: BookOpen, permission: "view:finance" },

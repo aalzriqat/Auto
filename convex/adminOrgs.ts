@@ -5,6 +5,7 @@ import { Id, TableNames } from "./_generated/dataModel";
 import { requireSuperAdmin } from "./utils/tenancy";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { logAdminAction } from "./adminAudit";
+import { notifyManagers } from "./utils/notifications";
 
 // Every table that carries an orgId, paired with an index whose first field
 // is orgId (sometimes a compound index — Convex allows equality on a prefix
@@ -119,6 +120,8 @@ export const suspendOrg = mutation({
       suspendedReason: args.reason,
     });
 
+    await notifyManagers(ctx, args.orgId, "admin.org_suspended", { reason: args.reason });
+
     await logAdminAction(ctx, admin, {
       action: "suspendOrg",
       targetTable: "organizations",
@@ -143,6 +146,8 @@ export const unsuspendOrg = mutation({
       suspendedReason: undefined,
     });
 
+    await notifyManagers(ctx, args.orgId, "admin.org_unsuspended", {});
+
     await logAdminAction(ctx, admin, {
       action: "unsuspendOrg",
       targetTable: "organizations",
@@ -164,6 +169,12 @@ export const hardDeleteOrg = mutation({
     if (args.confirmName !== org.name) {
       throwAppError(AppErrorCode.VALIDATION_FAILED, "Confirmation text does not match the organization name.");
     }
+
+    // Notify before the cascade below deletes memberships — otherwise there's
+    // nobody left to fan out the in-app row to. The email channel survives
+    // independently regardless, since dispatch() captures the recipient's
+    // address into the scheduled action at call time.
+    await notifyManagers(ctx, args.orgId, "admin.org_deleted", {});
 
     const deletedCounts: Record<string, number> = {};
     for (const { table, index } of ORG_SCOPED_TABLES) {

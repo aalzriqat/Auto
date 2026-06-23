@@ -264,9 +264,9 @@ export const create = mutation({
     await notifyManagers(
       ctx,
       args.orgId,
-      "New Lead Created",
-      `${actorName} created a new lead.`,
-      `/${args.orgId}/leads?highlightId=${id}`
+      "lead.created",
+      { actorName },
+      { link: `/${args.orgId}/leads?highlightId=${id}` }
     );
 
     if (args.assignedUserId) {
@@ -274,9 +274,9 @@ export const create = mutation({
         ctx,
         args.orgId,
         args.assignedUserId,
-        "New Lead Assigned",
-        `${actorName} assigned a new lead to you.`,
-        `/${args.orgId}/leads?highlightId=${id}`
+        "lead.assigned",
+        { actorName },
+        { link: `/${args.orgId}/leads?highlightId=${id}` }
       );
     }
 
@@ -351,9 +351,9 @@ export const update = mutation({
       await notifyManagers(
         ctx,
         args.orgId,
-        "Lead Updated",
-        `${actorName} updated a lead.`,
-        `/${args.orgId}/leads?highlightId=${args.leadId}`
+        "lead.updated",
+        { actorName },
+        { link: `/${args.orgId}/leads?highlightId=${args.leadId}` }
       );
 
       // If re-assigned to a new user
@@ -362,9 +362,9 @@ export const update = mutation({
           ctx,
           args.orgId,
           args.assignedUserId,
-          "Lead Assigned",
-          `${actorName} assigned a lead to you.`,
-          `/${args.orgId}/leads?highlightId=${args.leadId}`
+          "lead.assigned",
+          { actorName },
+          { link: `/${args.orgId}/leads?highlightId=${args.leadId}` }
         );
       }
     }
@@ -400,8 +400,8 @@ export const softDelete = mutation({
     await notifyManagers(
       ctx,
       args.orgId,
-      "Lead Deleted",
-      `${actorName} deleted a lead.`
+      "lead.deleted",
+      { actorName }
     );
   },
 });

@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { notifyManagers, notifyUser, getActorName } from "./utils/notifications";
 
 const wizardSnapshotValidator = v.optional(v.object({
   paymentType: v.string(),
@@ -47,15 +48,26 @@ export const requestProfitApproval = mutation({
       )
       .first();
 
+    const actorName = await getActorName(ctx);
+    const saleLabel = `${vehicle.year} ${vehicle.make} ${vehicle.model}`;
+
     if (existing) {
-      return await ctx.db.patch(existing._id, {
+      const result = await ctx.db.patch(existing._id, {
         requestedProfit: args.requestedProfit,
         minimumProfit: args.minimumProfit,
         wizardSnapshot: args.wizardSnapshot,
       });
+      await notifyManagers(
+        ctx,
+        args.orgId,
+        "approval.requested",
+        { actorName, saleLabel },
+        { link: `/${args.orgId}/approvals` }
+      );
+      return result;
     }
 
-    return await ctx.db.insert("profitApprovalRequests", {
+    const requestId = await ctx.db.insert("profitApprovalRequests", {
       orgId: args.orgId,
       vehicleId: args.vehicleId,
       requestedProfit: args.requestedProfit,
@@ -65,6 +77,16 @@ export const requestProfitApproval = mutation({
       createdAt: Date.now(),
       wizardSnapshot: args.wizardSnapshot,
     });
+
+    await notifyManagers(
+      ctx,
+      args.orgId,
+      "approval.requested",
+      { actorName, saleLabel },
+      { link: `/${args.orgId}/approvals` }
+    );
+
+    return requestId;
   },
 });
 
@@ -122,6 +144,17 @@ export const respondToApproval = mutation({
       approvedBy: user._id,
       notes: args.notes,
     });
+
+    const vehicle = await ctx.db.get(request.vehicleId);
+    const saleLabel = vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "the requested sale";
+    await notifyUser(
+      ctx,
+      args.orgId,
+      request.salespersonId,
+      "approval.responded",
+      { saleLabel, status: args.status === "APPROVED" ? "approved" : "rejected" },
+      { link: `/${args.orgId}/sales` }
+    );
   },
 });
 

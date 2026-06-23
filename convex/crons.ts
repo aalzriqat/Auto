@@ -1,7 +1,7 @@
 import { cronJobs } from "convex/server";
 import { internalMutation, MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { notifyManagers } from "./utils/notifications";
+import { notifyManagers, notifyUser } from "./utils/notifications";
 
 const crons = cronJobs();
 
@@ -51,16 +51,15 @@ async function runTriggerAlarms(ctx: MutationCtx) {
       // Mark as triggered
       await ctx.db.patch(task._id, { alarmTriggered: true });
 
-      // Create in-app notification
-      await ctx.db.insert("notifications", {
-        orgId: task.orgId,
-        userId: task.assignedTo,
-        title: "Upcoming Task",
-        message: `Your task "${task.title}" is scheduled for ${new Date(task.dueDate).toLocaleTimeString()}`,
-        isRead: false,
-        link: `/${task.orgId}/tasks`,
-        relatedTaskId: task._id,
-      });
+      // Create in-app notification for the assignee
+      await notifyUser(
+        ctx,
+        task.orgId,
+        task.assignedTo,
+        "task.due_soon",
+        { taskTitle: task.title, dueTime: new Date(task.dueDate).toLocaleTimeString() },
+        { link: `/${task.orgId}/tasks`, relatedTaskId: task._id }
+      );
 
       // Fetch assignee details for notifications and email
       const assignee = await ctx.db.get(task.assignedTo);
@@ -71,9 +70,9 @@ async function runTriggerAlarms(ctx: MutationCtx) {
       await notifyManagers(
         ctx,
         task.orgId,
-        "Task Overdue Warning",
-        `Task "${task.title}" assigned to ${assigneeName} is due soon or overdue!`,
-        "/tasks"
+        "task.overdue_warning",
+        { taskTitle: task.title, assigneeName },
+        { link: "/tasks" }
       );
 
       if (email) {

@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socialAutoPost";
+import { notifyManagers, notifyUser, getActorName } from "./utils/notifications";
 
 const vehicleStatus = v.union(
   v.literal("AVAILABLE"),
@@ -67,6 +68,15 @@ export const create = mutation({
       status: "PENDING",
       createdAt: Date.now(),
     });
+
+    const actorName = await getActorName(ctx);
+    await notifyManagers(
+      ctx,
+      args.orgId,
+      "vehicle.status_request_created",
+      { actorName, vehicleLabel: `${vehicle.year} ${vehicle.make} ${vehicle.model}` },
+      { link: `/${args.orgId}/vehicles?approvals=true` }
+    );
   },
 });
 
@@ -126,6 +136,21 @@ export const resolve = mutation({
       resolvedBy: user._id,
       resolvedAt: Date.now(),
     });
+
+    const requestedVehicle = await ctx.db.get(request.vehicleId);
+    await notifyUser(
+      ctx,
+      args.orgId,
+      request.requestedBy,
+      "vehicle.status_request_resolved",
+      {
+        vehicleLabel: requestedVehicle
+          ? `${requestedVehicle.year} ${requestedVehicle.make} ${requestedVehicle.model}`
+          : "the requested vehicle",
+        status: args.status === "APPROVED" ? "approved" : "rejected",
+      },
+      { link: `/${args.orgId}/vehicles?highlightId=${request.vehicleId}` }
+    );
 
     if (args.status === "APPROVED") {
       const vehicle = await ctx.db.get(request.vehicleId);

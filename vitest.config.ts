@@ -24,6 +24,11 @@ export default defineConfig({
         "convex/orgValuationCompanies.ts",
         "convex/wizardDrafts.ts",
         "convex/utils/tenancy.ts",
+        "convex/notifications.ts",
+        "convex/notificationPreferences.ts",
+        "convex/utils/notifications.ts",
+        "lib/notifications/types.ts",
+        "lib/notifications/render.ts",
       ],
       exclude: [
         "convex/_generated/**",

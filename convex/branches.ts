@@ -2,6 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { notifyManagers, getActorName } from "./utils/notifications";
 
 export const list = query({
   args: { orgId: v.id("organizations") },
@@ -46,6 +47,9 @@ export const add = mutation({
       managerId: args.managerId,
       isActive: args.isActive,
     });
+
+    const actorName = await getActorName(ctx);
+    await notifyManagers(ctx, args.orgId, "branch.changed", { actorName, branchName: args.name.trim() });
   },
 });
 
@@ -72,6 +76,9 @@ export const update = mutation({
       managerId: args.managerId,
       isActive: args.isActive,
     });
+
+    const actorName = await getActorName(ctx);
+    await notifyManagers(ctx, args.orgId, "branch.changed", { actorName, branchName: args.name.trim() });
   },
 });
 

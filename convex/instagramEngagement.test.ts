@@ -139,7 +139,8 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
         .collect()
     );
     expect(notifications.length).toBe(1);
-    expect(notifications[0].title).toContain("Instagram Comment");
+    expect(notifications[0].type).toBe("social.lead_created");
+    expect((notifications[0].data as any)?.platform).toContain("Instagram Comment");
   });
 
   test("flags needsProfileEnrichment for a DM with no username, not for a comment with one", async () => {
@@ -678,7 +679,7 @@ describe("instagramEngagement.handleIncomingInstagramEvent — Smart Reply", () 
         .withIndex("by_user", (q) => q.eq("userId", userId))
         .collect()
     );
-    expect(notifications.some((n) => n.title.includes("complaint"))).toBe(true);
+    expect(notifications.some((n) => n.type === "social.possible_complaint")).toBe(true);
   });
 
   test("Smart Reply enabled but no vehicle linked falls back to the canned reply for vehicle-dependent intents", async () => {

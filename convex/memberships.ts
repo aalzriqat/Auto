@@ -4,6 +4,7 @@ import { paginationOptsValidator } from "convex/server";
 import { internal } from "./_generated/api";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS, ALL_PERMISSIONS, DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
+import { notifyUser, notifyManagers } from "./utils/notifications";
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
@@ -151,6 +152,9 @@ export const add = mutation({
       roleId: args.roleId,
     });
 
+    await notifyUser(ctx, args.orgId, targetUser._id, "membership.added", { orgName: org.name });
+    await notifyManagers(ctx, args.orgId, "membership.added", { orgName: org.name }, { excludeUserId: targetUser._id });
+
     return { status: "added" };
   },
 });
@@ -196,6 +200,8 @@ export const updateRole = mutation({
     await ctx.db.patch(args.membershipId, {
       roleId: args.newRoleId,
     });
+
+    await notifyUser(ctx, args.orgId, membership.userId, "membership.role_changed", { roleName: newRole.name });
   },
 });
 
@@ -321,6 +327,14 @@ export const leave = mutation({
         );
       }
     }
+
+    await notifyManagers(
+      ctx,
+      args.orgId,
+      "membership.left",
+      { userName: user.name ?? user.email },
+      { excludeUserId: user._id }
+    );
 
     await ctx.db.delete(membership._id);
   },
@@ -642,6 +656,10 @@ export const updateCommissionRate = mutation({
     }
 
     await ctx.db.patch(args.membershipId, { commissionRate: args.commissionRate });
+
+    await notifyUser(ctx, args.orgId, membership.userId, "membership.commission_rate_changed", {
+      rate: args.commissionRate,
+    });
   },
 });
 

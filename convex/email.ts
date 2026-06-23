@@ -1,10 +1,12 @@
 "use node";
 
 import { internalAction } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { v, ConvexError } from "convex/values";
 import { Resend } from "resend";
 import { rateLimiter } from "./rateLimit";
 import { getValidatedEnv } from "./utils/env";
+import { renderNotification } from "../lib/notifications/render";
 
 /** Escape user input before interpolating into HTML to prevent XSS/injection. */
 function escapeHtml(s: string): string {
@@ -383,5 +385,70 @@ export const sendTeamInvite = internalAction({
     } catch (error) {
       return { success: false, error: String(error) };
     }
+  },
+});
+
+/**
+ * Email delivery for the typed in-app notification system (convex/utils/notifications.ts).
+ * Renders the same bilingual templates the bell/notifications page use
+ * (lib/notifications/render.ts) so copy never drifts between channels.
+ */
+export const sendNotificationEmail = internalAction({
+  args: {
+    toEmail: v.string(),
+    locale: v.union(v.literal("en"), v.literal("ar")),
+    type: v.string(),
+    data: v.any(),
+  },
+  handler: async (ctx, args) => {
+    const status = await rateLimiter.limit(ctx, "email");
+    if (!status.ok) {
+      // Silently drop rather than throw — this runs from a scheduled action
+      // with no caller to surface the error to; the in-app notification
+      // (already inserted by dispatch()) is the source of truth regardless.
+      return { success: false, error: "rate_limited" };
+    }
+
+    const { title, message } = renderNotification(args.locale, args.type, args.data);
+
+    const env = getValidatedEnv();
+    const resendApiKey = env.RESEND_API_KEY;
+    const appUrl = env.NEXT_PUBLIC_APP_URL;
+
+    const emailHtml = wrapEmailHtml(
+      title,
+      `
+        <h1 style="margin:0 0 16px; font-size:20px; font-weight:700; color:#111827;">${escapeHtml(title)}</h1>
+        <p style="margin:0 0 20px;">${escapeHtml(message)}</p>
+        ${emailButton(`${appUrl}/dashboard`, "View in AutoFlow")}
+      `
+    );
+
+    let result: { success: boolean; error?: string };
+    if (!resendApiKey) {
+      result = { success: true };
+    } else {
+      const resend = new Resend(resendApiKey);
+      try {
+        await resend.emails.send({
+          from: 'AutoFlow Notifications <notifications@autoflowdealer.com>',
+          to: args.toEmail,
+          subject: title,
+          html: emailHtml,
+        });
+        result = { success: true };
+      } catch (error) {
+        result = { success: false, error: String(error) };
+      }
+    }
+
+    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+      source: "notification-email",
+      status: result.success ? "success" : "error",
+      summary: `${args.type} -> ${args.toEmail}`,
+      error: result.error,
+    });
+
+    return result;
   },
 });

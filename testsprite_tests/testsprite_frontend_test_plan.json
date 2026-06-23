@@ -1,17 +1,17 @@
 [
   {
     "id": "TC001",
-    "title": "Complete organization setup and reach the dashboard",
-    "description": "A new user can complete onboarding by entering an organization name and currency and then reach the main dashboard.",
-    "category": "Onboarding Wizard",
+    "title": "Enter the correct organization after sign-in",
+    "description": "This test verifies that a signed-in user lands in their organization context on the dashboard after authentication.",
+    "category": "Org Routing & Entry Redirect",
     "steps": [
       {
         "type": "action",
-        "description": "Navigate to /login"
+        "description": "Navigate to /sign-in"
       },
       {
         "type": "action",
-        "description": "Fill in the login field with {{LOGIN_USER}}"
+        "description": "Fill in the email field with {{LOGIN_USER}}"
       },
       {
         "type": "action",
@@ -19,73 +19,65 @@
       },
       {
         "type": "action",
-        "description": "Submit the login form"
-      },
-      {
-        "type": "action",
-        "description": "Navigate to /dashboard"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the dealership name field with a valid organization name"
-      },
-      {
-        "type": "action",
-        "description": "Proceed to the currency step"
-      },
-      {
-        "type": "action",
-        "description": "Select a valid currency"
-      },
-      {
-        "type": "action",
-        "description": "Complete the onboarding wizard"
+        "description": "Submit the sign-in form"
       },
       {
         "type": "assertion",
-        "description": "Verify the main dashboard is displayed"
+        "description": "Verify the user lands on an organization dashboard"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify organization-specific dashboard content is displayed"
       }
     ],
     "priority": "High"
   },
   {
     "id": "TC002",
-    "title": "Switch the dashboard language to Arabic RTL",
-    "description": "A user can switch the dashboard interface to Arabic and see the layout change to right-to-left.",
-    "category": "Language Toggle (EN/AR RTL)",
+    "title": "Create the first dealership organization and enter its dashboard",
+    "description": "This verifies that a new user can complete the onboarding wizard, create an organization, and arrive in the organization dashboard.",
+    "category": "Org Onboarding and Routing",
     "steps": [
       {
         "type": "action",
-        "description": "Navigate to /dashboard"
+        "description": "Navigate to /sign-in"
       },
       {
         "type": "action",
-        "description": "Click the language toggle in the sidebar"
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Complete the onboarding wizard with valid organization details"
       },
       {
         "type": "assertion",
-        "description": "Verify the interface switches to Arabic"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the layout becomes right-to-left"
+        "description": "Verify the organization dashboard is displayed"
       }
     ],
     "priority": "High"
   },
   {
     "id": "TC003",
-    "title": "Keep onboarding progress while moving between setup steps",
-    "description": "A new user can move from organization name entry to currency selection and complete the wizard without losing progress.",
+    "title": "Create the first organization from onboarding",
+    "description": "This test verifies that a new user without organizations can complete onboarding and reach the new dashboard.",
     "category": "Onboarding Wizard",
     "steps": [
       {
         "type": "action",
-        "description": "Navigate to /login"
+        "description": "Navigate to /sign-in"
       },
       {
         "type": "action",
-        "description": "Fill in the login field with {{LOGIN_USER}}"
+        "description": "Fill in the email field with {{LOGIN_USER}}"
       },
       {
         "type": "action",
@@ -93,77 +85,81 @@
       },
       {
         "type": "action",
-        "description": "Submit the login form"
-      },
-      {
-        "type": "action",
-        "description": "Navigate to /dashboard"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the dealership name field with a valid organization name"
-      },
-      {
-        "type": "action",
-        "description": "Proceed to the currency step"
-      },
-      {
-        "type": "action",
-        "description": "Select a valid currency"
-      },
-      {
-        "type": "action",
-        "description": "Proceed to the final step"
+        "description": "Submit the sign-in form"
       },
       {
         "type": "assertion",
-        "description": "Verify the onboarding completion screen is displayed"
+        "description": "Verify the onboarding wizard is displayed"
+      },
+      {
+        "type": "action",
+        "description": "Enter a dealership name"
+      },
+      {
+        "type": "action",
+        "description": "Continue to the currency step"
+      },
+      {
+        "type": "action",
+        "description": "Select a currency"
+      },
+      {
+        "type": "action",
+        "description": "Continue through the setup steps"
+      },
+      {
+        "type": "action",
+        "description": "Go to the dashboard"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the user lands on the new organization dashboard"
       }
     ],
     "priority": "High"
   },
   {
     "id": "TC004",
-    "title": "Switch the dashboard language back to English LTR",
-    "description": "A user can switch the dashboard interface back to English and restore the left-to-right layout.",
-    "category": "Language Toggle (EN/AR RTL)",
+    "title": "Display the first-time onboarding wizard for a new user",
+    "description": "This verifies that a newly signed-in user with no organizations sees the onboarding wizard instead of the organization dashboard.",
+    "category": "Org Onboarding and Routing",
     "steps": [
       {
         "type": "action",
-        "description": "Navigate to /dashboard"
+        "description": "Navigate to /sign-in"
       },
       {
         "type": "action",
-        "description": "Click the language toggle in the sidebar"
+        "description": "Fill in the email field with {{LOGIN_USER}}"
       },
       {
         "type": "action",
-        "description": "Click the language toggle in the sidebar again"
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
       },
       {
         "type": "assertion",
-        "description": "Verify the interface switches back to English"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the layout returns to left-to-right"
+        "description": "Verify the onboarding wizard is displayed"
       }
     ],
     "priority": "High"
   },
   {
     "id": "TC005",
-    "title": "Add a vehicle with VIN auto-fill",
-    "description": "An inventory user can create a vehicle by decoding a VIN, completing the remaining details, and seeing the new vehicle in the list.",
-    "category": "Vehicle Inventory Management",
+    "title": "Redirect back when visiting an unauthorized organization",
+    "description": "This test verifies that a user who opens an organization they do not belong to is redirected back to a valid dashboard entry point.",
+    "category": "Org Routing & Entry Redirect",
     "steps": [
       {
         "type": "action",
-        "description": "Navigate to /login"
+        "description": "Navigate to /sign-in"
       },
       {
         "type": "action",
-        "description": "Fill in the login field with {{LOGIN_USER}}"
+        "description": "Fill in the email field with {{LOGIN_USER}}"
       },
       {
         "type": "action",
@@ -171,52 +167,36 @@
       },
       {
         "type": "action",
-        "description": "Submit the login form"
+        "description": "Submit the sign-in form"
       },
       {
         "type": "action",
-        "description": "Navigate to /vehicles"
-      },
-      {
-        "type": "action",
-        "description": "Start adding a vehicle"
-      },
-      {
-        "type": "action",
-        "description": "Fill in a valid VIN into the VIN field"
-      },
-      {
-        "type": "action",
-        "description": "Trigger VIN decoding"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the remaining required vehicle details"
-      },
-      {
-        "type": "action",
-        "description": "Save the vehicle"
+        "description": "Navigate to an organization dashboard URL the user does not belong to"
       },
       {
         "type": "assertion",
-        "description": "Verify the new vehicle appears in the inventory list"
+        "description": "Verify the user is redirected to a valid dashboard entry point"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify an organization dashboard or onboarding entry state is displayed"
       }
     ],
     "priority": "High"
   },
   {
     "id": "TC006",
-    "title": "Search vehicles in inventory",
-    "description": "A user can search the inventory and see matching vehicle results.",
-    "category": "Vehicle Inventory Management",
+    "title": "Save and resume an installment sale draft",
+    "description": "This verifies that an installment sale draft is preserved and can be resumed from the sales home page.",
+    "category": "Cash & Installment Sale Wizard",
     "steps": [
       {
         "type": "action",
-        "description": "Navigate to /login"
+        "description": "Navigate to /sign-in"
       },
       {
         "type": "action",
-        "description": "Fill in the login field with {{LOGIN_USER}}"
+        "description": "Fill in the email field with {{LOGIN_USER}}"
       },
       {
         "type": "action",
@@ -224,28 +204,183 @@
       },
       {
         "type": "action",
-        "description": "Submit the login form"
+        "description": "Submit the sign-in form"
       },
       {
         "type": "action",
-        "description": "Navigate to /vehicles"
+        "description": "Click the sales section"
       },
       {
         "type": "action",
-        "description": "Fill in the vehicle search field with a known vehicle term"
+        "description": "Start an installment sale"
+      },
+      {
+        "type": "action",
+        "description": "Select a vehicle"
+      },
+      {
+        "type": "action",
+        "description": "Select or create a customer"
+      },
+      {
+        "type": "action",
+        "description": "Enter a valid sale price"
+      },
+      {
+        "type": "action",
+        "description": "Leave the wizard and return to the sales home page"
+      },
+      {
+        "type": "action",
+        "description": "Resume the saved draft"
       },
       {
         "type": "assertion",
-        "description": "Verify matching vehicle results are displayed"
+        "description": "Verify the draft sale can be continued from the saved step"
       }
     ],
     "priority": "High"
   },
   {
     "id": "TC007",
-    "title": "Record a cash sale from the sales wizard",
-    "description": "Verifies that a user can complete the cash sale workflow and see the new sale in the recent sales list.",
-    "category": "Cash Sale Wizard",
+    "title": "Switch organizations from the top navigation",
+    "description": "This verifies that a member with multiple organizations can switch orgs and stay on the same sub-page with access preserved.",
+    "category": "Org Onboarding and Routing",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /sign-in"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Open a nested organization page"
+      },
+      {
+        "type": "action",
+        "description": "Switch to another organization from the top navigation"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the user remains on the same section within the newly selected organization"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC008",
+    "title": "Keep the same page when switching organizations",
+    "description": "This test verifies that changing organizations preserves the current sub-page while updating the URL and access context.",
+    "category": "Org Routing & Entry Redirect",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /sign-in"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Open the organization switcher"
+      },
+      {
+        "type": "action",
+        "description": "Select another organization"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the current sub-page remains visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the active organization context is updated"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC009",
+    "title": "Record a cash sale end to end",
+    "description": "This verifies that a user can complete the cash sale wizard and see the sale appear in the recent sales list.",
+    "category": "Cash & Installment Sale Wizard",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /sign-in"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Click the sales section"
+      },
+      {
+        "type": "action",
+        "description": "Start a cash sale"
+      },
+      {
+        "type": "action",
+        "description": "Select a vehicle"
+      },
+      {
+        "type": "action",
+        "description": "Select or create a customer"
+      },
+      {
+        "type": "action",
+        "description": "Enter a valid sale price"
+      },
+      {
+        "type": "action",
+        "description": "Review the sale summary"
+      },
+      {
+        "type": "action",
+        "description": "Confirm the sale"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the sale appears in the recent sales list"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC010",
+    "title": "Review and approve a pending deal",
+    "description": "This verifies a manager can approve a below-minimum-profit request and the approval card disappears from the queue.",
+    "category": "Approval Workflow",
     "steps": [
       {
         "type": "action",
@@ -261,60 +396,36 @@
       },
       {
         "type": "action",
-        "description": "Submit the login form"
+        "description": "Submit the sign-in form"
       },
       {
         "type": "action",
-        "description": "Navigate to /sales"
+        "description": "Click the link to open the approvals page"
       },
       {
         "type": "action",
-        "description": "Start the cash sale flow"
-      },
-      {
-        "type": "action",
-        "description": "Select a vehicle"
-      },
-      {
-        "type": "action",
-        "description": "Select or create a customer"
-      },
-      {
-        "type": "action",
-        "description": "Enter the sale price"
-      },
-      {
-        "type": "action",
-        "description": "Review the summary"
-      },
-      {
-        "type": "action",
-        "description": "Confirm the sale"
+        "description": "Click the approve action for a pending request"
       },
       {
         "type": "assertion",
-        "description": "Verify a new sale appears in the recent sales list"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the sale is recorded as completed"
+        "description": "Verify the approved request is removed from the approval queue"
       }
     ],
     "priority": "High"
   },
   {
-    "id": "TC008",
-    "title": "Reject an empty organization name during onboarding",
-    "description": "The onboarding flow prevents completion when the organization name is missing and shows a validation error.",
-    "category": "Onboarding Wizard",
+    "id": "TC011",
+    "title": "Approve a below-minimum-profit request",
+    "description": "This verifies that a manager can approve a pending profit approval request and see it leave the queue.",
+    "category": "Approval Queue",
     "steps": [
       {
         "type": "action",
-        "description": "Navigate to /login"
+        "description": "Navigate to /sign-in"
       },
       {
         "type": "action",
-        "description": "Fill in the login field with {{LOGIN_USER}}"
+        "description": "Fill in the email field with {{LOGIN_USER}}"
       },
       {
         "type": "action",
@@ -322,44 +433,204 @@
       },
       {
         "type": "action",
-        "description": "Submit the login form"
+        "description": "Submit the sign-in form"
       },
       {
         "type": "action",
-        "description": "Navigate to /dashboard"
+        "description": "Click the approvals section"
       },
       {
         "type": "action",
-        "description": "Proceed to the currency step"
+        "description": "Open a pending approval request"
       },
       {
         "type": "action",
-        "description": "Select a valid currency"
-      },
-      {
-        "type": "action",
-        "description": "Attempt to complete the onboarding wizard"
+        "description": "Approve the request"
       },
       {
         "type": "assertion",
-        "description": "Verify an organization name validation error is visible"
+        "description": "Verify the request is removed from the approval queue"
       }
     ],
     "priority": "High"
   },
   {
-    "id": "TC009",
-    "title": "Add a customer to CRM",
-    "description": "A user can create a customer record and see it appear in the customer list.",
+    "id": "TC012",
+    "title": "Keep role-based sales users on the sales page after login",
+    "description": "This verifies that a user with the SALES role is routed into the sales area instead of the general dashboard after sign-in.",
+    "category": "Org Onboarding and Routing",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /sign-in"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the sales home page is displayed"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC013",
+    "title": "Review and reject a pending deal",
+    "description": "This verifies a manager can reject a below-minimum-profit request and the approval card disappears from the queue.",
+    "category": "Approval Workflow",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the username field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Click the link to open the approvals page"
+      },
+      {
+        "type": "action",
+        "description": "Click the reject action for a pending request"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the rejected request is removed from the approval queue"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC014",
+    "title": "Reject a below-minimum-profit request",
+    "description": "This verifies that a manager can reject a pending profit approval request and see it leave the queue.",
+    "category": "Approval Queue",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /sign-in"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Click the approvals section"
+      },
+      {
+        "type": "action",
+        "description": "Open a pending approval request"
+      },
+      {
+        "type": "action",
+        "description": "Reject the request"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the request is removed from the approval queue"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC015",
+    "title": "Add a vehicle using VIN decode",
+    "description": "This test verifies that a user can create a vehicle, use VIN-based auto-fill, and see the new vehicle in inventory.",
+    "category": "Vehicle Inventory Management",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /sign-in"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Click the vehicles navigation item"
+      },
+      {
+        "type": "action",
+        "description": "Open the vehicle creation dialog"
+      },
+      {
+        "type": "action",
+        "description": "Fill a VIN into the VIN field"
+      },
+      {
+        "type": "action",
+        "description": "Trigger VIN decoding"
+      },
+      {
+        "type": "action",
+        "description": "Fill the remaining required vehicle details"
+      },
+      {
+        "type": "action",
+        "description": "Save the vehicle"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the new vehicle appears in the inventory list"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify decoded vehicle details are shown in the form before saving"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC016",
+    "title": "Create a customer record",
+    "description": "This verifies that a user can add a new customer from the CRM list and see the new record appear afterward.",
     "category": "Customer Management",
     "steps": [
       {
         "type": "action",
-        "description": "Navigate to /login"
+        "description": "Navigate to /sign-in"
       },
       {
         "type": "action",
-        "description": "Fill in the login field with {{LOGIN_USER}}"
+        "description": "Fill in the email field with {{LOGIN_USER}}"
       },
       {
         "type": "action",
@@ -367,23 +638,23 @@
       },
       {
         "type": "action",
-        "description": "Submit the login form"
+        "description": "Submit the sign-in form"
       },
       {
         "type": "action",
-        "description": "Navigate to /customers"
+        "description": "Click the customers section"
       },
       {
         "type": "action",
-        "description": "Start adding a customer"
+        "description": "Open the add customer dialog"
       },
       {
         "type": "action",
-        "description": "Fill in the first name field with a valid first name"
+        "description": "Fill in the first name field with a unique name"
       },
       {
         "type": "action",
-        "description": "Fill in the last name field with a valid last name"
+        "description": "Fill in the last name field with a unique surname"
       },
       {
         "type": "action",
@@ -405,39 +676,10 @@
     "priority": "High"
   },
   {
-    "id": "TC010",
-    "title": "Save the organization currency setting",
-    "description": "An authenticated user can change the organization currency in general settings and see the updated currency reflected in the app.",
-    "category": "General Settings",
-    "steps": [
-      {
-        "type": "action",
-        "description": "Navigate to /settings/general"
-      },
-      {
-        "type": "action",
-        "description": "Select a different currency"
-      },
-      {
-        "type": "action",
-        "description": "Save the settings"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the updated currency setting is saved"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the new currency is reflected in the app"
-      }
-    ],
-    "priority": "High"
-  },
-  {
-    "id": "TC011",
-    "title": "Create a lead from the pipeline board",
-    "description": "Verifies that a user can create a lead by selecting a customer, vehicle, source, and stage and then see it appear in the chosen pipeline column.",
-    "category": "Lead Pipeline",
+    "id": "TC017",
+    "title": "Record a new operational expense",
+    "description": "This verifies a user can create an expense with the required details and see it appear in the expense list.",
+    "category": "Expense Tracking",
     "steps": [
       {
         "type": "action",
@@ -453,15 +695,76 @@
       },
       {
         "type": "action",
-        "description": "Submit the login form"
+        "description": "Submit the sign-in form"
       },
       {
         "type": "action",
-        "description": "Navigate to /leads"
+        "description": "Click the link to open the expenses page"
       },
       {
         "type": "action",
-        "description": "Start adding a lead"
+        "description": "Open the expense creation form"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the expense title field with a unique title"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the amount field with a valid amount"
+      },
+      {
+        "type": "action",
+        "description": "Select an expense category"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the vendor name field with a vendor name"
+      },
+      {
+        "type": "action",
+        "description": "Fill in a valid date into the date field"
+      },
+      {
+        "type": "action",
+        "description": "Save the expense"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the new expense appears in the list"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC018",
+    "title": "Create a lead tied to a customer and vehicle",
+    "description": "This verifies that a user can create a lead by selecting a customer, a vehicle, a source, and a stage, then see it appear on the board.",
+    "category": "Lead Pipeline",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /sign-in"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Click the leads section"
+      },
+      {
+        "type": "action",
+        "description": "Open the add lead dialog"
       },
       {
         "type": "action",
@@ -485,446 +788,16 @@
       },
       {
         "type": "assertion",
-        "description": "Verify a new lead card is displayed"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the lead appears in the selected stage column"
+        "description": "Verify the new lead appears on the board"
       }
     ],
     "priority": "High"
-  },
-  {
-    "id": "TC012",
-    "title": "Edit a vehicle and keep the updated details in inventory",
-    "description": "An inventory user can update an existing vehicle and see the edited record reflected in the list.",
-    "category": "Vehicle Inventory Management",
-    "steps": [
-      {
-        "type": "action",
-        "description": "Navigate to /login"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the login field with {{LOGIN_USER}}"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
-      },
-      {
-        "type": "action",
-        "description": "Submit the login form"
-      },
-      {
-        "type": "action",
-        "description": "Navigate to /vehicles"
-      },
-      {
-        "type": "action",
-        "description": "Open an existing vehicle for editing"
-      },
-      {
-        "type": "action",
-        "description": "Update a vehicle detail"
-      },
-      {
-        "type": "action",
-        "description": "Save the changes"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the updated vehicle is displayed in the inventory list"
-      }
-    ],
-    "priority": "High"
-  },
-  {
-    "id": "TC013",
-    "title": "Record an expense and see it in the list",
-    "description": "Verifies that a user can create an operational expense and see it appear in the expenses list.",
-    "category": "Expense Tracking",
-    "steps": [
-      {
-        "type": "action",
-        "description": "Navigate to /login"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the username field with {{LOGIN_USER}}"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
-      },
-      {
-        "type": "action",
-        "description": "Submit the login form"
-      },
-      {
-        "type": "action",
-        "description": "Navigate to /expenses"
-      },
-      {
-        "type": "action",
-        "description": "Start recording an expense"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the expense title"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the expense amount"
-      },
-      {
-        "type": "action",
-        "description": "Select an expense category"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the vendor name"
-      },
-      {
-        "type": "action",
-        "description": "Fill in a valid date for the expense"
-      },
-      {
-        "type": "action",
-        "description": "Save the expense"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the new expense appears in the list"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the expense is searchable"
-      }
-    ],
-    "priority": "High"
-  },
-  {
-    "id": "TC014",
-    "title": "Delete a vehicle from inventory",
-    "description": "An inventory user can remove an existing vehicle and no longer see it in the inventory list.",
-    "category": "Vehicle Inventory Management",
-    "steps": [
-      {
-        "type": "action",
-        "description": "Navigate to /login"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the login field with {{LOGIN_USER}}"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
-      },
-      {
-        "type": "action",
-        "description": "Submit the login form"
-      },
-      {
-        "type": "action",
-        "description": "Navigate to /vehicles"
-      },
-      {
-        "type": "action",
-        "description": "Open an existing vehicle for removal"
-      },
-      {
-        "type": "action",
-        "description": "Confirm deletion"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the vehicle is removed from the inventory list"
-      }
-    ],
-    "priority": "High"
-  },
-  {
-    "id": "TC015",
-    "title": "Search customers in CRM",
-    "description": "A user can search the customer list and see matching customer records.",
-    "category": "Customer Management",
-    "steps": [
-      {
-        "type": "action",
-        "description": "Navigate to /login"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the login field with {{LOGIN_USER}}"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
-      },
-      {
-        "type": "action",
-        "description": "Submit the login form"
-      },
-      {
-        "type": "action",
-        "description": "Navigate to /customers"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the customer search field with a known customer name or phone"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify matching customer records are displayed"
-      }
-    ],
-    "priority": "Medium"
-  },
-  {
-    "id": "TC016",
-    "title": "Move a lead to another stage",
-    "description": "Verifies that a user can reopen an existing lead, change its stage, and see it move to a different pipeline column.",
-    "category": "Lead Pipeline",
-    "steps": [
-      {
-        "type": "action",
-        "description": "Navigate to /login"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the username field with {{LOGIN_USER}}"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
-      },
-      {
-        "type": "action",
-        "description": "Submit the login form"
-      },
-      {
-        "type": "action",
-        "description": "Navigate to /leads"
-      },
-      {
-        "type": "action",
-        "description": "Open an existing lead card"
-      },
-      {
-        "type": "action",
-        "description": "Change the lead stage"
-      },
-      {
-        "type": "action",
-        "description": "Save the lead changes"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the lead card is visible in a different stage column"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the lead no longer appears in the previous stage column"
-      }
-    ],
-    "priority": "Medium"
-  },
-  {
-    "id": "TC017",
-    "title": "Approve a pending below-minimum-profit deal",
-    "description": "A manager can review a pending approval and approve it so the request is removed from the queue.",
-    "category": "Approval Workflow",
-    "steps": [
-      {
-        "type": "action",
-        "description": "Navigate to /approvals"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify pending approval cards are displayed"
-      },
-      {
-        "type": "action",
-        "description": "Click the approve action for a pending approval"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the approved request is no longer shown in the list"
-      }
-    ],
-    "priority": "Medium"
-  },
-  {
-    "id": "TC018",
-    "title": "Edit a customer record",
-    "description": "A user can update an existing customer and see the edited customer in the list.",
-    "category": "Customer Management",
-    "steps": [
-      {
-        "type": "action",
-        "description": "Navigate to /login"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the login field with {{LOGIN_USER}}"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
-      },
-      {
-        "type": "action",
-        "description": "Submit the login form"
-      },
-      {
-        "type": "action",
-        "description": "Navigate to /customers"
-      },
-      {
-        "type": "action",
-        "description": "Open an existing customer for editing"
-      },
-      {
-        "type": "action",
-        "description": "Update a customer detail"
-      },
-      {
-        "type": "action",
-        "description": "Save the changes"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the updated customer is displayed in the customer list"
-      }
-    ],
-    "priority": "Medium"
   },
   {
     "id": "TC019",
-    "title": "View filtered report metrics",
-    "description": "Verifies that a user can choose a date range in reports and see summary metrics and salesperson performance for that period.",
-    "category": "Reports",
-    "steps": [
-      {
-        "type": "action",
-        "description": "Navigate to /login"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the login credentials with {{LOGIN_USER}} and {{LOGIN_PASSWORD}}"
-      },
-      {
-        "type": "action",
-        "description": "Submit the login form"
-      },
-      {
-        "type": "action",
-        "description": "Navigate to /reports"
-      },
-      {
-        "type": "action",
-        "description": "Select a valid date range"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify summary metrics are displayed"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify salesperson performance breakdown is displayed"
-      }
-    ],
-    "priority": "Medium"
-  },
-  {
-    "id": "TC020",
-    "title": "Complete the cash sale review step before confirmation",
-    "description": "Verifies that the sale wizard presents a summary before final submission and only completes after confirmation.",
-    "category": "Cash Sale Wizard",
-    "steps": [
-      {
-        "type": "action",
-        "description": "Navigate to /login"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the username field with {{LOGIN_USER}}"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
-      },
-      {
-        "type": "action",
-        "description": "Submit the login form"
-      },
-      {
-        "type": "action",
-        "description": "Navigate to /sales"
-      },
-      {
-        "type": "action",
-        "description": "Start the cash sale flow"
-      },
-      {
-        "type": "action",
-        "description": "Select a vehicle"
-      },
-      {
-        "type": "action",
-        "description": "Select or create a customer"
-      },
-      {
-        "type": "action",
-        "description": "Enter the sale price"
-      },
-      {
-        "type": "action",
-        "description": "Review the summary"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the sale summary is displayed"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the sale is not yet completed"
-      }
-    ],
-    "priority": "Medium"
-  },
-  {
-    "id": "TC021",
-    "title": "Reject a pending below-minimum-profit deal",
-    "description": "A manager can review a pending approval and reject it so the request is removed from the queue.",
-    "category": "Approval Workflow",
-    "steps": [
-      {
-        "type": "action",
-        "description": "Navigate to /approvals"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify pending approval cards are displayed"
-      },
-      {
-        "type": "action",
-        "description": "Click the reject action for a pending approval"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the rejected request is no longer shown in the list"
-      }
-    ],
-    "priority": "Medium"
-  },
-  {
-    "id": "TC022",
-    "title": "Delete a customer from CRM",
-    "description": "A user can remove a customer record and no longer see it in the customer list.",
-    "category": "Customer Management",
+    "title": "Switch the interface to Arabic",
+    "description": "This verifies that a signed-in user can switch the dashboard language to Arabic and the interface updates to RTL layout.",
+    "category": "Language Toggle (EN/AR RTL)",
     "steps": [
       {
         "type": "action",
@@ -940,40 +813,36 @@
       },
       {
         "type": "action",
-        "description": "Submit the login form"
+        "description": "Submit the form"
       },
       {
         "type": "action",
-        "description": "Navigate to /customers"
-      },
-      {
-        "type": "action",
-        "description": "Open an existing customer for removal"
-      },
-      {
-        "type": "action",
-        "description": "Confirm deletion"
+        "description": "Click the language toggle in the top navigation"
       },
       {
         "type": "assertion",
-        "description": "Verify the customer is removed from the customer list"
+        "description": "Verify the interface is displayed in Arabic"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the layout uses right-to-left direction"
       }
     ],
-    "priority": "Medium"
+    "priority": "High"
   },
   {
-    "id": "TC023",
-    "title": "View the lead pipeline board",
-    "description": "Verifies that a signed-in user can open the leads page and see leads grouped by pipeline stage.",
-    "category": "Lead Pipeline",
+    "id": "TC020",
+    "title": "Search the vehicle inventory",
+    "description": "This test verifies that a user can filter the inventory list by search and see matching results.",
+    "category": "Vehicle Inventory Management",
     "steps": [
       {
         "type": "action",
-        "description": "Navigate to /login"
+        "description": "Navigate to /sign-in"
       },
       {
         "type": "action",
-        "description": "Fill in the username field with {{LOGIN_USER}}"
+        "description": "Fill in the email field with {{LOGIN_USER}}"
       },
       {
         "type": "action",
@@ -981,32 +850,56 @@
       },
       {
         "type": "action",
-        "description": "Submit the login form"
+        "description": "Submit the sign-in form"
       },
       {
         "type": "action",
-        "description": "Navigate to /leads"
+        "description": "Click the vehicles navigation item"
+      },
+      {
+        "type": "action",
+        "description": "Enter a search term that matches an existing vehicle"
       },
       {
         "type": "assertion",
-        "description": "Verify leads are grouped into pipeline columns"
+        "description": "Verify the inventory list is filtered to matching vehicles"
       },
       {
         "type": "assertion",
-        "description": "Verify lead cards are visible"
+        "description": "Verify non-matching vehicles are not shown"
       }
     ],
-    "priority": "Medium"
+    "priority": "High"
   },
   {
-    "id": "TC024",
-    "title": "Update VAT in general settings",
-    "description": "An authenticated user can enter a VAT rate in general settings and save it successfully.",
+    "id": "TC021",
+    "title": "Save general settings changes",
+    "description": "This verifies that an admin can update organization currency and VAT settings and the saved configuration remains visible after saving.",
     "category": "General Settings",
     "steps": [
       {
         "type": "action",
-        "description": "Navigate to /settings/general"
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the login field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the form"
+      },
+      {
+        "type": "action",
+        "description": "Click the navigation link to the general settings page"
+      },
+      {
+        "type": "action",
+        "description": "Change the currency setting"
       },
       {
         "type": "action",
@@ -1018,20 +911,20 @@
       },
       {
         "type": "assertion",
-        "description": "Verify the VAT setting is saved"
+        "description": "Verify the updated currency setting is visible"
       },
       {
         "type": "assertion",
-        "description": "Verify the updated VAT value is displayed"
+        "description": "Verify the updated VAT setting is visible"
       }
     ],
-    "priority": "Medium"
+    "priority": "High"
   },
   {
-    "id": "TC025",
-    "title": "Seed default pipeline stages",
-    "description": "Verifies that a user can initialize the pipeline with default stages and see them appear in the configuration list.",
-    "category": "Pipeline Stage Configuration",
+    "id": "TC022",
+    "title": "View report metrics for a selected date range",
+    "description": "This verifies that a user can choose a date range and see the report metrics and performance breakdown for that period.",
+    "category": "Reports",
     "steps": [
       {
         "type": "action",
@@ -1039,40 +932,7 @@
       },
       {
         "type": "action",
-        "description": "Fill in the login credentials with {{LOGIN_USER}} and {{LOGIN_PASSWORD}}"
-      },
-      {
-        "type": "action",
-        "description": "Submit the login form"
-      },
-      {
-        "type": "action",
-        "description": "Navigate to /settings/pipeline"
-      },
-      {
-        "type": "action",
-        "description": "Seed the default pipeline stages"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the pipeline stages are displayed"
-      }
-    ],
-    "priority": "Medium"
-  },
-  {
-    "id": "TC026",
-    "title": "Show validation when a vehicle is saved without required details",
-    "description": "The vehicle form prevents saving when required information is missing and shows validation feedback.",
-    "category": "Vehicle Inventory Management",
-    "steps": [
-      {
-        "type": "action",
-        "description": "Navigate to /login"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the login field with {{LOGIN_USER}}"
+        "description": "Fill in the email field with {{LOGIN_USER}}"
       },
       {
         "type": "action",
@@ -1080,32 +940,65 @@
       },
       {
         "type": "action",
-        "description": "Submit the login form"
+        "description": "Submit the sign-in form"
       },
       {
         "type": "action",
-        "description": "Navigate to /vehicles"
+        "description": "Navigate to the reports page for the active organization"
       },
       {
         "type": "action",
-        "description": "Start adding a vehicle"
-      },
-      {
-        "type": "action",
-        "description": "Attempt to save the vehicle without filling required details"
+        "description": "Select a valid date range"
       },
       {
         "type": "assertion",
-        "description": "Verify a vehicle validation error is visible"
+        "description": "Verify report metrics are displayed"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify salesperson performance breakdown is displayed"
       }
     ],
-    "priority": "Medium"
+    "priority": "High"
   },
   {
-    "id": "TC027",
-    "title": "Filter expenses by title or category",
-    "description": "Verifies that a user can search expenses and see matching records in the results list.",
-    "category": "Expense Tracking",
+    "id": "TC023",
+    "title": "View leads grouped by pipeline stage",
+    "description": "This verifies that the lead board opens with leads organized into Kanban columns by stage.",
+    "category": "Lead Pipeline",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /sign-in"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Click the leads section"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify leads are displayed in pipeline columns"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC024",
+    "title": "View pending approval details",
+    "description": "This verifies a manager can open the approvals page and see pending requests with the key deal information needed to make a decision.",
+    "category": "Approval Workflow",
     "steps": [
       {
         "type": "action",
@@ -1121,31 +1014,228 @@
       },
       {
         "type": "action",
-        "description": "Submit the login form"
+        "description": "Submit the sign-in form"
       },
       {
         "type": "action",
-        "description": "Navigate to /expenses"
-      },
-      {
-        "type": "action",
-        "description": "Search expenses by title or category"
+        "description": "Click the link to open the approvals page"
       },
       {
         "type": "assertion",
-        "description": "Verify matching expense records are displayed"
+        "description": "Verify pending approval cards are displayed"
       },
       {
         "type": "assertion",
-        "description": "Verify non-matching expense records are hidden"
+        "description": "Verify requested and minimum profit details are displayed"
       }
     ],
-    "priority": "Medium"
+    "priority": "High"
+  },
+  {
+    "id": "TC025",
+    "title": "Edit an existing vehicle",
+    "description": "This test verifies that a user can update an inventory vehicle and see the revised values in the list.",
+    "category": "Vehicle Inventory Management",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /sign-in"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Click the vehicles navigation item"
+      },
+      {
+        "type": "action",
+        "description": "Open an existing vehicle for editing"
+      },
+      {
+        "type": "action",
+        "description": "Update the vehicle details"
+      },
+      {
+        "type": "action",
+        "description": "Save the changes"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the updated vehicle appears in the inventory list"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the previous vehicle details are no longer shown"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC026",
+    "title": "Move a lead to another pipeline stage",
+    "description": "This verifies that changing a lead's stage moves it to the corresponding Kanban column.",
+    "category": "Lead Pipeline",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /sign-in"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Click the leads section"
+      },
+      {
+        "type": "action",
+        "description": "Change a lead's stage"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the lead appears in the new pipeline column"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC027",
+    "title": "Seed default pipeline stages",
+    "description": "This verifies that a user can populate the pipeline configuration with default stages from the settings page.",
+    "category": "Pipeline Stage Configuration",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the login field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the form"
+      },
+      {
+        "type": "action",
+        "description": "Click the navigation link to the pipeline settings page"
+      },
+      {
+        "type": "action",
+        "description": "Seed the default pipeline stages"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify pipeline stages are displayed in the configuration list"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the default stages are available for editing"
+      }
+    ],
+    "priority": "High"
   },
   {
     "id": "TC028",
-    "title": "Add a custom vehicle field",
-    "description": "Verifies that a user can create a custom field for vehicles and see it available in the vehicle configuration.",
+    "title": "Redirect unauthorized organization URLs back to the dashboard entry",
+    "description": "This verifies that opening an organization page for an organization the user does not belong to redirects them back to the dashboard entry point.",
+    "category": "Org Onboarding and Routing",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /sign-in"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Open an organization page the user cannot access"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the user is redirected to the dashboard entry point"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC029",
+    "title": "Update report results after changing the date range",
+    "description": "This verifies that changing the selected date range updates the displayed report data for the new period.",
+    "category": "Reports",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to the reports page for the active organization"
+      },
+      {
+        "type": "action",
+        "description": "Select an initial valid date range"
+      },
+      {
+        "type": "action",
+        "description": "Select a different valid date range"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the report metrics update for the selected period"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC030",
+    "title": "Expose a new custom field in the vehicle form",
+    "description": "This verifies that a newly created vehicle custom field becomes available when creating or editing a vehicle.",
     "category": "Custom Fields",
     "steps": [
       {
@@ -1154,15 +1244,19 @@
       },
       {
         "type": "action",
-        "description": "Fill in the login credentials with {{LOGIN_USER}} and {{LOGIN_PASSWORD}}"
+        "description": "Fill in the email field with {{LOGIN_USER}}"
       },
       {
         "type": "action",
-        "description": "Submit the login form"
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
       },
       {
         "type": "action",
-        "description": "Navigate to /settings/custom-fields"
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to the custom fields settings for the active organization"
       },
       {
         "type": "action",
@@ -1174,61 +1268,44 @@
       },
       {
         "type": "action",
-        "description": "Enter a field name"
+        "description": "Fill in the field name with Trim Package"
       },
       {
         "type": "action",
-        "description": "Enter a field key"
+        "description": "Fill in the field key with trim_package"
       },
       {
         "type": "action",
-        "description": "Select a field type"
+        "description": "Select a text field type"
       },
       {
         "type": "action",
         "description": "Save the custom field"
       },
       {
+        "type": "action",
+        "description": "Open the vehicle create dialog"
+      },
+      {
         "type": "assertion",
-        "description": "Verify the new vehicle custom field is displayed"
+        "description": "Verify the new vehicle custom field is available in the vehicle form"
       }
     ],
     "priority": "Medium"
   },
   {
-    "id": "TC029",
-    "title": "Review approval details before deciding",
-    "description": "A manager can inspect the salesperson, vehicle, and profit thresholds on a pending approval before taking action.",
-    "category": "Approval Workflow",
+    "id": "TC031",
+    "title": "Edit an existing customer record",
+    "description": "This verifies that a user can update customer details and see the saved changes reflected in the list.",
+    "category": "Customer Management",
     "steps": [
       {
         "type": "action",
-        "description": "Navigate to /approvals"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify pending approval details are displayed"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify requested profit and minimum allowed profit are displayed"
-      }
-    ],
-    "priority": "Medium"
-  },
-  {
-    "id": "TC030",
-    "title": "Update lead details",
-    "description": "Verifies that a user can edit an existing lead and see the updated lead information after saving.",
-    "category": "Lead Pipeline",
-    "steps": [
-      {
-        "type": "action",
-        "description": "Navigate to /login"
+        "description": "Navigate to /sign-in"
       },
       {
         "type": "action",
-        "description": "Fill in the username field with {{LOGIN_USER}}"
+        "description": "Fill in the email field with {{LOGIN_USER}}"
       },
       {
         "type": "action",
@@ -1236,85 +1313,40 @@
       },
       {
         "type": "action",
-        "description": "Submit the login form"
+        "description": "Submit the sign-in form"
       },
       {
         "type": "action",
-        "description": "Navigate to /leads"
+        "description": "Click the customers section"
       },
       {
         "type": "action",
-        "description": "Open an existing lead card"
+        "description": "Open an existing customer for editing"
       },
       {
         "type": "action",
-        "description": "Update lead details"
+        "description": "Update the first name field"
       },
       {
         "type": "action",
-        "description": "Save the lead changes"
+        "description": "Update the phone field with a valid phone number"
+      },
+      {
+        "type": "action",
+        "description": "Save the customer"
       },
       {
         "type": "assertion",
-        "description": "Verify the updated lead information is displayed"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the lead edit is reflected on the board"
-      }
-    ],
-    "priority": "Medium"
-  },
-  {
-    "id": "TC031",
-    "title": "Edit a pipeline stage",
-    "description": "Verifies that a user can update a pipeline stage label and color and see the saved changes reflected in the list.",
-    "category": "Pipeline Stage Configuration",
-    "steps": [
-      {
-        "type": "action",
-        "description": "Navigate to /login"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the login credentials with {{LOGIN_USER}} and {{LOGIN_PASSWORD}}"
-      },
-      {
-        "type": "action",
-        "description": "Submit the login form"
-      },
-      {
-        "type": "action",
-        "description": "Navigate to /settings/pipeline"
-      },
-      {
-        "type": "action",
-        "description": "Seed the default pipeline stages"
-      },
-      {
-        "type": "action",
-        "description": "Edit a pipeline stage label"
-      },
-      {
-        "type": "action",
-        "description": "Change the pipeline stage color"
-      },
-      {
-        "type": "action",
-        "description": "Save the pipeline stage changes"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the revised pipeline stage settings are displayed"
+        "description": "Verify the customer list shows the updated customer record"
       }
     ],
     "priority": "Medium"
   },
   {
     "id": "TC032",
-    "title": "Show validation when customer contact details are incomplete",
-    "description": "The customer form prevents saving when required contact details are missing and shows validation feedback.",
-    "category": "Customer Management",
+    "title": "Switch the interface back to English",
+    "description": "This verifies that a signed-in user can switch from Arabic back to English and the interface returns to LTR layout.",
+    "category": "Language Toggle (EN/AR RTL)",
     "steps": [
       {
         "type": "action",
@@ -1330,32 +1362,118 @@
       },
       {
         "type": "action",
-        "description": "Submit the login form"
+        "description": "Submit the form"
       },
       {
         "type": "action",
-        "description": "Navigate to /customers"
+        "description": "Click the language toggle in the top navigation"
       },
       {
         "type": "action",
-        "description": "Start adding a customer"
-      },
-      {
-        "type": "action",
-        "description": "Attempt to save the customer without filling required details"
+        "description": "Click the language toggle in the top navigation again"
       },
       {
         "type": "assertion",
-        "description": "Verify a customer validation error is visible"
+        "description": "Verify the interface is displayed in English"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the layout uses left-to-right direction"
       }
     ],
     "priority": "Medium"
   },
   {
     "id": "TC033",
-    "title": "Delete an expense from the list",
-    "description": "Verifies that a user can remove an expense after confirming deletion and see it disappear from the list.",
-    "category": "Expense Tracking",
+    "title": "Delete a vehicle from inventory",
+    "description": "This test verifies that a user can remove a vehicle and see it disappear from the inventory list after confirmation.",
+    "category": "Vehicle Inventory Management",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /sign-in"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Click the vehicles navigation item"
+      },
+      {
+        "type": "action",
+        "description": "Delete an existing vehicle"
+      },
+      {
+        "type": "action",
+        "description": "Confirm the deletion"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the vehicle is removed from the inventory list"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the deleted vehicle no longer appears in search or the table"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC034",
+    "title": "Delete a customer record",
+    "description": "This verifies that a user can remove a customer and the record no longer appears in the CRM list.",
+    "category": "Customer Management",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /sign-in"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Click the customers section"
+      },
+      {
+        "type": "action",
+        "description": "Open an existing customer for deletion"
+      },
+      {
+        "type": "action",
+        "description": "Confirm the deletion"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the customer is removed from the customer list"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC035",
+    "title": "Cancel a pending deal from sales home",
+    "description": "This verifies a salesperson can cancel their pending profit-approval deal from the sales home page and the deal is removed from the pending list.",
+    "category": "Cancel In-Progress Draft and Pending Deals",
     "steps": [
       {
         "type": "action",
@@ -1371,35 +1489,72 @@
       },
       {
         "type": "action",
-        "description": "Submit the login form"
+        "description": "Submit the sign-in form"
       },
       {
         "type": "action",
-        "description": "Navigate to /expenses"
+        "description": "Click the link to open the sales home page"
       },
       {
         "type": "action",
-        "description": "Delete an existing expense"
-      },
-      {
-        "type": "action",
-        "description": "Confirm the deletion"
+        "description": "Click the cancel action for a pending deal"
       },
       {
         "type": "assertion",
-        "description": "Verify the expense is removed from the list"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the expense no longer appears in search results"
+        "description": "Verify the pending deals list no longer shows that request"
       }
     ],
     "priority": "Medium"
   },
   {
-    "id": "TC034",
-    "title": "Reorder pipeline stages",
-    "description": "Verifies that a user can change the order of pipeline stages and keep the updated ordering visible.",
+    "id": "TC036",
+    "title": "Edit an existing lead",
+    "description": "This verifies that a user can update lead details and see the changes reflected on the lead card.",
+    "category": "Lead Pipeline",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /sign-in"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Click the leads section"
+      },
+      {
+        "type": "action",
+        "description": "Open an existing lead for editing"
+      },
+      {
+        "type": "action",
+        "description": "Update the lead stage or details"
+      },
+      {
+        "type": "action",
+        "description": "Save the lead"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the updated lead information is displayed"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC037",
+    "title": "Edit a pipeline stage",
+    "description": "This verifies that a user can change a pipeline stage label and color and see the updated stage configuration saved.",
     "category": "Pipeline Stage Configuration",
     "steps": [
       {
@@ -1408,35 +1563,47 @@
       },
       {
         "type": "action",
-        "description": "Fill in the login credentials with {{LOGIN_USER}} and {{LOGIN_PASSWORD}}"
+        "description": "Fill in the login field with {{LOGIN_USER}}"
       },
       {
         "type": "action",
-        "description": "Submit the login form"
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
       },
       {
         "type": "action",
-        "description": "Navigate to /settings/pipeline"
+        "description": "Submit the form"
       },
       {
         "type": "action",
-        "description": "Seed the default pipeline stages"
+        "description": "Click the navigation link to the pipeline settings page"
       },
       {
         "type": "action",
-        "description": "Reorder the pipeline stages"
+        "description": "Edit a pipeline stage label"
+      },
+      {
+        "type": "action",
+        "description": "Change the stage color"
+      },
+      {
+        "type": "action",
+        "description": "Save the stage changes"
       },
       {
         "type": "assertion",
-        "description": "Verify the pipeline stages reflect the new order"
+        "description": "Verify the updated stage label is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the updated stage color is visible"
       }
     ],
     "priority": "Medium"
   },
   {
-    "id": "TC035",
-    "title": "Add a customer custom field",
-    "description": "Verifies that a user can create a custom field for customers and see it available after saving.",
+    "id": "TC038",
+    "title": "Create a custom field for vehicles",
+    "description": "This verifies that an admin can add a new vehicle custom field and see it listed in the configuration area afterward.",
     "category": "Custom Fields",
     "steps": [
       {
@@ -1445,15 +1612,121 @@
       },
       {
         "type": "action",
-        "description": "Fill in the login credentials with {{LOGIN_USER}} and {{LOGIN_PASSWORD}}"
+        "description": "Fill in the email field with {{LOGIN_USER}}"
       },
       {
         "type": "action",
-        "description": "Submit the login form"
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
       },
       {
         "type": "action",
-        "description": "Navigate to /settings/custom-fields"
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to the custom fields settings for the active organization"
+      },
+      {
+        "type": "action",
+        "description": "Select the vehicle entity type"
+      },
+      {
+        "type": "action",
+        "description": "Add a new custom field"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the field name with Vehicle Color"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the field key with vehicle_color"
+      },
+      {
+        "type": "action",
+        "description": "Select a text field type"
+      },
+      {
+        "type": "action",
+        "description": "Save the custom field"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the new vehicle custom field is listed in the configuration"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC039",
+    "title": "Update general branding details",
+    "description": "This verifies that an admin can update organization branding details in general settings and see the saved branding reflected on the page.",
+    "category": "General Settings",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the login field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the form"
+      },
+      {
+        "type": "action",
+        "description": "Click the navigation link to the general settings page"
+      },
+      {
+        "type": "action",
+        "description": "Update the branding information"
+      },
+      {
+        "type": "action",
+        "description": "Save the settings"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the updated branding information is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the general settings remain saved"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC040",
+    "title": "Show customer custom fields in the customer form",
+    "description": "This verifies that a custom field created for customers appears in the customer create or edit dialog.",
+    "category": "Custom Fields",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to the custom fields settings for the active organization"
       },
       {
         "type": "action",
@@ -1465,32 +1738,36 @@
       },
       {
         "type": "action",
-        "description": "Enter a field name"
+        "description": "Fill in the field name with Preferred Contact Method"
       },
       {
         "type": "action",
-        "description": "Enter a field key"
+        "description": "Fill in the field key with preferred_contact_method"
       },
       {
         "type": "action",
-        "description": "Select a field type"
+        "description": "Select a text field type"
       },
       {
         "type": "action",
         "description": "Save the custom field"
       },
       {
+        "type": "action",
+        "description": "Open the customer create dialog"
+      },
+      {
         "type": "assertion",
-        "description": "Verify the new customer custom field is displayed"
+        "description": "Verify the new customer custom field is available in the customer form"
       }
     ],
-    "priority": "Low"
+    "priority": "Medium"
   },
   {
-    "id": "TC036",
-    "title": "Require a sale price before confirming a cash sale",
-    "description": "Verifies that the cash sale wizard prevents confirmation when the sale price is missing and shows validation feedback.",
-    "category": "Cash Sale Wizard",
+    "id": "TC041",
+    "title": "Discard a saved draft from sales home",
+    "description": "This verifies a salesperson can remove an in-progress sales draft from the sales home page and the draft no longer appears in the resume section.",
+    "category": "Cancel In-Progress Draft and Pending Deals",
     "steps": [
       {
         "type": "action",
@@ -1506,84 +1783,27 @@
       },
       {
         "type": "action",
-        "description": "Submit the login form"
+        "description": "Submit the sign-in form"
       },
       {
         "type": "action",
-        "description": "Navigate to /sales"
+        "description": "Click the link to open the sales home page"
       },
       {
         "type": "action",
-        "description": "Start the cash sale flow"
-      },
-      {
-        "type": "action",
-        "description": "Select a vehicle"
-      },
-      {
-        "type": "action",
-        "description": "Select or create a customer"
-      },
-      {
-        "type": "action",
-        "description": "Review the summary"
-      },
-      {
-        "type": "action",
-        "description": "Confirm the sale"
+        "description": "Click the discard action for the in-progress draft"
       },
       {
         "type": "assertion",
-        "description": "Verify validation errors are visible"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the sale is not created"
+        "description": "Verify the draft resume section is no longer shown"
       }
     ],
-    "priority": "Low"
+    "priority": "Medium"
   },
   {
-    "id": "TC037",
-    "title": "Deactivate a pipeline stage",
-    "description": "Verifies that a user can toggle a pipeline stage inactive and see it reflected in the pipeline configuration.",
-    "category": "Pipeline Stage Configuration",
-    "steps": [
-      {
-        "type": "action",
-        "description": "Navigate to /login"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the login credentials with {{LOGIN_USER}} and {{LOGIN_PASSWORD}}"
-      },
-      {
-        "type": "action",
-        "description": "Submit the login form"
-      },
-      {
-        "type": "action",
-        "description": "Navigate to /settings/pipeline"
-      },
-      {
-        "type": "action",
-        "description": "Seed the default pipeline stages"
-      },
-      {
-        "type": "action",
-        "description": "Toggle a pipeline stage inactive"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the pipeline reflects the inactive stage state"
-      }
-    ],
-    "priority": "Low"
-  },
-  {
-    "id": "TC038",
-    "title": "Add a lead custom field",
-    "description": "Verifies that a user can create a custom field for leads and see it available after saving.",
+    "id": "TC042",
+    "title": "Show lead custom fields in the lead form",
+    "description": "This verifies that a custom field created for leads appears in the lead create or edit dialog.",
     "category": "Custom Fields",
     "steps": [
       {
@@ -1592,15 +1812,19 @@
       },
       {
         "type": "action",
-        "description": "Fill in the login credentials with {{LOGIN_USER}} and {{LOGIN_PASSWORD}}"
+        "description": "Fill in the email field with {{LOGIN_USER}}"
       },
       {
         "type": "action",
-        "description": "Submit the login form"
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
       },
       {
         "type": "action",
-        "description": "Navigate to /settings/custom-fields"
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to the custom fields settings for the active organization"
       },
       {
         "type": "action",
@@ -1612,69 +1836,44 @@
       },
       {
         "type": "action",
-        "description": "Enter a field name"
+        "description": "Fill in the field name with Lead Source Detail"
       },
       {
         "type": "action",
-        "description": "Enter a field key"
+        "description": "Fill in the field key with lead_source_detail"
       },
       {
         "type": "action",
-        "description": "Select a field type"
+        "description": "Select a text field type"
       },
       {
         "type": "action",
         "description": "Save the custom field"
       },
       {
+        "type": "action",
+        "description": "Open the lead create dialog"
+      },
+      {
         "type": "assertion",
-        "description": "Verify the new lead custom field is displayed"
+        "description": "Verify the new lead custom field is available in the lead form"
       }
     ],
-    "priority": "Low"
+    "priority": "Medium"
   },
   {
-    "id": "TC039",
-    "title": "Keep general settings unchanged with invalid VAT input",
-    "description": "An authenticated user sees validation feedback and cannot save general settings when VAT input is invalid.",
-    "category": "General Settings",
+    "id": "TC043",
+    "title": "Search for a customer",
+    "description": "This verifies that searching by a customer attribute filters the CRM list to matching records.",
+    "category": "Customer Management",
     "steps": [
       {
         "type": "action",
-        "description": "Navigate to /settings/general"
+        "description": "Navigate to /sign-in"
       },
       {
         "type": "action",
-        "description": "Enter an invalid VAT value"
-      },
-      {
-        "type": "action",
-        "description": "Save the settings"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify a VAT validation error is visible"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the settings are not saved"
-      }
-    ],
-    "priority": "Low"
-  },
-  {
-    "id": "TC040",
-    "title": "Require lead information before saving",
-    "description": "Verifies that the lead form blocks saving when required lead details are missing and shows validation feedback.",
-    "category": "Lead Pipeline",
-    "steps": [
-      {
-        "type": "action",
-        "description": "Navigate to /login"
-      },
-      {
-        "type": "action",
-        "description": "Fill in the username field with {{LOGIN_USER}}"
+        "description": "Fill in the email field with {{LOGIN_USER}}"
       },
       {
         "type": "action",
@@ -1682,35 +1881,27 @@
       },
       {
         "type": "action",
-        "description": "Submit the login form"
+        "description": "Submit the sign-in form"
       },
       {
         "type": "action",
-        "description": "Navigate to /leads"
+        "description": "Click the customers section"
       },
       {
         "type": "action",
-        "description": "Start adding a lead"
-      },
-      {
-        "type": "action",
-        "description": "Save the lead without completing required fields"
+        "description": "Enter a customer name or phone number into the search field"
       },
       {
         "type": "assertion",
-        "description": "Verify validation errors are visible"
-      },
-      {
-        "type": "assertion",
-        "description": "Verify the lead is not created"
+        "description": "Verify matching customer records are displayed"
       }
     ],
-    "priority": "Low"
+    "priority": "Medium"
   },
   {
-    "id": "TC041",
-    "title": "Require expense details before saving",
-    "description": "Verifies that the expense form blocks saving when required fields are missing and shows validation feedback.",
+    "id": "TC044",
+    "title": "Delete an expense after confirming",
+    "description": "This verifies a user can remove an existing expense through the delete confirmation flow and the expense disappears from the list.",
     "category": "Expense Tracking",
     "steps": [
       {
@@ -1727,27 +1918,509 @@
       },
       {
         "type": "action",
-        "description": "Submit the login form"
+        "description": "Submit the sign-in form"
       },
       {
         "type": "action",
-        "description": "Navigate to /expenses"
+        "description": "Click the link to open the expenses page"
       },
       {
         "type": "action",
-        "description": "Start recording an expense"
+        "description": "Click the delete action for an expense"
       },
       {
         "type": "action",
-        "description": "Save the expense without completing required fields"
+        "description": "Confirm the deletion"
       },
       {
         "type": "assertion",
-        "description": "Verify validation errors are visible"
+        "description": "Verify the expense is removed from the list"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC045",
+    "title": "Create custom fields for customer and lead records",
+    "description": "This verifies that an admin can add custom fields for customers and leads from their respective tabs and the fields are saved in each section.",
+    "category": "Custom Fields",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to the custom fields settings for the active organization"
+      },
+      {
+        "type": "action",
+        "description": "Select the customer entity type"
+      },
+      {
+        "type": "action",
+        "description": "Add a new custom field"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the field name with Customer Tier"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the field key with customer_tier"
+      },
+      {
+        "type": "action",
+        "description": "Select a text field type"
+      },
+      {
+        "type": "action",
+        "description": "Save the custom field"
+      },
+      {
+        "type": "action",
+        "description": "Select the lead entity type"
+      },
+      {
+        "type": "action",
+        "description": "Add a new custom field"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the field name with Lead Priority"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the field key with lead_priority"
+      },
+      {
+        "type": "action",
+        "description": "Select a text field type"
+      },
+      {
+        "type": "action",
+        "description": "Save the custom field"
       },
       {
         "type": "assertion",
-        "description": "Verify the expense is not created"
+        "description": "Verify the customer and lead custom fields are listed in their respective configuration tabs"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC046",
+    "title": "Reorder and disable a pipeline stage",
+    "description": "This verifies that a user can change pipeline stage order and disable a stage so the configuration reflects both updates.",
+    "category": "Pipeline Stage Configuration",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the login field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the form"
+      },
+      {
+        "type": "action",
+        "description": "Click the navigation link to the pipeline settings page"
+      },
+      {
+        "type": "action",
+        "description": "Reorder the pipeline stages"
+      },
+      {
+        "type": "action",
+        "description": "Disable a pipeline stage"
+      },
+      {
+        "type": "action",
+        "description": "Save the stage changes"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the pipeline stage order is updated"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the disabled stage is no longer active"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC047",
+    "title": "Keep the customer list filtered by search",
+    "description": "This verifies that the CRM search returns only customers that match the entered name or phone query.",
+    "category": "Customer Management",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /sign-in"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Click the customers section"
+      },
+      {
+        "type": "action",
+        "description": "Enter a search query that matches one customer"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify only matching customer records are displayed"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC048",
+    "title": "Search expenses by keyword",
+    "description": "This verifies a user can filter the expense list by search text and see only matching expenses.",
+    "category": "Expense Tracking",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the username field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Click the link to open the expenses page"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the search field with a keyword from an existing expense"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the expense list is filtered to matching results"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC049",
+    "title": "Show empty report state when no data exists in the selected period",
+    "description": "This verifies that selecting a date range with no matching activity shows an empty report state instead of stale metrics.",
+    "category": "Reports",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /login"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to the reports page for the active organization"
+      },
+      {
+        "type": "action",
+        "description": "Select a valid date range with no activity"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify an empty state message is visible"
+      }
+    ],
+    "priority": "Low"
+  },
+  {
+    "id": "TC050",
+    "title": "Show validation when required vehicle details are missing",
+    "description": "This test verifies that attempting to save an incomplete vehicle keeps the dialog open and shows validation feedback.",
+    "category": "Vehicle Inventory Management",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /sign-in"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Click the vehicles navigation item"
+      },
+      {
+        "type": "action",
+        "description": "Open the vehicle creation dialog"
+      },
+      {
+        "type": "action",
+        "description": "Attempt to save without completing required fields"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify a validation error is visible"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the vehicle is not added to the inventory list"
+      }
+    ],
+    "priority": "Low"
+  },
+  {
+    "id": "TC051",
+    "title": "View and filter the notifications inbox",
+    "description": "Verifies a signed-in user can open the dedicated notifications page, see their notification history, and filter it by category.",
+    "category": "Notifications",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /sign-in"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Open the notification bell in the top navigation"
+      },
+      {
+        "type": "action",
+        "description": "Click \"Inbox\" / view all to open the dedicated notifications page"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the notifications page loads with the Inbox tab showing recent notifications"
+      },
+      {
+        "type": "action",
+        "description": "Click a category filter (e.g. Sales)"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the list updates to show only notifications from that category"
+      }
+    ],
+    "priority": "High"
+  },
+  {
+    "id": "TC052",
+    "title": "Mark a notification read and archive it",
+    "description": "Verifies a user can mark an unread notification as read and archive it, and that it then appears under the Archive tab instead of the Inbox.",
+    "category": "Notifications",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /sign-in"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Perform an action elsewhere in the app that generates a notification (e.g. add a vehicle)"
+      },
+      {
+        "type": "action",
+        "description": "Open the notifications page Inbox tab"
+      },
+      {
+        "type": "action",
+        "description": "Mark the new notification as read"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the notification no longer shows as unread and the bell badge count decreases"
+      },
+      {
+        "type": "action",
+        "description": "Archive the notification"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the notification disappears from the Inbox tab"
+      },
+      {
+        "type": "action",
+        "description": "Switch to the Archive tab"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the archived notification appears there"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC053",
+    "title": "Update notification channel preferences",
+    "description": "Verifies a user can toggle email/WhatsApp delivery per category on the Preferences tab and that the change persists after reload.",
+    "category": "Notifications",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /sign-in"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Open the notifications page and switch to the Preferences tab"
+      },
+      {
+        "type": "action",
+        "description": "Toggle the Email switch for the Sales category"
+      },
+      {
+        "type": "action",
+        "description": "Enter a WhatsApp number and save it"
+      },
+      {
+        "type": "action",
+        "description": "Reload the page"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the Email toggle for Sales reflects the change made before reload"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the saved WhatsApp number is still populated"
+      }
+    ],
+    "priority": "Medium"
+  },
+  {
+    "id": "TC054",
+    "title": "Super admin sends a broadcast announcement",
+    "description": "Verifies a super admin can compose and send a broadcast notification to one organization from /admin/notifications, and that it is recorded in the broadcast history.",
+    "category": "Notifications",
+    "steps": [
+      {
+        "type": "action",
+        "description": "Navigate to /sign-in as a super-admin account"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the email field with {{LOGIN_USER}}"
+      },
+      {
+        "type": "action",
+        "description": "Fill in the password field with {{LOGIN_PASSWORD}}"
+      },
+      {
+        "type": "action",
+        "description": "Submit the sign-in form"
+      },
+      {
+        "type": "action",
+        "description": "Navigate to /admin/notifications"
+      },
+      {
+        "type": "action",
+        "description": "Select \"One organization\" as the audience and pick an organization"
+      },
+      {
+        "type": "action",
+        "description": "Fill in a title and message"
+      },
+      {
+        "type": "action",
+        "description": "Click \"Send broadcast\""
+      },
+      {
+        "type": "assertion",
+        "description": "Verify a success toast appears"
+      },
+      {
+        "type": "assertion",
+        "description": "Verify the broadcast appears in the History table below with the correct title and recipient count"
       }
     ],
     "priority": "Low"

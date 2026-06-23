@@ -144,9 +144,9 @@ export const createFromQuote = mutation({
     await notifyManagers(
       ctx,
       args.orgId,
-      "New Finance Application",
-      `${actorName} submitted a new finance application for ${customer?.firstName} ${customer?.lastName}`,
-      `/${args.orgId}/applications`
+      "application.created",
+      { actorName, customerName: `${customer?.firstName} ${customer?.lastName}` },
+      { link: `/${args.orgId}/applications` }
     );
 
     return appId;

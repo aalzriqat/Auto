@@ -276,9 +276,9 @@ export const create = mutation({
     await notifyManagers(
       ctx,
       args.orgId,
-      "New Sale Recorded",
-      `${actorName} recorded a new sale for ${vehicle.year} ${vehicle.make} ${vehicle.model}`,
-      `/${args.orgId}/sales?highlightId=${saleId}`
+      "sale.created",
+      { actorName, vehicleLabel: `${vehicle.year} ${vehicle.make} ${vehicle.model}` },
+      { link: `/${args.orgId}/sales?highlightId=${saleId}` }
     );
 
     return saleId;
@@ -354,9 +354,9 @@ export const update = mutation({
       await notifyManagers(
         ctx,
         args.orgId,
-        "Sale Updated",
-        `${actorName} updated a sale record.`,
-        `/${args.orgId}/sales?highlightId=${args.saleId}`
+        "sale.updated",
+        { actorName },
+        { link: `/${args.orgId}/sales?highlightId=${args.saleId}` }
       );
     }
   },
@@ -403,8 +403,8 @@ export const softDelete = mutation({
     await notifyManagers(
       ctx,
       args.orgId,
-      "Sale Deleted",
-      `${actorName} deleted a sale record.`
+      "sale.deleted",
+      { actorName }
     );
   },
 });

@@ -262,7 +262,7 @@ describe("socialPostingData.markPostResult", () => {
         .query("notifications")
         .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
         .collect();
-      expect(notifications.some((n) => n.title === "Posted to Instagram")).toBe(true);
+      expect(notifications.some((n) => n.type === "social.post_succeeded" && n.data?.platform === "Instagram")).toBe(true);
     });
   });
 
@@ -299,7 +299,7 @@ describe("socialPostingData.markPostResult", () => {
         .query("notifications")
         .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
         .collect();
-      expect(notifications.some((n) => n.title === "Instagram post failed")).toBe(true);
+      expect(notifications.some((n) => n.type === "social.post_failed" && n.data?.platform === "Instagram")).toBe(true);
     });
   });
 
@@ -332,7 +332,7 @@ describe("socialPostingData.markPostResult", () => {
         .query("notifications")
         .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
         .collect();
-      expect(notifications.some((n) => n.title === "Posted to Facebook")).toBe(true);
+      expect(notifications.some((n) => n.type === "social.post_succeeded" && n.data?.platform === "Facebook")).toBe(true);
     });
   });
 });

@@ -93,9 +93,9 @@ export const handleIncomingMessage = internalMutation({
       await notifyManagers(
         ctx,
         orgId,
-        "New WhatsApp Lead",
-        `New WhatsApp message from ${senderName ?? senderPhone}.`,
-        `/${orgId}/leads?highlightId=${leadId}`
+        "whatsapp.lead_created",
+        { senderName: senderName ?? senderPhone },
+        { link: `/${orgId}/leads?highlightId=${leadId}` }
       );
     }
   },

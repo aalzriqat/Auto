@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { advanceLeadStage } from "./utils/leadStageHelpers";
+import { notifyUser, getActorName } from "./utils/notifications";
 
 export const listQuotesByCustomer = query({
   args: { 
@@ -87,6 +88,22 @@ export const updateQuoteStatus = mutation({
 
     if (status === "SHARED" && existing.leadId) {
       await advanceLeadStage(ctx, { leadId: existing.leadId, targetStage: "NEGOTIATION" });
+    }
+
+    if (status === "ACCEPTED") {
+      const vehicle = await ctx.db.get(existing.vehicleId);
+      const actorName = await getActorName(ctx);
+      await notifyUser(
+        ctx,
+        orgId,
+        existing.createdBy,
+        "quote.accepted",
+        {
+          actorName,
+          quoteLabel: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "the quote",
+        },
+        { link: `/${orgId}/customers?highlightId=${existing.customerId}` }
+      );
     }
   },
 });

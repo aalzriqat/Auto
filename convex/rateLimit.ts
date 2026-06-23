@@ -12,6 +12,7 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
   chatMessage: { kind: "token bucket", rate: 20, period: 60000, capacity: 20 }, // Live chat messages, keyed by sender userId
   contactForm: { kind: "token bucket", rate: 3, period: 600000, capacity: 3 }, // Public contact form, keyed by submitter email
   socialPosting: { kind: "token bucket", rate: 10, period: 60000, capacity: 10 }, // Instagram/Facebook posts, keyed by orgId — stays well under Meta's own API limits
+  notificationWhatsapp: { kind: "token bucket", rate: 10, period: 60000, capacity: 10 }, // Outbound WhatsApp notification sends
   // System-wide circuit breaker for create/standardApi/upload, checked in addition to
   // the per-org bucket above. Per-org limits give tenant fairness; this protects the
   // underlying Convex deployment from an aggregate spike across many orgs at once

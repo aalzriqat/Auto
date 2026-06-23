@@ -2,6 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { mutation, query, internalQuery } from "./_generated/server";
 import { requireAuth, requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS, DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
+import { notifyManagers, getActorName } from "./utils/notifications";
 
 /** Internal lookup (no auth) for server-side flows like account-creation emails. */
 export const getInternal = internalQuery({
@@ -66,11 +67,20 @@ export const update = mutation({
     name: v.string(),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_ORG]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_ORG]);
 
     await ctx.db.patch(args.orgId, {
       name: args.name.trim(),
     });
+
+    const actorName = await getActorName(ctx);
+    await notifyManagers(
+      ctx,
+      args.orgId,
+      "organization.settings_changed",
+      { actorName },
+      { excludeUserId: user._id }
+    );
   },
 });
 

@@ -2,6 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { notifyOwner, getActorName } from "./utils/notifications";
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
@@ -71,11 +72,16 @@ export const create = mutation({
       throw new ConvexError(`A role named "${args.name}" already exists in this organization.`);
     }
 
-    return await ctx.db.insert("roles", {
+    const roleId = await ctx.db.insert("roles", {
       orgId: args.orgId,
       name: args.name.trim(),
       permissions: args.permissions,
     });
+
+    const actorName = await getActorName(ctx);
+    await notifyOwner(ctx, args.orgId, "role.changed", { actorName, roleName: args.name.trim() });
+
+    return roleId;
   },
 });
 
@@ -110,6 +116,9 @@ export const update = mutation({
 
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(args.roleId, patch);
+
+      const actorName = await getActorName(ctx);
+      await notifyOwner(ctx, args.orgId, "role.changed", { actorName, roleName: role.name });
     }
   },
 });
@@ -156,5 +165,8 @@ export const remove = mutation({
       deletedAt: Date.now(),
       deletedBy: identity.subject
     });
+
+    const actorName = await getActorName(ctx);
+    await notifyOwner(ctx, args.orgId, "role.changed", { actorName, roleName: role.name });
   },
 });

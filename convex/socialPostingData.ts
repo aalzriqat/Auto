@@ -151,18 +151,18 @@ export const markPostResult = internalMutation({
         ctx,
         post.orgId,
         post.requestedBy,
-        `Posted to ${platformLabel}`,
-        `${vehicleLabel} was posted to ${platformLabel} successfully.`,
-        `/${post.orgId}/vehicles?highlightId=${post.vehicleId}`
+        "social.post_succeeded",
+        { platform: platformLabel, vehicleLabel },
+        { link: `/${post.orgId}/vehicles?highlightId=${post.vehicleId}` }
       );
     } else {
       await notifyUser(
         ctx,
         post.orgId,
         post.requestedBy,
-        `${platformLabel} post failed`,
-        `${vehicleLabel} could not be posted to ${platformLabel}: ${args.errorMessage ?? "Unknown error"}`,
-        `/${post.orgId}/vehicles?highlightId=${post.vehicleId}`
+        "social.post_failed",
+        { platform: platformLabel, vehicleLabel, error: args.errorMessage ?? "Unknown error" },
+        { link: `/${post.orgId}/vehicles?highlightId=${post.vehicleId}` }
       );
     }
   },

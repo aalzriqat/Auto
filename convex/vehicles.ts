@@ -285,9 +285,9 @@ export const create = mutation({
     await notifyManagers(
       ctx,
       args.orgId,
-      "New Vehicle Added",
-      `${actorName} added a ${args.year} ${args.make.trim()} ${args.model.trim()}`,
-      `/${args.orgId}/vehicles?highlightId=${id}`
+      "vehicle.created",
+      { actorName, vehicleLabel: `${args.year} ${args.make.trim()} ${args.model.trim()}` },
+      { link: `/${args.orgId}/vehicles?highlightId=${id}` }
     );
 
     return id;
@@ -393,9 +393,9 @@ export const update = mutation({
       await notifyManagers(
         ctx,
         args.orgId,
-        "Vehicle Updated",
-        `${actorName} updated details for the ${vehicle.year} ${vehicle.make} ${vehicle.model}`,
-        `/${args.orgId}/vehicles?highlightId=${args.vehicleId}`
+        "vehicle.updated",
+        { actorName, vehicleLabel: `${vehicle.year} ${vehicle.make} ${vehicle.model}` },
+        { link: `/${args.orgId}/vehicles?highlightId=${args.vehicleId}` }
       );
 
       if (patch.status === "AVAILABLE" && vehicle.status !== "AVAILABLE") {
@@ -456,8 +456,8 @@ export const softDelete = mutation({
     await notifyManagers(
       ctx,
       args.orgId,
-      "Vehicle Deleted",
-      `${actorName} deleted a ${vehicle.year} ${vehicle.make} ${vehicle.model} (VIN: ${vehicle.vin})`
+      "vehicle.deleted",
+      { actorName, vehicleLabel: `${vehicle.year} ${vehicle.make} ${vehicle.model}`, vin: vehicle.vin }
     );
   },
 });

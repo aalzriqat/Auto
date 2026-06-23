@@ -2,6 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { notifyManagers, getActorName } from "./utils/notifications";
 
 export const list = query({
   args: {
@@ -75,7 +76,7 @@ export const create = mutation({
       });
     }
 
-    return await ctx.db.insert("workOrders", {
+    const workOrderId = await ctx.db.insert("workOrders", {
       orgId: args.orgId,
       vehicleId: args.vehicleId,
       title: args.title,
@@ -85,6 +86,17 @@ export const create = mutation({
       expenseId,
       notes: args.notes,
     });
+
+    const actorName = await getActorName(ctx);
+    await notifyManagers(
+      ctx,
+      args.orgId,
+      "workOrder.created",
+      { actorName, label: args.title },
+      { link: `/${args.orgId}/vehicles?highlightId=${args.vehicleId}` }
+    );
+
+    return workOrderId;
   },
 });
 
@@ -146,6 +158,16 @@ export const update = mutation({
       notes: args.notes,
       expenseId,
     });
+
+    if (args.status === "COMPLETED" && wo.status !== "COMPLETED") {
+      await notifyManagers(
+        ctx,
+        args.orgId,
+        "workOrder.completed",
+        { label: args.title },
+        { link: `/${args.orgId}/vehicles?highlightId=${wo.vehicleId}` }
+      );
+    }
   },
 });
 

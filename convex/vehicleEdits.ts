@@ -52,9 +52,9 @@ export const requestCreate = mutation({
     await notifyManagers(
       ctx,
       args.orgId,
-      "Vehicle Creation Request",
-      `${actorName} requested to add a new vehicle (${args.payload.year} ${args.payload.make} ${args.payload.model}).`,
-      `/${args.orgId}/vehicles?approvals=true`
+      "vehicle.create_requested",
+      { actorName, vehicleLabel: `${args.payload.year} ${args.payload.make} ${args.payload.model}` },
+      { link: `/${args.orgId}/vehicles?approvals=true` }
     );
 
     return requestId;
@@ -137,9 +137,9 @@ export const requestUpdate = mutation({
     await notifyManagers(
       ctx,
       args.orgId,
-      "Vehicle Update Request",
-      `${actorName} requested to update details for the ${vehicle.year} ${vehicle.make} ${vehicle.model}.`,
-      `/${args.orgId}/vehicles?approvals=true`
+      "vehicle.update_requested",
+      { actorName, vehicleLabel: `${vehicle.year} ${vehicle.make} ${vehicle.model}` },
+      { link: `/${args.orgId}/vehicles?approvals=true` }
     );
 
     return requestId;

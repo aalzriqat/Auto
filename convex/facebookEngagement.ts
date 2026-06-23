@@ -136,9 +136,9 @@ export const handleIncomingFacebookEvent = internalMutation({
         await notifyManagers(
           ctx,
           orgId,
-          `New ${label} Lead`,
-          `New ${label.toLowerCase()} from ${senderName ?? senderFacebookId}.`,
-          `/${orgId}/leads?highlightId=${leadId}`
+          "social.lead_created",
+          { platform: label, senderName: senderName ?? senderFacebookId },
+          { link: `/${orgId}/leads?highlightId=${leadId}` }
         );
       }
     }
@@ -167,9 +167,9 @@ export const handleIncomingFacebookEvent = internalMutation({
         await notifyManagers(
           ctx,
           orgId,
-          `Urgent: possible complaint`,
-          `${senderName ?? senderFacebookId} may have a complaint: "${text.slice(0, 200)}"`,
-          leadId ? `/${orgId}/leads?highlightId=${leadId}` : `/${orgId}/leads`
+          "social.possible_complaint",
+          { platform: "Facebook", senderName: senderName ?? senderFacebookId, excerpt: text.slice(0, 200) },
+          { link: leadId ? `/${orgId}/leads?highlightId=${leadId}` : `/${orgId}/leads` }
         );
       } else if (intent && (intent === "location" || intent === "greeting" || vehicleId)) {
         const vehicle = vehicleId ? await ctx.db.get(vehicleId) : null;

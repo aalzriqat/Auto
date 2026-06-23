@@ -5,6 +5,24 @@ import { internal } from "./_generated/api";
 import { requireSuperAdmin } from "./utils/tenancy";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { logAdminAction } from "./adminAudit";
+import { notifyUser } from "./utils/notifications";
+import { Id } from "./_generated/dataModel";
+import { MutationCtx } from "./_generated/server";
+
+/** disableUser/enableUser aren't org-scoped, but notifications are — fan out across every org the user belongs to. */
+async function notifyUserAcrossOrgs(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  type: "admin.user_disabled" | "admin.user_enabled",
+) {
+  const memberships = await ctx.db
+    .query("memberships")
+    .withIndex("by_user", (q) => q.eq("userId", userId))
+    .collect();
+  for (const membership of memberships) {
+    await notifyUser(ctx, membership.orgId, userId, type, {});
+  }
+}
 
 /**
  * Recovery escape hatch for a super admin who locked themselves out by
@@ -100,6 +118,7 @@ export const disableUser = mutation({
     if (!user) throwAppError(AppErrorCode.USER_NOT_FOUND, "User not found.");
 
     await ctx.db.patch(args.userId, { disabled: true });
+    await notifyUserAcrossOrgs(ctx, args.userId, "admin.user_disabled");
     await logAdminAction(ctx, admin, {
       action: "disableUser",
       targetTable: "users",
@@ -118,6 +137,7 @@ export const enableUser = mutation({
     if (!user) throwAppError(AppErrorCode.USER_NOT_FOUND, "User not found.");
 
     await ctx.db.patch(args.userId, { disabled: false });
+    await notifyUserAcrossOrgs(ctx, args.userId, "admin.user_enabled");
     await logAdminAction(ctx, admin, {
       action: "enableUser",
       targetTable: "users",
@@ -146,6 +166,8 @@ export const changeUserRole = mutation({
 
     const oldRole = await ctx.db.get(membership.roleId);
     await ctx.db.patch(membership._id, { roleId: args.roleId });
+
+    await notifyUser(ctx, args.orgId, args.userId, "admin.user_role_changed", { roleName: newRole.name });
 
     await logAdminAction(ctx, admin, {
       action: "changeUserRole",

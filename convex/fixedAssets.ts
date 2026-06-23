@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { notifyOwner, getActorName } from "./utils/notifications";
 
 export const list = query({
   args: { 
@@ -29,13 +30,20 @@ export const add = mutation({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    return await ctx.db.insert("fixedAssets", {
+    const assetId = await ctx.db.insert("fixedAssets", {
       orgId: args.orgId,
       name: args.name,
       purchaseDate: args.purchaseDate,
       purchaseValue: args.purchaseValue,
       notes: args.notes,
     });
+
+    const actorName = await getActorName(ctx);
+    await notifyOwner(ctx, args.orgId, "fixedAsset.changed", { actorName, assetLabel: args.name }, {
+      link: `/${args.orgId}/accounting`,
+    });
+
+    return assetId;
   },
 });
 
@@ -63,6 +71,11 @@ export const update = mutation({
     );
 
     await ctx.db.patch(assetId, cleanedUpdates);
+
+    const actorName = await getActorName(ctx);
+    await notifyOwner(ctx, orgId, "fixedAsset.changed", { actorName, assetLabel: asset.name }, {
+      link: `/${orgId}/accounting`,
+    });
   },
 });
 
@@ -84,6 +97,11 @@ export const remove = mutation({
       isDeleted: true,
       deletedAt: Date.now(),
       deletedBy: identity.subject
+    });
+
+    const actorName = await getActorName(ctx);
+    await notifyOwner(ctx, args.orgId, "fixedAsset.changed", { actorName, assetLabel: asset.name }, {
+      link: `/${args.orgId}/accounting`,
     });
   },
 });

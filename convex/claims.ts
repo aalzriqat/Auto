@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { notifyManagers, getActorName } from "./utils/notifications";
 
 export const list = query({
   args: { 
@@ -40,7 +41,7 @@ export const add = mutation({
       }
     }
 
-    return await ctx.db.insert("claims", {
+    const claimId = await ctx.db.insert("claims", {
       orgId: args.orgId,
       claimDate: args.claimDate,
       financingEntity: args.financingEntity,
@@ -50,6 +51,17 @@ export const add = mutation({
       notes: args.notes,
       saleId: args.saleId,
     });
+
+    const actorName = await getActorName(ctx);
+    await notifyManagers(
+      ctx,
+      args.orgId,
+      "claim.updated",
+      { actorName, claimLabel: `${args.buyerName} (${args.financingEntity})` },
+      { link: `/${args.orgId}/accounting` }
+    );
+
+    return claimId;
   },
 });
 
@@ -74,6 +86,15 @@ export const update = mutation({
     );
 
     await ctx.db.patch(claimId, cleanedUpdates);
+
+    const actorName = await getActorName(ctx);
+    await notifyManagers(
+      ctx,
+      orgId,
+      "claim.updated",
+      { actorName, claimLabel: `${claim.buyerName} (${claim.financingEntity})` },
+      { link: `/${orgId}/accounting` }
+    );
   },
 });
 
@@ -96,5 +117,14 @@ export const remove = mutation({
       deletedAt: Date.now(),
       deletedBy: identity.subject
     });
+
+    const actorName = await getActorName(ctx);
+    await notifyManagers(
+      ctx,
+      args.orgId,
+      "claim.updated",
+      { actorName, claimLabel: `${claim.buyerName} (${claim.financingEntity})` },
+      { link: `/${args.orgId}/accounting` }
+    );
   },
 });

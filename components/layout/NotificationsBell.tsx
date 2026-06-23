@@ -11,6 +11,8 @@ import { toast } from "@/components/ui/sonner";
 import { Id } from "@/convex/_generated/dataModel";
 import Link from "next/link";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { renderNotification } from "@/lib/notifications/render";
+import { CATEGORY_ICONS } from "@/lib/notifications/icons";
 
 export function NotificationsBell() {
   const { t, locale } = useLanguage();
@@ -109,6 +111,16 @@ export function NotificationsBell() {
     return new Date(ts).toLocaleDateString();
   };
 
+  // Typed notifications render bilingually via the shared registry; legacy
+  // rows (pre-dating the type/category/data fields) fall back to their
+  // stored plain-text title/message.
+  const renderNotif = (notif: { type?: string; data?: any; title?: string; message?: string }) => {
+    if (notif.type) {
+      return renderNotification(locale, notif.type, notif.data);
+    }
+    return { title: notif.title ?? "", message: notif.message ?? "" };
+  };
+
   return (
     <div className="relative" ref={dropdownRef}>
       <Button variant="ghost" size="icon" className="relative" onClick={() => setOpen(!open)}>
@@ -141,45 +153,64 @@ export function NotificationsBell() {
               <div className="p-4 text-center text-sm text-muted-foreground">{t("NoNotifications")}</div>
             ) : (
               <div className="flex flex-col">
-                {notifications.map((notif) => (
-                  <div
-                    key={notif._id}
-                    className={`flex items-start gap-3 p-4 border-b last:border-0 hover:bg-muted/50 transition-colors ${!notif.isRead ? 'bg-blue-50/50 dark:bg-blue-950/20' : ''}`}
-                  >
-                    <div className="flex-1 space-y-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className={`text-sm font-medium leading-none ${!notif.isRead ? 'text-foreground' : 'text-muted-foreground'}`}>
-                          {notif.link ? (
-                            <Link href={notif.link} onClick={() => handleNotificationClick(notif)} className="hover:underline">
-                              {notif.title}
-                            </Link>
-                          ) : (
-                            notif.title
-                          )}
-                        </p>
-                        <span className="text-[10px] text-muted-foreground whitespace-nowrap">
-                          {formatTime(notif._creationTime)}
-                        </span>
+                {notifications.map((notif) => {
+                  const { title, message } = renderNotif(notif);
+                  const CategoryIcon = notif.category ? CATEGORY_ICONS[notif.category as keyof typeof CATEGORY_ICONS] : undefined;
+                  return (
+                    <div
+                      key={notif._id}
+                      className={`flex items-start gap-3 p-4 border-b last:border-0 hover:bg-muted/50 transition-colors ${!notif.isRead ? 'bg-blue-50/50 dark:bg-blue-950/20' : ''}`}
+                    >
+                      {CategoryIcon && (
+                        <CategoryIcon className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
+                      )}
+                      <div className="flex-1 space-y-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className={`text-sm font-medium leading-none ${!notif.isRead ? 'text-foreground' : 'text-muted-foreground'}`}>
+                            {notif.link ? (
+                              <Link href={notif.link} onClick={() => handleNotificationClick(notif)} className="hover:underline">
+                                {title}
+                              </Link>
+                            ) : (
+                              title
+                            )}
+                          </p>
+                          <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                            {formatTime(notif._creationTime)}
+                          </span>
+                        </div>
+                        {message && (
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {message}
+                          </p>
+                        )}
                       </div>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {notif.message}
-                      </p>
+                      {!notif.isRead && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 rounded-full shrink-0"
+                          onClick={(e) => { e.stopPropagation(); handleMarkAsRead(notif._id); }}
+                        >
+                          <Check className="h-3 w-3" />
+                        </Button>
+                      )}
                     </div>
-                    {!notif.isRead && (
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-6 w-6 rounded-full shrink-0"
-                        onClick={(e) => { e.stopPropagation(); handleMarkAsRead(notif._id); }}
-                      >
-                        <Check className="h-3 w-3" />
-                      </Button>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
+
+          {activeOrgId && (
+            <Link
+              href={`/${activeOrgId}/notifications`}
+              onClick={() => setOpen(false)}
+              className="block text-center text-xs font-medium text-primary py-2.5 border-t bg-card hover:bg-muted/50 transition-colors"
+            >
+              {t("NotificationsInbox" as any)}
+            </Link>
+          )}
         </div>
       )}
     </div>

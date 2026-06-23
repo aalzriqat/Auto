@@ -4,6 +4,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { holdVehicleForDeposit, maybeReleaseVehicleHold } from "./utils/depositHelpers";
+import { notifyManagers, getActorName } from "./utils/notifications";
 
 export const create = mutation({
   args: {
@@ -50,6 +51,15 @@ export const create = mutation({
       vehicleId: quote!.vehicleId,
     });
 
+    const actorName = await getActorName(ctx);
+    await notifyManagers(
+      ctx,
+      args.orgId,
+      "deposit.created",
+      { actorName, amount: String(args.amount) },
+      { link: `/${args.orgId}/sales?highlightId=${quote!.vehicleId}` }
+    );
+
     return depositId;
   },
 });
@@ -93,6 +103,15 @@ export const release = mutation({
     }
 
     await maybeReleaseVehicleHold(ctx, deposit!.vehicleId);
+
+    const actorName = await getActorName(ctx);
+    await notifyManagers(
+      ctx,
+      args.orgId,
+      "deposit.released",
+      { actorName, amount: String(deposit!.amount) },
+      { link: `/${args.orgId}/sales?highlightId=${deposit!.vehicleId}` }
+    );
   },
 });
 

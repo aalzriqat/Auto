@@ -10,6 +10,7 @@
 
 import type * as adminAudit from "../adminAudit.js";
 import type * as adminAuth from "../adminAuth.js";
+import type * as adminBroadcasts from "../adminBroadcasts.js";
 import type * as adminData from "../adminData.js";
 import type * as adminImpersonation from "../adminImpersonation.js";
 import type * as adminOrgs from "../adminOrgs.js";
@@ -43,6 +44,7 @@ import type * as liveChat from "../liveChat.js";
 import type * as memberships from "../memberships.js";
 import type * as migrateRoles from "../migrateRoles.js";
 import type * as migrations from "../migrations.js";
+import type * as notificationPreferences from "../notificationPreferences.js";
 import type * as notifications from "../notifications.js";
 import type * as orgCustomFields from "../orgCustomFields.js";
 import type * as orgCustomerStatuses from "../orgCustomerStatuses.js";
@@ -96,6 +98,7 @@ import type * as vehicleEdits from "../vehicleEdits.js";
 import type * as vehicleRequests from "../vehicleRequests.js";
 import type * as vehicles from "../vehicles.js";
 import type * as whatsapp from "../whatsapp.js";
+import type * as whatsappSend from "../whatsappSend.js";
 import type * as wizardDrafts from "../wizardDrafts.js";
 import type * as workOrders from "../workOrders.js";
 
@@ -108,6 +111,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   adminAudit: typeof adminAudit;
   adminAuth: typeof adminAuth;
+  adminBroadcasts: typeof adminBroadcasts;
   adminData: typeof adminData;
   adminImpersonation: typeof adminImpersonation;
   adminOrgs: typeof adminOrgs;
@@ -141,6 +145,7 @@ declare const fullApi: ApiFromModules<{
   memberships: typeof memberships;
   migrateRoles: typeof migrateRoles;
   migrations: typeof migrations;
+  notificationPreferences: typeof notificationPreferences;
   notifications: typeof notifications;
   orgCustomFields: typeof orgCustomFields;
   orgCustomerStatuses: typeof orgCustomerStatuses;
@@ -194,6 +199,7 @@ declare const fullApi: ApiFromModules<{
   vehicleRequests: typeof vehicleRequests;
   vehicles: typeof vehicles;
   whatsapp: typeof whatsapp;
+  whatsappSend: typeof whatsappSend;
   wizardDrafts: typeof wizardDrafts;
   workOrders: typeof workOrders;
 }>;

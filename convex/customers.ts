@@ -211,9 +211,9 @@ export const create = mutation({
     await notifyManagers(
       ctx,
       args.orgId,
-      "New Customer Added",
-      `${actorName} added a new customer: ${args.firstName.trim()} ${args.lastName.trim()}`,
-      `/${args.orgId}/customers?highlightId=${id}`
+      "customer.created",
+      { actorName, customerName: `${args.firstName.trim()} ${args.lastName.trim()}` },
+      { link: `/${args.orgId}/customers?highlightId=${id}` }
     );
 
     return id;
@@ -320,9 +320,9 @@ export const update = mutation({
       await notifyManagers(
         ctx,
         args.orgId,
-        "Customer Updated",
-        `${actorName} updated details for ${customer.firstName} ${customer.lastName}`,
-        `/${args.orgId}/customers?highlightId=${args.customerId}`
+        "customer.updated",
+        { actorName, customerName: `${customer.firstName} ${customer.lastName}` },
+        { link: `/${args.orgId}/customers?highlightId=${args.customerId}` }
       );
     }
   },
@@ -386,8 +386,8 @@ export const softDelete = mutation({
     await notifyManagers(
       ctx,
       args.orgId,
-      "Customer Deleted",
-      `${actorName} deleted customer ${customer.firstName} ${customer.lastName}`
+      "customer.deleted",
+      { actorName, customerName: `${customer.firstName} ${customer.lastName}` }
     );
   },
 });
@@ -742,9 +742,13 @@ export const mergeCustomers = mutation({
     await notifyManagers(
       ctx,
       args.orgId,
-      "Customers Merged",
-      `${actorName} merged "${loser.firstName} ${loser.lastName}" into "${survivor.firstName} ${survivor.lastName}".`,
-      `/${args.orgId}/customers?highlightId=${survivor._id}`
+      "customer.merged",
+      {
+        actorName,
+        loserName: `${loser.firstName} ${loser.lastName}`,
+        survivorName: `${survivor.firstName} ${survivor.lastName}`,
+      },
+      { link: `/${args.orgId}/customers?highlightId=${survivor._id}` }
     );
 
     return { survivorId: survivor._id, reassignedCounts };

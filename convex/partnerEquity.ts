@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { notifyOwner, getActorName } from "./utils/notifications";
 
 export const list = query({
   args: { 
@@ -29,13 +30,20 @@ export const add = mutation({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    return await ctx.db.insert("partnerEquity", {
+    const equityId = await ctx.db.insert("partnerEquity", {
       orgId: args.orgId,
       partnerName: args.partnerName,
       initialCapital: args.initialCapital,
       currentBalance: args.currentBalance,
       notes: args.notes,
     });
+
+    const actorName = await getActorName(ctx);
+    await notifyOwner(ctx, args.orgId, "partnerEquity.changed", { actorName }, {
+      link: `/${args.orgId}/accounting`,
+    });
+
+    return equityId;
   },
 });
 
@@ -63,6 +71,11 @@ export const update = mutation({
     );
 
     await ctx.db.patch(equityId, cleanedUpdates);
+
+    const actorName = await getActorName(ctx);
+    await notifyOwner(ctx, orgId, "partnerEquity.changed", { actorName }, {
+      link: `/${orgId}/accounting`,
+    });
   },
 });
 
@@ -84,6 +97,11 @@ export const remove = mutation({
       isDeleted: true,
       deletedAt: Date.now(),
       deletedBy: identity.subject
+    });
+
+    const actorName = await getActorName(ctx);
+    await notifyOwner(ctx, args.orgId, "partnerEquity.changed", { actorName }, {
+      link: `/${args.orgId}/accounting`,
     });
   },
 });

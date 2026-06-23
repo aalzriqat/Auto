@@ -54,9 +54,9 @@ export const add = mutation({
     await notifyManagers(
       ctx,
       args.orgId,
-      "Guarantor Added",
-      `${actorName} added a guarantor for ${customer.firstName} ${customer.lastName}`,
-      `/${args.orgId}/customers?highlightId=${args.customerId}`
+      "guarantor.added",
+      { actorName, customerName: `${customer.firstName} ${customer.lastName}` },
+      { link: `/${args.orgId}/customers?highlightId=${args.customerId}` }
     );
 
     return id;

@@ -1,4 +1,4 @@
-import { internalMutation, query } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import { requireAuth } from "./utils/tenancy";
 
@@ -26,6 +26,27 @@ export const getUser = query({
     const user = await ctx.db.get(args.userId);
     if (!user) return null;
     return { name: user.name || "Unknown User" };
+  },
+});
+
+/**
+ * Lets the caller set their own server-known locale (so scheduled emails/
+ * WhatsApp messages can be localized — the client toggle in LanguageProvider
+ * otherwise lives only in localStorage) and WhatsApp number for notifications.
+ */
+export const updateMyNotificationProfile = mutation({
+  args: {
+    locale: v.optional(v.union(v.literal("en"), v.literal("ar"))),
+    whatsappPhone: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const user = await requireAuth(ctx);
+    const patch: Record<string, unknown> = {};
+    if (args.locale !== undefined) patch.locale = args.locale;
+    if (args.whatsappPhone !== undefined) patch.whatsappPhone = args.whatsappPhone.trim() || undefined;
+    if (Object.keys(patch).length > 0) {
+      await ctx.db.patch(user._id, patch);
+    }
   },
 });
 

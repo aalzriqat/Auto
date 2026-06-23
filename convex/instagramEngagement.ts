@@ -159,9 +159,9 @@ export const handleIncomingInstagramEvent = internalMutation({
         await notifyManagers(
           ctx,
           orgId,
-          `New ${label} Lead`,
-          `New ${label.toLowerCase()} from ${senderUsername ?? senderInstagramId}.`,
-          `/${orgId}/leads?highlightId=${leadId}`
+          "social.lead_created",
+          { platform: label, senderName: senderUsername ?? senderInstagramId },
+          { link: `/${orgId}/leads?highlightId=${leadId}` }
         );
       }
     }
@@ -190,9 +190,9 @@ export const handleIncomingInstagramEvent = internalMutation({
         await notifyManagers(
           ctx,
           orgId,
-          `Urgent: possible complaint`,
-          `${senderUsername ?? senderInstagramId} may have a complaint: "${text.slice(0, 200)}"`,
-          leadId ? `/${orgId}/leads?highlightId=${leadId}` : `/${orgId}/leads`
+          "social.possible_complaint",
+          { platform: "Instagram", senderName: senderUsername ?? senderInstagramId, excerpt: text.slice(0, 200) },
+          { link: leadId ? `/${orgId}/leads?highlightId=${leadId}` : `/${orgId}/leads` }
         );
       } else if (intent && (intent === "location" || intent === "greeting" || vehicleId)) {
         const vehicle = vehicleId ? await ctx.db.get(vehicleId) : null;

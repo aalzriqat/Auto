@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { notifyManagers, getActorName } from "./utils/notifications";
 
 export const list = query({
   args: {
@@ -66,7 +67,7 @@ export const add = mutation({
       }
     }
 
-    return await ctx.db.insert("transactions", {
+    const transactionId = await ctx.db.insert("transactions", {
       orgId: args.orgId,
       type: args.type,
       amount: args.amount,
@@ -77,6 +78,17 @@ export const add = mutation({
       userId: args.userId,
       expenseId: args.expenseId,
     });
+
+    const actorName = await getActorName(ctx);
+    await notifyManagers(
+      ctx,
+      args.orgId,
+      "transaction.recorded",
+      { actorName, amount: String(args.amount) },
+      { link: `/${args.orgId}/accounting` }
+    );
+
+    return transactionId;
   },
 });
 
@@ -127,6 +139,15 @@ export const update = mutation({
     );
 
     await ctx.db.patch(transactionId, cleanedUpdates);
+
+    const actorName = await getActorName(ctx);
+    await notifyManagers(
+      ctx,
+      orgId,
+      "transaction.updated",
+      { actorName },
+      { link: `/${orgId}/accounting` }
+    );
   },
 });
 
@@ -149,5 +170,14 @@ export const remove = mutation({
       deletedAt: Date.now(),
       deletedBy: identity.subject
     });
+
+    const actorName = await getActorName(ctx);
+    await notifyManagers(
+      ctx,
+      args.orgId,
+      "transaction.removed",
+      { actorName },
+      { link: `/${args.orgId}/accounting` }
+    );
   },
 });

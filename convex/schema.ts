@@ -8,6 +8,13 @@ export default defineSchema({
     name: v.optional(v.string()),
     imageUrl: v.optional(v.string()),
     disabled: v.optional(v.boolean()),
+    // Server-known language for email/WhatsApp notifications — the client's
+    // locale toggle (LanguageProvider) lives only in localStorage, so this
+    // mirrors it server-side whenever an authenticated user changes it.
+    locale: v.optional(v.union(v.literal("en"), v.literal("ar"))),
+    // Staff member's own WhatsApp number for receiving notifications —
+    // distinct from customers.whatsapp (a customer's contact number).
+    whatsappPhone: v.optional(v.string()),
   }).index("by_clerkId", ["clerkId"])
     .index("by_email", ["email"]),
 
@@ -334,14 +341,48 @@ export default defineSchema({
   notifications: defineTable({
     orgId: v.id("organizations"),
     userId: v.id("users"),
-    title: v.string(),
-    message: v.string(),
+    // Legacy plain-text fields — kept for old rows and for admin-authored
+    // broadcasts (type: "system.announcement"), which skip the registry
+    // since a super admin types free-form text rather than picking a key.
+    title: v.optional(v.string()),
+    message: v.optional(v.string()),
+    // New typed path: a key into lib/notifications/types.ts, rendered
+    // bilingually via lib/notifications/render.ts using `data`.
+    type: v.optional(v.string()),
+    category: v.optional(v.string()),
+    priority: v.optional(
+      v.union(v.literal("urgent"), v.literal("normal"), v.literal("low"))
+    ),
+    data: v.optional(v.any()),
     isRead: v.boolean(),
+    isArchived: v.optional(v.boolean()),
+    archivedAt: v.optional(v.number()),
     link: v.optional(v.string()), // Optional URL to navigate to when clicked
     relatedTaskId: v.optional(v.id("tasks")),
   })
     .index("by_user", ["userId"])
-    .index("by_org_user", ["orgId", "userId"]),
+    .index("by_org_user", ["orgId", "userId"])
+    // Unread badge/count without a full-table filter scan.
+    .index("by_org_user_read", ["orgId", "userId", "isRead"])
+    .index("by_org_user_category", ["orgId", "userId", "category"]),
+
+  notificationPreferences: defineTable({
+    orgId: v.id("organizations"),
+    userId: v.id("users"),
+    category: v.string(),
+    emailEnabled: v.boolean(),
+    whatsappEnabled: v.boolean(),
+  }).index("by_org_user_category", ["orgId", "userId", "category"]),
+
+  notificationBroadcasts: defineTable({
+    orgId: v.optional(v.id("organizations")), // omitted = platform-wide
+    title: v.string(),
+    message: v.string(),
+    link: v.optional(v.string()),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    recipientCount: v.number(),
+  }).index("by_createdAt", ["createdAt"]),
 
   test_drives: defineTable({
     orgId: v.id("organizations"),
@@ -946,7 +987,9 @@ export default defineSchema({
       v.literal("instagram-oauth"),
       v.literal("instagram"),
       v.literal("facebook-oauth"),
-      v.literal("facebook")
+      v.literal("facebook"),
+      v.literal("notification-email"),
+      v.literal("notification-whatsapp")
     ),
     status: v.union(v.literal("success"), v.literal("error")),
     summary: v.string(),

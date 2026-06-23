@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { advanceLeadStageForCustomerVehicle } from "./utils/leadStageHelpers";
+import { notifyUser, getActorName } from "./utils/notifications";
 
 export const list = query({
   args: {
@@ -87,6 +88,16 @@ export const create = mutation({
       targetStage: "TEST_DRIVE",
     });
 
+    const actorName = await getActorName(ctx);
+    await notifyUser(
+      ctx,
+      args.orgId,
+      args.salespersonId,
+      "test_drive.scheduled",
+      { actorName, vehicleLabel: `${vehicle.year} ${vehicle.make} ${vehicle.model}` },
+      { link: `/${args.orgId}/vehicles?highlightId=${args.vehicleId}` }
+    );
+
     return testDriveId;
   },
 });
@@ -108,6 +119,16 @@ export const complete = mutation({
       endTime: args.endTime,
       notes: args.notes !== undefined ? args.notes : td.notes,
     });
+
+    const vehicle = await ctx.db.get(td.vehicleId);
+    await notifyUser(
+      ctx,
+      args.orgId,
+      td.salespersonId,
+      "test_drive.completed",
+      { vehicleLabel: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "the vehicle" },
+      { link: `/${args.orgId}/vehicles?highlightId=${td.vehicleId}` }
+    );
   },
 });
 
