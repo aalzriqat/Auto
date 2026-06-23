@@ -1,5 +1,6 @@
 import { v } from "convex/values";
 import { query } from "./_generated/server";
+import { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { validateVinChecksum } from "../lib/vinHelpers";
 
@@ -209,6 +210,24 @@ export const stats = query({
 
     const teamTasks = Object.values(memberTaskStats).sort((a, b) => (b.pending + b.overdue) - (a.pending + a.overdue));
 
+    // 7. Top performer — ranked by revenue from completed sales in this period
+    // (not the task backlog leaderboard above, which tracks a different thing).
+    const revenueBySalesperson: Record<string, { revenue: number; deals: number }> = {};
+    for (const sale of completedSales) {
+      const entry = revenueBySalesperson[sale.salespersonId] ?? { revenue: 0, deals: 0 };
+      entry.revenue += sale.salePrice;
+      entry.deals += 1;
+      revenueBySalesperson[sale.salespersonId] = entry;
+    }
+
+    let topPerformer: { name: string; revenue: number; deals: number } | null = null;
+    const topEntry = Object.entries(revenueBySalesperson).sort((a, b) => b[1].revenue - a[1].revenue)[0];
+    if (topEntry) {
+      const [salespersonId, { revenue, deals }] = topEntry;
+      const salesperson = await ctx.db.get(salespersonId as Id<"users">);
+      topPerformer = { name: salesperson?.name || salesperson?.email || "Unknown", revenue, deals };
+    }
+
     return {
       totalVehicles,
       availableVehicles,
@@ -224,6 +243,7 @@ export const stats = query({
         overdue: overdueTasks,
       },
       teamTasks,
+      topPerformer,
     };
   },
 });
