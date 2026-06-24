@@ -26,6 +26,7 @@ import type * as crons from "../crons.js";
 import type * as customers from "../customers.js";
 import type * as dashboard from "../dashboard.js";
 import type * as deposits from "../deposits.js";
+import type * as directMessages from "../directMessages.js";
 import type * as documents from "../documents.js";
 import type * as email from "../email.js";
 import type * as expenses from "../expenses.js";
@@ -129,6 +130,7 @@ declare const fullApi: ApiFromModules<{
   customers: typeof customers;
   dashboard: typeof dashboard;
   deposits: typeof deposits;
+  directMessages: typeof directMessages;
   documents: typeof documents;
   email: typeof email;
   expenses: typeof expenses;
