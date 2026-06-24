@@ -62,7 +62,7 @@ function buildRowPostUrl(row: ConversationRow): string | null {
 export default function SocialInboxPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const { hasPermission } = usePermissions(activeOrgId ?? undefined);
+  const { hasPermission } = usePermissions();
   const isManager = hasPermission(PERMISSIONS.APPROVE_REQUESTS);
 
   // Filters
