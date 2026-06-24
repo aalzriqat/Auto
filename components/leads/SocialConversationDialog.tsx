@@ -1,11 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useAction } from "convex/react";
+import { useQuery, useAction, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { usePermissions } from "@/hooks/use-permissions";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 import { toast } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -15,7 +17,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Send, Loader2, MessageCircle, Car } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Send, Loader2, MessageCircle, Car, ExternalLink } from "lucide-react";
 
 interface SocialConversationDialogProps {
   customerId: Id<"customers"> | null;
@@ -23,23 +32,52 @@ interface SocialConversationDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
+function buildPostUrl(
+  platform: "instagram" | "facebook",
+  kind: "comment" | "dm",
+  postId: string | undefined | null,
+  senderHandle: string | undefined | null
+): string | null {
+  if (kind === "dm") {
+    return platform === "facebook"
+      ? "https://www.facebook.com/messages/"
+      : "https://www.instagram.com/direct/inbox/";
+  }
+  if (platform === "facebook" && postId) {
+    return `https://www.facebook.com/${postId}`;
+  }
+  if (platform === "instagram" && senderHandle) {
+    return `https://www.instagram.com/${senderHandle}/`;
+  }
+  return null;
+}
+
 export function SocialConversationDialog({ customerId, open, onOpenChange }: SocialConversationDialogProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  const { hasPermission } = usePermissions();
+  const isManager = hasPermission(PERMISSIONS.APPROVE_REQUESTS);
 
   const events = useQuery(
     api.socialInbox.listEventsForCustomer,
     activeOrgId && customerId ? { orgId: activeOrgId, customerId } : "skip"
   );
+  const vehicles = useQuery(
+    api.vehicles.listAll,
+    activeOrgId && isManager ? { orgId: activeOrgId } : "skip"
+  );
+
   const replyToInstagramComment = useAction(api.instagramEngagement.replyToInstagramComment);
   const sendInstagramDirectMessage = useAction(api.instagramEngagement.sendInstagramDirectMessage);
   const replyToFacebookComment = useAction(api.facebookEngagement.replyToFacebookComment);
   const sendFacebookDirectMessage = useAction(api.facebookEngagement.sendFacebookDirectMessage);
+  const setConversationVehicle = useMutation(api.socialInbox.setConversationVehicle);
 
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
   const [busyEventId, setBusyEventId] = useState<string | null>(null);
   const [dmDraft, setDmDraft] = useState("");
   const [sendingDm, setSendingDm] = useState(false);
+  const [linkingVehicle, setLinkingVehicle] = useState(false);
 
   const handleReply = async (event: { _id: string; platform: "instagram" | "facebook" }) => {
     if (!activeOrgId) return;
@@ -91,7 +129,26 @@ export function SocialConversationDialog({ customerId, open, onOpenChange }: Soc
     }
   };
 
+  const handleLinkVehicle = async (vehicleId: string) => {
+    if (!activeOrgId || !customerId) return;
+    setLinkingVehicle(true);
+    try {
+      await setConversationVehicle({
+        orgId: activeOrgId,
+        customerId,
+        vehicleId: vehicleId as Id<"vehicles">,
+      });
+      toast.success(t("VehicleLinked" as any));
+    } catch (error: any) {
+      toast.error(error.message || t("SomethingWentWrong" as any));
+    } finally {
+      setLinkingVehicle(false);
+    }
+  };
+
   const hasDmEvent = Boolean(dmEvent);
+  const conversationVehicleId = events?.find((e) => e.vehicleId)?.vehicleId;
+  const anyUnlinked = events?.some((e) => !e.vehicleId);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -102,6 +159,29 @@ export function SocialConversationDialog({ customerId, open, onOpenChange }: Soc
             {t("Conversation" as any)}
           </DialogTitle>
         </DialogHeader>
+
+        {/* Manager-only: vehicle linker shown when conversation has unlinked events */}
+        {isManager && anyUnlinked && vehicles && (
+          <div className="flex items-center gap-2 p-2.5 rounded-lg bg-muted/60 border border-dashed">
+            <Car className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            <span className="text-xs text-muted-foreground flex-1">
+              {t("LinkVehiclePrompt" as any)}
+            </span>
+            <Select onValueChange={handleLinkVehicle} disabled={linkingVehicle} value={conversationVehicleId ?? ""}>
+              <SelectTrigger className="h-7 text-xs w-44 shrink-0">
+                <SelectValue placeholder={t("SelectVehicle" as any)} />
+              </SelectTrigger>
+              <SelectContent>
+                {vehicles.map((v) => (
+                  <SelectItem key={v._id} value={v._id}>
+                    {v.year} {v.make} {v.model}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {linkingVehicle && <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />}
+          </div>
+        )}
 
         <div className="space-y-3">
           {events === undefined && (
@@ -116,6 +196,7 @@ export function SocialConversationDialog({ customerId, open, onOpenChange }: Soc
             const replied = event.autoRepliedAt ? "auto" : event.manualRepliedAt ? "manual" : null;
             const showVehicleLabel =
               event.vehicleSummary && event.vehicleSummary !== events[index - 1]?.vehicleSummary;
+            const postUrl = buildPostUrl(event.platform, event.kind, event.postId, event.senderHandle);
             return (
               <div key={event._id} className="space-y-1.5">
                 {showVehicleLabel && (
@@ -128,11 +209,23 @@ export function SocialConversationDialog({ customerId, open, onOpenChange }: Soc
                 {/* Customer bubble (start-aligned) */}
                 <div className="flex justify-start">
                   <div className="max-w-[85%] bg-muted rounded-2xl rounded-bl-sm px-3 py-2 space-y-1">
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 flex-wrap">
                       <span className="text-xs font-semibold">{event.senderDisplayName}</span>
                       <Badge variant="secondary" className="text-[9px] py-0 px-1.5">
                         {event.kind === "dm" ? t("DM" as any) : t("Comment" as any)}
                       </Badge>
+                      {postUrl && (
+                        <a
+                          href={postUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-0.5 text-[9px] text-muted-foreground hover:text-foreground transition-colors"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <ExternalLink className="h-2.5 w-2.5" />
+                          {event.kind === "dm" ? t("OpenInbox" as any) : t("ViewPost" as any)}
+                        </a>
+                      )}
                     </div>
                     <p className="text-sm">{event.text}</p>
                     <p className="text-[10px] text-muted-foreground">
@@ -141,7 +234,7 @@ export function SocialConversationDialog({ customerId, open, onOpenChange }: Soc
                   </div>
                 </div>
 
-                {/* Our reply bubble (end-aligned) — visually distinct so staff can tell their own replies apart */}
+                {/* Our reply bubble (end-aligned) */}
                 {replied && (
                   <div className="flex justify-end">
                     <div className="max-w-[85%] bg-primary text-primary-foreground rounded-2xl rounded-br-sm px-3 py-2 space-y-1">
@@ -156,7 +249,7 @@ export function SocialConversationDialog({ customerId, open, onOpenChange }: Soc
                   </div>
                 )}
 
-                {/* Inline reply composer — only when this comment hasn't been replied to yet */}
+                {/* Inline reply composer */}
                 {!replied && event.kind === "comment" && (
                   <div className="flex justify-start">
                     <div className="max-w-[85%] w-full flex items-center gap-1.5">

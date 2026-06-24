@@ -9,6 +9,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { postCommentReply, postDirectMessage, INSTAGRAM_GRAPH_VERSION } from "./utils/instagramApi";
 import { matchIntent, detectLocale } from "./utils/smartReplyIntent";
 import { buildSmartReplyText } from "./utils/smartReplyBuilder";
+import { matchVehicleFromText } from "./utils/vehicleTextMatch";
 
 const AUTO_REPLY_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 1 reply per sender per 24h
 // Placeholder name assigned when a customer is created without a username —
@@ -75,6 +76,7 @@ export const handleIncomingInstagramEvent = internalMutation({
     leadId?: Id<"leads">;
     customerId?: Id<"customers">;
     needsProfileEnrichment: boolean;
+    vehicleId?: Id<"vehicles">;
   } | null> => {
     const { orgId, kind, externalId, senderInstagramId, senderUsername, text, mediaId } = args;
 
@@ -246,12 +248,13 @@ export const handleIncomingInstagramEvent = internalMutation({
       leadId,
       vehicleId,
       text,
+      postId: mediaId,
       autoRepliedAt: shouldAutoReply ? Date.now() : undefined,
       autoReplyText: shouldAutoReply ? replyText : undefined,
       autoReplySource: shouldAutoReply ? (smartReplySource ? "smart" : "canned") : undefined,
     });
 
-    return { shouldAutoReply, replyText, smartReplyVisibility, leadId, customerId: customer._id, needsProfileEnrichment };
+    return { shouldAutoReply, replyText, smartReplyVisibility, leadId, customerId: customer._id, needsProfileEnrichment, vehicleId };
   },
 });
 
@@ -631,5 +634,78 @@ export const sendInstagramDirectMessage = action({
       manualReplyText: args.message,
       manualRepliedByUserId: userId,
     });
+  },
+});
+
+// ─── Post-content vehicle extraction ──────────────────────────────────────────
+
+/**
+ * Fetches the caption of an Instagram media post and tries to match it against
+ * the org's vehicle inventory. Called after a comment event is stored when no
+ * vehicle was found via the socialPosts table (i.e. the post wasn't published
+ * through AutoFlow). Best-effort — silently no-ops on API errors.
+ */
+export const enrichEventVehicleFromPost = internalAction({
+  args: {
+    orgId: v.id("organizations"),
+    externalId: v.string(),
+    mediaId: v.string(),
+  },
+  handler: async (ctx, args): Promise<void> => {
+    const token = await ctx.runQuery(internal.instagramEngagement.getTokenForOrg, { orgId: args.orgId });
+    if (!token) return;
+
+    const url = new URL(`https://graph.instagram.com/${INSTAGRAM_GRAPH_VERSION}/${args.mediaId}`);
+    url.searchParams.set("fields", "caption");
+    url.searchParams.set("access_token", token.instagramAccessToken);
+    const res = await fetch(url.toString());
+    if (!res.ok) return;
+
+    const json = await res.json();
+    const caption: string | undefined = json.caption;
+    if (!caption) return;
+
+    const vehicles = await ctx.runQuery(internal.instagramEngagement.getOrgVehicles, { orgId: args.orgId });
+    const matchedId = matchVehicleFromText(caption, vehicles);
+    if (!matchedId) return;
+
+    await ctx.runMutation(internal.instagramEngagement.patchEventVehicle, {
+      orgId: args.orgId,
+      externalId: args.externalId,
+      vehicleId: matchedId,
+    });
+  },
+});
+
+export const getOrgVehicles = internalQuery({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("vehicles")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+  },
+});
+
+export const patchEventVehicle = internalMutation({
+  args: {
+    orgId: v.id("organizations"),
+    externalId: v.string(),
+    vehicleId: v.id("vehicles"),
+  },
+  handler: async (ctx, args) => {
+    const event = await ctx.db
+      .query("instagramEvents")
+      .withIndex("by_org_external", (q) => q.eq("orgId", args.orgId).eq("externalId", args.externalId))
+      .unique();
+    if (!event || event.vehicleId) return; // already has a vehicle — don't overwrite
+    await ctx.db.patch(event._id, { vehicleId: args.vehicleId });
+    // Also update the linked lead if it has no vehicle yet
+    if (event.leadId) {
+      const lead = await ctx.db.get(event.leadId);
+      if (lead && !lead.vehicleId) {
+        await ctx.db.patch(event.leadId, { vehicleId: args.vehicleId });
+      }
+    }
   },
 });

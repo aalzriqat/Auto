@@ -661,6 +661,16 @@ http.route({
               senderInstagramId: String(value.from?.id ?? ""),
             });
           }
+          // If no vehicle was matched via socialPosts, try extracting one from
+          // the post caption (covers posts not published through AutoFlow).
+          const mediaId = value.media?.id ? String(value.media.id) : undefined;
+          if (result && !result.vehicleId && mediaId) {
+            await ctx.runAction(internal.instagramEngagement.enrichEventVehicleFromPost, {
+              orgId,
+              externalId: String(value.id),
+              mediaId,
+            });
+          }
           await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
             source: "instagram",
             status: "success",
@@ -997,6 +1007,16 @@ http.route({
                 message: result.replyText,
               });
             }
+          }
+          // If no vehicle was matched via socialPosts, try extracting one from
+          // the post message (covers posts not published through AutoFlow).
+          const fbPostId = value.post_id ? String(value.post_id) : undefined;
+          if (result && !result.vehicleId && fbPostId) {
+            await ctx.runAction(internal.facebookEngagement.enrichEventVehicleFromPost, {
+              orgId,
+              externalId: String(value.comment_id),
+              postId: fbPostId,
+            });
           }
           await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
             source: "facebook",

@@ -22,6 +22,19 @@ export const socialInboxEn = {
   MoreVehicles: "more",
   AutoReply: "Auto-reply",
   You: "You",
+  // Post links
+  ViewPost: "View post",
+  OpenInbox: "Open inbox",
+  // Vehicle linking
+  LinkVehiclePrompt: "No vehicle linked — assign one:",
+  SelectVehicle: "Select vehicle",
+  VehicleLinked: "Vehicle linked to conversation.",
+  // Analytics
+  PlatformBreakdown: "Platform Breakdown",
+  UniqueContacts: "Unique contacts",
+  TotalMessages: "Total messages",
+  Comments: "Comments",
+  DirectMessages: "Direct messages",
 };
 
 export const socialInboxAr = {
@@ -48,4 +61,17 @@ export const socialInboxAr = {
   MoreVehicles: "أخرى",
   AutoReply: "رد تلقائي",
   You: "أنت",
+  // Post links
+  ViewPost: "عرض المنشور",
+  OpenInbox: "فتح صندوق الوارد",
+  // Vehicle linking
+  LinkVehiclePrompt: "لا توجد مركبة مرتبطة — قم بتعيين واحدة:",
+  SelectVehicle: "اختر مركبة",
+  VehicleLinked: "تم ربط المركبة بالمحادثة.",
+  // Analytics
+  PlatformBreakdown: "توزيع المنصات",
+  UniqueContacts: "جهات اتصال فريدة",
+  TotalMessages: "إجمالي الرسائل",
+  Comments: "التعليقات",
+  DirectMessages: "الرسائل المباشرة",
 };

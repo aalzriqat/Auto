@@ -5,9 +5,10 @@ import { Doc, Id } from "./_generated/dataModel";
 import { notifyManagers } from "./utils/notifications";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
-import { postCommentReply, postDirectMessage } from "./utils/facebookApi";
+import { postCommentReply, postDirectMessage, FACEBOOK_GRAPH_VERSION } from "./utils/facebookApi";
 import { matchIntent, detectLocale } from "./utils/smartReplyIntent";
 import { buildSmartReplyText } from "./utils/smartReplyBuilder";
+import { matchVehicleFromText } from "./utils/vehicleTextMatch";
 
 const AUTO_REPLY_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 1 reply per sender per 24h
 
@@ -59,6 +60,7 @@ export const handleIncomingFacebookEvent = internalMutation({
     smartReplyVisibility?: "public" | "dm";
     leadId?: Id<"leads">;
     customerId?: Id<"customers">;
+    vehicleId?: Id<"vehicles">;
   } | null> => {
     const { orgId, kind, externalId, senderFacebookId, senderName, text, mediaId } = args;
 
@@ -223,12 +225,13 @@ export const handleIncomingFacebookEvent = internalMutation({
       leadId,
       vehicleId,
       text,
+      postId: mediaId,
       autoRepliedAt: shouldAutoReply ? Date.now() : undefined,
       autoReplyText: shouldAutoReply ? replyText : undefined,
       autoReplySource: shouldAutoReply ? (smartReplySource ? "smart" : "canned") : undefined,
     });
 
-    return { shouldAutoReply, replyText, smartReplyVisibility, leadId, customerId: customer._id };
+    return { shouldAutoReply, replyText, smartReplyVisibility, leadId, customerId: customer._id, vehicleId };
   },
 });
 
@@ -419,5 +422,78 @@ export const sendFacebookDirectMessage = action({
       manualReplyText: args.message,
       manualRepliedByUserId: userId,
     });
+  },
+});
+
+// ─── Post-content vehicle extraction ──────────────────────────────────────────
+
+/**
+ * Fetches the message/caption of a Facebook post and tries to match it against
+ * the org's vehicle inventory. Called after a comment event is stored when no
+ * vehicle was found via the socialPosts table (i.e. the post wasn't published
+ * through AutoFlow). Best-effort — silently no-ops on API errors.
+ */
+export const enrichEventVehicleFromPost = internalAction({
+  args: {
+    orgId: v.id("organizations"),
+    externalId: v.string(),
+    postId: v.string(),
+  },
+  handler: async (ctx, args): Promise<void> => {
+    const token = await ctx.runQuery(internal.facebookEngagement.getTokenForOrg, { orgId: args.orgId });
+    if (!token) return;
+
+    const url = new URL(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${args.postId}`);
+    url.searchParams.set("fields", "message");
+    url.searchParams.set("access_token", token.facebookPageAccessToken);
+    const res = await fetch(url.toString());
+    if (!res.ok) return;
+
+    const json = await res.json();
+    const message: string | undefined = json.message;
+    if (!message) return;
+
+    const vehicles = await ctx.runQuery(internal.facebookEngagement.getOrgVehicles, { orgId: args.orgId });
+    const matchedId = matchVehicleFromText(message, vehicles);
+    if (!matchedId) return;
+
+    await ctx.runMutation(internal.facebookEngagement.patchEventVehicle, {
+      orgId: args.orgId,
+      externalId: args.externalId,
+      vehicleId: matchedId,
+    });
+  },
+});
+
+export const getOrgVehicles = internalQuery({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("vehicles")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+  },
+});
+
+export const patchEventVehicle = internalMutation({
+  args: {
+    orgId: v.id("organizations"),
+    externalId: v.string(),
+    vehicleId: v.id("vehicles"),
+  },
+  handler: async (ctx, args) => {
+    const event = await ctx.db
+      .query("facebookEvents")
+      .withIndex("by_org_external", (q) => q.eq("orgId", args.orgId).eq("externalId", args.externalId))
+      .unique();
+    if (!event || event.vehicleId) return; // already has a vehicle — don't overwrite
+    await ctx.db.patch(event._id, { vehicleId: args.vehicleId });
+    // Also update the linked lead if it has no vehicle yet
+    if (event.leadId) {
+      const lead = await ctx.db.get(event.leadId);
+      if (lead && !lead.vehicleId) {
+        await ctx.db.patch(event.leadId, { vehicleId: args.vehicleId });
+      }
+    }
   },
 });
