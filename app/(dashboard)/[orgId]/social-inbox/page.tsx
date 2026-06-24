@@ -47,13 +47,21 @@ type ConversationRow = {
   leadStage: string | null;
 };
 
-function buildRowPostUrl(row: ConversationRow): string | null {
+function buildRowLink(row: ConversationRow): { url: string; label: "post" | "inbox" } | null {
   if (row.latestKind === "comment") {
     if (row.platform === "facebook" && row.latestPostId) {
-      return `https://www.facebook.com/${row.latestPostId}`;
+      return { url: `https://www.facebook.com/${row.latestPostId}`, label: "post" };
     }
     if (row.platform === "instagram" && row.latestSenderHandle) {
-      return `https://www.instagram.com/${row.latestSenderHandle}/`;
+      return { url: `https://www.instagram.com/${row.latestSenderHandle}/`, label: "post" };
+    }
+  }
+  if (row.latestKind === "dm") {
+    if (row.platform === "instagram" && row.latestSenderHandle) {
+      return { url: `https://ig.me/m/${row.latestSenderHandle}`, label: "inbox" };
+    }
+    if (row.platform === "facebook") {
+      return { url: `https://www.facebook.com/messages/`, label: "inbox" };
     }
   }
   return null;
@@ -281,7 +289,7 @@ export default function SocialInboxPage() {
               disabled={resyncing}
             >
               <RefreshCw className={`h-3 w-3 me-1 ${resyncing ? "animate-spin" : ""}`} />
-              {t("ResyncPosts" as any)}
+              {t("ResyncPostsDMs" as any)}
             </Button>
           )}
         </div>
@@ -292,7 +300,7 @@ export default function SocialInboxPage() {
             <p className="text-center py-12 text-muted-foreground">{t("NoSocialEvents" as any)}</p>
           ) : (
             (conversations as ConversationRow[]).map((conversation) => {
-              const postUrl = buildRowPostUrl(conversation);
+              const rowLink = buildRowLink(conversation);
               return (
                 <div
                   key={conversation.customerId}
@@ -303,21 +311,24 @@ export default function SocialInboxPage() {
                     <p className="font-semibold text-sm truncate flex items-center gap-1.5">
                       <PlatformIcon platform={conversation.platform} />
                       {conversation.senderDisplayName}
-                      {postUrl && (
+                    </p>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {rowLink && (
                         <a
-                          href={postUrl}
+                          href={rowLink.url}
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-muted-foreground hover:text-foreground"
+                          className="inline-flex items-center gap-1 text-[10px] text-primary border border-primary/30 rounded px-1.5 py-0.5 hover:bg-primary/10"
                           onClick={(e) => e.stopPropagation()}
                         >
-                          <ExternalLink className="h-3 w-3" />
+                          <ExternalLink className="h-2.5 w-2.5" />
+                          {rowLink.label === "post" ? t("ViewPost" as any) : t("OpenInbox" as any)}
                         </a>
                       )}
-                    </p>
-                    <Badge variant="secondary" className="text-[10px] shrink-0">
-                      {conversation.eventCount} {t("Messages" as any)}
-                    </Badge>
+                      <Badge variant="secondary" className="text-[10px]">
+                        {conversation.eventCount} {t("Messages" as any)}
+                      </Badge>
+                    </div>
                   </div>
                   {vehicleLabel(conversation) && (
                     <p className="text-xs text-muted-foreground flex items-center gap-1">
@@ -348,6 +359,7 @@ export default function SocialInboxPage() {
             <TableHeader>
               <TableRow>
                 <TableHead>{t("Sender" as any)}</TableHead>
+                <TableHead className="w-[110px]">{t("LinkColumn" as any)}</TableHead>
                 <TableHead>{t("Messages" as any)}</TableHead>
                 <TableHead>{t("Vehicle" as any) || "Vehicle"}</TableHead>
                 <TableHead>{t("Notes" as any) || "Text"}</TableHead>
@@ -358,35 +370,40 @@ export default function SocialInboxPage() {
             <TableBody>
               {!conversations || conversations.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center py-12 text-muted-foreground">
+                  <TableCell colSpan={7} className="text-center py-12 text-muted-foreground">
                     {t("NoSocialEvents" as any)}
                   </TableCell>
                 </TableRow>
               ) : (
                 (conversations as ConversationRow[]).map((conversation) => {
-                  const postUrl = buildRowPostUrl(conversation);
+                  const rowLink = buildRowLink(conversation);
                   return (
                     <TableRow
                       key={conversation.customerId}
-                      className="cursor-pointer group"
+                      className="cursor-pointer"
                       onClick={() => setConversationCustomerId(conversation.customerId)}
                     >
                       <TableCell className="py-4 px-6 font-medium">
                         <span className="flex items-center gap-1.5">
                           <PlatformIcon platform={conversation.platform} />
                           {conversation.senderDisplayName}
-                          {postUrl && (
-                            <a
-                              href={postUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-muted-foreground hover:text-foreground opacity-0 group-hover:opacity-100 transition-opacity"
-                              onClick={(e) => e.stopPropagation()}
-                            >
-                              <ExternalLink className="h-3 w-3" />
-                            </a>
-                          )}
                         </span>
+                      </TableCell>
+                      <TableCell className="py-4 px-6">
+                        {rowLink ? (
+                          <a
+                            href={rowLink.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 text-xs font-medium text-primary border border-primary/30 rounded-md px-2 py-1 hover:bg-primary/10 transition-colors"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                            {rowLink.label === "post" ? t("ViewPost" as any) : t("OpenInbox" as any)}
+                          </a>
+                        ) : (
+                          <span className="text-muted-foreground/40">—</span>
+                        )}
                       </TableCell>
                       <TableCell className="py-4 px-6">
                         <Badge variant="secondary">{conversation.eventCount} {t("Messages" as any)}</Badge>

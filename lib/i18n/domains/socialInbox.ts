@@ -44,8 +44,11 @@ export const socialInboxEn = {
   FilterWithVehicle: "Linked",
   FilterWithoutVehicle: "Unlinked",
   // Resync
-  ResyncPosts: "Resync posts",
+  ResyncPosts: "Resync posts & DMs",
+  ResyncPostsDMs: "Resync posts & DMs",
   ResyncSuccess: "Sync complete.",
+  // Table columns
+  LinkColumn: "Link",
 };
 
 export const socialInboxAr = {
@@ -94,6 +97,9 @@ export const socialInboxAr = {
   FilterWithVehicle: "مرتبطة",
   FilterWithoutVehicle: "غير مرتبطة",
   // Resync
-  ResyncPosts: "مزامنة المنشورات",
+  ResyncPosts: "مزامنة المنشورات والرسائل",
+  ResyncPostsDMs: "مزامنة المنشورات والرسائل",
   ResyncSuccess: "اكتملت المزامنة.",
+  // Table columns
+  LinkColumn: "رابط",
 };
