@@ -35,6 +35,17 @@ export const socialInboxEn = {
   TotalMessages: "Total messages",
   Comments: "Comments",
   DirectMessages: "Direct messages",
+  // Filters
+  FilterPlatform: "Platform",
+  FilterType: "Type",
+  FilterVehicle: "Vehicle",
+  FilterStatus: "Status",
+  FilterAll: "All",
+  FilterWithVehicle: "Linked",
+  FilterWithoutVehicle: "Unlinked",
+  // Resync
+  ResyncPosts: "Resync posts",
+  ResyncSuccess: "Sync complete.",
 };
 
 export const socialInboxAr = {
@@ -74,4 +85,15 @@ export const socialInboxAr = {
   TotalMessages: "إجمالي الرسائل",
   Comments: "التعليقات",
   DirectMessages: "الرسائل المباشرة",
+  // Filters
+  FilterPlatform: "المنصة",
+  FilterType: "النوع",
+  FilterVehicle: "المركبة",
+  FilterStatus: "الحالة",
+  FilterAll: "الكل",
+  FilterWithVehicle: "مرتبطة",
+  FilterWithoutVehicle: "غير مرتبطة",
+  // Resync
+  ResyncPosts: "مزامنة المنشورات",
+  ResyncSuccess: "اكتملت المزامنة.",
 };

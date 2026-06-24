@@ -94,9 +94,22 @@ function resolveSenderDisplayName(event: NormalizedEvent, customer: Doc<"custome
  * rather than `leadId`: lead creation is independently toggleable per
  * platform/event-kind (see `instagramLeadFromCommentsEnabled` etc.), so a
  * conversation may have no lead at all and still needs to show up here.
+ *
+ * Optional filters (all server-side, applied after grouping):
+ *   platform   — restrict to conversations that have ANY event on this platform
+ *   kind       — restrict to conversations that have ANY event of this kind
+ *   hasVehicle — true = at least one linked vehicle; false = none
+ *   needsReply — true = has at least one unanswered event; false = all answered
  */
 export const listConversations = query({
-  args: { orgId: v.id("organizations"), paginationOpts: paginationOptsValidator },
+  args: {
+    orgId: v.id("organizations"),
+    paginationOpts: paginationOptsValidator,
+    platform: v.optional(v.union(v.literal("instagram"), v.literal("facebook"))),
+    kind: v.optional(v.union(v.literal("comment"), v.literal("dm"))),
+    hasVehicle: v.optional(v.boolean()),
+    needsReply: v.optional(v.boolean()),
+  },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
 
@@ -112,28 +125,58 @@ export const listConversations = query({
     ]);
     const allEvents = [...igEvents.map(normalizeInstagramEvent), ...fbEvents.map(normalizeFacebookEvent)];
 
-    const grouped = new Map<Id<"customers">, NormalizedEvent[]>();
+    // Group by customer, tracking cross-platform/kind membership for filters.
+    const grouped = new Map<
+      Id<"customers">,
+      { events: NormalizedEvent[]; platforms: Set<"instagram" | "facebook">; hasComment: boolean; hasDm: boolean }
+    >();
     for (const ev of allEvents) {
       if (!ev.customerId) continue;
-      const bucket = grouped.get(ev.customerId);
-      if (bucket) bucket.push(ev);
-      else grouped.set(ev.customerId, [ev]);
+      const existing = grouped.get(ev.customerId);
+      if (existing) {
+        existing.events.push(ev);
+        existing.platforms.add(ev.platform);
+        if (ev.kind === "comment") existing.hasComment = true;
+        if (ev.kind === "dm") existing.hasDm = true;
+      } else {
+        grouped.set(ev.customerId, {
+          events: [ev],
+          platforms: new Set([ev.platform]),
+          hasComment: ev.kind === "comment",
+          hasDm: ev.kind === "dm",
+        });
+      }
     }
 
-    const conversations = Array.from(grouped.entries()).map(([customerId, evs]) => {
-      const latest = evs.reduce((a, b) => (b._creationTime > a._creationTime ? b : a));
-      const vehicleIds = new Set(evs.filter((e) => e.vehicleId).map((e) => e.vehicleId as Id<"vehicles">));
-      const leadId = [...evs].reverse().find((e) => e.leadId)?.leadId;
+    let conversations = Array.from(grouped.entries()).map(([customerId, g]) => {
+      const latest = g.events.reduce((a, b) => (b._creationTime > a._creationTime ? b : a));
+      const vehicleIds = new Set(g.events.filter((e) => e.vehicleId).map((e) => e.vehicleId as Id<"vehicles">));
+      const leadId = [...g.events].reverse().find((e) => e.leadId)?.leadId;
       return {
         customerId,
         leadId,
         latest,
-        eventCount: evs.length,
-        needsReply: evs.some((e) => !e.autoRepliedAt && !e.manualRepliedAt),
+        platforms: g.platforms,
+        hasComment: g.hasComment,
+        hasDm: g.hasDm,
+        eventCount: g.events.length,
+        needsReply: g.events.some((e) => !e.autoRepliedAt && !e.manualRepliedAt),
         vehicleIds,
       };
     });
     conversations.sort((a, b) => b.latest._creationTime - a.latest._creationTime);
+
+    // Apply filters
+    if (args.platform) {
+      const p = args.platform;
+      conversations = conversations.filter((c) => c.platforms.has(p));
+    }
+    if (args.kind === "comment") conversations = conversations.filter((c) => c.hasComment);
+    if (args.kind === "dm") conversations = conversations.filter((c) => c.hasDm);
+    if (args.hasVehicle === true) conversations = conversations.filter((c) => c.vehicleIds.size > 0);
+    if (args.hasVehicle === false) conversations = conversations.filter((c) => c.vehicleIds.size === 0);
+    if (args.needsReply === true) conversations = conversations.filter((c) => c.needsReply);
+    if (args.needsReply === false) conversations = conversations.filter((c) => !c.needsReply);
 
     const start = Number(args.paginationOpts.cursor ?? "0");
     const numItems = args.paginationOpts.numItems;

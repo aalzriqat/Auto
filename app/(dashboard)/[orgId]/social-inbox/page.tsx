@@ -2,14 +2,24 @@
 
 import { useState } from "react";
 import { RoleGuard } from "@/components/auth/RoleGuard";
-import { usePaginatedQuery, useQuery } from "convex/react";
+import { usePaginatedQuery, useQuery, useAction } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { usePermissions } from "@/hooks/use-permissions";
+import { PERMISSIONS } from "@/convex/utils/permissions";
+import { toast } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Id } from "@/convex/_generated/dataModel";
-import { Car, MessageCircle, ExternalLink } from "lucide-react";
+import { Car, MessageCircle, ExternalLink, RefreshCw } from "lucide-react";
 import { SocialConversationDialog } from "@/components/leads/SocialConversationDialog";
 import {
   Table,
@@ -52,9 +62,26 @@ function buildRowPostUrl(row: ConversationRow): string | null {
 export default function SocialInboxPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  const { hasPermission } = usePermissions(activeOrgId ?? undefined);
+  const isManager = hasPermission(PERMISSIONS.APPROVE_REQUESTS);
+
+  // Filters
+  const [filterPlatform, setFilterPlatform] = useState<"instagram" | "facebook" | undefined>(undefined);
+  const [filterKind, setFilterKind] = useState<"comment" | "dm" | undefined>(undefined);
+  const [filterHasVehicle, setFilterHasVehicle] = useState<boolean | undefined>(undefined);
+  const [filterNeedsReply, setFilterNeedsReply] = useState<boolean | undefined>(undefined);
+
   const { results: conversations, status, loadMore } = usePaginatedQuery(
     api.socialInbox.listConversations,
-    activeOrgId ? { orgId: activeOrgId } : "skip",
+    activeOrgId
+      ? {
+          orgId: activeOrgId,
+          platform: filterPlatform,
+          kind: filterKind,
+          hasVehicle: filterHasVehicle,
+          needsReply: filterNeedsReply,
+        }
+      : "skip",
     { initialNumItems: 25 }
   );
 
@@ -64,6 +91,21 @@ export default function SocialInboxPage() {
   );
 
   const [conversationCustomerId, setConversationCustomerId] = useState<Id<"customers"> | null>(null);
+  const [resyncing, setResyncing] = useState(false);
+  const resyncAction = useAction(api.socialInboxBackfill.resyncEvents);
+
+  const handleResync = async () => {
+    if (!activeOrgId || resyncing) return;
+    setResyncing(true);
+    try {
+      await resyncAction({ orgId: activeOrgId });
+      toast.success(t("ResyncSuccess" as any));
+    } catch {
+      toast.error("Resync failed");
+    } finally {
+      setResyncing(false);
+    }
+  };
 
   const statusBadge = (conversation: ConversationRow) =>
     conversation.needsReply ? (
@@ -88,6 +130,12 @@ export default function SocialInboxPage() {
     </span>
   );
 
+  const hasActiveFilters =
+    filterPlatform !== undefined ||
+    filterKind !== undefined ||
+    filterHasVehicle !== undefined ||
+    filterNeedsReply !== undefined;
+
   return (
     <RoleGuard permissions={["view:leads"]}>
       <div className="space-y-6 flex flex-col h-full overflow-hidden">
@@ -104,8 +152,8 @@ export default function SocialInboxPage() {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {(
               [
-                { platform: "instagram", label: "Instagram", color: "bg-pink-600", key: "ig" },
-                { platform: "facebook", label: "Facebook", color: "bg-blue-600", key: "fb" },
+                { platform: "instagram", label: "Instagram", color: "bg-pink-600" },
+                { platform: "facebook", label: "Facebook", color: "bg-blue-600" },
               ] as const
             ).map(({ platform, label, color }) => {
               const d = stats[platform];
@@ -141,6 +189,102 @@ export default function SocialInboxPage() {
             })}
           </div>
         )}
+
+        {/* Filter bar */}
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Platform */}
+          <Select
+            value={filterPlatform ?? "all"}
+            onValueChange={(v) => setFilterPlatform(v === "all" ? undefined : (v as "instagram" | "facebook"))}
+          >
+            <SelectTrigger className="h-8 text-xs w-[130px]">
+              <SelectValue placeholder={t("FilterPlatform" as any)} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">{t("FilterPlatform" as any)}: {t("FilterAll" as any)}</SelectItem>
+              <SelectItem value="instagram">Instagram</SelectItem>
+              <SelectItem value="facebook">Facebook</SelectItem>
+            </SelectContent>
+          </Select>
+
+          {/* Type */}
+          <Select
+            value={filterKind ?? "all"}
+            onValueChange={(v) => setFilterKind(v === "all" ? undefined : (v as "comment" | "dm"))}
+          >
+            <SelectTrigger className="h-8 text-xs w-[130px]">
+              <SelectValue placeholder={t("FilterType" as any)} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">{t("FilterType" as any)}: {t("FilterAll" as any)}</SelectItem>
+              <SelectItem value="comment">{t("Comments" as any)}</SelectItem>
+              <SelectItem value="dm">{t("DirectMessages" as any)}</SelectItem>
+            </SelectContent>
+          </Select>
+
+          {/* Vehicle */}
+          <Select
+            value={filterHasVehicle === undefined ? "all" : filterHasVehicle ? "yes" : "no"}
+            onValueChange={(v) =>
+              setFilterHasVehicle(v === "all" ? undefined : v === "yes")
+            }
+          >
+            <SelectTrigger className="h-8 text-xs w-[130px]">
+              <SelectValue placeholder={t("FilterVehicle" as any)} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">{t("FilterVehicle" as any)}: {t("FilterAll" as any)}</SelectItem>
+              <SelectItem value="yes">{t("FilterWithVehicle" as any)}</SelectItem>
+              <SelectItem value="no">{t("FilterWithoutVehicle" as any)}</SelectItem>
+            </SelectContent>
+          </Select>
+
+          {/* Status */}
+          <Select
+            value={filterNeedsReply === undefined ? "all" : filterNeedsReply ? "needs" : "replied"}
+            onValueChange={(v) =>
+              setFilterNeedsReply(v === "all" ? undefined : v === "needs")
+            }
+          >
+            <SelectTrigger className="h-8 text-xs w-[130px]">
+              <SelectValue placeholder={t("FilterStatus" as any)} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">{t("FilterStatus" as any)}: {t("FilterAll" as any)}</SelectItem>
+              <SelectItem value="needs">{t("NeedsReply" as any)}</SelectItem>
+              <SelectItem value="replied">{t("Replied" as any)}</SelectItem>
+            </SelectContent>
+          </Select>
+
+          {hasActiveFilters && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-8 text-xs text-muted-foreground"
+              onClick={() => {
+                setFilterPlatform(undefined);
+                setFilterKind(undefined);
+                setFilterHasVehicle(undefined);
+                setFilterNeedsReply(undefined);
+              }}
+            >
+              ✕ Clear
+            </Button>
+          )}
+
+          {isManager && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs ms-auto"
+              onClick={handleResync}
+              disabled={resyncing}
+            >
+              <RefreshCw className={`h-3 w-3 me-1 ${resyncing ? "animate-spin" : ""}`} />
+              {t("ResyncPosts" as any)}
+            </Button>
+          )}
+        </div>
 
         {/* Mobile card list */}
         <div className="flex flex-col gap-3 md:hidden">
