@@ -27,6 +27,7 @@ export const socialInboxEn = {
   OpenInbox: "Open inbox",
   // Vehicle linking
   LinkVehiclePrompt: "No vehicle linked — assign one:",
+  VehicleAutoLinked: "Auto-linked vehicle — apply to all:",
   SelectVehicle: "Select vehicle",
   VehicleLinked: "Vehicle linked to conversation.",
   // Analytics
@@ -80,6 +81,7 @@ export const socialInboxAr = {
   OpenInbox: "فتح صندوق الوارد",
   // Vehicle linking
   LinkVehiclePrompt: "لا توجد مركبة مرتبطة — قم بتعيين واحدة:",
+  VehicleAutoLinked: "مركبة مرتبطة تلقائيًا — تطبيق على الكل:",
   SelectVehicle: "اختر مركبة",
   VehicleLinked: "تم ربط المركبة بالمحادثة.",
   // Analytics

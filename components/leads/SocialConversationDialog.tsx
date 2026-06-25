@@ -26,10 +26,27 @@ import {
 } from "@/components/ui/select";
 import { Send, Loader2, MessageCircle, Car, ExternalLink } from "lucide-react";
 
+/** Identifies a specific conversation thread in the Social Inbox. */
+export type ConversationKey = {
+  customerId: Id<"customers">;
+  platform: "instagram" | "facebook";
+  conversationKind: "comment" | "dm";
+  conversationPostId: string | null;
+};
+
 interface SocialConversationDialogProps {
-  customerId: Id<"customers"> | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /**
+   * Social Inbox path: opens only the events for this specific thread
+   * (platform × customer × post for comments; platform × customer for DMs).
+   */
+  conversationKey?: ConversationKey | null;
+  /**
+   * Leads page path: opens all events for this customer across all platforms
+   * and threads. Ignored when conversationKey is provided.
+   */
+  customerId?: Id<"customers"> | null;
 }
 
 function buildPostUrl(
@@ -52,16 +69,44 @@ function buildPostUrl(
   return null;
 }
 
-export function SocialConversationDialog({ customerId, open, onOpenChange }: SocialConversationDialogProps) {
+export function SocialConversationDialog({
+  open,
+  onOpenChange,
+  conversationKey,
+  customerId,
+}: SocialConversationDialogProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const { hasPermission } = usePermissions();
   const isManager = hasPermission(PERMISSIONS.APPROVE_REQUESTS);
 
-  const events = useQuery(
-    api.socialInbox.listEventsForCustomer,
-    activeOrgId && customerId ? { orgId: activeOrgId, customerId } : "skip"
+  const ck = conversationKey ?? null;
+  const effectiveCustomerId = ck?.customerId ?? customerId ?? null;
+
+  // Social Inbox mode: fetch only this conversation's events
+  const conversationEvents = useQuery(
+    api.socialInbox.listEventsForConversation,
+    ck && activeOrgId
+      ? {
+          orgId: activeOrgId,
+          customerId: ck.customerId,
+          platform: ck.platform,
+          conversationKind: ck.conversationKind,
+          ...(ck.conversationPostId != null ? { conversationPostId: ck.conversationPostId } : {}),
+        }
+      : "skip"
   );
+
+  // Leads page mode: fetch all events for this customer
+  const customerEvents = useQuery(
+    api.socialInbox.listEventsForCustomer,
+    !ck && activeOrgId && effectiveCustomerId
+      ? { orgId: activeOrgId, customerId: effectiveCustomerId }
+      : "skip"
+  );
+
+  const events = ck ? conversationEvents : customerEvents;
+
   const vehicles = useQuery(
     api.vehicles.listAll,
     activeOrgId && isManager ? { orgId: activeOrgId } : "skip"
@@ -110,15 +155,15 @@ export function SocialConversationDialog({ customerId, open, onOpenChange }: Soc
   const dmEvent = events?.find((e) => e.kind === "dm");
 
   const handleSendDm = async () => {
-    if (!activeOrgId || !customerId || !dmEvent) return;
+    if (!activeOrgId || !effectiveCustomerId || !dmEvent) return;
     const message = dmDraft.trim();
     if (!message) return;
     setSendingDm(true);
     try {
       if (dmEvent.platform === "facebook") {
-        await sendFacebookDirectMessage({ orgId: activeOrgId, customerId, message: dmDraft });
+        await sendFacebookDirectMessage({ orgId: activeOrgId, customerId: effectiveCustomerId, message: dmDraft });
       } else {
-        await sendInstagramDirectMessage({ orgId: activeOrgId, customerId, message: dmDraft });
+        await sendInstagramDirectMessage({ orgId: activeOrgId, customerId: effectiveCustomerId, message: dmDraft });
       }
       setDmDraft("");
       toast.success(t("MessageSentSuccess" as any));
@@ -130,13 +175,21 @@ export function SocialConversationDialog({ customerId, open, onOpenChange }: Soc
   };
 
   const handleLinkVehicle = async (vehicleId: string) => {
-    if (!activeOrgId || !customerId) return;
+    if (!activeOrgId || !effectiveCustomerId) return;
     setLinkingVehicle(true);
     try {
       await setConversationVehicle({
         orgId: activeOrgId,
-        customerId,
+        customerId: effectiveCustomerId,
         vehicleId: vehicleId as Id<"vehicles">,
+        // Scope to this conversation when in Social Inbox mode
+        ...(ck
+          ? {
+              platform: ck.platform,
+              conversationKind: ck.conversationKind,
+              ...(ck.conversationPostId != null ? { conversationPostId: ck.conversationPostId } : {}),
+            }
+          : {}),
       });
       toast.success(t("VehicleLinked" as any));
     } catch (error: any) {
@@ -160,12 +213,14 @@ export function SocialConversationDialog({ customerId, open, onOpenChange }: Soc
           </DialogTitle>
         </DialogHeader>
 
-        {/* Manager-only: vehicle linker shown when conversation has unlinked events */}
+        {/* Manager-only: vehicle linker — shown when any event in the thread is unlinked */}
         {isManager && anyUnlinked && vehicles && (
           <div className="flex items-center gap-2 p-2.5 rounded-lg bg-muted/60 border border-dashed">
             <Car className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
             <span className="text-xs text-muted-foreground flex-1">
-              {t("LinkVehiclePrompt" as any)}
+              {conversationVehicleId
+                ? t("VehicleAutoLinked" as any)
+                : t("LinkVehiclePrompt" as any)}
             </span>
             <Select onValueChange={handleLinkVehicle} disabled={linkingVehicle} value={conversationVehicleId ?? ""}>
               <SelectTrigger className="h-7 text-xs w-44 shrink-0">
@@ -249,7 +304,7 @@ export function SocialConversationDialog({ customerId, open, onOpenChange }: Soc
                   </div>
                 )}
 
-                {/* Inline reply composer */}
+                {/* Inline reply composer — comments only */}
                 {!replied && event.kind === "comment" && (
                   <div className="flex justify-start">
                     <div className="max-w-[85%] w-full flex items-center gap-1.5">

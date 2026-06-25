@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/select";
 import { Id } from "@/convex/_generated/dataModel";
 import { Car, MessageCircle, ExternalLink, RefreshCw } from "lucide-react";
-import { SocialConversationDialog } from "@/components/leads/SocialConversationDialog";
+import { SocialConversationDialog, ConversationKey } from "@/components/leads/SocialConversationDialog";
 import {
   Table,
   TableHeader,
@@ -34,11 +34,11 @@ type ConversationRow = {
   customerId: Id<"customers">;
   leadId: Id<"leads"> | null;
   platform: "instagram" | "facebook";
+  conversationKind: "comment" | "dm";
+  conversationPostId: string | null;
   senderDisplayName: string;
   latestText: string | undefined;
-  latestKind: "comment" | "dm";
   latestCreationTime: number;
-  latestPostId: string | null;
   latestSenderHandle: string | null;
   vehicleSummary: string | null;
   vehicleCount: number;
@@ -48,15 +48,15 @@ type ConversationRow = {
 };
 
 function buildRowLink(row: ConversationRow): { url: string; label: "post" | "inbox" } | null {
-  if (row.latestKind === "comment") {
-    if (row.platform === "facebook" && row.latestPostId) {
-      return { url: `https://www.facebook.com/${row.latestPostId}`, label: "post" };
+  if (row.conversationKind === "comment") {
+    if (row.platform === "facebook" && row.conversationPostId) {
+      return { url: `https://www.facebook.com/${row.conversationPostId}`, label: "post" };
     }
     if (row.platform === "instagram" && row.latestSenderHandle) {
       return { url: `https://www.instagram.com/${row.latestSenderHandle}/`, label: "post" };
     }
   }
-  if (row.latestKind === "dm") {
+  if (row.conversationKind === "dm") {
     if (row.platform === "instagram" && row.latestSenderHandle) {
       return { url: `https://ig.me/m/${row.latestSenderHandle}`, label: "inbox" };
     }
@@ -65,6 +65,15 @@ function buildRowLink(row: ConversationRow): { url: string; label: "post" | "inb
     }
   }
   return null;
+}
+
+function rowToConversationKey(row: ConversationRow): ConversationKey {
+  return {
+    customerId: row.customerId,
+    platform: row.platform,
+    conversationKind: row.conversationKind,
+    conversationPostId: row.conversationPostId,
+  };
 }
 
 export default function SocialInboxPage() {
@@ -98,7 +107,7 @@ export default function SocialInboxPage() {
     activeOrgId ? { orgId: activeOrgId } : "skip"
   );
 
-  const [conversationCustomerId, setConversationCustomerId] = useState<Id<"customers"> | null>(null);
+  const [activeConversation, setActiveConversation] = useState<ConversationKey | null>(null);
   const [resyncing, setResyncing] = useState(false);
   const resyncAction = useAction(api.socialInboxBackfill.resyncEvents);
 
@@ -301,11 +310,12 @@ export default function SocialInboxPage() {
           ) : (
             (conversations as ConversationRow[]).map((conversation) => {
               const rowLink = buildRowLink(conversation);
+              const ck = rowToConversationKey(conversation);
               return (
                 <div
-                  key={conversation.customerId}
+                  key={`${conversation.platform}:${conversation.customerId}:${conversation.conversationKind}:${conversation.conversationPostId ?? ""}`}
                   className="rounded-xl border bg-card p-4 space-y-2 cursor-pointer active:bg-muted/30"
-                  onClick={() => setConversationCustomerId(conversation.customerId)}
+                  onClick={() => setActiveConversation(ck)}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <p className="font-semibold text-sm truncate flex items-center gap-1.5">
@@ -377,11 +387,12 @@ export default function SocialInboxPage() {
               ) : (
                 (conversations as ConversationRow[]).map((conversation) => {
                   const rowLink = buildRowLink(conversation);
+                  const ck = rowToConversationKey(conversation);
                   return (
                     <TableRow
-                      key={conversation.customerId}
+                      key={`${conversation.platform}:${conversation.customerId}:${conversation.conversationKind}:${conversation.conversationPostId ?? ""}`}
                       className="cursor-pointer"
-                      onClick={() => setConversationCustomerId(conversation.customerId)}
+                      onClick={() => setActiveConversation(ck)}
                     >
                       <TableCell className="py-4 px-6 font-medium">
                         <span className="flex items-center gap-1.5">
@@ -436,9 +447,9 @@ export default function SocialInboxPage() {
         </div>
 
         <SocialConversationDialog
-          customerId={conversationCustomerId}
-          open={!!conversationCustomerId}
-          onOpenChange={(o) => !o && setConversationCustomerId(null)}
+          conversationKey={activeConversation}
+          open={!!activeConversation}
+          onOpenChange={(o) => !o && setActiveConversation(null)}
         />
       </div>
     </RoleGuard>

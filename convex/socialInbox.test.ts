@@ -70,13 +70,14 @@ describe("socialInbox.listConversations", () => {
     expect(platforms).toEqual(["facebook", "instagram"]);
   });
 
-  test("groups multiple events for the same customer into one conversation, and shows up even with no lead", async () => {
+  test("splits same-customer events into separate comment and DM conversation threads", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asEditor } = await seedOrgWithEditor(t);
 
     const customerId = await t.run((ctx) =>
       ctx.db.insert("customers", { orgId, firstName: "No", lastName: "Lead", instagramUserId: "ig_no_lead" })
     );
+    // Comment that was auto-replied
     await t.run((ctx) =>
       ctx.db.insert("instagramEvents", {
         orgId,
@@ -89,6 +90,7 @@ describe("socialInbox.listConversations", () => {
         autoReplyText: "thanks",
       })
     );
+    // DM that was NOT replied
     await t.run((ctx) =>
       ctx.db.insert("instagramEvents", {
         orgId,
@@ -105,11 +107,81 @@ describe("socialInbox.listConversations", () => {
       paginationOpts: { numItems: 25, cursor: null },
     });
 
+    // Comment and DM are now separate conversation threads
+    expect(result.page.length).toBe(2);
+    expect(result.page.every((c) => c.customerId === customerId)).toBe(true);
+    expect(result.page.every((c) => c.leadId === null)).toBe(true);
+
+    const commentThread = result.page.find((c) => c.conversationKind === "comment");
+    const dmThread = result.page.find((c) => c.conversationKind === "dm");
+    expect(commentThread).toBeDefined();
+    expect(dmThread).toBeDefined();
+    expect(commentThread!.needsReply).toBe(false); // was auto-replied
+    expect(dmThread!.needsReply).toBe(true);        // no reply yet
+  });
+
+  test("groups multiple comments on the same post into one thread", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asEditor } = await seedOrgWithEditor(t);
+
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Repeat", lastName: "Commenter" })
+    );
+    for (const externalId of ["c1", "c2", "c3"]) {
+      await t.run((ctx) =>
+        ctx.db.insert("facebookEvents", {
+          orgId,
+          externalId,
+          kind: "comment",
+          senderFacebookId: "fb_repeat",
+          customerId,
+          postId: "post_abc",
+          text: `comment ${externalId}`,
+        })
+      );
+    }
+
+    const result = await asEditor.query(api.socialInbox.listConversations, {
+      orgId,
+      paginationOpts: { numItems: 25, cursor: null },
+    });
+
     expect(result.page.length).toBe(1);
-    expect(result.page[0].customerId).toBe(customerId);
-    expect(result.page[0].leadId).toBeNull();
-    expect(result.page[0].eventCount).toBe(2);
-    expect(result.page[0].needsReply).toBe(true);
+    expect(result.page[0].eventCount).toBe(3);
+    expect(result.page[0].conversationKind).toBe("comment");
+    expect(result.page[0].conversationPostId).toBe("post_abc");
+  });
+
+  test("splits same-customer comments on different posts into separate threads", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asEditor } = await seedOrgWithEditor(t);
+
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Multi", lastName: "Post" })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("facebookEvents", {
+        orgId, externalId: "ev1", kind: "comment",
+        senderFacebookId: "fb_multi", customerId,
+        postId: "post_kia", text: "interested in the kia",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("facebookEvents", {
+        orgId, externalId: "ev2", kind: "comment",
+        senderFacebookId: "fb_multi", customerId,
+        postId: "post_bmw", text: "interested in the bmw",
+      })
+    );
+
+    const result = await asEditor.query(api.socialInbox.listConversations, {
+      orgId,
+      paginationOpts: { numItems: 25, cursor: null },
+    });
+
+    expect(result.page.length).toBe(2);
+    const postIds = result.page.map((c) => c.conversationPostId).sort();
+    expect(postIds).toEqual(["post_bmw", "post_kia"]);
   });
 });
 
@@ -147,5 +219,53 @@ describe("socialInbox.listEventsForCustomer", () => {
     expect(events.length).toBe(2);
     expect(events.map((e) => e.text)).toEqual(["first (ig)", "second (fb)"]);
     expect(events.map((e) => e.platform)).toEqual(["instagram", "facebook"]);
+  });
+});
+
+describe("socialInbox.listEventsForConversation", () => {
+  test("returns only events matching the conversation (platform + kind + postId)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asEditor } = await seedOrgWithEditor(t);
+
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Conv", lastName: "Test" })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("facebookEvents", {
+        orgId, externalId: "conv_1", kind: "comment",
+        senderFacebookId: "fb_conv", customerId,
+        postId: "post_x", text: "on post x",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("facebookEvents", {
+        orgId, externalId: "conv_2", kind: "comment",
+        senderFacebookId: "fb_conv", customerId,
+        postId: "post_y", text: "on post y",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("facebookEvents", {
+        orgId, externalId: "conv_3", kind: "dm",
+        senderFacebookId: "fb_conv", customerId,
+        text: "dm message",
+      })
+    );
+
+    // Only comments on post_x
+    const postXEvents = await asEditor.query(api.socialInbox.listEventsForConversation, {
+      orgId, customerId, platform: "facebook",
+      conversationKind: "comment", conversationPostId: "post_x",
+    });
+    expect(postXEvents.length).toBe(1);
+    expect(postXEvents[0].text).toBe("on post x");
+
+    // Only DMs
+    const dmEvents = await asEditor.query(api.socialInbox.listEventsForConversation, {
+      orgId, customerId, platform: "facebook",
+      conversationKind: "dm",
+    });
+    expect(dmEvents.length).toBe(1);
+    expect(dmEvents[0].text).toBe("dm message");
   });
 });

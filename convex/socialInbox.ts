@@ -6,11 +6,13 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 
 /**
- * Unifies `instagramEvents` and `facebookEvents` for the Social Inbox UI
- * without touching either platform's own (tested, live) engagement module.
- * Each platform's webhook ingestion stays separate — only the read side
- * merges here, tagging every row with which platform it came from so the
- * UI can dispatch replies to the right action.
+ * Unifies `instagramEvents` and `facebookEvents` for the Social Inbox UI.
+ *
+ * Conversations are grouped by (platform × customer × post) for comments,
+ * and (platform × customer) for DMs. This means a customer who comments on
+ * three different car posts produces three separate conversation rows, each
+ * linked to its own vehicle and post. A customer who DMs on both Instagram
+ * and Facebook produces two separate DM threads.
  */
 type NormalizedEvent = {
   _id: Id<"instagramEvents"> | Id<"facebookEvents">;
@@ -78,7 +80,6 @@ function normalizeFacebookEvent(ev: Doc<"facebookEvents">): NormalizedEvent {
   };
 }
 
-/** Same resolution order as each platform's own helper: handle, then resolved customer name, then raw ID. */
 function resolveSenderDisplayName(event: NormalizedEvent, customer: Doc<"customers"> | null): string {
   if (event.senderHandle) return event.senderHandle;
   if (customer) {
@@ -89,17 +90,26 @@ function resolveSenderDisplayName(event: NormalizedEvent, customer: Doc<"custome
 }
 
 /**
- * Paginated, org-wide list of social conversations (Instagram + Facebook)
- * for the Social Inbox page — one row per customer. Grouped by `customerId`
- * rather than `leadId`: lead creation is independently toggleable per
- * platform/event-kind (see `instagramLeadFromCommentsEnabled` etc.), so a
- * conversation may have no lead at all and still needs to show up here.
+ * Stable key that groups events into a single conversation thread.
+ * - Comments: one thread per (platform, customer, postId). Events with no postId
+ *   are grouped into a "__none__" bucket until a resync can fill in the postId.
+ * - DMs: one thread per (platform, customer) — all DMs in one inbox thread.
+ */
+function getConversationKey(ev: NormalizedEvent): string {
+  if (ev.kind === "dm") return `${ev.platform}:${ev.customerId}:dm`;
+  return `${ev.platform}:${ev.customerId}:comment:${ev.postId ?? "__none__"}`;
+}
+
+/**
+ * Paginated list of conversations for the Social Inbox — one row per
+ * (platform × customer × post) for comments, one row per (platform × customer)
+ * for DMs. Sorted by most-recent activity.
  *
- * Optional filters (all server-side, applied after grouping):
- *   platform   — restrict to conversations that have ANY event on this platform
- *   kind       — restrict to conversations that have ANY event of this kind
+ * Optional filters (all server-side):
+ *   platform   — exact platform match
+ *   kind       — "comment" or "dm"
  *   hasVehicle — true = at least one linked vehicle; false = none
- *   needsReply — true = has at least one unanswered event; false = all answered
+ *   needsReply — true = any event in the thread is unanswered; false = all answered
  */
 export const listConversations = query({
   args: {
@@ -114,54 +124,54 @@ export const listConversations = query({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
 
     const [igEvents, fbEvents] = await Promise.all([
-      ctx.db
-        .query("instagramEvents")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .collect(),
-      ctx.db
-        .query("facebookEvents")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .collect(),
+      ctx.db.query("instagramEvents").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).collect(),
+      ctx.db.query("facebookEvents").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).collect(),
     ]);
-    const allEvents = [...igEvents.map(normalizeInstagramEvent), ...fbEvents.map(normalizeFacebookEvent)];
+    const allEvents = [
+      ...igEvents.map(normalizeInstagramEvent),
+      ...fbEvents.map(normalizeFacebookEvent),
+    ];
 
-    // Group by customer, tracking cross-platform/kind membership for filters.
+    // Group events into conversation threads
     const grouped = new Map<
-      Id<"customers">,
-      { events: NormalizedEvent[]; platforms: Set<"instagram" | "facebook">; hasComment: boolean; hasDm: boolean }
+      string,
+      {
+        events: NormalizedEvent[];
+        platform: "instagram" | "facebook";
+        kind: "comment" | "dm";
+        conversationPostId: string | null;
+      }
     >();
     for (const ev of allEvents) {
       if (!ev.customerId) continue;
-      const existing = grouped.get(ev.customerId);
+      const key = getConversationKey(ev);
+      const existing = grouped.get(key);
       if (existing) {
         existing.events.push(ev);
-        existing.platforms.add(ev.platform);
-        if (ev.kind === "comment") existing.hasComment = true;
-        if (ev.kind === "dm") existing.hasDm = true;
       } else {
-        grouped.set(ev.customerId, {
+        grouped.set(key, {
           events: [ev],
-          platforms: new Set([ev.platform]),
-          hasComment: ev.kind === "comment",
-          hasDm: ev.kind === "dm",
+          platform: ev.platform,
+          kind: ev.kind,
+          conversationPostId: ev.kind === "comment" ? (ev.postId ?? null) : null,
         });
       }
     }
 
-    let conversations = Array.from(grouped.entries()).map(([customerId, g]) => {
+    let conversations = Array.from(grouped.values()).map((g) => {
       const latest = g.events.reduce((a, b) => (b._creationTime > a._creationTime ? b : a));
       const vehicleIds = new Set(g.events.filter((e) => e.vehicleId).map((e) => e.vehicleId as Id<"vehicles">));
       const leadId = [...g.events].reverse().find((e) => e.leadId)?.leadId;
       return {
-        customerId,
-        leadId,
+        customerId: latest.customerId!,
+        platform: g.platform,
+        conversationKind: g.kind,
+        conversationPostId: g.conversationPostId,
         latest,
-        platforms: g.platforms,
-        hasComment: g.hasComment,
-        hasDm: g.hasDm,
         eventCount: g.events.length,
         needsReply: g.events.some((e) => !e.autoRepliedAt && !e.manualRepliedAt),
         vehicleIds,
+        leadId,
       };
     });
     conversations.sort((a, b) => b.latest._creationTime - a.latest._creationTime);
@@ -169,10 +179,12 @@ export const listConversations = query({
     // Apply filters
     if (args.platform) {
       const p = args.platform;
-      conversations = conversations.filter((c) => c.platforms.has(p));
+      conversations = conversations.filter((c) => c.platform === p);
     }
-    if (args.kind === "comment") conversations = conversations.filter((c) => c.hasComment);
-    if (args.kind === "dm") conversations = conversations.filter((c) => c.hasDm);
+    if (args.kind) {
+      const k = args.kind;
+      conversations = conversations.filter((c) => c.conversationKind === k);
+    }
     if (args.hasVehicle === true) conversations = conversations.filter((c) => c.vehicleIds.size > 0);
     if (args.hasVehicle === false) conversations = conversations.filter((c) => c.vehicleIds.size === 0);
     if (args.needsReply === true) conversations = conversations.filter((c) => c.needsReply);
@@ -186,16 +198,17 @@ export const listConversations = query({
       pageSlice.map(async (c) => {
         const customer = await ctx.db.get(c.customerId);
         const lead = c.leadId ? await ctx.db.get(c.leadId) : null;
-        const vehicle = c.latest.vehicleId ? await ctx.db.get(c.latest.vehicleId) : null;
+        const vehicleId = [...c.vehicleIds][0];
+        const vehicle = vehicleId ? await ctx.db.get(vehicleId) : null;
         return {
           customerId: c.customerId,
           leadId: c.leadId ?? null,
-          platform: c.latest.platform,
+          platform: c.platform,
+          conversationKind: c.conversationKind,
+          conversationPostId: c.conversationPostId,
           senderDisplayName: resolveSenderDisplayName(c.latest, customer),
           latestText: c.latest.text,
-          latestKind: c.latest.kind,
           latestCreationTime: c.latest._creationTime,
-          latestPostId: c.latest.postId ?? null,
           latestSenderHandle: c.latest.senderHandle ?? null,
           vehicleSummary: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : null,
           vehicleCount: c.vehicleIds.size,
@@ -214,7 +227,87 @@ export const listConversations = query({
   },
 });
 
-/** All Instagram + Facebook events tied to a single customer, oldest first, for the conversation dialog. */
+/**
+ * All events for a specific conversation thread — used by the Social Inbox
+ * dialog when opened from a conversation row.
+ *
+ * For comment threads: filters by platform + customerId + postId (or no-postId
+ * bucket). For DM threads: filters by platform + customerId + kind="dm".
+ *
+ * Events are returned oldest-first, enriched with vehicle/sender info.
+ */
+export const listEventsForConversation = query({
+  args: {
+    orgId: v.id("organizations"),
+    customerId: v.id("customers"),
+    platform: v.union(v.literal("instagram"), v.literal("facebook")),
+    conversationKind: v.union(v.literal("comment"), v.literal("dm")),
+    conversationPostId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
+
+    const matchesConversation = (kind: string, postId: string | undefined): boolean => {
+      if (kind !== args.conversationKind) return false;
+      if (args.conversationKind === "comment") {
+        return (postId ?? null) === (args.conversationPostId ?? null);
+      }
+      return true;
+    };
+
+    if (args.platform === "instagram") {
+      const events = await ctx.db
+        .query("instagramEvents")
+        .withIndex("by_org_customer", (q) => q.eq("orgId", args.orgId).eq("customerId", args.customerId))
+        .collect();
+      const normalized = events
+        .filter((e) => matchesConversation(e.kind, e.postId))
+        .map(normalizeInstagramEvent)
+        .sort((a, b) => a._creationTime - b._creationTime);
+      return await Promise.all(
+        normalized.map(async (ev) => {
+          const customer = ev.customerId ? await ctx.db.get(ev.customerId) : null;
+          const vehicle = ev.vehicleId ? await ctx.db.get(ev.vehicleId) : null;
+          const repliedByUser = ev.manualRepliedByUserId ? await ctx.db.get(ev.manualRepliedByUserId) : null;
+          return {
+            ...ev,
+            senderDisplayName: resolveSenderDisplayName(ev, customer),
+            vehicleSummary: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : null,
+            manualRepliedByName: repliedByUser?.name ?? null,
+          };
+        })
+      );
+    }
+
+    // Facebook
+    const events = await ctx.db
+      .query("facebookEvents")
+      .withIndex("by_org_customer", (q) => q.eq("orgId", args.orgId).eq("customerId", args.customerId))
+      .collect();
+    const normalized = events
+      .filter((e) => matchesConversation(e.kind, e.postId))
+      .map(normalizeFacebookEvent)
+      .sort((a, b) => a._creationTime - b._creationTime);
+    return await Promise.all(
+      normalized.map(async (ev) => {
+        const customer = ev.customerId ? await ctx.db.get(ev.customerId) : null;
+        const vehicle = ev.vehicleId ? await ctx.db.get(ev.vehicleId) : null;
+        const repliedByUser = ev.manualRepliedByUserId ? await ctx.db.get(ev.manualRepliedByUserId) : null;
+        return {
+          ...ev,
+          senderDisplayName: resolveSenderDisplayName(ev, customer),
+          vehicleSummary: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : null,
+          manualRepliedByName: repliedByUser?.name ?? null,
+        };
+      })
+    );
+  },
+});
+
+/**
+ * All Instagram + Facebook events tied to a single customer, oldest first.
+ * Used by the leads page to show the customer's full cross-platform history.
+ */
 export const listEventsForCustomer = query({
   args: { orgId: v.id("organizations"), customerId: v.id("customers") },
   handler: async (ctx, args) => {
@@ -251,15 +344,20 @@ export const listEventsForCustomer = query({
 });
 
 /**
- * Sets vehicleId on all events for a customer that currently have no vehicle
- * linked. Also updates the lead's vehicleId if it is unset.
- * Manager-only (APPROVE_REQUESTS permission).
+ * Links a vehicle to all unlinked events in a conversation thread.
+ * When platform + conversationKind (+ conversationPostId for comments) are
+ * provided, only events in that specific thread are updated. When omitted,
+ * all unlinked events for the customer are updated (leads-page behavior).
+ * Also patches any associated lead that has no vehicle yet.
  */
 export const setConversationVehicle = mutation({
   args: {
     orgId: v.id("organizations"),
     customerId: v.id("customers"),
     vehicleId: v.id("vehicles"),
+    platform: v.optional(v.union(v.literal("instagram"), v.literal("facebook"))),
+    conversationKind: v.optional(v.union(v.literal("comment"), v.literal("dm"))),
+    conversationPostId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
@@ -275,22 +373,35 @@ export const setConversationVehicle = mutation({
         .collect(),
     ]);
 
+    const inScope = (e: { kind: string; postId?: string }, platformMatches: boolean): boolean => {
+      if (!platformMatches) return false;
+      if (!args.conversationKind) return true;
+      if (e.kind !== args.conversationKind) return false;
+      if (args.conversationKind === "comment") {
+        return (e.postId ?? null) === (args.conversationPostId ?? null);
+      }
+      return true;
+    };
+
+    const igToUpdate = igEvents.filter(
+      (e) => !e.vehicleId && inScope(e, !args.platform || args.platform === "instagram")
+    );
+    const fbToUpdate = fbEvents.filter(
+      (e) => !e.vehicleId && inScope(e, !args.platform || args.platform === "facebook")
+    );
+
     await Promise.all([
-      ...igEvents.filter((e) => !e.vehicleId).map((e) => ctx.db.patch(e._id, { vehicleId: args.vehicleId })),
-      ...fbEvents.filter((e) => !e.vehicleId).map((e) => ctx.db.patch(e._id, { vehicleId: args.vehicleId })),
+      ...igToUpdate.map((e) => ctx.db.patch(e._id, { vehicleId: args.vehicleId })),
+      ...fbToUpdate.map((e) => ctx.db.patch(e._id, { vehicleId: args.vehicleId })),
     ]);
 
-    // Also patch the linked lead if it has no vehicle yet
-    const allLeadIds = new Set([
-      ...igEvents.filter((e) => e.leadId).map((e) => e.leadId as Id<"leads">),
-      ...fbEvents.filter((e) => e.leadId).map((e) => e.leadId as Id<"leads">),
-    ]);
+    const allLeadIds = new Set(
+      [...igToUpdate, ...fbToUpdate].filter((e) => e.leadId).map((e) => e.leadId as Id<"leads">)
+    );
     await Promise.all(
       Array.from(allLeadIds).map(async (leadId) => {
         const lead = await ctx.db.get(leadId);
-        if (lead && !lead.vehicleId) {
-          await ctx.db.patch(leadId, { vehicleId: args.vehicleId });
-        }
+        if (lead && !lead.vehicleId) await ctx.db.patch(leadId, { vehicleId: args.vehicleId });
       })
     );
   },
@@ -298,8 +409,7 @@ export const setConversationVehicle = mutation({
 
 /**
  * Platform analytics: count of received contacts broken down by platform
- * and event kind (comment vs DM) over the last N days.
- * Used by the Social Inbox analytics panel.
+ * and event kind (comment vs DM). Used by the Social Inbox analytics panel.
  */
 export const platformStats = query({
   args: { orgId: v.id("organizations") },
@@ -307,14 +417,8 @@ export const platformStats = query({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
 
     const [igEvents, fbEvents] = await Promise.all([
-      ctx.db
-        .query("instagramEvents")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .collect(),
-      ctx.db
-        .query("facebookEvents")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .collect(),
+      ctx.db.query("instagramEvents").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).collect(),
+      ctx.db.query("facebookEvents").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).collect(),
     ]);
 
     const igComments = igEvents.filter((e) => e.kind === "comment").length;
@@ -322,7 +426,6 @@ export const platformStats = query({
     const fbComments = fbEvents.filter((e) => e.kind === "comment").length;
     const fbDms = fbEvents.filter((e) => e.kind === "dm").length;
 
-    // Unique senders per platform
     const igUnique = new Set(igEvents.map((e) => e.senderInstagramId)).size;
     const fbUnique = new Set(fbEvents.map((e) => e.senderFacebookId)).size;
 
