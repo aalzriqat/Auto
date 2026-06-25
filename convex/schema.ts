@@ -879,6 +879,7 @@ export default defineSchema({
     vehicleId: v.optional(v.id("vehicles")),
     text: v.optional(v.string()),
     postId: v.optional(v.string()),
+    sourceSurface: v.optional(v.union(v.literal("post"), v.literal("reel"), v.literal("story"), v.literal("ad"), v.literal("unknown"))),
     vehicleMatchHintText: v.optional(v.string()),
     vehicleMatchHintSource: v.optional(v.union(v.literal("message"), v.literal("post"))),
     autoRepliedAt: v.optional(v.number()),

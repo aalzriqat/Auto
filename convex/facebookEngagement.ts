@@ -50,6 +50,7 @@ export const handleIncomingFacebookEvent = internalMutation({
     // DMs. Used to link the lead back to the vehicle that post was about,
     // via socialPosts.externalPostId.
     mediaId: v.optional(v.string()),
+    sourceSurface: v.optional(v.union(v.literal("post"), v.literal("reel"), v.literal("story"), v.literal("ad"), v.literal("unknown"))),
   },
   handler: async (
     ctx,
@@ -62,7 +63,7 @@ export const handleIncomingFacebookEvent = internalMutation({
     customerId?: Id<"customers">;
     vehicleId?: Id<"vehicles">;
   } | null> => {
-    const { orgId, kind, externalId, senderFacebookId, senderName, text, mediaId } = args;
+    const { orgId, kind, externalId, senderFacebookId, senderName, text, mediaId, sourceSurface } = args;
 
     const duplicate = await ctx.db
       .query("facebookEvents")
@@ -115,7 +116,12 @@ export const handleIncomingFacebookEvent = internalMutation({
         ? settings?.facebookLeadFromCommentsEnabled !== false
         : settings?.facebookLeadFromDmsEnabled !== false;
 
-    const label = kind === "dm" ? "Facebook DM" : "Facebook Comment";
+    const surfaceLabel =
+      sourceSurface === "reel" ? " Reel"
+        : sourceSurface === "story" ? " Story"
+          : sourceSurface === "ad" ? " Ad"
+            : "";
+    const label = kind === "dm" ? `Facebook${surfaceLabel} DM` : `Facebook${surfaceLabel} Comment`;
     let leadId: Id<"leads"> | undefined;
     if (leadCreationEnabled) {
       const existingLeads = await ctx.db
@@ -232,6 +238,7 @@ export const handleIncomingFacebookEvent = internalMutation({
       vehicleId,
       text,
       postId: mediaId,
+      sourceSurface,
       autoRepliedAt: shouldAutoReply ? Date.now() : undefined,
       autoReplyText: shouldAutoReply ? replyText : undefined,
       autoReplySource: shouldAutoReply ? (smartReplySource ? "smart" : "canned") : undefined,

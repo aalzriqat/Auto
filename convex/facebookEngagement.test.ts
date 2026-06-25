@@ -533,6 +533,35 @@ describe("facebookEngagement.handleIncomingFacebookEvent — Smart Reply", () =>
     expect(result?.shouldAutoReply).toBe(true);
     expect(result?.smartReplyVisibility).toBe("dm");
   });
+
+  test("reel-origin comments are labeled and stored with their source surface", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+
+    const result = await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+        orgId,
+        kind: "comment",
+        externalId: "fb_reel_comment",
+        senderFacebookId: "sender_reel_comment",
+        text: "Interested in the BYD Song Pro 2025",
+        mediaId: "page_reel_123",
+        sourceSurface: "reel",
+      })
+    );
+
+    const lead = await t.run((ctx) => ctx.db.get(result!.leadId!));
+    expect(lead?.source).toBe("Facebook Reel Comment");
+    expect(lead?.notes).toContain("Facebook Reel Comment");
+
+    const event = await t.run((ctx) =>
+      ctx.db
+        .query("facebookEvents")
+        .withIndex("by_org_external", (q) => q.eq("orgId", orgId).eq("externalId", "fb_reel_comment"))
+        .unique()
+    );
+    expect(event?.sourceSurface).toBe("reel");
+  });
 });
 
 describe("facebookEngagement.replyToFacebookComment", () => {

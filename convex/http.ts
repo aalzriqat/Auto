@@ -33,6 +33,81 @@ function hasMatchingSecret(providedSecret: string | null, expectedSecret: string
   return diff === 0;
 }
 
+type FacebookSourceSurface = "post" | "reel" | "story" | "ad" | "unknown";
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function collectTextParts(value: unknown, parts: string[] = []): string[] {
+  if (Array.isArray(value)) {
+    for (const item of value) collectTextParts(item, parts);
+    return parts;
+  }
+  if (!value || typeof value !== "object") return parts;
+  const record = value as Record<string, unknown>;
+  for (const key of ["text", "title", "description", "name", "caption", "url", "payload", "ref", "source", "type"] as const) {
+    const text = optionalString(record[key]);
+    if (text) parts.push(text);
+  }
+  for (const key of ["attachments", "data"] as const) {
+    const nested = record[key];
+    if (Array.isArray(nested)) {
+      for (const item of nested) collectTextParts(item, parts);
+    }
+  }
+  const payload = record.payload;
+  if (payload && typeof payload === "object") collectTextParts(payload, parts);
+  return parts;
+}
+
+function facebookSurfaceFromPayload(value: unknown): FacebookSourceSurface {
+  if (!value || typeof value !== "object") return "unknown";
+  const text = collectTextParts(value).join(" ").toLowerCase();
+  const record = value as Record<string, unknown>;
+  if (optionalString(record.reel_id) || text.includes("reel")) return "reel";
+  if (optionalString(record.story_id) || text.includes("story")) return "story";
+  if (optionalString(record.ad_id) || text.includes("ad")) return "ad";
+  if (optionalString(record.post_id) || optionalString(record.video_id) || optionalString(record.media_id)) return "post";
+  return "unknown";
+}
+
+function facebookMediaIdFromFeedValue(value: unknown): string | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  return optionalString(record.post_id)
+    ?? optionalString(record.video_id)
+    ?? optionalString(record.reel_id)
+    ?? optionalString(record.media_id)
+    ?? optionalString(record.object_id);
+}
+
+function facebookMessageText(messagingEvent: unknown): string | undefined {
+  if (!messagingEvent || typeof messagingEvent !== "object") return undefined;
+  const event = messagingEvent as Record<string, unknown>;
+  const message = event.message as Record<string, unknown> | undefined;
+  const parts: string[] = [];
+  const messageText = optionalString(message?.text);
+  if (messageText) parts.push(messageText);
+  collectTextParts(message?.attachments, parts);
+  collectTextParts(message?.referral, parts);
+  collectTextParts(event.referral, parts);
+  const combined = parts.join(" ").trim();
+  return combined || undefined;
+}
+
+function facebookMessageMediaId(messagingEvent: unknown): string | undefined {
+  if (!messagingEvent || typeof messagingEvent !== "object") return undefined;
+  const event = messagingEvent as Record<string, unknown>;
+  const message = event.message as Record<string, unknown> | undefined;
+  const referral = (message?.referral ?? event.referral) as Record<string, unknown> | undefined;
+  return optionalString(referral?.post_id)
+    ?? optionalString(referral?.video_id)
+    ?? optionalString(referral?.reel_id)
+    ?? optionalString(referral?.media_id)
+    ?? optionalString(referral?.object_id);
+}
+
 function base64UrlDecode(input: string): Uint8Array {
   const padded = input.replace(/-/g, "+").replace(/_/g, "/").padEnd(input.length + ((4 - (input.length % 4)) % 4), "=");
   const binary = atob(padded);
@@ -1040,6 +1115,8 @@ http.route({
 
         const fromId = String(value.from?.id ?? "");
         const summary = `Comment from ${value.from?.name ?? fromId}`;
+        const fbPostId = facebookMediaIdFromFeedValue(value);
+        const sourceSurface = facebookSurfaceFromPayload(value);
         try {
           const isOwnPage = fromId !== "" && fromId === settings.facebookPageId;
           if (isOwnPage) {
@@ -1057,7 +1134,8 @@ http.route({
             senderFacebookId: fromId,
             senderName: value.from?.name,
             text: value.message,
-            mediaId: value.post_id ? String(value.post_id) : undefined,
+            mediaId: fbPostId,
+            sourceSurface,
           });
           if (result?.shouldAutoReply && result.replyText) {
             if (result.smartReplyVisibility === "dm") {
@@ -1078,7 +1156,6 @@ http.route({
           // the comment text first, then the post content (covers posts not
           // published through AutoFlow, including WhatsApp-link style posts
           // where the vehicle name lives in the attachment title).
-          const fbPostId = value.post_id ? String(value.post_id) : undefined;
           if (result && !result.vehicleId) {
             await ctx.runAction(internal.facebookEngagement.enrichEventVehicleFromPost, {
               orgId,
@@ -1103,12 +1180,16 @@ http.route({
       }
 
       for (const messagingEvent of messagingEvents) {
-        if (!messagingEvent?.message?.text || messagingEvent.message.is_echo) {
-          // Edits, removals, reactions, read receipts, etc. — skip silently.
+        if (!messagingEvent?.message || messagingEvent.message.is_echo) {
+          // Echoes, reactions, read receipts, etc. — skip silently.
           continue;
         }
 
         const senderId = String(messagingEvent.sender?.id ?? "");
+        if (!senderId) continue;
+        const messageText = facebookMessageText(messagingEvent);
+        const mediaId = facebookMessageMediaId(messagingEvent);
+        const sourceSurface = facebookSurfaceFromPayload(messagingEvent);
         const summary = `DM from ${senderId}`;
         try {
           const result = await ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
@@ -1116,7 +1197,9 @@ http.route({
             kind: "dm",
             externalId: String(messagingEvent.message.mid ?? `${senderId}-${messagingEvent.timestamp}`),
             senderFacebookId: senderId,
-            text: messagingEvent.message.text,
+            text: messageText,
+            mediaId,
+            sourceSurface,
           });
           if (result?.shouldAutoReply && result.replyText) {
             await ctx.runAction(internal.facebookEngagement.sendDirectMessage, {
@@ -1127,11 +1210,12 @@ http.route({
           }
           // Try to match a vehicle from the DM text (customer often mentions
           // the car they saw in a post, e.g. "I want the E-Bora 2020").
-          if (result && !result.vehicleId && messagingEvent.message.text) {
+          if (result && !result.vehicleId && (messageText || mediaId)) {
             await ctx.runAction(internal.facebookEngagement.enrichEventVehicleFromPost, {
               orgId,
               externalId: String(messagingEvent.message.mid ?? `${senderId}-${messagingEvent.timestamp}`),
-              text: messagingEvent.message.text,
+              postId: mediaId,
+              text: messageText,
             });
           }
           await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
