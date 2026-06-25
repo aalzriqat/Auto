@@ -92,7 +92,7 @@ function OrgMembershipRow({
       await onImpersonate(reason.trim());
       setReason("");
     } catch (e: any) {
-      toast.error(e?.data?.message ?? e?.message ?? "Failed to start impersonation");
+      toast.error(e);
     } finally {
       setImpersonating(false);
     }
@@ -163,7 +163,7 @@ export default function AdminUsersPage() {
       setDeleteTarget(null);
       setConfirmEmail("");
     } catch (e: any) {
-      toast.error(e?.data?.message ?? e?.message ?? "Delete failed");
+      toast.error(e);
     }
   }
 

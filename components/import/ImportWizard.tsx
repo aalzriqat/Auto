@@ -215,7 +215,7 @@ export function ImportWizard(props: ImportWizardProps) {
       onOpenChange(false);
       resetAll();
     } catch (err: any) {
-      toast.error(err.message ?? "Import failed");
+      toast.error(err);
     } finally {
       setImporting(false);
     }

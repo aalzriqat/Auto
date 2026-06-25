@@ -6,6 +6,168 @@ import * as Sentry from "@sentry/nextjs"
 
 type ToasterProps = React.ComponentProps<typeof Sonner>
 
+type ErrorWithConvexData = Error & {
+  data?: unknown
+}
+
+const permissionLabels: Record<string, string> = {
+  "view:org": "view organization",
+  "edit:org": "edit organization details",
+  "view:users": "view users",
+  "manage:users": "manage users",
+  "manage:roles": "manage roles",
+  "view:vehicles": "view vehicles",
+  "create:vehicles": "create vehicles",
+  "create:vehicles:request": "request vehicle creation",
+  "edit:vehicles": "edit vehicles",
+  "edit:vehicles:request": "request vehicle edits",
+  "delete:vehicles": "delete vehicles",
+  "view:vehicle_info": "view vehicle info",
+  "view:vehicle_leads": "view vehicle leads",
+  "view:vehicle_expenses": "view vehicle expenses",
+  "view:vehicle_tasks": "view vehicle tasks",
+  "view:vehicle_test_drives": "view vehicle test drives",
+  "view:vehicle_work_orders": "view vehicle work orders",
+  "view:vehicle_valuations": "view vehicle valuations",
+  "view:customers": "view customers",
+  "create:customers": "create customers",
+  "create:customers:request": "request customer creation",
+  "edit:customers": "edit customers",
+  "edit:customers:request": "request customer edits",
+  "delete:customers": "delete customers",
+  "merge:customers": "merge customers",
+  "view:leads": "view leads",
+  "create:leads": "create leads",
+  "create:leads:request": "request lead creation",
+  "edit:leads": "edit leads",
+  "edit:leads:request": "request lead edits",
+  "delete:leads": "delete leads",
+  "view:sales": "view sales and finance applications",
+  "create:sales": "create sales and finance applications",
+  "create:sales:request": "request sale creation",
+  "edit:sales": "edit sales",
+  "edit:sales:request": "request sale edits",
+  "delete:sales": "delete sales",
+  "view:expenses": "view expenses",
+  "create:expenses": "create expenses",
+  "create:expenses:request": "request expense creation",
+  "edit:expenses": "edit expenses",
+  "edit:expenses:request": "request expense edits",
+  "delete:expenses": "delete expenses",
+  "view:tasks": "view tasks",
+  "create:tasks": "create tasks",
+  "edit:tasks": "edit tasks",
+  "delete:tasks": "delete tasks",
+  "view:reports": "view reports",
+  "view:settings": "view settings",
+  "manage:settings": "manage settings",
+  "view:finance": "view finance",
+  "manage:finance": "manage finance",
+  "view:cost_price": "view cost price",
+  "view:commissions": "view commissions",
+  "manage:commissions": "manage commissions",
+  "approve:requests": "approve requests",
+}
+
+function messageFromUnknown(value: unknown): string {
+  if (!value) {
+    return "";
+  }
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (typeof value === "object" && "message" in value) {
+    const message = (value as { message?: unknown }).message;
+    return typeof message === "string" ? message : "";
+  }
+
+  return "";
+}
+
+function readablePermission(permission: string): string {
+  const normalized = permission.trim();
+  const label = permissionLabels[normalized];
+  if (label) {
+    return `${label} (${normalized})`;
+  }
+
+  return normalized;
+}
+
+function formatPermissionRequirement(missingPermissions: string, locale: string): string {
+  const usesEitherPermission = /\s+or\s+/i.test(missingPermissions);
+  const permissions = missingPermissions
+    .split(/\s+or\s+|,\s*/i)
+    .map((permission) => permission.trim())
+    .filter(Boolean)
+    .map(readablePermission);
+
+  if (permissions.length === 0) {
+    return locale === "ar"
+      ? "ليس لديك الصلاحية المطلوبة لإتمام هذا الإجراء."
+      : "You do not have the required access to perform this action.";
+  }
+
+  if (usesEitherPermission && permissions.length > 1) {
+    const permissionText = permissions.join(" or ");
+    return locale === "ar"
+      ? `تحتاج إلى إحدى هذه الصلاحيات لإتمام هذا الإجراء: ${permissionText}.`
+      : `You need one of these permissions to perform this action: ${permissionText}.`;
+  }
+
+  const permissionText = permissions.join(", ");
+  return locale === "ar"
+    ? `تحتاج إلى هذه الصلاحية لإتمام هذا الإجراء: ${permissionText}.`
+    : `You need this permission to perform this action: ${permissionText}.`;
+}
+
+function formatAccessError(rawMessage: string, lowerMessage: string, locale: string): string | null {
+  const missingPermissions = rawMessage.match(/missing required permissions:\s*(.+)$/i)?.[1];
+  if (missingPermissions) {
+    return formatPermissionRequirement(missingPermissions, locale);
+  }
+
+  if (lowerMessage.includes("only the organization owner")) {
+    return locale === "ar"
+      ? "هذا الإجراء متاح فقط لمالك المعرض."
+      : "Only the organization owner can perform this action.";
+  }
+
+  if (lowerMessage.includes("not a member of this organization")) {
+    return locale === "ar"
+      ? "حسابك ليس عضواً في هذا المعرض."
+      : "Your account is not a member of this organization.";
+  }
+
+  if (lowerMessage.includes("organization has been suspended")) {
+    return locale === "ar"
+      ? "تم إيقاف هذا المعرض، لذلك لا يمكن تنفيذ هذا الإجراء."
+      : "This organization is suspended, so this action cannot be completed.";
+  }
+
+  if (lowerMessage.includes("account has been disabled")) {
+    return locale === "ar"
+      ? "تم تعطيل هذا الحساب. يرجى التواصل مع الدعم."
+      : "This account has been disabled. Please contact support.";
+  }
+
+  if (lowerMessage.includes("super-admin access only")) {
+    return locale === "ar"
+      ? "هذا الإجراء متاح فقط لمسؤول النظام."
+      : "This action requires super-admin access.";
+  }
+
+  if (lowerMessage.includes("support-agent access only")) {
+    return locale === "ar"
+      ? "هذا الإجراء متاح فقط لموظفي الدعم."
+      : "This action requires support-agent access.";
+  }
+
+  return null;
+}
+
 const Toaster = ({ ...props }: ToasterProps) => {
   const { theme = "system" } = useTheme()
 
@@ -30,7 +192,7 @@ const Toaster = ({ ...props }: ToasterProps) => {
 }
 
 // Global user-friendly error formatting utility
-function formatFriendlyError(error: any, locale: string): string {
+function formatFriendlyError(error: unknown, locale: string): string {
   if (!error) {
     return locale === "ar" 
       ? "حدث خطأ غير متوقع. يرجى المحاولة مرة أخرى." 
@@ -41,13 +203,22 @@ function formatFriendlyError(error: any, locale: string): string {
   if (typeof error === "string") {
     rawMessage = error;
   } else if (error instanceof Error) {
-    rawMessage = error.message;
+    const convexDataMessage = messageFromUnknown((error as ErrorWithConvexData).data);
+    rawMessage = convexDataMessage || error.message;
   } else if (typeof error === "object") {
-    rawMessage = error.message || error.error || JSON.stringify(error);
+    const dataMessage = "data" in error ? messageFromUnknown(error.data) : "";
+    const message = "message" in error ? messageFromUnknown(error) : "";
+    const errorMessage = "error" in error ? messageFromUnknown(error.error) : "";
+    rawMessage = dataMessage || message || errorMessage || JSON.stringify(error);
   }
 
   // Strip common framework prefixes (including nested "Uncaught ConvexError:" chains)
-  rawMessage = rawMessage.replace(/(?:Uncaught\s+)?ConvexError:\s*/gi, "").trim();
+  rawMessage = rawMessage
+    .replace(/^\[CONVEX[^\]]+\]\s*/i, "")
+    .replace(/(?:Uncaught\s+)?ConvexError:\s*/gi, "")
+    .replace(/Server Error\s+\[Request ID:[^\]]+\]/gi, "")
+    .replace(/Called by client/gi, "")
+    .trim();
 
   // Unwrap structured AppError JSON: {"code":"VEHICLE_NOT_FOUND","message":"..."}
   try {
@@ -75,7 +246,8 @@ function formatFriendlyError(error: any, locale: string): string {
     // Auth & Permissions
     "unauthenticated": "You must be logged in to perform this action.",
     "unauthorized": "You do not have permission to perform this action.",
-    "forbidden": "Access denied. Only the organization owner can perform this action.",
+    "forbidden": "You do not have permission to perform this action.",
+    "access denied": "You do not have permission to perform this action.",
     
     // Entity Not Found errors
     "vehicle not found": "The requested vehicle could not be found in this organization.",
@@ -160,7 +332,8 @@ function formatFriendlyError(error: any, locale: string): string {
     // Auth & Permissions
     "unauthenticated": "يجب تسجيل الدخول لإتمام هذا الإجراء.",
     "unauthorized": "ليس لديك الصلاحية لإتمام هذا الإجراء.",
-    "forbidden": "تم رفض الوصول. مالك المعرض فقط من يمكنه القيام بهذا الإجراء.",
+    "forbidden": "ليس لديك الصلاحية لإتمام هذا الإجراء.",
+    "access denied": "ليس لديك الصلاحية لإتمام هذا الإجراء.",
     
     // Entity Not Found errors
     "vehicle not found": "المركبة المطلوبة غير موجودة في سجلات هذا المعرض.",
@@ -232,10 +405,25 @@ function formatFriendlyError(error: any, locale: string): string {
 
   const lowerMessage = rawMessage.toLowerCase();
 
+  if (
+    lowerMessage.includes("server error [request id") ||
+    lowerMessage === "server error" ||
+    lowerMessage === "[convex]"
+  ) {
+    return locale === "ar"
+      ? "حدث خطأ أثناء معالجة الطلب. يرجى المحاولة مرة أخرى."
+      : "An error occurred while processing your request. Please try again.";
+  }
+
+  const accessError = formatAccessError(rawMessage, lowerMessage, locale);
+  if (accessError) {
+    return accessError;
+  }
+
   // Search for partial matches
   for (const [key, value] of Object.entries(enTranslations)) {
     if (lowerMessage.includes(key)) {
-      return locale === "ar" ? arTranslations[key] : value;
+      return locale === "ar" ? (arTranslations[key] ?? value) : value;
     }
   }
 
@@ -259,7 +447,7 @@ function formatFriendlyError(error: any, locale: string): string {
 // Custom wrapped toast object with user-friendly formatting for error
 export const toast = {
   ...originalToast,
-  error: (message: any, options?: any) => {
+  error: (message: unknown, options?: Parameters<typeof originalToast.error>[1]) => {
     if (message instanceof Error) {
       Sentry.captureException(message, { tags: { source: "toast" } });
     }

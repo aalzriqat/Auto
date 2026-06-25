@@ -71,7 +71,7 @@ function SupportLayoutImpl({ children }: { children: React.ReactNode }) {
         toast.info("You're still in an active chat — you'll switch to break once it ends.");
       }
     } catch (e: any) {
-      toast.error(e?.data?.message ?? e?.message ?? "Failed to update status");
+      toast.error(e);
     }
   }
 

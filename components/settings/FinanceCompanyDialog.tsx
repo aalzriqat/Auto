@@ -126,7 +126,7 @@ export function FinanceCompanyDialog({
       }
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || t("AnErrorOccurred" as any));
+      toast.error(error);
     } finally {
       setIsLoading(false);
     }

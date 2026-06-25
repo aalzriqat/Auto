@@ -54,7 +54,7 @@ export default function AdminDataPage() {
       toast.success("Record updated");
       setEditTarget(null);
     } catch (e: any) {
-      toast.error(e?.data?.message ?? e?.message ?? "Invalid JSON or update failed");
+      toast.error(e);
     }
   }
 
@@ -65,7 +65,7 @@ export default function AdminDataPage() {
       toast.success("Record deleted");
       setDeleteTarget(null);
     } catch (e: any) {
-      toast.error(e?.data?.message ?? "Delete failed");
+      toast.error(e);
     }
   }
 

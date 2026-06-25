@@ -68,7 +68,7 @@ export function RecordDepositDialog({ open, onOpenChange, quoteId, onRecorded }:
       onOpenChange(false);
       onRecorded();
     } catch (error: any) {
-      toast.error(error.message || (t("DepositSaveFail" as any) ?? "Failed to record deposit"));
+      toast.error(error);
     } finally {
       setIsSubmitting(false);
     }

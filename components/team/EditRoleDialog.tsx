@@ -58,7 +58,7 @@ export function EditRoleDialog({
       toast.success(t("RoleUpdated" as any));
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || t("RoleUpdateFailed" as any));
+      toast.error(error);
     } finally {
       setIsSubmitting(false);
     }

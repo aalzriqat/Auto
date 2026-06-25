@@ -90,7 +90,7 @@ export function VehicleMarketingTab({ vehicleId }: VehicleMarketingTabProps) {
       });
       toast.success(t("InstagramPostQueued" as any) || "Queued — you'll be notified when it's posted.");
     } catch (error: any) {
-      toast.error(error.message || t("SomethingWentWrong" as any));
+      toast.error(error);
     } finally {
       setIsPosting(false);
     }
@@ -109,7 +109,7 @@ export function VehicleMarketingTab({ vehicleId }: VehicleMarketingTabProps) {
       });
       toast.success(t("InstagramPostQueued" as any) || "Queued — you'll be notified when it's posted.");
     } catch (error: any) {
-      toast.error(error.message || t("SomethingWentWrong" as any));
+      toast.error(error);
     } finally {
       setIsPostingFacebook(false);
     }
@@ -231,7 +231,7 @@ function PostHistoryItem({ post }: { post: Doc<"socialPosts"> }) {
     try {
       await refreshEngagement({ socialPostId: post._id });
     } catch (error: any) {
-      toast.error(error.message || t("SomethingWentWrong" as any));
+      toast.error(error);
     } finally {
       setIsRefreshing(false);
     }
@@ -246,7 +246,7 @@ function PostHistoryItem({ post }: { post: Doc<"socialPosts"> }) {
         const result = await listComments({ socialPostId: post._id });
         setComments(result);
       } catch (error: any) {
-        toast.error(error.message || t("SomethingWentWrong" as any));
+        toast.error(error);
         setCommentsOpen(false);
       } finally {
         setIsLoadingComments(false);
@@ -263,7 +263,7 @@ function PostHistoryItem({ post }: { post: Doc<"socialPosts"> }) {
       setReplyDrafts((prev) => ({ ...prev, [commentId]: "" }));
       toast.success(t("ReplySent" as any) || "Reply sent.");
     } catch (error: any) {
-      toast.error(error.message || t("SomethingWentWrong" as any));
+      toast.error(error);
     } finally {
       setBusyCommentId(null);
     }
@@ -277,7 +277,7 @@ function PostHistoryItem({ post }: { post: Doc<"socialPosts"> }) {
         prev ? prev.map((c) => (c.id === comment.id ? { ...c, hidden: !comment.hidden } : c)) : prev
       );
     } catch (error: any) {
-      toast.error(error.message || t("SomethingWentWrong" as any));
+      toast.error(error);
     } finally {
       setBusyCommentId(null);
     }

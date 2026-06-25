@@ -188,7 +188,7 @@ export function SocialConversationDialog({
       setReplyDrafts((prev) => ({ ...prev, [event._id]: "" }));
       toast.success(t("ReplySentSuccess" as any));
     } catch (error: any) {
-      toast.error(error.message || t("SomethingWentWrong" as any));
+      toast.error(error);
     } finally {
       setBusyEventId(null);
     }
@@ -210,7 +210,7 @@ export function SocialConversationDialog({
       setDmDraft("");
       toast.success(t("MessageSentSuccess" as any));
     } catch (error: any) {
-      toast.error(error.message || t("SomethingWentWrong" as any));
+      toast.error(error);
     } finally {
       setSendingDm(false);
     }
@@ -235,7 +235,7 @@ export function SocialConversationDialog({
       });
       toast.success(t("VehicleLinked" as any));
     } catch (error: any) {
-      toast.error(error.message || t("SomethingWentWrong" as any));
+      toast.error(error);
     } finally {
       setLinkingVehicle(false);
     }
@@ -248,7 +248,7 @@ export function SocialConversationDialog({
       const result = await fetchFbHistory({ orgId: activeOrgId, customerId: effectiveCustomerId });
       toast.success(`Synced ${result.synced} messages`);
     } catch (error: any) {
-      toast.error(error.message || t("SomethingWentWrong" as any));
+      toast.error(error);
     } finally {
       setSyncing(false);
     }

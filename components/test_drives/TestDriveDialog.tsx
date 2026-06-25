@@ -121,7 +121,7 @@ export function TestDriveDialog({ open, onOpenChange, vehicleId, testDrive }: Te
       }
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || t("TestDriveSaveFail" as any));
+      toast.error(error);
     } finally {
       setIsSubmitting(false);
     }

@@ -177,7 +177,7 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
       toast.success(t("QuoteSavedSuccess" as any));
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || t("QuoteSaveFail" as any));
+      toast.error(error);
     } finally {
       setIsSubmitting(false);
     }

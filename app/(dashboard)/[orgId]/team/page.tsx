@@ -88,7 +88,7 @@ export default function TeamPage() {
       await updateCommissionRate({ orgId: activeOrgId, membershipId: membershipId as Id<"memberships">, commissionRate: rate });
       toast.success("Commission rate updated.");
     } catch (e: any) {
-      toast.error(e.message ?? "Failed to update.");
+      toast.error(e);
     }
     setEditingCommission(null);
   }
@@ -103,7 +103,7 @@ export default function TeamPage() {
       toast.success(t("MemberRemovedSuccess" as any));
       setMemberToDelete(null);
     } catch (error: any) {
-      toast.error(error.message || t("MemberRemoveFail" as any));
+      toast.error(error);
     }
   };
 
@@ -122,7 +122,7 @@ export default function TeamPage() {
                     const n = await syncRolePermissions({ orgId: activeOrgId });
                     toast.success(`Synced ${n} roles to latest permission templates.`);
                   } catch (e: any) {
-                    toast.error(e.message ?? "Sync failed.");
+                    toast.error(e);
                   }
                 }}
               >

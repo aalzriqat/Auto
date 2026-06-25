@@ -93,7 +93,7 @@ export function MergeCustomersDialog({ open, onOpenChange }: MergeCustomersDialo
       toast.success(t("CustomersMergedSuccess" as any) || "Customers merged successfully.");
       handleOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || t("SomethingWentWrong" as any));
+      toast.error(error);
     } finally {
       setIsMerging(false);
     }

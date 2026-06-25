@@ -109,7 +109,7 @@ export function WorkOrderDialog({ open, onOpenChange, vehicleId, workOrder }: Wo
       }
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || "Failed to save work order");
+      toast.error(error);
     } finally {
       setIsSubmitting(false);
     }

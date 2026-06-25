@@ -139,7 +139,7 @@ export function VehicleDetailsDialog({
       });
       toast.success(t("LandedCostSaved" as any));
     } catch (error: any) {
-      toast.error(error.message || t("LandedCostSaveFailed" as any));
+      toast.error(error);
     } finally {
       setSavingLandedCosts(false);
     }
@@ -161,7 +161,7 @@ export function VehicleDetailsDialog({
       setReservationExpiresAt("");
       toast.success(t("ReservationCreated" as any));
     } catch (error: any) {
-      toast.error(error.message || t("ReservationActionFailed" as any));
+      toast.error(error);
     } finally {
       setSavingReservation(false);
     }
@@ -174,7 +174,7 @@ export function VehicleDetailsDialog({
       await releaseReservation({ orgId: activeOrgId, reservationId });
       toast.success(t("ReservationReleased" as any));
     } catch (error: any) {
-      toast.error(error.message || t("ReservationActionFailed" as any));
+      toast.error(error);
     } finally {
       setSavingReservation(false);
     }
@@ -191,7 +191,7 @@ export function VehicleDetailsDialog({
           : (t("DepositForfeitedSuccess" as any) ?? "Deposit forfeited")
       );
     } catch (error: any) {
-      toast.error(error.message || (t("DepositReleaseFail" as any) ?? "Failed to release deposit"));
+      toast.error(error);
     } finally {
       setReleasingDepositId(null);
     }

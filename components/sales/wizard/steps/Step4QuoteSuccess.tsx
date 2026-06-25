@@ -68,7 +68,7 @@ export function Step4QuoteSuccess({
       setApplicationId(id);
       toast.success(t("ApplicationStartedSuccess" as any) ?? "Finance application started");
     } catch (error: any) {
-      toast.error(error.message || (t("ApplicationStartFail" as any) ?? "Failed to start finance application"));
+      toast.error(error);
     } finally {
       setIsStartingApplication(false);
     }
@@ -93,7 +93,7 @@ export function Step4QuoteSuccess({
       setSaleId(id);
       toast.success(t("SaleCompletedSuccess" as any) ?? "Cash sale completed");
     } catch (error: any) {
-      toast.error(error.message || (t("SaleCompleteFail" as any) ?? "Failed to complete sale"));
+      toast.error(error);
     } finally {
       setIsCompletingSale(false);
     }

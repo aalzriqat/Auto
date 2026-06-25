@@ -93,7 +93,7 @@ export default function TasksPage() {
       setTaskToCancel(null);
       setStatusNote("");
     } catch (error: any) {
-      toast.error(error.message || (t("TaskCancelFail" as any) || "Failed to cancel task"));
+      toast.error(error);
     }
   };
 
@@ -120,7 +120,7 @@ export default function TasksPage() {
       setStatusNote("");
       setNewDueDate(undefined);
     } catch (error: any) {
-      toast.error(error.message || (t("TaskRescheduleFail" as any) || "Failed to reschedule task"));
+      toast.error(error);
     }
   };
 
@@ -135,7 +135,7 @@ export default function TasksPage() {
       });
       toast.success(t("TaskMarkedStatus" as any) || `Task status updated`);
     } catch (error: any) {
-      toast.error(error.message || "Failed to update task status");
+      toast.error(error);
     }
   };
 

@@ -106,7 +106,7 @@ function ThreadView({ threadId }: { threadId: Id<"supportThreads"> }) {
       setReply("");
       toast.success("Reply sent");
     } catch (e: any) {
-      toast.error(e?.data?.message ?? e?.message ?? "Failed to send reply");
+      toast.error(e);
     } finally {
       setIsSending(false);
     }

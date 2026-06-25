@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 import { Plus, Trash2, ChevronUp, ChevronDown, Loader2 } from "lucide-react";
 import { Id } from "@/convex/_generated/dataModel";
 import { translateLeadSourceLabel } from "@/lib/i18n/defaultLabels";
@@ -38,7 +38,7 @@ export default function LeadSourcesPage() {
       await seedSources({ orgId: activeOrgId });
       toast.success(t("DefaultSourcesLoaded" as any));
     } catch (error: any) {
-      toast.error(error.message || t("DefaultSourcesLoadFail" as any));
+      toast.error(error);
     }
   };
 
@@ -51,7 +51,7 @@ export default function LeadSourcesPage() {
       setShowAddInput(false);
       toast.success(t("LeadSourceAdded" as any));
     } catch (error: any) {
-      toast.error(error.message || t("LeadSourceAddFail" as any));
+      toast.error(error);
     } finally {
       setIsAdding(false);
     }
@@ -62,7 +62,7 @@ export default function LeadSourcesPage() {
     try {
       await updateSource({ orgId: activeOrgId, sourceId, isActive });
     } catch (error: any) {
-      toast.error(error.message || t("LeadSourceUpdateFail" as any));
+      toast.error(error);
     }
   };
 
@@ -73,7 +73,7 @@ export default function LeadSourcesPage() {
       await removeSource({ orgId: activeOrgId, sourceId });
       toast.success(t("LeadSourceDeleted" as any));
     } catch (error: any) {
-      toast.error(error.message || t("LeadSourceDeleteFail" as any));
+      toast.error(error);
     }
   };
 
@@ -84,7 +84,7 @@ export default function LeadSourcesPage() {
     try {
       await reorderSources({ orgId: activeOrgId, orderedIds });
     } catch (error: any) {
-      toast.error(error.message || t("ReorderFail" as any));
+      toast.error(error);
     }
   };
 
@@ -95,7 +95,7 @@ export default function LeadSourcesPage() {
     try {
       await reorderSources({ orgId: activeOrgId, orderedIds });
     } catch (error: any) {
-      toast.error(error.message || t("ReorderFail" as any));
+      toast.error(error);
     }
   };
 

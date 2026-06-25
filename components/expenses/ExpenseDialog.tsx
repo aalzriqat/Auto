@@ -141,7 +141,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
       }
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || t("ExpenseSaveFail" as any));
+      toast.error(error);
     } finally {
       setIsSubmitting(false);
     }

@@ -59,7 +59,7 @@ export default function AdminNotificationsPage() {
       setMessage("");
       setLink("");
     } catch (e: any) {
-      toast.error(e?.data?.message ?? "Failed to send broadcast");
+      toast.error(e);
     } finally {
       setSending(false);
     }

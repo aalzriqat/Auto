@@ -233,7 +233,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
       }
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || t("SaleLogFail" as any));
+      toast.error(error);
     } finally {
       setIsSubmitting(false);
     }

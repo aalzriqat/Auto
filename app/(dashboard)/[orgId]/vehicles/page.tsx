@@ -132,7 +132,7 @@ export default function VehiclesPage() {
       setSelectedStatus("");
       setStatusRequestNotes("");
     } catch (error: any) {
-      toast.error(error.message || t("FailedToSubmitRequest" as any));
+      toast.error(error);
     }
   };
 
@@ -142,7 +142,7 @@ export default function VehiclesPage() {
       await resolveStatusRequest({ orgId: activeOrgId, requestId, status });
       toast.success(`Status request ${status.toLowerCase()}`);
     } catch (error: any) {
-      toast.error(error.message || `Failed to ${status.toLowerCase()} request`);
+      toast.error(error);
     }
   };
 
@@ -152,7 +152,7 @@ export default function VehiclesPage() {
       await resolveEditRequest({ orgId: activeOrgId, requestId, status });
       toast.success(`Edit request ${status.toLowerCase()}`);
     } catch (error: any) {
-      toast.error(error.message || `Failed to ${status.toLowerCase()} request`);
+      toast.error(error);
     }
   };
 
@@ -207,7 +207,7 @@ export default function VehiclesPage() {
       toast.success(t("VehicleRemoved" as any));
       setVehicleToDelete(null);
     } catch (error: any) {
-      toast.error(error.message || t("FailedToRemoveVehicle" as any));
+      toast.error(error);
     }
   };
 

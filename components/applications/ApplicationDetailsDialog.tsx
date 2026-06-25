@@ -62,7 +62,7 @@ export function ApplicationDetailsDialog({
       });
       toast.success(t("UploadSuccess" as any));
     } catch (err: any) {
-      toast.error(err.message || t("UploadFail" as any));
+      toast.error(err);
     }
   };
 
@@ -72,7 +72,7 @@ export function ApplicationDetailsDialog({
       await updateStatus({ orgId: activeOrgId, applicationId, status: "APPROVED" });
       toast.success(t("AppApprovedSuccess" as any));
     } catch (err: any) {
-      toast.error(err.message || "Failed to approve application");
+      toast.error(err);
     }
   };
 
@@ -83,7 +83,7 @@ export function ApplicationDetailsDialog({
       toast.success(t("DealFinalizedSuccess" as any));
       onOpenChange(false);
     } catch (err: any) {
-      toast.error(err.message || "Failed to finalize deal");
+      toast.error(err);
     }
   };
 

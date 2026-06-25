@@ -66,7 +66,7 @@ export default function ExpensesPage() {
       toast.success(t("ExpenseDeletedSuccess" as any));
       setExpenseToDelete(null);
     } catch (error: any) {
-      toast.error(error.message || t("ExpenseDeleteFail" as any));
+      toast.error(error);
     }
   };
 

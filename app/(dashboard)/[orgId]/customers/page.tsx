@@ -100,7 +100,7 @@ export default function CustomersPage() {
       toast.success(t("CustomerRemovedSuccess" as any));
       setCustomerToDelete(null);
     } catch (error: any) {
-      toast.error(error.message || t("CustomerRemoveFail" as any));
+      toast.error(error);
     }
   };
 

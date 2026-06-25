@@ -148,7 +148,7 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
       }
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || (t("TaskSaveFail" as any) || "Failed to save task"));
+      toast.error(error);
     } finally {
       setIsSubmitting(false);
     }

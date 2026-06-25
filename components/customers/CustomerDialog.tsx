@@ -146,7 +146,7 @@ export function CustomerDialog({ open, onOpenChange, customer }: CustomerDialogP
       }
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || t("SomethingWentWrong" as any));
+      toast.error(error);
     } finally {
       setIsSubmitting(false);
     }

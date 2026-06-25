@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { useEffect, useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 
 type EntityType = "vehicle" | "customer" | "lead";
 
@@ -132,8 +132,8 @@ export function useSaveCustomFieldValues() {
         entityId,
         values: entries,
       });
-    } catch (err: any) {
-      toast.error("Failed to save custom fields: " + (err.message ?? ""));
+    } catch (err) {
+      toast.error(err);
     }
   };
 }

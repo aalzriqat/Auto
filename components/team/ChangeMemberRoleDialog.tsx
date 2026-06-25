@@ -47,7 +47,7 @@ export function ChangeMemberRoleDialog({
       toast.success(t("RoleUpdatedSuccess"));
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || t("RoleUpdateFail"));
+      toast.error(error);
     } finally {
       setIsSubmitting(false);
     }

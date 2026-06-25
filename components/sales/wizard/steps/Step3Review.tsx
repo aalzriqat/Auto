@@ -186,7 +186,7 @@ export function Step3Review({
         },
       });
     } catch (err: any) {
-      toast.error(err.message || t("QuoteSaveFail"));
+      toast.error(err);
     } finally {
       setIsSubmitting(false);
     }

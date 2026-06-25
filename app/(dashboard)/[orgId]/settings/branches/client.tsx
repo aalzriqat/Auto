@@ -85,7 +85,7 @@ export function BranchesClient() {
       }
       setIsDialogOpen(false);
     } catch (error: any) {
-      toast.error(error.message || t("BranchSaveFail" as any));
+      toast.error(error);
     }
   };
 

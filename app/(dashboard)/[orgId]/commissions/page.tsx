@@ -107,7 +107,7 @@ export default function CommissionsPage() {
       await markPaid({ orgId: activeOrgId, saleId });
       toast.success("Commission marked as paid.");
     } catch (e: any) {
-      toast.error(e.message ?? "Failed to update.");
+      toast.error(e);
     }
   }
 
@@ -117,7 +117,7 @@ export default function CommissionsPage() {
       await markUnpaid({ orgId: activeOrgId, saleId });
       toast.success("Commission marked as unpaid.");
     } catch (e: any) {
-      toast.error(e.message ?? "Failed to update.");
+      toast.error(e);
     }
   }
 
@@ -131,7 +131,7 @@ export default function CommissionsPage() {
       setEditingId(null);
       setEditingAmount("");
     } catch (e: any) {
-      toast.error(e.message ?? t("CommissionUpdateFailed" as any));
+      toast.error(e);
     }
   }
 

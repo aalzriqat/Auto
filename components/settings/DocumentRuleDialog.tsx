@@ -63,7 +63,7 @@ export function DocumentRuleDialog({ open, onOpenChange }: DocumentRuleDialogPro
       toast.success(t("RuleAddedSuccess" as any));
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || t("RuleAddFail" as any));
+      toast.error(error);
     } finally {
       setIsSubmitting(false);
     }

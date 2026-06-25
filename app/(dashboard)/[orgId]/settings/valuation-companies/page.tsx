@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 import { Plus, Trash2, Loader2 } from "lucide-react";
 import { Id } from "@/convex/_generated/dataModel";
 
@@ -36,7 +36,7 @@ export default function ValuationCompaniesPage() {
       await seedCompanies({ orgId: activeOrgId });
       toast.success("Default valuation companies loaded.");
     } catch (error: any) {
-      toast.error(error.message || "Failed to seed valuation companies.");
+      toast.error(error);
     }
   };
 
@@ -49,7 +49,7 @@ export default function ValuationCompaniesPage() {
       setShowAddInput(false);
       toast.success("Valuation company added.");
     } catch (error: any) {
-      toast.error(error.message || "Failed to add valuation company.");
+      toast.error(error);
     } finally {
       setIsAdding(false);
     }
@@ -63,7 +63,7 @@ export default function ValuationCompaniesPage() {
     try {
       await updateCompany({ orgId: activeOrgId, companyId, isActive });
     } catch (error: any) {
-      toast.error(error.message || "Failed to update company.");
+      toast.error(error);
     }
   };
 
@@ -74,7 +74,7 @@ export default function ValuationCompaniesPage() {
       await removeCompany({ orgId: activeOrgId, companyId });
       toast.success("Valuation company deleted.");
     } catch (error: any) {
-      toast.error(error.message || "Failed to delete company.");
+      toast.error(error);
     }
   };
 

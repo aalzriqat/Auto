@@ -29,7 +29,7 @@ export default function ApprovalsPage() {
       });
       toast.success(status === "APPROVED" ? t("ApprovalApprovedMsg") : t("ApprovalRejectedMsg"));
     } catch (error: any) {
-      toast.error(error.message || t("FailedToProcessApproval"));
+      toast.error(error);
     }
   };
 

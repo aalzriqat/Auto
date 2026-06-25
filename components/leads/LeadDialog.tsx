@@ -162,7 +162,7 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
       }
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || "Something went wrong");
+      toast.error(error);
     } finally {
       setIsSubmitting(false);
     }

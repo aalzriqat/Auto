@@ -139,7 +139,7 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
       setEmailCheckState("idle");
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || t("AccountCreatedFail" as any));
+      toast.error(error);
     } finally {
       setIsSubmitting(false);
     }

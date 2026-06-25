@@ -52,7 +52,7 @@ export function OrgSwitcher() {
       setDialogType(null);
       toast.success(t("OrganizationCreated" as any));
     } catch (error: any) {
-      toast.error(error.message || t("FailedToCreateOrg" as any));
+      toast.error(error);
     }
   };
 
@@ -66,7 +66,7 @@ export function OrgSwitcher() {
       setDialogType(null);
       toast.success(t("OrganizationRenamed" as any));
     } catch (error: any) {
-      toast.error(error.message || t("FailedToRenameOrg" as any));
+      toast.error(error);
     }
   };
 

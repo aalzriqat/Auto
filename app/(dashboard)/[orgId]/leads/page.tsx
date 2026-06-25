@@ -91,7 +91,7 @@ export default function LeadsPage() {
       toast.success(t("LeadRemovedSuccess" as any) || "Lead deleted successfully");
       setLeadToDelete(null);
     } catch (error: any) {
-      toast.error(error.message || (t("LeadRemoveFail" as any) || "Failed to delete lead"));
+      toast.error(error);
     }
   };
 

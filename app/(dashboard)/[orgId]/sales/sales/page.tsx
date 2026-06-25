@@ -71,7 +71,7 @@ export default function SalesPage() {
       toast.success(t("SaleRemovedSuccess" as any));
       setSaleToDelete(null);
     } catch (error: any) {
-      toast.error(error.message || t("SaleRemoveFail" as any));
+      toast.error(error);
     }
   };
 

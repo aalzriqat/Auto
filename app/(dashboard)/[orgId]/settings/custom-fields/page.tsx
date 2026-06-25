@@ -19,7 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 import { Plus, Trash2, Loader2 } from "lucide-react";
 import { Id } from "@/convex/_generated/dataModel";
 
@@ -67,7 +67,7 @@ function FieldForm({ orgId, entityType, onDone }: {
       toast.success(t("FieldCreated" as any));
       onDone();
     } catch (error: any) {
-      toast.error(error.message || t("FieldCreateFail" as any));
+      toast.error(error);
     } finally {
       setIsSaving(false);
     }
@@ -140,7 +140,7 @@ function EntityFieldList({ orgId, entityType, descKey }: { orgId: string; entity
     try {
       await updateField({ orgId: orgId as Id<"organizations">, fieldId, isActive });
     } catch (error: any) {
-      toast.error(error.message || t("FieldUpdateFail" as any));
+      toast.error(error);
     }
   };
 
@@ -150,7 +150,7 @@ function EntityFieldList({ orgId, entityType, descKey }: { orgId: string; entity
       await removeField({ orgId: orgId as Id<"organizations">, fieldId });
       toast.success(t("FieldDeleted" as any));
     } catch (error: any) {
-      toast.error(error.message || t("FieldDeleteFail" as any));
+      toast.error(error);
     }
   };
 

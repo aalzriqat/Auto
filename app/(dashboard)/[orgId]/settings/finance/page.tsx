@@ -58,7 +58,7 @@ export default function FinanceCompaniesPage() {
         await deleteCompany({ id, orgId: activeOrgId });
         toast.success(t("CompanyDeletedSuccess" as any));
       } catch (error: any) {
-        toast.error(error.message || t("DeleteFail" as any));
+        toast.error(error);
       }
     }
   };
@@ -69,7 +69,7 @@ export default function FinanceCompaniesPage() {
       await seedStatuses({ orgId: activeOrgId });
       toast.success(t("DefaultStatusesLoaded" as any));
     } catch (error: any) {
-      toast.error(error.message || t("DefaultStatusesLoadFail" as any));
+      toast.error(error);
     }
   };
 
@@ -82,7 +82,7 @@ export default function FinanceCompaniesPage() {
       setShowAddStatusInput(false);
       toast.success(t("CustomerStatusAdded" as any));
     } catch (error: any) {
-      toast.error(error.message || t("CustomerStatusAddFail" as any));
+      toast.error(error);
     } finally {
       setIsAddingStatus(false);
     }
@@ -93,7 +93,7 @@ export default function FinanceCompaniesPage() {
     try {
       await updateStatus({ orgId: activeOrgId, statusId, isActive });
     } catch (error: any) {
-      toast.error(error.message || t("CustomerStatusUpdateFail" as any));
+      toast.error(error);
     }
   };
 
@@ -104,7 +104,7 @@ export default function FinanceCompaniesPage() {
       await removeStatus({ orgId: activeOrgId, statusId });
       toast.success(t("CustomerStatusDeleted" as any));
     } catch (error: any) {
-      toast.error(error.message || t("CustomerStatusDeleteFail" as any));
+      toast.error(error);
     }
   };
 
@@ -115,7 +115,7 @@ export default function FinanceCompaniesPage() {
     try {
       await reorderStatuses({ orgId: activeOrgId, orderedIds });
     } catch (error: any) {
-      toast.error(error.message || t("ReorderFail" as any));
+      toast.error(error);
     }
   };
 
@@ -126,7 +126,7 @@ export default function FinanceCompaniesPage() {
     try {
       await reorderStatuses({ orgId: activeOrgId, orderedIds });
     } catch (error: any) {
-      toast.error(error.message || t("ReorderFail" as any));
+      toast.error(error);
     }
   };
 

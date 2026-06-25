@@ -80,7 +80,7 @@ export default function ContactPage() {
       setSubmitted(true);
       form.reset();
     } catch (error: any) {
-      toast.error(error?.data?.message ?? error?.message ?? "Failed to send message. Please try again.");
+      toast.error(error);
     }
   }
 

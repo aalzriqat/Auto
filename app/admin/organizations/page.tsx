@@ -49,7 +49,7 @@ export default function AdminOrganizationsPage() {
       setSuspendTarget(null);
       setReason("");
     } catch (e: any) {
-      toast.error(e?.data?.message ?? "Action failed");
+      toast.error(e);
     }
   }
 
@@ -61,7 +61,7 @@ export default function AdminOrganizationsPage() {
       setDeleteTarget(null);
       setConfirmName("");
     } catch (e: any) {
-      toast.error(e?.data?.message ?? "Delete failed");
+      toast.error(e);
     }
   }
 

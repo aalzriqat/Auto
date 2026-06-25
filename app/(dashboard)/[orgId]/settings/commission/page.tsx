@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 import { Plus, Trash2, Zap, PenLine, Users } from "lucide-react";
 
 interface Tier {
@@ -43,7 +43,7 @@ export default function CommissionSettingsPage() {
       await upsert({ orgId: activeOrgId, commissionMode: mode });
       toast.success(t("CommissionModeSaved" as any));
     } catch (error: any) {
-      toast.error(error.message || t("CommissionModeError" as any));
+      toast.error(error);
     } finally {
       setIsSavingMode(false);
     }
@@ -71,7 +71,7 @@ export default function CommissionSettingsPage() {
       setTiers(sorted);
       toast.success(t("CommissionTiersSaved"));
     } catch (error: any) {
-      toast.error(error.message || t("FailedToSaveCommissionTiers"));
+      toast.error(error);
     } finally {
       setIsSaving(false);
     }

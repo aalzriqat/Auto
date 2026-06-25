@@ -17,7 +17,7 @@ import {
 } from "@/components/ui/select";
 import { Check } from "lucide-react";
 import { Id } from "@/convex/_generated/dataModel";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 
 const CURRENCIES = [
   { code: "JOD", symbol: "د.أ", label: "Jordanian Dinar (JOD)" },
@@ -53,7 +53,7 @@ function Onboarding({ onComplete }: { onComplete: (orgId: string) => void }) {
       setOrgId(newId as string);
       setStep(1);
     } catch (err: any) {
-      toast.error(err.message || "Something went wrong");
+      toast.error(err);
     } finally {
       setIsBusy(false);
     }
@@ -72,7 +72,7 @@ function Onboarding({ onComplete }: { onComplete: (orgId: string) => void }) {
       });
       setStep(2);
     } catch (err: any) {
-      toast.error(err.message || "Failed to save currency");
+      toast.error(err);
     } finally {
       setIsBusy(false);
     }
@@ -86,7 +86,7 @@ function Onboarding({ onComplete }: { onComplete: (orgId: string) => void }) {
       await seedLeadSources({ orgId: orgId as any });
       setStep(3);
     } catch (err: any) {
-      toast.error(err.message || "Failed to seed lead sources");
+      toast.error(err);
     } finally {
       setIsBusy(false);
     }
@@ -100,7 +100,7 @@ function Onboarding({ onComplete }: { onComplete: (orgId: string) => void }) {
       await seedPipeline({ orgId: orgId as any });
       setStep(4);
     } catch (err: any) {
-      toast.error(err.message || "Failed to seed pipeline");
+      toast.error(err);
     } finally {
       setIsBusy(false);
     }

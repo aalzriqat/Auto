@@ -53,7 +53,7 @@ function OfferedCard({ thread }: { thread: any }) {
             try {
               await acceptOffer({ threadId: thread._id });
             } catch (e: any) {
-              toast.error(e?.data?.message ?? e?.message ?? "Failed to accept");
+              toast.error(e);
             }
           }}
         >
@@ -66,7 +66,7 @@ function OfferedCard({ thread }: { thread: any }) {
             try {
               await rejectOffer({ threadId: thread._id });
             } catch (e: any) {
-              toast.error(e?.data?.message ?? e?.message ?? "Failed to reject");
+              toast.error(e);
             }
           }}
         >
@@ -195,7 +195,7 @@ function SupportConsoleImpl() {
                       await claimThread({ threadId: thread._id });
                       setActiveThreadId(thread._id);
                     } catch (e: any) {
-                      toast.error(e?.data?.message ?? e?.message ?? "Failed to claim");
+                      toast.error(e);
                     }
                   }}
                 >
@@ -274,7 +274,7 @@ function ThreadView({ threadId, onClosed }: { threadId: Id<"liveChatThreads">; o
       await sendAgentMessage({ threadId, bodyText: reply.trim() });
       setReply("");
     } catch (e: any) {
-      toast.error(e?.data?.message ?? e?.message ?? "Failed to send reply");
+      toast.error(e);
     } finally {
       setIsSending(false);
     }
@@ -286,7 +286,7 @@ function ThreadView({ threadId, onClosed }: { threadId: Id<"liveChatThreads">; o
       setAccessGrant(result);
       toast.success("Access granted");
     } catch (e: any) {
-      toast.error(e?.data?.message ?? e?.message ?? "Failed to get access");
+      toast.error(e);
     }
   }
 
@@ -296,7 +296,7 @@ function ThreadView({ threadId, onClosed }: { threadId: Id<"liveChatThreads">; o
       setAccessGrant(null);
       toast.success("Access revoked");
     } catch (e: any) {
-      toast.error(e?.data?.message ?? e?.message ?? "Failed to revoke access");
+      toast.error(e);
     }
   }
 

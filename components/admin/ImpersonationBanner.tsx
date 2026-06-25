@@ -26,7 +26,7 @@ export function ImpersonationBanner() {
       toast.success("Impersonation ended");
       router.push("/admin/users");
     } catch (e: any) {
-      toast.error(e?.data?.message ?? e?.message ?? "Failed to end impersonation");
+      toast.error(e);
     }
   }
 

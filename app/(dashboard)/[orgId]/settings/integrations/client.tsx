@@ -177,7 +177,7 @@ export function IntegrationsClient() {
       const url = await createInstagramConnectUrl({ orgId: activeOrgId });
       window.location.href = url;
     } catch (error: any) {
-      toast.error(error.message || t("SomethingWentWrong" as any));
+      toast.error(error);
     }
   };
 
@@ -187,7 +187,7 @@ export function IntegrationsClient() {
       await disconnectInstagram({ orgId: activeOrgId });
       toast.success(t("InstagramDisconnectedSuccess" as any));
     } catch (error: any) {
-      toast.error(error.message || t("SomethingWentWrong" as any));
+      toast.error(error);
     }
   };
 
@@ -197,7 +197,7 @@ export function IntegrationsClient() {
       const url = await createFacebookConnectUrl({ orgId: activeOrgId });
       window.location.href = url;
     } catch (error: any) {
-      toast.error(error.message || t("SomethingWentWrong" as any));
+      toast.error(error);
     }
   };
 
@@ -207,7 +207,7 @@ export function IntegrationsClient() {
       await disconnectFacebook({ orgId: activeOrgId });
       toast.success(t("FacebookDisconnectedSuccess" as any));
     } catch (error: any) {
-      toast.error(error.message || t("SomethingWentWrong" as any));
+      toast.error(error);
     }
   };
 
@@ -216,7 +216,7 @@ export function IntegrationsClient() {
     try {
       await setAutoPostEnabled({ orgId: activeOrgId, enabled });
     } catch (error: any) {
-      toast.error(error.message || t("SomethingWentWrong" as any));
+      toast.error(error);
     }
   };
 
@@ -239,7 +239,7 @@ export function IntegrationsClient() {
       });
       toast.success(t("AutoRepliesSaved" as any));
     } catch (error: any) {
-      toast.error(error.message || t("SomethingWentWrong" as any));
+      toast.error(error);
     } finally {
       setIgSavingAutoReply(false);
     }
@@ -264,7 +264,7 @@ export function IntegrationsClient() {
       });
       toast.success(t("AutoRepliesSaved" as any));
     } catch (error: any) {
-      toast.error(error.message || t("SomethingWentWrong" as any));
+      toast.error(error);
     } finally {
       setFbSavingAutoReply(false);
     }
@@ -279,7 +279,7 @@ export function IntegrationsClient() {
     try {
       await setInstagramLeadCreationConfig({ orgId: activeOrgId, leadFromCommentsEnabled, leadFromDmsEnabled });
     } catch (error: any) {
-      toast.error(error.message || t("SomethingWentWrong" as any));
+      toast.error(error);
     }
   };
 
@@ -292,7 +292,7 @@ export function IntegrationsClient() {
     try {
       await setFacebookLeadCreationConfig({ orgId: activeOrgId, leadFromCommentsEnabled, leadFromDmsEnabled });
     } catch (error: any) {
-      toast.error(error.message || t("SomethingWentWrong" as any));
+      toast.error(error);
     }
   };
 
@@ -328,7 +328,7 @@ export function IntegrationsClient() {
       });
       toast.success(t("SmartReplySaved" as any));
     } catch (error: any) {
-      toast.error(error.message || t("SomethingWentWrong" as any));
+      toast.error(error);
     } finally {
       setSavingSmartReply(false);
     }
@@ -363,7 +363,7 @@ export function IntegrationsClient() {
       });
       toast.success(t("SmartReplyTemplatesSaved" as any));
     } catch (error: any) {
-      toast.error(error.message || t("SomethingWentWrong" as any));
+      toast.error(error);
     } finally {
       setSavingTemplates(false);
     }

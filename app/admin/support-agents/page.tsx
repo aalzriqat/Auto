@@ -43,7 +43,7 @@ export default function AdminSupportAgentsPage() {
       toast.success("Support agent added");
       setEmail("");
     } catch (e: any) {
-      toast.error(e?.data?.message ?? e?.message ?? "Failed to add support agent");
+      toast.error(e);
     } finally {
       setIsAdding(false);
     }
@@ -54,7 +54,7 @@ export default function AdminSupportAgentsPage() {
       await removeSupportAgent({ agentId });
       toast.success("Support agent removed");
     } catch (e: any) {
-      toast.error(e?.data?.message ?? e?.message ?? "Failed to remove support agent");
+      toast.error(e);
     }
   }
 

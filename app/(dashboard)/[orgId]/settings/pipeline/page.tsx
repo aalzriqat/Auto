@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { toast } from "sonner";
+import { toast } from "@/components/ui/sonner";
 import { ChevronUp, ChevronDown, Loader2 } from "lucide-react";
 import { Id } from "@/convex/_generated/dataModel";
 import { translatePipelineStageLabel } from "@/lib/i18n/defaultLabels";
@@ -35,7 +35,7 @@ export default function PipelineSettingsPage() {
       await seedStages({ orgId: activeOrgId });
       toast.success(t("DefaultStagesLoaded" as any));
     } catch (error: any) {
-      toast.error(error.message || t("DefaultStagesLoadFail" as any));
+      toast.error(error);
     }
   };
 
@@ -44,7 +44,7 @@ export default function PipelineSettingsPage() {
     try {
       await updateStage({ orgId: activeOrgId, stageId, isActive });
     } catch (error: any) {
-      toast.error(error.message || t("PipelineStageUpdateFail" as any));
+      toast.error(error);
     }
   };
 
@@ -53,7 +53,7 @@ export default function PipelineSettingsPage() {
     try {
       await updateStage({ orgId: activeOrgId, stageId, color });
     } catch (error: any) {
-      toast.error(error.message || t("PipelineStageColorFail" as any));
+      toast.error(error);
     }
   };
 
@@ -70,7 +70,7 @@ export default function PipelineSettingsPage() {
       });
       toast.success(t("PipelineLabelUpdated" as any));
     } catch (error: any) {
-      toast.error(error.message || t("PipelineLabelFail" as any));
+      toast.error(error);
     }
   };
 
@@ -81,7 +81,7 @@ export default function PipelineSettingsPage() {
     try {
       await reorderStages({ orgId: activeOrgId, orderedIds });
     } catch (error: any) {
-      toast.error(error.message || t("ReorderFail" as any));
+      toast.error(error);
     }
   };
 
@@ -92,7 +92,7 @@ export default function PipelineSettingsPage() {
     try {
       await reorderStages({ orgId: activeOrgId, orderedIds });
     } catch (error: any) {
-      toast.error(error.message || t("ReorderFail" as any));
+      toast.error(error);
     }
   };
 

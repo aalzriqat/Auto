@@ -381,7 +381,7 @@ export function CustomerDetailsDialog({
                                 });
                                 toast.success(t("ApplicationCreatedSuccess" as any));
                               } catch (err: any) {
-                                toast.error(err.message || t("ApplicationCreateFail" as any));
+                                toast.error(err);
                               }
                             }}
                           >

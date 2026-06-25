@@ -94,7 +94,7 @@ export function GuarantorDialog({ open, onOpenChange, customerId, guarantor }: G
       }
       onOpenChange(false);
     } catch (error: any) {
-      toast.error(error.message || t("SomethingWentWrong" as any));
+      toast.error(error);
     } finally {
       setIsSubmitting(false);
     }

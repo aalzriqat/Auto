@@ -55,7 +55,7 @@ export function CustomerFinancialsTab({ customer }: { customer: any }) {
       toast.success(t("FinancialsUpdatedSuccess" as any));
       setIsEditing(false);
     } catch (error: any) {
-      toast.error(error.message || t("FinancialsUpdateFail" as any));
+      toast.error(error);
     } finally {
       setIsSubmitting(false);
     }
