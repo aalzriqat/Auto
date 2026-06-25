@@ -47,7 +47,14 @@ export const socialInboxEn = {
   // Resync
   ResyncPosts: "Resync posts & DMs",
   ResyncPostsDMs: "Resync posts & DMs",
+  Resyncing: "Resyncing...",
   ResyncSuccess: "Sync complete.",
+  ResyncLinkedVehicles: "vehicles linked",
+  ResyncSuggestionsFound: "suggestions found",
+  VehicleSuggestionFromMessage: "Suggested from message",
+  VehicleSuggestionFromPost: "Suggested from post",
+  VehicleSuggestionDetected: "Detected",
+  VehicleSuggestionMissing: "Missing",
   // Table columns
   LinkColumn: "Link",
 };
@@ -101,7 +108,14 @@ export const socialInboxAr = {
   // Resync
   ResyncPosts: "مزامنة المنشورات والرسائل",
   ResyncPostsDMs: "مزامنة المنشورات والرسائل",
+  Resyncing: "جارٍ المزامنة...",
   ResyncSuccess: "اكتملت المزامنة.",
+  ResyncLinkedVehicles: "مركبات تم ربطها",
+  ResyncSuggestionsFound: "اقتراحات تم العثور عليها",
+  VehicleSuggestionFromMessage: "اقتراح من الرسالة",
+  VehicleSuggestionFromPost: "اقتراح من المنشور",
+  VehicleSuggestionDetected: "تم التعرف على",
+  VehicleSuggestionMissing: "ناقص",
   // Table columns
   LinkColumn: "رابط",
 };

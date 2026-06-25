@@ -8,7 +8,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { postCommentReply, postDirectMessage, fetchFbConversationMessages, FACEBOOK_GRAPH_VERSION } from "./utils/facebookApi";
 import { matchIntent, detectLocale } from "./utils/smartReplyIntent";
 import { buildSmartReplyText } from "./utils/smartReplyBuilder";
-import { matchVehicleFromText } from "./utils/vehicleTextMatch";
+import { matchVehicleFromText, suggestVehiclesFromText } from "./utils/vehicleTextMatch";
 
 const AUTO_REPLY_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 1 reply per sender per 24h
 
@@ -493,6 +493,14 @@ export const enrichEventVehicleFromPost = internalAction({
         });
         return;
       }
+      if (suggestVehiclesFromText(args.text, vehicles).length > 0) {
+        await ctx.runMutation(internal.facebookEngagement.patchEventVehicleHint, {
+          orgId: args.orgId,
+          externalId: args.externalId,
+          hintText: args.text,
+          source: "message",
+        });
+      }
     }
 
     // 2. Fall back: fetch every text-bearing field Meta exposes on the post.
@@ -554,9 +562,12 @@ export const enrichEventVehicleFromPost = internalAction({
           } catch { /* not a URL */ }
         }
       }
-      const subCta = (att.call_to_action as any)?.value ?? {};
-      if (subCta.page_welcome_message) parts.push(subCta.page_welcome_message);
-      if (subCta.link) {
+      const callToAction = att.call_to_action as
+        | { value?: { page_welcome_message?: string; link?: string } }
+        | undefined;
+      const subCta = callToAction?.value;
+      if (subCta?.page_welcome_message) parts.push(subCta.page_welcome_message);
+      if (subCta?.link) {
         try {
           const waText = new URL(subCta.link).searchParams.get("text");
           if (waText) parts.push(decodeURIComponent(waText));
@@ -574,7 +585,17 @@ export const enrichEventVehicleFromPost = internalAction({
     if (!combined.trim()) return;
 
     const matchedId = matchVehicleFromText(combined, vehicles);
-    if (!matchedId) return;
+    if (!matchedId) {
+      if (suggestVehiclesFromText(combined, vehicles).length > 0) {
+        await ctx.runMutation(internal.facebookEngagement.patchEventVehicleHint, {
+          orgId: args.orgId,
+          externalId: args.externalId,
+          hintText: combined,
+          source: "post",
+        });
+      }
+      return;
+    }
 
     await ctx.runMutation(internal.facebookEngagement.patchEventVehicle, {
       orgId: args.orgId,
@@ -720,5 +741,25 @@ export const patchEventVehicle = internalMutation({
         await ctx.db.patch(event.leadId, { vehicleId: args.vehicleId });
       }
     }
+  },
+});
+
+export const patchEventVehicleHint = internalMutation({
+  args: {
+    orgId: v.id("organizations"),
+    externalId: v.string(),
+    hintText: v.string(),
+    source: v.union(v.literal("message"), v.literal("post")),
+  },
+  handler: async (ctx, args) => {
+    const event = await ctx.db
+      .query("facebookEvents")
+      .withIndex("by_org_external", (q) => q.eq("orgId", args.orgId).eq("externalId", args.externalId))
+      .unique();
+    if (!event || event.vehicleId) return;
+    await ctx.db.patch(event._id, {
+      vehicleMatchHintText: args.hintText.slice(0, 1000),
+      vehicleMatchHintSource: args.source,
+    });
   },
 });

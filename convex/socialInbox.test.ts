@@ -268,4 +268,54 @@ describe("socialInbox.listEventsForConversation", () => {
     expect(dmEvents.length).toBe(1);
     expect(dmEvents[0].text).toBe("dm message");
   });
+
+  test("returns vehicle suggestions from stored partial match hints", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asEditor } = await seedOrgWithEditor(t);
+
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "1HGCM82633A004352",
+        make: "BYD",
+        model: "Song Pro",
+        trim: "Zero",
+        year: 2025,
+        mileage: 1200,
+        color: "Silver",
+        fuelType: "Hybrid",
+        transmission: "Automatic",
+        sellingPrice: 25000,
+        status: "AVAILABLE",
+      })
+    );
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Hint", lastName: "Buyer", instagramUserId: "ig_hint" })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("instagramEvents", {
+        orgId,
+        externalId: "hint_1",
+        kind: "comment",
+        senderInstagramId: "ig_hint",
+        customerId,
+        postId: "post_hint",
+        text: "price?",
+        vehicleMatchHintText: "#byd SONG PRO",
+        vehicleMatchHintSource: "post",
+      })
+    );
+
+    const events = await asEditor.query(api.socialInbox.listEventsForConversation, {
+      orgId,
+      customerId,
+      platform: "instagram",
+      conversationKind: "comment",
+      conversationPostId: "post_hint",
+    });
+
+    expect(events[0].vehicleSuggestion?.source).toBe("post");
+    expect(events[0].vehicleSuggestion?.candidates[0].vehicleId).toBe(vehicleId);
+    expect(events[0].vehicleSuggestion?.missingDetails).toContain("year");
+  });
 });

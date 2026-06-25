@@ -50,3 +50,6 @@ update_*.js
 rtl-audit.js
 
 testsprite_tests\tmp\config.json
+
+# k6 output artifacts
+/load-tests/results/

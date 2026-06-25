@@ -34,6 +34,17 @@ export type ConversationKey = {
   conversationPostId: string | null;
 };
 
+type VehicleSuggestion = {
+  source: "message" | "post";
+  detectedDetails: string[];
+  missingDetails: string[];
+  candidates: Array<{
+    vehicleId: Id<"vehicles">;
+    summary: string;
+    status?: string;
+  }>;
+};
+
 interface SocialConversationDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -248,6 +259,11 @@ export function SocialConversationDialog({
     : Boolean(dmEvent);
   const conversationVehicleId = events?.find((e) => e.vehicleId)?.vehicleId;
   const anyUnlinked = events?.some((e) => !e.vehicleId);
+  const vehicleSuggestions = (events ?? [])
+    .map((event) => event.vehicleSuggestion as VehicleSuggestion | null | undefined)
+    .filter((suggestion): suggestion is VehicleSuggestion => Boolean(suggestion));
+  const vehicleSuggestion =
+    vehicleSuggestions.find((suggestion) => suggestion.source === "post") ?? vehicleSuggestions[0] ?? null;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -262,26 +278,69 @@ export function SocialConversationDialog({
 
         {/* Manager-only: vehicle linker */}
         {isManager && anyUnlinked && vehicles && (
-          <div className="flex items-center gap-2 px-4 py-2 bg-muted/40 border-b shrink-0">
-            <Car className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-            <span className="text-xs text-muted-foreground flex-1">
-              {conversationVehicleId
-                ? t("VehicleAutoLinked" as any)
-                : t("LinkVehiclePrompt" as any)}
-            </span>
-            <Select onValueChange={handleLinkVehicle} disabled={linkingVehicle} value={conversationVehicleId ?? ""}>
-              <SelectTrigger className="h-7 text-xs w-40 shrink-0">
-                <SelectValue placeholder={t("SelectVehicle" as any)} />
-              </SelectTrigger>
-              <SelectContent>
-                {vehicles.map((v) => (
-                  <SelectItem key={v._id} value={v._id}>
-                    {v.year} {v.make} {v.model}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {linkingVehicle && <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />}
+          <div className="px-4 py-2 bg-muted/40 border-b shrink-0">
+            <div className="flex items-center gap-2">
+              <Car className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              <span className="text-xs text-muted-foreground flex-1">
+                {conversationVehicleId
+                  ? t("VehicleAutoLinked" as any)
+                  : t("LinkVehiclePrompt" as any)}
+              </span>
+              <Select onValueChange={handleLinkVehicle} disabled={linkingVehicle} value={conversationVehicleId ?? ""}>
+                <SelectTrigger className="h-7 text-xs w-40 shrink-0">
+                  <SelectValue placeholder={t("SelectVehicle" as any)} />
+                </SelectTrigger>
+                <SelectContent>
+                  {vehicles.map((v) => (
+                    <SelectItem key={v._id} value={v._id}>
+                      {v.year} {v.make} {v.model}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {linkingVehicle && <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />}
+            </div>
+
+            {!conversationVehicleId && vehicleSuggestion && (
+              <div className="mt-2 ms-5 rounded-md border bg-background/80 px-2.5 py-2">
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+                  <span className="font-medium text-foreground">
+                    {vehicleSuggestion.source === "post"
+                      ? t("VehicleSuggestionFromPost" as any)
+                      : t("VehicleSuggestionFromMessage" as any)}
+                  </span>
+                  {vehicleSuggestion.detectedDetails.length > 0 && (
+                    <span>
+                      {t("VehicleSuggestionDetected" as any)}: {vehicleSuggestion.detectedDetails.join(", ")}
+                    </span>
+                  )}
+                  {vehicleSuggestion.missingDetails.length > 0 && (
+                    <span>
+                      {t("VehicleSuggestionMissing" as any)}: {vehicleSuggestion.missingDetails.join(", ")}
+                    </span>
+                  )}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {vehicleSuggestion.candidates.map((candidate) => (
+                    <Button
+                      key={candidate.vehicleId}
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-7 px-2 text-[11px]"
+                      disabled={linkingVehicle}
+                      onClick={() => handleLinkVehicle(candidate.vehicleId)}
+                    >
+                      <Car className="h-3 w-3 me-1" />
+                      {candidate.summary}
+                      {candidate.status && (
+                        <span className="ms-1 text-[10px] text-muted-foreground">{candidate.status}</span>
+                      )}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 

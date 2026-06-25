@@ -9,7 +9,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { postCommentReply, postDirectMessage, INSTAGRAM_GRAPH_VERSION } from "./utils/instagramApi";
 import { matchIntent, detectLocale } from "./utils/smartReplyIntent";
 import { buildSmartReplyText } from "./utils/smartReplyBuilder";
-import { matchVehicleFromText } from "./utils/vehicleTextMatch";
+import { matchVehicleFromText, suggestVehiclesFromText } from "./utils/vehicleTextMatch";
 
 const AUTO_REPLY_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 1 reply per sender per 24h
 // Placeholder name assigned when a customer is created without a username —
@@ -674,6 +674,14 @@ export const enrichEventVehicleFromPost = internalAction({
         });
         return;
       }
+      if (suggestVehiclesFromText(args.text, vehicles).length > 0) {
+        await ctx.runMutation(internal.instagramEngagement.patchEventVehicleHint, {
+          orgId: args.orgId,
+          externalId: args.externalId,
+          hintText: args.text,
+          source: "message",
+        });
+      }
     }
 
     // 2. Fall back: fetch the media caption.
@@ -692,7 +700,17 @@ export const enrichEventVehicleFromPost = internalAction({
     if (!caption) return;
 
     const matchedId = matchVehicleFromText(caption, vehicles);
-    if (!matchedId) return;
+    if (!matchedId) {
+      if (suggestVehiclesFromText(caption, vehicles).length > 0) {
+        await ctx.runMutation(internal.instagramEngagement.patchEventVehicleHint, {
+          orgId: args.orgId,
+          externalId: args.externalId,
+          hintText: caption,
+          source: "post",
+        });
+      }
+      return;
+    }
 
     await ctx.runMutation(internal.instagramEngagement.patchEventVehicle, {
       orgId: args.orgId,
@@ -732,5 +750,25 @@ export const patchEventVehicle = internalMutation({
         await ctx.db.patch(event.leadId, { vehicleId: args.vehicleId });
       }
     }
+  },
+});
+
+export const patchEventVehicleHint = internalMutation({
+  args: {
+    orgId: v.id("organizations"),
+    externalId: v.string(),
+    hintText: v.string(),
+    source: v.union(v.literal("message"), v.literal("post")),
+  },
+  handler: async (ctx, args) => {
+    const event = await ctx.db
+      .query("instagramEvents")
+      .withIndex("by_org_external", (q) => q.eq("orgId", args.orgId).eq("externalId", args.externalId))
+      .unique();
+    if (!event || event.vehicleId) return;
+    await ctx.db.patch(event._id, {
+      vehicleMatchHintText: args.hintText.slice(0, 1000),
+      vehicleMatchHintSource: args.source,
+    });
   },
 });

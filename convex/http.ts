@@ -13,6 +13,26 @@ function clientIp(request: Request): string {
   return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
 }
 
+function jsonResponse(body: Record<string, unknown>, status: number): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json",
+    },
+  });
+}
+
+function hasMatchingSecret(providedSecret: string | null, expectedSecret: string): boolean {
+  if (!providedSecret || providedSecret.length !== expectedSecret.length) return false;
+
+  let diff = 0;
+  for (let i = 0; i < expectedSecret.length; i++) {
+    diff |= expectedSecret.charCodeAt(i) ^ providedSecret.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
 function base64UrlDecode(input: string): Uint8Array {
   const padded = input.replace(/-/g, "+").replace(/_/g, "/").padEnd(input.length + ((4 - (input.length % 4)) % 4), "=");
   const binary = atob(padded);
@@ -69,6 +89,42 @@ async function verifyHubSignature256(rawBody: string, signatureHeader: string | 
   for (let i = 0; i < expectedHex.length; i++) diff |= expectedHex.charCodeAt(i) ^ provided.charCodeAt(i);
   return diff === 0;
 }
+
+http.route({
+  path: "/load-test/health",
+  method: "GET",
+  handler: httpAction(async (_ctx, request) => {
+    try {
+      const env = getValidatedEnv();
+      if (!env.LOAD_TEST_SECRET) {
+        return new Response("Not found", { status: 404 });
+      }
+
+      const providedSecret = request.headers.get("x-load-test-secret");
+      if (!hasMatchingSecret(providedSecret, env.LOAD_TEST_SECRET)) {
+        return new Response("Forbidden", { status: 403 });
+      }
+
+      return jsonResponse(
+        {
+          status: "ok",
+          service: "AutoFlow Convex",
+          timestamp: new Date().toISOString(),
+        },
+        200
+      );
+    } catch (err) {
+      console.error("Load test health check failed", err);
+      return jsonResponse(
+        {
+          success: false,
+          error: "An unexpected error occurred. Please try again later.",
+        },
+        500
+      );
+    }
+  }),
+});
 
 http.route({
   path: "/clerk-webhook",

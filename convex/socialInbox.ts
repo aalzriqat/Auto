@@ -1,9 +1,11 @@
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { query, mutation } from "./_generated/server";
+import { QueryCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { suggestVehiclesFromText } from "./utils/vehicleTextMatch";
 
 /**
  * Unifies `instagramEvents` and `facebookEvents` for the Social Inbox UI.
@@ -25,6 +27,8 @@ type NormalizedEvent = {
   leadId: Id<"leads"> | undefined;
   vehicleId: Id<"vehicles"> | undefined;
   postId: string | undefined;
+  vehicleMatchHintText: string | undefined;
+  vehicleMatchHintSource: "message" | "post" | undefined;
   autoRepliedAt: number | undefined;
   autoReplyText: string | undefined;
   manualReplyText: string | undefined;
@@ -48,6 +52,8 @@ function normalizeInstagramEvent(ev: Doc<"instagramEvents">): NormalizedEvent {
     leadId: ev.leadId,
     vehicleId: ev.vehicleId,
     postId: ev.postId,
+    vehicleMatchHintText: ev.vehicleMatchHintText,
+    vehicleMatchHintSource: ev.vehicleMatchHintSource,
     autoRepliedAt: ev.autoRepliedAt,
     autoReplyText: ev.autoReplyText,
     manualReplyText: ev.manualReplyText,
@@ -70,6 +76,8 @@ function normalizeFacebookEvent(ev: Doc<"facebookEvents">): NormalizedEvent {
     leadId: ev.leadId,
     vehicleId: ev.vehicleId,
     postId: ev.postId,
+    vehicleMatchHintText: ev.vehicleMatchHintText,
+    vehicleMatchHintSource: ev.vehicleMatchHintSource,
     autoRepliedAt: ev.autoRepliedAt,
     autoReplyText: ev.autoReplyText,
     manualReplyText: ev.manualReplyText,
@@ -87,6 +95,37 @@ function resolveSenderDisplayName(event: NormalizedEvent, customer: Doc<"custome
     if (name && !PLACEHOLDER_NAMES.has(name)) return name;
   }
   return event.senderRawId;
+}
+
+function buildVehicleSuggestion(
+  event: NormalizedEvent,
+  vehicles: Doc<"vehicles">[]
+) {
+  if (event.vehicleId) return null;
+  const hintText = event.vehicleMatchHintText ?? event.text;
+  if (!hintText) return null;
+
+  const source = event.vehicleMatchHintText ? (event.vehicleMatchHintSource ?? "post") : "message";
+  const candidates = suggestVehiclesFromText(hintText, vehicles, 3);
+  if (candidates.length === 0) return null;
+
+  const detectedDetails = Array.from(new Set(candidates.flatMap((candidate) => candidate.matchedDetails)));
+  const missingDetails = Array.from(new Set(candidates.flatMap((candidate) => candidate.missingDetails)));
+
+  return {
+    source,
+    detectedDetails,
+    missingDetails,
+    candidates,
+  };
+}
+
+async function loadVehiclesForSuggestions(ctx: QueryCtx, orgId: Id<"organizations">) {
+  return await ctx.db
+    .query("vehicles")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .order("desc")
+    .take(200);
 }
 
 /**
@@ -254,6 +293,7 @@ export const listEventsForConversation = query({
       }
       return true;
     };
+    const suggestionVehicles = await loadVehiclesForSuggestions(ctx, args.orgId);
 
     if (args.platform === "instagram") {
       const events = await ctx.db
@@ -273,6 +313,7 @@ export const listEventsForConversation = query({
             ...ev,
             senderDisplayName: resolveSenderDisplayName(ev, customer),
             vehicleSummary: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : null,
+            vehicleSuggestion: buildVehicleSuggestion(ev, suggestionVehicles),
             manualRepliedByName: repliedByUser?.name ?? null,
           };
         })
@@ -297,6 +338,7 @@ export const listEventsForConversation = query({
           ...ev,
           senderDisplayName: resolveSenderDisplayName(ev, customer),
           vehicleSummary: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : null,
+          vehicleSuggestion: buildVehicleSuggestion(ev, suggestionVehicles),
           manualRepliedByName: repliedByUser?.name ?? null,
         };
       })
@@ -312,6 +354,7 @@ export const listEventsForCustomer = query({
   args: { orgId: v.id("organizations"), customerId: v.id("customers") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
+    const suggestionVehicles = await loadVehiclesForSuggestions(ctx, args.orgId);
 
     const [igEvents, fbEvents] = await Promise.all([
       ctx.db
@@ -336,6 +379,7 @@ export const listEventsForCustomer = query({
           ...ev,
           senderDisplayName: resolveSenderDisplayName(ev, customer),
           vehicleSummary: vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : null,
+          vehicleSuggestion: buildVehicleSuggestion(ev, suggestionVehicles),
           manualRepliedByName: repliedByUser?.name ?? null,
         };
       })

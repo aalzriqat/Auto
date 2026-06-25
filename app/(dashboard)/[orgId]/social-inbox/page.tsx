@@ -115,8 +115,14 @@ export default function SocialInboxPage() {
     if (!activeOrgId || resyncing) return;
     setResyncing(true);
     try {
-      await resyncAction({ orgId: activeOrgId });
-      toast.success(t("ResyncSuccess" as any));
+      const result = await resyncAction({ orgId: activeOrgId });
+      const linked = result.igVehicles + result.fbVehicles;
+      const hints = result.igHints + result.fbHints;
+      const details = [
+        linked > 0 ? `${linked} ${t("ResyncLinkedVehicles" as any) || "linked"}` : null,
+        hints > 0 ? `${hints} ${t("ResyncSuggestionsFound" as any) || "suggestions"}` : null,
+      ].filter(Boolean);
+      toast.success(details.length > 0 ? `${t("ResyncSuccess" as any)} ${details.join(", ")}.` : t("ResyncSuccess" as any));
     } catch {
       toast.error("Resync failed");
     } finally {
@@ -298,7 +304,7 @@ export default function SocialInboxPage() {
               disabled={resyncing}
             >
               <RefreshCw className={`h-3 w-3 me-1 ${resyncing ? "animate-spin" : ""}`} />
-              {t("ResyncPostsDMs" as any)}
+              {resyncing ? (t("Resyncing" as any) || "Resyncing...") : t("ResyncPostsDMs" as any)}
             </Button>
           )}
         </div>

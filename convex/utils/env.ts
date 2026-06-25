@@ -37,6 +37,8 @@ const backendEnvSchema = z.object({
   // app-level secret, not per-org like WHATSAPP_WEBHOOK_SECRET. Signature
   // verification on the POST body reuses INSTAGRAM_APP_SECRET.
   INSTAGRAM_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
+  // Optional secret used only by the protected Convex load-test health probe.
+  LOAD_TEST_SECRET: z.string().min(16).optional(),
   // Auto-injected by Convex at runtime; validated here so a missing value
   // fails loudly instead of producing a broken OAuth redirect URI.
   CONVEX_SITE_URL: z.string().url().optional(),
@@ -82,6 +84,7 @@ export function getValidatedEnv() {
     FACEBOOK_WEBHOOK_VERIFY_TOKEN: process.env.FACEBOOK_WEBHOOK_VERIFY_TOKEN,
     WHATSAPP_APP_SECRET: process.env.WHATSAPP_APP_SECRET,
     INSTAGRAM_WEBHOOK_VERIFY_TOKEN: process.env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN,
+    LOAD_TEST_SECRET: process.env.LOAD_TEST_SECRET,
     CONVEX_SITE_URL: process.env.CONVEX_SITE_URL,
   });
   

@@ -16,7 +16,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "load:smoke": "k6 run load-tests/k6/autoflow-smoke.js",
+    "load:auth-smoke": "k6 run load-tests/k6/autoflow-authenticated-smoke.js",
+    "load:1000": "k6 run load-tests/k6/autoflow-1000-users.js"
   },
   "dependencies": {
     "@clerk/localizations": "^4.9.0",

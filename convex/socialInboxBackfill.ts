@@ -5,7 +5,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { INSTAGRAM_GRAPH_VERSION } from "./utils/instagramApi";
 import { FACEBOOK_GRAPH_VERSION } from "./utils/facebookApi";
-import { matchVehicleFromText } from "./utils/vehicleTextMatch";
+import { matchVehicleFromText, suggestVehiclesFromText } from "./utils/vehicleTextMatch";
 
 export const requireManagerAuthQuery = internalQuery({
   args: { orgId: v.id("organizations") },
@@ -76,6 +76,38 @@ export const patchFbEventPostId = internalMutation({
   },
 });
 
+export const patchIgVehicleMatchHint = internalMutation({
+  args: {
+    eventId: v.id("instagramEvents"),
+    hintText: v.string(),
+    source: v.union(v.literal("message"), v.literal("post")),
+  },
+  handler: async (ctx, args) => {
+    const ev = await ctx.db.get(args.eventId);
+    if (!ev || ev.vehicleId) return;
+    await ctx.db.patch(args.eventId, {
+      vehicleMatchHintText: args.hintText.slice(0, 1000),
+      vehicleMatchHintSource: args.source,
+    });
+  },
+});
+
+export const patchFbVehicleMatchHint = internalMutation({
+  args: {
+    eventId: v.id("facebookEvents"),
+    hintText: v.string(),
+    source: v.union(v.literal("message"), v.literal("post")),
+  },
+  handler: async (ctx, args) => {
+    const ev = await ctx.db.get(args.eventId);
+    if (!ev || ev.vehicleId) return;
+    await ctx.db.patch(args.eventId, {
+      vehicleMatchHintText: args.hintText.slice(0, 1000),
+      vehicleMatchHintSource: args.source,
+    });
+  },
+});
+
 /**
  * Backfills postId and vehicleId on all existing Instagram + Facebook comment
  * and DM events that are missing either field. Callable from the Social Inbox
@@ -95,7 +127,7 @@ export const resyncEvents = action({
   handler: async (
     ctx,
     args
-  ): Promise<{ igPostIds: number; fbPostIds: number; igVehicles: number; fbVehicles: number }> => {
+  ): Promise<{ igPostIds: number; fbPostIds: number; igVehicles: number; fbVehicles: number; igHints: number; fbHints: number }> => {
     await ctx.runQuery(internal.socialInboxBackfill.requireManagerAuthQuery, { orgId: args.orgId });
 
     const [igToken, fbToken, vehicles] = await Promise.all([
@@ -104,7 +136,19 @@ export const resyncEvents = action({
       ctx.runQuery(internal.instagramEngagement.getOrgVehicles, { orgId: args.orgId }),
     ]);
 
-    let igPostIds = 0, fbPostIds = 0, igVehicles = 0, fbVehicles = 0;
+    let igPostIds = 0, fbPostIds = 0, igVehicles = 0, fbVehicles = 0, igHints = 0, fbHints = 0;
+    const igHintedEventIds = new Set<string>();
+    const fbHintedEventIds = new Set<string>();
+    const countIgHint = (eventId: string) => {
+      if (igHintedEventIds.has(eventId)) return;
+      igHintedEventIds.add(eventId);
+      igHints++;
+    };
+    const countFbHint = (eventId: string) => {
+      if (fbHintedEventIds.has(eventId)) return;
+      fbHintedEventIds.add(eventId);
+      fbHints++;
+    };
 
     // ── Instagram ────────────────────────────────────────────────────────────────
     if (igToken) {
@@ -152,6 +196,14 @@ export const resyncEvents = action({
               igVehicles++;
               continue;
             }
+            if (suggestVehiclesFromText(ev.text, vehicles).length > 0) {
+              await ctx.runMutation(internal.socialInboxBackfill.patchIgVehicleMatchHint, {
+                eventId: ev._id,
+                hintText: ev.text,
+                source: "message",
+              });
+              countIgHint(ev._id);
+            }
           }
 
           // 2. Fall back to post caption
@@ -179,6 +231,13 @@ export const resyncEvents = action({
                   vehicleId: matchedId,
                 });
                 igVehicles++;
+              } else if (suggestVehiclesFromText(caption, vehicles).length > 0) {
+                await ctx.runMutation(internal.socialInboxBackfill.patchIgVehicleMatchHint, {
+                  eventId: ev._id,
+                  hintText: caption,
+                  source: "post",
+                });
+                countIgHint(ev._id);
               }
             }
           }
@@ -196,6 +255,13 @@ export const resyncEvents = action({
               vehicleId: matchedId,
             });
             igVehicles++;
+          } else if (suggestVehiclesFromText(ev.text, vehicles).length > 0) {
+            await ctx.runMutation(internal.socialInboxBackfill.patchIgVehicleMatchHint, {
+              eventId: ev._id,
+              hintText: ev.text,
+              source: "message",
+            });
+            countIgHint(ev._id);
           }
         }
       }
@@ -247,6 +313,14 @@ export const resyncEvents = action({
               });
               fbVehicles++;
               continue;
+            }
+            if (suggestVehiclesFromText(ev.text, vehicles).length > 0) {
+              await ctx.runMutation(internal.socialInboxBackfill.patchFbVehicleMatchHint, {
+                eventId: ev._id,
+                hintText: ev.text,
+                source: "message",
+              });
+              countFbHint(ev._id);
             }
           }
 
@@ -312,9 +386,12 @@ export const resyncEvents = action({
                       }
                     }
                     // CTA nested inside child_attachments
-                    const subCta = (att.call_to_action as any)?.value ?? {};
-                    if (subCta.page_welcome_message) parts.push(subCta.page_welcome_message);
-                    if (subCta.link) {
+                    const callToAction = att.call_to_action as
+                      | { value?: { page_welcome_message?: string; link?: string } }
+                      | undefined;
+                    const subCta = callToAction?.value;
+                    if (subCta?.page_welcome_message) parts.push(subCta.page_welcome_message);
+                    if (subCta?.link) {
                       try {
                         const waText = new URL(subCta.link).searchParams.get("text");
                         if (waText) parts.push(decodeURIComponent(waText));
@@ -346,6 +423,13 @@ export const resyncEvents = action({
                   vehicleId: matchedId,
                 });
                 fbVehicles++;
+              } else if (suggestVehiclesFromText(combined, vehicles).length > 0) {
+                await ctx.runMutation(internal.socialInboxBackfill.patchFbVehicleMatchHint, {
+                  eventId: ev._id,
+                  hintText: combined,
+                  source: "post",
+                });
+                countFbHint(ev._id);
               }
             }
           }
@@ -363,11 +447,18 @@ export const resyncEvents = action({
               vehicleId: matchedId,
             });
             fbVehicles++;
+          } else if (suggestVehiclesFromText(ev.text, vehicles).length > 0) {
+            await ctx.runMutation(internal.socialInboxBackfill.patchFbVehicleMatchHint, {
+              eventId: ev._id,
+              hintText: ev.text,
+              source: "message",
+            });
+            countFbHint(ev._id);
           }
         }
       }
     }
 
-    return { igPostIds, fbPostIds, igVehicles, fbVehicles };
+    return { igPostIds, fbPostIds, igVehicles, fbVehicles, igHints, fbHints };
   },
 });
