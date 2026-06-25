@@ -250,31 +250,86 @@ export const resyncEvents = action({
             }
           }
 
-          // 2. Fall back to post content — message + story + attachment titles
-          // (covers WhatsApp-link style posts where the car name is in the
-          // attachment title and the post body is Arabic-only or empty)
+          // 2. Fall back to post content — every text-bearing field Meta exposes
           if (postId) {
             if (!postTextCache.has(postId)) {
               try {
+                const fields = [
+                  "message",
+                  "story",
+                  "name",
+                  "caption",
+                  "description",
+                  "call_to_action",
+                  "properties",
+                  "attachments{title,description,name,caption,url,unshimmed_url,subattachments{title,description,name,caption,url,unshimmed_url}}",
+                  "child_attachments{title,description,name,caption,url,call_to_action}",
+                ].join(",");
                 const res = await fetch(
-                  `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${postId}?fields=message,story,name,attachments{title,description,name,subattachments{title,description,name}}&access_token=${fbToken.facebookPageAccessToken}`
+                  `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${postId}?fields=${fields}&access_token=${fbToken.facebookPageAccessToken}`
                 );
                 if (res.ok) {
                   const json = await res.json();
                   const parts: string[] = [];
-                  if (json.message) parts.push(json.message);
-                  if (json.story) parts.push(json.story);
-                  if (json.name) parts.push(json.name);
-                  for (const att of json.attachments?.data ?? []) {
-                    if (att.title) parts.push(att.title);
-                    if (att.description) parts.push(att.description);
-                    if (att.name) parts.push(att.name);
-                    for (const sub of att.subattachments?.data ?? []) {
-                      if (sub.title) parts.push(sub.title);
-                      if (sub.description) parts.push(sub.description);
-                      if (sub.name) parts.push(sub.name);
-                    }
+
+                  // Post-level text fields
+                  for (const f of ["message", "story", "name", "caption", "description"] as const) {
+                    if (json[f]) parts.push(json[f]);
                   }
+
+                  // call_to_action — WhatsApp CTA often carries the vehicle name
+                  // either in page_welcome_message or in the ?text= query param of the link
+                  const cta = json.call_to_action?.value ?? {};
+                  if (cta.page_welcome_message) parts.push(cta.page_welcome_message);
+                  if (cta.link) {
+                    parts.push(cta.link);
+                    try {
+                      const waText = new URL(cta.link).searchParams.get("text");
+                      if (waText) parts.push(decodeURIComponent(waText));
+                    } catch { /* not a valid URL */ }
+                  }
+
+                  // properties (key-value pairs on some post types)
+                  for (const prop of json.properties?.data ?? []) {
+                    if (prop.name) parts.push(prop.name);
+                    if (prop.text) parts.push(prop.text);
+                  }
+
+                  // Helper: collect every text field from an attachment node
+                  const collectAtt = (att: Record<string, unknown>) => {
+                    for (const f of ["title", "description", "name", "caption"] as const) {
+                      if (att[f]) parts.push(att[f] as string);
+                    }
+                    // WhatsApp deep-link URLs may carry ?text=VehicleName
+                    for (const f of ["url", "unshimmed_url"] as const) {
+                      const u = att[f] as string | undefined;
+                      if (u) {
+                        parts.push(u);
+                        try {
+                          const waText = new URL(u).searchParams.get("text");
+                          if (waText) parts.push(decodeURIComponent(waText));
+                        } catch { /* not a URL */ }
+                      }
+                    }
+                    // CTA nested inside child_attachments
+                    const subCta = (att.call_to_action as any)?.value ?? {};
+                    if (subCta.page_welcome_message) parts.push(subCta.page_welcome_message);
+                    if (subCta.link) {
+                      try {
+                        const waText = new URL(subCta.link).searchParams.get("text");
+                        if (waText) parts.push(decodeURIComponent(waText));
+                      } catch { /* not a URL */ }
+                    }
+                  };
+
+                  for (const att of json.attachments?.data ?? []) {
+                    collectAtt(att);
+                    for (const sub of att.subattachments?.data ?? []) collectAtt(sub);
+                  }
+                  for (const att of json.child_attachments?.data ?? []) {
+                    collectAtt(att);
+                  }
+
                   postTextCache.set(postId, parts.join(" "));
                 }
               } catch {
