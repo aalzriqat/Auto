@@ -458,27 +458,81 @@ export const enrichEventVehicleFromPost = internalAction({
       }
     }
 
-    // 2. Fall back: fetch the post and try message + attachment titles.
-    // Attachment title carries the car name for WhatsApp-link style posts
-    // where the post message is empty or in Arabic only.
+    // 2. Fall back: fetch every text-bearing field Meta exposes on the post.
     if (!args.postId) return;
     const token = await ctx.runQuery(internal.facebookEngagement.getTokenForOrg, { orgId: args.orgId });
     if (!token) return;
 
+    const fields = [
+      "message",
+      "story",
+      "name",
+      "caption",
+      "description",
+      "call_to_action",
+      "properties",
+      "attachments{title,description,name,caption,url,unshimmed_url,subattachments{title,description,name,caption,url,unshimmed_url}}",
+      "child_attachments{title,description,name,caption,url,call_to_action}",
+    ].join(",");
+
     const url = new URL(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${args.postId}`);
-    url.searchParams.set("fields", "message,story,attachments{title,description}");
+    url.searchParams.set("fields", fields);
     url.searchParams.set("access_token", token.facebookPageAccessToken);
     const res = await fetch(url.toString());
     if (!res.ok) return;
 
     const json = await res.json();
     const parts: string[] = [];
-    if (json.message) parts.push(json.message);
-    if (json.story) parts.push(json.story);
-    for (const att of json.attachments?.data ?? []) {
-      if (att.title) parts.push(att.title);
-      if (att.description) parts.push(att.description);
+
+    for (const f of ["message", "story", "name", "caption", "description"] as const) {
+      if (json[f]) parts.push(json[f]);
     }
+
+    const cta = json.call_to_action?.value ?? {};
+    if (cta.page_welcome_message) parts.push(cta.page_welcome_message);
+    if (cta.link) {
+      parts.push(cta.link);
+      try {
+        const waText = new URL(cta.link).searchParams.get("text");
+        if (waText) parts.push(decodeURIComponent(waText));
+      } catch { /* not a URL */ }
+    }
+
+    for (const prop of json.properties?.data ?? []) {
+      if (prop.name) parts.push(prop.name);
+      if (prop.text) parts.push(prop.text);
+    }
+
+    const collectAtt = (att: Record<string, unknown>) => {
+      for (const f of ["title", "description", "name", "caption"] as const) {
+        if (att[f]) parts.push(att[f] as string);
+      }
+      for (const f of ["url", "unshimmed_url"] as const) {
+        const u = att[f] as string | undefined;
+        if (u) {
+          parts.push(u);
+          try {
+            const waText = new URL(u).searchParams.get("text");
+            if (waText) parts.push(decodeURIComponent(waText));
+          } catch { /* not a URL */ }
+        }
+      }
+      const subCta = (att.call_to_action as any)?.value ?? {};
+      if (subCta.page_welcome_message) parts.push(subCta.page_welcome_message);
+      if (subCta.link) {
+        try {
+          const waText = new URL(subCta.link).searchParams.get("text");
+          if (waText) parts.push(decodeURIComponent(waText));
+        } catch { /* not a URL */ }
+      }
+    };
+
+    for (const att of json.attachments?.data ?? []) {
+      collectAtt(att);
+      for (const sub of att.subattachments?.data ?? []) collectAtt(sub);
+    }
+    for (const att of json.child_attachments?.data ?? []) collectAtt(att);
+
     const combined = parts.join(" ");
     if (!combined.trim()) return;
 
