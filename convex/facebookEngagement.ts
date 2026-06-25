@@ -1,11 +1,11 @@
 import { v, ConvexError } from "convex/values";
-import { internalMutation, internalQuery, internalAction, action } from "./_generated/server";
+import { internalMutation, internalQuery, internalAction, action, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { notifyManagers } from "./utils/notifications";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
-import { postCommentReply, postDirectMessage, FACEBOOK_GRAPH_VERSION } from "./utils/facebookApi";
+import { postCommentReply, postDirectMessage, fetchFbConversationMessages, FACEBOOK_GRAPH_VERSION } from "./utils/facebookApi";
 import { matchIntent, detectLocale } from "./utils/smartReplyIntent";
 import { buildSmartReplyText } from "./utils/smartReplyBuilder";
 import { matchVehicleFromText } from "./utils/vehicleTextMatch";
@@ -231,6 +231,24 @@ export const handleIncomingFacebookEvent = internalMutation({
       autoReplySource: shouldAutoReply ? (smartReplySource ? "smart" : "canned") : undefined,
     });
 
+    // For DMs, also store in facebookMessages for the full-thread view.
+    if (kind === "dm") {
+      const msgExists = await ctx.db
+        .query("facebookMessages")
+        .withIndex("by_org_fb_message", (q) => q.eq("orgId", orgId).eq("fbMessageId", externalId))
+        .unique();
+      if (!msgExists) {
+        await ctx.db.insert("facebookMessages", {
+          orgId,
+          customerId: customer._id,
+          direction: "in",
+          text,
+          timestamp: Date.now(),
+          fbMessageId: externalId,
+        });
+      }
+    }
+
     return { shouldAutoReply, replyText, smartReplyVisibility, leadId, customerId: customer._id, vehicleId };
   },
 });
@@ -422,6 +440,19 @@ export const sendFacebookDirectMessage = action({
       manualReplyText: args.message,
       manualRepliedByUserId: userId,
     });
+
+    // Store outbound message in facebookMessages for the full-thread view.
+    if (result.messageId) {
+      await ctx.runMutation(internal.facebookEngagement.storeFbMessage, {
+        orgId: args.orgId,
+        customerId: args.customerId,
+        direction: "out",
+        text: args.message,
+        timestamp: Date.now(),
+        fbMessageId: result.messageId,
+        sentByUserId: userId,
+      });
+    }
   },
 });
 
@@ -553,6 +584,112 @@ export const getOrgVehicles = internalQuery({
     return await ctx.db
       .query("vehicles")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+  },
+});
+
+// ─── Facebook Message Thread (full conversation history) ──────────────────────
+
+/** Inserts one row into facebookMessages, deduping by fbMessageId. */
+export const storeFbMessage = internalMutation({
+  args: {
+    orgId: v.id("organizations"),
+    customerId: v.id("customers"),
+    direction: v.union(v.literal("in"), v.literal("out")),
+    text: v.optional(v.string()),
+    timestamp: v.number(),
+    fbMessageId: v.string(),
+    fbConversationId: v.optional(v.string()),
+    sentByUserId: v.optional(v.id("users")),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("facebookMessages")
+      .withIndex("by_org_fb_message", (q) => q.eq("orgId", args.orgId).eq("fbMessageId", args.fbMessageId))
+      .unique();
+    if (existing) return existing._id;
+    return await ctx.db.insert("facebookMessages", args);
+  },
+});
+
+/**
+ * Fetches the full Messenger conversation history for a customer from the
+ * Graph API and stores every message in facebookMessages. Skips non-text
+ * messages (reactions, etc.). Safe to run multiple times — dedupes by fbMessageId.
+ */
+export const syncFbConversationHistory = internalAction({
+  args: {
+    orgId: v.id("organizations"),
+    customerId: v.id("customers"),
+    senderFacebookId: v.string(),
+  },
+  handler: async (ctx, args): Promise<{ synced: number }> => {
+    const token = await ctx.runQuery(internal.facebookEngagement.getTokenForOrg, { orgId: args.orgId });
+    if (!token) return { synced: 0 };
+
+    const { conversationId, messages } = await fetchFbConversationMessages(
+      args.senderFacebookId,
+      token.facebookPageId,
+      token.facebookPageAccessToken
+    );
+
+    let synced = 0;
+    for (const msg of messages) {
+      if (!msg.message) continue;
+      const direction: "in" | "out" = msg.from.id === token.facebookPageId ? "out" : "in";
+      const timestamp = new Date(msg.created_time).getTime();
+      await ctx.runMutation(internal.facebookEngagement.storeFbMessage, {
+        orgId: args.orgId,
+        customerId: args.customerId,
+        direction,
+        text: msg.message,
+        timestamp,
+        fbMessageId: msg.id,
+        fbConversationId: conversationId ?? undefined,
+      });
+      synced++;
+    }
+    return { synced };
+  },
+});
+
+/**
+ * Auth-gated history sync — called from the Social Inbox conversation dialog.
+ * Looks up the customer's PSID from the most recent facebookEvent DM, then
+ * delegates to syncFbConversationHistory.
+ */
+export const fetchFbConversationHistory = action({
+  args: {
+    orgId: v.id("organizations"),
+    customerId: v.id("customers"),
+  },
+  handler: async (ctx, args): Promise<{ synced: number }> => {
+    const { dmEvent } = await ctx.runQuery(internal.facebookEngagement.requireSendDmAccess, {
+      orgId: args.orgId,
+      customerId: args.customerId,
+    });
+    if (!dmEvent) return { synced: 0 };
+
+    return ctx.runAction(internal.facebookEngagement.syncFbConversationHistory, {
+      orgId: args.orgId,
+      customerId: args.customerId,
+      senderFacebookId: dmEvent.senderFacebookId,
+    });
+  },
+});
+
+/** Returns all Facebook DM messages for a customer, oldest-first. */
+export const listFbMessages = query({
+  args: {
+    orgId: v.id("organizations"),
+    customerId: v.id("customers"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
+    return await ctx.db
+      .query("facebookMessages")
+      .withIndex("by_org_customer_ts", (q) => q.eq("orgId", args.orgId).eq("customerId", args.customerId))
+      .order("asc")
       .collect();
   },
 });

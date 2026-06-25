@@ -871,6 +871,21 @@ export default defineSchema({
     .index("by_org_lead", ["orgId", "leadId"])
     .index("by_org_customer", ["orgId", "customerId"]),
 
+  // Full Messenger thread: one row per message (in or out), enabling complete
+  // conversation history including messages sent before AutoFlow existed.
+  facebookMessages: defineTable({
+    orgId: v.id("organizations"),
+    customerId: v.id("customers"),
+    direction: v.union(v.literal("in"), v.literal("out")),
+    text: v.optional(v.string()),
+    timestamp: v.number(),
+    fbMessageId: v.string(),
+    fbConversationId: v.optional(v.string()),
+    sentByUserId: v.optional(v.id("users")),
+  })
+    .index("by_org_customer_ts", ["orgId", "customerId", "timestamp"])
+    .index("by_org_fb_message", ["orgId", "fbMessageId"]),
+
   socialPosts: defineTable({
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
