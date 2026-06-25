@@ -1,12 +1,13 @@
 "use client";
 
-import { Menu, Search, X } from "lucide-react";
+import { Menu, Search, X, MessagesSquare } from "lucide-react";
 import Image from "next/image";
 import { UserButton } from "@clerk/nextjs";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { OrgSwitcher } from "@/components/layout/OrgSwitcher";
 import { NotificationsBell } from "@/components/layout/NotificationsBell";
+import { useMessenger } from "@/components/messages/MessengerContext";
 import { LanguageSwitcher } from "@/components/layout/LanguageSwitcher";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -45,6 +46,12 @@ export function TopNav() {
   const pendingCount = useQuery(
     api.approvals.countPending,
     activeOrgId && canSeeApprovals ? { orgId: activeOrgId } : "skip"
+  );
+
+  const { toggleList } = useMessenger();
+  const unreadMessages = useQuery(
+    api.directMessages.getUnreadCount,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
   );
 
   const visibleMainNavigation = mainNavigation.filter(item => {
@@ -164,6 +171,20 @@ export function TopNav() {
           </Button>
           <OrgSwitcher />
           <LanguageSwitcher />
+          {/* Messenger button */}
+          <button
+            onClick={toggleList}
+            className="relative p-2 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-700 transition-colors"
+            aria-label="Messages"
+            id="topnav-messenger-btn"
+          >
+            <MessagesSquare className="h-5 w-5" />
+            {unreadMessages != null && unreadMessages > 0 && (
+              <span className="absolute -top-0.5 -end-0.5 min-w-[16px] h-4 rounded-full bg-blue-500 text-white text-[9px] font-bold flex items-center justify-center px-0.5 border-2 border-white">
+                {unreadMessages > 9 ? "9+" : unreadMessages}
+              </span>
+            )}
+          </button>
           <NotificationsBell />
           <div className="flex items-center justify-center">
             <UserButton />

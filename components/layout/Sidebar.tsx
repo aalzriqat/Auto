@@ -29,11 +29,6 @@ export function Sidebar() {
     activeOrgId && canSeeApprovals ? { orgId: activeOrgId } : "skip"
   );
 
-  const unreadMessages = useQuery(
-    api.directMessages.getUnreadCount,
-    activeOrgId ? { orgId: activeOrgId } : "skip"
-  );
-
   const visibleNav = navigation.filter(item => {
     if (!item.permission) return true;
     return permissions.includes(item.permission);
@@ -49,7 +44,6 @@ export function Sidebar() {
     const href = `/${activeOrgId}${item.href}`;
     const isActive = pathname.startsWith(href);
     const isApprovals = item.name === "Approvals";
-    const isMessages = item.name === "Messages";
 
     return (
       <Link
@@ -67,11 +61,6 @@ export function Sidebar() {
         {isApprovals && pendingCount != null && pendingCount > 0 && (
           <span className="bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
             {pendingCount}
-          </span>
-        )}
-        {isMessages && unreadMessages != null && unreadMessages > 0 && (
-          <span className="bg-blue-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
-            {unreadMessages > 9 ? "9+" : unreadMessages}
           </span>
         )}
       </Link>

@@ -13,6 +13,9 @@ import { PresenceTracker } from "@/components/providers/PresenceTracker";
 import { LocaleSync } from "@/components/providers/LocaleSync";
 import { UpdateBanner } from "@/components/layout/UpdateBanner";
 import { hexToHslString } from "@/lib/colorUtils";
+import { MessengerProvider } from "@/components/messages/MessengerContext";
+import { FloatingMessenger } from "@/components/messages/FloatingMessenger";
+import { MessengerOnboarding } from "@/components/messages/MessengerOnboarding";
 
 function DashboardWrapper({ children }: { children: React.ReactNode }) {
   const { activeOrgId, isLoading } = useOrg();
@@ -39,25 +42,29 @@ function DashboardWrapper({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div
-      className="flex h-screen w-full overflow-hidden bg-slate-50 dark:bg-zinc-950/40"
-      style={brandStyle}
-    >
-      <PresenceTracker orgId={activeOrgId} />
-      <LocaleSync />
-      <Sidebar />
-      <div className="flex flex-col flex-1 w-full overflow-hidden">
-        <UpdateBanner />
-        <SupportAccessBanner />
-        <ImpersonationBanner />
-        <TopNav />
-        <main className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 lg:p-8 relative pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:pb-8">
-          {children}
-        </main>
+    <MessengerProvider>
+      <div
+        className="flex h-screen w-full overflow-hidden bg-slate-50 dark:bg-zinc-950/40"
+        style={brandStyle}
+      >
+        <PresenceTracker orgId={activeOrgId} />
+        <LocaleSync />
+        <Sidebar />
+        <div className="flex flex-col flex-1 w-full overflow-hidden">
+          <UpdateBanner />
+          <SupportAccessBanner />
+          <ImpersonationBanner />
+          <TopNav />
+          <main className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 lg:p-8 relative pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:pb-8">
+            {children}
+          </main>
+        </div>
+        <Toaster />
+        <FeedbackWidget />
+        <FloatingMessenger orgId={activeOrgId} />
+        <MessengerOnboarding />
       </div>
-      <Toaster />
-      <FeedbackWidget />
-    </div>
+    </MessengerProvider>
   );
 }
 
