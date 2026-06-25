@@ -97,7 +97,9 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])
-    .index("by_org_vin", ["orgId", "vin"]),
+    .index("by_org_vin", ["orgId", "vin"])
+    .searchIndex("search_make", { searchField: "make", filterFields: ["orgId", "isDeleted"] })
+    .searchIndex("search_vin", { searchField: "vin", filterFields: ["orgId", "isDeleted"] }),
 
   vehicleStatusRequests: defineTable({
     orgId: v.id("organizations"),
@@ -182,7 +184,9 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_org_email", ["orgId", "email"])
-    .index("by_org_phone", ["orgId", "phone"]),
+    .index("by_org_phone", ["orgId", "phone"])
+    .searchIndex("search_firstName", { searchField: "firstName", filterFields: ["orgId", "isDeleted"] })
+    .searchIndex("search_lastName", { searchField: "lastName", filterFields: ["orgId", "isDeleted"] }),
 
   customerMerges: defineTable({
     orgId: v.id("organizations"),

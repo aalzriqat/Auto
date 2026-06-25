@@ -1,6 +1,6 @@
 "use client";
 
-import { Menu, Search, X, MessagesSquare } from "lucide-react";
+import { Menu, Search, MessagesSquare } from "lucide-react";
 import Image from "next/image";
 import { UserButton } from "@clerk/nextjs";
 import { usePathname } from "next/navigation";
@@ -9,6 +9,7 @@ import { OrgSwitcher } from "@/components/layout/OrgSwitcher";
 import { NotificationsBell } from "@/components/layout/NotificationsBell";
 import { useMessenger } from "@/components/messages/MessengerContext";
 import { LanguageSwitcher } from "@/components/layout/LanguageSwitcher";
+import GlobalSearchModal from "@/components/search/GlobalSearchModal";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useQuery } from "convex/react";
@@ -16,7 +17,7 @@ import { api } from "@/convex/_generated/api";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTrigger, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
-import { useState, useRef } from "react";
+import { useState } from "react";
 import { mainNavigation, settingsNavigation, type NavItem } from "@/lib/navigation";
 
 // Flat list (main + settings) used only to resolve the current page title —
@@ -28,8 +29,7 @@ export function TopNav() {
   const { activeOrgId } = useOrg();
   const pathname = usePathname();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
-  const mobileSearchRef = useRef<HTMLInputElement>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
 
   const currentNavItem = navigation.find(item => pathname.startsWith(`/${activeOrgId}${item.href}`));
   const pageTitle = currentNavItem ? t(currentNavItem.name as any) : "AutoFlow";
@@ -94,6 +94,7 @@ export function TopNav() {
 
   return (
     <header className="sticky top-0 z-30 w-full border-b border-slate-200/50 bg-white/95 backdrop-blur shadow-sm shrink-0">
+      <GlobalSearchModal open={searchOpen} onOpenChange={setSearchOpen} />
       {/* Main nav bar */}
       <div className="h-14 md:h-16 flex w-full items-center justify-between gap-2 px-3 md:px-6">
 
@@ -149,9 +150,14 @@ export function TopNav() {
               <Search className="absolute start-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-slate-400" />
               <input
                 type="text"
-                placeholder={t("Search" as any)}
-                className="ps-9 pe-4 py-2 bg-slate-100 border-transparent rounded-lg text-sm w-full focus:bg-white focus:border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all"
+                placeholder={t("SearchPlaceholder" as any)}
+                onClick={() => setSearchOpen(true)}
+                readOnly
+                className="ps-9 pe-14 py-2 bg-slate-100 border-transparent rounded-lg text-sm w-full cursor-pointer focus:bg-white focus:border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all"
               />
+              <span className="absolute end-2 top-1/2 -translate-y-1/2 rounded border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-medium text-slate-500">
+                ⌘K
+              </span>
             </div>
           </div>
         </div>
@@ -162,12 +168,9 @@ export function TopNav() {
             variant="ghost"
             size="icon"
             className="md:hidden h-10 w-10"
-            onClick={() => {
-              setIsMobileSearchOpen(v => !v);
-              if (!isMobileSearchOpen) setTimeout(() => mobileSearchRef.current?.focus(), 50);
-            }}
+            onClick={() => setSearchOpen(true)}
           >
-            {isMobileSearchOpen ? <X className="h-4 w-4" /> : <Search className="h-4 w-4" />}
+            <Search className="h-4 w-4" />
           </Button>
           <OrgSwitcher />
           <LanguageSwitcher />
@@ -192,20 +195,6 @@ export function TopNav() {
         </div>
       </div>
 
-      {/* Mobile search bar — expands below the nav row */}
-      {isMobileSearchOpen && (
-        <div className="md:hidden px-3 pb-3">
-          <div className="relative">
-            <Search className="absolute start-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
-            <input
-              ref={mobileSearchRef}
-              type="text"
-              placeholder={t("Search" as any)}
-              className="ps-9 pe-4 py-2 bg-slate-100 border-transparent rounded-lg text-sm w-full focus:bg-white focus:border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/20 transition-all"
-            />
-          </div>
-        </div>
-      )}
     </header>
   );
 }

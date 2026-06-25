@@ -16,6 +16,7 @@ import { hexToHslString } from "@/lib/colorUtils";
 import { MessengerProvider } from "@/components/messages/MessengerContext";
 import { FloatingMessenger } from "@/components/messages/FloatingMessenger";
 import { MessengerOnboarding } from "@/components/messages/MessengerOnboarding";
+import { GlobalSearchOnboarding } from "@/components/search/GlobalSearchOnboarding";
 
 function DashboardWrapper({ children }: { children: React.ReactNode }) {
   const { activeOrgId, isLoading } = useOrg();
@@ -63,6 +64,7 @@ function DashboardWrapper({ children }: { children: React.ReactNode }) {
         <FeedbackWidget />
         <FloatingMessenger orgId={activeOrgId} />
         <MessengerOnboarding />
+        <GlobalSearchOnboarding />
       </div>
     </MessengerProvider>
   );

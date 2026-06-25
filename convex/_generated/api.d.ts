@@ -60,6 +60,7 @@ import type * as rateLimit from "../rateLimit.js";
 import type * as reports from "../reports.js";
 import type * as roles from "../roles.js";
 import type * as sales from "../sales.js";
+import type * as search from "../search.js";
 import type * as seedDocuments from "../seedDocuments.js";
 import type * as smartReply from "../smartReply.js";
 import type * as socialEngagement from "../socialEngagement.js";
@@ -164,6 +165,7 @@ declare const fullApi: ApiFromModules<{
   reports: typeof reports;
   roles: typeof roles;
   sales: typeof sales;
+  search: typeof search;
   seedDocuments: typeof seedDocuments;
   smartReply: typeof smartReply;
   socialEngagement: typeof socialEngagement;
