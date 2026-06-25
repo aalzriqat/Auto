@@ -25,6 +25,17 @@ export const getIgCommentEvents = internalQuery({
   },
 });
 
+export const getIgDmEvents = internalQuery({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("instagramEvents")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .filter((q) => q.eq(q.field("kind"), "dm"))
+      .collect();
+  },
+});
+
 export const getFbCommentEvents = internalQuery({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
@@ -32,6 +43,17 @@ export const getFbCommentEvents = internalQuery({
       .query("facebookEvents")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .filter((q) => q.eq(q.field("kind"), "comment"))
+      .collect();
+  },
+});
+
+export const getFbDmEvents = internalQuery({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("facebookEvents")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .filter((q) => q.eq(q.field("kind"), "dm"))
       .collect();
   },
 });
@@ -56,18 +78,17 @@ export const patchFbEventPostId = internalMutation({
 
 /**
  * Backfills postId and vehicleId on all existing Instagram + Facebook comment
- * events that are missing either field. Callable from the Social Inbox UI by
- * managers/owners.
+ * and DM events that are missing either field. Callable from the Social Inbox
+ * UI by managers/owners.
  *
  * For comments without postId:
  *   IG — GET /{commentId}?fields=media → mediaId stored as postId
  *   FB — GET /{commentId}?fields=object → parent post id stored as postId
- * For comments with postId but no vehicleId:
- *   IG — GET /{mediaId}?fields=caption → text-match against inventory
- *   FB — GET /{postId}?fields=message → text-match against inventory
- *
- * Post-content fetches are deduplicated per post (captionCache / messageCache)
- * so N comments on the same post only hit the Graph API once.
+ * For comments/DMs with no vehicleId:
+ *   1. Try matching the stored event text directly (fastest, no extra API call)
+ *   2. For comments with a postId: fetch post content (IG caption; FB
+ *      message+story+attachments) and try matching — deduplicated per post
+ *      so N comments on the same post only hit the Graph API once.
  */
 export const resyncEvents = action({
   args: { orgId: v.id("organizations") },
@@ -87,10 +108,13 @@ export const resyncEvents = action({
 
     // ── Instagram ────────────────────────────────────────────────────────────────
     if (igToken) {
-      const igEvents = await ctx.runQuery(internal.socialInboxBackfill.getIgCommentEvents, { orgId: args.orgId });
+      const [igCommentEvents, igDmEvents] = await Promise.all([
+        ctx.runQuery(internal.socialInboxBackfill.getIgCommentEvents, { orgId: args.orgId }),
+        ctx.runQuery(internal.socialInboxBackfill.getIgDmEvents, { orgId: args.orgId }),
+      ]);
       const captionCache = new Map<string, string>();
 
-      for (const ev of igEvents) {
+      for (const ev of igCommentEvents) {
         let mediaId = ev.postId;
 
         if (!mediaId) {
@@ -115,23 +139,10 @@ export const resyncEvents = action({
           }
         }
 
-        if (mediaId && !ev.vehicleId) {
-          if (!captionCache.has(mediaId)) {
-            try {
-              const res = await fetch(
-                `https://graph.instagram.com/${INSTAGRAM_GRAPH_VERSION}/${mediaId}?fields=caption&access_token=${igToken.instagramAccessToken}`
-              );
-              if (res.ok) {
-                const json = await res.json();
-                captionCache.set(mediaId, json.caption ?? "");
-              }
-            } catch {
-              // best-effort
-            }
-          }
-          const caption = captionCache.get(mediaId);
-          if (caption) {
-            const matchedId = matchVehicleFromText(caption, vehicles);
+        if (!ev.vehicleId) {
+          // 1. Try the comment text itself first
+          if (ev.text) {
+            const matchedId = matchVehicleFromText(ev.text, vehicles);
             if (matchedId) {
               await ctx.runMutation(internal.instagramEngagement.patchEventVehicle, {
                 orgId: args.orgId,
@@ -139,7 +150,52 @@ export const resyncEvents = action({
                 vehicleId: matchedId,
               });
               igVehicles++;
+              continue;
             }
+          }
+
+          // 2. Fall back to post caption
+          if (mediaId) {
+            if (!captionCache.has(mediaId)) {
+              try {
+                const res = await fetch(
+                  `https://graph.instagram.com/${INSTAGRAM_GRAPH_VERSION}/${mediaId}?fields=caption&access_token=${igToken.instagramAccessToken}`
+                );
+                if (res.ok) {
+                  const json = await res.json();
+                  captionCache.set(mediaId, json.caption ?? "");
+                }
+              } catch {
+                // best-effort
+              }
+            }
+            const caption = captionCache.get(mediaId);
+            if (caption) {
+              const matchedId = matchVehicleFromText(caption, vehicles);
+              if (matchedId) {
+                await ctx.runMutation(internal.instagramEngagement.patchEventVehicle, {
+                  orgId: args.orgId,
+                  externalId: ev.externalId,
+                  vehicleId: matchedId,
+                });
+                igVehicles++;
+              }
+            }
+          }
+        }
+      }
+
+      // DMs — match from DM text only (no post to fetch)
+      for (const ev of igDmEvents) {
+        if (!ev.vehicleId && ev.text) {
+          const matchedId = matchVehicleFromText(ev.text, vehicles);
+          if (matchedId) {
+            await ctx.runMutation(internal.instagramEngagement.patchEventVehicle, {
+              orgId: args.orgId,
+              externalId: ev.externalId,
+              vehicleId: matchedId,
+            });
+            igVehicles++;
           }
         }
       }
@@ -147,10 +203,14 @@ export const resyncEvents = action({
 
     // ── Facebook ─────────────────────────────────────────────────────────────────
     if (fbToken) {
-      const fbEvents = await ctx.runQuery(internal.socialInboxBackfill.getFbCommentEvents, { orgId: args.orgId });
-      const messageCache = new Map<string, string>();
+      const [fbCommentEvents, fbDmEvents] = await Promise.all([
+        ctx.runQuery(internal.socialInboxBackfill.getFbCommentEvents, { orgId: args.orgId }),
+        ctx.runQuery(internal.socialInboxBackfill.getFbDmEvents, { orgId: args.orgId }),
+      ]);
+      // Cache maps postId → combined text (message + story + attachment titles)
+      const postTextCache = new Map<string, string>();
 
-      for (const ev of fbEvents) {
+      for (const ev of fbCommentEvents) {
         let postId = ev.postId;
 
         if (!postId) {
@@ -175,23 +235,10 @@ export const resyncEvents = action({
           }
         }
 
-        if (postId && !ev.vehicleId) {
-          if (!messageCache.has(postId)) {
-            try {
-              const res = await fetch(
-                `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${postId}?fields=message&access_token=${fbToken.facebookPageAccessToken}`
-              );
-              if (res.ok) {
-                const json = await res.json();
-                messageCache.set(postId, json.message ?? "");
-              }
-            } catch {
-              // best-effort
-            }
-          }
-          const message = messageCache.get(postId);
-          if (message) {
-            const matchedId = matchVehicleFromText(message, vehicles);
+        if (!ev.vehicleId) {
+          // 1. Try the comment text itself first
+          if (ev.text) {
+            const matchedId = matchVehicleFromText(ev.text, vehicles);
             if (matchedId) {
               await ctx.runMutation(internal.facebookEngagement.patchEventVehicle, {
                 orgId: args.orgId,
@@ -199,7 +246,61 @@ export const resyncEvents = action({
                 vehicleId: matchedId,
               });
               fbVehicles++;
+              continue;
             }
+          }
+
+          // 2. Fall back to post content — message + story + attachment titles
+          // (covers WhatsApp-link style posts where the car name is in the
+          // attachment title and the post body is Arabic-only or empty)
+          if (postId) {
+            if (!postTextCache.has(postId)) {
+              try {
+                const res = await fetch(
+                  `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${postId}?fields=message,story,attachments{title,description}&access_token=${fbToken.facebookPageAccessToken}`
+                );
+                if (res.ok) {
+                  const json = await res.json();
+                  const parts: string[] = [];
+                  if (json.message) parts.push(json.message);
+                  if (json.story) parts.push(json.story);
+                  for (const att of json.attachments?.data ?? []) {
+                    if (att.title) parts.push(att.title);
+                    if (att.description) parts.push(att.description);
+                  }
+                  postTextCache.set(postId, parts.join(" "));
+                }
+              } catch {
+                // best-effort
+              }
+            }
+            const combined = postTextCache.get(postId);
+            if (combined) {
+              const matchedId = matchVehicleFromText(combined, vehicles);
+              if (matchedId) {
+                await ctx.runMutation(internal.facebookEngagement.patchEventVehicle, {
+                  orgId: args.orgId,
+                  externalId: ev.externalId,
+                  vehicleId: matchedId,
+                });
+                fbVehicles++;
+              }
+            }
+          }
+        }
+      }
+
+      // DMs — match from DM text only (no post to fetch)
+      for (const ev of fbDmEvents) {
+        if (!ev.vehicleId && ev.text) {
+          const matchedId = matchVehicleFromText(ev.text, vehicles);
+          if (matchedId) {
+            await ctx.runMutation(internal.facebookEngagement.patchEventVehicle, {
+              orgId: args.orgId,
+              externalId: ev.externalId,
+              vehicleId: matchedId,
+            });
+            fbVehicles++;
           }
         }
       }
