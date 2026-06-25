@@ -251,17 +251,18 @@ export function SocialConversationDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
-        <DialogHeader>
+      <DialogContent className="max-w-lg flex flex-col h-[82vh] p-0 gap-0 overflow-hidden">
+        {/* ── Fixed header ── */}
+        <DialogHeader className="px-4 pt-4 pb-3 border-b shrink-0">
           <DialogTitle className="flex items-center gap-2">
             <MessageCircle className="h-4 w-4" />
             {t("Conversation" as any)}
           </DialogTitle>
         </DialogHeader>
 
-        {/* Manager-only: vehicle linker — shown when any event in the thread is unlinked */}
+        {/* Manager-only: vehicle linker */}
         {isManager && anyUnlinked && vehicles && (
-          <div className="flex items-center gap-2 p-2.5 rounded-lg bg-muted/60 border border-dashed">
+          <div className="flex items-center gap-2 px-4 py-2 bg-muted/40 border-b shrink-0">
             <Car className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
             <span className="text-xs text-muted-foreground flex-1">
               {conversationVehicleId
@@ -269,7 +270,7 @@ export function SocialConversationDialog({
                 : t("LinkVehiclePrompt" as any)}
             </span>
             <Select onValueChange={handleLinkVehicle} disabled={linkingVehicle} value={conversationVehicleId ?? ""}>
-              <SelectTrigger className="h-7 text-xs w-44 shrink-0">
+              <SelectTrigger className="h-7 text-xs w-40 shrink-0">
                 <SelectValue placeholder={t("SelectVehicle" as any)} />
               </SelectTrigger>
               <SelectContent>
@@ -284,156 +285,161 @@ export function SocialConversationDialog({
           </div>
         )}
 
-        {/* ── Facebook DM: full Messenger-style thread ── */}
-        {isFbDm ? (
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] text-muted-foreground">
-                {fbMessages === undefined || syncing
-                  ? t("Loading" as any)
-                  : `${fbMessages.length} messages`}
-              </span>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-6 gap-1 text-[10px] px-2"
-                onClick={handleSyncHistory}
-                disabled={syncing}
-              >
-                {syncing
-                  ? <Loader2 className="h-3 w-3 animate-spin" />
-                  : <RefreshCw className="h-3 w-3" />}
-                {syncing ? t("Loading" as any) : "Sync history"}
-              </Button>
-            </div>
-
-            {fbMessages !== undefined && fbMessages.length === 0 && !syncing && (
-              <p className="text-sm text-muted-foreground">{t("NoConversation" as any)}</p>
-            )}
-
-            {fbMessages?.map((msg) => (
-              <div
-                key={msg._id}
-                className={`flex ${msg.direction === "out" ? "justify-end" : "justify-start"}`}
-              >
-                <div
-                  className={`max-w-[85%] rounded-2xl px-3 py-2 space-y-0.5 ${
-                    msg.direction === "out"
-                      ? "bg-primary text-primary-foreground rounded-br-sm"
-                      : "bg-muted rounded-bl-sm"
-                  }`}
+        {/* ── Scrollable message area ── */}
+        <div className="flex-1 overflow-y-auto min-h-0 px-4 py-3 space-y-3">
+          {/* ── Facebook DM: full Messenger-style thread ── */}
+          {isFbDm ? (
+            <>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-muted-foreground">
+                  {fbMessages === undefined || syncing
+                    ? t("Loading" as any)
+                    : `${fbMessages.length} messages`}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 gap-1 text-[10px] px-2"
+                  onClick={handleSyncHistory}
+                  disabled={syncing}
                 >
-                  {msg.text && <p className="text-sm">{msg.text}</p>}
-                  <p className={`text-[10px] ${msg.direction === "out" ? "opacity-70" : "text-muted-foreground"}`}>
-                    {new Date(msg.timestamp).toLocaleString()}
-                  </p>
-                </div>
+                  {syncing
+                    ? <Loader2 className="h-3 w-3 animate-spin" />
+                    : <RefreshCw className="h-3 w-3" />}
+                  {syncing ? t("Loading" as any) : "Sync history"}
+                </Button>
               </div>
-            ))}
-          </div>
-        ) : (
-          /* ── All other conversations: event-based view ── */
-          <div className="space-y-3">
-            {events === undefined && (
-              <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                <Loader2 className="h-3.5 w-3.5 animate-spin" /> {t("Loading" as any)}
-              </div>
-            )}
-            {events && events.length === 0 && (
-              <p className="text-sm text-muted-foreground">{t("NoConversation" as any)}</p>
-            )}
-            {events?.map((event, index) => {
-              const replied = event.autoRepliedAt ? "auto" : event.manualRepliedAt ? "manual" : null;
-              const showVehicleLabel =
-                event.vehicleSummary && event.vehicleSummary !== events[index - 1]?.vehicleSummary;
-              const postUrl = buildPostUrl(event.platform, event.kind, event.postId, event.senderHandle);
-              return (
-                <div key={event._id} className="space-y-1.5">
-                  {showVehicleLabel && (
-                    <div className="flex items-center justify-center gap-1 text-[10px] text-muted-foreground py-1">
-                      <Car className="h-3 w-3" />
-                      {event.vehicleSummary}
-                    </div>
-                  )}
 
-                  {/* Customer bubble (start-aligned) */}
-                  <div className="flex justify-start">
-                    <div className="max-w-[85%] bg-muted rounded-2xl rounded-bl-sm px-3 py-2 space-y-1">
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        <span className="text-xs font-semibold">{event.senderDisplayName}</span>
-                        <Badge variant="secondary" className="text-[9px] py-0 px-1.5">
-                          {event.kind === "dm" ? t("DM" as any) : t("Comment" as any)}
-                        </Badge>
-                        {postUrl && (
-                          <a
-                            href={postUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-0.5 text-[9px] text-muted-foreground hover:text-foreground transition-colors"
-                            onClick={(e) => e.stopPropagation()}
-                          >
-                            <ExternalLink className="h-2.5 w-2.5" />
-                            {event.kind === "dm" ? t("OpenInbox" as any) : t("ViewPost" as any)}
-                          </a>
-                        )}
-                      </div>
-                      <p className="text-sm">{event.text}</p>
-                      <p className="text-[10px] text-muted-foreground">
-                        {new Date(event._creationTime).toLocaleString()}
-                      </p>
-                    </div>
+              {fbMessages !== undefined && fbMessages.length === 0 && !syncing && (
+                <p className="text-sm text-muted-foreground">{t("NoConversation" as any)}</p>
+              )}
+
+              {fbMessages?.map((msg) => (
+                <div
+                  key={msg._id}
+                  className={`flex ${msg.direction === "out" ? "justify-end" : "justify-start"}`}
+                >
+                  <div
+                    className={`max-w-[80%] rounded-2xl px-3 py-2 space-y-0.5 ${
+                      msg.direction === "out"
+                        ? "bg-primary text-primary-foreground rounded-br-sm"
+                        : "bg-muted rounded-bl-sm"
+                    }`}
+                  >
+                    {msg.text && <p className="text-sm break-words whitespace-pre-wrap">{msg.text}</p>}
+                    <p className={`text-[10px] ${msg.direction === "out" ? "opacity-70" : "text-muted-foreground"}`}>
+                      {new Date(msg.timestamp).toLocaleString()}
+                    </p>
                   </div>
+                </div>
+              ))}
+            </>
+          ) : (
+            /* ── All other conversations: event-based view ── */
+            <>
+              {events === undefined && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> {t("Loading" as any)}
+                </div>
+              )}
+              {events && events.length === 0 && (
+                <p className="text-sm text-muted-foreground">{t("NoConversation" as any)}</p>
+              )}
+              {events?.map((event, index) => {
+                const replied = event.autoRepliedAt ? "auto" : event.manualRepliedAt ? "manual" : null;
+                const showVehicleLabel =
+                  event.vehicleSummary && event.vehicleSummary !== events[index - 1]?.vehicleSummary;
+                const postUrl = buildPostUrl(event.platform, event.kind, event.postId, event.senderHandle);
+                return (
+                  <div key={event._id} className="space-y-1.5">
+                    {showVehicleLabel && (
+                      <div className="flex items-center justify-center gap-1 text-[10px] text-muted-foreground py-1">
+                        <Car className="h-3 w-3" />
+                        {event.vehicleSummary}
+                      </div>
+                    )}
 
-                  {/* Our reply bubble (end-aligned) */}
-                  {replied && (
-                    <div className="flex justify-end">
-                      <div className="max-w-[85%] bg-primary text-primary-foreground rounded-2xl rounded-br-sm px-3 py-2 space-y-1">
-                        <span className="text-[10px] opacity-80 font-medium">
-                          {replied === "auto" ? t("AutoReply" as any) : event.manualRepliedByName ?? t("You" as any)}
-                        </span>
-                        <p className="text-sm">{replied === "auto" ? event.autoReplyText : event.manualReplyText}</p>
-                        <p className="text-[10px] opacity-70">
-                          {new Date((replied === "auto" ? event.autoRepliedAt : event.manualRepliedAt) ?? 0).toLocaleString()}
+                    {/* Customer bubble (start-aligned) */}
+                    <div className="flex justify-start">
+                      <div className="max-w-[80%] bg-muted rounded-2xl rounded-bl-sm px-3 py-2 space-y-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-xs font-semibold">{event.senderDisplayName}</span>
+                          <Badge variant="secondary" className="text-[9px] py-0 px-1.5">
+                            {event.kind === "dm" ? t("DM" as any) : t("Comment" as any)}
+                          </Badge>
+                          {postUrl && (
+                            <a
+                              href={postUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-0.5 text-[9px] text-muted-foreground hover:text-foreground transition-colors"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <ExternalLink className="h-2.5 w-2.5" />
+                              {event.kind === "dm" ? t("OpenInbox" as any) : t("ViewPost" as any)}
+                            </a>
+                          )}
+                        </div>
+                        <p className="text-sm break-words whitespace-pre-wrap">{event.text}</p>
+                        <p className="text-[10px] text-muted-foreground">
+                          {new Date(event._creationTime).toLocaleString()}
                         </p>
                       </div>
                     </div>
-                  )}
 
-                  {/* Inline reply composer — comments only */}
-                  {!replied && event.kind === "comment" && (
-                    <div className="flex justify-start">
-                      <div className="max-w-[85%] w-full flex items-center gap-1.5">
-                        <input
-                          type="text"
-                          value={replyDrafts[event._id] ?? ""}
-                          onChange={(e) => setReplyDrafts((prev) => ({ ...prev, [event._id]: e.target.value }))}
-                          placeholder={t("WriteAReply" as any)}
-                          className="flex-1 h-7 text-xs px-2 rounded border bg-background"
-                        />
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-7 w-7 p-0 shrink-0"
-                          disabled={busyEventId === event._id || !(replyDrafts[event._id] ?? "").trim()}
-                          onClick={() => handleReply(event)}
-                        >
-                          <Send className="h-3.5 w-3.5" />
-                        </Button>
+                    {/* Our reply bubble (end-aligned) */}
+                    {replied && (
+                      <div className="flex justify-end">
+                        <div className="max-w-[80%] bg-primary text-primary-foreground rounded-2xl rounded-br-sm px-3 py-2 space-y-1">
+                          <span className="text-[10px] opacity-80 font-medium">
+                            {replied === "auto" ? t("AutoReply" as any) : event.manualRepliedByName ?? t("You" as any)}
+                          </span>
+                          <p className="text-sm break-words whitespace-pre-wrap">{replied === "auto" ? event.autoReplyText : event.manualReplyText}</p>
+                          <p className="text-[10px] opacity-70">
+                            {new Date((replied === "auto" ? event.autoRepliedAt : event.manualRepliedAt) ?? 0).toLocaleString()}
+                          </p>
+                        </div>
                       </div>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
+                    )}
 
+                    {/* Inline reply composer — comments only */}
+                    {!replied && event.kind === "comment" && (
+                      <div className="flex justify-start">
+                        <div className="max-w-[80%] w-full flex items-center gap-1.5">
+                          <input
+                            type="text"
+                            value={replyDrafts[event._id] ?? ""}
+                            onChange={(e) => setReplyDrafts((prev) => ({ ...prev, [event._id]: e.target.value }))}
+                            placeholder={t("WriteAReply" as any)}
+                            className="flex-1 h-7 text-xs px-2 rounded border bg-background"
+                          />
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 w-7 p-0 shrink-0"
+                            disabled={busyEventId === event._id || !(replyDrafts[event._id] ?? "").trim()}
+                            onClick={() => handleReply(event)}
+                          >
+                            <Send className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </>
+          )}
+        </div>
+
+        {/* ── Fixed send bar ── */}
         {hasDmEvent && (
-          <div className="flex items-center gap-1.5 border-t pt-3">
+          <div className="flex items-center gap-1.5 px-4 py-3 border-t shrink-0 bg-background">
             <input
               type="text"
               value={dmDraft}
               onChange={(e) => setDmDraft(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void handleSendDm(); } }}
               placeholder={t("WriteAMessage" as any)}
               className="flex-1 h-9 text-sm px-3 rounded border bg-background"
             />

@@ -3,6 +3,8 @@ import { socialSmartReplyEn, socialSmartReplyAr } from "../../lib/i18n/domains/s
 import type { SmartReplyIntent } from "./smartReplyIntent";
 import type { Doc } from "../_generated/dataModel";
 
+type TemplateMap = Record<string, string>;
+
 interface BuildSmartReplyArgs {
   intent: Exclude<SmartReplyIntent, "complaint">;
   vehicle: Doc<"vehicles"> | null;
@@ -18,6 +20,25 @@ function fill(template: string, values: Record<string, string | number>): string
   );
 }
 
+function parseCustomTemplates(json: string | undefined): TemplateMap {
+  if (!json) return {};
+  try {
+    const parsed = JSON.parse(json);
+    return typeof parsed === "object" && parsed !== null ? (parsed as TemplateMap) : {};
+  } catch {
+    return {};
+  }
+}
+
+function tpl(
+  custom: TemplateMap,
+  key: string,
+  fallback: string
+): string {
+  const override = custom[key];
+  return override && override.trim() ? override.trim() : fallback;
+}
+
 /**
  * Builds the final reply text for a matched Smart Reply intent. Pure and
  * defensive -- never throws; falls back to generic copy (or null) on
@@ -25,12 +46,18 @@ function fill(template: string, values: Record<string, string | number>): string
  */
 export function buildSmartReplyText({ intent, vehicle, orgSettings, financeCompany, locale }: BuildSmartReplyArgs): string | null {
   const strings = locale === "ar" ? socialSmartReplyAr : socialSmartReplyEn;
+  const rawCustom = locale === "ar"
+    ? orgSettings?.smartReplyCustomTemplatesAr
+    : orgSettings?.smartReplyCustomTemplatesEn;
+  const custom = parseCustomTemplates(rawCustom);
   const currency = orgSettings?.currencySymbol || orgSettings?.currency || "";
 
   if (intent === "location") {
-    if (!orgSettings?.dealershipAddress) return strings.SmartReplyLocationFallback;
+    if (!orgSettings?.dealershipAddress) {
+      return tpl(custom, "locationFallback", strings.SmartReplyLocationFallback);
+    }
     const phoneSuffix = orgSettings.dealershipPhone ? ` (${orgSettings.dealershipPhone})` : "";
-    return fill(strings.SmartReplyLocation, {
+    return fill(tpl(custom, "location", strings.SmartReplyLocation), {
       dealershipName: orgSettings.dealershipName || "",
       dealershipAddress: orgSettings.dealershipAddress,
       phoneSuffix,
@@ -38,7 +65,7 @@ export function buildSmartReplyText({ intent, vehicle, orgSettings, financeCompa
   }
 
   if (intent === "greeting") {
-    return strings.SmartReplyGreeting;
+    return tpl(custom, "greeting", strings.SmartReplyGreeting);
   }
 
   // Every remaining intent (price/financing/availability/vehicleInfo) needs a
@@ -47,17 +74,17 @@ export function buildSmartReplyText({ intent, vehicle, orgSettings, financeCompa
 
   if (intent === "availability") {
     if (vehicle.status === "AVAILABLE") {
-      return fill(strings.SmartReplyAvailableYes, { model: vehicle.model, year: vehicle.year });
+      return fill(tpl(custom, "availableYes", strings.SmartReplyAvailableYes), { model: vehicle.model, year: vehicle.year });
     }
     if (vehicle.status === "SOLD" || vehicle.status === "ARCHIVED") {
-      return strings.SmartReplyAvailableSold;
+      return tpl(custom, "availableSold", strings.SmartReplyAvailableSold);
     }
-    return strings.SmartReplyAvailableUnclear;
+    return tpl(custom, "availableUnclear", strings.SmartReplyAvailableUnclear);
   }
 
   if (intent === "price") {
-    if (vehicle.status !== "AVAILABLE") return strings.SmartReplyAvailableUnclear;
-    return fill(strings.SmartReplyPriceAvailable, {
+    if (vehicle.status !== "AVAILABLE") return tpl(custom, "availableUnclear", strings.SmartReplyAvailableUnclear);
+    return fill(tpl(custom, "priceAvailable", strings.SmartReplyPriceAvailable), {
       model: vehicle.model,
       year: vehicle.year,
       price: vehicle.sellingPrice,
@@ -73,7 +100,7 @@ export function buildSmartReplyText({ intent, vehicle, orgSettings, financeCompa
       vehicle.status === "AVAILABLE";
 
     if (!canCalculate) {
-      return fill(strings.SmartReplyFinancingGeneric, { model: vehicle.model, year: vehicle.year });
+      return fill(tpl(custom, "financingGeneric", strings.SmartReplyFinancingGeneric), { model: vehicle.model, year: vehicle.year });
     }
 
     const downPaymentPercent = orgSettings?.smartReplyDefaultDownPaymentPercent ?? 20;
@@ -91,10 +118,10 @@ export function buildSmartReplyText({ intent, vehicle, orgSettings, financeCompa
     });
 
     if (!monthlyInstallment) {
-      return fill(strings.SmartReplyFinancingGeneric, { model: vehicle.model, year: vehicle.year });
+      return fill(tpl(custom, "financingGeneric", strings.SmartReplyFinancingGeneric), { model: vehicle.model, year: vehicle.year });
     }
 
-    return fill(strings.SmartReplyFinancingCalculated, {
+    return fill(tpl(custom, "financingCalculated", strings.SmartReplyFinancingCalculated), {
       model: vehicle.model,
       year: vehicle.year,
       monthlyAmount: Math.round(monthlyInstallment),
@@ -103,7 +130,7 @@ export function buildSmartReplyText({ intent, vehicle, orgSettings, financeCompa
   }
 
   if (intent === "vehicleInfo") {
-    return fill(strings.SmartReplyVehicleInfo, {
+    return fill(tpl(custom, "vehicleInfo", strings.SmartReplyVehicleInfo), {
       model: vehicle.model,
       year: vehicle.year,
       trimSuffix: vehicle.trim ? ` ${vehicle.trim}` : "",

@@ -159,7 +159,9 @@ export const handleIncomingFacebookEvent = internalMutation({
     let suppressCannedReply = false;
     let smartReplySource = false;
 
-    const smartReplyEnabled = settings?.facebookSmartReplyEnabled === true;
+    const smartReplyEnabled = kind === "dm"
+      ? (settings?.facebookSmartReplyForDmsEnabled ?? settings?.facebookSmartReplyEnabled ?? false)
+      : (settings?.facebookSmartReplyForCommentsEnabled ?? settings?.facebookSmartReplyEnabled ?? false);
 
     if (smartReplyEnabled && text) {
       const intent = matchIntent(text);
@@ -198,7 +200,11 @@ export const handleIncomingFacebookEvent = internalMutation({
     // Auto-reply eligibility: enabled, has messages, and sender not replied-to in the last 24h
     const messages = settings?.facebookAutoReplyMessages ?? [];
 
-    if (!shouldAutoReply && !suppressCannedReply && settings?.facebookAutoReplyEnabled && messages.length > 0) {
+    const cannedEnabled = kind === "dm"
+      ? (settings?.facebookAutoReplyForDmsEnabled ?? settings?.facebookAutoReplyEnabled ?? false)
+      : (settings?.facebookAutoReplyForCommentsEnabled ?? settings?.facebookAutoReplyEnabled ?? false);
+
+    if (!shouldAutoReply && !suppressCannedReply && cannedEnabled && messages.length > 0) {
       const recentEvents = await ctx.db
         .query("facebookEvents")
         .withIndex("by_org_sender", (q) => q.eq("orgId", orgId).eq("senderFacebookId", senderFacebookId))
@@ -207,7 +213,7 @@ export const handleIncomingFacebookEvent = internalMutation({
         (e) => e.autoRepliedAt && e.autoRepliedAt > Date.now() - AUTO_REPLY_COOLDOWN_MS
       );
 
-      if (!repliedRecently) {
+      if (!repliedRecently && settings) {
         const nextIndex = ((settings.facebookAutoReplyLastIndex ?? -1) + 1) % messages.length;
         replyText = messages[nextIndex];
         shouldAutoReply = true;

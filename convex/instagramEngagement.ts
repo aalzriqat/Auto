@@ -182,7 +182,9 @@ export const handleIncomingInstagramEvent = internalMutation({
     let suppressCannedReply = false;
     let smartReplySource = false;
 
-    const smartReplyEnabled = settings?.instagramSmartReplyEnabled === true;
+    const smartReplyEnabled = kind === "dm"
+      ? (settings?.instagramSmartReplyForDmsEnabled ?? settings?.instagramSmartReplyEnabled ?? false)
+      : (settings?.instagramSmartReplyForCommentsEnabled ?? settings?.instagramSmartReplyEnabled ?? false);
 
     if (smartReplyEnabled && text) {
       const intent = matchIntent(text);
@@ -221,7 +223,11 @@ export const handleIncomingInstagramEvent = internalMutation({
     // Auto-reply eligibility: enabled, has messages, and sender not replied-to in the last 24h
     const messages = settings?.instagramAutoReplyMessages ?? [];
 
-    if (!shouldAutoReply && !suppressCannedReply && settings?.instagramAutoReplyEnabled && messages.length > 0) {
+    const cannedEnabled = kind === "dm"
+      ? (settings?.instagramAutoReplyForDmsEnabled ?? settings?.instagramAutoReplyEnabled ?? false)
+      : (settings?.instagramAutoReplyForCommentsEnabled ?? settings?.instagramAutoReplyEnabled ?? false);
+
+    if (!shouldAutoReply && !suppressCannedReply && cannedEnabled && messages.length > 0) {
       const recentEvents = await ctx.db
         .query("instagramEvents")
         .withIndex("by_org_sender", (q) => q.eq("orgId", orgId).eq("senderInstagramId", senderInstagramId))
@@ -230,7 +236,7 @@ export const handleIncomingInstagramEvent = internalMutation({
         (e) => e.autoRepliedAt && e.autoRepliedAt > Date.now() - AUTO_REPLY_COOLDOWN_MS
       );
 
-      if (!repliedRecently) {
+      if (!repliedRecently && settings) {
         const nextIndex = ((settings.instagramAutoReplyLastIndex ?? -1) + 1) % messages.length;
         replyText = messages[nextIndex];
         shouldAutoReply = true;

@@ -83,14 +83,20 @@ export const getConnectionStatus = query({
       instagramPageName: settings?.instagramPageName,
       socialAutoPostEnabled: settings?.socialAutoPostEnabled ?? false,
       instagramAutoReplyEnabled: settings?.instagramAutoReplyEnabled ?? false,
+      instagramAutoReplyForDmsEnabled: settings?.instagramAutoReplyForDmsEnabled ?? settings?.instagramAutoReplyEnabled ?? false,
+      instagramAutoReplyForCommentsEnabled: settings?.instagramAutoReplyForCommentsEnabled ?? settings?.instagramAutoReplyEnabled ?? false,
       instagramAutoReplyMessages: settings?.instagramAutoReplyMessages ?? [],
       instagramLeadFromCommentsEnabled: settings?.instagramLeadFromCommentsEnabled !== false,
       instagramLeadFromDmsEnabled: settings?.instagramLeadFromDmsEnabled !== false,
       instagramSmartReplyEnabled: settings?.instagramSmartReplyEnabled ?? false,
+      instagramSmartReplyForDmsEnabled: settings?.instagramSmartReplyForDmsEnabled ?? settings?.instagramSmartReplyEnabled ?? false,
+      instagramSmartReplyForCommentsEnabled: settings?.instagramSmartReplyForCommentsEnabled ?? settings?.instagramSmartReplyEnabled ?? false,
       smartReplyFinancingMode: settings?.smartReplyFinancingMode ?? "generic",
       smartReplyDefaultDownPaymentPercent: settings?.smartReplyDefaultDownPaymentPercent,
       smartReplyDefaultFinanceCompanyId: settings?.smartReplyDefaultFinanceCompanyId,
       smartReplyVisibility: settings?.smartReplyVisibility ?? "public",
+      smartReplyCustomTemplatesEn: settings?.smartReplyCustomTemplatesEn,
+      smartReplyCustomTemplatesAr: settings?.smartReplyCustomTemplatesAr,
     };
   },
 });
@@ -103,7 +109,8 @@ export const getConnectionStatus = query({
 export const setInstagramAutoReplyConfig = mutation({
   args: {
     orgId: v.id("organizations"),
-    enabled: v.boolean(),
+    enabledForDms: v.boolean(),
+    enabledForComments: v.boolean(),
     messages: v.array(v.string()),
   },
   handler: async (ctx, args) => {
@@ -113,7 +120,8 @@ export const setInstagramAutoReplyConfig = mutation({
     if (cleaned.length > 5) {
       throw new ConvexError("Up to 5 auto-reply messages are allowed.");
     }
-    if (args.enabled && cleaned.length === 0) {
+    const eitherEnabled = args.enabledForDms || args.enabledForComments;
+    if (eitherEnabled && cleaned.length === 0) {
       throw new ConvexError("Add at least one auto-reply message before enabling.");
     }
 
@@ -126,7 +134,9 @@ export const setInstagramAutoReplyConfig = mutation({
     }
 
     await ctx.db.patch(settings._id, {
-      instagramAutoReplyEnabled: args.enabled,
+      instagramAutoReplyForDmsEnabled: args.enabledForDms,
+      instagramAutoReplyForCommentsEnabled: args.enabledForComments,
+      instagramAutoReplyEnabled: eitherEnabled,
       instagramAutoReplyMessages: cleaned,
     });
   },

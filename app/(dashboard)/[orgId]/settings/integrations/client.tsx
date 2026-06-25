@@ -13,10 +13,31 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Sparkles, Camera, CheckCircle2, Plus, Trash2 } from "lucide-react";
+import { Sparkles, Camera, CheckCircle2, Plus, Trash2, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
+import { socialSmartReplyEn, socialSmartReplyAr } from "@/lib/i18n/domains/socialSmartReply";
 
 const MAX_AUTO_REPLY_MESSAGES = 5;
+
+type TemplateMap = Record<string, string>;
+
+const TEMPLATE_KEYS: Array<{ key: string; label: string; placeholder: keyof typeof socialSmartReplyEn }> = [
+  { key: "greeting", label: "SmartReplyTplGreeting", placeholder: "SmartReplyGreeting" },
+  { key: "location", label: "SmartReplyTplLocation", placeholder: "SmartReplyLocation" },
+  { key: "locationFallback", label: "SmartReplyTplLocationFallback", placeholder: "SmartReplyLocationFallback" },
+  { key: "priceAvailable", label: "SmartReplyTplPriceAvailable", placeholder: "SmartReplyPriceAvailable" },
+  { key: "financingGeneric", label: "SmartReplyTplFinancingGeneric", placeholder: "SmartReplyFinancingGeneric" },
+  { key: "financingCalculated", label: "SmartReplyTplFinancingCalculated", placeholder: "SmartReplyFinancingCalculated" },
+  { key: "availableYes", label: "SmartReplyTplAvailableYes", placeholder: "SmartReplyAvailableYes" },
+  { key: "availableSold", label: "SmartReplyTplAvailableSold", placeholder: "SmartReplyAvailableSold" },
+  { key: "availableUnclear", label: "SmartReplyTplAvailableUnclear", placeholder: "SmartReplyAvailableUnclear" },
+  { key: "vehicleInfo", label: "SmartReplyTplVehicleInfo", placeholder: "SmartReplyVehicleInfo" },
+];
+
+function parseTemplates(json: string | undefined): TemplateMap {
+  if (!json) return {};
+  try { return JSON.parse(json) as TemplateMap; } catch { return {}; }
+}
 
 export function IntegrationsClient() {
   const { activeOrgId } = useOrg();
@@ -47,34 +68,49 @@ export function IntegrationsClient() {
 
   const setSmartReplyConfig = useMutation(api.smartReply.setSmartReplyConfig);
 
-  const [igAutoReplyEnabled, setIgAutoReplyEnabled] = useState(false);
+  // ── Instagram state ──
+  const [igAutoReplyForDms, setIgAutoReplyForDms] = useState(false);
+  const [igAutoReplyForComments, setIgAutoReplyForComments] = useState(false);
   const [igAutoReplyMessages, setIgAutoReplyMessages] = useState<string[]>([]);
   const [igAutoReplyLoaded, setIgAutoReplyLoaded] = useState(false);
   const [igSavingAutoReply, setIgSavingAutoReply] = useState(false);
   const [igLeadFromComments, setIgLeadFromComments] = useState(true);
   const [igLeadFromDms, setIgLeadFromDms] = useState(true);
 
-  const [fbAutoReplyEnabled, setFbAutoReplyEnabled] = useState(false);
+  // ── Facebook state ──
+  const [fbAutoReplyForDms, setFbAutoReplyForDms] = useState(false);
+  const [fbAutoReplyForComments, setFbAutoReplyForComments] = useState(false);
   const [fbAutoReplyMessages, setFbAutoReplyMessages] = useState<string[]>([]);
   const [fbAutoReplyLoaded, setFbAutoReplyLoaded] = useState(false);
   const [fbSavingAutoReply, setFbSavingAutoReply] = useState(false);
   const [fbLeadFromComments, setFbLeadFromComments] = useState(true);
   const [fbLeadFromDms, setFbLeadFromDms] = useState(true);
 
+  // ── Smart Reply state ──
   const [smartReplyLoaded, setSmartReplyLoaded] = useState(false);
-  const [igSmartReplyEnabled, setIgSmartReplyEnabled] = useState(false);
-  const [fbSmartReplyEnabled, setFbSmartReplyEnabled] = useState(false);
+  const [igSmartReplyForDms, setIgSmartReplyForDms] = useState(false);
+  const [igSmartReplyForComments, setIgSmartReplyForComments] = useState(false);
+  const [fbSmartReplyForDms, setFbSmartReplyForDms] = useState(false);
+  const [fbSmartReplyForComments, setFbSmartReplyForComments] = useState(false);
   const [smartReplyFinancingMode, setSmartReplyFinancingMode] = useState<"calculated" | "generic">("generic");
   const [smartReplyDownPaymentPercent, setSmartReplyDownPaymentPercent] = useState("20");
   const [smartReplyFinanceCompanyId, setSmartReplyFinanceCompanyId] = useState<string>("");
   const [smartReplyVisibility, setSmartReplyVisibility] = useState<"public" | "dm">("public");
   const [savingSmartReply, setSavingSmartReply] = useState(false);
 
-  // Sync local editable state from the server exactly once, the first time
-  // it loads — re-syncing on every reactive update would clobber in-progress edits.
+  // ── Templates state ──
+  const [templatesLoaded, setTemplatesLoaded] = useState(false);
+  const [templatesEn, setTemplatesEn] = useState<TemplateMap>({});
+  const [templatesAr, setTemplatesAr] = useState<TemplateMap>({});
+  const [templateTab, setTemplateTab] = useState<"en" | "ar">("en");
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [savingTemplates, setSavingTemplates] = useState(false);
+
+  // ── Load server state once ──
   useEffect(() => {
     if (!igStatus || igAutoReplyLoaded) return;
-    setIgAutoReplyEnabled(igStatus.instagramAutoReplyEnabled);
+    setIgAutoReplyForDms(igStatus.instagramAutoReplyForDmsEnabled);
+    setIgAutoReplyForComments(igStatus.instagramAutoReplyForCommentsEnabled);
     setIgAutoReplyMessages(igStatus.instagramAutoReplyMessages.length > 0 ? igStatus.instagramAutoReplyMessages : [""]);
     setIgLeadFromComments(igStatus.instagramLeadFromCommentsEnabled);
     setIgLeadFromDms(igStatus.instagramLeadFromDmsEnabled);
@@ -83,7 +119,8 @@ export function IntegrationsClient() {
 
   useEffect(() => {
     if (!fbStatus || fbAutoReplyLoaded) return;
-    setFbAutoReplyEnabled(fbStatus.facebookAutoReplyEnabled);
+    setFbAutoReplyForDms(fbStatus.facebookAutoReplyForDmsEnabled);
+    setFbAutoReplyForComments(fbStatus.facebookAutoReplyForCommentsEnabled);
     setFbAutoReplyMessages(fbStatus.facebookAutoReplyMessages.length > 0 ? fbStatus.facebookAutoReplyMessages : [""]);
     setFbLeadFromComments(fbStatus.facebookLeadFromCommentsEnabled);
     setFbLeadFromDms(fbStatus.facebookLeadFromDmsEnabled);
@@ -92,8 +129,10 @@ export function IntegrationsClient() {
 
   useEffect(() => {
     if (smartReplyLoaded || !igStatus || !fbStatus) return;
-    setIgSmartReplyEnabled(igStatus.instagramSmartReplyEnabled);
-    setFbSmartReplyEnabled(fbStatus.facebookSmartReplyEnabled);
+    setIgSmartReplyForDms(igStatus.instagramSmartReplyForDmsEnabled);
+    setIgSmartReplyForComments(igStatus.instagramSmartReplyForCommentsEnabled);
+    setFbSmartReplyForDms(fbStatus.facebookSmartReplyForDmsEnabled);
+    setFbSmartReplyForComments(fbStatus.facebookSmartReplyForCommentsEnabled);
     setSmartReplyFinancingMode(igStatus.smartReplyFinancingMode);
     setSmartReplyDownPaymentPercent(String(igStatus.smartReplyDefaultDownPaymentPercent ?? 20));
     setSmartReplyFinanceCompanyId(igStatus.smartReplyDefaultFinanceCompanyId ?? "");
@@ -101,7 +140,14 @@ export function IntegrationsClient() {
     setSmartReplyLoaded(true);
   }, [igStatus, fbStatus, smartReplyLoaded]);
 
-  // Surface the OAuth callback's redirect result, then clean the URL.
+  useEffect(() => {
+    if (templatesLoaded || !igStatus) return;
+    setTemplatesEn(parseTemplates(igStatus.smartReplyCustomTemplatesEn));
+    setTemplatesAr(parseTemplates(igStatus.smartReplyCustomTemplatesAr));
+    setTemplatesLoaded(true);
+  }, [igStatus, templatesLoaded]);
+
+  // ── OAuth redirect result ──
   useEffect(() => {
     const connected = searchParams.get("connected");
     const error = searchParams.get("error");
@@ -174,15 +220,21 @@ export function IntegrationsClient() {
     }
   };
 
-  const handleSaveIgAutoReply = async (overrides?: { enabled?: boolean; messages?: string[] }) => {
+  const handleSaveIgAutoReply = async (overrides?: {
+    enabledForDms?: boolean;
+    enabledForComments?: boolean;
+    messages?: string[];
+  }) => {
     if (!activeOrgId) return;
-    const enabled = overrides?.enabled ?? igAutoReplyEnabled;
+    const enabledForDms = overrides?.enabledForDms ?? igAutoReplyForDms;
+    const enabledForComments = overrides?.enabledForComments ?? igAutoReplyForComments;
     const messages = overrides?.messages ?? igAutoReplyMessages;
     setIgSavingAutoReply(true);
     try {
       await setInstagramAutoReplyConfig({
         orgId: activeOrgId,
-        enabled,
+        enabledForDms,
+        enabledForComments,
         messages: messages.filter((m) => m.trim().length > 0),
       });
       toast.success(t("AutoRepliesSaved" as any));
@@ -193,15 +245,21 @@ export function IntegrationsClient() {
     }
   };
 
-  const handleSaveFbAutoReply = async (overrides?: { enabled?: boolean; messages?: string[] }) => {
+  const handleSaveFbAutoReply = async (overrides?: {
+    enabledForDms?: boolean;
+    enabledForComments?: boolean;
+    messages?: string[];
+  }) => {
     if (!activeOrgId) return;
-    const enabled = overrides?.enabled ?? fbAutoReplyEnabled;
+    const enabledForDms = overrides?.enabledForDms ?? fbAutoReplyForDms;
+    const enabledForComments = overrides?.enabledForComments ?? fbAutoReplyForComments;
     const messages = overrides?.messages ?? fbAutoReplyMessages;
     setFbSavingAutoReply(true);
     try {
       await setFacebookAutoReplyConfig({
         orgId: activeOrgId,
-        enabled,
+        enabledForDms,
+        enabledForComments,
         messages: messages.filter((m) => m.trim().length > 0),
       });
       toast.success(t("AutoRepliesSaved" as any));
@@ -239,8 +297,10 @@ export function IntegrationsClient() {
   };
 
   const handleSaveSmartReply = async (overrides?: {
-    instagramEnabled?: boolean;
-    facebookEnabled?: boolean;
+    igForDms?: boolean;
+    igForComments?: boolean;
+    fbForDms?: boolean;
+    fbForComments?: boolean;
     financingMode?: "calculated" | "generic";
     visibility?: "public" | "dm";
   }) => {
@@ -249,10 +309,18 @@ export function IntegrationsClient() {
     const downPaymentPercent = Number(smartReplyDownPaymentPercent);
     setSavingSmartReply(true);
     try {
+      const igForDms = overrides?.igForDms ?? igSmartReplyForDms;
+      const igForComments = overrides?.igForComments ?? igSmartReplyForComments;
+      const fbForDms = overrides?.fbForDms ?? fbSmartReplyForDms;
+      const fbForComments = overrides?.fbForComments ?? fbSmartReplyForComments;
       await setSmartReplyConfig({
         orgId: activeOrgId,
-        instagramEnabled: overrides?.instagramEnabled ?? igSmartReplyEnabled,
-        facebookEnabled: overrides?.facebookEnabled ?? fbSmartReplyEnabled,
+        instagramEnabled: igForDms || igForComments,
+        facebookEnabled: fbForDms || fbForComments,
+        instagramEnabledForDms: igForDms,
+        instagramEnabledForComments: igForComments,
+        facebookEnabledForDms: fbForDms,
+        facebookEnabledForComments: fbForComments,
         financingMode,
         defaultDownPaymentPercent: Number.isFinite(downPaymentPercent) ? downPaymentPercent : undefined,
         defaultFinanceCompanyId: smartReplyFinanceCompanyId ? (smartReplyFinanceCompanyId as any) : undefined,
@@ -263,6 +331,41 @@ export function IntegrationsClient() {
       toast.error(error.message || t("SomethingWentWrong" as any));
     } finally {
       setSavingSmartReply(false);
+    }
+  };
+
+  const handleSaveTemplates = async () => {
+    if (!activeOrgId) return;
+    setSavingTemplates(true);
+    try {
+      const filtered = (map: TemplateMap) =>
+        Object.fromEntries(Object.entries(map).filter(([, v]) => v.trim().length > 0));
+      const igForDms = igSmartReplyForDms;
+      const igForComments = igSmartReplyForComments;
+      const fbForDms = fbSmartReplyForDms;
+      const fbForComments = fbSmartReplyForComments;
+      await setSmartReplyConfig({
+        orgId: activeOrgId,
+        instagramEnabled: igForDms || igForComments,
+        facebookEnabled: fbForDms || fbForComments,
+        instagramEnabledForDms: igForDms,
+        instagramEnabledForComments: igForComments,
+        facebookEnabledForDms: fbForDms,
+        facebookEnabledForComments: fbForComments,
+        financingMode: smartReplyFinancingMode,
+        defaultDownPaymentPercent: Number.isFinite(Number(smartReplyDownPaymentPercent))
+          ? Number(smartReplyDownPaymentPercent)
+          : undefined,
+        defaultFinanceCompanyId: smartReplyFinanceCompanyId ? (smartReplyFinanceCompanyId as any) : undefined,
+        visibility: smartReplyVisibility,
+        customTemplatesEn: JSON.stringify(filtered(templatesEn)),
+        customTemplatesAr: JSON.stringify(filtered(templatesAr)),
+      });
+      toast.success(t("SmartReplyTemplatesSaved" as any));
+    } catch (error: any) {
+      toast.error(error.message || t("SomethingWentWrong" as any));
+    } finally {
+      setSavingTemplates(false);
     }
   };
 
@@ -279,7 +382,7 @@ export function IntegrationsClient() {
           <CardDescription>{t("IntegrationsDesc" as any)}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          {/* Shared auto-post toggle — applies to whichever platform(s) are connected */}
+          {/* Shared auto-post toggle */}
           {anyConnected && (
             <div className="rounded-xl border border-border p-4 flex items-center justify-between gap-4">
               <div>
@@ -293,7 +396,7 @@ export function IntegrationsClient() {
             </div>
           )}
 
-          {/* Instagram */}
+          {/* ── Instagram ── */}
           <div className="rounded-xl border border-border p-6 space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div className="flex items-center gap-3">
@@ -317,7 +420,6 @@ export function IntegrationsClient() {
                   </p>
                 </div>
               </div>
-
               {igStatus?.instagramConnected ? (
                 <Button variant="outline" onClick={handleDisconnectInstagram}>
                   {t("Disconnect" as any)}
@@ -352,18 +454,32 @@ export function IntegrationsClient() {
               </div>
             )}
 
+            {/* Instagram Auto-Reply (split into DMs + Comments) */}
             {igStatus?.instagramConnected && (
               <div className="space-y-3 border-t border-border pt-4">
                 <div className="flex items-center justify-between gap-4">
                   <div>
-                    <p className="text-sm font-medium">{t("InstagramAutoReply" as any)}</p>
-                    <p className="text-xs text-muted-foreground">{t("InstagramAutoReplyDescription" as any)}</p>
+                    <p className="text-sm font-medium">{t("AutoReplyForDms" as any)}</p>
+                    <p className="text-xs text-muted-foreground">{t("AutoReplyForDmsDescription" as any)}</p>
                   </div>
                   <Switch
-                    checked={igAutoReplyEnabled}
+                    checked={igAutoReplyForDms}
                     onCheckedChange={(v) => {
-                      setIgAutoReplyEnabled(v);
-                      void handleSaveIgAutoReply({ enabled: v });
+                      setIgAutoReplyForDms(v);
+                      void handleSaveIgAutoReply({ enabledForDms: v });
+                    }}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-medium">{t("AutoReplyForComments" as any)}</p>
+                    <p className="text-xs text-muted-foreground">{t("AutoReplyForCommentsDescription" as any)}</p>
+                  </div>
+                  <Switch
+                    checked={igAutoReplyForComments}
+                    onCheckedChange={(v) => {
+                      setIgAutoReplyForComments(v);
+                      void handleSaveIgAutoReply({ enabledForComments: v });
                     }}
                   />
                 </div>
@@ -412,7 +528,7 @@ export function IntegrationsClient() {
             )}
           </div>
 
-          {/* Facebook */}
+          {/* ── Facebook ── */}
           <div className="rounded-xl border border-border p-6 space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div className="flex items-center gap-3">
@@ -436,7 +552,6 @@ export function IntegrationsClient() {
                   </p>
                 </div>
               </div>
-
               {fbStatus?.facebookConnected ? (
                 <Button variant="outline" onClick={handleDisconnectFacebook}>
                   {t("Disconnect" as any)}
@@ -471,18 +586,32 @@ export function IntegrationsClient() {
               </div>
             )}
 
+            {/* Facebook Auto-Reply (split into DMs + Comments) */}
             {fbStatus?.facebookConnected && (
               <div className="space-y-3 border-t border-border pt-4">
                 <div className="flex items-center justify-between gap-4">
                   <div>
-                    <p className="text-sm font-medium">{t("FacebookAutoReply" as any)}</p>
-                    <p className="text-xs text-muted-foreground">{t("FacebookAutoReplyDescription" as any)}</p>
+                    <p className="text-sm font-medium">{t("AutoReplyForDms" as any)}</p>
+                    <p className="text-xs text-muted-foreground">{t("AutoReplyForDmsDescription" as any)}</p>
                   </div>
                   <Switch
-                    checked={fbAutoReplyEnabled}
+                    checked={fbAutoReplyForDms}
                     onCheckedChange={(v) => {
-                      setFbAutoReplyEnabled(v);
-                      void handleSaveFbAutoReply({ enabled: v });
+                      setFbAutoReplyForDms(v);
+                      void handleSaveFbAutoReply({ enabledForDms: v });
+                    }}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-medium">{t("AutoReplyForComments" as any)}</p>
+                    <p className="text-xs text-muted-foreground">{t("AutoReplyForCommentsDescription" as any)}</p>
+                  </div>
+                  <Switch
+                    checked={fbAutoReplyForComments}
+                    onCheckedChange={(v) => {
+                      setFbAutoReplyForComments(v);
+                      void handleSaveFbAutoReply({ enabledForComments: v });
                     }}
                   />
                 </div>
@@ -531,7 +660,7 @@ export function IntegrationsClient() {
             )}
           </div>
 
-          {/* Smart Reply — rule-based price/financing/availability auto-answers, shared across both platforms */}
+          {/* ── Smart Reply (Instant Auto-Reply) ── */}
           {anyConnected && (
             <div className="rounded-xl border border-border p-6 space-y-4">
               <div className="flex items-center gap-3">
@@ -544,33 +673,61 @@ export function IntegrationsClient() {
                 </div>
               </div>
 
+              {/* Per-platform, per-kind toggles */}
               <div className="space-y-3 border-t border-border pt-4">
                 {igStatus?.instagramConnected && (
-                  <div className="flex items-center justify-between gap-4">
-                    <p className="text-sm font-medium">{t("SmartReplyEnableInstagram" as any)}</p>
-                    <Switch
-                      checked={igSmartReplyEnabled}
-                      onCheckedChange={(v) => {
-                        setIgSmartReplyEnabled(v);
-                        void handleSaveSmartReply({ instagramEnabled: v });
-                      }}
-                    />
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Instagram</p>
+                    <div className="flex items-center justify-between gap-4">
+                      <p className="text-sm font-medium">{t("SmartReplyEnableForDms" as any)}</p>
+                      <Switch
+                        checked={igSmartReplyForDms}
+                        onCheckedChange={(v) => {
+                          setIgSmartReplyForDms(v);
+                          void handleSaveSmartReply({ igForDms: v });
+                        }}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <p className="text-sm font-medium">{t("SmartReplyEnableForComments" as any)}</p>
+                      <Switch
+                        checked={igSmartReplyForComments}
+                        onCheckedChange={(v) => {
+                          setIgSmartReplyForComments(v);
+                          void handleSaveSmartReply({ igForComments: v });
+                        }}
+                      />
+                    </div>
                   </div>
                 )}
                 {fbStatus?.facebookConnected && (
-                  <div className="flex items-center justify-between gap-4">
-                    <p className="text-sm font-medium">{t("SmartReplyEnableFacebook" as any)}</p>
-                    <Switch
-                      checked={fbSmartReplyEnabled}
-                      onCheckedChange={(v) => {
-                        setFbSmartReplyEnabled(v);
-                        void handleSaveSmartReply({ facebookEnabled: v });
-                      }}
-                    />
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Facebook</p>
+                    <div className="flex items-center justify-between gap-4">
+                      <p className="text-sm font-medium">{t("SmartReplyEnableForDms" as any)}</p>
+                      <Switch
+                        checked={fbSmartReplyForDms}
+                        onCheckedChange={(v) => {
+                          setFbSmartReplyForDms(v);
+                          void handleSaveSmartReply({ fbForDms: v });
+                        }}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between gap-4">
+                      <p className="text-sm font-medium">{t("SmartReplyEnableForComments" as any)}</p>
+                      <Switch
+                        checked={fbSmartReplyForComments}
+                        onCheckedChange={(v) => {
+                          setFbSmartReplyForComments(v);
+                          void handleSaveSmartReply({ fbForComments: v });
+                        }}
+                      />
+                    </div>
                   </div>
                 )}
               </div>
 
+              {/* Shared config */}
               <div className="space-y-3 border-t border-border pt-4">
                 <div>
                   <p className="text-sm font-medium mb-1">{t("SmartReplyFinancingModeLabel" as any)}</p>
@@ -652,6 +809,72 @@ export function IntegrationsClient() {
                 </div>
 
                 {savingSmartReply && <p className="text-xs text-muted-foreground">{t("Saving" as any)}</p>}
+              </div>
+
+              {/* ── Editable response templates ── */}
+              <div className="border-t border-border pt-4">
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between text-left"
+                  onClick={() => setShowTemplates((v) => !v)}
+                >
+                  <div>
+                    <p className="text-sm font-medium">{t("SmartReplyTemplatesTitle" as any)}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{t("SmartReplyTemplatesDesc" as any)}</p>
+                  </div>
+                  {showTemplates ? <ChevronUp className="h-4 w-4 shrink-0" /> : <ChevronDown className="h-4 w-4 shrink-0" />}
+                </button>
+
+                {showTemplates && (
+                  <div className="mt-4 space-y-4">
+                    {/* Language tabs */}
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={templateTab === "en" ? "default" : "outline"}
+                        onClick={() => setTemplateTab("en")}
+                      >
+                        {t("SmartReplyTemplatesEnTab" as any)}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant={templateTab === "ar" ? "default" : "outline"}
+                        onClick={() => setTemplateTab("ar")}
+                      >
+                        {t("SmartReplyTemplatesArTab" as any)}
+                      </Button>
+                    </div>
+
+                    {/* Template fields */}
+                    <div className="space-y-3">
+                      {TEMPLATE_KEYS.map(({ key, label, placeholder }) => {
+                        const map = templateTab === "en" ? templatesEn : templatesAr;
+                        const defaults = templateTab === "en" ? socialSmartReplyEn : socialSmartReplyAr;
+                        const setMap = templateTab === "en" ? setTemplatesEn : setTemplatesAr;
+                        return (
+                          <div key={key}>
+                            <p className="text-xs font-medium mb-1">{t(label as any)}</p>
+                            <Textarea
+                              value={map[key] ?? ""}
+                              placeholder={defaults[placeholder]}
+                              onChange={(e) => setMap((prev) => ({ ...prev, [key]: e.target.value }))}
+                              rows={2}
+                              className="text-sm font-mono"
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="flex justify-end">
+                      <Button type="button" size="sm" onClick={handleSaveTemplates} disabled={savingTemplates}>
+                        {t("SmartReplyTemplatesSaved" as any)}
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}

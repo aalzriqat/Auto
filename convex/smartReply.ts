@@ -16,10 +16,16 @@ export const setSmartReplyConfig = mutation({
     orgId: v.id("organizations"),
     instagramEnabled: v.boolean(),
     facebookEnabled: v.boolean(),
+    instagramEnabledForDms: v.optional(v.boolean()),
+    instagramEnabledForComments: v.optional(v.boolean()),
+    facebookEnabledForDms: v.optional(v.boolean()),
+    facebookEnabledForComments: v.optional(v.boolean()),
     financingMode: v.union(v.literal("calculated"), v.literal("generic")),
     defaultDownPaymentPercent: v.optional(v.number()),
     defaultFinanceCompanyId: v.optional(v.id("financeCompanies")),
     visibility: v.union(v.literal("public"), v.literal("dm")),
+    customTemplatesEn: v.optional(v.string()),
+    customTemplatesAr: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
@@ -45,10 +51,16 @@ export const setSmartReplyConfig = mutation({
     await ctx.db.patch(settings._id, {
       instagramSmartReplyEnabled: args.instagramEnabled,
       facebookSmartReplyEnabled: args.facebookEnabled,
+      ...(args.instagramEnabledForDms !== undefined && { instagramSmartReplyForDmsEnabled: args.instagramEnabledForDms }),
+      ...(args.instagramEnabledForComments !== undefined && { instagramSmartReplyForCommentsEnabled: args.instagramEnabledForComments }),
+      ...(args.facebookEnabledForDms !== undefined && { facebookSmartReplyForDmsEnabled: args.facebookEnabledForDms }),
+      ...(args.facebookEnabledForComments !== undefined && { facebookSmartReplyForCommentsEnabled: args.facebookEnabledForComments }),
       smartReplyFinancingMode: args.financingMode,
       smartReplyDefaultDownPaymentPercent: args.defaultDownPaymentPercent,
       smartReplyDefaultFinanceCompanyId: args.defaultFinanceCompanyId,
       smartReplyVisibility: args.visibility,
+      ...(args.customTemplatesEn !== undefined && { smartReplyCustomTemplatesEn: args.customTemplatesEn }),
+      ...(args.customTemplatesAr !== undefined && { smartReplyCustomTemplatesAr: args.customTemplatesAr }),
     });
   },
 });

@@ -95,14 +95,20 @@ export const getConnectionStatus = query({
       facebookConnected: Boolean(settings?.facebookPageAccessToken && settings?.facebookPageId),
       facebookPageName: settings?.facebookPageName,
       facebookAutoReplyEnabled: settings?.facebookAutoReplyEnabled ?? false,
+      facebookAutoReplyForDmsEnabled: settings?.facebookAutoReplyForDmsEnabled ?? settings?.facebookAutoReplyEnabled ?? false,
+      facebookAutoReplyForCommentsEnabled: settings?.facebookAutoReplyForCommentsEnabled ?? settings?.facebookAutoReplyEnabled ?? false,
       facebookAutoReplyMessages: settings?.facebookAutoReplyMessages ?? [],
       facebookLeadFromCommentsEnabled: settings?.facebookLeadFromCommentsEnabled !== false,
       facebookLeadFromDmsEnabled: settings?.facebookLeadFromDmsEnabled !== false,
       facebookSmartReplyEnabled: settings?.facebookSmartReplyEnabled ?? false,
+      facebookSmartReplyForDmsEnabled: settings?.facebookSmartReplyForDmsEnabled ?? settings?.facebookSmartReplyEnabled ?? false,
+      facebookSmartReplyForCommentsEnabled: settings?.facebookSmartReplyForCommentsEnabled ?? settings?.facebookSmartReplyEnabled ?? false,
       smartReplyFinancingMode: settings?.smartReplyFinancingMode ?? "generic",
       smartReplyDefaultDownPaymentPercent: settings?.smartReplyDefaultDownPaymentPercent,
       smartReplyDefaultFinanceCompanyId: settings?.smartReplyDefaultFinanceCompanyId,
       smartReplyVisibility: settings?.smartReplyVisibility ?? "public",
+      smartReplyCustomTemplatesEn: settings?.smartReplyCustomTemplatesEn,
+      smartReplyCustomTemplatesAr: settings?.smartReplyCustomTemplatesAr,
     };
   },
 });
@@ -115,7 +121,8 @@ export const getConnectionStatus = query({
 export const setFacebookAutoReplyConfig = mutation({
   args: {
     orgId: v.id("organizations"),
-    enabled: v.boolean(),
+    enabledForDms: v.boolean(),
+    enabledForComments: v.boolean(),
     messages: v.array(v.string()),
   },
   handler: async (ctx, args) => {
@@ -125,7 +132,8 @@ export const setFacebookAutoReplyConfig = mutation({
     if (cleaned.length > 5) {
       throw new ConvexError("Up to 5 auto-reply messages are allowed.");
     }
-    if (args.enabled && cleaned.length === 0) {
+    const eitherEnabled = args.enabledForDms || args.enabledForComments;
+    if (eitherEnabled && cleaned.length === 0) {
       throw new ConvexError("Add at least one auto-reply message before enabling.");
     }
 
@@ -138,7 +146,9 @@ export const setFacebookAutoReplyConfig = mutation({
     }
 
     await ctx.db.patch(settings._id, {
-      facebookAutoReplyEnabled: args.enabled,
+      facebookAutoReplyForDmsEnabled: args.enabledForDms,
+      facebookAutoReplyForCommentsEnabled: args.enabledForComments,
+      facebookAutoReplyEnabled: eitherEnabled,
       facebookAutoReplyMessages: cleaned,
     });
   },

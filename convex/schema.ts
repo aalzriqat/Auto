@@ -808,6 +808,25 @@ export default defineSchema({
     // Fallback language for a reply when the inbound text has no detectable
     // script (emoji-only, numeric-only, etc). Default when unset: "en".
     smartReplyDefaultLocale: v.optional(v.union(v.literal("en"), v.literal("ar"))),
+    // Granular canned-reply toggles. When set, these override the platform-level
+    // facebookAutoReplyEnabled / instagramAutoReplyEnabled for the given kind.
+    // Undefined = fall back to the platform-level flag (backward-compatible).
+    facebookAutoReplyForDmsEnabled: v.optional(v.boolean()),
+    facebookAutoReplyForCommentsEnabled: v.optional(v.boolean()),
+    instagramAutoReplyForDmsEnabled: v.optional(v.boolean()),
+    instagramAutoReplyForCommentsEnabled: v.optional(v.boolean()),
+    // Per-kind smart-reply toggles (same backward-compat pattern).
+    facebookSmartReplyForDmsEnabled: v.optional(v.boolean()),
+    facebookSmartReplyForCommentsEnabled: v.optional(v.boolean()),
+    instagramSmartReplyForDmsEnabled: v.optional(v.boolean()),
+    instagramSmartReplyForCommentsEnabled: v.optional(v.boolean()),
+    // Custom Smart Reply response templates as JSON strings keyed by intent.
+    // Supported keys (same {placeholder} tokens as the built-in defaults):
+    //   greeting, location, locationFallback, priceAvailable, financingGeneric,
+    //   financingCalculated, availableYes, availableSold, availableUnclear, vehicleInfo
+    // Undefined = use the built-in copy from socialSmartReplyEn / socialSmartReplyAr.
+    smartReplyCustomTemplatesEn: v.optional(v.string()),
+    smartReplyCustomTemplatesAr: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
     .index("by_instagram_business_account_id", ["instagramBusinessAccountId"])
