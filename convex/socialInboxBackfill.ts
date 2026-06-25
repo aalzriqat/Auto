@@ -257,16 +257,23 @@ export const resyncEvents = action({
             if (!postTextCache.has(postId)) {
               try {
                 const res = await fetch(
-                  `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${postId}?fields=message,story,attachments{title,description}&access_token=${fbToken.facebookPageAccessToken}`
+                  `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${postId}?fields=message,story,name,attachments{title,description,name,subattachments{title,description,name}}&access_token=${fbToken.facebookPageAccessToken}`
                 );
                 if (res.ok) {
                   const json = await res.json();
                   const parts: string[] = [];
                   if (json.message) parts.push(json.message);
                   if (json.story) parts.push(json.story);
+                  if (json.name) parts.push(json.name);
                   for (const att of json.attachments?.data ?? []) {
                     if (att.title) parts.push(att.title);
                     if (att.description) parts.push(att.description);
+                    if (att.name) parts.push(att.name);
+                    for (const sub of att.subattachments?.data ?? []) {
+                      if (sub.title) parts.push(sub.title);
+                      if (sub.description) parts.push(sub.description);
+                      if (sub.name) parts.push(sub.name);
+                    }
                   }
                   postTextCache.set(postId, parts.join(" "));
                 }
