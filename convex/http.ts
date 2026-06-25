@@ -661,14 +661,15 @@ http.route({
               senderInstagramId: String(value.from?.id ?? ""),
             });
           }
-          // If no vehicle was matched via socialPosts, try extracting one from
-          // the post caption (covers posts not published through AutoFlow).
+          // If no vehicle was matched via socialPosts, try the comment text
+          // first then the post caption (covers posts not published through AutoFlow).
           const mediaId = value.media?.id ? String(value.media.id) : undefined;
-          if (result && !result.vehicleId && mediaId) {
+          if (result && !result.vehicleId) {
             await ctx.runAction(internal.instagramEngagement.enrichEventVehicleFromPost, {
               orgId,
               externalId: String(value.id),
               mediaId,
+              text: value.text,
             });
           }
           await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
@@ -714,6 +715,15 @@ http.route({
               orgId,
               customerId: result.customerId,
               senderInstagramId: senderId,
+            });
+          }
+          // Try to match a vehicle from the DM text (customer often mentions
+          // the car they saw in a post, e.g. "I want the E-Bora 2020").
+          if (result && !result.vehicleId && messagingEvent.message.text) {
+            await ctx.runAction(internal.instagramEngagement.enrichEventVehicleFromPost, {
+              orgId,
+              externalId: String(messagingEvent.message.mid ?? `${senderId}-${messagingEvent.timestamp}`),
+              text: messagingEvent.message.text,
             });
           }
           await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
@@ -1009,13 +1019,16 @@ http.route({
             }
           }
           // If no vehicle was matched via socialPosts, try extracting one from
-          // the post message (covers posts not published through AutoFlow).
+          // the comment text first, then the post content (covers posts not
+          // published through AutoFlow, including WhatsApp-link style posts
+          // where the vehicle name lives in the attachment title).
           const fbPostId = value.post_id ? String(value.post_id) : undefined;
-          if (result && !result.vehicleId && fbPostId) {
+          if (result && !result.vehicleId) {
             await ctx.runAction(internal.facebookEngagement.enrichEventVehicleFromPost, {
               orgId,
               externalId: String(value.comment_id),
               postId: fbPostId,
+              text: value.message,
             });
           }
           await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
@@ -1054,6 +1067,15 @@ http.route({
               orgId,
               recipientFacebookId: senderId,
               message: result.replyText,
+            });
+          }
+          // Try to match a vehicle from the DM text (customer often mentions
+          // the car they saw in a post, e.g. "I want the E-Bora 2020").
+          if (result && !result.vehicleId && messagingEvent.message.text) {
+            await ctx.runAction(internal.facebookEngagement.enrichEventVehicleFromPost, {
+              orgId,
+              externalId: String(messagingEvent.message.mid ?? `${senderId}-${messagingEvent.timestamp}`),
+              text: messagingEvent.message.text,
             });
           }
           await ctx.runMutation(internal.adminSystem.logWebhookEvent, {

@@ -437,24 +437,52 @@ export const enrichEventVehicleFromPost = internalAction({
   args: {
     orgId: v.id("organizations"),
     externalId: v.string(),
-    postId: v.string(),
+    // postId absent for DMs (no post to fetch) — text-only path
+    postId: v.optional(v.string()),
+    // The comment/DM text itself — tried before fetching the post caption
+    text: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<void> => {
+    const vehicles = await ctx.runQuery(internal.facebookEngagement.getOrgVehicles, { orgId: args.orgId });
+
+    // 1. Try matching from the event text (comment body or DM message).
+    if (args.text) {
+      const matchedId = matchVehicleFromText(args.text, vehicles);
+      if (matchedId) {
+        await ctx.runMutation(internal.facebookEngagement.patchEventVehicle, {
+          orgId: args.orgId,
+          externalId: args.externalId,
+          vehicleId: matchedId,
+        });
+        return;
+      }
+    }
+
+    // 2. Fall back: fetch the post and try message + attachment titles.
+    // Attachment title carries the car name for WhatsApp-link style posts
+    // where the post message is empty or in Arabic only.
+    if (!args.postId) return;
     const token = await ctx.runQuery(internal.facebookEngagement.getTokenForOrg, { orgId: args.orgId });
     if (!token) return;
 
     const url = new URL(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${args.postId}`);
-    url.searchParams.set("fields", "message");
+    url.searchParams.set("fields", "message,story,attachments{title,description}");
     url.searchParams.set("access_token", token.facebookPageAccessToken);
     const res = await fetch(url.toString());
     if (!res.ok) return;
 
     const json = await res.json();
-    const message: string | undefined = json.message;
-    if (!message) return;
+    const parts: string[] = [];
+    if (json.message) parts.push(json.message);
+    if (json.story) parts.push(json.story);
+    for (const att of json.attachments?.data ?? []) {
+      if (att.title) parts.push(att.title);
+      if (att.description) parts.push(att.description);
+    }
+    const combined = parts.join(" ");
+    if (!combined.trim()) return;
 
-    const vehicles = await ctx.runQuery(internal.facebookEngagement.getOrgVehicles, { orgId: args.orgId });
-    const matchedId = matchVehicleFromText(message, vehicles);
+    const matchedId = matchVehicleFromText(combined, vehicles);
     if (!matchedId) return;
 
     await ctx.runMutation(internal.facebookEngagement.patchEventVehicle, {

@@ -649,9 +649,29 @@ export const enrichEventVehicleFromPost = internalAction({
   args: {
     orgId: v.id("organizations"),
     externalId: v.string(),
-    mediaId: v.string(),
+    // mediaId absent for DMs (no post to fetch) — text-only path
+    mediaId: v.optional(v.string()),
+    // The comment/DM text itself — tried before fetching the post caption
+    text: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<void> => {
+    const vehicles = await ctx.runQuery(internal.instagramEngagement.getOrgVehicles, { orgId: args.orgId });
+
+    // 1. Try matching from the event text (comment body or DM message).
+    if (args.text) {
+      const matchedId = matchVehicleFromText(args.text, vehicles);
+      if (matchedId) {
+        await ctx.runMutation(internal.instagramEngagement.patchEventVehicle, {
+          orgId: args.orgId,
+          externalId: args.externalId,
+          vehicleId: matchedId,
+        });
+        return;
+      }
+    }
+
+    // 2. Fall back: fetch the media caption.
+    if (!args.mediaId) return;
     const token = await ctx.runQuery(internal.instagramEngagement.getTokenForOrg, { orgId: args.orgId });
     if (!token) return;
 
@@ -665,7 +685,6 @@ export const enrichEventVehicleFromPost = internalAction({
     const caption: string | undefined = json.caption;
     if (!caption) return;
 
-    const vehicles = await ctx.runQuery(internal.instagramEngagement.getOrgVehicles, { orgId: args.orgId });
     const matchedId = matchVehicleFromText(caption, vehicles);
     if (!matchedId) return;
 
