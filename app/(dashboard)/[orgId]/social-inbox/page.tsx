@@ -155,7 +155,7 @@ export default function SocialInboxPage() {
 
   return (
     <RoleGuard permissions={["view:leads"]}>
-      <div className="space-y-6 flex flex-col h-full overflow-hidden">
+      <div className="space-y-6 flex flex-col md:h-full md:overflow-hidden">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <MessageCircle className="h-5 w-5" />

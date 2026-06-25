@@ -139,7 +139,7 @@ export default function LeadsPage() {
 
   return (
     <RoleGuard permissions={["view:leads"]}>
-      <div className="space-y-6 flex flex-col h-full overflow-hidden">
+      <div className="space-y-6 flex flex-col md:h-full md:overflow-hidden">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           {/* View toggle */}
           <div className="flex items-center gap-1 rounded-lg border bg-muted/30 p-1 w-fit">

@@ -16,7 +16,7 @@ export function AccountingClient() {
   if (!activeOrgId) return null;
 
   return (
-    <div className="p-6 max-w-[1600px] mx-auto w-full flex flex-col h-full gap-6">
+    <div className="p-6 max-w-[1600px] mx-auto w-full flex flex-col md:h-full gap-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
@@ -29,7 +29,7 @@ export function AccountingClient() {
         </div>
       </div>
 
-      <Tabs defaultValue="ledger" className="flex-1 flex flex-col h-full overflow-hidden">
+      <Tabs defaultValue="ledger" className="flex-1 flex flex-col md:h-full md:overflow-hidden">
         <div className="overflow-x-auto self-start mb-4 w-full sm:w-auto">
           <TabsList className="w-max bg-white border border-slate-200/60 p-1">
             <TabsTrigger value="ledger" className="gap-2 data-[state=active]:bg-primary/5 data-[state=active]:text-primary data-[state=active]:shadow-none px-4">
@@ -51,7 +51,7 @@ export function AccountingClient() {
           </TabsList>
         </div>
 
-        <div className="flex-1 overflow-y-auto min-h-0 bg-white rounded-xl border border-slate-200/60 shadow-sm">
+        <div className="md:flex-1 md:overflow-y-auto md:min-h-0 bg-white rounded-xl border border-slate-200/60 shadow-sm">
           <TabsContent value="ledger" className="h-full m-0 data-[state=inactive]:hidden">
             <GeneralLedgerTab />
           </TabsContent>
