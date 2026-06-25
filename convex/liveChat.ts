@@ -11,20 +11,60 @@ const GRANT_DURATION_MS = 60 * 60_000;
 const ONLINE_THRESHOLD_MS = 45_000;
 const DEALER_PRESENCE_STALE_MS = 25_000;
 
-/**
- * Kill switch — the whole live chat system (dealer widget, marketing-site
- * widget, agent console) is disabled because its 10s presence + ~2s typing
- * pings, written directly onto the actively-queried `liveChatThreads` row,
- * fanned out into excessive Convex function-call usage. Flip back to `true`
- * once that reactivity pattern is fixed (e.g. move presence/typing to a
- * separate sparsely-read table instead of the row `listQueue` subscribes to).
- */
+// Kept off for now even though the underlying reactivity bug (presence/typing
+// pings hot-spotting the actively-queried `liveChatThreads` row) is fixed —
+// see `liveChatPresence` in schema.ts. Flip to `true` when ready to re-enable.
 const LIVE_CHAT_ENABLED = false;
 
 function assertLiveChatEnabled() {
   if (!LIVE_CHAT_ENABLED) {
     throw new ConvexError("Live chat is currently disabled.");
   }
+}
+
+// ─── Typing/presence (split off liveChatThreads — see schema.ts comment) ───
+
+type PresenceSide = "DEALER" | "AGENT";
+type PresencePatch = Partial<{
+  typingAt: number | undefined;
+  presence: "active" | "idle";
+  presenceAt: number;
+  presenceSince: number;
+}>;
+
+async function getPresenceRow(ctx: QueryCtx | MutationCtx, threadId: Id<"liveChatThreads">, side: PresenceSide) {
+  return await ctx.db
+    .query("liveChatPresence")
+    .withIndex("by_thread_side", (q) => q.eq("threadId", threadId).eq("side", side))
+    .first();
+}
+
+async function upsertPresence(ctx: MutationCtx, threadId: Id<"liveChatThreads">, side: PresenceSide, patch: PresencePatch) {
+  const existing = await getPresenceRow(ctx, threadId, side);
+  if (existing) {
+    await ctx.db.patch(existing._id, patch);
+  } else {
+    await ctx.db.insert("liveChatPresence", { threadId, side, ...patch });
+  }
+}
+
+/** Merges both sides' presence rows onto a thread doc, for responses that display live typing/presence. */
+async function withPresence<T extends Doc<"liveChatThreads">>(ctx: QueryCtx, thread: T) {
+  const [dealerP, agentP] = await Promise.all([
+    getPresenceRow(ctx, thread._id, "DEALER"),
+    getPresenceRow(ctx, thread._id, "AGENT"),
+  ]);
+  return {
+    ...thread,
+    dealerTypingAt: dealerP?.typingAt,
+    dealerPresence: dealerP?.presence,
+    dealerPresenceAt: dealerP?.presenceAt,
+    dealerPresenceSince: dealerP?.presenceSince,
+    agentTypingAt: agentP?.typingAt,
+    agentPresence: agentP?.presence,
+    agentPresenceAt: agentP?.presenceAt,
+    agentPresenceSince: agentP?.presenceSince,
+  };
 }
 
 // ─── Dealer-facing ──────────────────────────────────────────────────────────
@@ -73,34 +113,7 @@ export const getMyThread = query({
       .filter((q) => q.neq(q.field("status"), "CLOSED"))
       .first();
 
-    const agents = await ctx.db.query("supportAgents").collect();
-    const now = Date.now();
-    const anyAgentOnline = agents.some(
-      (a) => a.isActive && a.isOnline && a.lastHeartbeatAt && now - a.lastHeartbeatAt < ONLINE_THRESHOLD_MS
-    );
-
-    if (!thread) return { thread: null, queuePosition: null, anyAgentOnline };
-
-    let queuePosition: number | null = null;
-    if (thread.status === "WAITING" || thread.status === "OFFERED") {
-      const ahead = await ctx.db
-        .query("liveChatThreads")
-        .withIndex("by_status", (q) => q.eq("status", "WAITING").lt("createdAt", thread.createdAt))
-        .collect();
-      const aheadOffered = await ctx.db
-        .query("liveChatThreads")
-        .withIndex("by_status", (q) => q.eq("status", "OFFERED").lt("createdAt", thread.createdAt))
-        .collect();
-      queuePosition = ahead.length + aheadOffered.length + 1;
-    }
-
-    let claimedByName: string | undefined;
-    if (thread.claimedByUserId) {
-      const agentUser = await ctx.db.get(thread.claimedByUserId);
-      claimedByName = agentUser?.name;
-    }
-
-    return { thread, queuePosition, anyAgentOnline, claimedByName };
+    return buildThreadStatusInfo(ctx, thread ?? null);
   },
 });
 
@@ -134,7 +147,6 @@ export const sendDealerMessage = mutation({
     const wasClosed = thread.status === "CLOSED";
     await ctx.db.patch(args.threadId, {
       lastMessageAt: now,
-      dealerTypingAt: undefined,
       // Re-queue a closed conversation if the dealer writes again instead of
       // silently dropping the message into a dead thread.
       ...(wasClosed
@@ -149,6 +161,7 @@ export const sendDealerMessage = mutation({
           }
         : {}),
     });
+    await upsertPresence(ctx, args.threadId, "DEALER", { typingAt: undefined });
 
     if (wasClosed) {
       await ctx.scheduler.runAfter(0, internal.liveChat.offerToNextAgent, { threadId: args.threadId });
@@ -180,7 +193,7 @@ export const setDealerTyping = mutation({
     if (thread.dealerUserId !== user._id) {
       throw new ConvexError("Thread not found.");
     }
-    await ctx.db.patch(args.threadId, { dealerTypingAt: Date.now() });
+    await upsertPresence(ctx, args.threadId, "DEALER", { typingAt: Date.now() });
   },
 });
 
@@ -195,11 +208,12 @@ export const updateDealerPresence = mutation({
       throw new ConvexError("Thread not found.");
     }
     const now = Date.now();
-    const stateChanged = thread.dealerPresence !== args.state;
-    await ctx.db.patch(args.threadId, {
-      dealerPresence: args.state,
-      dealerPresenceAt: now,
-      ...(stateChanged ? { dealerPresenceSince: now } : {}),
+    const existing = await getPresenceRow(ctx, args.threadId, "DEALER");
+    const stateChanged = existing?.presence !== args.state;
+    await upsertPresence(ctx, args.threadId, "DEALER", {
+      presence: args.state,
+      presenceAt: now,
+      ...(stateChanged ? { presenceSince: now } : {}),
     });
   },
 });
@@ -306,7 +320,7 @@ async function buildThreadStatusInfo(ctx: QueryCtx, thread: Doc<"liveChatThreads
     claimedByName = agentUser?.name;
   }
 
-  return { thread, queuePosition, anyAgentOnline, claimedByName };
+  return { thread: await withPresence(ctx, thread), queuePosition, anyAgentOnline, claimedByName };
 }
 
 /** Finds the visitor's most recent non-closed lead thread, or starts a new (WAITING) one. */
@@ -423,7 +437,6 @@ export const sendLeadMessage = mutation({
     const wasClosed = thread.status === "CLOSED";
     await ctx.db.patch(args.threadId, {
       lastMessageAt: now,
-      dealerTypingAt: undefined,
       // Re-queue a closed conversation if the visitor writes again instead
       // of silently dropping the message into a dead thread.
       ...(wasClosed
@@ -438,6 +451,7 @@ export const sendLeadMessage = mutation({
           }
         : {}),
     });
+    await upsertPresence(ctx, args.threadId, "DEALER", { typingAt: undefined });
 
     if (wasClosed) {
       await ctx.scheduler.runAfter(0, internal.liveChat.offerToNextAgent, { threadId: args.threadId });
@@ -463,7 +477,7 @@ export const setLeadTyping = mutation({
     const leadId = normalizeLeadId(args.leadId);
     const thread = await ctx.db.get(args.threadId);
     if (!thread || thread.kind !== "LEAD" || thread.leadId !== leadId) return;
-    await ctx.db.patch(args.threadId, { dealerTypingAt: Date.now() });
+    await upsertPresence(ctx, args.threadId, "DEALER", { typingAt: Date.now() });
   },
 });
 
@@ -479,11 +493,12 @@ export const updateLeadPresence = mutation({
     const thread = await ctx.db.get(args.threadId);
     if (!thread || thread.kind !== "LEAD" || thread.leadId !== leadId) return;
     const now = Date.now();
-    const stateChanged = thread.dealerPresence !== args.state;
-    await ctx.db.patch(args.threadId, {
-      dealerPresence: args.state,
-      dealerPresenceAt: now,
-      ...(stateChanged ? { dealerPresenceSince: now } : {}),
+    const existing = await getPresenceRow(ctx, args.threadId, "DEALER");
+    const stateChanged = existing?.presence !== args.state;
+    await upsertPresence(ctx, args.threadId, "DEALER", {
+      presence: args.state,
+      presenceAt: now,
+      ...(stateChanged ? { presenceSince: now } : {}),
     });
   },
 });
@@ -551,7 +566,9 @@ export const getThreadForAgent = query({
   handler: async (ctx, args) => {
     assertLiveChatEnabled();
     await requireSupportAgent(ctx);
-    return await ctx.db.get(args.threadId);
+    const thread = await ctx.db.get(args.threadId);
+    if (!thread) return null;
+    return await withPresence(ctx, thread);
   },
 });
 
@@ -562,7 +579,7 @@ export const setAgentTyping = mutation({
     const { user } = await requireSupportAgent(ctx);
     const thread = await ctx.db.get(args.threadId);
     if (!thread || thread.claimedByUserId !== user._id) return;
-    await ctx.db.patch(args.threadId, { agentTypingAt: Date.now() });
+    await upsertPresence(ctx, args.threadId, "AGENT", { typingAt: Date.now() });
   },
 });
 
@@ -586,11 +603,12 @@ export const updateAgentPresence = mutation({
     const thread = await ctx.db.get(args.threadId);
     if (!thread || thread.claimedByUserId !== user._id) return;
     const now = Date.now();
-    const stateChanged = thread.agentPresence !== args.state;
-    await ctx.db.patch(args.threadId, {
-      agentPresence: args.state,
-      agentPresenceAt: now,
-      ...(stateChanged ? { agentPresenceSince: now } : {}),
+    const existing = await getPresenceRow(ctx, args.threadId, "AGENT");
+    const stateChanged = existing?.presence !== args.state;
+    await upsertPresence(ctx, args.threadId, "AGENT", {
+      presence: args.state,
+      presenceAt: now,
+      ...(stateChanged ? { presenceSince: now } : {}),
     });
   },
 });
@@ -624,8 +642,7 @@ export const listMyActiveThreads = query({
     const { user } = await requireSupportAgent(ctx);
     return await ctx.db
       .query("liveChatThreads")
-      .withIndex("by_claimedByUserId", (q) => q.eq("claimedByUserId", user._id))
-      .filter((q) => q.eq(q.field("status"), "ACTIVE"))
+      .withIndex("by_claimedByUserId_status", (q) => q.eq("claimedByUserId", user._id).eq("status", "ACTIVE"))
       .order("desc")
       .collect();
   },
@@ -754,8 +771,7 @@ export const offerToNextAgent = internalMutation({
       eligible.map(async (a) => {
         const active = await ctx.db
           .query("liveChatThreads")
-          .withIndex("by_claimedByUserId", (q) => q.eq("claimedByUserId", a.userId))
-          .filter((q) => q.eq(q.field("status"), "ACTIVE"))
+          .withIndex("by_claimedByUserId_status", (q) => q.eq("claimedByUserId", a.userId).eq("status", "ACTIVE"))
           .collect();
         return { agent: a, activeCount: active.length };
       })
@@ -824,7 +840,8 @@ export const sendAgentMessage = mutation({
       createdAt: now,
     });
 
-    await ctx.db.patch(args.threadId, { lastMessageAt: now, agentLastReadAt: now, agentTypingAt: undefined });
+    await ctx.db.patch(args.threadId, { lastMessageAt: now, agentLastReadAt: now });
+    await upsertPresence(ctx, args.threadId, "AGENT", { typingAt: undefined });
   },
 });
 
@@ -872,8 +889,7 @@ export const closeThread = mutation({
     if (agentRow?.pendingBreak) {
       const stillActive = await ctx.db
         .query("liveChatThreads")
-        .withIndex("by_claimedByUserId", (q) => q.eq("claimedByUserId", user._id))
-        .filter((q) => q.eq(q.field("status"), "ACTIVE"))
+        .withIndex("by_claimedByUserId_status", (q) => q.eq("claimedByUserId", user._id).eq("status", "ACTIVE"))
         .collect();
       if (stillActive.length === 0) {
         await ctx.db.patch(agentRow._id, { status: "BREAK", isOnline: false, pendingBreak: false });
@@ -889,8 +905,7 @@ export const getMyAgentStatus = query({
     const { agent } = await requireSupportAgent(ctx);
     const activeThreads = await ctx.db
       .query("liveChatThreads")
-      .withIndex("by_claimedByUserId", (q) => q.eq("claimedByUserId", agent.userId))
-      .filter((q) => q.eq(q.field("status"), "ACTIVE"))
+      .withIndex("by_claimedByUserId_status", (q) => q.eq("claimedByUserId", agent.userId).eq("status", "ACTIVE"))
       .collect();
     return {
       status: agent.status ?? (agent.isOnline ? "ONLINE" : "OFFLINE"),
@@ -991,8 +1006,7 @@ export const setAgentStatus = mutation({
 
     const activeThreads = await ctx.db
       .query("liveChatThreads")
-      .withIndex("by_claimedByUserId", (q) => q.eq("claimedByUserId", agent.userId))
-      .filter((q) => q.eq(q.field("status"), "ACTIVE"))
+      .withIndex("by_claimedByUserId_status", (q) => q.eq("claimedByUserId", agent.userId).eq("status", "ACTIVE"))
       .collect();
 
     if (activeThreads.length > 0) {

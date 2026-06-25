@@ -42,6 +42,9 @@ import {
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+type AgingFilter = "ALL" | "0-30" | "31-60" | "61-90" | "90+";
+
 function StatusBadge({ status, t }: { status: string; t: any }) {
   switch (status) {
     case "AVAILABLE":
@@ -75,6 +78,7 @@ export default function VehiclesPage() {
   const removeVehicle = useMutation(api.vehicles.softDelete);
 
   const [searchQuery, setSearchQuery] = useState("");
+  const [agingFilter, setAgingFilter] = useState<AgingFilter>("ALL");
   const [isVehicleDialogOpen, setIsVehicleDialogOpen] = useState(false);
   const [editingVehicle, setEditingVehicle] = useState<Doc<"vehicles"> | null>(null);
 
@@ -152,11 +156,30 @@ export default function VehiclesPage() {
     }
   };
 
-  const filteredVehicles = vehicles?.filter(v =>
-    v.vin.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    v.make.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    v.model.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const getVehicleAgeBucket = (createdAt: number): AgingFilter => {
+    const ageDays = Math.max(0, Math.floor((Date.now() - createdAt) / DAY_MS));
+    if (ageDays <= 30) return "0-30";
+    if (ageDays <= 60) return "31-60";
+    if (ageDays <= 90) return "61-90";
+    return "90+";
+  };
+
+  const agingFilterOptions: { value: AgingFilter; label: string }[] = [
+    { value: "ALL", label: t("AgingAll" as any) },
+    { value: "0-30", label: t("AgingBucket0To30" as any) },
+    { value: "31-60", label: t("AgingBucket31To60" as any) },
+    { value: "61-90", label: t("AgingBucket61To90" as any) },
+    { value: "90+", label: t("AgingBucket90Plus" as any) },
+  ];
+
+  const filteredVehicles = vehicles?.filter((v) => {
+    const matchesSearch =
+      v.vin.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      v.make.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      v.model.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesAge = agingFilter === "ALL" || getVehicleAgeBucket(v._creationTime) === agingFilter;
+    return matchesSearch && matchesAge;
+  });
 
   useEffect(() => {
     if (highlightId && vehicles) {
@@ -265,6 +288,20 @@ export default function VehiclesPage() {
           onChange={(e) => setSearchQuery(e.target.value)}
           className="ps-9"
         />
+      </div>
+
+      <div className="flex flex-wrap gap-2" aria-label={t("InventoryAging" as any)}>
+        {agingFilterOptions.map((option) => (
+          <Button
+            key={option.value}
+            type="button"
+            variant={agingFilter === option.value ? "default" : "outline"}
+            size="sm"
+            onClick={() => setAgingFilter(option.value)}
+          >
+            {option.label}
+          </Button>
+        ))}
       </div>
 
       {/* Mobile card list */}

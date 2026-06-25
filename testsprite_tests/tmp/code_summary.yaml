@@ -15,92 +15,140 @@ routes:
     auth_required: false
     description: Public landing page
   - path: /sign-in
-    file: app/sign-in/page.tsx
+    file: app/sign-in/[[...sign-in]]/page.tsx
     auth_required: false
     description: Clerk sign-in page
   - path: /sign-up
-    file: app/sign-up/page.tsx
+    file: app/sign-up/[[...sign-up]]/page.tsx
     auth_required: false
     description: Clerk sign-up page
   - path: /dashboard
     file: app/(dashboard)/dashboard/page.tsx
     auth_required: true
-    description: Main KPI dashboard showing revenue, vehicles, leads
-  - path: /vehicles
-    file: app/(dashboard)/vehicles/page.tsx
+    description: Post-login entry point. Has no org segment yet — it loads the signed-in user's organizations, redirects to /{orgId}/dashboard if they belong to one (their first org), or renders the onboarding wizard in-place if they belong to none.
+  - path: /{orgId}/dashboard
+    file: app/(dashboard)/[orgId]/dashboard/page.tsx
+    auth_required: true
+    description: Main KPI dashboard showing revenue, vehicles, leads. orgId is a Convex organization id taken from the URL; the page redirects back to /dashboard if the signed-in user is not a member of that org. Users with the SALES role are auto-redirected to /{orgId}/sales.
+  - path: /{orgId}/vehicles
+    file: app/(dashboard)/[orgId]/vehicles/page.tsx
     auth_required: true
     description: Vehicle inventory list with search, filter, add/edit/delete
-  - path: /customers
-    file: app/(dashboard)/customers/page.tsx
+  - path: /{orgId}/customers
+    file: app/(dashboard)/[orgId]/customers/page.tsx
     auth_required: true
     description: Customer CRM list with search and dialog-based CRUD
-  - path: /leads
-    file: app/(dashboard)/leads/page.tsx
+  - path: /{orgId}/leads
+    file: app/(dashboard)/[orgId]/leads/page.tsx
     auth_required: true
     description: Lead pipeline board with Kanban view and stage management
-  - path: /sales
-    file: app/(dashboard)/sales/page.tsx
+  - path: /{orgId}/sales
+    file: app/(dashboard)/[orgId]/sales/page.tsx
     auth_required: true
-    description: Sales home with wizard launcher and in-progress draft resume
-  - path: /sales/sales
-    file: app/(dashboard)/sales/sales/page.tsx
+    description: Sales home with cash/installment wizard launchers, in-progress draft resume (with Discard), and pending profit-approval deals (with Cancel)
+  - path: /{orgId}/sales/sales
+    file: app/(dashboard)/[orgId]/sales/sales/page.tsx
     auth_required: true
-    description: Completed sales list with search, edit, delete, PDF export
-  - path: /expenses
-    file: app/(dashboard)/expenses/page.tsx
+    description: Completed sales list with search, edit, delete, PDF export, and a link to the linked finance application
+  - path: /{orgId}/applications
+    file: app/(dashboard)/[orgId]/applications/page.tsx
+    auth_required: true
+    description: Finance applications list linked to installment sales
+  - path: /{orgId}/expenses
+    file: app/(dashboard)/[orgId]/expenses/page.tsx
     auth_required: true
     description: Expense tracking list with CRUD
-  - path: /approvals
-    file: app/(dashboard)/approvals/page.tsx
+  - path: /{orgId}/approvals
+    file: app/(dashboard)/[orgId]/approvals/page.tsx
     auth_required: true
     description: Profit approval requests for managers to approve/reject
-  - path: /reports
-    file: app/(dashboard)/reports/page.tsx
+  - path: /{orgId}/commissions
+    file: app/(dashboard)/[orgId]/commissions/page.tsx
+    auth_required: true
+    description: Commission calculations per salesperson
+  - path: /{orgId}/accounting
+    file: app/(dashboard)/[orgId]/accounting/page.tsx
+    auth_required: true
+    description: General ledger, fixed assets, partner equity, and claims tabs
+  - path: /{orgId}/reports
+    file: app/(dashboard)/[orgId]/reports/page.tsx
     auth_required: true
     description: Financial and inventory reports with date filtering
-  - path: /team
-    file: app/(dashboard)/team/page.tsx
+  - path: /{orgId}/tasks
+    file: app/(dashboard)/[orgId]/tasks/page.tsx
+    auth_required: true
+    description: Task management with assignment and history
+  - path: /{orgId}/team
+    file: app/(dashboard)/[orgId]/team/page.tsx
     auth_required: true
     description: Team member management with role assignment
-  - path: /settings/general
-    file: app/(dashboard)/settings/general/page.tsx
+  - path: /{orgId}/settings/general
+    file: app/(dashboard)/[orgId]/settings/general/page.tsx
     auth_required: true
     description: Org settings (currency, VAT, timezone, logo, WhatsApp)
-  - path: /settings/pipeline
-    file: app/(dashboard)/settings/pipeline/page.tsx
+  - path: /{orgId}/settings/finance
+    file: app/(dashboard)/[orgId]/settings/finance/page.tsx
+    auth_required: true
+    description: Finance company configuration for installment sales
+  - path: /{orgId}/settings/pipeline
+    file: app/(dashboard)/[orgId]/settings/pipeline/page.tsx
     auth_required: true
     description: Lead pipeline stage configuration
-  - path: /settings/lead-sources
-    file: app/(dashboard)/settings/lead-sources/page.tsx
+  - path: /{orgId}/settings/lead-sources
+    file: app/(dashboard)/[orgId]/settings/lead-sources/page.tsx
     auth_required: true
     description: Manage lead source labels
-  - path: /settings/custom-fields
-    file: app/(dashboard)/settings/custom-fields/page.tsx
+  - path: /{orgId}/settings/custom-fields
+    file: app/(dashboard)/[orgId]/settings/custom-fields/page.tsx
     auth_required: true
     description: Create custom fields for vehicles, customers, leads
-  - path: /settings/commission
-    file: app/(dashboard)/settings/commission/page.tsx
+  - path: /{orgId}/settings/commission
+    file: app/(dashboard)/[orgId]/settings/commission/page.tsx
     auth_required: true
     description: Tiered commission configuration by profit threshold
-  - path: /settings/branches
-    file: app/(dashboard)/settings/branches/page.tsx
+  - path: /{orgId}/settings/branches
+    file: app/(dashboard)/[orgId]/settings/branches/page.tsx
     auth_required: true
     description: Manage dealership branches
+  - path: /{orgId}/settings/valuation-companies
+    file: app/(dashboard)/[orgId]/settings/valuation-companies/page.tsx
+    auth_required: true
+    description: Manage third-party vehicle valuation companies
+  - path: /{orgId}/settings/feedback
+    file: app/(dashboard)/[orgId]/settings/feedback/page.tsx
+    auth_required: true
+    description: Inbox for in-app user feedback submissions
 
 features:
-  - name: Onboarding Wizard
-    description: Multi-step wizard for first-time users to create their org and pick currency
+  - name: Org Routing & Entry Redirect
+    description: Active organization is carried entirely in the URL (the [orgId] segment), not in client storage. The /dashboard entry point picks the user's org (or shows onboarding), and OrgProvider redirects back to /dashboard if a URL references an org the signed-in user does not belong to.
     files:
-      - app/(dashboard)/layout.tsx
+      - components/providers/OrgProvider.tsx
+      - app/(dashboard)/dashboard/page.tsx
+      - app/(dashboard)/[orgId]/layout.tsx
     entry_route: /dashboard
     user_interactions:
-      - New user sees wizard overlay automatically (no active org)
+      - Sign in and land on /{orgId}/dashboard automatically
+      - Switch organizations via the OrgSwitcher in the top nav; URL's orgId segment updates while staying on the same sub-page
+      - Manually navigate to a URL with an org id the user does not belong to and get redirected back to /dashboard instead of seeing an error
+    api_calls:
+      - method: QUERY
+        endpoint: convex/organizations.listMine
+    auth_required: true
+
+  - name: Onboarding Wizard
+    description: Multi-step wizard for first-time users (zero org memberships) to create their org and pick currency
+    files:
+      - app/(dashboard)/dashboard/page.tsx
+    entry_route: /dashboard
+    user_interactions:
+      - New user with no org sees the wizard rendered in place of a redirect
       - Enter dealership name in text input
-      - Click Next to proceed to currency step
+      - Click Continue to proceed to currency step
       - Select currency from dropdown
-      - Click Next to reach final step
+      - Click Continue, then Skip or load defaults for lead sources and pipeline
       - Click "Go to Dashboard" button
-      - Wizard closes and main dashboard renders
+      - Redirected to /{newOrgId}/dashboard
     api_calls:
       - method: MUTATION
         endpoint: convex/organizations.create
@@ -111,9 +159,9 @@ features:
   - name: Vehicle Inventory Management
     description: Add, edit, delete vehicles with VIN decode, image upload, approval workflow
     files:
-      - app/(dashboard)/vehicles/page.tsx
+      - app/(dashboard)/[orgId]/vehicles/page.tsx
       - components/vehicles/VehicleDialog.tsx
-    entry_route: /vehicles
+    entry_route: /{orgId}/vehicles
     user_interactions:
       - Click "Add Vehicle" button to open dialog
       - Type a VIN and click the decode icon
@@ -134,9 +182,9 @@ features:
   - name: Customer Management
     description: Create and manage customer records
     files:
-      - app/(dashboard)/customers/page.tsx
+      - app/(dashboard)/[orgId]/customers/page.tsx
       - components/customers/CustomerDialog.tsx
-    entry_route: /customers
+    entry_route: /{orgId}/customers
     user_interactions:
       - Search customers by name or phone
       - Click "Add Customer" to open dialog
@@ -154,9 +202,9 @@ features:
   - name: Lead Pipeline
     description: Kanban board for tracking sales leads through configurable pipeline stages
     files:
-      - app/(dashboard)/leads/page.tsx
+      - app/(dashboard)/[orgId]/leads/page.tsx
       - components/leads/LeadDialog.tsx
-    entry_route: /leads
+    entry_route: /{orgId}/leads
     user_interactions:
       - View leads grouped by stage in Kanban columns
       - Click "Add Lead" button
@@ -173,14 +221,14 @@ features:
         endpoint: convex/leads.create
     auth_required: true
 
-  - name: Cash Sale Wizard
-    description: Three-step guided wizard to record a cash vehicle sale
+  - name: Cash & Installment Sale Wizard
+    description: Three-step guided wizard to record a cash or installment vehicle sale, with draft auto-save and resume
     files:
-      - app/(dashboard)/sales/page.tsx
+      - app/(dashboard)/[orgId]/sales/page.tsx
       - components/sales/SalesWizard.tsx
-    entry_route: /sales
+    entry_route: /{orgId}/sales
     user_interactions:
-      - Click "Cash Sale" button on sales home page
+      - Click "Cash Sale" or "Installment" button on sales home page
       - Step 1: Select vehicle from searchable list
       - Step 2: Select or create customer, enter sale price
       - Step 3: Review summary and click Confirm
@@ -188,14 +236,34 @@ features:
     api_calls:
       - method: MUTATION
         endpoint: convex/sales.create
+      - method: MUTATION
+        endpoint: convex/wizardDrafts.saveDraft
+    auth_required: true
+
+  - name: Cancel In-Progress Draft and Pending Deals
+    description: A salesperson can discard their auto-saved wizard draft, or cancel their own pending profit-approval request, directly from the sales home page
+    files:
+      - app/(dashboard)/[orgId]/sales/page.tsx
+      - convex/approvals.ts
+      - convex/wizardDrafts.ts
+    entry_route: /{orgId}/sales
+    user_interactions:
+      - With an in-progress draft saved, click "Discard" next to "Resume Draft" to remove it
+      - With a PENDING profit-approval deal listed under "Pending Deals", click "Cancel" to withdraw the request
+      - Cancelled/discarded items disappear from their respective lists
+    api_calls:
+      - method: MUTATION
+        endpoint: convex/wizardDrafts.clearDraft
+      - method: MUTATION
+        endpoint: convex/approvals.cancelMyApproval
     auth_required: true
 
   - name: Expense Tracking
     description: Record and categorize operational expenses
     files:
-      - app/(dashboard)/expenses/page.tsx
+      - app/(dashboard)/[orgId]/expenses/page.tsx
       - components/expenses/ExpenseDialog.tsx
-    entry_route: /expenses
+    entry_route: /{orgId}/expenses
     user_interactions:
       - Click "Record Expense" button
       - Fill title, amount, category (REPAIR/MAINTENANCE/DETAILING)
@@ -214,8 +282,8 @@ features:
   - name: Approval Workflow
     description: Managers review and approve/reject below-minimum-profit sale requests
     files:
-      - app/(dashboard)/approvals/page.tsx
-    entry_route: /approvals
+      - app/(dashboard)/[orgId]/approvals/page.tsx
+    entry_route: /{orgId}/approvals
     user_interactions:
       - View pending approval cards showing salesperson and vehicle
       - See requested profit vs minimum allowed
@@ -233,10 +301,11 @@ features:
     description: Switch UI between English (LTR) and Arabic (RTL)
     files:
       - components/providers/LanguageProvider.tsx
-      - components/layout/Sidebar.tsx
-    entry_route: /dashboard
+      - components/layout/LanguageSwitcher.tsx
+      - components/layout/TopNav.tsx
+    entry_route: /{orgId}/dashboard
     user_interactions:
-      - Click the language toggle button in the sidebar (shows EN or AR)
+      - Click the language toggle button in the top nav (shows EN or AR)
       - UI text switches to Arabic
       - Layout direction flips to RTL
       - Click again to return to English LTR
@@ -246,8 +315,8 @@ features:
   - name: General Settings
     description: Configure org currency, VAT rate, and branding
     files:
-      - app/(dashboard)/settings/general/page.tsx
-    entry_route: /settings/general
+      - app/(dashboard)/[orgId]/settings/general/page.tsx
+    entry_route: /{orgId}/settings/general
     user_interactions:
       - Navigate to Settings > General
       - Change currency dropdown to AED
@@ -262,8 +331,8 @@ features:
   - name: Pipeline Stage Configuration
     description: Customize lead pipeline stage labels, colors, and order
     files:
-      - app/(dashboard)/settings/pipeline/page.tsx
-    entry_route: /settings/pipeline
+      - app/(dashboard)/[orgId]/settings/pipeline/page.tsx
+    entry_route: /{orgId}/settings/pipeline
     user_interactions:
       - Navigate to Settings > Pipeline
       - Click "Seed Defaults" to load default stages
@@ -281,9 +350,9 @@ features:
   - name: Custom Fields
     description: Create custom fields for vehicles, customers, and leads
     files:
-      - app/(dashboard)/settings/custom-fields/page.tsx
+      - app/(dashboard)/[orgId]/settings/custom-fields/page.tsx
       - components/custom-fields/CustomFieldsSection.tsx
-    entry_route: /settings/custom-fields
+    entry_route: /{orgId}/settings/custom-fields
     user_interactions:
       - Navigate to Settings > Custom Fields
       - Select entity type tab (Vehicle / Customer / Lead)
@@ -301,8 +370,8 @@ features:
   - name: Reports
     description: Financial and inventory analytics with date range filtering
     files:
-      - app/(dashboard)/reports/page.tsx
-    entry_route: /reports
+      - app/(dashboard)/[orgId]/reports/page.tsx
+    entry_route: /{orgId}/reports
     user_interactions:
       - Navigate to Reports
       - Select a date range from the date picker
@@ -315,8 +384,11 @@ features:
 
 known_limitations:
   - issue: Auth flows use Clerk hosted pages — E2E tests need pre-seeded test credentials
-    location: app/sign-in/page.tsx
+    location: app/sign-in/[[...sign-in]]/page.tsx
     impact: Login step requires real Clerk test user credentials in env vars
   - issue: VIN decode calls external NHTSA API — may be slow or unavailable in CI
     location: components/vehicles/VehicleDialog.tsx
     impact: VIN decode assertions may need a mock or longer timeout
+  - issue: All authenticated routes now require a valid orgId URL segment (/{orgId}/...); there is no static /vehicles, /customers, etc. path anymore
+    location: app/(dashboard)/[orgId]/
+    impact: Tests must navigate via UI links/redirects (or capture the orgId from the post-login redirect) rather than hardcoding a bare path like /vehicles

@@ -207,6 +207,24 @@ export const resolve = mutation({
         });
       } else if (request.type === "UPDATE" && request.vehicleId) {
         const previousVehicle = await ctx.db.get(request.vehicleId);
+        if (!previousVehicle || previousVehicle.isDeleted || previousVehicle.orgId !== args.orgId) {
+          throw new ConvexError("Vehicle not found.");
+        }
+
+        const payload = request.payload as { status?: string; sellingPrice?: number };
+        if (
+          typeof payload.sellingPrice === "number" &&
+          payload.sellingPrice !== previousVehicle.sellingPrice
+        ) {
+          await ctx.db.insert("vehiclePriceHistory", {
+            orgId: args.orgId,
+            vehicleId: request.vehicleId,
+            oldPrice: previousVehicle.sellingPrice,
+            newPrice: payload.sellingPrice,
+            changedBy: user._id,
+            changedAt: Date.now(),
+          });
+        }
 
         await ctx.db.patch(request.vehicleId, {
           ...(request.payload as any),
@@ -214,7 +232,6 @@ export const resolve = mutation({
           updatedAt: Date.now(),
         });
 
-        const payload = request.payload as { status?: string };
         if (payload.status === "AVAILABLE" && previousVehicle && previousVehicle.status !== "AVAILABLE") {
           const updatedVehicle = await ctx.db.get(request.vehicleId);
           if (updatedVehicle) {

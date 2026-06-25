@@ -40,76 +40,29 @@ async def run_test():
         except Exception:
             pass
         
-        # -> Open the Dashboard page by navigating to the application's Dashboard (the app's Dashboard page).
+        # -> Navigate to the dashboard page (open http://localhost:3000/dashboard) so the Arabic language toggle in the interface sidebar can be clicked and RTL layout changes can be observed.
         await page.goto("http://localhost:3000/dashboard")
         try:
             await page.wait_for_load_state("domcontentloaded", timeout=5000)
         except Exception:
             pass
         
-        # -> Sign in to the application by entering the username/email and password in the sign-in form and clicking the 'Continue' button so the dashboard can be accessed.
-        # Enter email or username text field
-        elem = page.locator('[id="identifier-field"]')
-        await elem.wait_for(state="visible", timeout=10000)
-        await elem.fill("alaajarad")
-        
-        # -> Sign in to the application by entering the username/email and password in the sign-in form and clicking the 'Continue' button so the dashboard can be accessed.
-        # Enter your password password field
-        elem = page.locator('[id="password-field"]')
-        await elem.wait_for(state="visible", timeout=10000)
-        await elem.fill("Alaa@14111991")
-        
-        # -> Sign in to the application by entering the username/email and password in the sign-in form and clicking the 'Continue' button so the dashboard can be accessed.
-        # Continue button
-        elem = page.get_by_role('button', name='Continue', exact=True)
-        await elem.click(timeout=10000)
-        
-        # -> Fill the 'Dealership Name' field with a name (visible placeholder: e.g. Al Mada Motors) and click the 'Continue →' button to proceed past onboarding and load the dashboard.
-        # e.g. Al Mada Motors text field
-        elem = page.locator('[id="orgName"]')
-        await elem.wait_for(state="visible", timeout=10000)
-        await elem.fill("Al Mada Motors")
-        
-        # -> Fill the 'Dealership Name' field with a name (visible placeholder: e.g. Al Mada Motors) and click the 'Continue →' button to proceed past onboarding and load the dashboard.
-        # Continue → button
-        elem = page.get_by_role('button', name='Continue →', exact=True)
-        await elem.click(timeout=10000)
-        
-        # -> Click the 'Continue →' button on the onboarding card to proceed past the current onboarding step and continue toward the dashboard.
-        # Continue → button
-        elem = page.get_by_role('button', name='Continue →', exact=True)
-        await elem.click(timeout=10000)
-        
-        # -> Click the 'Skip' link on the onboarding card (the 'Skip' control beneath the 'Load Default Lead Sources →' button) to continue onboarding toward the dashboard.
-        # Skip button
-        elem = page.get_by_role('button', name='Skip', exact=True)
-        await elem.click(timeout=10000)
-        
-        # -> Click the 'Skip' link under the Sales Pipeline onboarding card to advance onboarding toward the dashboard.
-        # Skip button
-        elem = page.get_by_role('button', name='Skip', exact=True)
-        await elem.click(timeout=10000)
-        
-        # -> Click the 'Go to Dashboard' button on the onboarding completion card to load the dashboard.
-        # Go to Dashboard button
-        elem = page.get_by_role('button', name='Go to Dashboard', exact=True)
-        await elem.click(timeout=10000)
-        
-        # -> Click the visible 'Switch Language' button (label shown as 'en') in the header to change the interface language to Arabic.
-        # en button
-        elem = page.get_by_role('button', name='en', exact=True)
-        await elem.click(timeout=10000)
+        # -> Open the Dashboard page (http://localhost:3000/dashboard) and check whether the dashboard loads or if the app redirects to the 'Sign in to AutoFlow' page; if the sign-in page appears, report the dashboard is auth-gated.
+        await page.goto("http://localhost:3000/dashboard")
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=5000)
+        except Exception:
+            pass
         
         # --> Assertions to verify final state
+        # Assert: Verify the interface switches to Arabic
+        assert False, "Expected: Verify the interface switches to Arabic (could not be verified on the page)"
+        # Assert: Verify the layout becomes right-to-left
+        assert False, "Expected: Verify the layout becomes right-to-left (could not be verified on the page)"
         
-        # --> Verify the interface switches to Arabic
-        # Assert: The language toggle displays 'ar', indicating the interface is set to Arabic.
-        await expect(page.locator("xpath=/html/body/div[2]/div/div/header/div/div[2]/button").nth(0)).to_have_text("ar", timeout=15000), "The language toggle displays 'ar', indicating the interface is set to Arabic."
-        # Assert: The sidebar navigation label 'لوحة القيادة' is visible, confirming the interface language is Arabic.
-        await expect(page.locator("xpath=/html/body/div[2]/div/aside/div[2]/nav/a[1]").nth(0)).to_have_text("\u0644\u0648\u062d\u0629 \u0627\u0644\u0642\u064a\u0627\u062f\u0629", timeout=15000), "The sidebar navigation label '\u0644\u0648\u062d\u0629 \u0627\u0644\u0642\u064a\u0627\u062f\u0629' is visible, confirming the interface language is Arabic."
-        current_url = await page.evaluate("() => window.location.href")
-        # Assert: page loaded with a URL (final outcome verified by the AI judge during the run)
-        assert current_url, 'Page should have loaded with a URL'
+        # --> Test blocked by environment/access constraints during agent run
+        # Reason: TEST BLOCKED The dashboard could not be reached — the UI redirected to the Clerk sign-in page, preventing the language toggle and RTL layout from being tested. Observations: - Navigating to /dashboard redirected to the Clerk 'Sign in to AutoFlow' page instead of loading the dashboard UI. - The current page shows no interactive elements in the test environment (0 interactive elements), so the Ar...
+        raise AssertionError("Test blocked during agent run: " + "TEST BLOCKED The dashboard could not be reached \u2014 the UI redirected to the Clerk sign-in page, preventing the language toggle and RTL layout from being tested. Observations: - Navigating to /dashboard redirected to the Clerk 'Sign in to AutoFlow' page instead of loading the dashboard UI. - The current page shows no interactive elements in the test environment (0 interactive elements), so the Ar..." + " — the exported script cannot reproduce a PASS in this environment.")
         await asyncio.sleep(5)
 
     finally:

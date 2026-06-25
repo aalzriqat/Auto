@@ -19,7 +19,7 @@ const fs = require("fs");
 const path = require("path");
 
 const CLERK_API = "https://api.clerk.com/v1";
-const USER_ID = "user_3Ef31A37I3UlQSDdGLwodk8i82q";
+const USER_ID = "user_3FF8Mj3Gj9AuoUYjQgOlR29TD13"; // dedicated autoflow_qa test account
 const APP_URL = "http://localhost:3000";
 
 const REPO_ROOT = path.resolve(__dirname, "..");

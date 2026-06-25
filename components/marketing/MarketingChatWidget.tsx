@@ -198,7 +198,11 @@ function MarketingChatWidgetImpl() {
     if (open && thread && inLiveMode) {
       markLeadThreadRead({ threadId: thread._id, leadId });
     }
-  }, [open, thread, inLiveMode, messages?.length, markLeadThreadRead, leadId]);
+    // thread is a fresh object reference on every reactive re-run (e.g. every
+    // agent presence heartbeat) — depend on its stable id instead, or this
+    // re-fires (and re-patches the thread, triggering more re-runs) every ~10s.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, thread?._id, inLiveMode, messages?.length, markLeadThreadRead, leadId]);
 
   const unreadCount =
     thread && messages

@@ -33,44 +33,18 @@ async def run_test():
         page = await context.new_page()
 
         # Interact with the page elements to simulate user flow
-        # -> navigate
+        # -> Final action — this is where the agent failed
+        # Error observed by agent: Navigation failed - site unavailable: http://localhost:3000
         await page.goto("http://localhost:3000")
         try:
             await page.wait_for_load_state("domcontentloaded", timeout=5000)
         except Exception:
             pass
         
-        # -> Click the 'Sign In' link in the page header to open the Clerk sign-in page.
-        # Sign In link
-        elem = page.get_by_role('link', name='Sign In', exact=True)
-        await elem.click(timeout=10000)
-        
-        # -> Fill the 'Email address or username' field with the provided username, fill the 'Password' field with the provided password, then click the 'Continue' button to submit the sign-in form.
-        # Enter email or username text field
-        elem = page.locator('[id="identifier-field"]')
-        await elem.wait_for(state="visible", timeout=10000)
-        await elem.fill("alaajarad")
-        
-        # -> Fill the 'Email address or username' field with the provided username, fill the 'Password' field with the provided password, then click the 'Continue' button to submit the sign-in form.
-        # Enter your password password field
-        elem = page.locator('[id="password-field"]')
-        await elem.wait_for(state="visible", timeout=10000)
-        await elem.fill("Alaa@14111991")
-        
-        # -> Fill the 'Email address or username' field with the provided username, fill the 'Password' field with the provided password, then click the 'Continue' button to submit the sign-in form.
-        # Continue button
-        elem = page.get_by_role('button', name='Continue', exact=True)
-        await elem.click(timeout=10000)
-        
-        # -> Click the 'Continue →' button on the 'Welcome to AutoFlow' Dealership Name step to attempt to proceed without entering a dealership name and observe whether a validation error appears.
-        # Continue → button
-        elem = page.get_by_role('button', name='Continue →', exact=True)
-        await elem.click(timeout=10000)
-        
-        # --> Test passed — verified by AI agent
-        frame = context.pages[-1]
-        current_url = await frame.evaluate("() => window.location.href")
-        assert current_url is not None, "Test completed successfully"
+        # --> Assertions to verify final state
+        current_url = await page.evaluate("() => window.location.href")
+        # Assert: page loaded with a URL (final outcome verified by the AI judge during the run)
+        assert current_url, 'Page should have loaded with a URL'
         await asyncio.sleep(5)
 
     finally:

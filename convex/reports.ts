@@ -57,7 +57,8 @@ export const getSalesAndProfitReport = query({
       const expenses = expensesByVehicle.get(sale.vehicleId) ?? [];
 
       const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
-      const cost = (vehicle?.purchasePrice ?? vehicle?.sellingPrice ?? 0) + totalExpenses;
+      const vehicleBaseCost = vehicle?.landedCostTotal ?? vehicle?.purchasePrice ?? vehicle?.sellingPrice ?? 0;
+      const cost = vehicleBaseCost + totalExpenses;
       const profit = sale.salePrice - cost;
 
       totalRevenue += sale.salePrice;
@@ -70,7 +71,7 @@ export const getSalesAndProfitReport = query({
         vehicleModel: vehicle?.model,
         vehicleYear: vehicle?.year,
         vehicleVin: vehicle?.vin,
-        vehicleCost: vehicle?.purchasePrice ?? vehicle?.sellingPrice ?? 0,
+        vehicleCost: vehicleBaseCost,
         vehicleExpenses: totalExpenses,
         totalCost: cost,
         netProfit: profit,
@@ -139,7 +140,7 @@ export const getInventoryReport = query({
     const enrichedInventory = activeInventory.map((vehicle) => {
       const expenses = expensesByVehicle.get(vehicle._id) ?? [];
       const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
-      const basePrice = vehicle.purchasePrice ?? vehicle.sellingPrice ?? 0;
+      const basePrice = vehicle.landedCostTotal ?? vehicle.purchasePrice ?? vehicle.sellingPrice ?? 0;
       const totalInvestment = basePrice + totalExpenses;
 
       totalValue += totalInvestment;
@@ -286,7 +287,7 @@ export const getSalespersonPerformance = query({
         const vehicle = vehicleMap.get(sale.vehicleId);
         const expenses = expensesByVehicle.get(sale.vehicleId) ?? [];
         const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
-        const cost = (vehicle?.purchasePrice || 0) + totalExpenses;
+        const cost = (vehicle?.landedCostTotal ?? vehicle?.purchasePrice ?? 0) + totalExpenses;
         const profit = sale.salePrice - cost;
 
         totalRevenue += sale.salePrice;

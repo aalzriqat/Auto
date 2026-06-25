@@ -39,6 +39,7 @@
 | 21 | main | Data Quality Dashboard Widget (CRM data quality, part 5) | ✅ Done |
 | 25 | main | Instagram Engagement: Comments/DMs Capture, Auto-Reply, Lead Creation, Social Inbox | ✅ Done |
 | 26 | main | Facebook Page Integration: Connect, Post, Inbound Engagement + Lead-Creation Toggles | ✅ Done |
+| 28 | main | Notification System Overhaul: multi-channel, bilingual, preferences, broadcasts | ✅ Done |
 
 ---
 
@@ -745,3 +746,434 @@ Key design decisions: notifications are now `(type, data)` pairs rendered biling
 **Frontend coverage note:** per this repo's established convention (`vitest.config.ts`: "all UI components/pages are covered by TestSprite E2E tests instead"), the new pages got TestSprite plan entries, not React Testing Library tests.
 
 **Not yet pursued:** email digest batching (every notification sends instantly, gated only by on/off preference); WhatsApp Cloud API send was implemented and wired but not live-verified against a real Meta number (no sandbox credentials available this session).
+
+---
+
+## Upcoming Roadmap — Phases 29–42
+
+> **Rule:** Any feature tagged `[LLM]` requires an external language model API budget and is deferred to the AI Backlog section below. Do not start those phases until budget is confirmed.
+
+---
+
+### Tier 1 — High ROI, Builds on Existing Data (Phases 29–32)
+
+---
+
+## Phase 29 — Inventory Intelligence
+
+**Branch:** `feature/phase-29-inventory-intelligence`
+**Goal:** Give dealers the dashboards and tracking they look at every day. No new entities — all data already exists; this phase surfaces it correctly.
+
+### Scope
+
+- **Aging Dashboard** — vehicles grouped into 0–30 / 31–60 / 61–90 / 90+ day buckets, color-coded (green/yellow/orange/red), with per-bucket counts + average days on lot. "Days on lot" = `now - createdAt` for AVAILABLE vehicles. Top-level summary card on the main Dashboard page.
+- **Landed Cost Breakdown** — replace the single "purchase price" field on vehicles with a structured cost table: Purchase Price, Auction Fee, Shipping, Customs, Registration, Repair, Detailing, Photography, Marketing, Finance Cost. Show **Total Landed Cost** = sum of all rows. Profit calculations throughout (`sales.ts`, reports) must use landed cost, not just purchase price.
+- **Pricing History Log** — whenever `vehicles.price` changes, append a row to a new `vehiclePriceHistory` table (`vehicleId`, `orgId`, `oldPrice`, `newPrice`, `changedBy`, `changedAt`). Show timeline in vehicle details.
+- **Reservation History** — when a vehicle is reserved, capture depositor customer ID, deposit amount, expiry date. Store as `vehicleReservations` table rows (not just the status flag). Show history in vehicle details.
+
+### Tasks
+- [ ] `convex/schema.ts` — add `vehiclePriceHistory`, `vehicleReservations`, `vehicleLandedCosts` tables; extend `vehicles` with optional `landedCostTotal`
+- [ ] `convex/vehicles.ts` — write price history row on every price change; `getLandedCosts`/`upsertLandedCost` mutations; `getReservationHistory` query
+- [ ] `convex/reports.ts` — update profit calculations to use `landedCostTotal ?? purchasePrice`
+- [ ] `components/vehicles/VehicleDetailsDialog.tsx` — Landed Cost tab, Pricing History tab, Reservation History section
+- [ ] `app/(dashboard)/[orgId]/dashboard/page.tsx` — Inventory Aging card
+- [ ] `app/(dashboard)/[orgId]/vehicles/page.tsx` — Aging filter tabs (All / 0-30 / 31-60 / 61-90 / 90+)
+- [ ] i18n EN + AR for all new strings
+- [ ] Tests for price history write-on-change, landed cost profit calculation, aging bucket logic
+
+---
+
+## Phase 30 — Customer Timeline
+
+**Branch:** `feature/phase-30-customer-timeline`
+**Goal:** Every customer gets a single chronological activity stream — the foundation all future CRM depth is built on.
+
+### Scope
+
+One read-only timeline per customer aggregating existing data from:
+- WhatsApp messages (`whatsappMessages` / inbound events)
+- Instagram DMs + comments (`instagramEvents`)
+- Facebook DMs + comments (`facebookEvents`)
+- Leads (created, stage changes, won/lost)
+- Sales (sale date, vehicle, amount)
+- Tasks (created, completed)
+- Quotes (generated)
+- Notes (manual free-text notes added inline on the timeline)
+
+No new write paths other than manual notes. The timeline is a read-side aggregation query that merges rows from multiple tables, sorted by timestamp descending.
+
+### Tasks
+- [ ] `convex/schema.ts` — new `customerNotes` table (`orgId`, `customerId`, `authorId`, `body`, `isPinned`, `createdAt`)
+- [ ] `convex/customerTimeline.ts` (new) — `getTimeline` query: fetches events from all source tables for a given `customerId` + `orgId`, merges + sorts in JS, returns a typed union array. Bounded fetches per table (`.take(50)` per source, merge, sort, slice to 100 total) — no unbounded scans.
+- [ ] `convex/customerNotes.ts` (new) — `create`, `pin`/`unpin`, `remove` (author or manager only)
+- [ ] `components/customers/CustomerTimelinePanel.tsx` (new) — scrollable timeline with event-type icons, grouped by date; inline note composer at top
+- [ ] `components/customers/CustomerDialog.tsx` — new "Timeline" tab
+- [ ] i18n EN + AR
+- [ ] Tests for timeline merge ordering, note CRUD, permission gating
+
+---
+
+## Phase 31 — BI Executive Dashboard
+
+**Branch:** `feature/phase-31-exec-dashboard`
+**Goal:** A single page owners and GMs open every morning. All data is already in the system — this phase assembles it into one screen.
+
+### Scope
+
+A new `/dashboard/executive` route (or a new tab on the existing dashboard) showing:
+
+| Section | Metrics |
+|---|---|
+| Today's Performance | Sales count, revenue, profit, margin % |
+| Pipeline Snapshot | Open leads by stage (mini funnel), total open pipeline value |
+| Inventory Position | Total vehicles, available count, inventory value (at landed cost), vehicles aged 90+ |
+| Cash & Finance | Pending deposits, pending finance applications, overdue collections |
+| Pending Actions | Approval requests (vehicle edits, status changes, profit approvals) waiting for owner |
+| Top Performer | Salesperson with most revenue this month |
+| Alerts | Any vehicle aged 90+, any sale with profit < threshold, any finance rejected this week |
+
+### Tasks
+- [ ] `convex/executiveDashboard.ts` (new) — single `getSummary` query that returns all sections above in one call (parallel `Promise.all` fetches internally, no N+1)
+- [ ] `app/(dashboard)/[orgId]/dashboard/executive/page.tsx` (new) — grid layout, stat cards, mini funnel, alerts list
+- [ ] Dashboard nav — "Executive View" link, gated by `requireOwner` equivalent permission
+- [ ] i18n EN + AR
+- [ ] Tests for `getSummary` data shape and auth gating
+
+---
+
+## Phase 32 — Customer Tags & Segments
+
+**Branch:** `feature/phase-32-customer-segments`
+**Goal:** Manual tagging + rule-based dynamic segments. No ML required.
+
+### Scope
+
+**Tags** — free-form labels per customer: VIP, Repeat Buyer, Fleet, Finance Eligible, High Risk, Wholesale, Referral Partner. Org-defined (not hardcoded). Shown as colored chips on customer rows and in the timeline.
+
+**Segments** — saved filter presets that dynamically compute a customer list at query time. Rules are simple predicates:
+- Purchased in last N months
+- No purchase in last N months (inactive)
+- Has open lead
+- Tag includes X
+- Lead source = Y
+- Created after date
+
+### Tasks
+- [ ] `convex/schema.ts` — `customerTags` table (org-defined tag definitions: name, color); `customerTagAssignments` (customerId → tagId); `customerSegments` table (name, rules JSON array, createdBy)
+- [ ] `convex/customerTags.ts` (new) — define/list/delete tags; assign/unassign tags to customers
+- [ ] `convex/customerSegments.ts` (new) — `create`/`list`/`evaluate` (runs the rule predicates against the customer table, returns matching IDs)
+- [ ] `components/customers/CustomerTagsEditor.tsx` (new) — inline multi-select tag editor in CustomerDialog
+- [ ] `app/(dashboard)/[orgId]/customers/page.tsx` — tag filter chips, segment dropdown filter
+- [ ] `app/(dashboard)/[orgId]/settings/segments/page.tsx` (new) — segment builder UI
+- [ ] i18n EN + AR
+- [ ] Tests for tag CRUD, assignment uniqueness, segment rule evaluation
+
+---
+
+### Tier 2 — Operational Depth (Phases 33–36)
+
+---
+
+## Phase 33 — Basic Workflow Automation
+
+**Branch:** `feature/phase-33-workflow-automation`
+**Goal:** Trigger → Action rules that run automatically. No LLM. Pure event-driven logic.
+
+### Scope
+
+An org-configurable rule engine: **WHEN** [trigger event] **AND** [optional conditions] **THEN** [actions].
+
+**Supported triggers (V1):**
+- Lead created
+- Lead inactive for N days
+- Lead stage changed to X
+- Vehicle status changed to AVAILABLE
+- Sale recorded
+- Low-profit sale (below threshold)
+
+**Supported actions (V1):**
+- Create a task (assignee, title, due date offset)
+- Send in-app notification to [role]
+- Send WhatsApp message to customer (template text only — no LLM)
+- Change lead stage to X
+
+**Not in V1:** email sending, external webhooks, complex branching. Those come with the Integration Hub (Phase 42).
+
+### Tasks
+- [ ] `convex/schema.ts` — `automationRules` table (`orgId`, `name`, `trigger`, `conditions` JSON, `actions` JSON array, `isActive`, `lastTriggeredAt`, `triggerCount`)
+- [ ] `convex/automationRules.ts` (new) — CRUD for rules; `evaluateRules(ctx, orgId, triggerType, payload)` internal mutation — fetches active rules matching the trigger, evaluates conditions, executes actions
+- [ ] Wire `evaluateRules` call into existing mutation files: `convex/leads.ts`, `convex/vehicles.ts`, `convex/sales.ts` at the right trigger points
+- [ ] `app/(dashboard)/[orgId]/settings/automations/page.tsx` (new) — rule builder UI: trigger picker → condition rows → action rows → save; rule list with on/off toggle + trigger count
+- [ ] i18n EN + AR
+- [ ] Tests for rule evaluation, condition matching, action dispatch, trigger count increment
+
+---
+
+## Phase 34 — Vehicle Acquisition Workflow
+
+**Branch:** `feature/phase-34-acquisition`
+**Goal:** Track how vehicles come into inventory before the Add Vehicle step.
+
+### Scope
+
+A pre-inventory acquisition flow covering:
+- **Source types:** Private seller, Auction, Trade-in, Fleet/Corporate, Transfer from branch
+- **Purchase Order** — created before the vehicle is formally added to inventory; captures seller, agreed price, terms, payment method
+- **Approval flow** — purchase orders above a threshold require manager/owner approval (reuses the existing pending → approved/rejected pattern)
+- **Link to vehicle** — when a PO is approved and payment confirmed, it creates the vehicle record pre-filled with the agreed purchase price → feeds Phase 29's landed cost breakdown
+
+### Tasks
+- [ ] `convex/schema.ts` — `purchaseOrders` table (`orgId`, `sourceType`, `sellerName`, `sellerContact`, `agreedPrice`, `paymentMethod`, `status: DRAFT|PENDING_APPROVAL|APPROVED|PAID|CANCELLED`, `vehicleId` (nullable — set on approval), `approvedBy`, `notes`, soft-delete fields)
+- [ ] `convex/purchaseOrders.ts` (new) — `create`, `submit` (→ PENDING_APPROVAL), `approve`/`reject` (owner/manager), `markPaid` (→ PAID + creates vehicle), `list`, `get`
+- [ ] `app/(dashboard)/[orgId]/acquisition/page.tsx` (new) — PO list with status filters; create PO flow
+- [ ] `app/(dashboard)/[orgId]/acquisition/[id]/page.tsx` (new) — PO detail + approval action
+- [ ] Sidebar nav entry under Inventory section
+- [ ] i18n EN + AR
+- [ ] Tests for PO state machine, approval gating, vehicle auto-create on PAID
+
+---
+
+## Phase 35 — MENA Marketplace Syndication
+
+**Branch:** `feature/phase-35-marketplace`
+**Goal:** Publish inventory to Dubizzle, OpenSooq, Haraj, and YallaMotor — the platforms where MENA buyers actually search. Uses the Phase 23/26 social posting architecture as the pattern.
+
+### Scope
+
+Each marketplace has its own API (or CSV/XML feed). V1 covers:
+- **Dubizzle** — REST API or XML feed (research required per their current partner API)
+- **OpenSooq** — listing API
+- **Haraj** (Saudi) — API or webhook
+- **YallaMotor** — XML inventory feed
+
+Per-vehicle: manual "Publish to [platform]" button in the Marketing tab (same UX as Instagram/Facebook). Per-org toggle for auto-publish on status → AVAILABLE.
+
+Synchronized status: when a vehicle is sold/archived in AutoFlow, send a delete/deactivate call to each platform it was published on.
+
+### Tasks
+- [ ] Research each platform's current partner API / listing API requirements and document in `docs/marketplace-apis.md`
+- [ ] `convex/schema.ts` — extend `socialPosts` platform enum with `"dubizzle" | "opensooq" | "haraj" | "yallamotor"`; or create separate `marketplaceListings` table if the data shape differs significantly
+- [ ] `convex/marketplacePosting.ts` (new) — `publishListing` (per platform), `deactivateListing` (on vehicle sold/deleted)
+- [ ] `components/vehicles/VehicleMarketingTab.tsx` — marketplace publish buttons, listing status per platform
+- [ ] `app/(dashboard)/[orgId]/settings/integrations/client.tsx` — marketplace API key configuration per platform
+- [ ] i18n EN + AR
+- [ ] Tests for listing create/deactivate per platform, credential validation
+
+---
+
+## Phase 36 — Inspection Module
+
+**Branch:** `feature/phase-36-inspection`
+**Goal:** Structured vehicle inspection checklist with photos, separate from work orders.
+
+### Scope
+
+A standalone inspection record per vehicle (can have multiple — pre-purchase, post-repair, pre-delivery):
+
+**Checklist sections:** Exterior, Interior, Engine, Electrical, Tyres, Brakes, Paint, Diagnostics
+
+Each item: **pass / fail / N/A** with optional photo attachment and a free-text note.
+
+**Output:** inspection summary card (overall pass/fail, section scores), linked to the vehicle record and optionally to a purchase order (Phase 34).
+
+### Tasks
+- [ ] `convex/schema.ts` — `inspections` table (`orgId`, `vehicleId`, `purchaseOrderId` (optional), `inspectorId`, `status: DRAFT|COMPLETE`, `sections` JSON array, `overallResult`, soft-delete fields); `inspectionPhotos` storage IDs linked to inspection + section item
+- [ ] `convex/inspections.ts` (new) — `create`, `updateSection`, `complete`, `list`, `get`, `generateUploadUrl`
+- [ ] `components/vehicles/InspectionDialog.tsx` (new) — section accordion, pass/fail/NA toggle per item, photo upload per item, submit button
+- [ ] `components/vehicles/VehicleDetailsDialog.tsx` — new "Inspections" tab showing inspection history + "New Inspection" button
+- [ ] i18n EN + AR
+- [ ] Tests for inspection CRUD, completion guard (all items answered), photo attachment
+
+---
+
+### Tier 3 — Enterprise & Scale (Phases 37–42)
+
+---
+
+## Phase 37 — Document Management
+
+**Branch:** `feature/phase-37-documents`
+**Goal:** Versioned document storage with expiry tracking and renewal reminders.
+
+### Scope
+
+Structured documents per vehicle and per customer:
+
+**Vehicle documents:** Registration, Insurance, Inspection Certificate, Purchase Agreement, Title/Ownership, Import Permit, Customs Clearance
+
+**Customer documents:** ID (front/back), Driving License, Proof of Income, Bank Statement, Finance Agreement
+
+**Features:**
+- Upload new version (keeps previous versions, doesn't overwrite)
+- Document status: VALID / EXPIRING_SOON (within 30 days) / EXPIRED
+- Expiry date field per document; cron triggers notifications 30 days before expiry (reuses Phase 28's notification system)
+- Document categories enforced by type
+
+### Tasks
+- [ ] `convex/schema.ts` — extend existing `documents` table (or create `documentVersions` table) with `version`, `expiresAt`, `status`, `replacedBy` (FK to newer version); `documentTypes` table for org-defined document type definitions
+- [ ] `convex/documents.ts` — `uploadNewVersion`, `listVersions`, `getLatest`, `setExpiry`; cron job for expiry notifications
+- [ ] `components/documents/DocumentVersionsPanel.tsx` (new) — version history list, upload new version, expiry badge
+- [ ] `app/(dashboard)/[orgId]/vehicles/[id]/documents/` — vehicle documents panel
+- [ ] `app/(dashboard)/[orgId]/customers/` — customer documents panel
+- [ ] i18n EN + AR
+- [ ] Tests for version chain, expiry status computation, cron notification trigger
+
+---
+
+## Phase 38 — Multi-Branch Operations
+
+**Branch:** `feature/phase-38-multi-branch`
+**Goal:** Branches already exist in the schema. This phase adds vehicle transfers, branch-level inventory views, and branch profitability breakdown.
+
+### Scope
+
+- **Vehicle Transfer** — move a vehicle from one branch to another with an approval flow (manager of destination branch approves). Transfer request captures source branch, destination branch, reason, transport cost (feeds landed cost).
+- **Branch Inventory View** — filter the inventory page by branch; show per-branch vehicle count and total value.
+- **Branch Profitability** — in Reports, add a Branch tab breaking down revenue, profit, and margin per branch for the selected period.
+- **Inter-branch Sales** — a sale can be recorded against a branch other than the vehicle's current branch (e.g., salesperson from branch B sells a car sitting at branch A).
+
+### Tasks
+- [ ] `convex/schema.ts` — `vehicleTransfers` table (`orgId`, `vehicleId`, `fromBranchId`, `toBranchId`, `requestedBy`, `status: PENDING|APPROVED|REJECTED|IN_TRANSIT|COMPLETE`, `transportCost`, soft-delete fields); index on `by_org_vehicle`
+- [ ] `convex/vehicleTransfers.ts` (new) — `request`, `approve`/`reject`, `markComplete` (updates vehicle's `branchId`); `list`, `get`
+- [ ] `convex/reports.ts` — add branch breakdown aggregation
+- [ ] `app/(dashboard)/[orgId]/vehicles/page.tsx` — branch filter dropdown
+- [ ] `app/(dashboard)/[orgId]/transfers/page.tsx` (new) — transfer requests list + action buttons
+- [ ] i18n EN + AR
+- [ ] Tests for transfer state machine, branch filter correctness, profitability aggregation
+
+---
+
+## Phase 39 — Sales Funnel Analytics
+
+**Branch:** `feature/phase-39-funnel-analytics`
+**Goal:** Visual funnel, marketing ROI by channel, salesperson leaderboard. All computed from existing data.
+
+### Scope
+
+New "Analytics" tab in Reports (or a dedicated `/analytics` route):
+
+**Sales Funnel** — for a date range: Leads created → Leads qualified → Leads quoted → Finance applications → Sales closed. Conversion % at each step.
+
+**Marketing ROI by Channel** — leads grouped by `leadSource` (WhatsApp, Instagram, Facebook, Walk-in, Referral, etc.), showing leads count → sales count → revenue → cost per acquisition (manual cost entry per channel per month).
+
+**Salesperson Leaderboard** — for a date range: each salesperson's sales count, revenue, profit, closing rate (sales / leads assigned), average deal size, average days to close.
+
+**Forecast** — next 30-day revenue projection based on current open pipeline value × historical closing rate. No ML — purely `sum(openLeads.estimatedValue) × closingRate`.
+
+### Tasks
+- [ ] `convex/schema.ts` — `marketingChannelCosts` table (`orgId`, `channel`, `month` (YYYY-MM), `cost`) for manual cost entry
+- [ ] `convex/analytics.ts` (new) — `getSalesFunnel`, `getMarketingRoi`, `getSalespersonLeaderboard`, `getForecast` queries
+- [ ] `app/(dashboard)/[orgId]/reports/page.tsx` — new Analytics tab
+- [ ] `components/analytics/` — funnel chart, ROI table, leaderboard table, forecast card
+- [ ] i18n EN + AR
+- [ ] Tests for funnel conversion rates, leaderboard sorting, forecast formula
+
+---
+
+## Phase 40 — Mobile PWA
+
+**Branch:** `feature/phase-40-pwa`
+**Goal:** Installable app, offline inventory/customer lookup, camera VIN scanner, push notifications.
+
+### Scope
+
+- **PWA manifest + service worker** — `next-pwa` or manual `sw.js`. Cache strategy: network-first for API calls, stale-while-revalidate for static assets. Offline fallback shows cached vehicle/customer data (read-only).
+- **Push Notifications** — wire Web Push (VAPID keys) into the existing notification system (Phase 28). Dispatch push alongside in-app + email + WhatsApp. User opts in from the Notification Preferences page.
+- **Camera VIN Scanner** — on the Add Vehicle form, a "Scan VIN" button opens the device camera, uses a barcode/QR library (`zxing-js/browser` or `quagga2`) to read Code 39/Code 128/DataMatrix VIN barcodes, and pre-fills the VIN field.
+- **GPS Check-in (stretch)** — salesperson taps "Check in" from a lead page to record their GPS location + timestamp to the lead's timeline.
+
+### Tasks
+- [ ] Add `next-pwa` (or manual service worker) to `next.config.ts`; create `public/manifest.json` with app icons; verify offline shell renders correctly
+- [ ] `convex/schema.ts` — `pushSubscriptions` table (`userId`, `endpoint`, `keys`, `createdAt`); `notificationPreferences` gains `pushEnabled`
+- [ ] `convex/pushNotifications.ts` (new, `"use node"`) — VAPID key generation + `sendPush` action using `web-push` npm package
+- [ ] `convex/utils/notifications.ts` — add push dispatch path alongside email/WhatsApp
+- [ ] `components/vehicles/VehicleDialog.tsx` — "Scan VIN" button with camera modal
+- [ ] `lib/vinScanner.ts` (new) — thin wrapper around `zxing-js/browser` `BrowserBarcodeReader`
+- [ ] i18n EN + AR
+- [ ] Tests for push subscription CRUD, VIN scanner output parsing
+
+---
+
+## Phase 41 — Accounting Depth
+
+**Branch:** `feature/phase-41-accounting`
+**Goal:** Bring accounting from 6.5/10 to production-grade for dealership operations.
+
+### Scope
+
+- **Bank Accounts** — track multiple bank accounts per org (name, IBAN, currency, opening balance). All transactions linked to a bank account.
+- **Cash Register** — daily cash-in/cash-out log per branch. End-of-day reconciliation (expected vs. actual).
+- **Payment Reconciliation** — match sales payments against bank statement lines (manual upload of CSV statement → auto-suggest matches → confirm).
+- **Installment Collections Calendar** — all upcoming installment due dates on a calendar view with overdue highlighting.
+- **VAT Return Export** — generate a VAT summary for a period (total sales VAT collected, total purchase VAT paid, net due) exportable as PDF/CSV.
+- **Cheque Management** — track post-dated cheques received from customers (date, amount, status: PENDING/DEPOSITED/BOUNCED).
+
+### Tasks
+- [ ] `convex/schema.ts` — `bankAccounts`, `cashRegisterEntries`, `cheques` tables; link `transactions` table to `bankAccountId`
+- [ ] `convex/bankAccounts.ts`, `convex/cashRegister.ts`, `convex/cheques.ts` (new) — CRUD + reconciliation helpers
+- [ ] `convex/vatReport.ts` (new) — `generateVatSummary` query
+- [ ] `app/(dashboard)/[orgId]/accounting/` — new Bank Accounts tab, Cash Register tab, Cheques tab, VAT Export button
+- [ ] `app/(dashboard)/[orgId]/collections/` — installment calendar view
+- [ ] i18n EN + AR
+- [ ] Tests for reconciliation matching, VAT calculation, cheque state machine
+
+---
+
+## Phase 42 — Open API & Integration Hub
+
+**Branch:** `feature/phase-42-open-api`
+**Goal:** Let third-party tools connect to AutoFlow via API keys and event webhooks — the foundation for all future integrations.
+
+### Scope
+
+- **API Keys** — org owners can generate named API keys with scopes (read:vehicles, write:leads, read:customers, etc.). Keys are hashed on storage; shown in full only at creation.
+- **Outbound Webhooks** — org owners register webhook URLs for specific events (lead.created, vehicle.sold, sale.recorded, etc.). AutoFlow sends a signed `POST` with event payload on each trigger. Reuses the `automationRules` trigger catalogue from Phase 33.
+- **Webhook Delivery Log** — per-event delivery attempt record (status code, response body, retry count). Reuses the existing `webhookLogs` pattern from `convex/adminSystem.ts`.
+- **Rate Limits** — API key calls are rate-limited per key (not just per org) using the existing `@convex-dev/rate-limiter` component.
+
+### Tasks
+- [ ] `convex/schema.ts` — `apiKeys` table (`orgId`, `name`, `keyHash`, `scopes`, `lastUsedAt`, `isActive`); `webhookEndpoints` table (`orgId`, `url`, `events` string array, `secret`, `isActive`); `webhookDeliveries` table (delivery log)
+- [ ] `convex/apiKeys.ts` (new) — `create` (returns plaintext key once), `list`, `revoke`
+- [ ] `convex/webhookEndpoints.ts` (new) — `create`/`list`/`delete`; `dispatchWebhook` internal action (HMAC-signs payload, `fetch`, logs delivery)
+- [ ] Wire `dispatchWebhook` into the same trigger points as `evaluateRules` (Phase 33)
+- [ ] `convex/http.ts` — new `/api/v1/*` routes authenticated by API key header, returning org data per granted scopes
+- [ ] `app/(dashboard)/[orgId]/settings/api/page.tsx` (new) — API keys management + webhook endpoint config
+- [ ] i18n EN + AR
+- [ ] Tests for key hashing, scope enforcement, webhook signature verification, delivery retry logic
+
+---
+
+## AI / LLM Backlog — No Budget, Build Later
+
+> Start these phases only after an LLM API budget is confirmed. Each depends on data built in earlier phases.
+
+| Phase | Feature | Depends On | LLM Use |
+|---|---|---|---|
+| 50 | AI Reply Suggestions (WhatsApp / IG / FB) | Phase 30 Customer Timeline | Generate contextual reply options from conversation history |
+| 51 | AI Vehicle Description Generator | Phase 35 Marketplace Syndication | Generate listing copy per platform from vehicle attributes |
+| 52 | Lead Scoring | Phase 32 Segments + Phase 39 Funnel data | Predict purchase probability from engagement signals |
+| 53 | AI Sales Assistant / Copilot | Phases 30, 32, 39 | Summarize customer, suggest next action, recommend financing |
+| 54 | Predictive Sales Forecasting | Phase 39 + 6+ months historical data | Improve on Phase 39's rule-based forecast with ML regression |
+| 55 | Call Summary & Sentiment | External call recording integration | Transcribe + summarize calls, extract next actions |
+
+---
+
+## Phase Roadmap Summary
+
+| Phase | Name | Tier | Status |
+|---|---|---|---|
+| 29 | Inventory Intelligence | 1 — High ROI | ⬜ Not started |
+| 30 | Customer Timeline | 1 — High ROI | ⬜ Not started |
+| 31 | BI Executive Dashboard | 1 — High ROI | ⬜ Not started |
+| 32 | Customer Tags & Segments | 1 — High ROI | ⬜ Not started |
+| 33 | Basic Workflow Automation | 2 — Operational Depth | ⬜ Not started |
+| 34 | Vehicle Acquisition Workflow | 2 — Operational Depth | ⬜ Not started |
+| 35 | MENA Marketplace Syndication | 2 — Operational Depth | ⬜ Not started |
+| 36 | Inspection Module | 2 — Operational Depth | ⬜ Not started |
+| 37 | Document Management | 3 — Enterprise & Scale | ⬜ Not started |
+| 38 | Multi-Branch Operations | 3 — Enterprise & Scale | ⬜ Not started |
+| 39 | Sales Funnel Analytics | 3 — Enterprise & Scale | ⬜ Not started |
+| 40 | Mobile PWA | 3 — Enterprise & Scale | ⬜ Not started |
+| 41 | Accounting Depth | 3 — Enterprise & Scale | ⬜ Not started |
+| 42 | Open API & Integration Hub | 3 — Enterprise & Scale | ⬜ Not started |
+| 50–55 | AI / LLM Features | Backlog — No Budget | 🔒 Deferred |

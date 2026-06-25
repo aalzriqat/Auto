@@ -9,6 +9,9 @@ import {
   Car,
   Camera,
   HandCoins,
+  Plus,
+  Save,
+  Trash2,
 } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
 import { api } from "@/convex/_generated/api";
@@ -32,8 +35,17 @@ import {
 } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { TestDriveDialog } from "@/components/test_drives/TestDriveDialog";
 import { WorkOrderDialog } from "@/components/work_orders/WorkOrderDialog";
 import { VehicleValuationsTab } from "@/components/vehicles/VehicleValuationsTab";
@@ -58,6 +70,8 @@ export function VehicleDetailsDialog({
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const { hasPermission, isLoading: permissionsLoading } = usePermissions();
+  const canEditVehicles = !permissionsLoading && hasPermission(PERMISSIONS.EDIT_VEHICLES);
+  const canViewCustomers = !permissionsLoading && hasPermission(PERMISSIONS.VIEW_CUSTOMERS);
 
   const relations = useQuery(
     api.vehicles.getRelations,
@@ -68,8 +82,103 @@ export function VehicleDetailsDialog({
     api.deposits.listByVehicle,
     activeOrgId && vehicle ? { orgId: activeOrgId, vehicleId: vehicle._id } : "skip"
   );
+  const landedCosts = useQuery(
+    api.vehicles.getLandedCosts,
+    activeOrgId && vehicle ? { orgId: activeOrgId, vehicleId: vehicle._id } : "skip"
+  );
+  const pricingHistory = useQuery(
+    api.vehicles.getPricingHistory,
+    activeOrgId && vehicle ? { orgId: activeOrgId, vehicleId: vehicle._id } : "skip"
+  );
+  const reservationHistory = useQuery(
+    api.vehicles.getReservationHistory,
+    activeOrgId && vehicle ? { orgId: activeOrgId, vehicleId: vehicle._id } : "skip"
+  );
+  const customersPage = useQuery(
+    api.customers.list,
+    activeOrgId && canViewCustomers
+      ? { orgId: activeOrgId, paginationOpts: { numItems: 100, cursor: null } }
+      : "skip"
+  );
   const releaseDeposit = useMutation(api.deposits.release);
+  const upsertLandedCosts = useMutation(api.vehicles.upsertLandedCosts);
+  const createReservation = useMutation(api.vehicles.createReservation);
+  const releaseReservation = useMutation(api.vehicles.releaseReservation);
   const [releasingDepositId, setReleasingDepositId] = useState<string | null>(null);
+  const [landedCostItems, setLandedCostItems] = useState<{ label: string; amount: number }[]>([]);
+  const [savingLandedCosts, setSavingLandedCosts] = useState(false);
+  const [reservationCustomerId, setReservationCustomerId] = useState("");
+  const [reservationDeposit, setReservationDeposit] = useState("");
+  const [reservationExpiresAt, setReservationExpiresAt] = useState("");
+  const [savingReservation, setSavingReservation] = useState(false);
+
+  useEffect(() => {
+    if (landedCosts) {
+      setLandedCostItems(landedCosts.items);
+    } else if (landedCosts === null) {
+      setLandedCostItems([]);
+    }
+  }, [landedCosts]);
+
+  const formatMoney = (value: number) => `${value.toLocaleString()} JOD`;
+
+  const getReservationStatusLabel = (status: "ACTIVE" | "RELEASED" | "CONVERTED") => {
+    if (status === "ACTIVE") return t("ReservationStatusActive" as any);
+    if (status === "RELEASED") return t("ReservationStatusReleased" as any);
+    return t("ReservationStatusConverted" as any);
+  };
+
+  const handleSaveLandedCosts = async () => {
+    if (!activeOrgId || !vehicle) return;
+    setSavingLandedCosts(true);
+    try {
+      await upsertLandedCosts({
+        orgId: activeOrgId,
+        vehicleId: vehicle._id,
+        items: landedCostItems,
+      });
+      toast.success(t("LandedCostSaved" as any));
+    } catch (error: any) {
+      toast.error(error.message || t("LandedCostSaveFailed" as any));
+    } finally {
+      setSavingLandedCosts(false);
+    }
+  };
+
+  const handleCreateReservation = async () => {
+    if (!activeOrgId || !vehicle || !reservationCustomerId) return;
+    setSavingReservation(true);
+    try {
+      await createReservation({
+        orgId: activeOrgId,
+        vehicleId: vehicle._id,
+        customerId: reservationCustomerId as any,
+        depositAmount: reservationDeposit ? Number(reservationDeposit) : undefined,
+        expiresAt: reservationExpiresAt ? new Date(reservationExpiresAt).getTime() : undefined,
+      });
+      setReservationCustomerId("");
+      setReservationDeposit("");
+      setReservationExpiresAt("");
+      toast.success(t("ReservationCreated" as any));
+    } catch (error: any) {
+      toast.error(error.message || t("ReservationActionFailed" as any));
+    } finally {
+      setSavingReservation(false);
+    }
+  };
+
+  const handleReleaseReservation = async (reservationId: any) => {
+    if (!activeOrgId) return;
+    setSavingReservation(true);
+    try {
+      await releaseReservation({ orgId: activeOrgId, reservationId });
+      toast.success(t("ReservationReleased" as any));
+    } catch (error: any) {
+      toast.error(error.message || t("ReservationActionFailed" as any));
+    } finally {
+      setSavingReservation(false);
+    }
+  };
 
   const handleReleaseDeposit = async (depositId: any, resolution: "REFUNDED" | "FORFEITED") => {
     if (!activeOrgId) return;
@@ -182,6 +291,30 @@ export function VehicleDetailsDialog({
                   className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
                 >
                   {t("Valuations" as any)}
+                </TabsTrigger>
+              )}
+              {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_INFO)) && (
+                <TabsTrigger
+                  value="landed_cost"
+                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
+                >
+                  {t("LandedCost" as any)}
+                </TabsTrigger>
+              )}
+              {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_INFO)) && (
+                <TabsTrigger
+                  value="pricing_history"
+                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
+                >
+                  {t("PricingHistory" as any)}
+                </TabsTrigger>
+              )}
+              {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_INFO)) && (
+                <TabsTrigger
+                  value="reservations"
+                  className="data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-primary data-[state=active]:shadow-none rounded-none h-12 px-6"
+                >
+                  {t("Reservations" as any)}
                 </TabsTrigger>
               )}
               {(!permissionsLoading && hasPermission(PERMISSIONS.VIEW_VEHICLE_INFO)) && (
@@ -550,6 +683,224 @@ export function VehicleDetailsDialog({
             </TabsContent>
             <TabsContent value="valuations" className="m-0 focus-visible:outline-none p-4">
               <VehicleValuationsTab vehicleId={vehicle._id} />
+            </TabsContent>
+            <TabsContent value="landed_cost" className="m-0 focus-visible:outline-none space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="font-semibold text-sm">{t("LandedCostBreakdown" as any)}</h3>
+                {canEditVehicles && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setLandedCostItems((items) => [...items, { label: "", amount: 0 }])}
+                  >
+                    <Plus className="h-4 w-4 me-2" />
+                    {t("AddCostItem" as any)}
+                  </Button>
+                )}
+              </div>
+              {landedCosts === undefined ? (
+                <Skeleton className="h-[120px] w-full rounded-lg" />
+              ) : landedCostItems.length === 0 ? (
+                <EmptyState icon={Banknote} title={t("NoLandedCosts" as any)} />
+              ) : (
+                <div className="space-y-3">
+                  {landedCostItems.map((item, index) => (
+                    <div key={index} className="grid grid-cols-[1fr_160px_auto] gap-2 items-end">
+                      <div className="space-y-1">
+                        <Label>{t("CostItemLabel" as any)}</Label>
+                        <Input
+                          value={item.label}
+                          disabled={!canEditVehicles}
+                          onChange={(event) =>
+                            setLandedCostItems((items) =>
+                              items.map((current, currentIndex) =>
+                                currentIndex === index ? { ...current, label: event.target.value } : current
+                              )
+                            )
+                          }
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label>{t("CostItemAmount" as any)}</Label>
+                        <Input
+                          type="number"
+                          min="0"
+                          value={item.amount}
+                          disabled={!canEditVehicles}
+                          onChange={(event) =>
+                            setLandedCostItems((items) =>
+                              items.map((current, currentIndex) =>
+                                currentIndex === index ? { ...current, amount: Number(event.target.value) } : current
+                              )
+                            )
+                          }
+                        />
+                      </div>
+                      {canEditVehicles && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => setLandedCostItems((items) => items.filter((_, currentIndex) => currentIndex !== index))}
+                          title={t("Remove" as any)}
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      )}
+                    </div>
+                  ))}
+                  <div className="flex items-center justify-between border-t pt-3">
+                    <span className="text-sm font-semibold">{t("Total" as any)}</span>
+                    <span className="font-bold">{formatMoney(landedCostItems.reduce((sum, item) => sum + item.amount, 0))}</span>
+                  </div>
+                  {canEditVehicles && (
+                    <div className="flex justify-end">
+                      <Button onClick={handleSaveLandedCosts} disabled={savingLandedCosts}>
+                        <Save className="h-4 w-4 me-2" />
+                        {t("SaveLandedCost" as any)}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </TabsContent>
+            <TabsContent value="pricing_history" className="m-0 focus-visible:outline-none">
+              <h3 className="font-semibold text-sm mb-3">{t("PricingHistory" as any)}</h3>
+              {pricingHistory === undefined ? (
+                <Skeleton className="h-[120px] w-full rounded-lg" />
+              ) : pricingHistory.length === 0 ? (
+                <EmptyState icon={Banknote} title={t("NoPricingHistory" as any)} />
+              ) : (
+                <div className="space-y-2">
+                  {pricingHistory.map((entry) => (
+                    <div key={entry._id} className="rounded-lg border bg-muted/30 p-3 text-sm grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      <div>
+                        <p className="text-xs text-muted-foreground">{t("OldPrice" as any)}</p>
+                        <p className="font-medium">{formatMoney(entry.oldPrice)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">{t("NewPrice" as any)}</p>
+                        <p className="font-medium">{formatMoney(entry.newPrice)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">{t("ChangedAt" as any)}</p>
+                        <p className="font-medium">{format(entry.changedAt, "PP p")}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </TabsContent>
+            <TabsContent value="reservations" className="m-0 focus-visible:outline-none space-y-5">
+              {canEditVehicles && canViewCustomers && vehicle.status === "AVAILABLE" && (
+                <div className="rounded-lg border p-4 space-y-3">
+                  <h3 className="font-semibold text-sm">{t("CreateReservation" as any)}</h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="space-y-1">
+                      <Label>{t("SelectCustomer" as any)}</Label>
+                      <Select value={reservationCustomerId} onValueChange={setReservationCustomerId}>
+                        <SelectTrigger>
+                          <SelectValue placeholder={t("SelectCustomer" as any)} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {customersPage?.page.map((customer) => (
+                            <SelectItem key={customer._id} value={customer._id}>
+                              {customer.firstName} {customer.lastName}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1">
+                      <Label>{t("DepositAmount" as any)}</Label>
+                      <Input
+                        type="number"
+                        min="0"
+                        value={reservationDeposit}
+                        onChange={(event) => setReservationDeposit(event.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label>{t("ExpiresAt" as any)}</Label>
+                      <Input
+                        type="datetime-local"
+                        value={reservationExpiresAt}
+                        onChange={(event) => setReservationExpiresAt(event.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end">
+                    <Button
+                      onClick={handleCreateReservation}
+                      disabled={savingReservation || !reservationCustomerId}
+                    >
+                      <Plus className="h-4 w-4 me-2" />
+                      {t("CreateReservation" as any)}
+                    </Button>
+                  </div>
+                </div>
+              )}
+              <div>
+                <h3 className="font-semibold text-sm mb-3">{t("ReservationHistory" as any)}</h3>
+                {reservationHistory === undefined ? (
+                  <Skeleton className="h-[120px] w-full rounded-lg" />
+                ) : reservationHistory.length === 0 ? (
+                  <EmptyState icon={Car} title={t("NoReservations" as any)} />
+                ) : (
+                  <div className="space-y-3">
+                    {reservationHistory.map((reservation) => (
+                      <div key={reservation._id} className="rounded-lg border bg-muted/30 p-3 text-sm">
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="font-medium">{reservation.customerName}</p>
+                            <p className="text-xs text-muted-foreground mt-1">
+                              {t("ReservedAt" as any)}: {format(reservation.reservedAt, "PP p")}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {t("ReservedBy" as any)}: {reservation.reservedByName}
+                            </p>
+                            {reservation.depositAmount !== undefined && (
+                              <p className="text-xs text-muted-foreground">
+                                {t("DepositAmount" as any)}: {formatMoney(reservation.depositAmount)}
+                              </p>
+                            )}
+                            {reservation.expiresAt !== undefined && (
+                              <p className="text-xs text-muted-foreground">
+                                {t("ExpiresAt" as any)}: {format(reservation.expiresAt, "PP p")}
+                              </p>
+                            )}
+                            {reservation.releasedAt !== undefined && (
+                              <p className="text-xs text-muted-foreground">
+                                {t("ReleasedAt" as any)}: {format(reservation.releasedAt, "PP p")}
+                              </p>
+                            )}
+                            {reservation.releasedByName && (
+                              <p className="text-xs text-muted-foreground">
+                                {t("ReleasedBy" as any)}: {reservation.releasedByName}
+                              </p>
+                            )}
+                          </div>
+                          <div className="flex flex-col items-end gap-2">
+                            <Badge variant={reservation.status === "ACTIVE" ? "default" : "secondary"}>
+                              {getReservationStatusLabel(reservation.status)}
+                            </Badge>
+                            {canEditVehicles && reservation.status === "ACTIVE" && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleReleaseReservation(reservation._id)}
+                                disabled={savingReservation}
+                              >
+                                {t("ReleaseReservation" as any)}
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </TabsContent>
             <TabsContent value="marketing" className="m-0 focus-visible:outline-none">
               <VehicleMarketingTab vehicleId={vehicle._id} />

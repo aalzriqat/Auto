@@ -2,18 +2,18 @@
   "status": "commited",
   "type": "frontend",
   "scope": "codebase",
-  "localEndpoint": "http://localhost:3000",
-  "loginUser": "alaajarad",
-  "loginPassword": "Alaa@14111991",
+  "localEndpoint": "http://localhost:3100",
+  "loginUser": "autoflow_qa",
+  "loginPassword": "PXTeYAchtKuHVYj9uWgttq7H!9x",
   "executionArgs": {
     "projectName": "Auto",
     "projectPath": "e:\\Auto\\Auto",
     "testIds": [],
-    "additionalInstruction": "This is a multi-tenant dealership management app (AutoFlow). Auth is handled by Clerk — sign in at /sign-in using {{LOGIN_USER}} and {{LOGIN_PASSWORD}}. After login, the user may see an onboarding wizard if no org is configured yet. The sidebar shows navigation links. Use id selectors where available (e.g. #btn-new-cash-sale). Language toggle is in the sidebar. The app supports English and Arabic RTL.",
-    "serverMode": "development",
+    "additionalInstruction": "Test fixtures now exist: a SALES-role test user (separate from the OWNER account used to sign in), a pending profit-approval request awaiting review, and a completed sale dated within the last 30 days. The app's authenticated routes live under /{orgId}/... where orgId is taken from the URL after sign-in redirects from /dashboard.",
+    "serverMode": "production",
     "envs": {
       "API_KEY": "sk-user-qnodIW9JfHxjmRepnd32y43hDhpGC9hNHkRPK8TvjP_Hw0WrTvrj5f3y66v9mbOgtXHeGmyn_Iz_NYMmlfJq5xiuxSjyJo1kq4QtO8YU_rBiVkhrNR9ULV2drEq65hKslXo"
     }
   },
-  "serverPort": 62400
+  "serverPort": 54886
 }

@@ -109,6 +109,12 @@ export const dashboardEn = {
   CustomersMissingPhone: "Customers missing phone",
   CustomersMissingEmail: "Customers missing email",
   VehiclesVinWarning: "Vehicles with a VIN checksum warning",
+  InventoryAging: "Inventory Aging",
+  AverageDays: "avg days",
+  AgingBucket0To30: "0-30",
+  AgingBucket31To60: "31-60",
+  AgingBucket61To90: "61-90",
+  AgingBucket90Plus: "90+",
 };
 
 export const dashboardAr = {
@@ -222,4 +228,10 @@ export const dashboardAr = {
   CustomersMissingPhone: "عملاء بلا رقم هاتف",
   CustomersMissingEmail: "عملاء بلا بريد إلكتروني",
   VehiclesVinWarning: "مركبات بتحذير في رقم الهيكل (VIN)",
+  InventoryAging: "عمر المخزون",
+  AverageDays: "متوسط الأيام",
+  AgingBucket0To30: "0-30",
+  AgingBucket31To60: "31-60",
+  AgingBucket61To90: "61-90",
+  AgingBucket90Plus: "90+",
 };

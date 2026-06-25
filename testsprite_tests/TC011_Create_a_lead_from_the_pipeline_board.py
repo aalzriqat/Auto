@@ -40,107 +40,93 @@ async def run_test():
         except Exception:
             pass
         
-        # -> Click the 'Sign In' link to open the sign-in page (Clerk) and begin authentication with the provided credentials.
-        # Sign In link
-        elem = page.get_by_role('link', name='Sign In', exact=True)
-        await elem.click(timeout=10000)
-        
-        # -> Fill the 'Email address or username' field with the username 'alaajarad', fill the 'Password' field with the provided password, then click the 'Continue' button to sign in.
-        # Enter email or username text field
-        elem = page.locator('[id="identifier-field"]')
-        await elem.wait_for(state="visible", timeout=10000)
-        await elem.fill("alaajarad")
-        
-        # -> Fill the 'Email address or username' field with the username 'alaajarad', fill the 'Password' field with the provided password, then click the 'Continue' button to sign in.
-        # Enter your password password field
-        elem = page.locator('[id="password-field"]')
-        await elem.wait_for(state="visible", timeout=10000)
-        await elem.fill("Alaa@14111991")
-        
-        # -> Fill the 'Email address or username' field with the username 'alaajarad', fill the 'Password' field with the provided password, then click the 'Continue' button to sign in.
-        # Continue button
-        elem = page.get_by_role('button', name='Continue', exact=True)
-        await elem.click(timeout=10000)
-        
-        # -> Type a dealership name into the 'Dealership Name' field and click the 'Continue →' button to complete onboarding so the Leads page becomes accessible.
-        # e.g. Al Mada Motors text field
-        elem = page.locator('[id="orgName"]')
-        await elem.wait_for(state="visible", timeout=10000)
-        await elem.fill("Alaa Motors")
-        
-        # -> Type a dealership name into the 'Dealership Name' field and click the 'Continue →' button to complete onboarding so the Leads page becomes accessible.
-        # Continue → button
-        elem = page.get_by_role('button', name='Continue →', exact=True)
-        await elem.click(timeout=10000)
-        
-        # -> Click the 'Continue →' button on the Currency onboarding step to complete onboarding and reveal the main app UI (sidebar and Leads link).
-        # Continue → button
-        elem = page.get_by_role('button', name='Continue →', exact=True)
-        await elem.click(timeout=10000)
-        
-        # -> Click the 'Load Default Lead Sources →' button to load default lead sources and proceed with onboarding so the main app UI (including the Leads page) becomes available.
-        # Load Default Lead Sources → button
-        elem = page.get_by_role('button', name='Load Default Lead Sources →', exact=True)
-        await elem.click(timeout=10000)
-        
-        # -> Click the 'Load Default Pipeline →' button to create default pipeline stages and finish onboarding so the main app UI (including the Leads link in the sidebar) becomes available.
-        # Load Default Pipeline → button
-        elem = page.get_by_role('button', name='Load Default Pipeline →', exact=True)
-        await elem.click(timeout=10000)
-        
-        # -> Click the 'Go to Dashboard' button on the onboarding success card to open the main app dashboard so the sidebar and Leads link become available.
-        # Go to Dashboard button
-        elem = page.get_by_role('button', name='Go to Dashboard', exact=True)
-        await elem.click(timeout=10000)
-        
-        # -> Open the Leads page by clicking the 'Leads' link in the left sidebar so the Leads list and New Lead controls become available.
-        # Leads link
-        elem = page.get_by_role('link', name='Leads', exact=True)
-        await elem.click(timeout=10000)
-        
-        # -> Click the 'Add Lead' button in the top-right of the Leads page to open the new lead creation form.
-        # Add Lead button
-        elem = page.get_by_role('button', name='Add Lead', exact=True)
-        await elem.click(timeout=10000)
-        
-        # -> Open the 'Select customer' dropdown in the Add Lead modal so a customer option can be chosen.
-        # Select customer button
-        elem = page.get_by_role('button', name='Select customer', exact=True)
-        await elem.click(timeout=10000)
-        
-        # -> Close the Add Lead modal by clicking the 'Cancel' button, then navigate to the Customers page so a new customer can be created.
-        # Cancel button
-        elem = page.get_by_role('button', name='Cancel', exact=True)
-        await elem.click(timeout=10000)
-        
-        # -> Close the Add Lead modal by clicking the 'Cancel' button, then navigate to the Customers page so a new customer can be created.
-        await page.goto("http://localhost:3000/customers")
+        # -> Open the Login page (the 'Sign In' /login page) so credentials can be entered and the lead-creation flow can be started.
+        await page.goto("http://localhost:3000/login")
         try:
             await page.wait_for_load_state("domcontentloaded", timeout=5000)
         except Exception:
             pass
         
-        # -> Click the 'Add Customer' button to open the new customer form so a customer can be created.
-        # Add Customer button
-        elem = page.get_by_role('button', name='Add Customer', exact=True)
+        # -> Fill the 'Email address or username' field with the test username and the 'Password' field with the test password, then click the 'Continue' button to submit the login form.
+        # Enter email or username text field
+        elem = page.locator('[id="identifier-field"]')
+        await elem.wait_for(state="visible", timeout=10000)
+        await elem.fill("autoflow_qa")
+        
+        # -> Fill the 'Email address or username' field with the test username and the 'Password' field with the test password, then click the 'Continue' button to submit the login form.
+        # Enter your password password field
+        elem = page.locator('[id="password-field"]')
+        await elem.wait_for(state="visible", timeout=10000)
+        await elem.fill("PXTeYAchtKuHVYj9uWgttq7H!9x")
+        
+        # -> Fill the 'Email address or username' field with the test username and the 'Password' field with the test password, then click the 'Continue' button to submit the login form.
+        # Continue button
+        elem = page.get_by_role('button', name='Continue', exact=True)
         await elem.click(timeout=10000)
         
-        # -> Fill 'AutoTest' into the First Name field and 'Customer' into the Last Name field, click the 'Add Customer' button to create the customer, then open the 'Leads' page.
-        # John text field
-        elem = page.get_by_label('First Name *', exact=True)
-        await elem.wait_for(state="visible", timeout=10000)
-        await elem.fill("AutoTest")
+        # -> Navigate to the application's homepage (http://localhost:3000), find and click the 'Sign In' link to open a working login page.
+        await page.goto("http://localhost:3000")
+        try:
+            await page.wait_for_load_state("domcontentloaded", timeout=5000)
+        except Exception:
+            pass
         
-        # -> Fill 'AutoTest' into the First Name field and 'Customer' into the Last Name field, click the 'Add Customer' button to create the customer, then open the 'Leads' page.
-        # Doe text field
-        elem = page.get_by_label('Last Name *', exact=True)
-        await elem.wait_for(state="visible", timeout=10000)
-        await elem.fill("Customer")
-        
-        # -> Fill 'AutoTest' into the First Name field and 'Customer' into the Last Name field, click the 'Add Customer' button to create the customer, then open the 'Leads' page.
-        # Add Customer button
-        elem = page.get_by_text('Cancel', exact=True).locator("xpath=ancestor-or-self::*[.//button][1]").get_by_role('button', name='Add Customer', exact=True)
+        # -> Click the 'Sign In' link in the page header to open the login page and verify the Clerk sign-in form appears.
+        # Sign In link
+        elem = page.get_by_role('link', name='Sign In', exact=True)
         await elem.click(timeout=10000)
+        
+        # -> Fill the visible 'Dealership Name' field with 'Test Dealership' and click the 'Continue →' button to advance the onboarding so the app can be navigated to the Leads page.
+        # e.g. Al Mada Motors text field
+        elem = page.locator('[id="orgName"]')
+        await elem.wait_for(state="visible", timeout=10000)
+        await elem.fill("Test Dealership")
+        
+        # -> Fill the visible 'Dealership Name' field with 'Test Dealership' and click the 'Continue →' button to advance the onboarding so the app can be navigated to the Leads page.
+        # Continue → button
+        elem = page.get_by_role('button', name='Continue →', exact=True)
+        await elem.click(timeout=10000)
+        
+        # -> Click the 'Continue →' button on the Currency card to advance onboarding toward the main app so the Leads page can be reached.
+        # Continue → button
+        elem = page.get_by_role('button', name='Continue →', exact=True)
+        await elem.click(timeout=10000)
+        
+        # -> Click the 'Load Default Lead Sources →' button on the Lead Sources onboarding card to add default sources and continue onboarding toward the main app.
+        # Load Default Lead Sources → button
+        elem = page.get_by_role('button', name='Load Default Lead Sources →', exact=True)
+        await elem.click(timeout=10000)
+        
+        # -> Click the 'Load Default Pipeline →' button on the Sales Pipeline onboarding card to create default pipeline stages and continue into the main app.
+        # Load Default Pipeline → button
+        elem = page.get_by_role('button', name='Load Default Pipeline →', exact=True)
+        await elem.click(timeout=10000)
+        
+        # -> Open the main Dashboard by clicking the 'Go to Dashboard' button so the Leads page can be reached from the app navigation.
+        # Go to Dashboard button
+        elem = page.get_by_role('button', name='Go to Dashboard', exact=True)
+        await elem.click(timeout=10000)
+        
+        # -> Click the 'Leads' link in the left navigation to open the Leads page so the lead creation flow can be started.
+        # Leads link
+        elem = page.get_by_role('link', name='Leads', exact=True)
+        await elem.click(timeout=10000)
+        
+        # -> Click the 'Add Lead' button to open the Add Lead form so customer, vehicle, source, and stage can be selected.
+        # Add Lead button
+        elem = page.get_by_role('button', name='Add Lead', exact=True)
+        await elem.click(timeout=10000)
+        
+        # -> Open the customer picker by clicking the 'Select customer' control in the Add Lead modal so an existing customer can be chosen.
+        # Select customer button
+        elem = page.get_by_role('button', name='Select customer', exact=True)
+        await elem.click(timeout=10000)
+        
+        # -> Type 'Test Customer' into the customer search box inside the 'Add Lead' modal to trigger suggestion results or create-a-new-customer behavior.
+        # Search… text field
+        elem = page.get_by_placeholder('Search…', exact=True)
+        await elem.wait_for(state="visible", timeout=10000)
+        await elem.fill("Test Customer")
         
         # --> Assertions to verify final state
         current_url = await page.evaluate("() => window.location.href")

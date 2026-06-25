@@ -4,13 +4,16 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 
 vi.mock("./rateLimit", () => ({
-  rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
+  rateLimiter: {
+    limit: vi.fn().mockResolvedValue({ ok: true }),
+    check: vi.fn().mockResolvedValue({ ok: true }),
+  },
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 
 const PERMISSIONS = [
   "create:vehicles", "edit:vehicles", "delete:vehicles",
-  "view:vehicles", "view:users", "manage:users",
+  "view:vehicles", "view:users", "manage:users", "view:reports",
 ];
 
 async function setup() {
@@ -296,5 +299,195 @@ describe("vehicles.listAll includeReserved", () => {
     const results = await asUser.query(api.vehicles.listAll, { orgId, status: "AVAILABLE", includeReserved: true });
     const statuses = results.map((v) => v.status).sort();
     expect(statuses).toEqual(["AVAILABLE", "RESERVED"]);
+  });
+});
+
+describe("inventory intelligence", () => {
+  test("getAgingBuckets counts available vehicles by age", async () => {
+    vi.useFakeTimers();
+    try {
+      const { orgId, asUser } = await setup();
+      const now = new Date("2026-06-25T00:00:00.000Z");
+
+      for (const [daysOld, vin] of [
+        [10, "1HGCM82633A800001"],
+        [45, "1HGCM82633A800002"],
+        [75, "1HGCM82633A800003"],
+        [120, "1HGCM82633A800004"],
+      ] as const) {
+        vi.setSystemTime(now.getTime() - daysOld * 24 * 60 * 60 * 1000);
+        await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle, vin });
+      }
+
+      vi.setSystemTime(now);
+      const buckets = await asUser.query(api.vehicles.getAgingBuckets, { orgId });
+
+      expect(buckets).toMatchObject([
+        { bucket: "0-30", count: 1, avgDays: 10 },
+        { bucket: "31-60", count: 1, avgDays: 45 },
+        { bucket: "61-90", count: 1, avgDays: 75 },
+        { bucket: "90+", count: 1, avgDays: 120 },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("upsertLandedCosts recomputes total and requires edit permission", async () => {
+    const { t, orgId, userId, asUser } = await setup();
+    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+
+    await expect(
+      asUser.mutation(api.vehicles.upsertLandedCosts, {
+        orgId,
+        vehicleId,
+        items: [
+          { label: "Shipping", amount: 500 },
+          { label: "Customs", amount: 750 },
+        ],
+      })
+    ).resolves.toEqual({ total: 1250 });
+
+    await t.run(async (ctx) => {
+      const vehicle = await ctx.db.get(vehicleId);
+      expect(vehicle?.landedCostTotal).toBe(1250);
+    });
+
+    const viewerId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "viewer_v1", email: "viewer@test.com", name: "Viewer" })
+    );
+    const viewerRoleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "VIEWER", permissions: ["view:vehicles"] })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: viewerId, roleId: viewerRoleId }));
+    const asViewer = t.withIdentity({ subject: "viewer_v1" });
+
+    await expect(
+      asViewer.mutation(api.vehicles.upsertLandedCosts, {
+        orgId,
+        vehicleId,
+        items: [{ label: "Shipping", amount: 100 }],
+      })
+    ).rejects.toThrow(/edit:vehicles/);
+  });
+
+  test("reports use landed cost total before purchase price", async () => {
+    const { t, orgId, userId, asUser } = await setup();
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      orgId,
+      ...baseVehicle,
+      purchasePrice: 8000,
+      sellingPrice: 15000,
+    });
+    await asUser.mutation(api.vehicles.upsertLandedCosts, {
+      orgId,
+      vehicleId,
+      items: [{ label: "Landed", amount: 12000 }],
+    });
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Test", lastName: "Buyer" })
+    );
+    const saleDate = Date.now();
+    await t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId,
+        vehicleId,
+        customerId,
+        salespersonId: userId,
+        salePrice: 15000,
+        saleDate,
+        status: "COMPLETED",
+      })
+    );
+
+    const report = await asUser.query(api.reports.getSalesAndProfitReport, {
+      orgId,
+      startDate: saleDate - 1000,
+      endDate: saleDate + 1000,
+    });
+
+    expect(report.sales[0].vehicleCost).toBe(12000);
+    expect(report.sales[0].netProfit).toBe(3000);
+  });
+
+  test("price history is inserted only when selling price changes", async () => {
+    const { t, orgId, asUser } = await setup();
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      orgId,
+      ...baseVehicle,
+      sellingPrice: 20000,
+    });
+
+    await asUser.mutation(api.vehicles.update, { orgId, vehicleId, sellingPrice: 21000 });
+    await asUser.mutation(api.vehicles.update, { orgId, vehicleId, sellingPrice: 21000, mileage: 11000 });
+
+    await t.run(async (ctx) => {
+      const history = await ctx.db
+        .query("vehiclePriceHistory")
+        .withIndex("by_org_vehicle", (q) => q.eq("orgId", orgId).eq("vehicleId", vehicleId))
+        .collect();
+      expect(history).toHaveLength(1);
+      expect(history[0]).toMatchObject({ oldPrice: 20000, newPrice: 21000 });
+    });
+  });
+
+  test("approved vehicle edit price changes insert price history", async () => {
+    const { t, orgId, userId, asUser } = await setup();
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      orgId,
+      ...baseVehicle,
+      sellingPrice: 20000,
+    });
+    const requestId = await t.run((ctx) =>
+      ctx.db.insert("vehicleEdits", {
+        orgId,
+        vehicleId,
+        requestedBy: userId,
+        type: "UPDATE",
+        payload: { sellingPrice: 23000 },
+        status: "PENDING",
+        createdAt: Date.now(),
+      })
+    );
+
+    await asUser.mutation(api.vehicleEdits.resolve, { orgId, requestId, status: "APPROVED" });
+
+    await t.run(async (ctx) => {
+      const history = await ctx.db
+        .query("vehiclePriceHistory")
+        .withIndex("by_org_vehicle", (q) => q.eq("orgId", orgId).eq("vehicleId", vehicleId))
+        .collect();
+      expect(history).toHaveLength(1);
+      expect(history[0]).toMatchObject({ oldPrice: 20000, newPrice: 23000 });
+    });
+  });
+
+  test("createReservation reserves vehicle and releaseReservation makes it available", async () => {
+    const { t, orgId, asUser } = await setup();
+    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Reserve", lastName: "Customer" })
+    );
+
+    const reservationId = await asUser.mutation(api.vehicles.createReservation, {
+      orgId,
+      vehicleId,
+      customerId,
+      depositAmount: 1000,
+    });
+
+    await t.run(async (ctx) => {
+      const vehicle = await ctx.db.get(vehicleId);
+      expect(vehicle?.status).toBe("RESERVED");
+    });
+
+    await asUser.mutation(api.vehicles.releaseReservation, { orgId, reservationId });
+
+    await t.run(async (ctx) => {
+      const vehicle = await ctx.db.get(vehicleId);
+      const reservation = await ctx.db.get(reservationId);
+      expect(vehicle?.status).toBe("AVAILABLE");
+      expect(reservation?.status).toBe("RELEASED");
+    });
   });
 });

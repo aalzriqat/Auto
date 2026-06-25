@@ -76,6 +76,7 @@ export default defineSchema({
     fuelType: v.string(),
     transmission: v.string(),
     purchasePrice: v.optional(v.number()), // Might be hidden from salespeople
+    landedCostTotal: v.optional(v.number()),
     minimumProfit: v.optional(v.number()), // Preset minimum profit required
     sellingPrice: v.number(),
     status: v.union(
@@ -88,6 +89,7 @@ export default defineSchema({
     ),
     notes: v.optional(v.string()),
     imageIds: v.optional(v.array(v.id("_storage"))),
+    createdAt: v.optional(v.number()),
     addedBy: v.optional(v.id("users")),
     updatedBy: v.optional(v.id("users")),
     updatedAt: v.optional(v.number()),
@@ -100,6 +102,42 @@ export default defineSchema({
     .index("by_org_vin", ["orgId", "vin"])
     .searchIndex("search_make", { searchField: "make", filterFields: ["orgId", "isDeleted"] })
     .searchIndex("search_vin", { searchField: "vin", filterFields: ["orgId", "isDeleted"] }),
+
+  vehicleLandedCosts: defineTable({
+    vehicleId: v.id("vehicles"),
+    orgId: v.id("organizations"),
+    items: v.array(v.object({
+      label: v.string(),
+      amount: v.number(),
+    })),
+    total: v.number(),
+    updatedAt: v.number(),
+    updatedBy: v.id("users"),
+  }).index("by_org_vehicle", ["orgId", "vehicleId"]),
+
+  vehiclePriceHistory: defineTable({
+    vehicleId: v.id("vehicles"),
+    orgId: v.id("organizations"),
+    oldPrice: v.number(),
+    newPrice: v.number(),
+    changedBy: v.id("users"),
+    changedAt: v.number(),
+  }).index("by_org_vehicle", ["orgId", "vehicleId"]),
+
+  vehicleReservations: defineTable({
+    vehicleId: v.id("vehicles"),
+    orgId: v.id("organizations"),
+    customerId: v.id("customers"),
+    depositAmount: v.optional(v.number()),
+    expiresAt: v.optional(v.number()),
+    status: v.union(v.literal("ACTIVE"), v.literal("RELEASED"), v.literal("CONVERTED")),
+    reservedBy: v.id("users"),
+    reservedAt: v.number(),
+    releasedAt: v.optional(v.number()),
+    releasedBy: v.optional(v.id("users")),
+  })
+    .index("by_org_vehicle", ["orgId", "vehicleId"])
+    .index("by_org_status", ["orgId", "status"]),
 
   vehicleStatusRequests: defineTable({
     orgId: v.id("organizations"),

@@ -1,5 +1,5 @@
 import { v, ConvexError } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { MutationCtx, mutation, query } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -23,6 +23,34 @@ const vehicleStatus = v.union(
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
 import { paginationOptsValidator } from "convex/server";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function getAgeBucket(days: number): "0-30" | "31-60" | "61-90" | "90+" {
+  if (days <= 30) return "0-30";
+  if (days <= 60) return "31-60";
+  if (days <= 90) return "61-90";
+  return "90+";
+}
+
+async function insertPriceHistory(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">,
+  oldPrice: number,
+  newPrice: number,
+  changedBy: Id<"users">,
+) {
+  if (oldPrice === newPrice) return;
+  await ctx.db.insert("vehiclePriceHistory", {
+    orgId,
+    vehicleId,
+    oldPrice,
+    newPrice,
+    changedBy,
+    changedAt: Date.now(),
+  });
+}
 
 /**
  * Lists all vehicles for an organization.
@@ -199,6 +227,115 @@ export const getByVin = query({
   },
 });
 
+export const getAgingBuckets = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+
+    const buckets: Record<"0-30" | "31-60" | "61-90" | "90+", { count: number; totalDays: number }> = {
+      "0-30": { count: 0, totalDays: 0 },
+      "31-60": { count: 0, totalDays: 0 },
+      "61-90": { count: 0, totalDays: 0 },
+      "90+": { count: 0, totalDays: 0 },
+    };
+
+    const now = Date.now();
+    const vehicles = ctx.db
+      .query("vehicles")
+      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "AVAILABLE"));
+
+    for await (const vehicle of vehicles) {
+      if (vehicle.isDeleted) continue;
+      const ageDays = Math.max(0, Math.floor((now - (vehicle.createdAt ?? vehicle._creationTime)) / DAY_MS));
+      const bucket = getAgeBucket(ageDays);
+      buckets[bucket].count += 1;
+      buckets[bucket].totalDays += ageDays;
+    }
+
+    return (["0-30", "31-60", "61-90", "90+"] as const).map((bucket) => ({
+      bucket,
+      count: buckets[bucket].count,
+      avgDays: buckets[bucket].count > 0 ? Math.round(buckets[bucket].totalDays / buckets[bucket].count) : 0,
+    }));
+  },
+});
+
+export const getLandedCosts = query({
+  args: {
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+
+    const vehicle = await ctx.db.get(args.vehicleId);
+    if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
+      throw new ConvexError("Vehicle not found in this organization.");
+    }
+
+    return await ctx.db
+      .query("vehicleLandedCosts")
+      .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
+      .unique();
+  },
+});
+
+export const getPricingHistory = query({
+  args: {
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+
+    const vehicle = await ctx.db.get(args.vehicleId);
+    if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
+      throw new ConvexError("Vehicle not found in this organization.");
+    }
+
+    return await ctx.db
+      .query("vehiclePriceHistory")
+      .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
+      .order("desc")
+      .take(100);
+  },
+});
+
+export const getReservationHistory = query({
+  args: {
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+
+    const vehicle = await ctx.db.get(args.vehicleId);
+    if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
+      throw new ConvexError("Vehicle not found in this organization.");
+    }
+
+    const reservations = await ctx.db
+      .query("vehicleReservations")
+      .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
+      .order("desc")
+      .take(100);
+
+    return await Promise.all(
+      reservations.map(async (reservation) => {
+        const customer = await ctx.db.get(reservation.customerId);
+        const reservedBy = await ctx.db.get(reservation.reservedBy);
+        const releasedBy = reservation.releasedBy ? await ctx.db.get(reservation.releasedBy) : null;
+        return {
+          ...reservation,
+          customerName: customer ? `${customer.firstName} ${customer.lastName}` : null,
+          reservedByName: reservedBy?.name ?? reservedBy?.email ?? null,
+          releasedByName: releasedBy?.name ?? releasedBy?.email ?? null,
+        };
+      })
+    );
+  },
+});
+
 // ─── Mutations ───────────────────────────────────────────────────────────────
 
 /**
@@ -264,6 +401,7 @@ export const create = mutation({
       status: args.status ?? "AVAILABLE",
       notes: args.notes,
       imageIds: args.imageIds,
+      createdAt: Date.now(),
       addedBy: user._id,
       updatedBy: user._id,
       updatedAt: Date.now(),
@@ -374,6 +512,10 @@ export const update = mutation({
     }
 
     if (Object.keys(patch).length > 0) {
+      if (typeof patch.sellingPrice === "number") {
+        await insertPriceHistory(ctx, args.orgId, args.vehicleId, vehicle.sellingPrice, patch.sellingPrice, user._id);
+      }
+
       await ctx.db.insert("vehicleEdits", {
         orgId: args.orgId,
         vehicleId: args.vehicleId,
@@ -412,6 +554,146 @@ export const update = mutation({
         });
       }
     }
+  },
+});
+
+export const upsertLandedCosts = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    items: v.array(v.object({
+      label: v.string(),
+      amount: v.number(),
+    })),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+
+    const vehicle = await ctx.db.get(args.vehicleId);
+    if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
+      throw new ConvexError("Vehicle not found in this organization.");
+    }
+
+    const items = args.items
+      .map((item) => ({ label: item.label.trim(), amount: item.amount }))
+      .filter((item) => item.label.length > 0);
+    const total = items.reduce((sum, item) => sum + item.amount, 0);
+    const now = Date.now();
+
+    const existing = await ctx.db
+      .query("vehicleLandedCosts")
+      .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
+      .unique();
+
+    if (existing) {
+      await ctx.db.patch(existing._id, { items, total, updatedAt: now, updatedBy: user._id });
+    } else {
+      await ctx.db.insert("vehicleLandedCosts", {
+        orgId: args.orgId,
+        vehicleId: args.vehicleId,
+        items,
+        total,
+        updatedAt: now,
+        updatedBy: user._id,
+      });
+    }
+
+    await ctx.db.patch(args.vehicleId, {
+      landedCostTotal: total,
+      updatedAt: now,
+      updatedBy: user._id,
+    });
+
+    return { total };
+  },
+});
+
+export const createReservation = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    customerId: v.id("customers"),
+    depositAmount: v.optional(v.number()),
+    expiresAt: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+
+    const vehicle = await ctx.db.get(args.vehicleId);
+    if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
+      throw new ConvexError("Vehicle not found in this organization.");
+    }
+    if (vehicle.status !== "AVAILABLE") {
+      throw new ConvexError("Vehicle must be available before it can be reserved.");
+    }
+
+    const customer = await ctx.db.get(args.customerId);
+    if (!customer || customer.isDeleted || customer.orgId !== args.orgId) {
+      throw new ConvexError("Customer not found in this organization.");
+    }
+
+    const existingReservations = await ctx.db
+      .query("vehicleReservations")
+      .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
+      .take(100);
+    if (existingReservations.some((reservation) => reservation.status === "ACTIVE")) {
+      throw new ConvexError("Vehicle already has an active reservation.");
+    }
+
+    const now = Date.now();
+    const reservationId = await ctx.db.insert("vehicleReservations", {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      customerId: args.customerId,
+      depositAmount: args.depositAmount,
+      expiresAt: args.expiresAt,
+      status: "ACTIVE",
+      reservedBy: user._id,
+      reservedAt: now,
+    });
+
+    await ctx.db.patch(args.vehicleId, {
+      status: "RESERVED",
+      updatedAt: now,
+      updatedBy: user._id,
+    });
+
+    return reservationId;
+  },
+});
+
+export const releaseReservation = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    reservationId: v.id("vehicleReservations"),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+
+    const reservation = await ctx.db.get(args.reservationId);
+    if (!reservation || reservation.orgId !== args.orgId) {
+      throw new ConvexError("Reservation not found in this organization.");
+    }
+    if (reservation.status !== "ACTIVE") {
+      throw new ConvexError("Reservation is not active.");
+    }
+
+    const vehicle = await ctx.db.get(reservation.vehicleId);
+    if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
+      throw new ConvexError("Vehicle not found in this organization.");
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(args.reservationId, {
+      status: "RELEASED",
+      releasedAt: now,
+      releasedBy: user._id,
+    });
+    await ctx.db.patch(reservation.vehicleId, {
+      status: "AVAILABLE",
+      updatedAt: now,
+      updatedBy: user._id,
+    });
   },
 });
 

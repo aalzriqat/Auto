@@ -65,6 +65,11 @@ export default function DashboardPage() {
     activeOrgId ? { orgId: activeOrgId } : "skip"
   );
 
+  const agingBuckets = useQuery(
+    api.vehicles.getAgingBuckets,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
+
   const { results: leads } = usePaginatedQuery(
     api.leads.list,
     activeOrgId ? { orgId: activeOrgId } : "skip",
@@ -144,6 +149,18 @@ export default function DashboardPage() {
     : timeRange === "DAY" ? t("Today") : timeRange === "MONTH" ? t("ThisMonth") : timeRange === "YEAR" ? t("ThisYear") : t("AllTime");
   const newLeadsCount = leads?.filter(l => l.stage === "NEW").length || 0;
   const qualifiedLeadsCount = leads?.filter(l => l.stage === "INTERESTED" || l.stage === "TEST_DRIVE").length || 0;
+  const agingLabelByBucket = {
+    "0-30": t("AgingBucket0To30" as any),
+    "31-60": t("AgingBucket31To60" as any),
+    "61-90": t("AgingBucket61To90" as any),
+    "90+": t("AgingBucket90Plus" as any),
+  } as const;
+  const agingColorByBucket = {
+    "0-30": "bg-emerald-50 text-emerald-700 border-emerald-200",
+    "31-60": "bg-sky-50 text-sky-700 border-sky-200",
+    "61-90": "bg-amber-50 text-amber-700 border-amber-200",
+    "90+": "bg-rose-50 text-rose-700 border-rose-200",
+  } as const;
 
   const donutChartData = [
     { name: t("New" as any) || "New", value: newLeadsCount, color: "#10b981" },
@@ -425,6 +442,33 @@ export default function DashboardPage() {
             </div>
           </motion.div>
         )}
+
+      {agingBuckets && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.48 }}
+          className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
+        >
+          <h3 className="text-xs font-bold text-slate-700 tracking-wider uppercase mb-3">
+            {t("InventoryAging" as any)}
+          </h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            {agingBuckets.map((bucket) => (
+              <div
+                key={bucket.bucket}
+                className={`rounded-xl border px-4 py-3 ${agingColorByBucket[bucket.bucket]}`}
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm font-semibold">{agingLabelByBucket[bucket.bucket]}</span>
+                  <span className="text-2xl font-bold">{bucket.count}</span>
+                </div>
+                <p className="text-xs mt-1 opacity-80">
+                  {bucket.avgDays} {t("AverageDays" as any)}
+                </p>
+              </div>
+            ))}
+          </div>
+        </motion.div>
+      )}
 
       {/* Row 3: Recent Leads Table (Full Width) */}
       <motion.div
