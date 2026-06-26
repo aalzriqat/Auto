@@ -16,11 +16,11 @@ import { useState, useEffect } from "react";
 
 const PLANS = ["free", "starter", "professional", "enterprise"] as const;
 const STATUSES = ["active", "past_due", "cancelled", "expired"] as const;
-const INTERVALS = ["monthly", "annual"] as const;
+const BILLING_INTERVALS = ["monthly", "annual"] as const;
 
 type Plan = (typeof PLANS)[number];
-type Status = (typeof STATUSES)[number];
-type Interval = (typeof INTERVALS)[number];
+type SubStatus = (typeof STATUSES)[number];
+type BillingInterval = (typeof BILLING_INTERVALS)[number];
 
 const STATUS_COLORS: Record<string, string> = {
   active: "bg-green-100 text-green-700",
@@ -46,19 +46,18 @@ export default function AdminOrgDetailPage() {
   const updateSubscription = useMutation(api.subscriptions.adminUpdateSubscription);
 
   const [plan, setPlan] = useState<Plan>("free");
-  const [status, setStatus] = useState<Status>("active");
-  const [interval, setInterval] = useState<Interval | "">("");
+  const [subStatus, setSubStatus] = useState<SubStatus>("active");
+  const [billingInterval, setBillingInterval] = useState<BillingInterval | "none">("none");
   const [periodStart, setPeriodStart] = useState("");
   const [periodEnd, setPeriodEnd] = useState("");
   const [saving, setSaving] = useState(false);
 
-  // Populate form from loaded subscription
   useEffect(() => {
     if (!detail) return;
     const sub = detail.subscription;
     setPlan((sub?.plan as Plan) ?? "free");
-    setStatus((sub?.status as Status) ?? "active");
-    setInterval((sub?.billingInterval as Interval) ?? "");
+    setSubStatus((sub?.status as SubStatus) ?? "active");
+    setBillingInterval((sub?.billingInterval as BillingInterval) ?? "none");
     setPeriodStart(toDateInputValue(sub?.currentPeriodStart));
     setPeriodEnd(toDateInputValue(sub?.currentPeriodEnd));
   }, [detail]);
@@ -69,14 +68,14 @@ export default function AdminOrgDetailPage() {
       await updateSubscription({
         orgId,
         plan,
-        status,
-        billingInterval: interval || undefined,
+        status: subStatus,
+        billingInterval: billingInterval === "none" ? undefined : billingInterval,
         currentPeriodStart: fromDateInputValue(periodStart),
         currentPeriodEnd: fromDateInputValue(periodEnd),
       });
       toast.success("Subscription updated");
-    } catch (e: any) {
-      toast.error(e?.message ?? "Failed to update subscription");
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to update subscription");
     } finally {
       setSaving(false);
     }
@@ -95,7 +94,9 @@ export default function AdminOrgDetailPage() {
           <h1 className="text-xl font-semibold text-slate-100">{org.name}</h1>
           <p className="text-sm text-slate-400">
             Created {new Date(org.createdAt).toLocaleDateString()} ·{" "}
-            {org.suspended ? <Badge variant="destructive">Suspended</Badge> : <Badge variant="secondary">Active</Badge>}
+            {org.suspended
+              ? <Badge variant="destructive">Suspended</Badge>
+              : <Badge variant="secondary">Active</Badge>}
           </p>
         </div>
         <Button variant="outline" asChild>
@@ -105,11 +106,13 @@ export default function AdminOrgDetailPage() {
 
       {org.suspended && org.suspendedReason && (
         <Card className="border-red-200">
-          <CardContent className="pt-6 text-sm text-red-700">Suspended reason: {org.suspendedReason}</CardContent>
+          <CardContent className="pt-6 text-sm text-red-700">
+            Suspended reason: {org.suspendedReason}
+          </CardContent>
         </Card>
       )}
 
-      {/* ── Subscription Editor ─────────────────────────────── */}
+      {/* ── Subscription Editor ─────────────────────────── */}
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center justify-between">
@@ -134,7 +137,9 @@ export default function AdminOrgDetailPage() {
                 </SelectTrigger>
                 <SelectContent>
                   {PLANS.map((p) => (
-                    <SelectItem key={p} value={p} className="capitalize">{p.charAt(0).toUpperCase() + p.slice(1)}</SelectItem>
+                    <SelectItem key={p} value={p}>
+                      {p.charAt(0).toUpperCase() + p.slice(1)}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -142,13 +147,15 @@ export default function AdminOrgDetailPage() {
 
             <div className="space-y-1.5">
               <Label className="text-slate-300">Status</Label>
-              <Select value={status} onValueChange={(v) => setStatus(v as Status)}>
+              <Select value={subStatus} onValueChange={(v) => setSubStatus(v as SubStatus)}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   {STATUSES.map((s) => (
-                    <SelectItem key={s} value={s} className="capitalize">{s.replace("_", " ")}</SelectItem>
+                    <SelectItem key={s} value={s}>
+                      {s.replace("_", " ").replace(/^\w/, (c) => c.toUpperCase())}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -156,14 +163,16 @@ export default function AdminOrgDetailPage() {
 
             <div className="space-y-1.5">
               <Label className="text-slate-300">Billing interval <span className="text-slate-500">(optional)</span></Label>
-              <Select value={interval} onValueChange={(v) => setInterval(v as Interval | "")}>
+              <Select value={billingInterval} onValueChange={(v) => setBillingInterval(v as BillingInterval | "none")}>
                 <SelectTrigger>
-                  <SelectValue placeholder="None" />
+                  <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">None</SelectItem>
-                  {INTERVALS.map((i) => (
-                    <SelectItem key={i} value={i} className="capitalize">{i.charAt(0).toUpperCase() + i.slice(1)}</SelectItem>
+                  <SelectItem value="none">None</SelectItem>
+                  {BILLING_INTERVALS.map((i) => (
+                    <SelectItem key={i} value={i}>
+                      {i.charAt(0).toUpperCase() + i.slice(1)}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
@@ -192,13 +201,17 @@ export default function AdminOrgDetailPage() {
             </div>
           </div>
 
-          <Button onClick={handleSave} disabled={saving} className="bg-amber-500 hover:bg-amber-600 text-black font-semibold">
+          <Button
+            onClick={handleSave}
+            disabled={saving}
+            className="bg-amber-500 hover:bg-amber-600 text-black font-semibold"
+          >
             {saving ? "Saving…" : "Save subscription"}
           </Button>
         </CardContent>
       </Card>
 
-      {/* ── Entity counts ───────────────────────────────────── */}
+      {/* ── Entity counts ───────────────────────────────── */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
         {Object.entries(counts).map(([entity, count]) => (
           <Card key={entity}>
@@ -210,7 +223,7 @@ export default function AdminOrgDetailPage() {
         ))}
       </div>
 
-      {/* ── Org Settings ────────────────────────────────────── */}
+      {/* ── Org Settings ────────────────────────────────── */}
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Org Settings</CardTitle>
