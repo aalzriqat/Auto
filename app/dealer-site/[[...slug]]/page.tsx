@@ -13,6 +13,9 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/sonner";
 import { Id } from "@/convex/_generated/dataModel";
+import { PrestigeTheme } from "./themes/prestige-theme";
+import { VelocityTheme } from "./themes/velocity-theme";
+import { AvantTheme } from "./themes/avant-theme";
 
 type PublicVehicle = {
   id: Id<"vehicles">;
@@ -178,7 +181,7 @@ export default function DealerSitePage() {
 
   const t = STRINGS[lang];
   const isArabic = lang === "ar";
-  const dir = isArabic ? "rtl" : "ltr";
+  const dir: "ltr" | "rtl" = isArabic ? "rtl" : "ltr";
   const showLangToggle = supportedLangs.includes("en") && supportedLangs.includes("ar");
 
   const primary = site?.settings.primaryColor ?? "#0f172a";
@@ -187,6 +190,8 @@ export default function DealerSitePage() {
   function formatPrice(price: number | null) {
     return price == null ? t.contactForPrice : `${price.toLocaleString()} JOD`;
   }
+
+  const templateId = site?.settings?.templateId ?? "modern-showroom";
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>, formType: string) {
     event.preventDefault();
@@ -235,6 +240,38 @@ export default function DealerSitePage() {
       </main>
     );
   }
+
+  // Premium theme dispatch
+  const premiumThemeProps = {
+    site,
+    page,
+    detailVehicle,
+    lang,
+    isArabic,
+    dir,
+    showLangToggle,
+    isPreviewMode,
+    form,
+    setForm,
+    setSelectedVehicleId,
+    isSubmitting,
+    formSuccess,
+    setFormSuccess,
+    onSubmit: handleSubmit,
+    onToggleLang: () => setUserSelectedLang(lang === "en" ? "ar" : "en"),
+    mobileNavOpen,
+    setMobileNavOpen,
+    t,
+    primary,
+    secondary,
+    formatPrice,
+    vehicles,
+    featuredVehicles,
+  };
+
+  if (templateId === "prestige") return <PrestigeTheme {...premiumThemeProps} />;
+  if (templateId === "velocity") return <VelocityTheme {...premiumThemeProps} />;
+  if (templateId === "avant") return <AvantTheme {...premiumThemeProps} />;
 
   const profile = site.profile;
   const nav = [

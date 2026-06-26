@@ -467,6 +467,9 @@ export default function WebsiteSettingsPage() {
                   <SelectItem value="modern-showroom">{t("WebsiteTemplateModernShowroom")}</SelectItem>
                   <SelectItem value="classic-inventory">{t("WebsiteTemplateClassicInventory")}</SelectItem>
                   <SelectItem value="premium-minimal">{t("WebsiteTemplatePremiumMinimal")}</SelectItem>
+                  <SelectItem value="prestige">★ {t("WebsiteTemplatePrestige")}</SelectItem>
+                  <SelectItem value="velocity">★ {t("WebsiteTemplateVelocity")}</SelectItem>
+                  <SelectItem value="avant">★ {t("WebsiteTemplateAvant")}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
