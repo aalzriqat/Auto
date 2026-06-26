@@ -541,6 +541,18 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_lead", ["leadId"]),
 
+  applicationStatusLog: defineTable({
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    fromStatus: v.optional(v.string()),
+    toStatus: v.string(),
+    changedBy: v.id("users"),
+    changedAt: v.number(),
+    note: v.optional(v.string()),
+  })
+    .index("by_application", ["applicationId"])
+    .index("by_org", ["orgId"]),
+
   financeApplications: defineTable({
     orgId: v.id("organizations"),
     quoteId: v.id("quotes"),

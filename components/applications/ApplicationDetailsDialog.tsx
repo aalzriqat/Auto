@@ -12,7 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { format } from "date-fns";
 import { toast } from "@/components/ui/sonner";
 import { Separator } from "@/components/ui/separator";
-import { Upload, CheckCircle, XCircle, Clock, Eye, X, Download } from "lucide-react";
+import { Upload, CheckCircle, XCircle, Clock, Eye, X, Download, History } from "lucide-react";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 
@@ -33,6 +33,7 @@ export function ApplicationDetailsDialog({
 
   const app = useQuery(api.applications.get, activeOrgId ? { orgId: activeOrgId, applicationId } : "skip");
   const documents = useQuery(api.documents.getForApplication, activeOrgId ? { orgId: activeOrgId, applicationId } : "skip");
+  const statusLog = useQuery(api.applications.getLog, activeOrgId ? { orgId: activeOrgId, applicationId } : "skip");
 
   const updateStatus = useMutation(api.applications.updateStatus);
   const finalizeDeal = useMutation(api.applications.finalizeDeal);
@@ -281,6 +282,40 @@ export function ApplicationDetailsDialog({
               <p className="text-sm text-muted-foreground">{t("NoDocsRequired" as any)}</p>
             )}
           </div>
+        </div>
+
+        <Separator />
+
+        <div className="my-4">
+          <h4 className="font-semibold text-lg mb-4 flex items-center gap-2">
+            <History className="h-4 w-4" />
+            {t("StatusHistory" as any)}
+          </h4>
+          {statusLog && statusLog.length > 0 ? (
+            <div className="relative border-s-2 border-muted ps-4 space-y-4">
+              {statusLog.map((entry) => (
+                <div key={entry._id} className="relative">
+                  <div className="absolute -start-[1.35rem] top-1 w-3 h-3 rounded-full bg-primary border-2 border-background" />
+                  <div className="flex flex-col gap-0.5">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {entry.fromStatus && (
+                        <span className="text-xs text-muted-foreground">{entry.fromStatus}</span>
+                      )}
+                      {entry.fromStatus && <span className="text-xs text-muted-foreground">→</span>}
+                      <span className="text-sm font-semibold">{entry.toStatus}</span>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {entry.changedByName} · {format(entry.changedAt, "PP p")}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              {t("NoStatusHistory" as any)}
+            </p>
+          )}
         </div>
       </DialogContent>
     </Dialog>

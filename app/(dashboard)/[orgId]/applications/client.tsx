@@ -43,17 +43,18 @@ export function ApplicationClient() {
                   <TableHead>{t("Amount" as any)}</TableHead>
                   <TableHead>{t("Status" as any)}</TableHead>
                   <TableHead>{t("Date" as any)}</TableHead>
+                  <TableHead>{t("Employee" as any)}</TableHead>
                   <TableHead className="text-right">{t("Actions" as any)}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {applications === undefined ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center">{t("LoadingApplications" as any)}</TableCell>
+                    <TableCell colSpan={8} className="text-center">{t("LoadingApplications" as any)}</TableCell>
                   </TableRow>
                 ) : applications.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-center text-muted-foreground">
+                    <TableCell colSpan={8} className="text-center text-muted-foreground">
                       {t("NoApplicationsFound" as any)}
                     </TableCell>
                   </TableRow>
@@ -74,6 +75,7 @@ export function ApplicationClient() {
                         </Badge>
                       </TableCell>
                       <TableCell>{format(app.createdAt, "PP")}</TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{app.salespersonName}</TableCell>
                       <TableCell className="text-right">
                         <Button
                           variant="ghost"

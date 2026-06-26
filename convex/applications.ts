@@ -107,6 +107,7 @@ export const createFromQuote = mutation({
       throw new ConvexError("An application already exists for this quote.");
     }
 
+    const now = Date.now();
     const appId = await ctx.db.insert("financeApplications", {
       orgId: args.orgId,
       quoteId: quote._id,
@@ -116,8 +117,16 @@ export const createFromQuote = mutation({
       salespersonId: auth.user._id,
       status: "PENDING_DOCS",
       notes: args.notes,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    await ctx.db.insert("applicationStatusLog", {
+      orgId: args.orgId,
+      applicationId: appId,
+      toStatus: "PENDING_DOCS",
+      changedBy: auth.user._id,
+      changedAt: now,
     });
 
     // Automatically assign required documents based on rules
@@ -187,16 +196,52 @@ export const updateStatus = mutation({
       approvedAt = Date.now();
     }
 
+    const patchedAt = Date.now();
     await ctx.db.patch(args.applicationId, {
       status: args.status,
-      updatedAt: Date.now(),
+      updatedAt: patchedAt,
       approvedBy,
       approvedAt,
+    });
+
+    await ctx.db.insert("applicationStatusLog", {
+      orgId: args.orgId,
+      applicationId: args.applicationId,
+      fromStatus: app.status,
+      toStatus: args.status,
+      changedBy: auth.user._id,
+      changedAt: patchedAt,
     });
 
     if (args.status === "REJECTED" && app.status !== "REJECTED") {
       await releaseHoldForRejectedQuote(ctx, { quoteId: app.quoteId });
     }
+  },
+});
+
+export const getLog = query({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+
+    const entries = await ctx.db
+      .query("applicationStatusLog")
+      .withIndex("by_application", (q) => q.eq("applicationId", args.applicationId))
+      .order("asc")
+      .collect();
+
+    return Promise.all(
+      entries.map(async (entry) => {
+        const user = await ctx.db.get(entry.changedBy);
+        return {
+          ...entry,
+          changedByName: user && "name" in user ? (user.name ?? user.email) : "Unknown",
+        };
+      })
+    );
   },
 });
 

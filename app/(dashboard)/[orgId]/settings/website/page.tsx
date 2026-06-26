@@ -36,6 +36,60 @@ import {
   WEBSITE_SECTION_GROUPS,
 } from "@/lib/website/websiteSetupConfig";
 
+const HERO_TITLE_PRESETS: Record<"en" | "ar", string[]> = {
+  en: [
+    "Premium Cars at Your Fingertips",
+    "Your Trusted Auto Dealer",
+    "Find Your Perfect Vehicle",
+    "Quality Cars, Unbeatable Prices",
+    "Drive Your Dreams Today",
+    "Certified Pre-Owned Vehicles",
+    "New & Used Cars for Every Budget",
+    "Luxury & Economy – All in One Place",
+    "Explore Our Full Inventory",
+    "Top Deals on Premium Vehicles",
+  ],
+  ar: [
+    "سيارات مميزة بين يديك",
+    "وكيلك الموثوق للسيارات",
+    "اعثر على سيارتك المثالية",
+    "جودة عالية وأسعار لا تُقاوم",
+    "حقق حلم سيارتك اليوم",
+    "مركبات معتمدة مضمونة",
+    "سيارات جديدة ومستعملة لكل الميزانيات",
+    "الفخامة والاقتصاد في مكان واحد",
+    "استعرض مخزوننا الكامل",
+    "أفضل الصفقات على السيارات المميزة",
+  ],
+};
+
+const HERO_SUBTITLE_PRESETS: Record<"en" | "ar", string[]> = {
+  en: [
+    "Browse our public inventory and contact our team.",
+    "Get the best deal on your next vehicle.",
+    "We make car buying simple, fast, and transparent.",
+    "Trusted by thousands of happy customers.",
+    "Premium selection. Fair pricing. Outstanding service.",
+    "Finance available. Drive away today.",
+    "Explore hundreds of vehicles in stock.",
+    "Serving you with honesty and expertise.",
+    "Your journey begins here.",
+    "Contact us to schedule a test drive.",
+  ],
+  ar: [
+    "تصفح مخزوننا وتواصل مع فريقنا.",
+    "احصل على أفضل صفقة لسيارتك القادمة.",
+    "نجعل شراء السيارات بسيطاً وسريعاً وشفافاً.",
+    "موثوق به من آلاف العملاء السعداء.",
+    "اختيار متميز. أسعار عادلة. خدمة استثنائية.",
+    "تمويل متاح. اقود سيارتك اليوم.",
+    "استعرض مئات السيارات المتوفرة.",
+    "نخدمك بصدق واحترافية.",
+    "رحلتك تبدأ هنا.",
+    "تواصل معنا لحجز تجربة قيادة.",
+  ],
+};
+
 type SectionState = Record<string, boolean>;
 type DomainLookupResult = null | {
   available?: boolean;
@@ -499,10 +553,26 @@ export default function WebsiteSettingsPage() {
             </div>
             <div className="space-y-2 lg:col-span-2">
               <Label>{t("WebsiteHeroText")}</Label>
+              <Select onValueChange={(v) => setHeroTitle(v)}>
+                <SelectTrigger><SelectValue placeholder={t("WebsitePickPreset")} /></SelectTrigger>
+                <SelectContent>
+                  {HERO_TITLE_PRESETS[defaultLanguage].map((preset) => (
+                    <SelectItem key={preset} value={preset}>{preset}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <Input value={heroTitle} onChange={(event) => setHeroTitle(event.target.value)} placeholder={t("WebsiteHeroPlaceholder")} />
             </div>
             <div className="space-y-2 lg:col-span-2">
               <Label>{t("WebsiteSloganSubtitle")}</Label>
+              <Select onValueChange={(v) => setHeroSubtitle(v)}>
+                <SelectTrigger><SelectValue placeholder={t("WebsitePickPreset")} /></SelectTrigger>
+                <SelectContent>
+                  {HERO_SUBTITLE_PRESETS[defaultLanguage].map((preset) => (
+                    <SelectItem key={preset} value={preset}>{preset}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <Textarea value={heroSubtitle} onChange={(event) => setHeroSubtitle(event.target.value)} placeholder={t("WebsiteSloganPlaceholder")} />
             </div>
             <div className="flex items-center justify-between rounded-md border p-3 lg:col-span-2">
