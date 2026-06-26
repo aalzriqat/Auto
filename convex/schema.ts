@@ -834,6 +834,110 @@ export default defineSchema({
     .index("by_facebook_page_id", ["facebookPageId"])
     .index("by_facebook_connected_user_id", ["facebookConnectedByUserId"]),
 
+  websiteSettings: defineTable({
+    orgId: v.id("organizations"),
+    enabled: v.boolean(),
+    status: v.union(
+      v.literal("disabled"),
+      v.literal("draft"),
+      v.literal("active"),
+      v.literal("suspended")
+    ),
+    defaultSubdomain: v.optional(v.string()),
+    activeDomainId: v.optional(v.id("websiteDomains")),
+    templateId: v.string(),
+    defaultLanguage: v.union(v.literal("en"), v.literal("ar")),
+    supportedLanguages: v.array(v.union(v.literal("en"), v.literal("ar"))),
+    primaryColor: v.optional(v.string()),
+    secondaryColor: v.optional(v.string()),
+    logoUrl: v.optional(v.string()),
+    heroTitle: v.optional(v.string()),
+    heroSubtitle: v.optional(v.string()),
+    slogan: v.optional(v.string()),
+    themeConfig: v.optional(v.any()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    publishedAt: v.optional(v.number()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"]),
+
+  websiteDomains: defineTable({
+    orgId: v.id("organizations"),
+    websiteSettingsId: v.id("websiteSettings"),
+    domain: v.string(),
+    type: v.union(
+      v.literal("platform_subdomain"),
+      v.literal("purchased_custom_domain"),
+      v.literal("external_custom_domain")
+    ),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("active"),
+      v.literal("failed"),
+      v.literal("suspended")
+    ),
+    isPrimary: v.boolean(),
+    registrarProvider: v.optional(v.string()),
+    registrarDomainId: v.optional(v.string()),
+    dnsStatus: v.union(v.literal("pending"), v.literal("configured"), v.literal("failed")),
+    sslStatus: v.union(v.literal("pending"), v.literal("active"), v.literal("failed")),
+    registrationExpiresAt: v.optional(v.number()),
+    autoRenew: v.boolean(),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_domain", ["domain"])
+    .index("by_org_primary", ["orgId", "isPrimary"]),
+
+  websitePublishedSections: defineTable({
+    orgId: v.id("organizations"),
+    websiteSettingsId: v.id("websiteSettings"),
+    sectionKey: v.string(),
+    enabled: v.boolean(),
+    configJson: v.optional(v.any()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_settings", ["websiteSettingsId"])
+    .index("by_org_settings_section", ["orgId", "websiteSettingsId", "sectionKey"]),
+
+  websiteLeadRouting: defineTable({
+    orgId: v.id("organizations"),
+    websiteSettingsId: v.id("websiteSettings"),
+    formType: v.string(),
+    routeToUserId: v.optional(v.id("users")),
+    routeToRole: v.optional(v.string()),
+    routeToBranchId: v.optional(v.id("branches")),
+    createTask: v.boolean(),
+    notifyByEmail: v.boolean(),
+    notifyByWhatsApp: v.boolean(),
+    configJson: v.optional(v.any()),
+  })
+    .index("by_settings", ["websiteSettingsId"])
+    .index("by_org_settings_form", ["orgId", "websiteSettingsId", "formType"]),
+
+  websitePublishSnapshots: defineTable({
+    orgId: v.id("organizations"),
+    websiteSettingsId: v.id("websiteSettings"),
+    snapshotJson: v.any(),
+    createdAt: v.number(),
+    publishedByUserId: v.id("users"),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_settings", ["websiteSettingsId"]),
+
+  domainSearchLogs: defineTable({
+    orgId: v.id("organizations"),
+    query: v.string(),
+    available: v.boolean(),
+    price: v.optional(v.number()),
+    provider: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_createdAt", ["orgId", "createdAt"]),
+
   oauthStates: defineTable({
     orgId: v.id("organizations"),
     state: v.string(),

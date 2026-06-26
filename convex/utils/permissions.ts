@@ -79,6 +79,13 @@ export const PERMISSIONS = {
   VIEW_SETTINGS: "view:settings",
   MANAGE_SETTINGS: "manage:settings",
 
+  // Dealer Website
+  WEBSITE_VIEW: "website.view",
+  WEBSITE_MANAGE: "website.manage",
+  WEBSITE_PUBLISH: "website.publish",
+  WEBSITE_DOMAIN_MANAGE: "website.domain.manage",
+  WEBSITE_LEADS_MANAGE: "website.leads.manage",
+
   // Finance / Accounting
   VIEW_FINANCE: "view:finance",
   MANAGE_FINANCE: "manage:finance",
@@ -143,6 +150,11 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.DELETE_TASKS,
       PERMISSIONS.VIEW_REPORTS,
       PERMISSIONS.VIEW_SETTINGS, // read-only: branch/lead-source/customer-status dropdowns, org config
+      PERMISSIONS.WEBSITE_VIEW,
+      PERMISSIONS.WEBSITE_MANAGE,
+      PERMISSIONS.WEBSITE_PUBLISH,
+      PERMISSIONS.WEBSITE_DOMAIN_MANAGE,
+      PERMISSIONS.WEBSITE_LEADS_MANAGE,
       PERMISSIONS.VIEW_COST_PRICE,
       PERMISSIONS.VIEW_COMMISSIONS,
       PERMISSIONS.MANAGE_COMMISSIONS,

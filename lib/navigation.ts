@@ -21,6 +21,7 @@ import {
   Camera,
   MessageCircle,
   Bell,
+  Globe2,
   type LucideIcon,
 } from "lucide-react";
 
@@ -68,5 +69,6 @@ export const settingsNavigation: NavItem[] = [
   { name: "Commission", href: "/settings/commission", icon: Percent, ownerOnly: true },
   { name: "Branches", href: "/settings/branches", icon: Store, ownerOnly: true },
   { name: "Integrations", href: "/settings/integrations", icon: Camera, ownerOnly: true },
+  { name: "Website", href: "/settings/website", icon: Globe2, ownerOnly: true },
   { name: "FeedbackInbox", href: "/settings/feedback", icon: MessageSquarePlus, ownerOnly: true },
 ];

@@ -17,6 +17,7 @@ import { MessengerProvider } from "@/components/messages/MessengerContext";
 import { FloatingMessenger } from "@/components/messages/FloatingMessenger";
 import { MessengerOnboarding } from "@/components/messages/MessengerOnboarding";
 import { GlobalSearchOnboarding } from "@/components/search/GlobalSearchOnboarding";
+import { WebsiteOnboarding } from "@/components/website/WebsiteOnboarding";
 
 function DashboardWrapper({ children }: { children: React.ReactNode }) {
   const { activeOrgId, isLoading } = useOrg();
@@ -65,6 +66,7 @@ function DashboardWrapper({ children }: { children: React.ReactNode }) {
         <FloatingMessenger orgId={activeOrgId} />
         <MessengerOnboarding />
         <GlobalSearchOnboarding />
+        <WebsiteOnboarding />
       </div>
     </MessengerProvider>
   );
