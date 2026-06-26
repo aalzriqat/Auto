@@ -22,6 +22,7 @@ import {
   MessageCircle,
   Bell,
   Globe2,
+  CreditCard,
   type LucideIcon,
 } from "lucide-react";
 
@@ -71,4 +72,5 @@ export const settingsNavigation: NavItem[] = [
   { name: "Integrations", href: "/settings/integrations", icon: Camera, ownerOnly: true },
   { name: "Website", href: "/settings/website", icon: Globe2, ownerOnly: true },
   { name: "FeedbackInbox", href: "/settings/feedback", icon: MessageSquarePlus, ownerOnly: true },
+  { name: "Billing", href: "/settings/billing", icon: CreditCard, ownerOnly: true },
 ];

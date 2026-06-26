@@ -9,6 +9,7 @@ import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { cn } from "@/lib/utils";
 import { mainNavigation as navigation, settingsNavigation } from "@/lib/navigation";
+import { Badge } from "@/components/ui/badge";
 
 export function Sidebar() {
   const { t } = useLanguage();
@@ -27,6 +28,10 @@ export function Sidebar() {
   const pendingCount = useQuery(
     api.approvals.countPending,
     activeOrgId && canSeeApprovals ? { orgId: activeOrgId } : "skip"
+  );
+  const subscription = useQuery(
+    api.subscriptions.getMySubscription,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
   );
 
   const visibleNav = navigation.filter(item => {
@@ -97,10 +102,17 @@ export function Sidebar() {
       </div>
 
       <div className="p-4 border-t border-slate-200/50">
-        <div className="rounded-xl bg-slate-50 p-4 border border-slate-100">
-          <p className="text-xs font-medium text-slate-500 mb-1">{t("AutoFlowPro" as any)}</p>
-          <p className="text-[10px] text-slate-400">{t("DealershipPlanActive" as any)}</p>
-        </div>
+        <Link href={activeOrgId ? `/${activeOrgId}/settings/billing` : "#"}>
+          <div className="rounded-xl bg-slate-50 p-4 border border-slate-100 hover:bg-slate-100 transition-colors cursor-pointer">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs font-medium text-slate-500">{t("AutoFlowPro" as any)}</p>
+              <Badge variant="secondary" className="text-[10px] px-2 py-0 h-4 font-semibold">
+                {subscription?.planDetails?.name ?? "Free"}
+              </Badge>
+            </div>
+            <p className="text-[10px] text-slate-400 mt-1">{t("BillingManagePlan" as any)}</p>
+          </div>
+        </Link>
       </div>
     </aside>
   );

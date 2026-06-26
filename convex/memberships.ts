@@ -94,6 +94,13 @@ export const add = mutation({
       throw new ConvexError("The specified role does not belong to this organization.");
     }
 
+    const memberGate = await ctx.runQuery(internal.subscriptions.canAddMember, { orgId: args.orgId });
+    if (!memberGate.allowed) {
+      throw new ConvexError(
+        `You've reached the ${memberGate.limit}-user limit on your current plan. Upgrade to add more team members.`
+      );
+    }
+
     const org = await ctx.db.get(args.orgId);
     if (!org) throw new ConvexError("Organization not found");
 

@@ -70,6 +70,7 @@ import type * as socialInboxBackfill from "../socialInboxBackfill.js";
 import type * as socialIntegrations from "../socialIntegrations.js";
 import type * as socialPosting from "../socialPosting.js";
 import type * as socialPostingData from "../socialPostingData.js";
+import type * as subscriptions from "../subscriptions.js";
 import type * as support from "../support.js";
 import type * as supportAgentAuth from "../supportAgentAuth.js";
 import type * as tasks from "../tasks.js";
@@ -179,6 +180,7 @@ declare const fullApi: ApiFromModules<{
   socialIntegrations: typeof socialIntegrations;
   socialPosting: typeof socialPosting;
   socialPostingData: typeof socialPostingData;
+  subscriptions: typeof subscriptions;
   support: typeof support;
   supportAgentAuth: typeof supportAgentAuth;
   tasks: typeof tasks;

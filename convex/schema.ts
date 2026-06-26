@@ -1155,6 +1155,33 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"]),
 
+  // ─── Subscription plans ────────────────────────────────────────────────────
+
+  subscriptions: defineTable({
+    orgId: v.id("organizations"),
+    plan: v.union(
+      v.literal("free"),
+      v.literal("starter"),
+      v.literal("professional"),
+      v.literal("enterprise")
+    ),
+    status: v.union(
+      v.literal("active"),     // on free plan or paying subscriber
+      v.literal("past_due"),   // payment failed
+      v.literal("cancelled"),  // cancelled; access until period end
+      v.literal("expired"),    // paid plan lapsed, back to free
+    ),
+    billingInterval: v.optional(v.union(v.literal("monthly"), v.literal("annual"))),
+    currentPeriodStart: v.optional(v.number()),
+    currentPeriodEnd: v.optional(v.number()),
+    renewalReminderSentAt: v.optional(v.number()),
+    cancelledAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_status_period_end", ["status", "currentPeriodEnd"]),
+
   // ─── Super-admin dashboard (cross-tenant, /admin) ──────────────────────────
 
   adminAuditLog: defineTable({
@@ -1188,7 +1215,8 @@ export default defineSchema({
       v.literal("facebook-oauth"),
       v.literal("facebook"),
       v.literal("notification-email"),
-      v.literal("notification-whatsapp")
+      v.literal("notification-whatsapp"),
+      v.literal("subscription-reminder")
     ),
     status: v.union(v.literal("success"), v.literal("error")),
     summary: v.string(),
@@ -1205,9 +1233,9 @@ export default defineSchema({
     participantName: v.optional(v.string()),
     subject: v.string(),
     status: v.union(v.literal("OPEN"), v.literal("CLOSED")),
-    // Which inbox this thread belongs to — support@ (help requests) vs info@
-    // (general/sales inquiries) get separate threads even for the same sender.
-    inbox: v.union(v.literal("support"), v.literal("info")),
+    // Which inbox this thread belongs to — support@ (help), info@ (sales/general),
+    // subscriptions@ (billing/plan inquiries).
+    inbox: v.union(v.literal("support"), v.literal("info"), v.literal("subscriptions")),
     lastMessageAt: v.number(),
     autoRepliedAt: v.optional(v.number()),
   })

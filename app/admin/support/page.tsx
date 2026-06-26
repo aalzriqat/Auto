@@ -13,7 +13,7 @@ import { toast } from "@/components/ui/sonner";
 import { format } from "date-fns";
 
 export default function AdminSupportPage() {
-  const [inbox, setInbox] = useState<"support" | "info">("support");
+  const [inbox, setInbox] = useState<"support" | "info" | "subscriptions">("support");
   const [activeThreadId, setActiveThreadId] = useState<Id<"supportThreads"> | null>(null);
 
   const { results: threads, loadMore, status } = usePaginatedQuery(
@@ -26,7 +26,7 @@ export default function AdminSupportPage() {
     <div className="flex h-[calc(100vh-7rem)] gap-4">
       <Card className="w-80 shrink-0 overflow-y-auto p-0">
         <div className="flex border-b border-slate-800 shrink-0">
-          {(["support", "info"] as const).map((tab) => (
+          {(["support", "info", "subscriptions"] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => {
@@ -34,13 +34,13 @@ export default function AdminSupportPage() {
                 setActiveThreadId(null);
               }}
               className={cn(
-                "flex-1 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors",
+                "flex-1 px-3 py-2.5 text-sm font-medium border-b-2 transition-colors",
                 inbox === tab
                   ? "border-amber-500 text-amber-400"
                   : "border-transparent text-slate-500 hover:text-slate-300"
               )}
             >
-              {tab === "support" ? "Support" : "Info"}
+              {tab === "support" ? "Support" : tab === "info" ? "Info" : "Billing"}
             </button>
           ))}
         </div>

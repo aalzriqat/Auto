@@ -63,7 +63,8 @@ export const logWebhookEvent = internalMutation({
       v.literal("facebook-oauth"),
       v.literal("facebook"),
       v.literal("notification-email"),
-      v.literal("notification-whatsapp")
+      v.literal("notification-whatsapp"),
+      v.literal("subscription-reminder")
     ),
     status: v.union(v.literal("success"), v.literal("error")),
     summary: v.string(),

@@ -53,3 +53,6 @@ testsprite_tests\tmp\config.json
 
 # k6 output artifacts
 /load-tests/results/
+
+# Added by ggshield
+.cache_ggshield

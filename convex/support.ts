@@ -9,15 +9,19 @@ import type { MutationCtx } from "./_generated/server";
 const CONTACT_FORM_TO_EMAIL = "info@autoflowdealer.com";
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-type Inbox = "support" | "info";
+type Inbox = "support" | "info" | "subscriptions";
 
 const FROM_EMAIL: Record<Inbox, string> = {
   support: "support@autoflowdealer.com",
   info: "info@autoflowdealer.com",
+  subscriptions: "subscriptions@autoflowdealer.com",
 };
 
 function inboxForAddress(toEmail: string): Inbox {
-  return toEmail.toLowerCase().includes("info@") ? "info" : "support";
+  const lower = toEmail.toLowerCase();
+  if (lower.includes("subscriptions@")) return "subscriptions";
+  if (lower.includes("info@")) return "info";
+  return "support";
 }
 
 // Shared by the Resend inbound webhook and the public contact form below —
@@ -156,7 +160,7 @@ export const submitContactMessage = mutation({
 
 export const listThreads = query({
   args: {
-    inbox: v.union(v.literal("support"), v.literal("info")),
+    inbox: v.union(v.literal("support"), v.literal("info"), v.literal("subscriptions")),
     status: v.optional(v.union(v.literal("OPEN"), v.literal("CLOSED"))),
     paginationOpts: paginationOptsValidator,
   },
@@ -295,7 +299,7 @@ export const sendAutoReply = internalAction({
     toEmail: v.string(),
     participantName: v.optional(v.string()),
     subject: v.string(),
-    inbox: v.union(v.literal("support"), v.literal("info")),
+    inbox: v.union(v.literal("support"), v.literal("info"), v.literal("subscriptions")),
   },
   handler: async (ctx, args) => {
     const result = await ctx.runAction(internal.email.sendAutoReplyEmail, {

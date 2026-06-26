@@ -233,18 +233,19 @@ export const sendNewAccountCredentials = internalAction({
   },
 });
 
-const SUPPORT_INBOX_FROM: Record<"support" | "info", string> = {
+const SUPPORT_INBOX_FROM: Record<"support" | "info" | "subscriptions", string> = {
   support: "AutoFlow Support <support@autoflowdealer.com>",
   info: "AutoFlow <info@autoflowdealer.com>",
+  subscriptions: "AutoFlow Subscriptions <subscriptions@autoflowdealer.com>",
 };
 
-/** Sends a reply from the company support or info inbox to a subscriber. */
+/** Sends a reply from the company support, info, or subscriptions inbox to a subscriber. */
 export const sendSupportReply = internalAction({
   args: {
     toEmail: v.string(),
     subject: v.string(),
     bodyText: v.string(),
-    inbox: v.union(v.literal("support"), v.literal("info")),
+    inbox: v.union(v.literal("support"), v.literal("info"), v.literal("subscriptions")),
   },
   handler: async (ctx, args): Promise<{ success: boolean; resendEmailId?: string; error?: string }> => {
     const status = await rateLimiter.limit(ctx, "email");
@@ -281,13 +282,13 @@ export const sendSupportReply = internalAction({
   },
 });
 
-/** Professional acknowledgment sent automatically the first time a new sender emails support@ or info@autoflowdealer.com. */
+/** Professional acknowledgment sent automatically the first time a new sender emails support@, info@, or subscriptions@autoflowdealer.com. */
 export const sendAutoReplyEmail = internalAction({
   args: {
     toEmail: v.string(),
     participantName: v.optional(v.string()),
     subject: v.string(),
-    inbox: v.union(v.literal("support"), v.literal("info")),
+    inbox: v.union(v.literal("support"), v.literal("info"), v.literal("subscriptions")),
   },
   handler: async (ctx, args): Promise<{ success: boolean; resendEmailId?: string; error?: string }> => {
     const status = await rateLimiter.limit(ctx, "email");
@@ -337,6 +338,72 @@ export const sendAutoReplyEmail = internalAction({
     } catch (error) {
       return { success: false, error: String(error) };
     }
+  },
+});
+
+export const sendSubscriptionReminderEmail = internalAction({
+  args: {
+    toEmail: v.string(),
+    orgName: v.string(),
+    kind: v.literal("renewal_due"),
+    planName: v.string(),
+    endsAt: v.number(),
+    priceJod: v.optional(v.number()),
+  },
+  handler: async (ctx, args): Promise<{ success: boolean; error?: string }> => {
+    const status = await rateLimiter.limit(ctx, "email");
+    if (!status.ok) {
+      return { success: false, error: "rate_limited" };
+    }
+    const env = getValidatedEnv();
+    const resendApiKey = env.RESEND_API_KEY;
+    const appUrl = env.NEXT_PUBLIC_APP_URL;
+
+    const safeOrgName = escapeHtml(args.orgName);
+    const safePlanName = escapeHtml(args.planName);
+    const endDate = new Date(args.endsAt).toLocaleDateString("en-GB", {
+      day: "numeric", month: "long", year: "numeric",
+    });
+
+    const subject = `Your AutoFlow subscription renews on ${endDate}`;
+    const preheader = `Your ${safePlanName} plan renews in 2 days.`;
+
+    const bodyHtml = `
+      <h1 style="margin:0 0 16px; font-size:20px; font-weight:700; color:#111827;">Your subscription renews in 2 days</h1>
+      <p style="margin:0 0 16px;">Hi ${safeOrgName},</p>
+      <p style="margin:0 0 24px;">Your <strong>${safePlanName} plan</strong>${args.priceJod ? ` (${args.priceJod} JOD/month)` : ""} will renew automatically on <strong>${endDate}</strong>.</p>
+      ${emailButton(`${appUrl}/settings/billing`, "Manage Subscription")}
+      <p style="margin:20px 0 0; font-size:13px; color:#6b7280;">To cancel or change your plan before renewal, visit <a href="${appUrl}/settings/billing" style="color:#0f172a;">Settings → Billing</a> or reply to this email at <a href="mailto:subscriptions@autoflowdealer.com" style="color:#0f172a;">subscriptions@autoflowdealer.com</a>.</p>
+    `;
+
+    const emailHtml = wrapEmailHtml(preheader, bodyHtml);
+
+    let result: { success: boolean; error?: string };
+    if (!resendApiKey) {
+      result = { success: true };
+    } else {
+      const resend = new Resend(resendApiKey);
+      try {
+        await resend.emails.send({
+          from: "AutoFlow Subscriptions <subscriptions@autoflowdealer.com>",
+          to: args.toEmail,
+          subject,
+          html: emailHtml,
+        });
+        result = { success: true };
+      } catch (error) {
+        result = { success: false, error: String(error) };
+      }
+    }
+
+    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+      source: "subscription-reminder",
+      status: result.success ? "success" : "error",
+      summary: `${args.kind} -> ${args.toEmail} (${args.orgName})`,
+      error: result.error,
+    });
+
+    return result;
   },
 });
 

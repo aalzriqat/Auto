@@ -1,7 +1,9 @@
 import { cronJobs } from "convex/server";
-import { internalMutation, MutationCtx } from "./_generated/server";
+import { v } from "convex/values";
+import { internalMutation, internalQuery, internalAction, MutationCtx, ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { notifyManagers, notifyUser } from "./utils/notifications";
+import { PLANS } from "./subscriptions";
 
 const crons = cronJobs();
 
@@ -10,6 +12,14 @@ crons.interval(
   "check-upcoming-tasks",
   { minutes: 5 }, // Every 5 minutes
   internal.crons.triggerAlarms
+);
+
+// Run daily at 08:00 UTC (11:00 Jordan time) to send subscription reminders
+crons.cron(
+  "subscription-reminders",
+  "0 8 * * *",
+  internal.crons.triggerSubscriptionReminders,
+  {}
 );
 
 export default crons;
@@ -90,3 +100,84 @@ async function runTriggerAlarms(ctx: MutationCtx) {
 
   return `Triggered alarms for ${triggeredCount} tasks.`;
 }
+
+// ─── Subscription reminder cron ───────────────────────────────────────────────
+
+export const triggerSubscriptionReminders = internalAction({
+  args: {},
+  handler: async (ctx: ActionCtx) => {
+    try {
+      const result = await runSubscriptionReminders(ctx);
+      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+        source: "subscription-reminder",
+        status: "success",
+        summary: result,
+      });
+      return result;
+    } catch (err) {
+      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+        source: "subscription-reminder",
+        status: "error",
+        summary: "subscription-reminders cron failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+  },
+});
+
+const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
+
+async function runSubscriptionReminders(ctx: ActionCtx): Promise<string> {
+  let sent = 0;
+
+  // Send renewal reminders 2 days before the next billing date for paid orgs
+  const expiringRenewals = await ctx.runQuery(internal.subscriptions.getExpiringRenewals, {
+    withinMs: TWO_DAYS_MS,
+  });
+
+  for (const sub of expiringRenewals) {
+    const ownerEmail = await ctx.runQuery(internal.crons.getOrgOwnerEmail, { orgId: sub.orgId });
+    const org = await ctx.runQuery(internal.organizations.getInternal, { orgId: sub.orgId });
+
+    if (ownerEmail && org) {
+      await ctx.runAction(internal.email.sendSubscriptionReminderEmail, {
+        toEmail: ownerEmail,
+        orgName: org.name,
+        kind: "renewal_due",
+        planName: PLANS[sub.plan].name,
+        endsAt: sub.currentPeriodEnd ?? Date.now(),
+        priceJod: PLANS[sub.plan].priceJod,
+      });
+      await ctx.runMutation(internal.subscriptions.markRenewalReminderSent, {
+        subscriptionId: sub._id,
+      });
+      sent++;
+    }
+  }
+
+  return `Sent ${sent} renewal reminder(s).`;
+}
+
+/** Returns the email address of the org's OWNER-role member. */
+export const getOrgOwnerEmail = internalQuery({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const roles = await ctx.db
+      .query("roles")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .take(20);
+    const ownerRole = roles.find((r) => r.name === "OWNER");
+    if (!ownerRole) return null;
+
+    const memberships = await ctx.db
+      .query("memberships")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .take(50);
+    const ownerMembership = memberships.find((m) => m.roleId === ownerRole._id);
+    if (!ownerMembership) return null;
+
+    const user = await ctx.db.get(ownerMembership.userId);
+    return user?.email ?? null;
+  },
+});
