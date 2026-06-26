@@ -106,7 +106,12 @@ export const getOrgDetail = query({
       ).length;
     }
 
-    return { org, settings, counts };
+    const subscription = await ctx.db
+      .query("subscriptions")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .unique();
+
+    return { org, settings, counts, subscription };
   },
 });
 
