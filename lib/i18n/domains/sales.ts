@@ -227,6 +227,7 @@ export const salesEn = {
   ReviewApp: "Review",
   LoadingApplications: "Loading applications...",
   NoApplicationsFound: "No applications found.",
+  Employee: "Employee",
   JOD: "JOD",
   Company: "Company",
 
@@ -553,6 +554,7 @@ export const salesAr = {
   ActiveApplications: "الطلبات النشطة",
   ReviewApp: "مراجعة",
   LoadingApplications: "جاري تحميل الطلبات...",
+  Employee: "الموظف",
   NoApplicationsFound: "لم يتم العثور على طلبات.",
   JOD: "دينار",
   Company: "الشركة",
