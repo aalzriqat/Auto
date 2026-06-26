@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { ArrowRight, Car, Globe2, Mail, MapPin, Phone, Send, ShieldCheck } from "lucide-react";
 import Link from "next/link";
@@ -47,7 +47,18 @@ export default function DealerSitePage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitLead = useMutation(api.websites.submitPublicLead);
 
-  const liveHost = searchParams.get("host") ?? "";
+  const hostParam = searchParams.get("host");
+  const [browserHost, setBrowserHost] = useState("");
+  useEffect(() => {
+    if (!hostParam) {
+      const h = window.location.hostname;
+      // Use browser hostname when served at a dealer subdomain (not the AutoFlow app itself)
+      if (h && !h.includes("localhost") && !h.includes("vercel.app") && h !== "autoflowdealer.com" && !h.startsWith("www.")) {
+        setBrowserHost(h);
+      }
+    }
+  }, [hostParam]);
+  const liveHost = hostParam ?? browserHost;
   const previewOrgId = searchParams.get("previewOrgId") as Id<"organizations"> | null;
   const liveSite = useQuery(api.websites.resolveDomain, !previewOrgId && liveHost ? { host: liveHost } : "skip");
   const previewSite = useQuery(api.websites.preview, previewOrgId ? { orgId: previewOrgId } : "skip");
