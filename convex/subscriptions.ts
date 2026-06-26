@@ -277,6 +277,7 @@ export const getMySubscription = query({
       ...(sub ?? { plan: "free" as const, status: "active" as const }),
       planDetails: plan,
       daysUntilRenewal,
+      currentPeriodEnd: sub?.currentPeriodEnd ?? null,
     };
   },
 });
