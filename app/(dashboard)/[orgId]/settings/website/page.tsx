@@ -29,6 +29,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/sonner";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { Id } from "@/convex/_generated/dataModel";
 import {
   SENSITIVE_WEBSITE_SECTION_KEYS,
   WEBSITE_FORM_TYPES,
@@ -80,7 +81,6 @@ export default function WebsiteSettingsPage() {
   const [routing, setRouting] = useState<Record<string, { createTask: boolean; notifyByEmail: boolean; notifyByWhatsApp: boolean }>>({});
 
   const primaryDomain = status?.primaryDomain?.domain ?? status?.settings?.defaultSubdomain ?? null;
-  const previewUrl = primaryDomain ? `https://${primaryDomain}` : null;
 
   useEffect(() => {
     if (!status) return;
@@ -118,6 +118,35 @@ export default function WebsiteSettingsPage() {
     () => Object.values(sections).filter(Boolean).length,
     [sections]
   );
+  const statusLabel = status?.settings?.status ?? "disabled";
+  const setupExists = Boolean(status?.settings);
+  const selectedAddress = primaryDomain ?? (subdomainSlug.trim() ? `${subdomainSlug.trim().toLowerCase()}.autoflowdealer.com` : null);
+  const canPublish = Boolean(setupExists && selectedAddress);
+
+  function websiteDraftInput(orgId: Id<"organizations">) {
+    return {
+      orgId,
+      subdomainSlug: subdomainSlug.trim() || undefined,
+      templateId,
+      defaultLanguage,
+      supportedLanguages: supportArabic ? (["en", "ar"] as Array<"en" | "ar">) : [defaultLanguage],
+      primaryColor,
+      secondaryColor,
+      heroTitle: heroTitle.trim() || undefined,
+      heroSubtitle: heroSubtitle.trim() || undefined,
+      sections: Object.entries(sections).map(([sectionKey, enabled]) => ({ sectionKey, enabled })),
+      routing: WEBSITE_FORM_TYPES.map(([formType]) => ({
+        formType,
+        createTask: routing[formType]?.createTask ?? formType === "test_drive",
+        notifyByEmail: routing[formType]?.notifyByEmail ?? true,
+        notifyByWhatsApp: routing[formType]?.notifyByWhatsApp ?? false,
+      })),
+    };
+  }
+
+  function previewPath(orgId: Id<"organizations">) {
+    return `/dealer-site?previewOrgId=${orgId}`;
+  }
 
   async function runAction(action: () => Promise<void>, success: string) {
     setIsBusy(true);
@@ -178,48 +207,33 @@ export default function WebsiteSettingsPage() {
   async function handleSaveDraft() {
     if (!activeOrgId) return;
     await runAction(async () => {
-      await saveDraft({
-        orgId: activeOrgId,
-        subdomainSlug: subdomainSlug.trim() || undefined,
-        templateId,
-        defaultLanguage,
-        supportedLanguages: supportArabic ? ["en", "ar"] : [defaultLanguage],
-        primaryColor,
-        secondaryColor,
-        heroTitle: heroTitle.trim() || undefined,
-        heroSubtitle: heroSubtitle.trim() || undefined,
-        sections: Object.entries(sections).map(([sectionKey, enabled]) => ({ sectionKey, enabled })),
-        routing: WEBSITE_FORM_TYPES.map(([formType]) => ({
-          formType,
-          createTask: routing[formType]?.createTask ?? formType === "test_drive",
-          notifyByEmail: routing[formType]?.notifyByEmail ?? true,
-          notifyByWhatsApp: routing[formType]?.notifyByWhatsApp ?? false,
-        })),
-      });
+      await saveDraft(websiteDraftInput(activeOrgId));
     }, t("WebsiteDraftSaved"));
+  }
+
+  async function handlePreview() {
+    if (!activeOrgId) return;
+    const previewWindow = window.open("about:blank", "_blank");
+    if (previewWindow) previewWindow.opener = null;
+    await runAction(async () => {
+      await saveDraft(websiteDraftInput(activeOrgId));
+      const url = previewPath(activeOrgId);
+      if (previewWindow) {
+        previewWindow.location.href = url;
+      } else {
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
+    }, t("WebsitePreviewOpening"));
   }
 
   async function handlePublish() {
     if (!activeOrgId) return;
     await runAction(async () => {
-      await saveDraft({
-        orgId: activeOrgId,
-        subdomainSlug: subdomainSlug.trim() || undefined,
-        templateId,
-        defaultLanguage,
-        supportedLanguages: supportArabic ? ["en", "ar"] : [defaultLanguage],
-        primaryColor,
-        secondaryColor,
-        heroTitle: heroTitle.trim() || undefined,
-        heroSubtitle: heroSubtitle.trim() || undefined,
-        sections: Object.entries(sections).map(([sectionKey, enabled]) => ({ sectionKey, enabled })),
-      });
+      await saveDraft(websiteDraftInput(activeOrgId));
       await publishWebsite({ orgId: activeOrgId });
     }, t("WebsitePublished"));
   }
 
-  const statusLabel = status?.settings?.status ?? "disabled";
-  const setupExists = Boolean(status?.settings);
   const wizardSteps = [
     "WebsiteStepAddress",
     "WebsiteStepData",
@@ -248,11 +262,9 @@ export default function WebsiteSettingsPage() {
             <LayoutTemplate className="h-4 w-4" />
             {t("WebsiteEditSettings")}
           </Button>
-          <Button variant="outline" asChild disabled={!previewUrl}>
-            <a href={previewUrl ?? "#"} target="_blank" rel="noreferrer">
-              <ExternalLink className="h-4 w-4" />
-              {t("WebsitePreview")}
-            </a>
+          <Button variant="outline" onClick={handlePreview} disabled={!setupExists || isBusy}>
+            <ExternalLink className="h-4 w-4" />
+            {t("WebsitePreview")}
           </Button>
         </div>
       </div>
@@ -554,7 +566,7 @@ export default function WebsiteSettingsPage() {
             <div className="grid gap-4 md:grid-cols-3">
               <div className="rounded-md border p-3">
                 <p className="text-xs text-muted-foreground">{t("WebsiteSelectedAddress")}</p>
-                <p className="font-medium break-words">{primaryDomain ?? t("WebsiteChooseAddressFirst")}</p>
+                <p className="font-medium break-words">{selectedAddress ?? t("WebsiteChooseAddressFirst")}</p>
               </div>
               <div className="rounded-md border p-3">
                 <p className="text-xs text-muted-foreground">{t("WebsiteTemplate")}</p>
@@ -577,11 +589,9 @@ export default function WebsiteSettingsPage() {
                 <Save className="h-4 w-4" />
                 {t("WebsiteSaveDraft")}
               </Button>
-              <Button variant="outline" asChild disabled={!previewUrl}>
-                <a href={previewUrl ?? "#"} target="_blank" rel="noreferrer">
-                  <ExternalLink className="h-4 w-4" />
-                  {t("WebsitePreview")}
-                </a>
+              <Button variant="outline" onClick={handlePreview} disabled={!setupExists || isBusy}>
+                <ExternalLink className="h-4 w-4" />
+                {t("WebsitePreview")}
               </Button>
               {statusLabel === "active" && (
                 <Button
@@ -594,7 +604,7 @@ export default function WebsiteSettingsPage() {
                   {t("WebsiteUnpublish")}
                 </Button>
               )}
-              <Button onClick={handlePublish} disabled={isBusy || !primaryDomain}>
+              <Button onClick={handlePublish} disabled={isBusy || !canPublish}>
                 {isBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                 {t("WebsitePublish")}
               </Button>

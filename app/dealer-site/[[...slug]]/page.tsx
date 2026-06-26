@@ -47,8 +47,13 @@ export default function DealerSitePage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitLead = useMutation(api.websites.submitPublicLead);
 
-  const host = searchParams.get("host") ?? "";
-  const site = useQuery(api.websites.resolveDomain, host ? { host } : "skip");
+  const liveHost = searchParams.get("host") ?? "";
+  const previewOrgId = searchParams.get("previewOrgId") as Id<"organizations"> | null;
+  const liveSite = useQuery(api.websites.resolveDomain, !previewOrgId && liveHost ? { host: liveHost } : "skip");
+  const previewSite = useQuery(api.websites.preview, previewOrgId ? { orgId: previewOrgId } : "skip");
+  const site = previewOrgId ? previewSite : liveSite;
+  const host = liveHost || site?.settings.domain || "";
+  const isPreviewMode = Boolean(previewOrgId);
   const slug = params?.slug ?? [];
   const page = slug[0] ?? "home";
   const detailSlug = page === "inventory" && slug[1] ? slug[1] : null;
@@ -65,6 +70,10 @@ export default function DealerSitePage() {
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>, formType: string) {
     event.preventDefault();
+    if (isPreviewMode) {
+      toast.error("Preview mode does not submit leads.");
+      return;
+    }
     if (!host) return;
     setIsSubmitting(true);
     try {
@@ -125,6 +134,11 @@ export default function DealerSitePage() {
   return (
     <main dir={direction} className="min-h-screen bg-white text-slate-950">
       <header className="sticky top-0 z-30 border-b bg-white/95 backdrop-blur">
+        {isPreviewMode && (
+          <div className="border-b bg-amber-50 px-4 py-2 text-center text-sm font-medium text-amber-900">
+            Preview mode. This draft is visible only inside AutoFlow and lead forms are disabled.
+          </div>
+        )}
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3">
           <Link href="/" className="flex items-center gap-3">
             {profile.logoUrl ? (
