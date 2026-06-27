@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
-import { query, internalMutation } from "./_generated/server";
+import { query, mutation, internalMutation, internalQuery } from "./_generated/server";
 import { requireSuperAdmin } from "./utils/tenancy";
 
 const OVERVIEW_TABLES = [
@@ -52,6 +52,46 @@ export const listWebhookLogs = query({
 
 // Called from convex/http.ts and convex/whatsapp.ts httpActions to record
 // webhook delivery outcomes for the admin Overview page.
+// ─── Site-wide configuration ──────────────────────────────────────────────────
+
+export const getSiteConfig = query({
+  args: { key: v.string() },
+  handler: async (ctx, args) => {
+    const row = await ctx.db
+      .query("siteConfig")
+      .withIndex("by_key", (q) => q.eq("key", args.key))
+      .unique();
+    return row?.value ?? null;
+  },
+});
+
+export const getSiteConfigInternal = internalQuery({
+  args: { key: v.string() },
+  handler: async (ctx, args) => {
+    const row = await ctx.db
+      .query("siteConfig")
+      .withIndex("by_key", (q) => q.eq("key", args.key))
+      .unique();
+    return row?.value ?? null;
+  },
+});
+
+export const setSiteConfig = mutation({
+  args: { key: v.string(), value: v.any() },
+  handler: async (ctx, args) => {
+    await requireSuperAdmin(ctx);
+    const existing = await ctx.db
+      .query("siteConfig")
+      .withIndex("by_key", (q) => q.eq("key", args.key))
+      .unique();
+    if (existing) {
+      await ctx.db.patch(existing._id, { value: args.value, updatedAt: Date.now() });
+    } else {
+      await ctx.db.insert("siteConfig", { key: args.key, value: args.value, updatedAt: Date.now() });
+    }
+  },
+});
+
 export const logWebhookEvent = internalMutation({
   args: {
     source: v.union(
@@ -64,7 +104,9 @@ export const logWebhookEvent = internalMutation({
       v.literal("facebook"),
       v.literal("notification-email"),
       v.literal("notification-whatsapp"),
-      v.literal("subscription-reminder")
+      v.literal("subscription-reminder"),
+      v.literal("support-inbox-notification"),
+      v.literal("upgrade-request")
     ),
     status: v.union(v.literal("success"), v.literal("error")),
     summary: v.string(),

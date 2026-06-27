@@ -92,6 +92,23 @@ async function recordSupportMessage(
       inbox,
     });
   }
+
+  // Notify configured admin emails on every new inbound message.
+  const configRow = await ctx.db
+    .query("siteConfig")
+    .withIndex("by_key", (q) => q.eq("key", "supportNotifyEmails"))
+    .unique();
+  const notifyEmails = configRow?.value as string[] | null | undefined;
+  if (notifyEmails && Array.isArray(notifyEmails) && notifyEmails.length > 0) {
+    await ctx.scheduler.runAfter(0, internal.email.sendSupportInboxNotification, {
+      toEmails: notifyEmails,
+      inbox,
+      fromEmail: email,
+      fromName: args.fromName,
+      subject: args.subject,
+      bodyPreview: args.bodyText?.slice(0, 200),
+    });
+  }
 }
 
 // ─── Inbound (called from the Resend webhook in convex/http.ts) ───────────────

@@ -1,7 +1,8 @@
 import { v, ConvexError } from "convex/values";
-import { query, mutation, internalMutation, internalQuery } from "./_generated/server";
+import { query, mutation, action, internalMutation, internalQuery } from "./_generated/server";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 import { requireTenantAuth, requireSuperAdmin } from "./utils/tenancy";
+import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 
 // ─── Plan catalogue ──────────────────────────────────────────────────────────
@@ -19,6 +20,11 @@ export const PLANS = {
       "Up to 15 vehicles",
       "2 users",
       "Core CRM: customers, leads, sales, tasks",
+    ],
+    featuresAr: [
+      "حتى 15 مركبة",
+      "مستخدمان",
+      "إدارة العملاء والعملاء المحتملين والمبيعات والمهام",
     ],
     gates: {
       socialInbox: false,
@@ -42,6 +48,11 @@ export const PLANS = {
       "Up to 50 vehicles",
       "5 users",
       "Full CRM + financing + reports + expenses",
+    ],
+    featuresAr: [
+      "حتى 50 مركبة",
+      "5 مستخدمين",
+      "إدارة علاقات عملاء كاملة + تمويل + تقارير + مصروفات",
     ],
     gates: {
       socialInbox: false,
@@ -70,6 +81,15 @@ export const PLANS = {
       "Accounting module & advanced reports",
       "Custom roles & permissions",
     ],
+    featuresAr: [
+      "حتى 150 مركبة",
+      "15 مستخدمًا",
+      "صندوق التواصل الاجتماعي (إنستغرام + فيسبوك)",
+      "إشعارات واتساب",
+      "المراسلة الداخلية",
+      "وحدة المحاسبة والتقارير المتقدمة",
+      "أدوار وصلاحيات مخصصة",
+    ],
     gates: {
       socialInbox: true,
       whatsapp: true,
@@ -93,6 +113,12 @@ export const PLANS = {
       "Website builder (all premium themes)",
       "Multi-branch / multi-org",
       "Priority support",
+    ],
+    featuresAr: [
+      "مركبات ومستخدمون غير محدودين",
+      "منشئ المواقع (جميع القوالب المميزة)",
+      "متعدد الفروع / متعدد المؤسسات",
+      "دعم ذو أولوية",
     ],
     gates: {
       socialInbox: true,
@@ -317,6 +343,65 @@ export const getUsageStats = query({
 });
 
 // ─── Admin mutations (super admin only) ──────────────────────────────────────
+
+export const getShowPricing = query({
+  args: {},
+  handler: async (ctx) => {
+    const row = await ctx.db
+      .query("siteConfig")
+      .withIndex("by_key", (q) => q.eq("key", "showPlanPricing"))
+      .unique();
+    return (row?.value as boolean | null | undefined) ?? true;
+  },
+});
+
+export const requestUpgrade = action({
+  args: {
+    orgId: v.id("organizations"),
+    targetPlan: v.string(),
+    phone: v.string(),
+    message: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new ConvexError("Unauthenticated");
+
+    const [user, org] = await Promise.all([
+      ctx.runQuery(internal.subscriptions._getCallerUser, { clerkId: identity.subject }),
+      ctx.runQuery(internal.subscriptions._getOrg, { orgId: args.orgId }),
+    ]);
+
+    if (!org) throw new ConvexError("Organization not found");
+
+    const currentSub = await ctx.runQuery(internal.subscriptions.getByOrg, { orgId: args.orgId });
+
+    await ctx.runAction(internal.email.sendUpgradeRequestEmail, {
+      orgName: org.name,
+      orgId: args.orgId,
+      currentPlan: currentSub?.plan ?? "free",
+      targetPlan: args.targetPlan,
+      userName: user?.name ?? identity.name ?? "Unknown",
+      userEmail: user?.email ?? identity.email ?? "unknown@unknown.com",
+      phone: args.phone,
+      message: args.message,
+    });
+  },
+});
+
+export const _getCallerUser = internalQuery({
+  args: { clerkId: v.string() },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("users")
+      .withIndex("by_clerkId", (q) => q.eq("clerkId", args.clerkId))
+      .unique();
+  },
+});
+
+export const _getOrg = internalQuery({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => ctx.db.get(args.orgId),
+});
 
 export const adminUpdateSubscription = mutation({
   args: {

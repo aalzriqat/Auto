@@ -595,6 +595,17 @@ export const settingsEn = {
   BillingManagePlan: "Manage plan & billing",
   AutoFlowPro: "AutoFlow Pro",
   DealershipPlanActive: "Dealership plan active",
+  UpgradeRequestTitle: "Request Plan Upgrade",
+  UpgradeRequestDesc: "We'll reach out within 2 hours to complete your upgrade.",
+  UpgradeRequestPlan: "Requested Plan",
+  UpgradeRequestPhone: "Phone / WhatsApp",
+  UpgradeRequestPhonePlaceholder: "e.g. +962 7 9000 0000",
+  UpgradeRequestMessage: "Additional notes (optional)",
+  UpgradeRequestMessagePlaceholder: "Any specific requirements or questions?",
+  SendUpgradeRequest: "Send Request",
+  Sending: "Sending…",
+  UpgradeRequestSent: "Request sent! We'll be in touch within 2 hours.",
+  UpgradeRequestFailed: "Failed to send request. Please try again.",
 };
 
 export const settingsAr = {
@@ -1195,4 +1206,15 @@ export const settingsAr = {
   BillingManagePlan: "إدارة الخطة والفوترة",
   AutoFlowPro: "أوتو فلو برو",
   DealershipPlanActive: "خطة المعرض مفعّلة",
+  UpgradeRequestTitle: "طلب ترقية الخطة",
+  UpgradeRequestDesc: "سنتواصل معك خلال ساعتين لإتمام عملية الترقية.",
+  UpgradeRequestPlan: "الخطة المطلوبة",
+  UpgradeRequestPhone: "رقم الهاتف / واتساب",
+  UpgradeRequestPhonePlaceholder: "مثال: 9620796000000+",
+  UpgradeRequestMessage: "ملاحظات إضافية (اختياري)",
+  UpgradeRequestMessagePlaceholder: "أي متطلبات أو أسئلة خاصة؟",
+  SendUpgradeRequest: "إرسال الطلب",
+  Sending: "جارٍ الإرسال…",
+  UpgradeRequestSent: "تم إرسال الطلب! سنتواصل معك خلال ساعتين.",
+  UpgradeRequestFailed: "فشل إرسال الطلب. يرجى المحاولة مجدداً.",
 };

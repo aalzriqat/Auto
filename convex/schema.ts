@@ -1216,7 +1216,9 @@ export default defineSchema({
       v.literal("facebook"),
       v.literal("notification-email"),
       v.literal("notification-whatsapp"),
-      v.literal("subscription-reminder")
+      v.literal("subscription-reminder"),
+      v.literal("support-inbox-notification"),
+      v.literal("upgrade-request")
     ),
     status: v.union(v.literal("success"), v.literal("error")),
     summary: v.string(),
@@ -1423,4 +1425,13 @@ export default defineSchema({
   })
     .index("by_actorUserId", ["actorUserId"])
     .index("by_orgId", ["orgId"]),
+
+  // ─── Global site configuration (super-admin controlled) ───────────────────
+  // Key-value store for platform-level settings that apply across all orgs.
+  // Examples: showPlanPricing (bool), supportNotifyEmails (string[]).
+  siteConfig: defineTable({
+    key: v.string(),
+    value: v.any(),
+    updatedAt: v.number(),
+  }).index("by_key", ["key"]),
 });

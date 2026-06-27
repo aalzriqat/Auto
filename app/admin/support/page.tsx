@@ -141,12 +141,12 @@ function ThreadView({ threadId }: { threadId: Id<"supportThreads"> }) {
             className={cn(
               "max-w-[75%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap",
               m.direction === "OUTBOUND"
-                ? "self-end bg-amber-500/15 text-amber-100"
-                : "self-start bg-slate-800 text-slate-100"
+                ? "self-end bg-amber-500 text-white"
+                : "self-start bg-slate-100 text-slate-900"
             )}
           >
             <p>{m.bodyText || "(no text content)"}</p>
-            <p className="text-[10px] text-slate-500 mt-1">{format(m.createdAt, "PP p")}</p>
+            <p className={cn("text-[10px] mt-1", m.direction === "OUTBOUND" ? "text-amber-100" : "text-slate-400")}>{format(m.createdAt, "PP p")}</p>
           </div>
         ))}
       </div>

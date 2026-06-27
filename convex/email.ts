@@ -519,3 +519,130 @@ export const sendNotificationEmail = internalAction({
     return result;
   },
 });
+
+export const sendUpgradeRequestEmail = internalAction({
+  args: {
+    orgName: v.string(),
+    orgId: v.string(),
+    currentPlan: v.string(),
+    targetPlan: v.string(),
+    userName: v.string(),
+    userEmail: v.string(),
+    phone: v.string(),
+    message: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const env = getValidatedEnv();
+    const resendApiKey = env.RESEND_API_KEY;
+
+    const safeOrgName = escapeHtml(args.orgName);
+    const safeUserName = escapeHtml(args.userName);
+    const safePhone = escapeHtml(args.phone);
+    const safeMessage = args.message ? escapeHtml(args.message) : "";
+    const safeTarget = escapeHtml(args.targetPlan);
+    const safeCurrent = escapeHtml(args.currentPlan);
+
+    const subject = `Upgrade Request: ${safeOrgName} → ${safeTarget}`;
+    const bodyHtml = `
+      <h1 style="margin:0 0 16px; font-size:20px; font-weight:700; color:#111827;">New Plan Upgrade Request</h1>
+      <table style="width:100%; border-collapse:collapse; margin-bottom:20px; font-size:14px;">
+        <tr><td style="padding:8px 12px; background:#f9fafb; font-weight:600; width:140px; border:1px solid #e5e7eb;">Organization</td><td style="padding:8px 12px; border:1px solid #e5e7eb;">${safeOrgName}</td></tr>
+        <tr><td style="padding:8px 12px; background:#f9fafb; font-weight:600; border:1px solid #e5e7eb;">Org ID</td><td style="padding:8px 12px; border:1px solid #e5e7eb; font-family:monospace; font-size:12px;">${args.orgId}</td></tr>
+        <tr><td style="padding:8px 12px; background:#f9fafb; font-weight:600; border:1px solid #e5e7eb;">Current Plan</td><td style="padding:8px 12px; border:1px solid #e5e7eb;">${safeCurrent}</td></tr>
+        <tr><td style="padding:8px 12px; background:#f9fafb; font-weight:600; border:1px solid #e5e7eb;">Requested Plan</td><td style="padding:8px 12px; border:1px solid #e5e7eb; font-weight:700; color:#d97706;">${safeTarget}</td></tr>
+        <tr><td style="padding:8px 12px; background:#f9fafb; font-weight:600; border:1px solid #e5e7eb;">Contact Name</td><td style="padding:8px 12px; border:1px solid #e5e7eb;">${safeUserName}</td></tr>
+        <tr><td style="padding:8px 12px; background:#f9fafb; font-weight:600; border:1px solid #e5e7eb;">Email</td><td style="padding:8px 12px; border:1px solid #e5e7eb;"><a href="mailto:${args.userEmail}">${args.userEmail}</a></td></tr>
+        <tr><td style="padding:8px 12px; background:#f9fafb; font-weight:600; border:1px solid #e5e7eb;">Phone / WhatsApp</td><td style="padding:8px 12px; border:1px solid #e5e7eb; font-weight:700;">${safePhone}</td></tr>
+        ${safeMessage ? `<tr><td style="padding:8px 12px; background:#f9fafb; font-weight:600; border:1px solid #e5e7eb;">Message</td><td style="padding:8px 12px; border:1px solid #e5e7eb;">${safeMessage}</td></tr>` : ""}
+      </table>
+      <p style="margin:0; font-size:13px; color:#6b7280;">Reply directly to this email or call the number above to follow up.</p>
+    `;
+
+    const emailHtml = wrapEmailHtml(subject, bodyHtml);
+
+    let result: { success: boolean; error?: string };
+    if (!resendApiKey) {
+      result = { success: true };
+    } else {
+      const resend = new Resend(resendApiKey);
+      try {
+        await resend.emails.send({
+          from: "AutoFlow System <notifications@autoflowdealer.com>",
+          to: "subscriptions@autoflowdealer.com",
+          replyTo: args.userEmail,
+          subject,
+          html: emailHtml,
+        });
+        result = { success: true };
+      } catch (error) {
+        result = { success: false, error: String(error) };
+      }
+    }
+
+    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+      source: "upgrade-request",
+      status: result.success ? "success" : "error",
+      summary: `${args.orgName} → ${args.targetPlan} (${args.userEmail})`,
+      error: result.error,
+    });
+
+    return result;
+  },
+});
+
+export const sendSupportInboxNotification = internalAction({
+  args: {
+    toEmails: v.array(v.string()),
+    inbox: v.string(),
+    fromEmail: v.string(),
+    fromName: v.optional(v.string()),
+    subject: v.string(),
+    bodyPreview: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const env = getValidatedEnv();
+    const resendApiKey = env.RESEND_API_KEY;
+    if (!resendApiKey || args.toEmails.length === 0) return { success: true };
+
+    const safeName = escapeHtml(args.fromName ?? args.fromEmail);
+    const safeSubject = escapeHtml(args.subject);
+    const safeInbox = escapeHtml(args.inbox);
+    const safePreview = args.bodyPreview ? escapeHtml(args.bodyPreview) : "";
+
+    const bodyHtml = `
+      <h1 style="margin:0 0 16px; font-size:20px; font-weight:700; color:#111827;">New Email in ${safeInbox}@ Inbox</h1>
+      <table style="width:100%; border-collapse:collapse; margin-bottom:20px; font-size:14px;">
+        <tr><td style="padding:8px 12px; background:#f9fafb; font-weight:600; width:100px; border:1px solid #e5e7eb;">From</td><td style="padding:8px 12px; border:1px solid #e5e7eb;">${safeName} &lt;${args.fromEmail}&gt;</td></tr>
+        <tr><td style="padding:8px 12px; background:#f9fafb; font-weight:600; border:1px solid #e5e7eb;">Inbox</td><td style="padding:8px 12px; border:1px solid #e5e7eb;">${safeInbox}@autoflowdealer.com</td></tr>
+        <tr><td style="padding:8px 12px; background:#f9fafb; font-weight:600; border:1px solid #e5e7eb;">Subject</td><td style="padding:8px 12px; border:1px solid #e5e7eb;">${safeSubject}</td></tr>
+        ${safePreview ? `<tr><td style="padding:8px 12px; background:#f9fafb; font-weight:600; border:1px solid #e5e7eb;">Preview</td><td style="padding:8px 12px; border:1px solid #e5e7eb; color:#6b7280;">${safePreview}</td></tr>` : ""}
+      </table>
+      ${emailButton("https://autoflowdealer.com/admin/support", "Open Support Inbox")}
+    `;
+
+    const emailHtml = wrapEmailHtml(`New email from ${args.fromEmail}`, bodyHtml);
+
+    const resend = new Resend(resendApiKey);
+    let result: { success: boolean; error?: string };
+    try {
+      await resend.emails.send({
+        from: "AutoFlow Inbox <notifications@autoflowdealer.com>",
+        to: args.toEmails,
+        subject: `[${safeInbox}] New email from ${safeName}`,
+        html: emailHtml,
+      });
+      result = { success: true };
+    } catch (error) {
+      result = { success: false, error: String(error) };
+    }
+
+    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+      source: "support-inbox-notification",
+      status: result.success ? "success" : "error",
+      summary: `notify ${args.toEmails.join(", ")} for ${args.inbox} inbox`,
+      error: result.error,
+    });
+
+    return result;
+  },
+});

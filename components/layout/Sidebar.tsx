@@ -12,7 +12,7 @@ import { mainNavigation as navigation, settingsNavigation } from "@/lib/navigati
 import { Badge } from "@/components/ui/badge";
 
 export function Sidebar() {
-  const { t } = useLanguage();
+  const { t, isRtl } = useLanguage();
   const { activeOrgId } = useOrg();
   const pathname = usePathname();
 
@@ -107,7 +107,7 @@ export function Sidebar() {
             <div className="flex items-center justify-between gap-2">
               <p className="text-xs font-medium text-slate-500">{t("AutoFlowPro" as any)}</p>
               <Badge variant="secondary" className="text-[10px] px-2 py-0 h-4 font-semibold">
-                {subscription?.planDetails?.name ?? "Free"}
+                {(isRtl ? subscription?.planDetails?.nameAr : subscription?.planDetails?.name) ?? (isRtl ? "مجاني" : "Free")}
               </Badge>
             </div>
             <p className="text-[10px] text-slate-400 mt-1">{t("BillingManagePlan" as any)}</p>
