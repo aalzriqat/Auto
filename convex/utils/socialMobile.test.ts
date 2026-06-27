@@ -10,6 +10,12 @@ describe("extractSharedMobileNumber", () => {
     ["direct 078-123-4567", "0781234567"],
     ["office 06 123 4567", "061234567"],
     ["arabic digits ٠٧٩١٢٣٤٥٦٧", "0791234567"],
+    ["arabic digits with spaces ٠٧٩ ١٢٣ ٤٥٦٧", "0791234567"],
+    ["arabic digits with punctuation ٠٧٩/١٢٣،٤٥٦٧", "0791234567"],
+    ["arabic international +٩٦٢ ٧٩ ١٢٣ ٤٥٦٧", "+962791234567"],
+    ["arabic international ٠٠٩٦٢ ٧٧ ١٢٣ ٤٥٦٧", "+962771234567"],
+    ["persian digits ۰۷۸ ۱۲۳ ۴۵۶۷", "0781234567"],
+    ["bidi controls ‏٠٧٩‏١٢٣‏٤٥٦٧", "0791234567"],
   ])("extracts %s", (text, expected) => {
     expect(extractSharedMobileNumber(text)?.normalized).toBe(expected);
   });

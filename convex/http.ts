@@ -35,6 +35,34 @@ function hasMatchingSecret(providedSecret: string | null, expectedSecret: string
 
 type FacebookSourceSurface = "post" | "reel" | "story" | "ad" | "unknown";
 
+const META_TEXT_KEYS = [
+  "text",
+  "title",
+  "description",
+  "name",
+  "caption",
+  "url",
+  "payload",
+  "ref",
+  "source",
+  "type",
+  "phone",
+  "phone_number",
+  "mobile",
+  "number",
+  "value",
+  "label",
+] as const;
+
+const META_NESTED_TEXT_KEYS = [
+  "attachments",
+  "data",
+  "quick_reply",
+  "reply_to",
+  "referral",
+  "postback",
+] as const;
+
 function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
@@ -46,14 +74,16 @@ function collectTextParts(value: unknown, parts: string[] = []): string[] {
   }
   if (!value || typeof value !== "object") return parts;
   const record = value as Record<string, unknown>;
-  for (const key of ["text", "title", "description", "name", "caption", "url", "payload", "ref", "source", "type"] as const) {
+  for (const key of META_TEXT_KEYS) {
     const text = optionalString(record[key]);
     if (text) parts.push(text);
   }
-  for (const key of ["attachments", "data"] as const) {
+  for (const key of META_NESTED_TEXT_KEYS) {
     const nested = record[key];
     if (Array.isArray(nested)) {
       for (const item of nested) collectTextParts(item, parts);
+    } else if (nested && typeof nested === "object") {
+      collectTextParts(nested, parts);
     }
   }
   const payload = record.payload;
@@ -82,15 +112,12 @@ function facebookMediaIdFromFeedValue(value: unknown): string | undefined {
     ?? optionalString(record.object_id);
 }
 
-function facebookMessageText(messagingEvent: unknown): string | undefined {
+function metaMessageText(messagingEvent: unknown): string | undefined {
   if (!messagingEvent || typeof messagingEvent !== "object") return undefined;
   const event = messagingEvent as Record<string, unknown>;
   const message = event.message as Record<string, unknown> | undefined;
   const parts: string[] = [];
-  const messageText = optionalString(message?.text);
-  if (messageText) parts.push(messageText);
-  collectTextParts(message?.attachments, parts);
-  collectTextParts(message?.referral, parts);
+  collectTextParts(message, parts);
   collectTextParts(event.referral, parts);
   const combined = parts.join(" ").trim();
   return combined || undefined;
@@ -819,12 +846,14 @@ http.route({
       }
 
       for (const messagingEvent of messagingEvents) {
-        if (!messagingEvent?.message?.text || messagingEvent.message.is_echo) {
+        if (!messagingEvent?.message || messagingEvent.message.is_echo) {
           // Echoes, reactions, read receipts, etc. — skip silently.
           continue;
         }
 
         const senderId = String(messagingEvent.sender?.id ?? "");
+        if (!senderId) continue;
+        const messageText = metaMessageText(messagingEvent);
         const summary = `DM from ${senderId}`;
         try {
           const result = await ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
@@ -832,7 +861,7 @@ http.route({
             kind: "dm",
             externalId: String(messagingEvent.message.mid ?? `${senderId}-${messagingEvent.timestamp}`),
             senderInstagramId: senderId,
-            text: messagingEvent.message.text,
+            text: messageText,
           });
           if (result?.shouldAutoReply && result.replyText) {
             await ctx.runAction(internal.instagramEngagement.sendDirectMessage, {
@@ -850,11 +879,11 @@ http.route({
           }
           // Try to match a vehicle from the DM text (customer often mentions
           // the car they saw in a post, e.g. "I want the E-Bora 2020").
-          if (result && !result.vehicleId && messagingEvent.message.text) {
+          if (result && !result.vehicleId && messageText) {
             await ctx.runAction(internal.instagramEngagement.enrichEventVehicleFromPost, {
               orgId,
               externalId: String(messagingEvent.message.mid ?? `${senderId}-${messagingEvent.timestamp}`),
-              text: messagingEvent.message.text,
+              text: messageText,
             });
           }
           await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
@@ -1187,7 +1216,7 @@ http.route({
 
         const senderId = String(messagingEvent.sender?.id ?? "");
         if (!senderId) continue;
-        const messageText = facebookMessageText(messagingEvent);
+        const messageText = metaMessageText(messagingEvent);
         const mediaId = facebookMessageMediaId(messagingEvent);
         const sourceSurface = facebookSurfaceFromPayload(messagingEvent);
         const summary = `DM from ${senderId}`;

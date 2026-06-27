@@ -8,14 +8,19 @@ export type SharedMobileNumber = {
 
 const JORDAN_COUNTRY_CODE = "962";
 const INTERNATIONAL_PREFIX = `00${JORDAN_COUNTRY_CODE}`;
-const PHONE_CANDIDATE_RE = /(?:\+|00)?\d[\d\s().-]{6,}\d/g;
+const PHONE_CANDIDATE_RE = /(?:\+\s*|00\s*)?\d(?:[\d\s().\-\/\\_,:;،٬٫]*\d){6,}/g;
+const BIDI_CONTROL_RE = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
 
-function toAsciiDigits(value: string): string {
-  return value.replace(/[\u0660-\u0669\u06f0-\u06f9]/g, (digit) => {
-    const code = digit.charCodeAt(0);
-    const offset = code >= 0x06f0 ? 0x06f0 : 0x0660;
-    return String(code - offset);
-  });
+function normalizePhoneText(value: string): string {
+  return value
+    .normalize("NFKC")
+    .replace(BIDI_CONTROL_RE, "")
+    .replace(/[\ufe62\uff0b]/g, "+")
+    .replace(/[\u0660-\u0669\u06f0-\u06f9]/g, (digit) => {
+      const code = digit.charCodeAt(0);
+      const offset = code >= 0x06f0 ? 0x06f0 : 0x0660;
+      return String(code - offset);
+    });
 }
 
 function isAllowedLocalNumber(localNumber: string): boolean {
@@ -57,7 +62,7 @@ function variantsFromLocalNumber(localNumber: string): string[] {
 export function extractSharedMobileNumber(text: string | undefined): SharedMobileNumber | null {
   if (!text) return null;
 
-  const candidates = toAsciiDigits(text).match(PHONE_CANDIDATE_RE) ?? [];
+  const candidates = normalizePhoneText(text).match(PHONE_CANDIDATE_RE) ?? [];
   for (const candidate of candidates) {
     const localNumber = localNumberFromCandidate(candidate);
     if (!localNumber) continue;
