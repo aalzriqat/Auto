@@ -9,6 +9,7 @@ import { postCommentReply, postDirectMessage, fetchFbConversationMessages, FACEB
 import { matchIntent, detectLocale } from "./utils/smartReplyIntent";
 import { buildSmartReplyText } from "./utils/smartReplyBuilder";
 import { matchVehicleFromText, suggestVehiclesFromText } from "./utils/vehicleTextMatch";
+import { attachSharedMobileNumberToCustomer, extractSharedMobileNumber } from "./utils/socialMobile";
 
 const AUTO_REPLY_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 1 reply per sender per 24h
 
@@ -64,6 +65,7 @@ export const handleIncomingFacebookEvent = internalMutation({
     vehicleId?: Id<"vehicles">;
   } | null> => {
     const { orgId, kind, externalId, senderFacebookId, senderName, text, mediaId, sourceSurface } = args;
+    const sharedMobileNumber = kind === "dm" ? extractSharedMobileNumber(text) : null;
 
     const duplicate = await ctx.db
       .query("facebookEvents")
@@ -92,6 +94,10 @@ export const handleIncomingFacebookEvent = internalMutation({
     }
     if (!customer) return null;
 
+    if (kind === "dm") {
+      await attachSharedMobileNumberToCustomer(ctx, orgId, customer, sharedMobileNumber);
+    }
+
     const settings = await ctx.db
       .query("orgSettings")
       .withIndex("by_org", (q) => q.eq("orgId", orgId))
@@ -114,7 +120,8 @@ export const handleIncomingFacebookEvent = internalMutation({
     const leadCreationEnabled =
       kind === "comment"
         ? settings?.facebookLeadFromCommentsEnabled !== false
-        : settings?.facebookLeadFromDmsEnabled !== false;
+        : settings?.facebookLeadFromDmsEnabled !== false
+          && (!(settings?.facebookLeadFromDmsRequiresMobile ?? false) || Boolean(sharedMobileNumber));
 
     const surfaceLabel =
       sourceSurface === "reel" ? " Reel"

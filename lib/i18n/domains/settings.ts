@@ -401,6 +401,8 @@ export const settingsEn = {
   LeadFromCommentsDescription: "Off still captures and auto-replies to comments in the Social Inbox — it just won't create a CRM lead.",
   LeadFromDms: "Create leads from DMs",
   LeadFromDmsDescription: "Off still captures and auto-replies to DMs in the Social Inbox — it just won't create a CRM lead.",
+  LeadFromDmsRequiresMobile: "Require mobile number for DM leads",
+  LeadFromDmsRequiresMobileDescription: "When enabled, a DM creates a lead only if the message includes +962, 00962, 079, 077, 078, or 06 phone formats.",
 
   // Website setup
   Website: "Website",
@@ -1011,6 +1013,8 @@ export const settingsAr = {
   LeadFromCommentsDescription: "عند الإيقاف، يستمر النظام بتسجيل التعليقات والرد عليها تلقائيًا في صندوق التواصل — فقط لن يتم إنشاء عميل محتمل في نظام إدارة العملاء.",
   LeadFromDms: "إنشاء عملاء محتملين من الرسائل المباشرة",
   LeadFromDmsDescription: "عند الإيقاف، يستمر النظام بتسجيل الرسائل والرد عليها تلقائيًا في صندوق التواصل — فقط لن يتم إنشاء عميل محتمل في نظام إدارة العملاء.",
+  LeadFromDmsRequiresMobile: "اشتراط رقم هاتف للرسائل المباشرة",
+  LeadFromDmsRequiresMobileDescription: "عند التفعيل، تنشئ الرسالة المباشرة عميلاً محتملاً فقط إذا تضمنت صيغة هاتف مثل +962 أو 00962 أو 079 أو 077 أو 078 أو 06.",
 
   // Website setup
   Website: "الموقع الإلكتروني",

@@ -149,6 +149,7 @@ describe("facebookIntegrations.setFacebookLeadCreationConfig", () => {
         orgId,
         leadFromCommentsEnabled: false,
         leadFromDmsEnabled: true,
+        leadFromDmsRequiresMobile: true,
       })
     ).rejects.toThrow(/connect facebook/i);
 
@@ -164,11 +165,13 @@ describe("facebookIntegrations.setFacebookLeadCreationConfig", () => {
       orgId,
       leadFromCommentsEnabled: false,
       leadFromDmsEnabled: true,
+      leadFromDmsRequiresMobile: true,
     });
 
     const status = await asOwner.query(api.facebookIntegrations.getConnectionStatus, { orgId });
     expect(status.facebookLeadFromCommentsEnabled).toBe(false);
     expect(status.facebookLeadFromDmsEnabled).toBe(true);
+    expect(status.facebookLeadFromDmsRequiresMobile).toBe(true);
   });
 });
 

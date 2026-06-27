@@ -76,6 +76,7 @@ export function IntegrationsClient() {
   const [igSavingAutoReply, setIgSavingAutoReply] = useState(false);
   const [igLeadFromComments, setIgLeadFromComments] = useState(true);
   const [igLeadFromDms, setIgLeadFromDms] = useState(true);
+  const [igLeadFromDmsRequiresMobile, setIgLeadFromDmsRequiresMobile] = useState(false);
 
   // ── Facebook state ──
   const [fbAutoReplyForDms, setFbAutoReplyForDms] = useState(false);
@@ -85,6 +86,7 @@ export function IntegrationsClient() {
   const [fbSavingAutoReply, setFbSavingAutoReply] = useState(false);
   const [fbLeadFromComments, setFbLeadFromComments] = useState(true);
   const [fbLeadFromDms, setFbLeadFromDms] = useState(true);
+  const [fbLeadFromDmsRequiresMobile, setFbLeadFromDmsRequiresMobile] = useState(false);
 
   // ── Smart Reply state ──
   const [smartReplyLoaded, setSmartReplyLoaded] = useState(false);
@@ -114,6 +116,7 @@ export function IntegrationsClient() {
     setIgAutoReplyMessages(igStatus.instagramAutoReplyMessages.length > 0 ? igStatus.instagramAutoReplyMessages : [""]);
     setIgLeadFromComments(igStatus.instagramLeadFromCommentsEnabled);
     setIgLeadFromDms(igStatus.instagramLeadFromDmsEnabled);
+    setIgLeadFromDmsRequiresMobile(igStatus.instagramLeadFromDmsRequiresMobile);
     setIgAutoReplyLoaded(true);
   }, [igStatus, igAutoReplyLoaded]);
 
@@ -124,6 +127,7 @@ export function IntegrationsClient() {
     setFbAutoReplyMessages(fbStatus.facebookAutoReplyMessages.length > 0 ? fbStatus.facebookAutoReplyMessages : [""]);
     setFbLeadFromComments(fbStatus.facebookLeadFromCommentsEnabled);
     setFbLeadFromDms(fbStatus.facebookLeadFromDmsEnabled);
+    setFbLeadFromDmsRequiresMobile(fbStatus.facebookLeadFromDmsRequiresMobile);
     setFbAutoReplyLoaded(true);
   }, [fbStatus, fbAutoReplyLoaded]);
 
@@ -270,27 +274,53 @@ export function IntegrationsClient() {
     }
   };
 
-  const handleToggleIgLeadCreation = async (overrides: { leadFromComments?: boolean; leadFromDms?: boolean }) => {
+  const handleToggleIgLeadCreation = async (overrides: {
+    leadFromComments?: boolean;
+    leadFromDms?: boolean;
+    leadFromDmsRequiresMobile?: boolean;
+  }) => {
     if (!activeOrgId) return;
     const leadFromCommentsEnabled = overrides.leadFromComments ?? igLeadFromComments;
     const leadFromDmsEnabled = overrides.leadFromDms ?? igLeadFromDms;
+    const leadFromDmsRequiresMobile = overrides.leadFromDmsRequiresMobile ?? igLeadFromDmsRequiresMobile;
     if (overrides.leadFromComments !== undefined) setIgLeadFromComments(overrides.leadFromComments);
     if (overrides.leadFromDms !== undefined) setIgLeadFromDms(overrides.leadFromDms);
+    if (overrides.leadFromDmsRequiresMobile !== undefined) {
+      setIgLeadFromDmsRequiresMobile(overrides.leadFromDmsRequiresMobile);
+    }
     try {
-      await setInstagramLeadCreationConfig({ orgId: activeOrgId, leadFromCommentsEnabled, leadFromDmsEnabled });
+      await setInstagramLeadCreationConfig({
+        orgId: activeOrgId,
+        leadFromCommentsEnabled,
+        leadFromDmsEnabled,
+        leadFromDmsRequiresMobile,
+      });
     } catch (error: any) {
       toast.error(error);
     }
   };
 
-  const handleToggleFbLeadCreation = async (overrides: { leadFromComments?: boolean; leadFromDms?: boolean }) => {
+  const handleToggleFbLeadCreation = async (overrides: {
+    leadFromComments?: boolean;
+    leadFromDms?: boolean;
+    leadFromDmsRequiresMobile?: boolean;
+  }) => {
     if (!activeOrgId) return;
     const leadFromCommentsEnabled = overrides.leadFromComments ?? fbLeadFromComments;
     const leadFromDmsEnabled = overrides.leadFromDms ?? fbLeadFromDms;
+    const leadFromDmsRequiresMobile = overrides.leadFromDmsRequiresMobile ?? fbLeadFromDmsRequiresMobile;
     if (overrides.leadFromComments !== undefined) setFbLeadFromComments(overrides.leadFromComments);
     if (overrides.leadFromDms !== undefined) setFbLeadFromDms(overrides.leadFromDms);
+    if (overrides.leadFromDmsRequiresMobile !== undefined) {
+      setFbLeadFromDmsRequiresMobile(overrides.leadFromDmsRequiresMobile);
+    }
     try {
-      await setFacebookLeadCreationConfig({ orgId: activeOrgId, leadFromCommentsEnabled, leadFromDmsEnabled });
+      await setFacebookLeadCreationConfig({
+        orgId: activeOrgId,
+        leadFromCommentsEnabled,
+        leadFromDmsEnabled,
+        leadFromDmsRequiresMobile,
+      });
     } catch (error: any) {
       toast.error(error);
     }
@@ -451,6 +481,17 @@ export function IntegrationsClient() {
                     onCheckedChange={(v) => handleToggleIgLeadCreation({ leadFromDms: v })}
                   />
                 </div>
+                <div className="flex items-center justify-between gap-4 ps-4 border-s border-border/70">
+                  <div>
+                    <p className="text-sm font-medium">{t("LeadFromDmsRequiresMobile" as any)}</p>
+                    <p className="text-xs text-muted-foreground">{t("LeadFromDmsRequiresMobileDescription" as any)}</p>
+                  </div>
+                  <Switch
+                    checked={igLeadFromDmsRequiresMobile}
+                    disabled={!igLeadFromDms}
+                    onCheckedChange={(v) => handleToggleIgLeadCreation({ leadFromDmsRequiresMobile: v })}
+                  />
+                </div>
               </div>
             )}
 
@@ -581,6 +622,17 @@ export function IntegrationsClient() {
                   <Switch
                     checked={fbLeadFromDms}
                     onCheckedChange={(v) => handleToggleFbLeadCreation({ leadFromDms: v })}
+                  />
+                </div>
+                <div className="flex items-center justify-between gap-4 ps-4 border-s border-border/70">
+                  <div>
+                    <p className="text-sm font-medium">{t("LeadFromDmsRequiresMobile" as any)}</p>
+                    <p className="text-xs text-muted-foreground">{t("LeadFromDmsRequiresMobileDescription" as any)}</p>
+                  </div>
+                  <Switch
+                    checked={fbLeadFromDmsRequiresMobile}
+                    disabled={!fbLeadFromDms}
+                    onCheckedChange={(v) => handleToggleFbLeadCreation({ leadFromDmsRequiresMobile: v })}
                   />
                 </div>
               </div>

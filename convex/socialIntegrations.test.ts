@@ -168,6 +168,7 @@ describe("socialIntegrations.setInstagramLeadCreationConfig", () => {
         orgId,
         leadFromCommentsEnabled: false,
         leadFromDmsEnabled: true,
+        leadFromDmsRequiresMobile: true,
       })
     ).rejects.toThrow(/connect instagram/i);
 
@@ -183,11 +184,13 @@ describe("socialIntegrations.setInstagramLeadCreationConfig", () => {
       orgId,
       leadFromCommentsEnabled: false,
       leadFromDmsEnabled: true,
+      leadFromDmsRequiresMobile: true,
     });
 
     const status = await asOwner.query(api.socialIntegrations.getConnectionStatus, { orgId });
     expect(status.instagramLeadFromCommentsEnabled).toBe(false);
     expect(status.instagramLeadFromDmsEnabled).toBe(true);
+    expect(status.instagramLeadFromDmsRequiresMobile).toBe(true);
   });
 });
 

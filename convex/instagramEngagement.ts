@@ -10,6 +10,7 @@ import { postCommentReply, postDirectMessage, INSTAGRAM_GRAPH_VERSION } from "./
 import { matchIntent, detectLocale } from "./utils/smartReplyIntent";
 import { buildSmartReplyText } from "./utils/smartReplyBuilder";
 import { matchVehicleFromText, suggestVehiclesFromText } from "./utils/vehicleTextMatch";
+import { attachSharedMobileNumberToCustomer, extractSharedMobileNumber } from "./utils/socialMobile";
 
 const AUTO_REPLY_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 1 reply per sender per 24h
 // Placeholder name assigned when a customer is created without a username —
@@ -79,6 +80,7 @@ export const handleIncomingInstagramEvent = internalMutation({
     vehicleId?: Id<"vehicles">;
   } | null> => {
     const { orgId, kind, externalId, senderInstagramId, senderUsername, text, mediaId } = args;
+    const sharedMobileNumber = kind === "dm" ? extractSharedMobileNumber(text) : null;
 
     const duplicate = await ctx.db
       .query("instagramEvents")
@@ -106,6 +108,10 @@ export const handleIncomingInstagramEvent = internalMutation({
       customer = await ctx.db.get(customerId);
     }
     if (!customer) return null;
+
+    if (kind === "dm") {
+      await attachSharedMobileNumberToCustomer(ctx, orgId, customer, sharedMobileNumber);
+    }
 
     // DM payloads never carry a username (only comments do) — if we still
     // only have the placeholder name, the caller (an action) should fetch
@@ -136,7 +142,8 @@ export const handleIncomingInstagramEvent = internalMutation({
     const leadCreationEnabled =
       kind === "comment"
         ? settings?.instagramLeadFromCommentsEnabled !== false
-        : settings?.instagramLeadFromDmsEnabled !== false;
+        : settings?.instagramLeadFromDmsEnabled !== false
+          && (!(settings?.instagramLeadFromDmsRequiresMobile ?? false) || Boolean(sharedMobileNumber));
 
     const label = kind === "dm" ? "Instagram DM" : "Instagram Comment";
     let leadId: Id<"leads"> | undefined;

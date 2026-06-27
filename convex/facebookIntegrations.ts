@@ -100,6 +100,7 @@ export const getConnectionStatus = query({
       facebookAutoReplyMessages: settings?.facebookAutoReplyMessages ?? [],
       facebookLeadFromCommentsEnabled: settings?.facebookLeadFromCommentsEnabled !== false,
       facebookLeadFromDmsEnabled: settings?.facebookLeadFromDmsEnabled !== false,
+      facebookLeadFromDmsRequiresMobile: settings?.facebookLeadFromDmsRequiresMobile ?? false,
       facebookSmartReplyEnabled: settings?.facebookSmartReplyEnabled ?? false,
       facebookSmartReplyForDmsEnabled: settings?.facebookSmartReplyForDmsEnabled ?? settings?.facebookSmartReplyEnabled ?? false,
       facebookSmartReplyForCommentsEnabled: settings?.facebookSmartReplyForCommentsEnabled ?? settings?.facebookSmartReplyEnabled ?? false,
@@ -166,6 +167,7 @@ export const setFacebookLeadCreationConfig = mutation({
     orgId: v.id("organizations"),
     leadFromCommentsEnabled: v.boolean(),
     leadFromDmsEnabled: v.boolean(),
+    leadFromDmsRequiresMobile: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
@@ -181,6 +183,9 @@ export const setFacebookLeadCreationConfig = mutation({
     await ctx.db.patch(settings._id, {
       facebookLeadFromCommentsEnabled: args.leadFromCommentsEnabled,
       facebookLeadFromDmsEnabled: args.leadFromDmsEnabled,
+      ...(args.leadFromDmsRequiresMobile !== undefined
+        ? { facebookLeadFromDmsRequiresMobile: args.leadFromDmsRequiresMobile }
+        : {}),
     });
   },
 });

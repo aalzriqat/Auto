@@ -88,6 +88,7 @@ export const getConnectionStatus = query({
       instagramAutoReplyMessages: settings?.instagramAutoReplyMessages ?? [],
       instagramLeadFromCommentsEnabled: settings?.instagramLeadFromCommentsEnabled !== false,
       instagramLeadFromDmsEnabled: settings?.instagramLeadFromDmsEnabled !== false,
+      instagramLeadFromDmsRequiresMobile: settings?.instagramLeadFromDmsRequiresMobile ?? false,
       instagramSmartReplyEnabled: settings?.instagramSmartReplyEnabled ?? false,
       instagramSmartReplyForDmsEnabled: settings?.instagramSmartReplyForDmsEnabled ?? settings?.instagramSmartReplyEnabled ?? false,
       instagramSmartReplyForCommentsEnabled: settings?.instagramSmartReplyForCommentsEnabled ?? settings?.instagramSmartReplyEnabled ?? false,
@@ -153,6 +154,7 @@ export const setInstagramLeadCreationConfig = mutation({
     orgId: v.id("organizations"),
     leadFromCommentsEnabled: v.boolean(),
     leadFromDmsEnabled: v.boolean(),
+    leadFromDmsRequiresMobile: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
@@ -168,6 +170,9 @@ export const setInstagramLeadCreationConfig = mutation({
     await ctx.db.patch(settings._id, {
       instagramLeadFromCommentsEnabled: args.leadFromCommentsEnabled,
       instagramLeadFromDmsEnabled: args.leadFromDmsEnabled,
+      ...(args.leadFromDmsRequiresMobile !== undefined
+        ? { instagramLeadFromDmsRequiresMobile: args.leadFromDmsRequiresMobile }
+        : {}),
     });
   },
 });

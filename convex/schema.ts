@@ -782,6 +782,7 @@ export default defineSchema({
     // gates whether it also produces a Lead in the pipeline + notification.
     instagramLeadFromCommentsEnabled: v.optional(v.boolean()),
     instagramLeadFromDmsEnabled: v.optional(v.boolean()),
+    instagramLeadFromDmsRequiresMobile: v.optional(v.boolean()),
     facebookPageId: v.optional(v.string()),
     facebookPageAccessToken: v.optional(v.string()),
     facebookPageName: v.optional(v.string()),
@@ -800,6 +801,7 @@ export default defineSchema({
     facebookAutoReplyLastIndex: v.optional(v.number()),
     facebookLeadFromCommentsEnabled: v.optional(v.boolean()),
     facebookLeadFromDmsEnabled: v.optional(v.boolean()),
+    facebookLeadFromDmsRequiresMobile: v.optional(v.boolean()),
     // Smart Reply: rule-based price/financing/availability/vehicleInfo/location
     // auto-answers, distinct from the canned round-robin auto-reply above --
     // requires a vehicleId match (except location/greeting) and only fires for

@@ -341,6 +341,53 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
     expect(dmResult?.leadId).toBeUndefined();
   });
 
+  test("DM mobile requirement creates a lead only after the customer shares a valid phone number", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, userId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, {
+      instagramLeadFromDmsEnabled: true,
+      instagramLeadFromDmsRequiresMobile: true,
+    });
+
+    const firstResult = await t.run((ctx) =>
+      ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+        orgId,
+        kind: "dm",
+        externalId: "ig_dm_without_phone",
+        senderInstagramId: "ig_user_mobile_gate",
+        text: "hello, is this available?",
+      })
+    );
+    expect(firstResult?.leadId).toBeUndefined();
+
+    const secondResult = await t.run((ctx) =>
+      ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+        orgId,
+        kind: "dm",
+        externalId: "ig_dm_with_phone",
+        senderInstagramId: "ig_user_mobile_gate",
+        text: "yes please call me at +962 79 123 4567",
+      })
+    );
+    expect(secondResult?.leadId).toBeDefined();
+
+    const customers = await t.run((ctx) => ctx.db.query("customers").collect());
+    expect(customers.length).toBe(1);
+    expect(customers[0].phone).toBe("+962791234567");
+
+    const leads = await t.run((ctx) => ctx.db.query("leads").collect());
+    expect(leads.length).toBe(1);
+    expect(leads[0].source).toBe("Instagram DM");
+
+    const notifications = await t.run((ctx) =>
+      ctx.db
+        .query("notifications")
+        .withIndex("by_user", (q) => q.eq("userId", userId))
+        .collect()
+    );
+    expect(notifications.length).toBe(1);
+  });
+
   test("rotates round-robin through active auto-reply messages and skips when disabled", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);

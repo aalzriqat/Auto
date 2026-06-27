@@ -268,6 +268,53 @@ describe("facebookEngagement.handleIncomingFacebookEvent", () => {
     );
     expect(dmResult?.leadId).toBeUndefined();
   });
+
+  test("DM mobile requirement creates a lead only after the customer shares a valid phone number", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, userId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, {
+      facebookLeadFromDmsEnabled: true,
+      facebookLeadFromDmsRequiresMobile: true,
+    });
+
+    const firstResult = await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+        orgId,
+        kind: "dm",
+        externalId: "fb_dm_without_phone",
+        senderFacebookId: "fb_user_mobile_gate",
+        text: "hello, is this available?",
+      })
+    );
+    expect(firstResult?.leadId).toBeUndefined();
+
+    const secondResult = await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+        orgId,
+        kind: "dm",
+        externalId: "fb_dm_with_phone",
+        senderFacebookId: "fb_user_mobile_gate",
+        text: "call me at 00962-78-123-4567",
+      })
+    );
+    expect(secondResult?.leadId).toBeDefined();
+
+    const customers = await t.run((ctx) => ctx.db.query("customers").collect());
+    expect(customers.length).toBe(1);
+    expect(customers[0].phone).toBe("+962781234567");
+
+    const leads = await t.run((ctx) => ctx.db.query("leads").collect());
+    expect(leads.length).toBe(1);
+    expect(leads[0].source).toBe("Facebook DM");
+
+    const notifications = await t.run((ctx) =>
+      ctx.db
+        .query("notifications")
+        .withIndex("by_user", (q) => q.eq("userId", userId))
+        .collect()
+    );
+    expect(notifications.length).toBe(1);
+  });
 });
 
 async function seedVehicle(
