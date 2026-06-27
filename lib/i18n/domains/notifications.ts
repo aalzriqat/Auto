@@ -139,6 +139,11 @@ export const notificationsEn = {
   Notif_AdminUserRoleChanged_Title: "Your Role Changed",
   Notif_AdminUserRoleChanged_Message: "An administrator changed your role to {roleName}.",
 
+  Notif_FeedbackReplied_Title: "Admin replied to your feedback",
+  Notif_FeedbackReplied_Message: "Your submission \"{title}\" received a reply from the team.",
+  Notif_FeedbackResolved_Title: "Your feedback was resolved",
+  Notif_FeedbackResolved_Message: "Your submission \"{title}\" has been marked as resolved.",
+
   // Static UI labels for the notifications/preferences pages
   NotificationsInbox: "Inbox",
   NotificationsPreferences: "Preferences",
@@ -295,6 +300,11 @@ export const notificationsAr = {
   Notif_AdminUserEnabled_Message: "تمت إعادة تفعيل حسابك.",
   Notif_AdminUserRoleChanged_Title: "تم تغيير دورك",
   Notif_AdminUserRoleChanged_Message: "قام أحد المسؤولين بتغيير دورك إلى {roleName}.",
+
+  Notif_FeedbackReplied_Title: "رد فريق الدعم على ملاحظتك",
+  Notif_FeedbackReplied_Message: "تلقّت ملاحظتك \"{title}\" ردًا من الفريق.",
+  Notif_FeedbackResolved_Title: "تم حل ملاحظتك",
+  Notif_FeedbackResolved_Message: "تم تعليم ملاحظتك \"{title}\" كمُحلَّلة.",
 
   NotificationsInbox: "الوارد",
   NotificationsPreferences: "التفضيلات",

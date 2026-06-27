@@ -1157,6 +1157,10 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])
+    .index("by_org_user", ["orgId", "userId"])
+    .index("by_org_user_type", ["orgId", "userId", "type"])
+    .index("by_org_user_status", ["orgId", "userId", "status"])
+    .index("by_org_user_type_status", ["orgId", "userId", "type", "status"])
     .index("by_status", ["status"]),
 
   // ─── Subscription plans ────────────────────────────────────────────────────

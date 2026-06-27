@@ -339,6 +339,8 @@ export const commonEn = {
   FeedbackFilterFeature: "Features",
   FeedbackFrom: "From",
   FeedbackPage: "Page",
+  FeedbackReplied: "Replied",
+  FeedbackAdminReply: "Admin reply",
 
   // Commission mode
   CommissionMode: "Commission Mode",
@@ -706,6 +708,8 @@ export const commonAr = {
   FeedbackFilterFeature: "الميزات",
   FeedbackFrom: "من",
   FeedbackPage: "الصفحة",
+  FeedbackReplied: "تمّ الردّ",
+  FeedbackAdminReply: "ردّ الإدارة",
 
   // Commission mode
   CommissionMode: "نمط العمولة",

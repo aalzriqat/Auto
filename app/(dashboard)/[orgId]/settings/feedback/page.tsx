@@ -1,27 +1,24 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Bug, Lightbulb, Loader2, ExternalLink } from "lucide-react";
+import { Bug, Lightbulb, Loader2, ExternalLink, MessageSquare } from "lucide-react";
 import { format } from "date-fns";
-import { Id } from "@/convex/_generated/dataModel";
 
 export default function FeedbackInboxPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const setStatus = useMutation(api.feedback.setStatus);
 
   const [typeFilter, setTypeFilter] = useState<"ALL" | "BUG" | "FEATURE">("ALL");
-  const [statusFilter, setStatusFilter] = useState<"ALL" | "OPEN" | "CLOSED">("OPEN");
+  const [statusFilter, setStatusFilter] = useState<"ALL" | "OPEN" | "CLOSED">("ALL");
 
   const items = useQuery(
-    api.feedback.list,
+    api.feedback.myList,
     activeOrgId
       ? {
           orgId: activeOrgId,
@@ -30,18 +27,6 @@ export default function FeedbackInboxPage() {
         }
       : "skip"
   );
-
-  const handleToggleStatus = async (
-    feedbackId: Id<"feedback">,
-    current: "OPEN" | "CLOSED"
-  ) => {
-    if (!activeOrgId) return;
-    await setStatus({
-      orgId: activeOrgId,
-      feedbackId,
-      status: current === "OPEN" ? "CLOSED" : "OPEN",
-    });
-  };
 
   return (
     <div className="flex-1 space-y-4 p-4 md:p-8 pt-6">
@@ -102,63 +87,56 @@ export default function FeedbackInboxPage() {
       ) : (
         <div className="space-y-3">
           {items.map((item) => (
-            <Card key={item._id} className="border-border">
+            <Card key={item._id} className={`border-border ${item.status === "CLOSED" ? "opacity-70" : ""}`}>
               <CardHeader className="pb-2">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="flex items-start gap-2.5 flex-1 min-w-0">
-                    {item.type === "BUG" ? (
-                      <Bug className="h-4 w-4 text-rose-500 mt-0.5 shrink-0" />
-                    ) : (
-                      <Lightbulb className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
-                    )}
-                    <div className="flex-1 min-w-0">
-                      <CardTitle className="text-sm leading-snug">{item.title}</CardTitle>
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1">
-                        <Badge
-                          variant="outline"
-                          className={
-                            item.type === "BUG"
-                              ? "text-rose-600 border-rose-300 text-xs"
-                              : "text-amber-600 border-amber-300 text-xs"
-                          }
-                        >
-                          {item.type === "BUG"
-                            ? t("FeedbackTypeBug" as any)
-                            : t("FeedbackTypeFeature" as any)}
+                <div className="flex items-start gap-2.5 flex-1 min-w-0">
+                  {item.type === "BUG" ? (
+                    <Bug className="h-4 w-4 text-rose-500 mt-0.5 shrink-0" />
+                  ) : (
+                    <Lightbulb className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <CardTitle className="text-sm leading-snug">{item.title}</CardTitle>
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1">
+                      <Badge
+                        variant="outline"
+                        className={
+                          item.type === "BUG"
+                            ? "text-rose-600 border-rose-300 text-xs"
+                            : "text-amber-600 border-amber-300 text-xs"
+                        }
+                      >
+                        {item.type === "BUG"
+                          ? t("FeedbackTypeBug" as any)
+                          : t("FeedbackTypeFeature" as any)}
+                      </Badge>
+                      <Badge
+                        variant="outline"
+                        className={
+                          item.status === "OPEN"
+                            ? "text-green-600 border-green-300 text-xs"
+                            : "text-slate-500 border-slate-300 text-xs"
+                        }
+                      >
+                        {item.status === "OPEN"
+                          ? t("FeedbackOpen" as any)
+                          : t("FeedbackClosed" as any)}
+                      </Badge>
+                      {item.adminReply && (
+                        <Badge variant="outline" className="text-blue-600 border-blue-300 text-xs gap-1">
+                          <MessageSquare className="h-2.5 w-2.5" />
+                          {t("FeedbackReplied" as any)}
                         </Badge>
-                        <Badge
-                          variant="outline"
-                          className={
-                            item.status === "OPEN"
-                              ? "text-green-600 border-green-300 text-xs"
-                              : "text-slate-500 border-slate-300 text-xs"
-                          }
-                        >
-                          {item.status === "OPEN"
-                            ? t("FeedbackOpen" as any)
-                            : t("FeedbackClosed" as any)}
-                        </Badge>
-                        <span className="text-xs text-muted-foreground">
-                          {t("FeedbackFrom" as any)} {item.userName} ·{" "}
-                          {format(new Date(item.createdAt), "MMM d, yyyy")}
-                        </span>
-                      </div>
+                      )}
+                      <span className="text-xs text-muted-foreground">
+                        {format(new Date(item.createdAt), "MMM d, yyyy")}
+                      </span>
                     </div>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="shrink-0 text-xs"
-                    onClick={() => handleToggleStatus(item._id, item.status)}
-                  >
-                    {item.status === "OPEN"
-                      ? t("FeedbackMarkClosed" as any)
-                      : t("FeedbackMarkOpen" as any)}
-                  </Button>
                 </div>
               </CardHeader>
-              {(item.description || item.url) && (
-                <CardContent className="pt-0 ps-9 space-y-1.5">
+              {(item.description || item.url || item.adminReply) && (
+                <CardContent className="pt-0 ps-9 space-y-3">
                   {item.description && (
                     <CardDescription className="text-sm whitespace-pre-wrap">
                       {item.description}
@@ -168,6 +146,22 @@ export default function FeedbackInboxPage() {
                     <div className="flex items-center gap-1 text-xs text-muted-foreground">
                       <ExternalLink className="h-3 w-3" />
                       <span className="font-mono">{item.url}</span>
+                    </div>
+                  )}
+                  {item.adminReply && (
+                    <div className="rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-800 p-3 space-y-1">
+                      <p className="text-xs font-semibold text-blue-700 dark:text-blue-400 flex items-center gap-1">
+                        <MessageSquare className="h-3 w-3" />
+                        {t("FeedbackAdminReply" as any)}
+                      </p>
+                      <p className="text-sm text-blue-900 dark:text-blue-200 whitespace-pre-wrap">
+                        {item.adminReply}
+                      </p>
+                      {item.adminRepliedAt && (
+                        <p className="text-[11px] text-blue-500 dark:text-blue-500">
+                          {format(new Date(item.adminRepliedAt), "MMM d, yyyy · HH:mm")}
+                        </p>
+                      )}
                     </div>
                   )}
                 </CardContent>

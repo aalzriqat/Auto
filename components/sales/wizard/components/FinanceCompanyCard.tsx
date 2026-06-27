@@ -98,7 +98,7 @@ export function FinanceCompanyCard({
           className={cn(
             "text-2xl font-bold",
             result.exceedsValuation
-              ? "text-red-400"
+              ? "text-rose-600 dark:text-rose-400"
               : selected
                 ? "text-indigo-400"
                 : "text-foreground"
@@ -168,7 +168,7 @@ export function FinanceCompanyCard({
               className={cn(
                 "font-medium",
                 result.exceedsValuation
-                  ? "text-red-400"
+                  ? "text-rose-600 dark:text-rose-400"
                   : "text-foreground"
               )}
             >
@@ -184,17 +184,17 @@ export function FinanceCompanyCard({
 
         {/* Exceeds valuation warning */}
         {result.exceedsValuation && (
-          <div className="rounded-md bg-red-950/40 border border-red-500/30 p-2 mt-2 space-y-0.5">
-            <p className="font-semibold text-red-400">
+          <div className="rounded-md bg-rose-50 dark:bg-rose-950/60 border border-rose-300 dark:border-rose-700 p-2 mt-2 space-y-0.5">
+            <p className="font-semibold text-rose-700 dark:text-rose-300">
               {t("ExceedsLimit" as any) || "Exceeds Financing Limit"}
             </p>
 
-            <p className="text-red-300/80">
+            <p className="text-rose-700 dark:text-rose-300">
               {t("ExceedingBy" as any) || "Exceeding by"}:{" "}
               {(result.totalFinancedAmount - result.maxFinancingAllowed).toLocaleString(undefined, { minimumFractionDigits: 2 })} {t("JOD" as any)}
             </p>
 
-            <p className="text-red-300/80">
+            <p className="text-rose-700 dark:text-rose-300">
               {t("MinDownPayment" as any)}:{" "}
               {result.minimumDownPayment.toLocaleString(
                 undefined,

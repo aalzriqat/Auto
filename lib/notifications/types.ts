@@ -105,6 +105,10 @@ export const NOTIFICATION_TYPES = {
   "social.post_failed": { category: "social", priority: "normal", criticalDefault: false },
   "whatsapp.lead_created": { category: "social", priority: "normal", criticalDefault: false },
 
+  // ─── Feedback ─────────────────────────────────────────────────────────
+  "feedback.replied": { category: "system", priority: "normal", criticalDefault: true },
+  "feedback.resolved": { category: "system", priority: "normal", criticalDefault: true },
+
   // ─── System / cross-tenant admin ───────────────────────────────────────
   "system.announcement": { category: "system", priority: "urgent", criticalDefault: true },
   "admin.org_suspended": { category: "system", priority: "urgent", criticalDefault: true },
