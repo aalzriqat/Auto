@@ -774,6 +774,7 @@ export default defineSchema({
     socialAutoPostEnabled: v.optional(v.boolean()),
     instagramAutoReplyEnabled: v.optional(v.boolean()),
     instagramAutoReplyMessages: v.optional(v.array(v.string())),
+    instagramAutoReplyMobileReceivedMessage: v.optional(v.string()),
     instagramAutoReplyLastIndex: v.optional(v.number()),
     // Whether an inbound comment/DM creates a CRM lead. Undefined is treated
     // as true (preserves pre-toggle behavior for orgs that connected before
@@ -798,6 +799,7 @@ export default defineSchema({
     facebookTokenExpiresAt: v.optional(v.number()),
     facebookAutoReplyEnabled: v.optional(v.boolean()),
     facebookAutoReplyMessages: v.optional(v.array(v.string())),
+    facebookAutoReplyMobileReceivedMessage: v.optional(v.string()),
     facebookAutoReplyLastIndex: v.optional(v.number()),
     facebookLeadFromCommentsEnabled: v.optional(v.boolean()),
     facebookLeadFromDmsEnabled: v.optional(v.boolean()),

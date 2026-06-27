@@ -444,6 +444,39 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
     expect(notifications.length).toBe(1);
   });
 
+  test("DMs with mobile numbers use the mobile-received reply without advancing round-robin replies", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    const settingsId = await seedSettings(t, orgId, {
+      instagramAutoReplyEnabled: true,
+      instagramAutoReplyMessages: ["Default reply"],
+      instagramAutoReplyMobileReceivedMessage: "Thanks, got your number.",
+      instagramLeadFromDmsEnabled: true,
+      instagramLeadFromDmsRequiresMobile: true,
+    });
+
+    const result = await t.run((ctx) =>
+      ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+        orgId,
+        kind: "dm",
+        externalId: "ig_mobile_received_reply",
+        senderInstagramId: "ig_user_mobile_reply",
+        text: "رقمي ٠٧٩ ١٢٣ ٤٥٦٧",
+      })
+    );
+
+    expect(result?.shouldAutoReply).toBe(true);
+    expect(result?.replyText).toBe("Thanks, got your number.");
+    expect(result?.leadId).toBeDefined();
+
+    const customers = await t.run((ctx) => ctx.db.query("customers").collect());
+    expect(customers.length).toBe(1);
+    expect(customers[0].phone).toBe("0791234567");
+
+    const settings = await t.run((ctx) => ctx.db.get(settingsId));
+    expect(settings?.instagramAutoReplyLastIndex).toBeUndefined();
+  });
+
   test("rotates round-robin through active auto-reply messages and skips when disabled", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);

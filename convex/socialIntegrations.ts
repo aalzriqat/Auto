@@ -86,6 +86,7 @@ export const getConnectionStatus = query({
       instagramAutoReplyForDmsEnabled: settings?.instagramAutoReplyForDmsEnabled ?? settings?.instagramAutoReplyEnabled ?? false,
       instagramAutoReplyForCommentsEnabled: settings?.instagramAutoReplyForCommentsEnabled ?? settings?.instagramAutoReplyEnabled ?? false,
       instagramAutoReplyMessages: settings?.instagramAutoReplyMessages ?? [],
+      instagramAutoReplyMobileReceivedMessage: settings?.instagramAutoReplyMobileReceivedMessage,
       instagramLeadFromCommentsEnabled: settings?.instagramLeadFromCommentsEnabled !== false,
       instagramLeadFromDmsEnabled: settings?.instagramLeadFromDmsEnabled !== false,
       instagramLeadFromDmsRequiresMobile: settings?.instagramLeadFromDmsRequiresMobile ?? false,
@@ -113,6 +114,7 @@ export const setInstagramAutoReplyConfig = mutation({
     enabledForDms: v.boolean(),
     enabledForComments: v.boolean(),
     messages: v.array(v.string()),
+    mobileReceivedMessage: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
@@ -139,6 +141,7 @@ export const setInstagramAutoReplyConfig = mutation({
       instagramAutoReplyForCommentsEnabled: args.enabledForComments,
       instagramAutoReplyEnabled: eitherEnabled,
       instagramAutoReplyMessages: cleaned,
+      instagramAutoReplyMobileReceivedMessage: args.mobileReceivedMessage?.trim() || undefined,
     });
   },
 });

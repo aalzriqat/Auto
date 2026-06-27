@@ -315,6 +315,58 @@ describe("facebookEngagement.handleIncomingFacebookEvent", () => {
     );
     expect(notifications.length).toBe(1);
   });
+
+  test("mobile-received reply is sent after the default reply cooldown but is not repeated", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId, {
+      facebookAutoReplyEnabled: true,
+      facebookAutoReplyMessages: ["Please send your number."],
+      facebookAutoReplyMobileReceivedMessage: "Thanks, got your number.",
+      facebookLeadFromDmsEnabled: true,
+      facebookLeadFromDmsRequiresMobile: true,
+    });
+
+    const first = await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+        orgId,
+        kind: "dm",
+        externalId: "fb_mobile_reply_without_phone",
+        senderFacebookId: "fb_user_mobile_reply",
+        text: "hello, is this available?",
+      })
+    );
+    expect(first?.shouldAutoReply).toBe(true);
+    expect(first?.replyText).toBe("Please send your number.");
+    expect(first?.leadId).toBeUndefined();
+
+    const second = await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+        orgId,
+        kind: "dm",
+        externalId: "fb_mobile_reply_with_phone",
+        senderFacebookId: "fb_user_mobile_reply",
+        text: "my number is ٠٠٩٦٢ ٧٨ ١٢٣ ٤٥٦٧",
+      })
+    );
+    expect(second?.shouldAutoReply).toBe(true);
+    expect(second?.replyText).toBe("Thanks, got your number.");
+    expect(second?.leadId).toBeDefined();
+
+    const third = await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+        orgId,
+        kind: "dm",
+        externalId: "fb_mobile_reply_phone_repeat",
+        senderFacebookId: "fb_user_mobile_reply",
+        text: "also call 0781234567",
+      })
+    );
+    expect(third?.shouldAutoReply).toBe(false);
+
+    const leads = await t.run((ctx) => ctx.db.query("leads").collect());
+    expect(leads.length).toBe(1);
+  });
 });
 
 async function seedVehicle(

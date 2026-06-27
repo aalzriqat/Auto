@@ -16,6 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Sparkles, Camera, CheckCircle2, Plus, Trash2, ChevronDown, ChevronUp, UserCheck } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
 import { socialSmartReplyEn, socialSmartReplyAr } from "@/lib/i18n/domains/socialSmartReply";
+import { DEFAULT_MOBILE_RECEIVED_AUTO_REPLY } from "@/convex/utils/socialMobileReply";
 
 const MAX_AUTO_REPLY_MESSAGES = 5;
 
@@ -74,6 +75,7 @@ export function IntegrationsClient() {
   const [igAutoReplyForDms, setIgAutoReplyForDms] = useState(false);
   const [igAutoReplyForComments, setIgAutoReplyForComments] = useState(false);
   const [igAutoReplyMessages, setIgAutoReplyMessages] = useState<string[]>([]);
+  const [igMobileReceivedReply, setIgMobileReceivedReply] = useState(DEFAULT_MOBILE_RECEIVED_AUTO_REPLY);
   const [igAutoReplyLoaded, setIgAutoReplyLoaded] = useState(false);
   const [igSavingAutoReply, setIgSavingAutoReply] = useState(false);
   const [igLeadFromComments, setIgLeadFromComments] = useState(true);
@@ -84,6 +86,7 @@ export function IntegrationsClient() {
   const [fbAutoReplyForDms, setFbAutoReplyForDms] = useState(false);
   const [fbAutoReplyForComments, setFbAutoReplyForComments] = useState(false);
   const [fbAutoReplyMessages, setFbAutoReplyMessages] = useState<string[]>([]);
+  const [fbMobileReceivedReply, setFbMobileReceivedReply] = useState(DEFAULT_MOBILE_RECEIVED_AUTO_REPLY);
   const [fbAutoReplyLoaded, setFbAutoReplyLoaded] = useState(false);
   const [fbSavingAutoReply, setFbSavingAutoReply] = useState(false);
   const [fbLeadFromComments, setFbLeadFromComments] = useState(true);
@@ -121,6 +124,9 @@ export function IntegrationsClient() {
     setIgAutoReplyForDms(igStatus.instagramAutoReplyForDmsEnabled);
     setIgAutoReplyForComments(igStatus.instagramAutoReplyForCommentsEnabled);
     setIgAutoReplyMessages(igStatus.instagramAutoReplyMessages.length > 0 ? igStatus.instagramAutoReplyMessages : [""]);
+    setIgMobileReceivedReply(
+      igStatus.instagramAutoReplyMobileReceivedMessage ?? DEFAULT_MOBILE_RECEIVED_AUTO_REPLY
+    );
     setIgLeadFromComments(igStatus.instagramLeadFromCommentsEnabled);
     setIgLeadFromDms(igStatus.instagramLeadFromDmsEnabled);
     setIgLeadFromDmsRequiresMobile(igStatus.instagramLeadFromDmsRequiresMobile);
@@ -132,6 +138,9 @@ export function IntegrationsClient() {
     setFbAutoReplyForDms(fbStatus.facebookAutoReplyForDmsEnabled);
     setFbAutoReplyForComments(fbStatus.facebookAutoReplyForCommentsEnabled);
     setFbAutoReplyMessages(fbStatus.facebookAutoReplyMessages.length > 0 ? fbStatus.facebookAutoReplyMessages : [""]);
+    setFbMobileReceivedReply(
+      fbStatus.facebookAutoReplyMobileReceivedMessage ?? DEFAULT_MOBILE_RECEIVED_AUTO_REPLY
+    );
     setFbLeadFromComments(fbStatus.facebookLeadFromCommentsEnabled);
     setFbLeadFromDms(fbStatus.facebookLeadFromDmsEnabled);
     setFbLeadFromDmsRequiresMobile(fbStatus.facebookLeadFromDmsRequiresMobile);
@@ -241,11 +250,13 @@ export function IntegrationsClient() {
     enabledForDms?: boolean;
     enabledForComments?: boolean;
     messages?: string[];
+    mobileReceivedMessage?: string;
   }) => {
     if (!activeOrgId) return;
     const enabledForDms = overrides?.enabledForDms ?? igAutoReplyForDms;
     const enabledForComments = overrides?.enabledForComments ?? igAutoReplyForComments;
     const messages = overrides?.messages ?? igAutoReplyMessages;
+    const mobileReceivedMessage = overrides?.mobileReceivedMessage ?? igMobileReceivedReply;
     setIgSavingAutoReply(true);
     try {
       await setInstagramAutoReplyConfig({
@@ -253,6 +264,7 @@ export function IntegrationsClient() {
         enabledForDms,
         enabledForComments,
         messages: messages.filter((m) => m.trim().length > 0),
+        mobileReceivedMessage,
       });
       toast.success(t("AutoRepliesSaved" as any));
     } catch (error: any) {
@@ -266,11 +278,13 @@ export function IntegrationsClient() {
     enabledForDms?: boolean;
     enabledForComments?: boolean;
     messages?: string[];
+    mobileReceivedMessage?: string;
   }) => {
     if (!activeOrgId) return;
     const enabledForDms = overrides?.enabledForDms ?? fbAutoReplyForDms;
     const enabledForComments = overrides?.enabledForComments ?? fbAutoReplyForComments;
     const messages = overrides?.messages ?? fbAutoReplyMessages;
+    const mobileReceivedMessage = overrides?.mobileReceivedMessage ?? fbMobileReceivedReply;
     setFbSavingAutoReply(true);
     try {
       await setFacebookAutoReplyConfig({
@@ -278,6 +292,7 @@ export function IntegrationsClient() {
         enabledForDms,
         enabledForComments,
         messages: messages.filter((m) => m.trim().length > 0),
+        mobileReceivedMessage,
       });
       toast.success(t("AutoRepliesSaved" as any));
     } catch (error: any) {
@@ -594,6 +609,19 @@ export function IntegrationsClient() {
                   ))}
                 </div>
 
+                <div className="space-y-2 rounded-md border border-border/70 p-3">
+                  <div>
+                    <p className="text-sm font-medium">{t("MobileReceivedAutoReply" as any)}</p>
+                    <p className="text-xs text-muted-foreground">{t("MobileReceivedAutoReplyDescription" as any)}</p>
+                  </div>
+                  <Textarea
+                    value={igMobileReceivedReply}
+                    placeholder={t("MobileReceivedAutoReplyPlaceholder" as any)}
+                    onChange={(e) => setIgMobileReceivedReply(e.target.value)}
+                    rows={3}
+                  />
+                </div>
+
                 <div className="flex items-center justify-between">
                   <Button
                     type="button"
@@ -735,6 +763,19 @@ export function IntegrationsClient() {
                       </Button>
                     </div>
                   ))}
+                </div>
+
+                <div className="space-y-2 rounded-md border border-border/70 p-3">
+                  <div>
+                    <p className="text-sm font-medium">{t("MobileReceivedAutoReply" as any)}</p>
+                    <p className="text-xs text-muted-foreground">{t("MobileReceivedAutoReplyDescription" as any)}</p>
+                  </div>
+                  <Textarea
+                    value={fbMobileReceivedReply}
+                    placeholder={t("MobileReceivedAutoReplyPlaceholder" as any)}
+                    onChange={(e) => setFbMobileReceivedReply(e.target.value)}
+                    rows={3}
+                  />
                 </div>
 
                 <div className="flex items-center justify-between">

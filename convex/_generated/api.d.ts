@@ -95,6 +95,7 @@ import type * as utils_smartReplyBuilder from "../utils/smartReplyBuilder.js";
 import type * as utils_smartReplyIntent from "../utils/smartReplyIntent.js";
 import type * as utils_socialAutoPost from "../utils/socialAutoPost.js";
 import type * as utils_socialMobile from "../utils/socialMobile.js";
+import type * as utils_socialMobileReply from "../utils/socialMobileReply.js";
 import type * as utils_tenancy from "../utils/tenancy.js";
 import type * as utils_validation from "../utils/validation.js";
 import type * as utils_vehicleTextMatch from "../utils/vehicleTextMatch.js";
@@ -207,6 +208,7 @@ declare const fullApi: ApiFromModules<{
   "utils/smartReplyIntent": typeof utils_smartReplyIntent;
   "utils/socialAutoPost": typeof utils_socialAutoPost;
   "utils/socialMobile": typeof utils_socialMobile;
+  "utils/socialMobileReply": typeof utils_socialMobileReply;
   "utils/tenancy": typeof utils_tenancy;
   "utils/validation": typeof utils_validation;
   "utils/vehicleTextMatch": typeof utils_vehicleTextMatch;

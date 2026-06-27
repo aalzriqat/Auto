@@ -98,6 +98,7 @@ export const getConnectionStatus = query({
       facebookAutoReplyForDmsEnabled: settings?.facebookAutoReplyForDmsEnabled ?? settings?.facebookAutoReplyEnabled ?? false,
       facebookAutoReplyForCommentsEnabled: settings?.facebookAutoReplyForCommentsEnabled ?? settings?.facebookAutoReplyEnabled ?? false,
       facebookAutoReplyMessages: settings?.facebookAutoReplyMessages ?? [],
+      facebookAutoReplyMobileReceivedMessage: settings?.facebookAutoReplyMobileReceivedMessage,
       facebookLeadFromCommentsEnabled: settings?.facebookLeadFromCommentsEnabled !== false,
       facebookLeadFromDmsEnabled: settings?.facebookLeadFromDmsEnabled !== false,
       facebookLeadFromDmsRequiresMobile: settings?.facebookLeadFromDmsRequiresMobile ?? false,
@@ -125,6 +126,7 @@ export const setFacebookAutoReplyConfig = mutation({
     enabledForDms: v.boolean(),
     enabledForComments: v.boolean(),
     messages: v.array(v.string()),
+    mobileReceivedMessage: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
@@ -151,6 +153,7 @@ export const setFacebookAutoReplyConfig = mutation({
       facebookAutoReplyForCommentsEnabled: args.enabledForComments,
       facebookAutoReplyEnabled: eitherEnabled,
       facebookAutoReplyMessages: cleaned,
+      facebookAutoReplyMobileReceivedMessage: args.mobileReceivedMessage?.trim() || undefined,
     });
   },
 });

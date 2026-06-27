@@ -12,6 +12,7 @@ import { buildSmartReplyText } from "./utils/smartReplyBuilder";
 import { matchVehicleFromText, suggestVehiclesFromText } from "./utils/vehicleTextMatch";
 import { attachSharedMobileNumberToCustomer, extractSharedMobileNumber } from "./utils/socialMobile";
 import { nextGeneratedLeadAssignee } from "./utils/leadAssignment";
+import { mobileReceivedAutoReplyText } from "./utils/socialMobileReply";
 
 const AUTO_REPLY_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 1 reply per sender per 24h
 // Placeholder name assigned when a customer is created without a username —
@@ -248,20 +249,35 @@ export const handleIncomingInstagramEvent = internalMutation({
       ? (settings?.instagramAutoReplyForDmsEnabled ?? settings?.instagramAutoReplyEnabled ?? false)
       : (settings?.instagramAutoReplyForCommentsEnabled ?? settings?.instagramAutoReplyEnabled ?? false);
 
-    if (!shouldAutoReply && !suppressCannedReply && cannedEnabled && messages.length > 0) {
+    if (!shouldAutoReply && !suppressCannedReply && cannedEnabled) {
       const recentEvents = await ctx.db
         .query("instagramEvents")
         .withIndex("by_org_sender", (q) => q.eq("orgId", orgId).eq("senderInstagramId", senderInstagramId))
         .collect();
-      const repliedRecently = recentEvents.some(
-        (e) => e.autoRepliedAt && e.autoRepliedAt > Date.now() - AUTO_REPLY_COOLDOWN_MS
-      );
+      const recentAutoReplyCutoff = Date.now() - AUTO_REPLY_COOLDOWN_MS;
+      const mobileReceivedReply =
+        kind === "dm" && sharedMobileNumber
+          ? mobileReceivedAutoReplyText(settings?.instagramAutoReplyMobileReceivedMessage)
+          : undefined;
 
-      if (!repliedRecently && settings) {
-        const nextIndex = ((settings.instagramAutoReplyLastIndex ?? -1) + 1) % messages.length;
-        replyText = messages[nextIndex];
-        shouldAutoReply = true;
-        await ctx.db.patch(settings._id, { instagramAutoReplyLastIndex: nextIndex });
+      if (mobileReceivedReply) {
+        const sentMobileReceivedReplyRecently = recentEvents.some(
+          (e) => e.autoRepliedAt && e.autoRepliedAt > recentAutoReplyCutoff && e.autoReplyText === mobileReceivedReply
+        );
+        if (!sentMobileReceivedReplyRecently) {
+          replyText = mobileReceivedReply;
+          shouldAutoReply = true;
+        }
+      } else if (messages.length > 0 && settings) {
+        const repliedRecently = recentEvents.some(
+          (e) => e.autoRepliedAt && e.autoRepliedAt > recentAutoReplyCutoff
+        );
+        if (!repliedRecently) {
+          const nextIndex = ((settings.instagramAutoReplyLastIndex ?? -1) + 1) % messages.length;
+          replyText = messages[nextIndex];
+          shouldAutoReply = true;
+          await ctx.db.patch(settings._id, { instagramAutoReplyLastIndex: nextIndex });
+        }
       }
     }
 
