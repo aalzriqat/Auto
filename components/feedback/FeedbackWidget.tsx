@@ -65,7 +65,7 @@ export function FeedbackWidget() {
       {/* Floating trigger button */}
       <button
         onClick={() => setOpen(true)}
-        className="fixed bottom-[calc(1.25rem+env(safe-area-inset-bottom))] end-5 z-40 flex items-center gap-2 rounded-full bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-lg ring-1 ring-black/10 hover:bg-primary/90 transition-colors"
+        className="fixed bottom-[5.5rem] end-5 z-40 flex items-center gap-2 rounded-full bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground shadow-lg ring-1 ring-black/10 hover:bg-primary/90 transition-colors"
         aria-label={t("FeedbackWidgetTitle" as any)}
       >
         <MessageSquarePlus className="h-4 w-4" />
@@ -111,7 +111,7 @@ export function FeedbackWidget() {
                     <Bug className="h-5 w-5 text-rose-500 mt-0.5 shrink-0" />
                     <div>
                       <p className="font-medium text-sm">{t("FeedbackTypeBug" as any)}</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">Something isn't working as expected</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">{t("FeedbackTypeBugDesc" as any)}</p>
                     </div>
                   </button>
                   <button
@@ -121,7 +121,7 @@ export function FeedbackWidget() {
                     <Lightbulb className="h-5 w-5 text-amber-500 mt-0.5 shrink-0" />
                     <div>
                       <p className="font-medium text-sm">{t("FeedbackTypeFeature" as any)}</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">Suggest an improvement or new feature</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">{t("FeedbackTypeFeatureDesc" as any)}</p>
                     </div>
                   </button>
                 </div>

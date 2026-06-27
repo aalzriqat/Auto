@@ -1151,9 +1151,13 @@ export default defineSchema({
     url: v.optional(v.string()),
     status: v.union(v.literal("OPEN"), v.literal("CLOSED")),
     createdAt: v.number(),
+    adminReply: v.optional(v.string()),
+    adminRepliedAt: v.optional(v.number()),
+    resolvedAt: v.optional(v.number()),
   })
     .index("by_org", ["orgId"])
-    .index("by_org_status", ["orgId", "status"]),
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_status", ["status"]),
 
   // ─── Subscription plans ────────────────────────────────────────────────────
 
