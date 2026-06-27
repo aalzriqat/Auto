@@ -66,6 +66,7 @@ export const upsert = mutation({
       v.array(v.object({ minProfitAmount: v.number(), commissionPct: v.number() }))
     ),
     commissionMode: v.optional(v.union(v.literal("AUTO_TIERS"), v.literal("AUTO_MEMBER"), v.literal("MANUAL"))),
+    generatedLeadAutoAssignmentEnabled: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
@@ -110,9 +111,44 @@ export const upsert = mutation({
         approvalMinProfitPercent: fields.approvalMinProfitPercent,
         commissionTiers: fields.commissionTiers,
         commissionMode: fields.commissionMode,
+        generatedLeadAutoAssignmentEnabled: fields.generatedLeadAutoAssignmentEnabled,
       });
       return newId;
     }
+  },
+});
+
+/**
+ * Controls whether automated lead sources assign new leads to SALES members
+ * in round-robin order. Owner-only because it changes routing behavior.
+ */
+export const setGeneratedLeadAutoAssignmentEnabled = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    enabled: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    await requireOwner(ctx, args.orgId);
+
+    const settings = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .unique();
+
+    if (settings) {
+      await ctx.db.patch(settings._id, {
+        generatedLeadAutoAssignmentEnabled: args.enabled,
+      });
+      return settings._id;
+    }
+
+    return await ctx.db.insert("orgSettings", {
+      orgId: args.orgId,
+      currency: DEFAULT_SETTINGS.currency,
+      currencySymbol: DEFAULT_SETTINGS.currencySymbol,
+      enabledPaymentTypes: DEFAULT_SETTINGS.enabledPaymentTypes,
+      generatedLeadAutoAssignmentEnabled: args.enabled,
+    });
   },
 });
 

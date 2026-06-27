@@ -2,7 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { internalMutation, internalQuery, internalAction, action, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
-import { notifyManagers } from "./utils/notifications";
+import { notifyManagers, notifyUser } from "./utils/notifications";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { postCommentReply, postDirectMessage, fetchFbConversationMessages, FACEBOOK_GRAPH_VERSION } from "./utils/facebookApi";
@@ -10,6 +10,7 @@ import { matchIntent, detectLocale } from "./utils/smartReplyIntent";
 import { buildSmartReplyText } from "./utils/smartReplyBuilder";
 import { matchVehicleFromText, suggestVehiclesFromText } from "./utils/vehicleTextMatch";
 import { attachSharedMobileNumberToCustomer, extractSharedMobileNumber } from "./utils/socialMobile";
+import { nextGeneratedLeadAssignee } from "./utils/leadAssignment";
 
 const AUTO_REPLY_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 1 reply per sender per 24h
 
@@ -139,9 +140,11 @@ export const handleIncomingFacebookEvent = internalMutation({
       leadId = openLead?._id;
 
       if (!leadId) {
+        const assignedUserId = await nextGeneratedLeadAssignee(ctx, orgId);
         leadId = await ctx.db.insert("leads", {
           orgId,
           customerId: customer._id,
+          assignedUserId,
           vehicleId,
           source: label,
           stage: "NEW",
@@ -155,6 +158,17 @@ export const handleIncomingFacebookEvent = internalMutation({
           { platform: label, senderName: senderName ?? senderFacebookId },
           { link: `/${orgId}/leads?highlightId=${leadId}` }
         );
+
+        if (assignedUserId) {
+          await notifyUser(
+            ctx,
+            orgId,
+            assignedUserId,
+            "lead.assigned",
+            { actorName: "AutoFlow" },
+            { link: `/${orgId}/leads?highlightId=${leadId}` }
+          );
+        }
       }
     }
 

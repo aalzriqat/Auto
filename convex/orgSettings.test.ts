@@ -56,6 +56,19 @@ describe("orgSettings", () => {
     expect(settings?.vatRate).toBe(15);
   });
 
+  test("setGeneratedLeadAutoAssignmentEnabled creates and patches the toggle", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asOwner } = await seedOwner(t);
+
+    await asOwner.mutation(api.orgSettings.setGeneratedLeadAutoAssignmentEnabled, { orgId, enabled: true });
+    let settings = await asOwner.query(api.orgSettings.get, { orgId });
+    expect(settings?.generatedLeadAutoAssignmentEnabled).toBe(true);
+
+    await asOwner.mutation(api.orgSettings.setGeneratedLeadAutoAssignmentEnabled, { orgId, enabled: false });
+    settings = await asOwner.query(api.orgSettings.get, { orgId });
+    expect(settings?.generatedLeadAutoAssignmentEnabled).toBe(false);
+  });
+
   test("upsert is owner-only", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOwner(t);

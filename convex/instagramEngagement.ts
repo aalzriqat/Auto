@@ -3,7 +3,7 @@ import { paginationOptsValidator } from "convex/server";
 import { internalMutation, internalQuery, internalAction, query, action } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
-import { notifyManagers } from "./utils/notifications";
+import { notifyManagers, notifyUser } from "./utils/notifications";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { postCommentReply, postDirectMessage, INSTAGRAM_GRAPH_VERSION } from "./utils/instagramApi";
@@ -11,6 +11,7 @@ import { matchIntent, detectLocale } from "./utils/smartReplyIntent";
 import { buildSmartReplyText } from "./utils/smartReplyBuilder";
 import { matchVehicleFromText, suggestVehiclesFromText } from "./utils/vehicleTextMatch";
 import { attachSharedMobileNumberToCustomer, extractSharedMobileNumber } from "./utils/socialMobile";
+import { nextGeneratedLeadAssignee } from "./utils/leadAssignment";
 
 const AUTO_REPLY_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 1 reply per sender per 24h
 // Placeholder name assigned when a customer is created without a username —
@@ -156,9 +157,11 @@ export const handleIncomingInstagramEvent = internalMutation({
       leadId = openLead?._id;
 
       if (!leadId) {
+        const assignedUserId = await nextGeneratedLeadAssignee(ctx, orgId);
         leadId = await ctx.db.insert("leads", {
           orgId,
           customerId: customer._id,
+          assignedUserId,
           vehicleId,
           source: label,
           stage: "NEW",
@@ -172,6 +175,17 @@ export const handleIncomingInstagramEvent = internalMutation({
           { platform: label, senderName: senderUsername ?? senderInstagramId },
           { link: `/${orgId}/leads?highlightId=${leadId}` }
         );
+
+        if (assignedUserId) {
+          await notifyUser(
+            ctx,
+            orgId,
+            assignedUserId,
+            "lead.assigned",
+            { actorName: "AutoFlow" },
+            { link: `/${orgId}/leads?highlightId=${leadId}` }
+          );
+        }
       }
     }
 

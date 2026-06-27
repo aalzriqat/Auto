@@ -18,6 +18,8 @@ import { websitePublicProjection, websiteSectionMap } from "./websiteProjection"
 import { PERMISSIONS } from "./utils/permissions";
 import { requireTenantAuth } from "./utils/tenancy";
 import { writeAuditLog } from "./utils/auditLog";
+import { resolveGeneratedLeadAssignee } from "./utils/leadAssignment";
+import { notifyUser } from "./utils/notifications";
 
 const sectionInputValidator = v.object({
   sectionKey: v.string(),
@@ -635,21 +637,34 @@ export const submitPublicLead = mutation({
       whatsapp: args.whatsapp?.trim(),
     });
 
+    const assignedUserId = await resolveGeneratedLeadAssignee(ctx, domain.orgId, routing?.routeToUserId);
+
     const leadId = await ctx.db.insert("leads", {
       orgId: domain.orgId,
       branchId: routing?.routeToBranchId,
       customerId,
-      assignedUserId: routing?.routeToUserId,
+      assignedUserId,
       vehicleId,
       source: `Dealer website: ${args.formType}`,
       stage: args.formType === "test_drive" ? "TEST_DRIVE" : "NEW",
       notes: args.message?.trim(),
     });
 
-    if (routing?.createTask && routing.routeToUserId) {
+    if (assignedUserId) {
+      await notifyUser(
+        ctx,
+        domain.orgId,
+        assignedUserId,
+        "lead.assigned",
+        { actorName: "AutoFlow" },
+        { link: `/${domain.orgId}/leads?highlightId=${leadId}` }
+      );
+    }
+
+    if (routing?.createTask && assignedUserId) {
       await ctx.db.insert("tasks", {
         orgId: domain.orgId,
-        assignedTo: routing.routeToUserId,
+        assignedTo: assignedUserId,
         title: args.formType === "test_drive" ? "Website test drive request" : "Follow up website lead",
         description: args.message?.trim(),
         dueDate: args.preferredDate ?? Date.now() + 24 * 60 * 60 * 1000,

@@ -43,6 +43,21 @@ async function seedOrgWithEditor(t: ReturnType<typeof convexTest>) {
   return { orgId, userId, asEditor: t.withIdentity({ subject: "editor_001" }) };
 }
 
+async function seedSalesTeam(t: ReturnType<typeof convexTest>, orgId: any) {
+  const roleId = await t.run((ctx) =>
+    ctx.db.insert("roles", { orgId, name: "SALES", permissions: ["view:leads", "edit:leads"] })
+  );
+  const firstSalesId = await t.run((ctx) =>
+    ctx.db.insert("users", { clerkId: "sales_auto_1", email: "sales1@test.com", name: "Sales One" })
+  );
+  const secondSalesId = await t.run((ctx) =>
+    ctx.db.insert("users", { clerkId: "sales_auto_2", email: "sales2@test.com", name: "Sales Two" })
+  );
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: firstSalesId, roleId }));
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: secondSalesId, roleId }));
+  return { firstSalesId, secondSalesId };
+}
+
 async function seedSettings(
   t: ReturnType<typeof convexTest>,
   orgId: any,
@@ -141,6 +156,47 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
     expect(notifications.length).toBe(1);
     expect(notifications[0].type).toBe("social.lead_created");
     expect((notifications[0].data as any)?.platform).toContain("Instagram Comment");
+  });
+
+  test("auto-assigns generated leads to sales reps and notifies the assigned user", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    const { firstSalesId, secondSalesId } = await seedSalesTeam(t, orgId);
+    await seedSettings(t, orgId, { generatedLeadAutoAssignmentEnabled: true });
+
+    const firstResult = await t.run((ctx) =>
+      ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+        orgId,
+        kind: "comment",
+        externalId: "comment_auto_assign_1",
+        senderInstagramId: "ig_auto_1",
+        senderUsername: "auto_one",
+        text: "Interested",
+      })
+    );
+    const secondResult = await t.run((ctx) =>
+      ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+        orgId,
+        kind: "comment",
+        externalId: "comment_auto_assign_2",
+        senderInstagramId: "ig_auto_2",
+        senderUsername: "auto_two",
+        text: "Interested too",
+      })
+    );
+
+    const firstLead = await t.run((ctx) => ctx.db.get(firstResult!.leadId!));
+    const secondLead = await t.run((ctx) => ctx.db.get(secondResult!.leadId!));
+    expect(firstLead?.assignedUserId).toBe(firstSalesId);
+    expect(secondLead?.assignedUserId).toBe(secondSalesId);
+
+    const firstSalesNotifications = await t.run((ctx) =>
+      ctx.db
+        .query("notifications")
+        .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", firstSalesId))
+        .collect()
+    );
+    expect(firstSalesNotifications.some((notification) => notification.type === "lead.assigned")).toBe(true);
   });
 
   test("flags needsProfileEnrichment for a DM with no username, not for a comment with one", async () => {

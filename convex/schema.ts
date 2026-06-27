@@ -802,6 +802,7 @@ export default defineSchema({
     facebookLeadFromCommentsEnabled: v.optional(v.boolean()),
     facebookLeadFromDmsEnabled: v.optional(v.boolean()),
     facebookLeadFromDmsRequiresMobile: v.optional(v.boolean()),
+    generatedLeadAutoAssignmentEnabled: v.optional(v.boolean()),
     // Smart Reply: rule-based price/financing/availability/vehicleInfo/location
     // auto-answers, distinct from the canned round-robin auto-reply above --
     // requires a vehicleId match (except location/greeting) and only fires for
@@ -847,6 +848,12 @@ export default defineSchema({
     .index("by_instagram_webhook_account_id", ["instagramWebhookAccountId"])
     .index("by_facebook_page_id", ["facebookPageId"])
     .index("by_facebook_connected_user_id", ["facebookConnectedByUserId"]),
+
+  leadAssignmentCursors: defineTable({
+    orgId: v.id("organizations"),
+    lastAssignedUserId: v.optional(v.id("users")),
+    updatedAt: v.number(),
+  }).index("by_org", ["orgId"]),
 
   websiteSettings: defineTable({
     orgId: v.id("organizations"),

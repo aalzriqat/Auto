@@ -85,6 +85,7 @@ import type * as utils_env from "../utils/env.js";
 import type * as utils_errors from "../utils/errors.js";
 import type * as utils_facebookApi from "../utils/facebookApi.js";
 import type * as utils_instagramApi from "../utils/instagramApi.js";
+import type * as utils_leadAssignment from "../utils/leadAssignment.js";
 import type * as utils_leadStageHelpers from "../utils/leadStageHelpers.js";
 import type * as utils_mergeHelpers from "../utils/mergeHelpers.js";
 import type * as utils_notifications from "../utils/notifications.js";
@@ -196,6 +197,7 @@ declare const fullApi: ApiFromModules<{
   "utils/errors": typeof utils_errors;
   "utils/facebookApi": typeof utils_facebookApi;
   "utils/instagramApi": typeof utils_instagramApi;
+  "utils/leadAssignment": typeof utils_leadAssignment;
   "utils/leadStageHelpers": typeof utils_leadStageHelpers;
   "utils/mergeHelpers": typeof utils_mergeHelpers;
   "utils/notifications": typeof utils_notifications;

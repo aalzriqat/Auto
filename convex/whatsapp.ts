@@ -1,7 +1,8 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery } from "./_generated/server";
 import { Doc } from "./_generated/dataModel";
-import { notifyManagers } from "./utils/notifications";
+import { notifyManagers, notifyUser } from "./utils/notifications";
+import { nextGeneratedLeadAssignee } from "./utils/leadAssignment";
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -80,9 +81,11 @@ export const handleIncomingMessage = internalMutation({
     );
 
     if (!hasOpenLead) {
+      const assignedUserId = await nextGeneratedLeadAssignee(ctx, orgId);
       const leadId = await ctx.db.insert("leads", {
         orgId,
         customerId: customer._id,
+        assignedUserId,
         source: "WhatsApp",
         stage: "NEW",
         notes: messageText
@@ -97,6 +100,17 @@ export const handleIncomingMessage = internalMutation({
         { senderName: senderName ?? senderPhone },
         { link: `/${orgId}/leads?highlightId=${leadId}` }
       );
+
+      if (assignedUserId) {
+        await notifyUser(
+          ctx,
+          orgId,
+          assignedUserId,
+          "lead.assigned",
+          { actorName: "AutoFlow" },
+          { link: `/${orgId}/leads?highlightId=${leadId}` }
+        );
+      }
     }
   },
 });

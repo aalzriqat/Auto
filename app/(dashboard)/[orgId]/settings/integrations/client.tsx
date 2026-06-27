@@ -13,7 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Sparkles, Camera, CheckCircle2, Plus, Trash2, ChevronDown, ChevronUp } from "lucide-react";
+import { Sparkles, Camera, CheckCircle2, Plus, Trash2, ChevronDown, ChevronUp, UserCheck } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
 import { socialSmartReplyEn, socialSmartReplyAr } from "@/lib/i18n/domains/socialSmartReply";
 
@@ -53,6 +53,7 @@ export function IntegrationsClient() {
     api.facebookIntegrations.getConnectionStatus,
     activeOrgId ? { orgId: activeOrgId } : "skip"
   );
+  const orgSettings = useQuery(api.orgSettings.get, activeOrgId ? { orgId: activeOrgId } : "skip");
   const financeCompanies = useQuery(api.finance.listCompanies, activeOrgId ? { orgId: activeOrgId } : "skip");
 
   const createInstagramConnectUrl = useMutation(api.socialIntegrations.createConnectUrl);
@@ -67,6 +68,7 @@ export function IntegrationsClient() {
   const setFacebookLeadCreationConfig = useMutation(api.facebookIntegrations.setFacebookLeadCreationConfig);
 
   const setSmartReplyConfig = useMutation(api.smartReply.setSmartReplyConfig);
+  const setGeneratedLeadAutoAssignmentEnabled = useMutation(api.orgSettings.setGeneratedLeadAutoAssignmentEnabled);
 
   // ── Instagram state ──
   const [igAutoReplyForDms, setIgAutoReplyForDms] = useState(false);
@@ -87,6 +89,11 @@ export function IntegrationsClient() {
   const [fbLeadFromComments, setFbLeadFromComments] = useState(true);
   const [fbLeadFromDms, setFbLeadFromDms] = useState(true);
   const [fbLeadFromDmsRequiresMobile, setFbLeadFromDmsRequiresMobile] = useState(false);
+
+  // ── Generated lead assignment state ──
+  const [autoAssignGeneratedLeads, setAutoAssignGeneratedLeads] = useState(false);
+  const [autoAssignLoadedOrgId, setAutoAssignLoadedOrgId] = useState<string | null>(null);
+  const [savingAutoAssign, setSavingAutoAssign] = useState(false);
 
   // ── Smart Reply state ──
   const [smartReplyLoaded, setSmartReplyLoaded] = useState(false);
@@ -130,6 +137,12 @@ export function IntegrationsClient() {
     setFbLeadFromDmsRequiresMobile(fbStatus.facebookLeadFromDmsRequiresMobile);
     setFbAutoReplyLoaded(true);
   }, [fbStatus, fbAutoReplyLoaded]);
+
+  useEffect(() => {
+    if (!activeOrgId || autoAssignLoadedOrgId === activeOrgId || orgSettings === undefined) return;
+    setAutoAssignGeneratedLeads(orgSettings?.generatedLeadAutoAssignmentEnabled ?? false);
+    setAutoAssignLoadedOrgId(activeOrgId);
+  }, [activeOrgId, orgSettings, autoAssignLoadedOrgId]);
 
   useEffect(() => {
     if (smartReplyLoaded || !igStatus || !fbStatus) return;
@@ -326,6 +339,22 @@ export function IntegrationsClient() {
     }
   };
 
+  const handleToggleGeneratedLeadAutoAssignment = async (enabled: boolean) => {
+    if (!activeOrgId) return;
+    const previous = autoAssignGeneratedLeads;
+    setAutoAssignGeneratedLeads(enabled);
+    setSavingAutoAssign(true);
+    try {
+      await setGeneratedLeadAutoAssignmentEnabled({ orgId: activeOrgId, enabled });
+      toast.success(t("GeneratedLeadAutoAssignmentSaved" as any));
+    } catch (error: any) {
+      setAutoAssignGeneratedLeads(previous);
+      toast.error(error);
+    } finally {
+      setSavingAutoAssign(false);
+    }
+  };
+
   const handleSaveSmartReply = async (overrides?: {
     igForDms?: boolean;
     igForComments?: boolean;
@@ -412,6 +441,21 @@ export function IntegrationsClient() {
           <CardDescription>{t("IntegrationsDesc" as any)}</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
+          <div className="rounded-xl border border-border p-4 flex items-center justify-between gap-4">
+            <div className="flex items-start gap-3">
+              <UserCheck className="h-5 w-5 mt-0.5 text-muted-foreground" />
+              <div>
+                <p className="text-sm font-medium">{t("GeneratedLeadAutoAssignment" as any)}</p>
+                <p className="text-xs text-muted-foreground">{t("GeneratedLeadAutoAssignmentDescription" as any)}</p>
+              </div>
+            </div>
+            <Switch
+              checked={autoAssignGeneratedLeads}
+              disabled={savingAutoAssign || !activeOrgId || autoAssignLoadedOrgId !== activeOrgId}
+              onCheckedChange={handleToggleGeneratedLeadAutoAssignment}
+            />
+          </div>
+
           {/* Shared auto-post toggle */}
           {anyConnected && (
             <div className="rounded-xl border border-border p-4 flex items-center justify-between gap-4">

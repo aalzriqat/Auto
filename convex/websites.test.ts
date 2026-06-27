@@ -58,6 +58,24 @@ async function publishDealerWebsite() {
   return seededDealer;
 }
 
+async function seedWebsiteSalesTeam(
+  convex: ReturnType<typeof convexTest>,
+  orgId: any
+) {
+  const roleId = await convex.run((ctx) =>
+    ctx.db.insert("roles", { orgId, name: "SALES", permissions: ["view:leads", "edit:leads"] })
+  );
+  const firstSalesId = await convex.run((ctx) =>
+    ctx.db.insert("users", { clerkId: "website_sales_1", email: "website1@example.com", name: "Website Sales One" })
+  );
+  const secondSalesId = await convex.run((ctx) =>
+    ctx.db.insert("users", { clerkId: "website_sales_2", email: "website2@example.com", name: "Website Sales Two" })
+  );
+  await convex.run((ctx) => ctx.db.insert("memberships", { orgId, userId: firstSalesId, roleId }));
+  await convex.run((ctx) => ctx.db.insert("memberships", { orgId, userId: secondSalesId, roleId }));
+  return { firstSalesId, secondSalesId };
+}
+
 describe("dealer website domain validation", () => {
   test("reserved_subdomain_is_blocked", async () => {
     const { orgId, asOwner } = await seedDealer();
@@ -207,6 +225,39 @@ describe("dealer website leads", () => {
       expect(customers[0]).toMatchObject({ firstName: "Lina", email: "lina@example.com" });
       expect(leads).toHaveLength(1);
       expect(leads[0]).toMatchObject({ source: "Dealer website: contact", stage: "NEW" });
+    });
+  });
+
+  test("contact_form_auto_assigns_generated_leads_and_notifies_sales", async () => {
+    const { convex, orgId } = await publishDealerWebsite();
+    const { firstSalesId, secondSalesId } = await seedWebsiteSalesTeam(convex, orgId);
+    await convex.run(async (ctx) => {
+      const settings = await ctx.db.query("orgSettings").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique();
+      await ctx.db.patch(settings!._id, { generatedLeadAutoAssignmentEnabled: true });
+    });
+
+    await convex.mutation(api.websites.submitPublicLead, {
+      host: "premiumcars.autoflowdealer.com",
+      formType: "contact",
+      firstName: "Rami",
+      email: "rami@example.com",
+    });
+    await convex.mutation(api.websites.submitPublicLead, {
+      host: "premiumcars.autoflowdealer.com",
+      formType: "contact",
+      firstName: "Dana",
+      email: "dana@example.com",
+    });
+
+    await convex.run(async (ctx) => {
+      const leads = await ctx.db.query("leads").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect();
+      expect(leads.map((lead) => lead.assignedUserId)).toEqual([firstSalesId, secondSalesId]);
+
+      const firstSalesNotifications = await ctx.db
+        .query("notifications")
+        .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", firstSalesId))
+        .collect();
+      expect(firstSalesNotifications.some((notification) => notification.type === "lead.assigned")).toBe(true);
     });
   });
 });
