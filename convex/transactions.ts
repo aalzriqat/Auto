@@ -43,6 +43,7 @@ export const add = mutation({
     category: v.union(
       v.literal("VEHICLE_SALE"), v.literal("VEHICLE_PURCHASE"),
       v.literal("EXPENSE"), v.literal("DEPOSIT"),
+      v.literal("COLLECTION_PAYMENT"), v.literal("REFUND"),
       v.literal("PARTNER_DRAW"), v.literal("CAPITAL_INJECTION"),
       v.literal("CLAIM_PAYMENT"), v.literal("OTHER")
     ),
@@ -102,6 +103,7 @@ export const update = mutation({
     category: v.optional(v.union(
       v.literal("VEHICLE_SALE"), v.literal("VEHICLE_PURCHASE"),
       v.literal("EXPENSE"), v.literal("DEPOSIT"),
+      v.literal("COLLECTION_PAYMENT"), v.literal("REFUND"),
       v.literal("PARTNER_DRAW"), v.literal("CAPITAL_INJECTION"),
       v.literal("CLAIM_PAYMENT"), v.literal("OTHER")
     )),

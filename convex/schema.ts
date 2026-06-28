@@ -610,6 +610,233 @@ export default defineSchema({
     .index("by_org_status", ["orgId", "status"])
     .index("by_vehicle_hold", ["vehicleId", "holdActive"]),
 
+  receivables: defineTable({
+    orgId: v.id("organizations"),
+    branchId: v.optional(v.id("branches")),
+    saleId: v.optional(v.id("sales")),
+    quoteId: v.optional(v.id("quotes")),
+    applicationId: v.optional(v.id("financeApplications")),
+    customerId: v.id("customers"),
+    vehicleId: v.optional(v.id("vehicles")),
+    sourceType: v.union(
+      v.literal("CUSTOMER_DEPOSIT"),
+      v.literal("RESERVATION_PAYMENT"),
+      v.literal("INTERNAL_INSTALLMENT"),
+      v.literal("BANK_FINANCED_BALANCE"),
+      v.literal("BANK_TRANSFER"),
+      v.literal("PAYMENT_LINK"),
+      v.literal("CHEQUE"),
+      v.literal("OTHER")
+    ),
+    title: v.string(),
+    originalAmount: v.number(),
+    outstandingAmount: v.number(),
+    dueDate: v.number(),
+    status: v.union(
+      v.literal("OPEN"),
+      v.literal("PARTIALLY_PAID"),
+      v.literal("PAID"),
+      v.literal("OVERDUE"),
+      v.literal("RESCHEDULED"),
+      v.literal("CANCELLED"),
+      v.literal("REFUNDED")
+    ),
+    installmentNumber: v.optional(v.number()),
+    totalInstallments: v.optional(v.number()),
+    paymentPlanLabel: v.optional(v.string()),
+    assignedTo: v.optional(v.id("users")),
+    lastReminderAt: v.optional(v.number()),
+    lastPaymentAt: v.optional(v.number()),
+    notes: v.optional(v.string()),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    isDeleted: v.optional(v.boolean()),
+    deletedAt: v.optional(v.number()),
+    deletedBy: v.optional(v.string()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_status_and_dueDate", ["orgId", "status", "dueDate"])
+    .index("by_org_dueDate", ["orgId", "dueDate"])
+    .index("by_org_customer", ["orgId", "customerId"])
+    .index("by_org_vehicle", ["orgId", "vehicleId"])
+    .index("by_sale", ["saleId"])
+    .index("by_quote", ["quoteId"])
+    .index("by_application", ["applicationId"])
+    .index("by_assignedTo", ["assignedTo"]),
+
+  collectionPayments: defineTable({
+    orgId: v.id("organizations"),
+    branchId: v.optional(v.id("branches")),
+    receivableId: v.optional(v.id("receivables")),
+    customerId: v.id("customers"),
+    vehicleId: v.optional(v.id("vehicles")),
+    saleId: v.optional(v.id("sales")),
+    chequeId: v.optional(v.id("postDatedCheques")),
+    reconciliationId: v.optional(v.id("cashierReconciliations")),
+    direction: v.union(v.literal("IN"), v.literal("OUT")),
+    method: v.union(
+      v.literal("CASH"),
+      v.literal("BANK_TRANSFER"),
+      v.literal("CHEQUE"),
+      v.literal("PAYMENT_LINK"),
+      v.literal("CARD"),
+      v.literal("DEPOSIT_APPLIED"),
+      v.literal("REFUND"),
+      v.literal("OTHER")
+    ),
+    amount: v.number(),
+    paymentDate: v.number(),
+    status: v.union(
+      v.literal("POSTED"),
+      v.literal("PENDING_CLEARANCE"),
+      v.literal("VOIDED")
+    ),
+    reference: v.optional(v.string()),
+    cashierId: v.id("users"),
+    notes: v.optional(v.string()),
+    createdAt: v.number(),
+    voidedAt: v.optional(v.number()),
+    voidedBy: v.optional(v.id("users")),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_paymentDate", ["orgId", "paymentDate"])
+    .index("by_receivable", ["receivableId"])
+    .index("by_org_customer", ["orgId", "customerId"])
+    .index("by_org_cashier", ["orgId", "cashierId"])
+    .index("by_reconciliation", ["reconciliationId"])
+    .index("by_cheque", ["chequeId"]),
+
+  postDatedCheques: defineTable({
+    orgId: v.id("organizations"),
+    branchId: v.optional(v.id("branches")),
+    receivableId: v.optional(v.id("receivables")),
+    customerId: v.id("customers"),
+    vehicleId: v.optional(v.id("vehicles")),
+    saleId: v.optional(v.id("sales")),
+    bank: v.string(),
+    chequeNumber: v.string(),
+    chequeDate: v.number(),
+    amount: v.number(),
+    depositedDate: v.optional(v.number()),
+    status: v.union(
+      v.literal("HELD"),
+      v.literal("DEPOSITED"),
+      v.literal("CLEARED"),
+      v.literal("RETURNED"),
+      v.literal("REPLACED"),
+      v.literal("CANCELLED")
+    ),
+    replacementChequeId: v.optional(v.id("postDatedCheques")),
+    returnedAt: v.optional(v.number()),
+    returnReason: v.optional(v.string()),
+    clearedAt: v.optional(v.number()),
+    notes: v.optional(v.string()),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    isDeleted: v.optional(v.boolean()),
+    deletedAt: v.optional(v.number()),
+    deletedBy: v.optional(v.string()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_status_and_chequeDate", ["orgId", "status", "chequeDate"])
+    .index("by_org_chequeDate", ["orgId", "chequeDate"])
+    .index("by_org_bank_and_chequeNumber", ["orgId", "bank", "chequeNumber"])
+    .index("by_org_customer", ["orgId", "customerId"])
+    .index("by_receivable", ["receivableId"])
+    .index("by_replacementCheque", ["replacementChequeId"]),
+
+  cashierReconciliations: defineTable({
+    orgId: v.id("organizations"),
+    branchId: v.optional(v.id("branches")),
+    cashierId: v.id("users"),
+    businessDate: v.number(),
+    expectedCash: v.number(),
+    countedCash: v.number(),
+    difference: v.number(),
+    status: v.union(
+      v.literal("OPEN"),
+      v.literal("SUBMITTED"),
+      v.literal("APPROVED"),
+      v.literal("REJECTED")
+    ),
+    notes: v.optional(v.string()),
+    reviewedBy: v.optional(v.id("users")),
+    reviewedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_businessDate", ["orgId", "businessDate"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_cashier", ["orgId", "cashierId"]),
+
+  collectionApprovalRequests: defineTable({
+    orgId: v.id("organizations"),
+    receivableId: v.id("receivables"),
+    customerId: v.id("customers"),
+    requestedBy: v.id("users"),
+    requestType: v.union(
+      v.literal("REFUND"),
+      v.literal("RESCHEDULE"),
+      v.literal("CANCEL_RECEIVABLE")
+    ),
+    status: v.union(
+      v.literal("PENDING"),
+      v.literal("APPROVED"),
+      v.literal("REJECTED")
+    ),
+    requestedAmount: v.optional(v.number()),
+    requestedDueDate: v.optional(v.number()),
+    reason: v.string(),
+    decisionNotes: v.optional(v.string()),
+    decidedBy: v.optional(v.id("users")),
+    decidedAt: v.optional(v.number()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_receivable", ["receivableId"])
+    .index("by_requestedBy", ["requestedBy"]),
+
+  collectionReminders: defineTable({
+    orgId: v.id("organizations"),
+    receivableId: v.optional(v.id("receivables")),
+    chequeId: v.optional(v.id("postDatedCheques")),
+    customerId: v.id("customers"),
+    channel: v.union(
+      v.literal("WHATSAPP"),
+      v.literal("SMS"),
+      v.literal("EMAIL"),
+      v.literal("MANUAL")
+    ),
+    messageType: v.union(
+      v.literal("DUE_SOON"),
+      v.literal("OVERDUE"),
+      v.literal("CHEQUE_UPCOMING"),
+      v.literal("CHEQUE_RETURNED")
+    ),
+    status: v.union(
+      v.literal("PENDING"),
+      v.literal("SENT"),
+      v.literal("FAILED"),
+      v.literal("SKIPPED")
+    ),
+    scheduledAt: v.number(),
+    sentAt: v.optional(v.number()),
+    error: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status_and_scheduledAt", ["orgId", "status", "scheduledAt"])
+    .index("by_receivable", ["receivableId"])
+    .index("by_cheque", ["chequeId"])
+    .index("by_org_customer", ["orgId", "customerId"]),
+
   companyDocumentRules: defineTable({
     orgId: v.id("organizations"),
     companyId: v.optional(v.id("financeCompanies")), // Null means required for ALL deals (e.g., ID)
@@ -657,6 +884,7 @@ export default defineSchema({
     category: v.union(
       v.literal("VEHICLE_SALE"), v.literal("VEHICLE_PURCHASE"),
       v.literal("EXPENSE"), v.literal("DEPOSIT"),
+      v.literal("COLLECTION_PAYMENT"), v.literal("REFUND"),
       v.literal("PARTNER_DRAW"), v.literal("CAPITAL_INJECTION"),
       v.literal("CLAIM_PAYMENT"), v.literal("OTHER")
     ),

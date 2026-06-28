@@ -75,6 +75,17 @@ export const NOTIFICATION_TYPES = {
   "partnerEquity.changed": { category: "finance", priority: "normal", criticalDefault: false },
   "approval.requested": { category: "finance", priority: "urgent", criticalDefault: true },
   "approval.responded": { category: "finance", priority: "urgent", criticalDefault: true },
+  "collection.receivable_created": { category: "finance", priority: "normal", criticalDefault: false },
+  "collection.plan_created": { category: "finance", priority: "normal", criticalDefault: false },
+  "collection.payment_recorded": { category: "finance", priority: "normal", criticalDefault: false },
+  "collection.cheque_returned": { category: "finance", priority: "urgent", criticalDefault: true },
+  "collection.approval_requested": { category: "finance", priority: "urgent", criticalDefault: true },
+  "collection.approval_responded": { category: "finance", priority: "urgent", criticalDefault: true },
+  "collection.reconciliation_submitted": { category: "finance", priority: "normal", criticalDefault: false },
+  "collection.receivable_due_soon": { category: "finance", priority: "normal", criticalDefault: false },
+  "collection.receivable_overdue": { category: "finance", priority: "urgent", criticalDefault: true },
+  "collection.cheque_upcoming": { category: "finance", priority: "normal", criticalDefault: false },
+  "collection.cheque_returned_customer": { category: "finance", priority: "urgent", criticalDefault: true },
 
   // ─── Operations ────────────────────────────────────────────────────────
   "workOrder.created": { category: "operations", priority: "normal", criticalDefault: false },

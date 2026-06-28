@@ -11,6 +11,14 @@ export const create = mutation({
     orgId: v.id("organizations"),
     quoteId: v.id("quotes"),
     amount: v.number(),
+    method: v.optional(v.union(
+      v.literal("CASH"),
+      v.literal("BANK_TRANSFER"),
+      v.literal("PAYMENT_LINK"),
+      v.literal("CARD"),
+      v.literal("CHEQUE"),
+      v.literal("OTHER")
+    )),
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -49,6 +57,21 @@ export const create = mutation({
       category: "DEPOSIT",
       description: `Deposit held for quote ${args.quoteId}`,
       vehicleId: quote!.vehicleId,
+    });
+
+    await ctx.db.insert("collectionPayments", {
+      orgId: args.orgId,
+      customerId: quote!.customerId,
+      vehicleId: quote!.vehicleId,
+      direction: "IN",
+      method: args.method ?? "CASH",
+      amount: args.amount,
+      paymentDate: Date.now(),
+      status: "POSTED",
+      reference: `Deposit ${depositId}`,
+      cashierId: user._id,
+      notes: args.notes,
+      createdAt: Date.now(),
     });
 
     const actorName = await getActorName(ctx);
@@ -99,6 +122,21 @@ export const release = mutation({
         category: "DEPOSIT",
         description: `Deposit refunded for quote ${deposit!.quoteId}`,
         vehicleId: deposit!.vehicleId,
+      });
+
+      await ctx.db.insert("collectionPayments", {
+        orgId: args.orgId,
+        customerId: deposit!.customerId,
+        vehicleId: deposit!.vehicleId,
+        direction: "OUT",
+        method: "REFUND",
+        amount: deposit!.amount,
+        paymentDate: Date.now(),
+        status: "POSTED",
+        reference: `Deposit refund ${args.depositId}`,
+        cashierId: user._id,
+        notes: args.notes,
+        createdAt: Date.now(),
       });
     }
 

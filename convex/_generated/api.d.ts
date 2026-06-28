@@ -21,6 +21,8 @@ import type * as applications from "../applications.js";
 import type * as approvals from "../approvals.js";
 import type * as branches from "../branches.js";
 import type * as claims from "../claims.js";
+import type * as collectionReminderActions from "../collectionReminderActions.js";
+import type * as collections from "../collections.js";
 import type * as constants from "../constants.js";
 import type * as crons from "../crons.js";
 import type * as customers from "../customers.js";
@@ -134,6 +136,8 @@ declare const fullApi: ApiFromModules<{
   approvals: typeof approvals;
   branches: typeof branches;
   claims: typeof claims;
+  collectionReminderActions: typeof collectionReminderActions;
+  collections: typeof collections;
   constants: typeof constants;
   crons: typeof crons;
   customers: typeof customers;

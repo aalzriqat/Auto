@@ -22,6 +22,14 @@ crons.cron(
   {}
 );
 
+// Run daily at 06:30 UTC (09:30 Jordan time) for receivable and cheque reminders.
+crons.cron(
+  "collection-reminders",
+  "30 6 * * *",
+  internal.collections.processDailyCollectionReminders,
+  {}
+);
+
 export default crons;
 
 export const triggerAlarms = internalMutation({

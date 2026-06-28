@@ -3,11 +3,12 @@
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { BookOpen, Briefcase, Landmark, HandCoins } from "lucide-react";
+import { BookOpen, Briefcase, Landmark, HandCoins, WalletCards } from "lucide-react";
 import { GeneralLedgerTab } from "./GeneralLedgerTab";
 import { FixedAssetsTab } from "./FixedAssetsTab";
 import { PartnerEquityTab } from "./PartnerEquityTab";
 import { ClaimsTab } from "./ClaimsTab";
+import { CollectionsTab } from "./CollectionsTab";
 
 export function AccountingClient() {
   const { t } = useLanguage();
@@ -48,6 +49,10 @@ export function AccountingClient() {
               <Landmark className="w-4 h-4" />
               {t("Claims" as any)}
             </TabsTrigger>
+            <TabsTrigger value="collections" className="gap-2 data-[state=active]:bg-primary/5 data-[state=active]:text-primary data-[state=active]:shadow-none px-4">
+              <WalletCards className="w-4 h-4" />
+              Collections
+            </TabsTrigger>
           </TabsList>
         </div>
 
@@ -63,6 +68,9 @@ export function AccountingClient() {
           </TabsContent>
           <TabsContent value="claims" className="h-full m-0 data-[state=inactive]:hidden">
             <ClaimsTab />
+          </TabsContent>
+          <TabsContent value="collections" className="h-full m-0 data-[state=inactive]:hidden">
+            <CollectionsTab />
           </TabsContent>
         </div>
       </Tabs>
