@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import { Id } from "../_generated/dataModel";
 import schema from "../schema";
 import { nextGeneratedLeadAssignee, resolveGeneratedLeadAssignee } from "./leadAssignment";
+import { PERMISSIONS } from "./permissions";
 
 async function seedOrg(autoAssignEnabled: boolean) {
   const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
@@ -82,6 +83,39 @@ describe("generated lead assignment", () => {
     const assignee = await t.run((ctx) => nextGeneratedLeadAssignee(ctx, orgId));
 
     expect(assignee).toBe(activeSalesId);
+  });
+
+  test("includes custom lead-handling roles without routing to managers", async () => {
+    const { t, orgId } = await seedOrg(true);
+    const managerLikeRoleId = await t.run((ctx) =>
+      ctx.db.insert("roles", {
+        orgId,
+        name: "Sales Manager",
+        permissions: [
+          PERMISSIONS.VIEW_LEADS,
+          PERMISSIONS.CREATE_LEADS,
+          PERMISSIONS.EDIT_LEADS,
+          PERMISSIONS.MANAGE_USERS,
+        ],
+      })
+    );
+    const customSalesRoleId = await t.run((ctx) =>
+      ctx.db.insert("roles", {
+        orgId,
+        name: "Internet Sales",
+        permissions: [
+          PERMISSIONS.VIEW_LEADS,
+          PERMISSIONS.CREATE_LEADS,
+          PERMISSIONS.EDIT_LEADS,
+        ],
+      })
+    );
+    await addMember(t, orgId, managerLikeRoleId, "Manager Lead Admin");
+    const customSalesId = await addMember(t, orgId, customSalesRoleId, "Custom Sales");
+
+    const assignee = await t.run((ctx) => nextGeneratedLeadAssignee(ctx, orgId));
+
+    expect(assignee).toBe(customSalesId);
   });
 
   test("keeps a valid explicit route without advancing the round-robin cursor", async () => {

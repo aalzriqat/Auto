@@ -1,8 +1,21 @@
-import { Id } from "../_generated/dataModel";
+import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx } from "../_generated/server";
+import { PERMISSIONS } from "./permissions";
 
 const SALES_ROLE_NAME = "SALES";
 const MAX_MEMBERS_TO_SCAN = 200;
+
+function canReceiveGeneratedLeads(role: Doc<"roles"> | null): boolean {
+  if (!role || role.isDeleted) return false;
+  if (role.name.trim().toUpperCase() === SALES_ROLE_NAME) return true;
+
+  return (
+    !role.permissions.includes(PERMISSIONS.MANAGE_USERS) &&
+    role.permissions.includes(PERMISSIONS.VIEW_LEADS) &&
+    role.permissions.includes(PERMISSIONS.CREATE_LEADS) &&
+    role.permissions.includes(PERMISSIONS.EDIT_LEADS)
+  );
+}
 
 async function isActiveOrgMember(
   ctx: MutationCtx,
@@ -28,7 +41,7 @@ async function eligibleSalesUsers(ctx: MutationCtx, orgId: Id<"organizations">) 
   const eligible: Array<Id<"users">> = [];
   for (const membership of memberships) {
     const role = await ctx.db.get(membership.roleId);
-    if (role?.name !== SALES_ROLE_NAME) continue;
+    if (!canReceiveGeneratedLeads(role)) continue;
 
     const user = await ctx.db.get(membership.userId);
     if (!user || user.disabled) continue;

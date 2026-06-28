@@ -556,6 +556,40 @@ describe("instagramEngagement.handleIncomingInstagramEvent", () => {
     expect(leads.length).toBe(1);
   });
 
+  test("keeps DM and comment canned auto-reply cooldowns separate", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+
+    await seedSettings(t, orgId, {
+      instagramAutoReplyForDmsEnabled: true,
+      instagramAutoReplyForCommentsEnabled: true,
+      instagramAutoReplyMessages: ["Reply A"],
+    });
+
+    const dmReply = await t.run((ctx) =>
+      ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+        orgId,
+        kind: "dm",
+        externalId: "mixed_surface_dm",
+        senderInstagramId: "same_sender",
+        text: "hi in dm",
+      })
+    );
+    const commentReply = await t.run((ctx) =>
+      ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
+        orgId,
+        kind: "comment",
+        externalId: "mixed_surface_comment",
+        senderInstagramId: "same_sender",
+        senderUsername: "same_handle",
+        text: "hi on the post",
+      })
+    );
+
+    expect(dmReply?.shouldAutoReply).toBe(true);
+    expect(commentReply?.shouldAutoReply).toBe(true);
+  });
+
   test("does not auto-reply when disabled even with messages configured", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);

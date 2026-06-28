@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { RefreshCw, X } from "lucide-react";
+import { AlertTriangle, RefreshCw, X } from "lucide-react";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 
 // A new build only happens on deploys, not continuously — so this checks far
@@ -46,26 +46,39 @@ export function UpdateBanner() {
   if (!newBuildAvailable || dismissed) return null;
 
   return (
-    <div className="w-full bg-primary/10 border-b border-primary/20 px-4 py-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-center text-xs sm:text-sm shrink-0">
-      <span>
-        {t("UpdateBannerMessage" as any)}{" "}
-        <span className="text-muted-foreground">{t("UpdateBannerWarning" as any)}</span>
-      </span>
-      <div className="flex items-center gap-2 shrink-0">
-        <Button
-          size="sm"
-          className="h-6 px-2 text-xs gap-1"
-          onClick={() => window.location.reload()}
-        >
-          <RefreshCw className="h-3 w-3" /> {t("UpdateBannerButton" as any)}
-        </Button>
-        <button
-          onClick={() => setDismissed(true)}
-          className="text-muted-foreground hover:text-foreground"
-          aria-label={t("UpdateBannerDismiss" as any)}
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
+    <div
+      role="status"
+      aria-live="polite"
+      className="w-full shrink-0 border-b border-amber-600 bg-amber-400 px-4 py-3 text-slate-950 shadow-sm"
+    >
+      <div className="mx-auto flex max-w-7xl flex-col items-stretch justify-center gap-3 sm:flex-row sm:items-center">
+        <div className="flex min-w-0 flex-1 items-start gap-2 sm:items-center">
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-950 text-amber-300 shadow-sm">
+            <AlertTriangle className="h-4 w-4" />
+          </span>
+          <p className="text-sm font-semibold leading-snug sm:text-base">
+            {t("UpdateBannerMessage" as any)}{" "}
+            <span className="block text-sm font-medium text-slate-800 sm:inline">
+              {t("UpdateBannerWarning" as any)}
+            </span>
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center justify-center gap-2">
+          <Button
+            size="sm"
+            className="h-9 bg-slate-950 px-4 text-sm font-semibold text-white shadow hover:bg-slate-800"
+            onClick={() => window.location.reload()}
+          >
+            <RefreshCw className="h-4 w-4" /> {t("UpdateBannerButton" as any)}
+          </Button>
+          <button
+            onClick={() => setDismissed(true)}
+            className="flex h-9 w-9 items-center justify-center rounded-full text-slate-800 transition-colors hover:bg-amber-300 hover:text-slate-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-950"
+            aria-label={t("UpdateBannerDismiss" as any)}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </div>
     </div>
   );

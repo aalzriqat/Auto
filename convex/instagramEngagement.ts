@@ -262,7 +262,7 @@ export const handleIncomingInstagramEvent = internalMutation({
 
       if (mobileReceivedReply) {
         const sentMobileReceivedReplyRecently = recentEvents.some(
-          (e) => e.autoRepliedAt && e.autoRepliedAt > recentAutoReplyCutoff && e.autoReplyText === mobileReceivedReply
+          (e) => e.kind === kind && e.autoRepliedAt && e.autoRepliedAt > recentAutoReplyCutoff && e.autoReplyText === mobileReceivedReply
         );
         if (!sentMobileReceivedReplyRecently) {
           replyText = mobileReceivedReply;
@@ -270,7 +270,7 @@ export const handleIncomingInstagramEvent = internalMutation({
         }
       } else if (messages.length > 0 && settings) {
         const repliedRecently = recentEvents.some(
-          (e) => e.autoRepliedAt && e.autoRepliedAt > recentAutoReplyCutoff
+          (e) => e.kind === kind && e.autoRepliedAt && e.autoRepliedAt > recentAutoReplyCutoff
         );
         if (!repliedRecently) {
           const nextIndex = ((settings.instagramAutoReplyLastIndex ?? -1) + 1) % messages.length;
