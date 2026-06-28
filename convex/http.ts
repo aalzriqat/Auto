@@ -10,7 +10,9 @@ import { rateLimiter } from "./rateLimit";
 const http = httpRouter();
 
 function clientIp(request: Request): string {
-  return request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+  return (
+    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown"
+  );
 }
 
 function jsonResponse(body: Record<string, unknown>, status: number): Response {
@@ -23,8 +25,12 @@ function jsonResponse(body: Record<string, unknown>, status: number): Response {
   });
 }
 
-function hasMatchingSecret(providedSecret: string | null, expectedSecret: string): boolean {
-  if (!providedSecret || providedSecret.length !== expectedSecret.length) return false;
+function hasMatchingSecret(
+  providedSecret: string | null,
+  expectedSecret: string,
+): boolean {
+  if (!providedSecret || providedSecret.length !== expectedSecret.length)
+    return false;
 
   let diff = 0;
   for (let i = 0; i < expectedSecret.length; i++) {
@@ -67,6 +73,28 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+function optionalRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function recordArray(value: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(value)) return [];
+  const records: Record<string, unknown>[] = [];
+  for (const item of value) {
+    const record = optionalRecord(item);
+    if (record) records.push(record);
+  }
+  return records;
+}
+
+function optionalMetaId(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim()) return value;
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return undefined;
+}
+
 function collectTextParts(value: unknown, parts: string[] = []): string[] {
   if (Array.isArray(value)) {
     for (const item of value) collectTextParts(item, parts);
@@ -98,18 +126,25 @@ function facebookSurfaceFromPayload(value: unknown): FacebookSourceSurface {
   if (optionalString(record.reel_id) || text.includes("reel")) return "reel";
   if (optionalString(record.story_id) || text.includes("story")) return "story";
   if (optionalString(record.ad_id) || text.includes("ad")) return "ad";
-  if (optionalString(record.post_id) || optionalString(record.video_id) || optionalString(record.media_id)) return "post";
+  if (
+    optionalString(record.post_id) ||
+    optionalString(record.video_id) ||
+    optionalString(record.media_id)
+  )
+    return "post";
   return "unknown";
 }
 
 function facebookMediaIdFromFeedValue(value: unknown): string | undefined {
   if (!value || typeof value !== "object") return undefined;
   const record = value as Record<string, unknown>;
-  return optionalString(record.post_id)
-    ?? optionalString(record.video_id)
-    ?? optionalString(record.reel_id)
-    ?? optionalString(record.media_id)
-    ?? optionalString(record.object_id);
+  return (
+    optionalString(record.post_id) ??
+    optionalString(record.video_id) ??
+    optionalString(record.reel_id) ??
+    optionalString(record.media_id) ??
+    optionalString(record.object_id)
+  );
 }
 
 function metaMessageText(messagingEvent: unknown): string | undefined {
@@ -127,16 +162,23 @@ function facebookMessageMediaId(messagingEvent: unknown): string | undefined {
   if (!messagingEvent || typeof messagingEvent !== "object") return undefined;
   const event = messagingEvent as Record<string, unknown>;
   const message = event.message as Record<string, unknown> | undefined;
-  const referral = (message?.referral ?? event.referral) as Record<string, unknown> | undefined;
-  return optionalString(referral?.post_id)
-    ?? optionalString(referral?.video_id)
-    ?? optionalString(referral?.reel_id)
-    ?? optionalString(referral?.media_id)
-    ?? optionalString(referral?.object_id);
+  const referral = (message?.referral ?? event.referral) as
+    | Record<string, unknown>
+    | undefined;
+  return (
+    optionalString(referral?.post_id) ??
+    optionalString(referral?.video_id) ??
+    optionalString(referral?.reel_id) ??
+    optionalString(referral?.media_id) ??
+    optionalString(referral?.object_id)
+  );
 }
 
 function base64UrlDecode(input: string): Uint8Array {
-  const padded = input.replace(/-/g, "+").replace(/_/g, "/").padEnd(input.length + ((4 - (input.length % 4)) % 4), "=");
+  const padded = input
+    .replace(/-/g, "+")
+    .replace(/_/g, "/")
+    .padEnd(input.length + ((4 - (input.length % 4)) % 4), "=");
   const binary = atob(padded);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
@@ -145,7 +187,10 @@ function base64UrlDecode(input: string): Uint8Array {
 
 // Meta's "signed_request" format used by Instagram's deauthorize and data
 // deletion callbacks: base64url(HMAC-SHA256 signature) + "." + base64url(JSON payload).
-async function verifyMetaSignedRequest(signedRequest: string, appSecret: string): Promise<Record<string, unknown> | null> {
+async function verifyMetaSignedRequest(
+  signedRequest: string,
+  appSecret: string,
+): Promise<Record<string, unknown> | null> {
   const [encodedSig, encodedPayload] = signedRequest.split(".");
   if (!encodedSig || !encodedPayload) return null;
 
@@ -154,14 +199,21 @@ async function verifyMetaSignedRequest(signedRequest: string, appSecret: string)
     new TextEncoder().encode(appSecret),
     { name: "HMAC", hash: "SHA-256" },
     false,
-    ["sign"]
+    ["sign"],
   );
-  const expectedSig = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(encodedPayload)));
+  const expectedSig = new Uint8Array(
+    await crypto.subtle.sign(
+      "HMAC",
+      key,
+      new TextEncoder().encode(encodedPayload),
+    ),
+  );
   const actualSig = base64UrlDecode(encodedSig);
 
   if (expectedSig.length !== actualSig.length) return null;
   let diff = 0;
-  for (let i = 0; i < expectedSig.length; i++) diff |= expectedSig[i] ^ actualSig[i];
+  for (let i = 0; i < expectedSig.length; i++)
+    diff |= expectedSig[i] ^ actualSig[i];
   if (diff !== 0) return null;
 
   return JSON.parse(new TextDecoder().decode(base64UrlDecode(encodedPayload)));
@@ -172,7 +224,11 @@ async function verifyMetaSignedRequest(signedRequest: string, appSecret: string)
 // WhatsApp Cloud API webhook POST. This is the only thing that proves a
 // webhook call actually came from Meta; the `orgId` query param and message
 // body are otherwise fully attacker-controlled.
-async function verifyHubSignature256(rawBody: string, signatureHeader: string | null, appSecret: string): Promise<boolean> {
+async function verifyHubSignature256(
+  rawBody: string,
+  signatureHeader: string | null,
+  appSecret: string,
+): Promise<boolean> {
   if (!signatureHeader?.startsWith("sha256=")) return false;
   const provided = signatureHeader.slice("sha256=".length);
 
@@ -181,14 +237,19 @@ async function verifyHubSignature256(rawBody: string, signatureHeader: string | 
     new TextEncoder().encode(appSecret),
     { name: "HMAC", hash: "SHA-256" },
     false,
-    ["sign"]
+    ["sign"],
   );
-  const expectedBytes = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(rawBody)));
-  const expectedHex = Array.from(expectedBytes).map((b) => b.toString(16).padStart(2, "0")).join("");
+  const expectedBytes = new Uint8Array(
+    await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(rawBody)),
+  );
+  const expectedHex = Array.from(expectedBytes)
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
 
   if (expectedHex.length !== provided.length) return false;
   let diff = 0;
-  for (let i = 0; i < expectedHex.length; i++) diff |= expectedHex.charCodeAt(i) ^ provided.charCodeAt(i);
+  for (let i = 0; i < expectedHex.length; i++)
+    diff |= expectedHex.charCodeAt(i) ^ provided.charCodeAt(i);
   return diff === 0;
 }
 
@@ -213,7 +274,7 @@ http.route({
           service: "AutoFlow Convex",
           timestamp: new Date().toISOString(),
         },
-        200
+        200,
       );
     } catch (err) {
       console.error("Load test health check failed", err);
@@ -222,7 +283,7 @@ http.route({
           success: false,
           error: "An unexpected error occurred. Please try again later.",
         },
-        500
+        500,
       );
     }
   }),
@@ -232,7 +293,9 @@ http.route({
   path: "/clerk-webhook",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
-    const limitStatus = await rateLimiter.limit(ctx, "webhook", { key: clientIp(request) });
+    const limitStatus = await rateLimiter.limit(ctx, "webhook", {
+      key: clientIp(request),
+    });
     if (!limitStatus.ok) {
       return new Response("Too many requests", { status: 429 });
     }
@@ -240,10 +303,13 @@ http.route({
     let webhookSecret: string;
     try {
       const env = getValidatedEnv();
-      if (!env.CLERK_WEBHOOK_SECRET) throw new ConvexError("CLERK_WEBHOOK_SECRET not set");
+      if (!env.CLERK_WEBHOOK_SECRET)
+        throw new ConvexError("CLERK_WEBHOOK_SECRET not set");
       webhookSecret = env.CLERK_WEBHOOK_SECRET;
     } catch {
-      return new Response("Webhook secret not set or invalid env", { status: 500 });
+      return new Response("Webhook secret not set or invalid env", {
+        status: 500,
+      });
     }
 
     const svixId = request.headers.get("svix-id");
@@ -340,7 +406,9 @@ http.route({
   path: "/resend-inbound",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
-    const limitStatus = await rateLimiter.limit(ctx, "webhook", { key: clientIp(request) });
+    const limitStatus = await rateLimiter.limit(ctx, "webhook", {
+      key: clientIp(request),
+    });
     if (!limitStatus.ok) {
       return new Response("Too many requests", { status: 429 });
     }
@@ -349,11 +417,14 @@ http.route({
     let resendApiKey: string | undefined;
     try {
       const env = getValidatedEnv();
-      if (!env.RESEND_WEBHOOK_SECRET) throw new ConvexError("RESEND_WEBHOOK_SECRET not set");
+      if (!env.RESEND_WEBHOOK_SECRET)
+        throw new ConvexError("RESEND_WEBHOOK_SECRET not set");
       webhookSecret = env.RESEND_WEBHOOK_SECRET;
       resendApiKey = env.RESEND_API_KEY;
     } catch {
-      return new Response("Webhook secret not set or invalid env", { status: 500 });
+      return new Response("Webhook secret not set or invalid env", {
+        status: 500,
+      });
     }
 
     const svixId = request.headers.get("svix-id");
@@ -397,9 +468,12 @@ http.route({
       let bodyText: string | undefined;
       let bodyHtml: string | undefined;
       if (resendApiKey) {
-        const contentRes = await fetch(`https://api.resend.com/emails/receiving/${email_id}`, {
-          headers: { Authorization: `Bearer ${resendApiKey}` },
-        });
+        const contentRes = await fetch(
+          `https://api.resend.com/emails/receiving/${email_id}`,
+          {
+            headers: { Authorization: `Bearer ${resendApiKey}` },
+          },
+        );
         if (contentRes.ok) {
           const content = await contentRes.json();
           bodyText = content.text;
@@ -459,8 +533,13 @@ http.route({
       return new Response("Too many requests", { status: 429 });
     }
 
-    const settings = await ctx.runQuery(internal.whatsapp.getSettingsByOrg, { orgId });
-    if (!settings?.whatsappWebhookSecret || settings.whatsappWebhookSecret !== token) {
+    const settings = await ctx.runQuery(internal.whatsapp.getSettingsByOrg, {
+      orgId,
+    });
+    if (
+      !settings?.whatsappWebhookSecret ||
+      settings.whatsappWebhookSecret !== token
+    ) {
       return new Response("Forbidden", { status: 403 });
     }
 
@@ -484,10 +563,13 @@ http.route({
     let appSecret: string;
     try {
       const env = getValidatedEnv();
-      if (!env.WHATSAPP_APP_SECRET) throw new ConvexError("WHATSAPP_APP_SECRET not set");
+      if (!env.WHATSAPP_APP_SECRET)
+        throw new ConvexError("WHATSAPP_APP_SECRET not set");
       appSecret = env.WHATSAPP_APP_SECRET;
     } catch {
-      return new Response("Webhook secret not set or invalid env", { status: 500 });
+      return new Response("Webhook secret not set or invalid env", {
+        status: 500,
+      });
     }
 
     const rawBody = await request.text();
@@ -496,28 +578,31 @@ http.route({
       return new Response("Invalid signature", { status: 401 });
     }
 
-    let body: any;
+    let body: Record<string, unknown> | undefined;
     try {
-      body = JSON.parse(rawBody);
+      body = optionalRecord(JSON.parse(rawBody));
     } catch {
       return new Response("Invalid JSON", { status: 400 });
     }
 
     // Walk the WhatsApp Cloud API payload structure
-    const entry = body?.entry?.[0];
-    const change = entry?.changes?.[0]?.value;
-    const message = change?.messages?.[0];
+    const entry = recordArray(body?.entry)[0];
+    const change = optionalRecord(recordArray(entry?.changes)[0]?.value);
+    const message = recordArray(change?.messages)[0];
 
     if (!message) {
       // Delivery receipts and status updates — acknowledge silently
       return new Response(null, { status: 200 });
     }
 
-    const senderPhone = message.from as string;
-    const senderName: string | undefined =
-      change?.contacts?.[0]?.profile?.name;
+    const senderPhone = optionalMetaId(message.from);
+    if (!senderPhone) return new Response("Bad request", { status: 400 });
+    const contact = recordArray(change?.contacts)[0];
+    const profile = optionalRecord(contact?.profile);
+    const senderName = optionalString(profile?.name);
+    const textPayload = optionalRecord(message.text);
     const messageText: string | undefined =
-      message.type === "text" ? message.text?.body : undefined;
+      message.type === "text" ? optionalString(textPayload?.body) : undefined;
 
     try {
       await ctx.runMutation(internal.whatsapp.handleIncomingMessage, {
@@ -567,7 +652,10 @@ http.route({
       return Response.redirect(`${appUrl}/?instagramConnectError=1`, 302);
     }
 
-    const stateRecord = await ctx.runMutation(internal.socialIntegrations.consumeOAuthState, { state });
+    const stateRecord = await ctx.runMutation(
+      internal.socialIntegrations.consumeOAuthState,
+      { state },
+    );
     if (!stateRecord) {
       return Response.redirect(`${appUrl}/?instagramConnectError=1`, 302);
     }
@@ -581,6 +669,8 @@ http.route({
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      const userMessage =
+        "Instagram connection failed. Please try again later.";
       await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
         source: "instagram-oauth",
         status: "error",
@@ -588,8 +678,8 @@ http.route({
         error: message,
       });
       return Response.redirect(
-        `${settingsUrl}?connected=instagram&error=1&errorMessage=${encodeURIComponent(message)}`,
-        302
+        `${settingsUrl}?connected=instagram&error=1&errorMessage=${encodeURIComponent(userMessage)}`,
+        302,
       );
     }
 
@@ -616,18 +706,26 @@ http.route({
   method: "POST",
   handler: httpAction(async (ctx, request) => {
     const env = getValidatedEnv();
-    if (!env.INSTAGRAM_APP_SECRET) return new Response("Not configured", { status: 500 });
+    if (!env.INSTAGRAM_APP_SECRET)
+      return new Response("Not configured", { status: 500 });
 
     const form = await request.formData().catch(() => null);
     const signedRequest = form?.get("signed_request")?.toString();
     if (!signedRequest) return new Response("Bad request", { status: 400 });
 
-    const payload = await verifyMetaSignedRequest(signedRequest, env.INSTAGRAM_APP_SECRET);
-    if (!payload?.user_id) return new Response("Invalid signature", { status: 400 });
+    const payload = await verifyMetaSignedRequest(
+      signedRequest,
+      env.INSTAGRAM_APP_SECRET,
+    );
+    if (!payload?.user_id)
+      return new Response("Invalid signature", { status: 400 });
 
-    await ctx.runMutation(internal.socialIntegrations.disconnectByInstagramUserId, {
-      instagramBusinessAccountId: String(payload.user_id),
-    });
+    await ctx.runMutation(
+      internal.socialIntegrations.disconnectByInstagramUserId,
+      {
+        instagramBusinessAccountId: String(payload.user_id),
+      },
+    );
     await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
       source: "instagram-oauth",
       status: "success",
@@ -643,21 +741,29 @@ http.route({
   method: "POST",
   handler: httpAction(async (ctx, request) => {
     const env = getValidatedEnv();
-    if (!env.INSTAGRAM_APP_SECRET) return new Response("Not configured", { status: 500 });
+    if (!env.INSTAGRAM_APP_SECRET)
+      return new Response("Not configured", { status: 500 });
 
     const form = await request.formData().catch(() => null);
     const signedRequest = form?.get("signed_request")?.toString();
     if (!signedRequest) return new Response("Bad request", { status: 400 });
 
-    const payload = await verifyMetaSignedRequest(signedRequest, env.INSTAGRAM_APP_SECRET);
-    if (!payload?.user_id) return new Response("Invalid signature", { status: 400 });
+    const payload = await verifyMetaSignedRequest(
+      signedRequest,
+      env.INSTAGRAM_APP_SECRET,
+    );
+    if (!payload?.user_id)
+      return new Response("Invalid signature", { status: 400 });
 
     // We only ever stored the dealer's own IG business account ID, access
     // token, and display name on orgSettings — clearing those is a complete
     // erasure, no async job needed.
-    await ctx.runMutation(internal.socialIntegrations.disconnectByInstagramUserId, {
-      instagramBusinessAccountId: String(payload.user_id),
-    });
+    await ctx.runMutation(
+      internal.socialIntegrations.disconnectByInstagramUserId,
+      {
+        instagramBusinessAccountId: String(payload.user_id),
+      },
+    );
 
     const confirmationCode = `${payload.user_id}-${Date.now()}`;
     await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
@@ -672,7 +778,7 @@ http.route({
         url: `${appUrl}/data-deletion-status?id=${confirmationCode}`,
         confirmation_code: confirmationCode,
       }),
-      { status: 200, headers: { "Content-Type": "application/json" } }
+      { status: 200, headers: { "Content-Type": "application/json" } },
     );
   }),
 });
@@ -701,7 +807,10 @@ http.route({
     }
 
     const env = getValidatedEnv();
-    if (!env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN || env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN !== token) {
+    if (
+      !env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN ||
+      env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN !== token
+    ) {
       return new Response("Forbidden", { status: 403 });
     }
 
@@ -716,10 +825,13 @@ http.route({
     let appSecret: string;
     try {
       const env = getValidatedEnv();
-      if (!env.INSTAGRAM_APP_SECRET) throw new ConvexError("INSTAGRAM_APP_SECRET not set");
+      if (!env.INSTAGRAM_APP_SECRET)
+        throw new ConvexError("INSTAGRAM_APP_SECRET not set");
       appSecret = env.INSTAGRAM_APP_SECRET;
     } catch {
-      return new Response("Webhook secret not set or invalid env", { status: 500 });
+      return new Response("Webhook secret not set or invalid env", {
+        status: 500,
+      });
     }
 
     const rawBody = await request.text();
@@ -728,9 +840,9 @@ http.route({
       return new Response("Invalid signature", { status: 401 });
     }
 
-    let body: any;
+    let body: Record<string, unknown> | undefined;
     try {
-      body = JSON.parse(rawBody);
+      body = optionalRecord(JSON.parse(rawBody));
     } catch {
       return new Response("Invalid JSON", { status: 400 });
     }
@@ -739,14 +851,16 @@ http.route({
     // comments/DMs for one account into changes[]/messaging[], when volume is
     // high. Processing only [0] of each would silently drop the rest of a
     // burst — so we iterate everything in the payload.
-    const entries: any[] = Array.isArray(body?.entry) ? body.entry : [];
+    const entries = recordArray(body?.entry);
     let anyRateLimited = false;
 
     for (const entry of entries) {
-      const igAccountId: string | undefined = entry?.id;
+      const igAccountId = optionalMetaId(entry.id);
       if (!igAccountId) continue;
 
-      const limitStatus = await rateLimiter.limit(ctx, "webhook", { key: igAccountId });
+      const limitStatus = await rateLimiter.limit(ctx, "webhook", {
+        key: igAccountId,
+      });
       if (!limitStatus.ok) {
         // Skip this account's events for now but signal the batch as
         // rate-limited so we return 429 below — Meta will redeliver the
@@ -757,9 +871,12 @@ http.route({
         continue;
       }
 
-      const settings = await ctx.runQuery(internal.instagramEngagement.getSettingsByInstagramAccountId, {
-        instagramBusinessAccountId: igAccountId,
-      });
+      const settings = await ctx.runQuery(
+        internal.instagramEngagement.getSettingsByInstagramAccountId,
+        {
+          instagramBusinessAccountId: igAccountId,
+        },
+      );
       if (!settings) {
         // Unrecognized account (not connected to any org, or already
         // disconnected) — acknowledge so Meta doesn't retry forever.
@@ -769,66 +886,86 @@ http.route({
 
       // Comments arrive via entry[].changes[] (field === "comments");
       // DMs arrive via entry[].messaging[] (Messenger-style payload shape).
-      const commentChanges = (entry?.changes ?? []).filter((c: any) => c.field === "comments");
-      const messagingEvents: any[] = entry?.messaging ?? [];
+      const commentChanges = recordArray(entry.changes).filter(
+        (commentChange) => commentChange.field === "comments",
+      );
+      const messagingEvents = recordArray(entry.messaging);
 
       for (const commentChange of commentChanges) {
-        const value = commentChange?.value;
+        const value = optionalRecord(commentChange.value);
         if (!value?.id) continue;
+        const from = optionalRecord(value.from);
+        const media = optionalRecord(value.media);
 
-        const summary = `Comment from ${value.from?.username ?? value.from?.id}`;
+        const summary = `Comment from ${optionalString(from?.username) ?? optionalMetaId(from?.id)}`;
         try {
-          const fromId = String(value.from?.id ?? "");
+          const fromId = optionalMetaId(from?.id) ?? "";
           const isOwnAccount =
             fromId !== "" &&
-            (fromId === settings.instagramBusinessAccountId || fromId === settings.instagramWebhookAccountId);
+            (fromId === settings.instagramBusinessAccountId ||
+              fromId === settings.instagramWebhookAccountId);
           if (isOwnAccount) {
             // Our own auto/manual reply re-arriving as a webhook (Instagram fires a
             // "comments" event for replies we post too) — acknowledge without
             // reprocessing it as a new inbound comment, or we'd auto-reply to ourselves.
             continue;
           }
-          const result = await ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
-            orgId,
-            kind: "comment",
-            externalId: String(value.id),
-            senderInstagramId: String(value.from?.id ?? ""),
-            senderUsername: value.from?.username,
-            text: value.text,
-            mediaId: value.media?.id ? String(value.media.id) : undefined,
-          });
+          const result = await ctx.runMutation(
+            internal.instagramEngagement.handleIncomingInstagramEvent,
+            {
+              orgId,
+              kind: "comment",
+              externalId: String(value.id),
+              senderInstagramId: fromId,
+              senderUsername: optionalString(from?.username),
+              text: optionalString(value.text),
+              mediaId: optionalMetaId(media?.id),
+            },
+          );
           if (result?.shouldAutoReply && result.replyText) {
             if (result.smartReplyVisibility === "dm") {
-              await ctx.runAction(internal.instagramEngagement.sendDirectMessage, {
-                orgId,
-                recipientInstagramId: String(value.from?.id ?? ""),
-                message: result.replyText,
-              });
+              await ctx.runAction(
+                internal.instagramEngagement.sendDirectMessage,
+                {
+                  orgId,
+                  recipientInstagramId: fromId,
+                  message: result.replyText,
+                },
+              );
             } else {
-              await ctx.runAction(internal.instagramEngagement.sendCommentReply, {
-                orgId,
-                commentId: String(value.id),
-                message: result.replyText,
-              });
+              await ctx.runAction(
+                internal.instagramEngagement.sendCommentReply,
+                {
+                  orgId,
+                  commentId: String(value.id),
+                  message: result.replyText,
+                },
+              );
             }
           }
           if (result?.needsProfileEnrichment && result.customerId) {
-            await ctx.runAction(internal.instagramEngagement.enrichCustomerProfile, {
-              orgId,
-              customerId: result.customerId,
-              senderInstagramId: String(value.from?.id ?? ""),
-            });
+            await ctx.runAction(
+              internal.instagramEngagement.enrichCustomerProfile,
+              {
+                orgId,
+                customerId: result.customerId,
+                senderInstagramId: fromId,
+              },
+            );
           }
           // If no vehicle was matched via socialPosts, try the comment text
           // first then the post caption (covers posts not published through AutoFlow).
-          const mediaId = value.media?.id ? String(value.media.id) : undefined;
+          const mediaId = optionalMetaId(media?.id);
           if (result && !result.vehicleId) {
-            await ctx.runAction(internal.instagramEngagement.enrichEventVehicleFromPost, {
-              orgId,
-              externalId: String(value.id),
-              mediaId,
-              text: value.text,
-            });
+            await ctx.runAction(
+              internal.instagramEngagement.enrichEventVehicleFromPost,
+              {
+                orgId,
+                externalId: String(value.id),
+                mediaId,
+                text: optionalString(value.text),
+              },
+            );
           }
           await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
             source: "instagram",
@@ -846,45 +983,65 @@ http.route({
       }
 
       for (const messagingEvent of messagingEvents) {
-        if (!messagingEvent?.message || messagingEvent.message.is_echo) {
+        const message = optionalRecord(messagingEvent.message);
+        if (!message || message.is_echo === true) {
           // Echoes, reactions, read receipts, etc. — skip silently.
           continue;
         }
 
-        const senderId = String(messagingEvent.sender?.id ?? "");
+        const sender = optionalRecord(messagingEvent.sender);
+        const senderId = optionalMetaId(sender?.id) ?? "";
         if (!senderId) continue;
         const messageText = metaMessageText(messagingEvent);
         const summary = `DM from ${senderId}`;
         try {
-          const result = await ctx.runMutation(internal.instagramEngagement.handleIncomingInstagramEvent, {
-            orgId,
-            kind: "dm",
-            externalId: String(messagingEvent.message.mid ?? `${senderId}-${messagingEvent.timestamp}`),
-            senderInstagramId: senderId,
-            text: messageText,
-          });
-          if (result?.shouldAutoReply && result.replyText) {
-            await ctx.runAction(internal.instagramEngagement.sendDirectMessage, {
+          const result = await ctx.runMutation(
+            internal.instagramEngagement.handleIncomingInstagramEvent,
+            {
               orgId,
-              recipientInstagramId: senderId,
-              message: result.replyText,
-            });
+              kind: "dm",
+              externalId: String(
+                optionalMetaId(message.mid) ??
+                  `${senderId}-${optionalMetaId(messagingEvent.timestamp) ?? "unknown"}`,
+              ),
+              senderInstagramId: senderId,
+              text: messageText,
+            },
+          );
+          if (result?.shouldAutoReply && result.replyText) {
+            await ctx.runAction(
+              internal.instagramEngagement.sendDirectMessage,
+              {
+                orgId,
+                recipientInstagramId: senderId,
+                message: result.replyText,
+              },
+            );
           }
           if (result?.needsProfileEnrichment && result.customerId) {
-            await ctx.runAction(internal.instagramEngagement.enrichCustomerProfile, {
-              orgId,
-              customerId: result.customerId,
-              senderInstagramId: senderId,
-            });
+            await ctx.runAction(
+              internal.instagramEngagement.enrichCustomerProfile,
+              {
+                orgId,
+                customerId: result.customerId,
+                senderInstagramId: senderId,
+              },
+            );
           }
           // Try to match a vehicle from the DM text (customer often mentions
           // the car they saw in a post, e.g. "I want the E-Bora 2020").
           if (result && !result.vehicleId && messageText) {
-            await ctx.runAction(internal.instagramEngagement.enrichEventVehicleFromPost, {
-              orgId,
-              externalId: String(messagingEvent.message.mid ?? `${senderId}-${messagingEvent.timestamp}`),
-              text: messageText,
-            });
+            await ctx.runAction(
+              internal.instagramEngagement.enrichEventVehicleFromPost,
+              {
+                orgId,
+                externalId: String(
+                  optionalMetaId(message.mid) ??
+                    `${senderId}-${optionalMetaId(messagingEvent.timestamp) ?? "unknown"}`,
+                ),
+                text: messageText,
+              },
+            );
           }
           await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
             source: "instagram",
@@ -931,7 +1088,10 @@ http.route({
       return Response.redirect(`${appUrl}/?facebookConnectError=1`, 302);
     }
 
-    const stateRecord = await ctx.runMutation(internal.facebookIntegrations.consumeOAuthState, { state });
+    const stateRecord = await ctx.runMutation(
+      internal.facebookIntegrations.consumeOAuthState,
+      { state },
+    );
     if (!stateRecord) {
       return Response.redirect(`${appUrl}/?facebookConnectError=1`, 302);
     }
@@ -953,7 +1113,7 @@ http.route({
       });
       return Response.redirect(
         `${settingsUrl}?connected=facebook&error=1&errorMessage=${encodeURIComponent(message)}`,
-        302
+        302,
       );
     }
 
@@ -980,18 +1140,26 @@ http.route({
   method: "POST",
   handler: httpAction(async (ctx, request) => {
     const env = getValidatedEnv();
-    if (!env.FACEBOOK_APP_SECRET) return new Response("Not configured", { status: 500 });
+    if (!env.FACEBOOK_APP_SECRET)
+      return new Response("Not configured", { status: 500 });
 
     const form = await request.formData().catch(() => null);
     const signedRequest = form?.get("signed_request")?.toString();
     if (!signedRequest) return new Response("Bad request", { status: 400 });
 
-    const payload = await verifyMetaSignedRequest(signedRequest, env.FACEBOOK_APP_SECRET);
-    if (!payload?.user_id) return new Response("Invalid signature", { status: 400 });
+    const payload = await verifyMetaSignedRequest(
+      signedRequest,
+      env.FACEBOOK_APP_SECRET,
+    );
+    if (!payload?.user_id)
+      return new Response("Invalid signature", { status: 400 });
 
-    await ctx.runMutation(internal.facebookIntegrations.disconnectByFacebookConnectedUserId, {
-      facebookConnectedByUserId: String(payload.user_id),
-    });
+    await ctx.runMutation(
+      internal.facebookIntegrations.disconnectByFacebookConnectedUserId,
+      {
+        facebookConnectedByUserId: String(payload.user_id),
+      },
+    );
     await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
       source: "facebook-oauth",
       status: "success",
@@ -1007,21 +1175,29 @@ http.route({
   method: "POST",
   handler: httpAction(async (ctx, request) => {
     const env = getValidatedEnv();
-    if (!env.FACEBOOK_APP_SECRET) return new Response("Not configured", { status: 500 });
+    if (!env.FACEBOOK_APP_SECRET)
+      return new Response("Not configured", { status: 500 });
 
     const form = await request.formData().catch(() => null);
     const signedRequest = form?.get("signed_request")?.toString();
     if (!signedRequest) return new Response("Bad request", { status: 400 });
 
-    const payload = await verifyMetaSignedRequest(signedRequest, env.FACEBOOK_APP_SECRET);
-    if (!payload?.user_id) return new Response("Invalid signature", { status: 400 });
+    const payload = await verifyMetaSignedRequest(
+      signedRequest,
+      env.FACEBOOK_APP_SECRET,
+    );
+    if (!payload?.user_id)
+      return new Response("Invalid signature", { status: 400 });
 
     // We only ever stored the dealer's own Page ID, access token, and
     // display name on orgSettings — clearing those is a complete erasure,
     // no async job needed.
-    await ctx.runMutation(internal.facebookIntegrations.disconnectByFacebookConnectedUserId, {
-      facebookConnectedByUserId: String(payload.user_id),
-    });
+    await ctx.runMutation(
+      internal.facebookIntegrations.disconnectByFacebookConnectedUserId,
+      {
+        facebookConnectedByUserId: String(payload.user_id),
+      },
+    );
 
     const confirmationCode = `${payload.user_id}-${Date.now()}`;
     await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
@@ -1036,7 +1212,7 @@ http.route({
         url: `${appUrl}/data-deletion-status?id=${confirmationCode}`,
         confirmation_code: confirmationCode,
       }),
-      { status: 200, headers: { "Content-Type": "application/json" } }
+      { status: 200, headers: { "Content-Type": "application/json" } },
     );
   }),
 });
@@ -1063,7 +1239,10 @@ http.route({
     }
 
     const env = getValidatedEnv();
-    if (!env.FACEBOOK_WEBHOOK_VERIFY_TOKEN || env.FACEBOOK_WEBHOOK_VERIFY_TOKEN !== token) {
+    if (
+      !env.FACEBOOK_WEBHOOK_VERIFY_TOKEN ||
+      env.FACEBOOK_WEBHOOK_VERIFY_TOKEN !== token
+    ) {
       return new Response("Forbidden", { status: 403 });
     }
 
@@ -1078,10 +1257,13 @@ http.route({
     let appSecret: string;
     try {
       const env = getValidatedEnv();
-      if (!env.FACEBOOK_APP_SECRET) throw new ConvexError("FACEBOOK_APP_SECRET not set");
+      if (!env.FACEBOOK_APP_SECRET)
+        throw new ConvexError("FACEBOOK_APP_SECRET not set");
       appSecret = env.FACEBOOK_APP_SECRET;
     } catch {
-      return new Response("Webhook secret not set or invalid env", { status: 500 });
+      return new Response("Webhook secret not set or invalid env", {
+        status: 500,
+      });
     }
 
     const rawBody = await request.text();
@@ -1090,9 +1272,9 @@ http.route({
       return new Response("Invalid signature", { status: 401 });
     }
 
-    let body: any;
+    let body: Record<string, unknown> | undefined;
     try {
-      body = JSON.parse(rawBody);
+      body = optionalRecord(JSON.parse(rawBody));
     } catch {
       return new Response("Invalid JSON", { status: 400 });
     }
@@ -1102,14 +1284,16 @@ http.route({
     // high. Processing only [0] of each would silently drop the rest of a
     // burst — so we iterate everything in the payload (mirrors the
     // Instagram handler above).
-    const entries: any[] = Array.isArray(body?.entry) ? body.entry : [];
+    const entries = recordArray(body?.entry);
     let anyRateLimited = false;
 
     for (const entry of entries) {
-      const pageId: string | undefined = entry?.id;
+      const pageId = optionalMetaId(entry.id);
       if (!pageId) continue;
 
-      const limitStatus = await rateLimiter.limit(ctx, "webhook", { key: pageId });
+      const limitStatus = await rateLimiter.limit(ctx, "webhook", {
+        key: pageId,
+      });
       if (!limitStatus.ok) {
         // Skip this page's events for now but signal the batch as
         // rate-limited so we return 429 below — Meta will redeliver the
@@ -1120,9 +1304,12 @@ http.route({
         continue;
       }
 
-      const settings = await ctx.runQuery(internal.facebookEngagement.getSettingsByFacebookPageId, {
-        facebookPageId: pageId,
-      });
+      const settings = await ctx.runQuery(
+        internal.facebookEngagement.getSettingsByFacebookPageId,
+        {
+          facebookPageId: pageId,
+        },
+      );
       if (!settings) {
         // Unrecognized Page (not connected to any org, or already
         // disconnected) — acknowledge so Meta doesn't retry forever.
@@ -1133,17 +1320,19 @@ http.route({
       // Page comments arrive via entry[].changes[] (field === "feed",
       // value.item === "comment"); Messenger DMs arrive via entry[].messaging[]
       // (same shape Instagram DMs use — both ride the Messenger Platform).
-      const feedChanges = (entry?.changes ?? []).filter(
-        (c: any) => c.field === "feed" && c.value?.item === "comment"
-      );
-      const messagingEvents: any[] = entry?.messaging ?? [];
+      const feedChanges = recordArray(entry.changes).filter((feedChange) => {
+        const value = optionalRecord(feedChange.value);
+        return feedChange.field === "feed" && value?.item === "comment";
+      });
+      const messagingEvents = recordArray(entry.messaging);
 
       for (const feedChange of feedChanges) {
-        const value = feedChange?.value;
+        const value = optionalRecord(feedChange.value);
         if (!value?.comment_id || value.verb !== "add") continue;
+        const from = optionalRecord(value.from);
 
-        const fromId = String(value.from?.id ?? "");
-        const summary = `Comment from ${value.from?.name ?? fromId}`;
+        const fromId = optionalMetaId(from?.id) ?? "";
+        const summary = `Comment from ${optionalString(from?.name) ?? fromId}`;
         const fbPostId = facebookMediaIdFromFeedValue(value);
         const sourceSurface = facebookSurfaceFromPayload(value);
         try {
@@ -1156,29 +1345,38 @@ http.route({
             continue;
           }
 
-          const result = await ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
-            orgId,
-            kind: "comment",
-            externalId: String(value.comment_id),
-            senderFacebookId: fromId,
-            senderName: value.from?.name,
-            text: value.message,
-            mediaId: fbPostId,
-            sourceSurface,
-          });
+          const result = await ctx.runMutation(
+            internal.facebookEngagement.handleIncomingFacebookEvent,
+            {
+              orgId,
+              kind: "comment",
+              externalId: String(value.comment_id),
+              senderFacebookId: fromId,
+              senderName: optionalString(from?.name),
+              text: optionalString(value.message),
+              mediaId: fbPostId,
+              sourceSurface,
+            },
+          );
           if (result?.shouldAutoReply && result.replyText) {
             if (result.smartReplyVisibility === "dm") {
-              await ctx.runAction(internal.facebookEngagement.sendDirectMessage, {
-                orgId,
-                recipientFacebookId: fromId,
-                message: result.replyText,
-              });
+              await ctx.runAction(
+                internal.facebookEngagement.sendDirectMessage,
+                {
+                  orgId,
+                  recipientFacebookId: fromId,
+                  message: result.replyText,
+                },
+              );
             } else {
-              await ctx.runAction(internal.facebookEngagement.sendCommentReply, {
-                orgId,
-                commentId: String(value.comment_id),
-                message: result.replyText,
-              });
+              await ctx.runAction(
+                internal.facebookEngagement.sendCommentReply,
+                {
+                  orgId,
+                  commentId: String(value.comment_id),
+                  message: result.replyText,
+                },
+              );
             }
           }
           // If no vehicle was matched via socialPosts, try extracting one from
@@ -1186,12 +1384,15 @@ http.route({
           // published through AutoFlow, including WhatsApp-link style posts
           // where the vehicle name lives in the attachment title).
           if (result && !result.vehicleId) {
-            await ctx.runAction(internal.facebookEngagement.enrichEventVehicleFromPost, {
-              orgId,
-              externalId: String(value.comment_id),
-              postId: fbPostId,
-              text: value.message,
-            });
+            await ctx.runAction(
+              internal.facebookEngagement.enrichEventVehicleFromPost,
+              {
+                orgId,
+                externalId: String(value.comment_id),
+                postId: fbPostId,
+                text: optionalString(value.message),
+              },
+            );
           }
           await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
             source: "facebook",
@@ -1209,27 +1410,35 @@ http.route({
       }
 
       for (const messagingEvent of messagingEvents) {
-        if (!messagingEvent?.message || messagingEvent.message.is_echo) {
+        const message = optionalRecord(messagingEvent.message);
+        if (!message || message.is_echo === true) {
           // Echoes, reactions, read receipts, etc. — skip silently.
           continue;
         }
 
-        const senderId = String(messagingEvent.sender?.id ?? "");
+        const sender = optionalRecord(messagingEvent.sender);
+        const senderId = optionalMetaId(sender?.id) ?? "";
         if (!senderId) continue;
         const messageText = metaMessageText(messagingEvent);
         const mediaId = facebookMessageMediaId(messagingEvent);
         const sourceSurface = facebookSurfaceFromPayload(messagingEvent);
         const summary = `DM from ${senderId}`;
         try {
-          const result = await ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
-            orgId,
-            kind: "dm",
-            externalId: String(messagingEvent.message.mid ?? `${senderId}-${messagingEvent.timestamp}`),
-            senderFacebookId: senderId,
-            text: messageText,
-            mediaId,
-            sourceSurface,
-          });
+          const result = await ctx.runMutation(
+            internal.facebookEngagement.handleIncomingFacebookEvent,
+            {
+              orgId,
+              kind: "dm",
+              externalId: String(
+                optionalMetaId(message.mid) ??
+                  `${senderId}-${optionalMetaId(messagingEvent.timestamp) ?? "unknown"}`,
+              ),
+              senderFacebookId: senderId,
+              text: messageText,
+              mediaId,
+              sourceSurface,
+            },
+          );
           if (result?.shouldAutoReply && result.replyText) {
             await ctx.runAction(internal.facebookEngagement.sendDirectMessage, {
               orgId,
@@ -1240,12 +1449,18 @@ http.route({
           // Try to match a vehicle from the DM text (customer often mentions
           // the car they saw in a post, e.g. "I want the E-Bora 2020").
           if (result && !result.vehicleId && (messageText || mediaId)) {
-            await ctx.runAction(internal.facebookEngagement.enrichEventVehicleFromPost, {
-              orgId,
-              externalId: String(messagingEvent.message.mid ?? `${senderId}-${messagingEvent.timestamp}`),
-              postId: mediaId,
-              text: messageText,
-            });
+            await ctx.runAction(
+              internal.facebookEngagement.enrichEventVehicleFromPost,
+              {
+                orgId,
+                externalId: String(
+                  optionalMetaId(message.mid) ??
+                    `${senderId}-${optionalMetaId(messagingEvent.timestamp) ?? "unknown"}`,
+                ),
+                postId: mediaId,
+                text: messageText,
+              },
+            );
           }
           await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
             source: "facebook",

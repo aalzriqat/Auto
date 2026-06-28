@@ -5,7 +5,7 @@ export default defineConfig({
     environment: "jsdom",
     setupFiles: ["./vitest.setup.ts"],
     include: ["**/*.test.ts", "**/*.test.tsx"],
-    exclude: ["node_modules", ".next", "out", "build"],
+    exclude: ["node_modules", "**/node_modules/**", ".next", "out", "build"],
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov", "html", "json-summary"],
@@ -30,9 +30,7 @@ export default defineConfig({
         "lib/notifications/types.ts",
         "lib/notifications/render.ts",
       ],
-      exclude: [
-        "convex/_generated/**",
-      ],
+      exclude: ["convex/_generated/**"],
       thresholds: {
         lines: 90,
         functions: 85,

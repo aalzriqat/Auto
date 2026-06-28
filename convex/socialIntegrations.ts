@@ -1,5 +1,11 @@
 import { v, ConvexError } from "convex/values";
-import { mutation, query, internalMutation, internalQuery, internalAction } from "./_generated/server";
+import {
+  mutation,
+  query,
+  internalMutation,
+  internalQuery,
+  internalAction,
+} from "./_generated/server";
 import { internal } from "./_generated/api";
 import { requireOwner, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -8,6 +14,8 @@ import { DEFAULT_SETTINGS } from "./orgSettings";
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const INSTAGRAM_GRAPH_VERSION = "v21.0";
+const INSTAGRAM_CONNECT_FAILURE_MESSAGE =
+  "Instagram connection failed. Please verify the Instagram app settings and try again.";
 
 // This app is configured as "API setup with Instagram Login" in the Meta
 // dashboard (confirmed live — "API setup with Facebook Login" scopes were
@@ -21,6 +29,122 @@ const INSTAGRAM_SCOPES = [
   "instagram_business_manage_comments",
   "instagram_business_manage_messages",
 ].join(",");
+
+type MetaJsonObject = Record<string, unknown>;
+
+function isRecord(value: unknown): value is MetaJsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function stringField(record: MetaJsonObject, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+function numberField(record: MetaJsonObject, key: string): number | undefined {
+  const value = record[key];
+  return typeof value === "number" ? value : undefined;
+}
+
+function getMetaErrorMessage(
+  payload: MetaJsonObject,
+  fallback: string,
+): string {
+  const direct = stringField(payload, "error_message");
+  if (direct) return direct;
+
+  const error = payload.error;
+  if (isRecord(error)) {
+    const message = stringField(error, "message");
+    if (message) return message;
+  }
+
+  return fallback || "Unknown Instagram API error";
+}
+
+async function readMetaJson(
+  response: Response,
+  transformText?: (text: string) => string,
+): Promise<MetaJsonObject> {
+  const rawText = await response.text();
+  if (!rawText) return {};
+
+  try {
+    const parsed: unknown = JSON.parse(
+      transformText ? transformText(rawText) : rawText,
+    );
+    if (isRecord(parsed)) return parsed;
+  } catch (err) {
+    console.error("Failed to parse Instagram API response", err);
+  }
+
+  return {
+    error_message: response.statusText || "Invalid response from Instagram.",
+  };
+}
+
+function isGetMethodUnsupported(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("unsupported request") &&
+    normalized.includes("method type: get")
+  );
+}
+
+async function exchangeForLongLivedInstagramToken(
+  appSecret: string,
+  shortLivedToken: string,
+): Promise<{ accessToken: string; expiresInSeconds?: number }> {
+  const params = new URLSearchParams({
+    grant_type: "ig_exchange_token",
+    client_secret: appSecret,
+    access_token: shortLivedToken,
+  });
+
+  // Meta documents this exchange as GET, but some Instagram Login apps return
+  // "Unsupported request - method type: get"; retry POST only for that method failure.
+  const getUrl = new URL("https://graph.instagram.com/access_token");
+  getUrl.search = params.toString();
+  const getRes = await fetch(getUrl.toString(), { method: "GET" });
+  const getJson = await readMetaJson(getRes);
+  const getToken = stringField(getJson, "access_token");
+  if (getRes.ok && getToken) {
+    return {
+      accessToken: getToken,
+      expiresInSeconds: numberField(getJson, "expires_in"),
+    };
+  }
+
+  const getMessage = getMetaErrorMessage(getJson, getRes.statusText);
+  if (!isGetMethodUnsupported(getMessage)) {
+    throw new Error(getMessage);
+  }
+
+  console.error(
+    "Instagram long-lived token exchange GET rejected; retrying with POST.",
+    {
+      status: getRes.status,
+      error: getMessage,
+    },
+  );
+
+  const postRes = await fetch("https://graph.instagram.com/access_token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: params.toString(),
+  });
+  const postJson = await readMetaJson(postRes);
+  const postToken = stringField(postJson, "access_token");
+  if (postRes.ok && postToken) {
+    return {
+      accessToken: postToken,
+      expiresInSeconds: numberField(postJson, "expires_in"),
+    };
+  }
+
+  const postMessage = getMetaErrorMessage(postJson, postRes.statusText);
+  throw new Error(`${postMessage} (GET also failed: ${getMessage})`);
+}
 
 // ─── Public ───────────────────────────────────────────────────────────────────
 
@@ -36,10 +160,14 @@ export const createConnectUrl = mutation({
 
     const env = getValidatedEnv();
     if (!env.INSTAGRAM_APP_ID) {
-      throw new ConvexError("Instagram integration is not configured for this deployment.");
+      throw new ConvexError(
+        "Instagram integration is not configured for this deployment.",
+      );
     }
     if (!env.CONVEX_SITE_URL) {
-      throw new ConvexError("CONVEX_SITE_URL is unavailable — cannot build the OAuth redirect URI.");
+      throw new ConvexError(
+        "CONVEX_SITE_URL is unavailable — cannot build the OAuth redirect URI.",
+      );
     }
 
     const state = crypto.randomUUID();
@@ -79,23 +207,43 @@ export const getConnectionStatus = query({
       .unique();
 
     return {
-      instagramConnected: Boolean(settings?.instagramAccessToken && settings?.instagramBusinessAccountId),
+      instagramConnected: Boolean(
+        settings?.instagramAccessToken && settings?.instagramBusinessAccountId,
+      ),
       instagramPageName: settings?.instagramPageName,
       socialAutoPostEnabled: settings?.socialAutoPostEnabled ?? false,
       instagramAutoReplyEnabled: settings?.instagramAutoReplyEnabled ?? false,
-      instagramAutoReplyForDmsEnabled: settings?.instagramAutoReplyForDmsEnabled ?? settings?.instagramAutoReplyEnabled ?? false,
-      instagramAutoReplyForCommentsEnabled: settings?.instagramAutoReplyForCommentsEnabled ?? settings?.instagramAutoReplyEnabled ?? false,
+      instagramAutoReplyForDmsEnabled:
+        settings?.instagramAutoReplyForDmsEnabled ??
+        settings?.instagramAutoReplyEnabled ??
+        false,
+      instagramAutoReplyForCommentsEnabled:
+        settings?.instagramAutoReplyForCommentsEnabled ??
+        settings?.instagramAutoReplyEnabled ??
+        false,
       instagramAutoReplyMessages: settings?.instagramAutoReplyMessages ?? [],
-      instagramAutoReplyMobileReceivedMessage: settings?.instagramAutoReplyMobileReceivedMessage,
-      instagramLeadFromCommentsEnabled: settings?.instagramLeadFromCommentsEnabled !== false,
-      instagramLeadFromDmsEnabled: settings?.instagramLeadFromDmsEnabled !== false,
-      instagramLeadFromDmsRequiresMobile: settings?.instagramLeadFromDmsRequiresMobile ?? false,
+      instagramAutoReplyMobileReceivedMessage:
+        settings?.instagramAutoReplyMobileReceivedMessage,
+      instagramLeadFromCommentsEnabled:
+        settings?.instagramLeadFromCommentsEnabled !== false,
+      instagramLeadFromDmsEnabled:
+        settings?.instagramLeadFromDmsEnabled !== false,
+      instagramLeadFromDmsRequiresMobile:
+        settings?.instagramLeadFromDmsRequiresMobile ?? false,
       instagramSmartReplyEnabled: settings?.instagramSmartReplyEnabled ?? false,
-      instagramSmartReplyForDmsEnabled: settings?.instagramSmartReplyForDmsEnabled ?? settings?.instagramSmartReplyEnabled ?? false,
-      instagramSmartReplyForCommentsEnabled: settings?.instagramSmartReplyForCommentsEnabled ?? settings?.instagramSmartReplyEnabled ?? false,
+      instagramSmartReplyForDmsEnabled:
+        settings?.instagramSmartReplyForDmsEnabled ??
+        settings?.instagramSmartReplyEnabled ??
+        false,
+      instagramSmartReplyForCommentsEnabled:
+        settings?.instagramSmartReplyForCommentsEnabled ??
+        settings?.instagramSmartReplyEnabled ??
+        false,
       smartReplyFinancingMode: settings?.smartReplyFinancingMode ?? "generic",
-      smartReplyDefaultDownPaymentPercent: settings?.smartReplyDefaultDownPaymentPercent,
-      smartReplyDefaultFinanceCompanyId: settings?.smartReplyDefaultFinanceCompanyId,
+      smartReplyDefaultDownPaymentPercent:
+        settings?.smartReplyDefaultDownPaymentPercent,
+      smartReplyDefaultFinanceCompanyId:
+        settings?.smartReplyDefaultFinanceCompanyId,
       smartReplyVisibility: settings?.smartReplyVisibility ?? "public",
       smartReplyCustomTemplatesEn: settings?.smartReplyCustomTemplatesEn,
       smartReplyCustomTemplatesAr: settings?.smartReplyCustomTemplatesAr,
@@ -125,7 +273,9 @@ export const setInstagramAutoReplyConfig = mutation({
     }
     const eitherEnabled = args.enabledForDms || args.enabledForComments;
     if (eitherEnabled && cleaned.length === 0) {
-      throw new ConvexError("Add at least one auto-reply message before enabling.");
+      throw new ConvexError(
+        "Add at least one auto-reply message before enabling.",
+      );
     }
 
     const settings = await ctx.db
@@ -133,7 +283,9 @@ export const setInstagramAutoReplyConfig = mutation({
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .unique();
     if (!settings) {
-      throw new ConvexError("Connect Instagram before configuring auto-replies.");
+      throw new ConvexError(
+        "Connect Instagram before configuring auto-replies.",
+      );
     }
 
     await ctx.db.patch(settings._id, {
@@ -141,7 +293,8 @@ export const setInstagramAutoReplyConfig = mutation({
       instagramAutoReplyForCommentsEnabled: args.enabledForComments,
       instagramAutoReplyEnabled: eitherEnabled,
       instagramAutoReplyMessages: cleaned,
-      instagramAutoReplyMobileReceivedMessage: args.mobileReceivedMessage?.trim() || undefined,
+      instagramAutoReplyMobileReceivedMessage:
+        args.mobileReceivedMessage?.trim() || undefined,
     });
   },
 });
@@ -167,7 +320,9 @@ export const setInstagramLeadCreationConfig = mutation({
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .unique();
     if (!settings) {
-      throw new ConvexError("Connect Instagram before configuring lead creation.");
+      throw new ConvexError(
+        "Connect Instagram before configuring lead creation.",
+      );
     }
 
     await ctx.db.patch(settings._id, {
@@ -192,7 +347,7 @@ export const disconnectByInstagramUserId = internalMutation({
     const settings = await ctx.db
       .query("orgSettings")
       .withIndex("by_instagram_business_account_id", (q) =>
-        q.eq("instagramBusinessAccountId", args.instagramBusinessAccountId)
+        q.eq("instagramBusinessAccountId", args.instagramBusinessAccountId),
       )
       .first();
     if (!settings) return;
@@ -250,9 +405,12 @@ export const setAutoPostEnabled = mutation({
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .unique();
 
-    const hasAnyConnection = settings?.instagramAccessToken || settings?.facebookPageAccessToken;
+    const hasAnyConnection =
+      settings?.instagramAccessToken || settings?.facebookPageAccessToken;
     if (args.enabled && !hasAnyConnection) {
-      throw new ConvexError("Connect Instagram or Facebook before enabling auto-post.");
+      throw new ConvexError(
+        "Connect Instagram or Facebook before enabling auto-post.",
+      );
     }
     if (!settings) return;
 
@@ -274,7 +432,11 @@ export const consumeOAuthState = internalMutation({
       .withIndex("by_state", (q) => q.eq("state", args.state))
       .unique();
 
-    if (!record || record.provider !== "instagram" || record.expiresAt < Date.now()) {
+    if (
+      !record ||
+      record.provider !== "instagram" ||
+      record.expiresAt < Date.now()
+    ) {
       return null;
     }
 
@@ -317,8 +479,14 @@ export const getEnvForExchange = internalQuery({
   args: {},
   handler: async () => {
     const env = getValidatedEnv();
-    if (!env.INSTAGRAM_APP_ID || !env.INSTAGRAM_APP_SECRET || !env.CONVEX_SITE_URL) {
-      throw new ConvexError("Instagram integration is not fully configured for this deployment.");
+    if (
+      !env.INSTAGRAM_APP_ID ||
+      !env.INSTAGRAM_APP_SECRET ||
+      !env.CONVEX_SITE_URL
+    ) {
+      throw new ConvexError(
+        "Instagram integration is not fully configured for this deployment.",
+      );
     }
     return {
       appId: env.INSTAGRAM_APP_ID,
@@ -338,47 +506,58 @@ export const getEnvForExchange = internalQuery({
 export const exchangeCodeForToken = internalAction({
   args: { orgId: v.id("organizations"), code: v.string() },
   handler: async (ctx, args): Promise<void> => {
-    const { appId, appSecret, redirectUri } = await ctx.runQuery(internal.socialIntegrations.getEnvForExchange, {});
+    const { appId, appSecret, redirectUri } = await ctx.runQuery(
+      internal.socialIntegrations.getEnvForExchange,
+      {},
+    );
 
     // 1. Exchange the authorization code for a short-lived access token.
     //    This is a POST with a form-encoded body, not a GET with query params.
-    const tokenRes = await fetch("https://api.instagram.com/oauth/access_token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        client_id: appId,
-        client_secret: appSecret,
-        grant_type: "authorization_code",
-        redirect_uri: redirectUri,
-        code: args.code,
-      }).toString(),
-    });
+    const tokenRes = await fetch(
+      "https://api.instagram.com/oauth/access_token",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          client_id: appId,
+          client_secret: appSecret,
+          grant_type: "authorization_code",
+          redirect_uri: redirectUri,
+          code: args.code,
+        }).toString(),
+      },
+    );
     // Instagram user IDs can exceed Number.MAX_SAFE_INTEGER (17 digits) — if
     // Meta's response has `user_id` as an unquoted JSON number, `.json()`
     // would silently round it to a different, wrong ID before we ever see
     // it. Quote it in the raw text first so JSON.parse treats it as a string.
-    const tokenRawText = await tokenRes.text();
-    const tokenSafeText = tokenRawText.replace(/"user_id"\s*:\s*(\d+)/, '"user_id":"$1"');
-    const tokenJson = JSON.parse(tokenSafeText);
-    const shortLivedToken: string | undefined = tokenJson.access_token;
-    const igUserId: string | undefined = tokenJson.user_id;
+    const tokenJson = await readMetaJson(tokenRes, (text) =>
+      text.replace(/"user_id"\s*:\s*(\d+)/, '"user_id":"$1"'),
+    );
+    const shortLivedToken = stringField(tokenJson, "access_token");
+    const igUserId = stringField(tokenJson, "user_id");
     if (!tokenRes.ok || !shortLivedToken || !igUserId) {
-      throw new ConvexError(`Instagram token exchange failed: ${tokenJson?.error_message ?? tokenJson?.error?.message ?? tokenRes.statusText}`);
+      console.error("Instagram token exchange failed", {
+        status: tokenRes.status,
+        error: getMetaErrorMessage(tokenJson, tokenRes.statusText),
+      });
+      throw new ConvexError(INSTAGRAM_CONNECT_FAILURE_MESSAGE);
     }
 
     // 2. Exchange for a long-lived access token (~60 days).
-    const longLivedUrl = new URL("https://graph.instagram.com/access_token");
-    longLivedUrl.searchParams.set("grant_type", "ig_exchange_token");
-    longLivedUrl.searchParams.set("client_secret", appSecret);
-    longLivedUrl.searchParams.set("access_token", shortLivedToken);
-
-    const longLivedRes = await fetch(longLivedUrl.toString());
-    const longLivedJson = await longLivedRes.json();
-    if (!longLivedRes.ok || !longLivedJson.access_token) {
-      throw new ConvexError(`Instagram long-lived token exchange failed: ${longLivedJson?.error?.message ?? longLivedRes.statusText}`);
+    let longLivedToken: string;
+    let expiresInSeconds: number | undefined;
+    try {
+      const longLived = await exchangeForLongLivedInstagramToken(
+        appSecret,
+        shortLivedToken,
+      );
+      longLivedToken = longLived.accessToken;
+      expiresInSeconds = longLived.expiresInSeconds;
+    } catch (err) {
+      console.error("Instagram long-lived token exchange failed", err);
+      throw new ConvexError(INSTAGRAM_CONNECT_FAILURE_MESSAGE);
     }
-    const longLivedToken: string = longLivedJson.access_token;
-    const expiresInSeconds: number | undefined = longLivedJson.expires_in;
 
     // 3. Fetch the username for display purposes ("Connected as @handle"),
     // and the profile's "user_id" field — a *different* ID from `igUserId`
@@ -388,7 +567,9 @@ export const exchangeCodeForToken = internalAction({
     let username: string | undefined;
     let webhookAccountId: string | undefined;
     try {
-      const profileUrl = new URL(`https://graph.instagram.com/${INSTAGRAM_GRAPH_VERSION}/${igUserId}`);
+      const profileUrl = new URL(
+        `https://graph.instagram.com/${INSTAGRAM_GRAPH_VERSION}/${igUserId}`,
+      );
       profileUrl.searchParams.set("fields", "username,user_id");
       profileUrl.searchParams.set("access_token", longLivedToken);
       const profileRes = await fetch(profileUrl.toString());
@@ -399,14 +580,19 @@ export const exchangeCodeForToken = internalAction({
       // Non-fatal — connection still succeeds without a display name.
     }
 
-    await ctx.runMutation(internal.socialIntegrations.saveInstagramCredentials, {
-      orgId: args.orgId,
-      instagramBusinessAccountId: igUserId,
-      instagramWebhookAccountId: webhookAccountId,
-      instagramAccessToken: longLivedToken,
-      instagramTokenExpiresAt: expiresInSeconds ? Date.now() + expiresInSeconds * 1000 : undefined,
-      instagramPageName: username,
-    });
+    await ctx.runMutation(
+      internal.socialIntegrations.saveInstagramCredentials,
+      {
+        orgId: args.orgId,
+        instagramBusinessAccountId: igUserId,
+        instagramWebhookAccountId: webhookAccountId,
+        instagramAccessToken: longLivedToken,
+        instagramTokenExpiresAt: expiresInSeconds
+          ? Date.now() + expiresInSeconds * 1000
+          : undefined,
+        instagramPageName: username,
+      },
+    );
 
     // 4. Subscribe this specific IG account to webhook delivery. The
     // app-level Webhooks product config (callback URL + verify token +
@@ -415,13 +601,19 @@ export const exchangeCodeForToken = internalAction({
     // or comments/messages will never be delivered to /instagram-webhook
     // even though the OAuth scopes were granted.
     try {
-      const subscribeUrl = new URL(`https://graph.instagram.com/${INSTAGRAM_GRAPH_VERSION}/${igUserId}/subscribed_apps`);
+      const subscribeUrl = new URL(
+        `https://graph.instagram.com/${INSTAGRAM_GRAPH_VERSION}/${igUserId}/subscribed_apps`,
+      );
       subscribeUrl.searchParams.set("subscribed_fields", "comments,messages");
       subscribeUrl.searchParams.set("access_token", longLivedToken);
-      const subscribeRes = await fetch(subscribeUrl.toString(), { method: "POST" });
+      const subscribeRes = await fetch(subscribeUrl.toString(), {
+        method: "POST",
+      });
       const subscribeJson = await subscribeRes.json();
       if (!subscribeRes.ok || subscribeJson?.success !== true) {
-        throw new ConvexError(subscribeJson?.error?.message ?? subscribeRes.statusText);
+        throw new ConvexError(
+          subscribeJson?.error?.message ?? subscribeRes.statusText,
+        );
       }
     } catch (err) {
       // Non-fatal — the account is connected and posting/comment-viewing
