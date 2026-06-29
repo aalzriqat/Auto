@@ -269,6 +269,21 @@ export const update = mutation({
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(args.expenseId, patch);
 
+      // Sync amount/date on the linked legacy transaction row when they change
+      if (patch.amount !== undefined || patch.date !== undefined) {
+        const linkedTx = await ctx.db
+          .query("transactions")
+          .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+          .filter((q) => q.eq(q.field("expenseId"), args.expenseId))
+          .first();
+        if (linkedTx) {
+          const txPatch: Record<string, unknown> = {};
+          if (patch.amount !== undefined) txPatch.amount = patch.amount;
+          if (patch.date !== undefined) txPatch.date = patch.date;
+          await ctx.db.patch(linkedTx._id, txPatch);
+        }
+      }
+
       const actorName = await getActorName(ctx);
       await notifyManagers(
         ctx,
@@ -305,11 +320,26 @@ export const remove = mutation({
 
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new ConvexError("Unauthenticated");
+    const now = Date.now();
     await ctx.db.patch(args.expenseId, {
       isDeleted: true,
-      deletedAt: Date.now(),
+      deletedAt: now,
       deletedBy: identity.subject
     });
+
+    // Also soft-delete the linked legacy transaction row so reports stay consistent
+    const linkedTx = await ctx.db
+      .query("transactions")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .filter((q) => q.eq(q.field("expenseId"), args.expenseId))
+      .first();
+    if (linkedTx && !linkedTx.isDeleted) {
+      await ctx.db.patch(linkedTx._id, {
+        isDeleted: true,
+        deletedAt: now,
+        deletedBy: identity.subject,
+      });
+    }
 
     const actorName = await getActorName(ctx);
     await notifyManagers(

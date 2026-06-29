@@ -3,6 +3,57 @@ import { mutation, query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
+import { hookExpensePosted, getOrgCurrency } from "./accounting/workflowHooks";
+import { toMinorUnits } from "./utils/money";
+import { Id } from "./_generated/dataModel";
+import { MutationCtx } from "./_generated/server";
+
+async function createWorkOrderExpense(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    title: string;
+    amount: number;
+    notes: string | undefined;
+    actorId: Id<"users">;
+  }
+): Promise<Id<"expenses">> {
+  const now = Date.now();
+  const expenseId = await ctx.db.insert("expenses", {
+    orgId: args.orgId,
+    vehicleId: args.vehicleId,
+    title: args.title,
+    amount: args.amount,
+    date: now,
+    category: "REPAIR",
+    status: "PAID",
+    notes: args.notes,
+  });
+
+  await ctx.db.insert("transactions", {
+    orgId: args.orgId,
+    type: "OUT",
+    amount: args.amount,
+    date: now,
+    category: "EXPENSE",
+    description: args.title,
+    vehicleId: args.vehicleId,
+    expenseId,
+  });
+
+  const currency = await getOrgCurrency(ctx, args.orgId);
+  await hookExpensePosted(ctx, {
+    orgId: args.orgId,
+    expenseId,
+    amountMinor: toMinorUnits(args.amount, currency),
+    currency,
+    actorId: args.actorId,
+    occurredAt: now,
+  });
+
+  return expenseId;
+}
 
 export const list = query({
   args: {
@@ -56,23 +107,21 @@ export const create = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
 
     const totalCost = args.tasks.reduce((sum, task) => sum + task.partsCost + task.laborCost, 0);
 
-    let expenseId = undefined;
+    let expenseId: Id<"expenses"> | undefined = undefined;
 
-    // If creating a COMPLETED work order, sync to expenses
+    // If creating a COMPLETED work order, sync to expenses with transaction + GL hook
     if (args.status === "COMPLETED" && totalCost > 0) {
-      expenseId = await ctx.db.insert("expenses", {
+      expenseId = await createWorkOrderExpense(ctx, {
         orgId: args.orgId,
         vehicleId: args.vehicleId,
         title: `Work Order: ${args.title}`,
         amount: totalCost,
-        date: Date.now(),
-        category: "REPAIR",
-        status: "PAID",
         notes: args.notes,
+        actorId: user._id,
       });
     }
 
@@ -119,7 +168,7 @@ export const update = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
 
     const wo = await ctx.db.get(args.workOrderId);
     if (!wo || wo.isDeleted || wo.orgId !== args.orgId) throw new ConvexError("Work Order not found");
@@ -128,26 +177,36 @@ export const update = mutation({
 
     let expenseId = wo.expenseId;
 
-    // If changing status to COMPLETED and no expense exists, create it
+    // If changing status to COMPLETED and no expense exists, create it with transaction + GL hook
     if (args.status === "COMPLETED" && !expenseId && totalCost > 0) {
-      expenseId = await ctx.db.insert("expenses", {
+      expenseId = await createWorkOrderExpense(ctx, {
         orgId: args.orgId,
         vehicleId: wo.vehicleId,
         title: `Work Order: ${args.title}`,
         amount: totalCost,
-        date: Date.now(),
-        category: "REPAIR",
-        status: "PAID",
         notes: args.notes,
+        actorId: user._id,
       });
-    } 
-    // If expense already exists, update it
+    }
+    // If expense already exists, update it and sync the linked transaction row
     else if (expenseId) {
       await ctx.db.patch(expenseId, {
         title: `Work Order: ${args.title}`,
         amount: totalCost,
         notes: args.notes,
       });
+      // Sync the amount on the linked legacy transaction row (best-effort)
+      const linkedTx = await ctx.db
+        .query("transactions")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .filter((q) => q.eq(q.field("expenseId"), expenseId))
+        .first();
+      if (linkedTx) {
+        await ctx.db.patch(linkedTx._id, {
+          amount: totalCost,
+          description: `Work Order: ${args.title}`,
+        });
+      }
     }
 
     await ctx.db.patch(args.workOrderId, {
