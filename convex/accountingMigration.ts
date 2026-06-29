@@ -63,7 +63,8 @@ async function classifyLegacyTransaction(
     category: tx.category,
     description: tx.description,
     vehicleId: tx.vehicleId?.toString(),
-    hasJournalEntry: !!existing,
+    // Only consider an event as posted if it is in POSTED status with a journal entry linked
+    hasJournalEntry: !!(existing && existing.status === "POSTED" && existing.journalEntryId),
     eventType,
   };
 }
@@ -79,7 +80,11 @@ export const auditLegacyTransactions = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
-    const limit = Math.min(args.limit ?? 100, 500);
+    const rawLimit = args.limit ?? 100;
+    if (!Number.isSafeInteger(rawLimit) || rawLimit < 1) {
+      throw new Error("limit must be a positive integer.");
+    }
+    const limit = Math.min(rawLimit, 500);
 
     // Scan enough rows to collect `limit` unposted entries when onlyUnposted=true
     const scanLimit = args.onlyUnposted ? limit * 5 : limit;
@@ -93,6 +98,8 @@ export const auditLegacyTransactions = query({
     const posted = rows.filter((r) => r.hasJournalEntry);
 
     return {
+      scannedCount: rows.length,
+      hasMore: txns.length === scanLimit,
       total: rows.length,
       postedCount: posted.length,
       unpostedCount: unposted.length,
@@ -216,12 +223,17 @@ export const migrateUnpostedTransactions = mutation({
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
     const dryRun = args.dryRun !== false;
-    const limit = Math.min(args.limit ?? 50, 200);
+    const rawMigLimit = args.limit ?? 50;
+    if (!Number.isSafeInteger(rawMigLimit) || rawMigLimit < 1) {
+      throw new Error("limit must be a positive integer.");
+    }
+    const limit = Math.min(rawMigLimit, 200);
 
+    // Scan 10x the requested limit to work past already-posted or unmappable rows
     const txns = await ctx.db
       .query("transactions")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .take(limit * 3);
+      .take(limit * 10);
 
     const currency = await getOrgCurrency(ctx, args.orgId);
     const results: Array<{ transactionId: string; action: string; eventType: string | null; reason?: string }> = [];
@@ -301,10 +313,11 @@ export const migrateUnpostedTransactions = mutation({
       }
     }
 
-    const posted = results.filter((r) => r.action === "POSTED" || r.action === "WOULD_POST").length;
+    const posted = results.filter((r) => r.action === "POSTED").length;
+    const wouldPost = results.filter((r) => r.action === "WOULD_POST").length;
     const skipped = results.filter((r) => r.action === "SKIP").length;
     const failed = results.filter((r) => r.action === "FAILED").length;
 
-    return { dryRun, posted, skipped, failed, results };
+    return { dryRun, posted, wouldPost, skipped, failed, results };
   },
 });

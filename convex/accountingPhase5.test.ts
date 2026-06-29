@@ -35,11 +35,12 @@ async function seedReportingDealer() {
 
   await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
   const periods = await asUser.query(api.accountingPeriods.list, { orgId });
+  const fiscalYear = new Date().getUTCFullYear();
   await asUser.mutation(api.accountingPeriods.create, {
     orgId,
-    startDate: Date.now() - 60 * 86400_000,
-    endDate: Date.now() + 30 * 86400_000,
-    fiscalYear: 2026, periodNumber: 1,
+    startDate: Date.UTC(fiscalYear, 0, 1),
+    endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+    fiscalYear, periodNumber: 1,
   });
   const period = (await asUser.query(api.accountingPeriods.list, { orgId }))[0];
   await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
@@ -166,8 +167,8 @@ describe("Phase 5 — AR aging", () => {
     const aging = await asUser.query(api.accountingReports.arAging, { orgId, asOfDate: now });
     expect(aging.rows).toHaveLength(1);
     expect(aging.totalOutstandingMinor).toBe(100000);
-    // 45 days overdue → days30 bucket (31-60 days)
-    expect(aging.buckets.days30).toBe(100000);
+    // 45 days overdue → days60 bucket (31-60 days)
+    expect(aging.buckets.days60).toBe(100000);
   });
 
   test("paid receivable does not appear in aging report", async () => {

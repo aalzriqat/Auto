@@ -142,7 +142,8 @@ describe("Phase 6 — dry-run migration", () => {
     });
 
     expect(result.dryRun).toBe(true);
-    expect(result.posted).toBe(1);
+    expect(result.wouldPost).toBe(1);
+    expect(result.posted).toBe(0);
     expect(result.results[0].action).toBe("WOULD_POST");
 
     // Verify no events were actually created

@@ -50,12 +50,13 @@ export const trialBalance = query({
     toDate: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
 
+    // Include all accounts (active and inactive) so historical postings on
+    // deactivated accounts still appear in the trial balance.
     const accounts = await ctx.db
       .query("chartOfAccounts")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.eq(q.field("active"), true))
       .collect();
 
     const lines = await getPostedLines(ctx, args.orgId, args.fromDate, args.toDate);
@@ -106,12 +107,11 @@ export const incomeStatement = query({
     toDate: v.number(),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
 
     const accounts = await ctx.db
       .query("chartOfAccounts")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.eq(q.field("active"), true))
       .collect();
 
     const lines = await getPostedLines(ctx, args.orgId, args.fromDate, args.toDate);
@@ -176,12 +176,11 @@ export const balanceSheet = query({
     asOfDate: v.number(),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
 
     const accounts = await ctx.db
       .query("chartOfAccounts")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.eq(q.field("active"), true))
       .collect();
 
     const lines = await getPostedLines(ctx, args.orgId, undefined, args.asOfDate);
@@ -189,10 +188,10 @@ export const balanceSheet = query({
     const accountMap = new Map(accounts.map((a) => [a._id, a]));
     const totals = new Map<string, number>();
 
+    // Compute net balance per account (all types including P&L for net income)
     for (const line of lines) {
       const account = accountMap.get(line.accountId);
       if (!account) continue;
-      if (!["ASSET", "LIABILITY", "EQUITY"].includes(account.type)) continue;
       const existing = totals.get(line.accountId) ?? 0;
       const net = account.normalBalance === "DEBIT"
         ? line.debitMinor - line.creditMinor
@@ -202,7 +201,6 @@ export const balanceSheet = query({
 
     const toRows = (accts: typeof accounts) =>
       accts
-        .filter((a) => ["ASSET", "LIABILITY", "EQUITY"].includes(a.type))
         .map((a) => ({ accountId: a._id, code: a.code, name: a.name, nameAr: a.nameAr, type: a.type, netMinor: totals.get(a._id) ?? 0 }))
         .filter((r) => r.netMinor !== 0);
 
@@ -214,10 +212,23 @@ export const balanceSheet = query({
     const totalLiabilities = liabilityRows.reduce((s, r) => s + r.netMinor, 0);
     const totalEquity = equityRows.reduce((s, r) => s + r.netMinor, 0);
 
+    // Current-period net income: Revenue + OtherIncome - COGS - Expense - OtherExpense
+    // Folded into equity for the balance-sheet equation before period closing.
+    let netIncomeMinor = 0;
+    for (const account of accounts) {
+      const net = totals.get(account._id) ?? 0;
+      if (account.type === "REVENUE" || account.type === "OTHER_INCOME") {
+        netIncomeMinor += net;
+      } else if (account.type === "COGS" || account.type === "EXPENSE" || account.type === "OTHER_EXPENSE") {
+        netIncomeMinor -= net;
+      }
+    }
+
     return {
       assetRows, liabilityRows, equityRows,
-      totalAssets, totalLiabilities, totalEquity,
-      isBalanced: totalAssets === totalLiabilities + totalEquity,
+      totalAssets, totalLiabilities, totalEquity, netIncomeMinor,
+      // Assets = Liabilities + Equity + Current-period Net Income (pre-close)
+      isBalanced: totalAssets === totalLiabilities + totalEquity + netIncomeMinor,
     };
   },
 });
@@ -230,18 +241,21 @@ export const arAging = query({
     asOfDate: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
 
     const asOfDate = args.asOfDate ?? Date.now();
 
+    // Only include receivables issued on or before asOfDate for historical accuracy
     const openReceivables = await ctx.db
       .query("receivableDocuments")
       .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "OPEN"))
+      .filter((q) => q.lte(q.field("issueDate"), asOfDate))
       .collect();
 
     const partialReceivables = await ctx.db
       .query("receivableDocuments")
       .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PARTIALLY_PAID"))
+      .filter((q) => q.lte(q.field("issueDate"), asOfDate))
       .collect();
 
     const allOpen = [...openReceivables, ...partialReceivables];
@@ -258,22 +272,30 @@ export const arAging = query({
     }> = [];
 
     for (const rec of allOpen) {
+      // Only count allocations that existed as of asOfDate
       const activeAllocations = await ctx.db
         .query("paymentAllocations")
         .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", rec._id))
-        .filter((q) => q.eq(q.field("status"), "ACTIVE"))
+        .filter((q) =>
+          q.and(
+            q.eq(q.field("status"), "ACTIVE"),
+            q.lte(q.field("createdAt"), asOfDate)
+          )
+        )
         .collect();
       const allocated = activeAllocations.reduce((s, a) => s + a.amountMinor, 0);
       const outstanding = Math.max(0, rec.originalAmountMinor - allocated);
       if (outstanding === 0) continue;
 
       const ageDays = Math.floor((asOfDate - rec.dueDate) / 86400_000);
-      let bucket = "current";
-      if (ageDays > 90) { bucket = "over90"; buckets.over90 += outstanding; }
-      else if (ageDays > 60) { bucket = "days60"; buckets.days60 += outstanding; }
-      else if (ageDays > 30) { bucket = "days30"; buckets.days30 += outstanding; }
-      else if (ageDays > 0) { bucket = "days30"; buckets.days30 += outstanding; }
-      else { bucket = "current"; buckets.current += outstanding; }
+      type AgingBucket = keyof typeof buckets;
+      let bucket: AgingBucket;
+      if (ageDays <= 0) { bucket = "current"; }
+      else if (ageDays <= 30) { bucket = "days30"; }
+      else if (ageDays <= 60) { bucket = "days60"; }
+      else if (ageDays <= 90) { bucket = "days90"; }
+      else { bucket = "over90"; }
+      buckets[bucket] += outstanding;
 
       rows.push({
         receivableId: rec._id,
@@ -299,9 +321,10 @@ export const subledgerReconciliation = query({
     toDate: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
 
-    // GL total for AR accounts
+    // GL total for AR accounts — cumulative from inception to toDate so the
+    // basis matches the subledger outstanding balance (not period movement).
     const accounts = await ctx.db
       .query("chartOfAccounts")
       .withIndex("by_org_type", (q) => q.eq("orgId", args.orgId).eq("type", "ASSET"))
@@ -312,18 +335,21 @@ export const subledgerReconciliation = query({
       a.systemKey === "accounts_receivable_customers" || a.systemKey === "accounts_receivable_finance_companies"
     ).map((a) => a._id));
 
-    const lines = await getPostedLines(ctx, args.orgId, args.fromDate, args.toDate);
+    const lines = await getPostedLines(ctx, args.orgId, undefined, args.toDate);
     const arLines = lines.filter((l) => arAccountIds.has(l.accountId));
     const glArBalanceMinor = arLines.reduce((s, l) => s + l.debitMinor - l.creditMinor, 0);
 
-    // Subledger total (open + partial receivables)
+    // Subledger total (open + partial receivables issued on or before toDate)
+    const effectiveAsOf = args.toDate ?? Date.now();
     const openRecs = await ctx.db
       .query("receivableDocuments")
       .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "OPEN"))
+      .filter((q) => q.lte(q.field("issueDate"), effectiveAsOf))
       .collect();
     const partialRecs = await ctx.db
       .query("receivableDocuments")
       .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PARTIALLY_PAID"))
+      .filter((q) => q.lte(q.field("issueDate"), effectiveAsOf))
       .collect();
 
     let subledgerOutstandingMinor = 0;
@@ -331,7 +357,12 @@ export const subledgerReconciliation = query({
       const activeAllocations = await ctx.db
         .query("paymentAllocations")
         .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", rec._id))
-        .filter((q) => q.eq(q.field("status"), "ACTIVE"))
+        .filter((q) =>
+          q.and(
+            q.eq(q.field("status"), "ACTIVE"),
+            q.lte(q.field("createdAt"), effectiveAsOf)
+          )
+        )
         .collect();
       const allocated = activeAllocations.reduce((s, a) => s + a.amountMinor, 0);
       subledgerOutstandingMinor += Math.max(0, rec.originalAmountMinor - allocated);
