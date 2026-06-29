@@ -11,6 +11,7 @@
 import { Id } from "../_generated/dataModel";
 import { MutationCtx } from "../_generated/server";
 import { postAccountingEvent } from "./postingEngine";
+import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate } from "../accountingPeriods";
 import { isChartInitialized } from "../chartOfAccounts";
 import { toMinorUnits } from "../utils/money";
@@ -269,6 +270,113 @@ export async function hookCommissionAccrued(
       amountMinor: args.amountMinor,
       currency: args.currency,
       salespersonId: args.salespersonId.toString(),
+    },
+    actorId: args.actorId,
+  });
+}
+
+export async function hookSaleCancelled(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    saleId: Id<"sales">;
+    reason: string;
+    actorId: Id<"users">;
+    reversalDate: number;
+  }
+) {
+  // Find the original SALE_COMPLETED event for this sale
+  const originalEvent = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_source", (q) =>
+      q.eq("orgId", args.orgId).eq("sourceType", "sales").eq("sourceId", args.saleId.toString())
+    )
+    .filter((q) => q.eq(q.field("eventType"), "SALE_COMPLETED"))
+    .filter((q) => q.eq(q.field("status"), "POSTED"))
+    .first();
+
+  if (!originalEvent) return; // No GL entry to reverse — sale never posted
+
+  const period = await getOpenPeriodForDate(ctx, args.orgId, args.reversalDate);
+  if (!period) return; // No open period; skip silently
+
+  await reverseAccountingEvent(ctx, {
+    orgId: args.orgId,
+    originalEventId: originalEvent._id,
+    reversalDate: args.reversalDate,
+    reason: args.reason,
+    actorId: args.actorId,
+    idempotencyKey: `sale_cancelled_${args.saleId}`,
+  });
+}
+
+export async function hookFinanceDisbursed(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    applicationId: Id<"financeApplications">;
+    saleId: Id<"sales">;
+    financeCompanyId: Id<"financeCompanies">;
+    customerId: Id<"customers">;
+    loanAmountMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  if (!(await shouldPost(ctx, args.orgId, args.occurredAt))) return;
+  await postAccountingEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "FINANCE_DISBURSED",
+    sourceType: "financeApplications",
+    sourceId: args.applicationId.toString(),
+    eventVersion: 1,
+    accountingDate: args.occurredAt,
+    occurredAt: args.occurredAt,
+    currency: args.currency,
+    idempotencyKey: `finance_disbursed_${args.applicationId}`,
+    payload: {
+      applicationId: args.applicationId.toString(),
+      saleId: args.saleId.toString(),
+      financeCompanyId: args.financeCompanyId.toString(),
+      amountMinor: args.loanAmountMinor,
+      currency: args.currency,
+      customerId: args.customerId.toString(),
+    },
+    actorId: args.actorId,
+  });
+}
+
+export async function hookPaymentLinkReceived(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    intentId: Id<"paymentIntents">;
+    customerId: Id<"customers">;
+    amountMinor: number;
+    currency: string;
+    provider: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  if (!(await shouldPost(ctx, args.orgId, args.occurredAt))) return;
+  await postAccountingEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "PAYMENT_LINK_RECEIVED",
+    sourceType: "paymentIntents",
+    sourceId: args.intentId.toString(),
+    eventVersion: 1,
+    accountingDate: args.occurredAt,
+    occurredAt: args.occurredAt,
+    currency: args.currency,
+    idempotencyKey: `payment_link_received_${args.intentId}`,
+    payload: {
+      intentId: args.intentId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      customerId: args.customerId.toString(),
+      provider: args.provider,
     },
     actorId: args.actorId,
   });

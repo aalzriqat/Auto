@@ -1486,4 +1486,62 @@ http.route({
   }),
 });
 
+// ─── Payment provider webhooks ────────────────────────────────────────────────
+// Generic webhook endpoint for payment providers (e.g. Tap, Stripe, Telr).
+// The body is provider-specific JSON. The provider name is in the URL path:
+//   POST /api/payment-webhook/:provider
+// A shared secret header (X-Webhook-Secret) is checked against the
+// PAYMENT_WEBHOOK_SECRET Convex env var when set.
+
+http.route({
+  path: "/api/payment-webhook",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    try {
+      const url = new URL(request.url);
+      const provider = url.searchParams.get("provider") ?? "unknown";
+      const body = await request.json() as Record<string, unknown>;
+
+      // Optional secret check — providers that sign payloads should verify here
+      const secret = process.env.PAYMENT_WEBHOOK_SECRET;
+      if (secret) {
+        const incoming = request.headers.get("x-webhook-secret");
+        if (incoming !== secret) {
+          return new Response("Unauthorized", { status: 401 });
+        }
+      }
+
+      const externalId = (body.id ?? body.transaction_id ?? body.charge_id ?? "") as string;
+      if (!externalId) {
+        return new Response(JSON.stringify({ ok: false, error: "Missing external ID" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      const settledStatuses = new Set(["captured", "paid", "CAPTURED", "successful", "COMPLETED", "settled"]);
+      const status = (body.status ?? body.charge?.status ?? "") as string;
+
+      if (settledStatuses.has(status)) {
+        await ctx.runMutation(internal.paymentIntents.settleByExternalId, {
+          provider,
+          externalId,
+          providerPayload: body,
+        });
+      }
+
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    } catch (err) {
+      console.error("[payment-webhook] error:", err);
+      return new Response(JSON.stringify({ ok: false }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+  }),
+});
+
 export default http;

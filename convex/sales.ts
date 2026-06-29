@@ -12,6 +12,7 @@ import { completeSale } from "./utils/saleCompletion";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
+import { hookSaleCancelled } from "./accounting/workflowHooks";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -230,6 +231,14 @@ export const update = mutation({
         "Salesperson cannot approve cancellation of their own sale."
       );
       await restoreVehicleToAvailable(ctx, sale.vehicleId);
+      // Post reversal journal entry for the original SALE_COMPLETED GL event
+      await hookSaleCancelled(ctx, {
+        orgId: args.orgId,
+        saleId: args.saleId,
+        reason: "Sale cancelled",
+        actorId: user._id,
+        reversalDate: Date.now(),
+      });
     }
 
     if (Object.keys(patch).length > 0) {

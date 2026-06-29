@@ -897,6 +897,9 @@ export default defineSchema({
     approvedAt: v.optional(v.number()),
     finalizedSaleId: v.optional(v.id("sales")),
     finalizationIdempotencyKey: v.optional(v.string()),
+    disbursedAt: v.optional(v.number()),
+    disbursedAmountMinor: v.optional(v.number()),
+    disbursementIdempotencyKey: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
     .index("by_customer", ["customerId"])
@@ -1056,6 +1059,8 @@ export default defineSchema({
     returnedAt: v.optional(v.number()),
     returnReason: v.optional(v.string()),
     clearedAt: v.optional(v.number()),
+    returnedAfterClearing: v.optional(v.boolean()),
+    bankFeeMinor: v.optional(v.number()),
     idempotencyKey: v.optional(v.string()),
     notes: v.optional(v.string()),
     createdBy: v.id("users"),
@@ -2009,4 +2014,35 @@ export default defineSchema({
     value: v.any(),
     updatedAt: v.number(),
   }).index("by_key", ["key"]),
+
+  // Payment intents for payment-link / provider-initiated payments.
+  // One intent per customer payment request. Fulfilled by provider webhook.
+  paymentIntents: defineTable({
+    orgId: v.id("organizations"),
+    customerId: v.id("customers"),
+    receivableDocumentId: v.optional(v.id("receivableDocuments")),
+    saleId: v.optional(v.id("sales")),
+    amountMinor: v.number(),
+    currency: v.string(),
+    provider: v.string(),
+    externalId: v.optional(v.string()),
+    status: v.union(
+      v.literal("PENDING"),
+      v.literal("SETTLED"),
+      v.literal("FAILED"),
+      v.literal("EXPIRED"),
+      v.literal("REFUNDED")
+    ),
+    idempotencyKey: v.string(),
+    providerPayload: v.optional(v.any()),
+    settledAt: v.optional(v.number()),
+    expiresAt: v.optional(v.number()),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_external_id", ["provider", "externalId"])
+    .index("by_org_idempotency", ["orgId", "idempotencyKey"]),
 });

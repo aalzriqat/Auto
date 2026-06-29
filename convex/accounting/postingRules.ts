@@ -16,13 +16,17 @@ export type EventType =
   | "CHEQUE_RETURNED"
   | "COMMISSION_ACCRUED"
   | "COMMISSION_PAID"
+  | "FINANCE_DISBURSED"
+  | "PAYMENT_LINK_RECEIVED"
   | "JOURNAL_REVERSAL";
 
 export const ALL_EVENT_TYPES = new Set<string>([
   "DEPOSIT_RECEIVED", "DEPOSIT_APPLIED", "DEPOSIT_REFUNDED", "DEPOSIT_FORFEITED",
   "SALE_COMPLETED", "SALE_CANCELLED", "COLLECTION_PAYMENT", "EXPENSE_POSTED",
   "CHEQUE_RECEIVED", "CHEQUE_DEPOSITED", "CHEQUE_CLEARED", "CHEQUE_RETURNED",
-  "COMMISSION_ACCRUED", "COMMISSION_PAID", "JOURNAL_REVERSAL",
+  "COMMISSION_ACCRUED", "COMMISSION_PAID",
+  "FINANCE_DISBURSED", "PAYMENT_LINK_RECEIVED",
+  "JOURNAL_REVERSAL",
 ]);
 
 export interface LineSpec {
@@ -299,6 +303,46 @@ export function ruleCommissionPaid(p: CommissionPaidPayload): RuleResult {
   };
 }
 
+export interface FinanceDisbursedPayload {
+  applicationId: string;
+  saleId: string;
+  financeCompanyId: string;
+  amountMinor: number;
+  currency: string;
+  customerId: string;
+}
+
+export interface PaymentLinkReceivedPayload {
+  intentId: string;
+  amountMinor: number;
+  currency: string;
+  customerId: string;
+  provider: string;
+}
+
+export function ruleFinanceDisbursed(p: FinanceDisbursedPayload): RuleResult {
+  return {
+    lines: [
+      // Transfer the receivable from the customer to the finance company
+      line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES, p.amountMinor, 0, "Finance company receivable", { financeCompanyId: p.financeCompanyId, customerId: p.customerId }),
+      line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, 0, p.amountMinor, "Customer AR offset by finance co", { customerId: p.customerId }),
+    ],
+    memo: "Finance company disbursement expected",
+    category: "SYSTEM",
+  };
+}
+
+export function rulePaymentLinkReceived(p: PaymentLinkReceivedPayload): RuleResult {
+  return {
+    lines: [
+      line(SYSTEM_KEYS.BANK_ACCOUNT, p.amountMinor, 0, `Payment via ${p.provider}`, { customerId: p.customerId }),
+      line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, 0, p.amountMinor, "AR settled via payment link", { customerId: p.customerId }),
+    ],
+    memo: `Payment link settled (${p.provider})`,
+    category: "SYSTEM",
+  };
+}
+
 // ─── Dispatch ─────────────────────────────────────────────────────────────────
 
 export function applyPostingRule(eventType: string, payload: Record<string, unknown>): RuleResult {
@@ -315,6 +359,8 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "CHEQUE_RETURNED": return ruleChequeReturned(payload as unknown as ChequeReturnedPayload);
     case "COMMISSION_ACCRUED": return ruleCommissionAccrued(payload as unknown as CommissionAccruedPayload);
     case "COMMISSION_PAID": return ruleCommissionPaid(payload as unknown as CommissionPaidPayload);
+    case "FINANCE_DISBURSED": return ruleFinanceDisbursed(payload as unknown as FinanceDisbursedPayload);
+    case "PAYMENT_LINK_RECEIVED": return rulePaymentLinkReceived(payload as unknown as PaymentLinkReceivedPayload);
     default:
       throw new Error(`No posting rule defined for event type: ${eventType}`);
   }

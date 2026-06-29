@@ -16,6 +16,7 @@ import { getActorName, notifyManagers, notifyUser } from "./utils/notifications"
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { hookCollectionPayment, getOrgCurrency } from "./accounting/workflowHooks";
+import { reverseAccountingEvent } from "./accounting/reversals";
 import { toMinorUnits } from "./utils/money";
 
 const receivableStatusValidator = v.union(
@@ -867,6 +868,130 @@ export const replaceCheque = mutation({
     });
 
     return newChequeId;
+  },
+});
+
+/**
+ * Returns a cheque that has already been CLEARED by the bank.
+ * Reverses the original clearing accounting event, reopens the receivable
+ * balance, and optionally records a bank return fee.
+ */
+export const returnClearedCheque = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    chequeId: v.id("postDatedCheques"),
+    returnReason: v.optional(v.string()),
+    bankFeeMinor: v.optional(v.number()),
+    idempotencyKey: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "collections.returnClearedCheque",
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+      },
+      async () => {
+        const cheque = await ctx.db.get(args.chequeId);
+        if (!cheque || cheque.orgId !== args.orgId) throw new ConvexError("Cheque not found.");
+        if (cheque.status !== "CLEARED") {
+          throw new ConvexError("Only cleared cheques can be returned after clearing.");
+        }
+
+        const now = Date.now();
+
+        // Find the collection payment created when this cheque cleared
+        const clearedPayment = await ctx.db
+          .query("collectionPayments")
+          .withIndex("by_cheque", (q) => q.eq("chequeId", args.chequeId))
+          .filter((q) => q.eq(q.field("status"), "POSTED"))
+          .first();
+
+        // Find and reverse the accounting event for the clearing
+        if (clearedPayment) {
+          const clearingEvent = await ctx.db
+            .query("accountingEvents")
+            .withIndex("by_org_source", (q) =>
+              q.eq("orgId", args.orgId)
+                .eq("sourceType", "collectionPayments")
+                .eq("sourceId", clearedPayment._id.toString())
+            )
+            .filter((q) => q.eq(q.field("status"), "POSTED"))
+            .first();
+
+          if (clearingEvent) {
+            await reverseAccountingEvent(ctx, {
+              orgId: args.orgId,
+              originalEventId: clearingEvent._id,
+              reversalDate: now,
+              reason: args.returnReason ?? "Cheque returned after clearing",
+              actorId: user._id,
+              idempotencyKey: `cheque_return_after_clear_${args.chequeId}`,
+            });
+          }
+
+          // Mark the payment as voided
+          await ctx.db.patch(clearedPayment._id, { status: "VOIDED" });
+        }
+
+        // Reopen the linked legacy receivable
+        if (cheque.receivableId) {
+          const receivable = await ctx.db.get(cheque.receivableId);
+          if (receivable) {
+            await ctx.db.patch(receivable._id, {
+              outstandingAmount: (receivable.outstandingAmount ?? 0) + cheque.amount,
+              status: "OVERDUE",
+              updatedAt: now,
+            });
+          }
+        }
+
+        // Post bank fee as expense if provided
+        if (args.bankFeeMinor && args.bankFeeMinor > 0) {
+          const currency = await getOrgCurrency(ctx, args.orgId);
+          const feeAmount = args.bankFeeMinor / Math.pow(10, currency === "JOD" ? 3 : 2);
+          const feeExpenseId = await ctx.db.insert("expenses", {
+            orgId: args.orgId,
+            title: `Bank return fee — cheque ${cheque.bank} #${cheque.chequeNumber}`,
+            amount: feeAmount,
+            date: now,
+            category: "FEES",
+            status: "PAID",
+          });
+          await ctx.db.insert("transactions", {
+            orgId: args.orgId,
+            type: "OUT",
+            amount: feeAmount,
+            date: now,
+            category: "EXPENSE",
+            description: `Bank return fee — cheque ${cheque.bank} #${cheque.chequeNumber}`,
+            expenseId: feeExpenseId,
+          });
+        }
+
+        // Mark cheque as RETURNED (after clearing)
+        await ctx.db.patch(args.chequeId, {
+          status: "RETURNED",
+          returnedAt: now,
+          returnReason: args.returnReason,
+          returnedAfterClearing: true,
+          bankFeeMinor: args.bankFeeMinor,
+          updatedAt: now,
+        });
+
+        const actorName = await getActorName(ctx);
+        await notifyManagers(ctx, args.orgId, "collection.cheque_returned_after_clearing", {
+          actorName,
+          amount: String(cheque.amount),
+          bank: cheque.bank,
+          chequeNumber: cheque.chequeNumber,
+        }, { link: `/${args.orgId}/accounting` });
+      }
+    );
   },
 });
 
