@@ -12,6 +12,21 @@ import { MutationCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 
+type AuditActionType =
+  | "CREATE_PERIOD"
+  | "POST_EVENT"
+  | "POST_MANUAL_JOURNAL"
+  | "REVERSE_EVENT"
+  | "OPEN_PERIOD"
+  | "CLOSE_PERIOD"
+  | "LOCK_PERIOD"
+  | "REOPEN_PERIOD"
+  | "INIT_CHART"
+  | "UPDATE_ACCOUNT"
+  | "MIGRATE_TRANSACTION"
+  | "ALLOCATE_PAYMENT"
+  | "REVERSE_ALLOCATION";
+
 // ─── Internal: write audit entry ─────────────────────────────────────────────
 
 export async function auditLog(
@@ -19,18 +34,7 @@ export async function auditLog(
   entry: {
     orgId: Id<"organizations">;
     actorId: Id<"users">;
-    actionType:
-      | "POST_EVENT"
-      | "REVERSE_EVENT"
-      | "OPEN_PERIOD"
-      | "CLOSE_PERIOD"
-      | "LOCK_PERIOD"
-      | "REOPEN_PERIOD"
-      | "INIT_CHART"
-      | "UPDATE_ACCOUNT"
-      | "MIGRATE_TRANSACTION"
-      | "ALLOCATE_PAYMENT"
-      | "REVERSE_ALLOCATION";
+    actionType: AuditActionType;
     resourceType: string;
     resourceId: string;
     description: string;
@@ -47,15 +51,6 @@ export async function auditLog(
 
 // ─── Segregation of duties guard ─────────────────────────────────────────────
 
-/**
- * Asserts that the actor attempting a financial action is NOT the same person
- * who initiated the underlying source record (e.g., the person who created a
- * sale cannot also approve/post the corresponding accounting event).
- *
- * In smaller orgs (single-user), this guard can be explicitly bypassed by
- * an OWNER setting `allowSoDBypasses: true` on org settings, or the check
- * degrades to a warning rather than a hard throw.
- */
 export async function checkSegregationOfDuties(
   ctx: MutationCtx,
   args: {
@@ -94,6 +89,12 @@ export const listAuditLog = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const limit = Math.min(args.limit ?? 50, 200);
+    const actionType = args.actionType as AuditActionType | undefined;
+
+    // When date bounds are specified with the time index we can push the lower
+    // bound into the index scan; for actor/action branches we over-fetch and
+    // slice to avoid dropping valid matches before the in-memory date filter.
+    const fetchLimit = args.fromDate || args.toDate ? limit * 5 : limit;
 
     let entries;
     if (args.actorId) {
@@ -101,23 +102,33 @@ export const listAuditLog = query({
         .query("financialAuditLog")
         .withIndex("by_org_actor", (q) => q.eq("orgId", args.orgId).eq("actorId", args.actorId!))
         .order("desc")
-        .take(limit);
-    } else if (args.actionType) {
+        .take(fetchLimit);
+    } else if (actionType) {
       entries = await ctx.db
         .query("financialAuditLog")
         .withIndex("by_org_action", (q) =>
-          q.eq("orgId", args.orgId).eq("actionType", args.actionType as "POST_EVENT" | "REVERSE_EVENT" | "OPEN_PERIOD" | "CLOSE_PERIOD" | "LOCK_PERIOD" | "REOPEN_PERIOD" | "INIT_CHART" | "UPDATE_ACCOUNT" | "MIGRATE_TRANSACTION" | "ALLOCATE_PAYMENT" | "REVERSE_ALLOCATION")
+          q.eq("orgId", args.orgId).eq("actionType", actionType)
         )
         .order("desc")
-        .take(limit);
+        .take(fetchLimit);
+    } else if (args.fromDate) {
+      // Use time index so fromDate is pushed into the scan, not post-filtered.
+      entries = await ctx.db
+        .query("financialAuditLog")
+        .withIndex("by_org_time", (q) =>
+          q.eq("orgId", args.orgId).gte("occurredAt", args.fromDate!)
+        )
+        .order("desc")
+        .take(fetchLimit);
     } else {
       entries = await ctx.db
         .query("financialAuditLog")
         .withIndex("by_org_time", (q) => q.eq("orgId", args.orgId))
         .order("desc")
-        .take(limit);
+        .take(fetchLimit);
     }
 
+    // Apply remaining date bounds in memory (after the index scan).
     if (args.fromDate || args.toDate) {
       entries = entries.filter((e) => {
         if (args.fromDate && e.occurredAt < args.fromDate) return false;
@@ -126,7 +137,7 @@ export const listAuditLog = query({
       });
     }
 
-    return entries;
+    return entries.slice(0, limit);
   },
 });
 
@@ -148,12 +159,42 @@ export const postManualJournal = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
-    // Manual journals require either OWNER role or a reviewer different from the poster
+    // SoD: reviewer cannot be the same person as poster
     if (args.reviewedBy && args.reviewedBy === user._id) {
       throw new ConvexError("Manual journal reviewer cannot be the same as the poster.");
     }
 
-    // Validate balance
+    // Reviewer must be a valid org member (server-side verification)
+    if (args.reviewedBy) {
+      const reviewerMembership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) =>
+          q.eq("orgId", args.orgId).eq("userId", args.reviewedBy!)
+        )
+        .first();
+      if (!reviewerMembership) {
+        throw new ConvexError("Reviewer is not a member of this organization.");
+      }
+    }
+
+    // Per-line validation: safe integers, non-negative, exactly one side non-zero
+    for (const [idx, line] of args.lines.entries()) {
+      const n = idx + 1;
+      if (!Number.isSafeInteger(line.debitMinor) || !Number.isSafeInteger(line.creditMinor)) {
+        throw new ConvexError(`Line ${n}: amounts must be integer minor-unit values.`);
+      }
+      if (line.debitMinor < 0 || line.creditMinor < 0) {
+        throw new ConvexError(`Line ${n}: amounts cannot be negative.`);
+      }
+      if (line.debitMinor > 0 && line.creditMinor > 0) {
+        throw new ConvexError(`Line ${n}: a single line cannot have both debit and credit amounts.`);
+      }
+      if (line.debitMinor === 0 && line.creditMinor === 0) {
+        throw new ConvexError(`Line ${n}: must have a non-zero debit or credit amount.`);
+      }
+    }
+
+    // Balance validation
     const totalDebits = args.lines.reduce((s, l) => s + l.debitMinor, 0);
     const totalCredits = args.lines.reduce((s, l) => s + l.creditMinor, 0);
     if (totalDebits !== totalCredits) {
@@ -163,7 +204,7 @@ export const postManualJournal = mutation({
       throw new ConvexError("Manual journal must have at least one non-zero line.");
     }
 
-    // Validate all accounts exist and belong to this org, and allow manual posting
+    // Validate all accounts exist, belong to this org, and allow manual posting
     for (const line of args.lines) {
       const account = await ctx.db.get(line.accountId);
       if (!account || account.orgId !== args.orgId) {
@@ -174,19 +215,40 @@ export const postManualJournal = mutation({
       }
     }
 
-    // Idempotency check
+    // Idempotency: namespaced under POST_MANUAL_JOURNAL to avoid collisions with POST_EVENT
     const existing = await ctx.db
       .query("financialAuditLog")
-      .withIndex("by_org_action", (q) => q.eq("orgId", args.orgId).eq("actionType", "POST_EVENT"))
-      .filter((q) => q.eq(q.field("idempotencyKey"), args.idempotencyKey))
+      .withIndex("by_org_action_idempotency", (q) =>
+        q.eq("orgId", args.orgId).eq("actionType", "POST_MANUAL_JOURNAL").eq("idempotencyKey", args.idempotencyKey)
+      )
       .first();
     if (existing) {
       return { alreadyPosted: true, resourceId: existing.resourceId };
     }
 
     const now = Date.now();
+
+    // Verify an open period covers today; inline to avoid circular import with accountingPeriods.ts
+    const period = await ctx.db
+      .query("accountingPeriods")
+      .withIndex("by_org_startDate", (q) => q.eq("orgId", args.orgId))
+      .filter((q) =>
+        q.and(q.lte(q.field("startDate"), now), q.gte(q.field("endDate"), now))
+      )
+      .first();
+    if (!period) {
+      throw new ConvexError("No accounting period found for today. Create and open a period first.");
+    }
+    if (period.status === "CLOSED" || period.status === "LOCKED") {
+      throw new ConvexError(`Accounting period is ${period.status}. Manual journal posting not allowed.`);
+    }
+    if (period.status === "FUTURE") {
+      throw new ConvexError("Accounting period has not been opened yet.");
+    }
+
     const journalId = await ctx.db.insert("journalEntries", {
       orgId: args.orgId,
+      periodId: period._id,
       journalNumber: `MJ-${now.toString().slice(-8)}`,
       accountingDate: now,
       sourceType: "manual",
@@ -219,7 +281,7 @@ export const postManualJournal = mutation({
     await auditLog(ctx, {
       orgId: args.orgId,
       actorId: user._id,
-      actionType: "POST_EVENT",
+      actionType: "POST_MANUAL_JOURNAL",
       resourceType: "journalEntries",
       resourceId: journalId.toString(),
       description: `Manual journal posted: ${args.memo}`,

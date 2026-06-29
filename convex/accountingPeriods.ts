@@ -155,17 +155,46 @@ export const create = mutation({
       );
     }
 
+    // Reject overlapping date ranges
+    const overlap = await ctx.db
+      .query("accountingPeriods")
+      .withIndex("by_org_startDate", (q) => q.eq("orgId", args.orgId))
+      .filter((q) =>
+        q.and(
+          q.lte(q.field("startDate"), args.endDate),
+          q.gte(q.field("endDate"), args.startDate)
+        )
+      )
+      .first();
+    if (overlap) {
+      throw new ConvexError(
+        `Period dates overlap with ${overlap.fiscalYear}-${String(overlap.periodNumber).padStart(2, "0")}.`
+      );
+    }
+
     const now = Date.now();
-    return await ctx.db.insert("accountingPeriods", {
+    const status = args.openImmediately ? "OPEN" : "FUTURE";
+    const periodId = await ctx.db.insert("accountingPeriods", {
       orgId: args.orgId,
       fiscalYear: args.fiscalYear,
       periodNumber: args.periodNumber,
       startDate: args.startDate,
       endDate: args.endDate,
-      status: args.openImmediately ? "OPEN" : "FUTURE",
+      status,
       createdAt: now,
       createdBy: user._id,
     });
+
+    await auditLog(ctx, {
+      orgId: args.orgId,
+      actorId: user._id,
+      actionType: "CREATE_PERIOD",
+      resourceType: "accountingPeriods",
+      resourceId: periodId.toString(),
+      description: `Created period ${args.fiscalYear}-${String(args.periodNumber).padStart(2, "0")} (status: ${status})`,
+    });
+
+    return periodId;
   },
 });
 

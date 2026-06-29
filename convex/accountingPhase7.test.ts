@@ -59,12 +59,17 @@ describe("Phase 7 — financial audit log", () => {
     });
     const periods = await asUser.query(api.accountingPeriods.list, { orgId });
     const futurePeriod = periods.find((p) => p.status === "FUTURE")!;
+    const logsBefore = await asUser.query(api.financialAudit.listAuditLog, { orgId, actionType: "OPEN_PERIOD" });
+    const countBefore = logsBefore.length;
+
     await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: futurePeriod._id });
 
-    const logs = await asUser.query(api.financialAudit.listAuditLog, { orgId, actionType: "OPEN_PERIOD" });
-    // There will be one log for the seedAuditDealer's period open + one for this
-    expect(logs.length).toBeGreaterThanOrEqual(1);
-    expect(logs.some((l) => l.actionType === "OPEN_PERIOD")).toBe(true);
+    const logsAfter = await asUser.query(api.financialAudit.listAuditLog, { orgId, actionType: "OPEN_PERIOD" });
+    expect(logsAfter.length).toBe(countBefore + 1);
+    // The newest entry must reference the futurePeriod we just opened
+    const newest = logsAfter.find((l) => l.resourceId === futurePeriod._id.toString());
+    expect(newest).toBeDefined();
+    expect(newest!.actionType).toBe("OPEN_PERIOD");
   });
 
   test("posting an accounting event creates an audit entry", async () => {
@@ -200,6 +205,7 @@ describe("Phase 7 — manual journal", () => {
     });
 
     expect(second.alreadyPosted).toBe(true);
+    expect(first.resourceId).toBeDefined();
     expect(second.resourceId).toBe(first.resourceId);
   });
 });

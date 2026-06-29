@@ -313,7 +313,9 @@ export default defineSchema({
     orgId: v.id("organizations"),
     actorId: v.id("users"),
     actionType: v.union(
+      v.literal("CREATE_PERIOD"),
       v.literal("POST_EVENT"),
+      v.literal("POST_MANUAL_JOURNAL"),
       v.literal("REVERSE_EVENT"),
       v.literal("OPEN_PERIOD"),
       v.literal("CLOSE_PERIOD"),
@@ -336,6 +338,7 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_actor", ["orgId", "actorId"])
     .index("by_org_action", ["orgId", "actionType"])
+    .index("by_org_action_idempotency", ["orgId", "actionType", "idempotencyKey"])
     .index("by_org_time", ["orgId", "occurredAt"]),
 
   roles: defineTable({
