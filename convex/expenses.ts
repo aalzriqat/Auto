@@ -7,6 +7,9 @@ import { notifyManagers, getActorName } from "./utils/notifications";
 import { validateInput } from "./utils/validation";
 import { CreateExpenseSchema, UpdateExpenseSchema } from "./validations/expenses";
 import { checkTenantWriteLimit } from "./rateLimit";
+import { runWithIdempotency } from "./utils/idempotency";
+import { hookExpensePosted, getOrgCurrency } from "./accounting/workflowHooks";
+import { toMinorUnits } from "./utils/money";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -123,54 +126,78 @@ export const create = mutation({
     vendor: v.optional(v.string()),
     payerId: v.optional(v.id("users")),
     notes: v.optional(v.string()),
+    idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_EXPENSES]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_EXPENSES]);
 
-    validateInput(CreateExpenseSchema, args);
-
-    if (args.vehicleId) {
-      const vehicle = await ctx.db.get(args.vehicleId);
-      if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
-        throw new ConvexError("Vehicle not found in this organization.");
-      }
-    }
-
-    const id = await ctx.db.insert("expenses", {
-      orgId: args.orgId,
-      vehicleId: args.vehicleId,
-      title: args.title,
-      amount: args.amount,
-      date: args.date,
-      category: args.category,
-      status: args.status || "PAID",
-      vendor: args.vendor,
-      payerId: args.payerId,
-      notes: args.notes,
-    });
-
-    // Log the transaction in the General Ledger
-    await ctx.db.insert("transactions", {
-      orgId: args.orgId,
-      type: "OUT",
-      amount: args.amount,
-      date: args.date,
-      category: "EXPENSE",
-      description: `Expense: ${args.title} (${args.category})`,
-      vehicleId: args.vehicleId,
-      expenseId: id,
-    });
-
-    const actorName = await getActorName(ctx);
-    await notifyManagers(
+    return await runWithIdempotency(
       ctx,
-      args.orgId,
-      "expense.created",
-      { actorName, expenseTitle: args.title, amount: `$${args.amount}` },
-      { link: `/${args.orgId}/expenses?highlightId=${id}` }
-    );
+      {
+        orgId: args.orgId,
+        operation: "expenses.create",
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+      },
+      async () => {
+        validateInput(CreateExpenseSchema, args);
 
-    return id;
+        if (args.vehicleId) {
+          const vehicle = await ctx.db.get(args.vehicleId);
+          if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
+            throw new ConvexError("Vehicle not found in this organization.");
+          }
+        }
+
+        const id = await ctx.db.insert("expenses", {
+          orgId: args.orgId,
+          vehicleId: args.vehicleId,
+          title: args.title,
+          amount: args.amount,
+          date: args.date,
+          category: args.category,
+          status: args.status || "PAID",
+          idempotencyKey: args.idempotencyKey,
+          vendor: args.vendor,
+          payerId: args.payerId,
+          notes: args.notes,
+        });
+
+        // Legacy cashflow row. This is not the future general ledger.
+        await ctx.db.insert("transactions", {
+          orgId: args.orgId,
+          type: "OUT",
+          amount: args.amount,
+          date: args.date,
+          category: "EXPENSE",
+          description: `Expense: ${args.title} (${args.category})`,
+          vehicleId: args.vehicleId,
+          expenseId: id,
+          idempotencyKey: args.idempotencyKey,
+        });
+
+        const currency = await getOrgCurrency(ctx, args.orgId);
+        await hookExpensePosted(ctx, {
+          orgId: args.orgId,
+          expenseId: id,
+          amountMinor: toMinorUnits(args.amount, currency),
+          currency,
+          actorId: user._id,
+          occurredAt: args.date,
+        });
+
+        const actorName = await getActorName(ctx);
+        await notifyManagers(
+          ctx,
+          args.orgId,
+          "expense.created",
+          { actorName, expenseTitle: args.title, amount: `$${args.amount}` },
+          { link: `/${args.orgId}/expenses?highlightId=${id}` }
+        );
+
+        return id;
+      }
+    );
   },
 });
 

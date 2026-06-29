@@ -13,6 +13,10 @@ import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { getActorName, notifyManagers, notifyUser } from "./utils/notifications";
+import { runWithIdempotency } from "./utils/idempotency";
+import { assertDifferentActors } from "./utils/financialGuards";
+import { hookCollectionPayment, getOrgCurrency } from "./accounting/workflowHooks";
+import { toMinorUnits } from "./utils/money";
 
 const receivableStatusValidator = v.union(
   v.literal("OPEN"),
@@ -225,6 +229,7 @@ async function insertLedgerTransaction(
     vehicleId?: Id<"vehicles">;
     userId?: Id<"users">;
     category: "COLLECTION_PAYMENT" | "REFUND";
+    idempotencyKey?: string;
   }
 ) {
   await ctx.db.insert("transactions", {
@@ -236,6 +241,7 @@ async function insertLedgerTransaction(
     description: args.description,
     vehicleId: args.vehicleId,
     userId: args.userId,
+    idempotencyKey: args.idempotencyKey,
   });
 }
 
@@ -514,72 +520,99 @@ export const recordPayment = mutation({
     paymentDate: v.number(),
     reference: v.optional(v.string()),
     notes: v.optional(v.string()),
+    idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { user, membership } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    assertPositiveAmount(args.amount);
-    if (args.method === "REFUND") throw new ConvexError("Refunds require manager approval.");
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "collections.recordPayment",
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+      },
+      async () => {
+        assertPositiveAmount(args.amount);
+        if (args.method === "REFUND") throw new ConvexError("Refunds require manager approval.");
 
-    let receivable: Doc<"receivables"> | null = null;
-    if (args.receivableId) {
-      receivable = await ctx.db.get(args.receivableId);
-      if (!receivable || receivable.orgId !== args.orgId) throw new ConvexError("Receivable not found.");
-      if (["PAID", "CANCELLED", "REFUNDED"].includes(receivable.status)) {
-        throw new ConvexError("This receivable can no longer accept payments.");
+        let receivable: Doc<"receivables"> | null = null;
+        if (args.receivableId) {
+          receivable = await ctx.db.get(args.receivableId);
+          if (!receivable || receivable.orgId !== args.orgId) throw new ConvexError("Receivable not found.");
+          if (["PAID", "CANCELLED", "REFUNDED"].includes(receivable.status)) {
+            throw new ConvexError("This receivable can no longer accept payments.");
+          }
+          if (args.amount > receivable.outstandingAmount) {
+            throw new ConvexError("Payment amount cannot exceed the outstanding receivable amount.");
+          }
+        }
+
+        const customerId = receivable?.customerId ?? args.customerId;
+        if (!customerId) throw new ConvexError("Customer is required when no receivable is selected.");
+        await validateOrgCustomer(ctx, args.orgId, customerId);
+
+        const vehicleId = receivable?.vehicleId ?? args.vehicleId;
+        const saleId = receivable?.saleId ?? args.saleId;
+        await validateOptionalLinks(ctx, args.orgId, { vehicleId, saleId });
+
+        const now = Date.now();
+        const paymentId = await ctx.db.insert("collectionPayments", {
+          orgId: args.orgId,
+          branchId: membership.branchId,
+          receivableId: receivable?._id,
+          customerId,
+          vehicleId,
+          saleId,
+          direction: "IN",
+          method: args.method,
+          amount: roundMoney(args.amount),
+          paymentDate: args.paymentDate,
+          status: "POSTED",
+          idempotencyKey: args.idempotencyKey,
+          reference: args.reference,
+          cashierId: user._id,
+          notes: args.notes,
+          createdAt: now,
+        });
+
+        if (receivable) {
+          await applyPostedPayment(ctx, receivable, args.amount, args.paymentDate);
+        }
+
+        await insertLedgerTransaction(ctx, {
+          orgId: args.orgId,
+          direction: "IN",
+          amount: roundMoney(args.amount),
+          date: args.paymentDate,
+          description: `Collection payment${receivable ? ` for ${receivable.title}` : ""}`,
+          vehicleId,
+          userId: user._id,
+          category: "COLLECTION_PAYMENT",
+          idempotencyKey: args.idempotencyKey,
+        });
+
+        const currency = await getOrgCurrency(ctx, args.orgId);
+        await hookCollectionPayment(ctx, {
+          orgId: args.orgId,
+          paymentId,
+          customerId,
+          amountMinor: toMinorUnits(roundMoney(args.amount), currency),
+          currency,
+          paymentMethod: args.method,
+          actorId: user._id,
+          occurredAt: args.paymentDate,
+        });
+
+        const actorName = await getActorName(ctx);
+        await notifyManagers(ctx, args.orgId, "collection.payment_recorded", {
+          actorName,
+          amount: String(roundMoney(args.amount)),
+        }, { link: `/${args.orgId}/accounting` });
+
+        return paymentId;
       }
-      if (args.amount > receivable.outstandingAmount) {
-        throw new ConvexError("Payment amount cannot exceed the outstanding receivable amount.");
-      }
-    }
-
-    const customerId = receivable?.customerId ?? args.customerId;
-    if (!customerId) throw new ConvexError("Customer is required when no receivable is selected.");
-    await validateOrgCustomer(ctx, args.orgId, customerId);
-
-    const vehicleId = receivable?.vehicleId ?? args.vehicleId;
-    const saleId = receivable?.saleId ?? args.saleId;
-    await validateOptionalLinks(ctx, args.orgId, { vehicleId, saleId });
-
-    const paymentId = await ctx.db.insert("collectionPayments", {
-      orgId: args.orgId,
-      branchId: membership.branchId,
-      receivableId: receivable?._id,
-      customerId,
-      vehicleId,
-      saleId,
-      direction: "IN",
-      method: args.method,
-      amount: roundMoney(args.amount),
-      paymentDate: args.paymentDate,
-      status: "POSTED",
-      reference: args.reference,
-      cashierId: user._id,
-      notes: args.notes,
-      createdAt: Date.now(),
-    });
-
-    if (receivable) {
-      await applyPostedPayment(ctx, receivable, args.amount, args.paymentDate);
-    }
-
-    await insertLedgerTransaction(ctx, {
-      orgId: args.orgId,
-      direction: "IN",
-      amount: roundMoney(args.amount),
-      date: args.paymentDate,
-      description: `Collection payment${receivable ? ` for ${receivable.title}` : ""}`,
-      vehicleId,
-      userId: user._id,
-      category: "COLLECTION_PAYMENT",
-    });
-
-    const actorName = await getActorName(ctx);
-    await notifyManagers(ctx, args.orgId, "collection.payment_recorded", {
-      actorName,
-      amount: String(roundMoney(args.amount)),
-    }, { link: `/${args.orgId}/accounting` });
-
-    return paymentId;
+    );
   },
 });
 
@@ -668,65 +701,80 @@ export const clearCheque = mutation({
     orgId: v.id("organizations"),
     chequeId: v.id("postDatedCheques"),
     clearedAt: v.optional(v.number()),
+    idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { user, membership } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    const cheque = await ctx.db.get(args.chequeId);
-    if (!cheque || cheque.orgId !== args.orgId) throw new ConvexError("Cheque not found.");
-    if (cheque.status !== "HELD" && cheque.status !== "DEPOSITED") {
-      throw new ConvexError("Only held or deposited cheques can be cleared.");
-    }
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "collections.clearCheque",
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+      },
+      async () => {
+        const cheque = await ctx.db.get(args.chequeId);
+        if (!cheque || cheque.orgId !== args.orgId) throw new ConvexError("Cheque not found.");
+        if (cheque.status !== "HELD" && cheque.status !== "DEPOSITED") {
+          throw new ConvexError("Only held or deposited cheques can be cleared.");
+        }
 
-    const clearedAt = args.clearedAt ?? Date.now();
-    await ctx.db.patch(args.chequeId, {
-      status: "CLEARED",
-      clearedAt,
-      depositedDate: cheque.depositedDate ?? clearedAt,
-      updatedAt: Date.now(),
-    });
+        const clearedAt = args.clearedAt ?? Date.now();
+        await ctx.db.patch(args.chequeId, {
+          status: "CLEARED",
+          clearedAt,
+          depositedDate: cheque.depositedDate ?? clearedAt,
+          idempotencyKey: args.idempotencyKey,
+          updatedAt: Date.now(),
+        });
 
-    let receivable: Doc<"receivables"> | null = null;
-    if (cheque.receivableId) {
-      receivable = await ctx.db.get(cheque.receivableId);
-      if (receivable && cheque.amount > receivable.outstandingAmount) {
-        throw new ConvexError("Cheque amount cannot exceed the outstanding receivable amount.");
+        let receivable: Doc<"receivables"> | null = null;
+        if (cheque.receivableId) {
+          receivable = await ctx.db.get(cheque.receivableId);
+          if (receivable && cheque.amount > receivable.outstandingAmount) {
+            throw new ConvexError("Cheque amount cannot exceed the outstanding receivable amount.");
+          }
+        }
+
+        const paymentId = await ctx.db.insert("collectionPayments", {
+          orgId: args.orgId,
+          branchId: membership.branchId,
+          receivableId: cheque.receivableId,
+          customerId: cheque.customerId,
+          vehicleId: cheque.vehicleId,
+          saleId: cheque.saleId,
+          chequeId: args.chequeId,
+          direction: "IN",
+          method: "CHEQUE",
+          amount: cheque.amount,
+          paymentDate: clearedAt,
+          status: "POSTED",
+          idempotencyKey: args.idempotencyKey,
+          reference: `${cheque.bank} #${cheque.chequeNumber}`,
+          cashierId: user._id,
+          createdAt: Date.now(),
+        });
+
+        if (receivable) {
+          await applyPostedPayment(ctx, receivable, cheque.amount, clearedAt);
+        }
+
+        await insertLedgerTransaction(ctx, {
+          orgId: args.orgId,
+          direction: "IN",
+          amount: cheque.amount,
+          date: clearedAt,
+          description: `Cleared cheque ${cheque.bank} #${cheque.chequeNumber}`,
+          vehicleId: cheque.vehicleId,
+          userId: user._id,
+          category: "COLLECTION_PAYMENT",
+          idempotencyKey: args.idempotencyKey,
+        });
+
+        return paymentId;
       }
-    }
-
-    const paymentId = await ctx.db.insert("collectionPayments", {
-      orgId: args.orgId,
-      branchId: membership.branchId,
-      receivableId: cheque.receivableId,
-      customerId: cheque.customerId,
-      vehicleId: cheque.vehicleId,
-      saleId: cheque.saleId,
-      chequeId: args.chequeId,
-      direction: "IN",
-      method: "CHEQUE",
-      amount: cheque.amount,
-      paymentDate: clearedAt,
-      status: "POSTED",
-      reference: `${cheque.bank} #${cheque.chequeNumber}`,
-      cashierId: user._id,
-      createdAt: Date.now(),
-    });
-
-    if (receivable) {
-      await applyPostedPayment(ctx, receivable, cheque.amount, clearedAt);
-    }
-
-    await insertLedgerTransaction(ctx, {
-      orgId: args.orgId,
-      direction: "IN",
-      amount: cheque.amount,
-      date: clearedAt,
-      description: `Cleared cheque ${cheque.bank} #${cheque.chequeNumber}`,
-      vehicleId: cheque.vehicleId,
-      userId: user._id,
-      category: "COLLECTION_PAYMENT",
-    });
-
-    return paymentId;
+    );
   },
 });
 
@@ -910,87 +958,109 @@ export const respondToApproval = mutation({
     requestId: v.id("collectionApprovalRequests"),
     status: v.union(v.literal("APPROVED"), v.literal("REJECTED")),
     decisionNotes: v.optional(v.string()),
+    idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { user, membership } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
-    const request = await ctx.db.get(args.requestId);
-    if (!request || request.orgId !== args.orgId) throw new ConvexError("Approval request not found.");
-    if (request.status !== "PENDING") throw new ConvexError("This request has already been resolved.");
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "collections.respondToApproval",
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+      },
+      async () => {
+        const request = await ctx.db.get(args.requestId);
+        if (!request || request.orgId !== args.orgId) throw new ConvexError("Approval request not found.");
+        if (request.status !== "PENDING") throw new ConvexError("This request has already been resolved.");
+        assertDifferentActors(
+          user._id,
+          request.requestedBy,
+          "Requester cannot approve or reject their own collection approval request."
+        );
 
-    const receivable = await ctx.db.get(request.receivableId);
-    if (!receivable || receivable.orgId !== args.orgId) throw new ConvexError("Receivable not found.");
+        const receivable = await ctx.db.get(request.receivableId);
+        if (!receivable || receivable.orgId !== args.orgId) throw new ConvexError("Receivable not found.");
 
-    const now = Date.now();
-    await ctx.db.patch(args.requestId, {
-      status: args.status,
-      decisionNotes: args.decisionNotes,
-      decidedBy: user._id,
-      decidedAt: now,
-      updatedAt: now,
-    });
-
-    if (args.status === "APPROVED") {
-      if (request.requestType === "RESCHEDULE") {
-        if (!request.requestedDueDate) throw new ConvexError("Requested due date is missing.");
-        await ctx.db.patch(receivable._id, {
-          dueDate: request.requestedDueDate,
-          status: request.requestedDueDate < now ? "OVERDUE" : "RESCHEDULED",
-          updatedAt: now,
-        });
-      } else if (request.requestType === "CANCEL_RECEIVABLE") {
-        await ctx.db.patch(receivable._id, {
-          outstandingAmount: 0,
-          status: "CANCELLED",
-          updatedAt: now,
-        });
-      } else if (request.requestType === "REFUND") {
-        const refundAmount = roundMoney(request.requestedAmount ?? 0);
-        assertPositiveAmount(refundAmount, "Refund amount");
-        const paidAmount = roundMoney(receivable.originalAmount - receivable.outstandingAmount);
-        if (refundAmount > paidAmount) throw new ConvexError("Refund amount cannot exceed collected amount.");
-
-        await ctx.db.insert("collectionPayments", {
-          orgId: args.orgId,
-          branchId: membership.branchId,
-          receivableId: receivable._id,
-          customerId: receivable.customerId,
-          vehicleId: receivable.vehicleId,
-          saleId: receivable.saleId,
-          direction: "OUT",
-          method: "REFUND",
-          amount: refundAmount,
-          paymentDate: now,
-          status: "POSTED",
-          reference: `Refund approval ${args.requestId}`,
-          cashierId: user._id,
-          notes: args.decisionNotes,
-          createdAt: now,
-        });
-
-        const newOutstanding = roundMoney(receivable.outstandingAmount + refundAmount);
-        await ctx.db.patch(receivable._id, {
-          outstandingAmount: newOutstanding,
-          status: refundAmount >= paidAmount ? "REFUNDED" : nextStatus(newOutstanding, receivable.dueDate),
+        const now = Date.now();
+        await ctx.db.patch(args.requestId, {
+          status: args.status,
+          decisionNotes: args.decisionNotes,
+          decidedBy: user._id,
+          decidedAt: now,
+          responseIdempotencyKey: args.idempotencyKey,
           updatedAt: now,
         });
 
-        await insertLedgerTransaction(ctx, {
-          orgId: args.orgId,
-          direction: "OUT",
-          amount: refundAmount,
-          date: now,
-          description: `Refund for ${receivable.title}`,
-          vehicleId: receivable.vehicleId,
-          userId: user._id,
-          category: "REFUND",
-        });
+        if (args.status === "APPROVED") {
+          if (request.requestType === "RESCHEDULE") {
+            if (!request.requestedDueDate) throw new ConvexError("Requested due date is missing.");
+            await ctx.db.patch(receivable._id, {
+              dueDate: request.requestedDueDate,
+              status: request.requestedDueDate < now ? "OVERDUE" : "RESCHEDULED",
+              updatedAt: now,
+            });
+          } else if (request.requestType === "CANCEL_RECEIVABLE") {
+            await ctx.db.patch(receivable._id, {
+              outstandingAmount: 0,
+              status: "CANCELLED",
+              updatedAt: now,
+            });
+          } else if (request.requestType === "REFUND") {
+            const refundAmount = roundMoney(request.requestedAmount ?? 0);
+            assertPositiveAmount(refundAmount, "Refund amount");
+            const paidAmount = roundMoney(receivable.originalAmount - receivable.outstandingAmount);
+            if (refundAmount > paidAmount) throw new ConvexError("Refund amount cannot exceed collected amount.");
+
+            await ctx.db.insert("collectionPayments", {
+              orgId: args.orgId,
+              branchId: membership.branchId,
+              receivableId: receivable._id,
+              customerId: receivable.customerId,
+              vehicleId: receivable.vehicleId,
+              saleId: receivable.saleId,
+              direction: "OUT",
+              method: "REFUND",
+              amount: refundAmount,
+              paymentDate: now,
+              status: "POSTED",
+              idempotencyKey: args.idempotencyKey,
+              reference: `Refund approval ${args.requestId}`,
+              cashierId: user._id,
+              notes: args.decisionNotes,
+              createdAt: now,
+            });
+
+            const newOutstanding = roundMoney(receivable.outstandingAmount + refundAmount);
+            await ctx.db.patch(receivable._id, {
+              outstandingAmount: newOutstanding,
+              status: refundAmount >= paidAmount ? "REFUNDED" : nextStatus(newOutstanding, receivable.dueDate),
+              updatedAt: now,
+            });
+
+            await insertLedgerTransaction(ctx, {
+              orgId: args.orgId,
+              direction: "OUT",
+              amount: refundAmount,
+              date: now,
+              description: `Refund for ${receivable.title}`,
+              vehicleId: receivable.vehicleId,
+              userId: user._id,
+              category: "REFUND",
+              idempotencyKey: args.idempotencyKey,
+            });
+          }
+        }
+
+        await notifyUser(ctx, args.orgId, request.requestedBy, "collection.approval_responded", {
+          status: args.status,
+          amount: String(request.requestedAmount ?? receivable.outstandingAmount),
+        }, { link: `/${args.orgId}/accounting` });
+
+        return args.requestId;
       }
-    }
-
-    await notifyUser(ctx, args.orgId, request.requestedBy, "collection.approval_responded", {
-      status: args.status,
-      amount: String(request.requestedAmount ?? receivable.outstandingAmount),
-    }, { link: `/${args.orgId}/accounting` });
+    );
   },
 });
 
@@ -1032,56 +1102,69 @@ export const submitCashierReconciliation = mutation({
     businessDate: v.number(),
     countedCash: v.number(),
     notes: v.optional(v.string()),
+    idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { user, membership } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    if (!Number.isFinite(args.countedCash) || args.countedCash < 0) {
-      throw new ConvexError("Counted cash must be zero or greater.");
-    }
-    const { start, end } = dayRange(args.businessDate);
-    const payments = await ctx.db
-      .query("collectionPayments")
-      .withIndex("by_org_cashier", (q) => q.eq("orgId", args.orgId).eq("cashierId", user._id))
-      .take(500);
-    const cashPayments = payments.filter(
-      (payment) =>
-        !payment.reconciliationId &&
-        payment.status === "POSTED" &&
-        payment.paymentDate >= start &&
-        payment.paymentDate <= end &&
-        (payment.method === "CASH" || payment.method === "REFUND")
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "collections.submitCashierReconciliation",
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+      },
+      async () => {
+        if (!Number.isFinite(args.countedCash) || args.countedCash < 0) {
+          throw new ConvexError("Counted cash must be zero or greater.");
+        }
+        const { start, end } = dayRange(args.businessDate);
+        const payments = await ctx.db
+          .query("collectionPayments")
+          .withIndex("by_org_cashier", (q) => q.eq("orgId", args.orgId).eq("cashierId", user._id))
+          .take(500);
+        const cashPayments = payments.filter(
+          (payment) =>
+            !payment.reconciliationId &&
+            payment.status === "POSTED" &&
+            payment.paymentDate >= start &&
+            payment.paymentDate <= end &&
+            (payment.method === "CASH" || payment.method === "REFUND")
+        );
+        const expectedCash = roundMoney(cashPayments.reduce(
+          (sum, payment) => sum + (payment.direction === "IN" ? payment.amount : -payment.amount),
+          0
+        ));
+        const countedCash = roundMoney(args.countedCash);
+        const now = Date.now();
+        const reconciliationId = await ctx.db.insert("cashierReconciliations", {
+          orgId: args.orgId,
+          branchId: membership.branchId,
+          cashierId: user._id,
+          businessDate: start,
+          expectedCash,
+          countedCash,
+          difference: roundMoney(countedCash - expectedCash),
+          status: "SUBMITTED",
+          idempotencyKey: args.idempotencyKey,
+          notes: args.notes,
+          createdAt: now,
+          updatedAt: now,
+        });
+
+        for (const payment of cashPayments) {
+          await ctx.db.patch(payment._id, { reconciliationId });
+        }
+
+        const actorName = await getActorName(ctx);
+        await notifyManagers(ctx, args.orgId, "collection.reconciliation_submitted", {
+          actorName,
+          amount: String(countedCash),
+        }, { link: `/${args.orgId}/accounting` });
+
+        return reconciliationId;
+      }
     );
-    const expectedCash = roundMoney(cashPayments.reduce(
-      (sum, payment) => sum + (payment.direction === "IN" ? payment.amount : -payment.amount),
-      0
-    ));
-    const countedCash = roundMoney(args.countedCash);
-    const now = Date.now();
-    const reconciliationId = await ctx.db.insert("cashierReconciliations", {
-      orgId: args.orgId,
-      branchId: membership.branchId,
-      cashierId: user._id,
-      businessDate: start,
-      expectedCash,
-      countedCash,
-      difference: roundMoney(countedCash - expectedCash),
-      status: "SUBMITTED",
-      notes: args.notes,
-      createdAt: now,
-      updatedAt: now,
-    });
-
-    for (const payment of cashPayments) {
-      await ctx.db.patch(payment._id, { reconciliationId });
-    }
-
-    const actorName = await getActorName(ctx);
-    await notifyManagers(ctx, args.orgId, "collection.reconciliation_submitted", {
-      actorName,
-      amount: String(countedCash),
-    }, { link: `/${args.orgId}/accounting` });
-
-    return reconciliationId;
   },
 });
 
@@ -1116,6 +1199,11 @@ export const reviewCashierReconciliation = mutation({
     const reconciliation = await ctx.db.get(args.reconciliationId);
     if (!reconciliation || reconciliation.orgId !== args.orgId) throw new ConvexError("Reconciliation not found.");
     if (reconciliation.status !== "SUBMITTED") throw new ConvexError("Only submitted reconciliations can be reviewed.");
+    assertDifferentActors(
+      user._id,
+      reconciliation.cashierId,
+      "Cashier cannot approve or reject their own reconciliation."
+    );
     await ctx.db.patch(args.reconciliationId, {
       status: args.status,
       notes: args.notes ?? reconciliation.notes,
