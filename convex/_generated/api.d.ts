@@ -68,6 +68,7 @@ import type * as orgSettings from "../orgSettings.js";
 import type * as orgValuationCompanies from "../orgValuationCompanies.js";
 import type * as organizations from "../organizations.js";
 import type * as partnerEquity from "../partnerEquity.js";
+import type * as paymentIntents from "../paymentIntents.js";
 import type * as quotes from "../quotes.js";
 import type * as rateLimit from "../rateLimit.js";
 import type * as reports from "../reports.js";
@@ -199,6 +200,7 @@ declare const fullApi: ApiFromModules<{
   orgValuationCompanies: typeof orgValuationCompanies;
   organizations: typeof organizations;
   partnerEquity: typeof partnerEquity;
+  paymentIntents: typeof paymentIntents;
   quotes: typeof quotes;
   rateLimit: typeof rateLimit;
   reports: typeof reports;
