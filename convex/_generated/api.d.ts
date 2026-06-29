@@ -10,6 +10,7 @@
 
 import type * as accountingLedger from "../accountingLedger.js";
 import type * as accountingPeriods from "../accountingPeriods.js";
+import type * as accountingReports from "../accountingReports.js";
 import type * as accounting_postingEngine from "../accounting/postingEngine.js";
 import type * as accounting_postingRules from "../accounting/postingRules.js";
 import type * as accounting_reversals from "../accounting/reversals.js";
@@ -138,6 +139,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   accountingLedger: typeof accountingLedger;
   accountingPeriods: typeof accountingPeriods;
+  accountingReports: typeof accountingReports;
   "accounting/postingEngine": typeof accounting_postingEngine;
   "accounting/postingRules": typeof accounting_postingRules;
   "accounting/reversals": typeof accounting_reversals;
