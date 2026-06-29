@@ -44,7 +44,7 @@ export const getJournalEntry = query({
       .query("journalLines")
       .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", args.journalEntryId))
       .collect();
-    const event = await ctx.db.get(entry.accountingEventId);
+    const event = entry.accountingEventId ? await ctx.db.get(entry.accountingEventId) : null;
     return { entry, lines, event };
   },
 });
@@ -64,15 +64,19 @@ export const getAccountActivity = query({
     if (!account || account.orgId !== args.orgId) return null;
 
     const limit = Math.min(args.limit ?? 100, 500);
-    let q = ctx.db
-      .query("journalLines")
-      .withIndex("by_org_account_date", (q) => {
-        let base = q.eq("orgId", args.orgId).eq("accountId", args.accountId);
-        if (args.fromDate !== undefined) base = base.gte("accountingDate", args.fromDate);
-        return base;
-      });
-
-    const lines = await q.take(limit);
+    const lines = await (args.fromDate !== undefined
+      ? ctx.db
+          .query("journalLines")
+          .withIndex("by_org_account_date", (q) =>
+            q.eq("orgId", args.orgId).eq("accountId", args.accountId).gte("accountingDate", args.fromDate!)
+          )
+          .take(limit)
+      : ctx.db
+          .query("journalLines")
+          .withIndex("by_org_account_date", (q) =>
+            q.eq("orgId", args.orgId).eq("accountId", args.accountId)
+          )
+          .take(limit));
 
     const filtered = args.toDate
       ? lines.filter((l) => l.accountingDate <= args.toDate!)

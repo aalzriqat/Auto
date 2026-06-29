@@ -106,7 +106,7 @@ export const listAuditLog = query({
       entries = await ctx.db
         .query("financialAuditLog")
         .withIndex("by_org_action", (q) =>
-          q.eq("orgId", args.orgId).eq("actionType", args.actionType as Parameters<typeof q.eq>[1])
+          q.eq("orgId", args.orgId).eq("actionType", args.actionType as "POST_EVENT" | "REVERSE_EVENT" | "OPEN_PERIOD" | "CLOSE_PERIOD" | "LOCK_PERIOD" | "REOPEN_PERIOD" | "INIT_CHART" | "UPDATE_ACCOUNT" | "MIGRATE_TRANSACTION" | "ALLOCATE_PAYMENT" | "REVERSE_ALLOCATION")
         )
         .order("desc")
         .take(limit);
