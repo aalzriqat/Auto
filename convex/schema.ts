@@ -192,6 +192,121 @@ export default defineSchema({
     .index("by_org_account", ["orgId", "accountId"])
     .index("by_org_account_date", ["orgId", "accountId", "accountingDate"]),
 
+  // ─── Phase 3: Receivables, payments, and allocations subledger ────────────
+
+  receivableDocuments: defineTable({
+    orgId: v.id("organizations"),
+    branchId: v.optional(v.id("branches")),
+    documentType: v.union(
+      v.literal("INVOICE"),
+      v.literal("INSTALLMENT"),
+      v.literal("DEBIT_ADJUSTMENT"),
+      v.literal("CREDIT_ADJUSTMENT"),
+      v.literal("WRITE_OFF"),
+      v.literal("REFUND_PAYABLE"),
+    ),
+    documentNumber: v.string(),
+    payerType: v.union(v.literal("CUSTOMER"), v.literal("FINANCE_COMPANY")),
+    customerId: v.optional(v.id("customers")),
+    financeCompanyId: v.optional(v.id("financeCompanies")),
+    sourceType: v.string(),
+    sourceId: v.string(),
+    originalAmountMinor: v.number(),
+    currency: v.string(),
+    scale: v.number(),
+    issueDate: v.number(),
+    dueDate: v.number(),
+    status: v.union(
+      v.literal("OPEN"),
+      v.literal("PARTIALLY_PAID"),
+      v.literal("PAID"),
+      v.literal("WRITTEN_OFF"),
+      v.literal("CANCELLED"),
+      v.literal("REVERSED"),
+    ),
+    accountingEventId: v.optional(v.id("accountingEvents")),
+    reversedDocumentId: v.optional(v.id("receivableDocuments")),
+    createdAt: v.number(),
+    createdBy: v.id("users"),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_customer", ["orgId", "customerId"])
+    .index("by_org_source", ["orgId", "sourceType", "sourceId"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_dueDate", ["orgId", "dueDate"]),
+
+  canonicalPayments: defineTable({
+    orgId: v.id("organizations"),
+    branchId: v.optional(v.id("branches")),
+    direction: v.union(v.literal("IN"), v.literal("OUT")),
+    payerType: v.optional(v.union(v.literal("CUSTOMER"), v.literal("FINANCE_COMPANY"))),
+    customerId: v.optional(v.id("customers")),
+    financeCompanyId: v.optional(v.id("financeCompanies")),
+    method: v.union(
+      v.literal("CASH"),
+      v.literal("BANK_TRANSFER"),
+      v.literal("CARD"),
+      v.literal("PAYMENT_LINK"),
+      v.literal("CHEQUE"),
+      v.literal("INTERNAL_TRANSFER"),
+      v.literal("OTHER"),
+    ),
+    amountMinor: v.number(),
+    currency: v.string(),
+    scale: v.number(),
+    receivedAt: v.optional(v.number()),
+    verifiedAt: v.optional(v.number()),
+    settledAt: v.optional(v.number()),
+    status: v.union(
+      v.literal("DRAFT"),
+      v.literal("PENDING_VERIFICATION"),
+      v.literal("VERIFIED"),
+      v.literal("PENDING_SETTLEMENT"),
+      v.literal("SETTLED"),
+      v.literal("FAILED"),
+      v.literal("RETURNED"),
+      v.literal("REVERSED"),
+      v.literal("REFUNDED"),
+      v.literal("VOIDED"),
+    ),
+    externalReference: v.optional(v.string()),
+    provider: v.optional(v.string()),
+    providerTransactionId: v.optional(v.string()),
+    idempotencyKey: v.string(),
+    cashierSessionId: v.optional(v.id("cashierReconciliations")),
+    originalPaymentId: v.optional(v.id("canonicalPayments")),
+    reversalPaymentId: v.optional(v.id("canonicalPayments")),
+    accountingEventId: v.optional(v.id("accountingEvents")),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_customer", ["orgId", "customerId"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_idempotency", ["orgId", "idempotencyKey"]),
+
+  paymentAllocations: defineTable({
+    orgId: v.id("organizations"),
+    paymentId: v.id("canonicalPayments"),
+    receivableDocumentId: v.id("receivableDocuments"),
+    amountMinor: v.number(),
+    currency: v.string(),
+    scale: v.number(),
+    allocationDate: v.number(),
+    status: v.union(
+      v.literal("ACTIVE"),
+      v.literal("REVERSED"),
+    ),
+    reversalOfAllocationId: v.optional(v.id("paymentAllocations")),
+    reversedByAllocationId: v.optional(v.id("paymentAllocations")),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_payment", ["paymentId"])
+    .index("by_receivable", ["receivableDocumentId"])
+    .index("by_org_status", ["orgId", "status"]),
+
   roles: defineTable({
     orgId: v.id("organizations"), // Roles are scoped to orgs allowing custom roles
     name: v.string(), // "OWNER", "SALES", etc.

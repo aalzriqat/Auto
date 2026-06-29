@@ -8,7 +8,11 @@
  * @module
  */
 
+import type * as accountingLedger from "../accountingLedger.js";
 import type * as accountingPeriods from "../accountingPeriods.js";
+import type * as accounting_postingEngine from "../accounting/postingEngine.js";
+import type * as accounting_postingRules from "../accounting/postingRules.js";
+import type * as accounting_reversals from "../accounting/reversals.js";
 import type * as adminAudit from "../adminAudit.js";
 import type * as adminAuth from "../adminAuth.js";
 import type * as adminBroadcasts from "../adminBroadcasts.js";
@@ -130,7 +134,11 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  accountingLedger: typeof accountingLedger;
   accountingPeriods: typeof accountingPeriods;
+  "accounting/postingEngine": typeof accounting_postingEngine;
+  "accounting/postingRules": typeof accounting_postingRules;
+  "accounting/reversals": typeof accounting_reversals;
   adminAudit: typeof adminAudit;
   adminAuth: typeof adminAuth;
   adminBroadcasts: typeof adminBroadcasts;
