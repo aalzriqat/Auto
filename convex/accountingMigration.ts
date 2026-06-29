@@ -24,32 +24,36 @@ interface LegacyTransactionRow {
   amount: number;
   date: number;
   category: string;
-  description: string | undefined;
+  description: string;
   vehicleId: string | undefined;
   hasJournalEntry: boolean;
   eventType: string | null;
 }
 
+function mapCategoryToEventType(category: string, type: string): string | null {
+  if (category === "VEHICLE_SALE") return "SALE_COMPLETED";
+  if (category === "DEPOSIT") return type === "IN" ? "DEPOSIT_RECEIVED" : "DEPOSIT_REFUNDED";
+  if (category === "COLLECTION_PAYMENT") return "COLLECTION_PAYMENT";
+  if (category === "EXPENSE") return "EXPENSE_POSTED";
+  return null;
+}
+
 async function classifyLegacyTransaction(
   ctx: QueryCtx,
-  tx: { _id: Id<"transactions">; type: string; category: string; vehicleId?: Id<"vehicles">; amount: number; date: number; description?: string }
+  orgId: Id<"organizations">,
+  tx: { _id: Id<"transactions">; type: "IN" | "OUT"; category: string; vehicleId?: Id<"vehicles">; amount: number; date: number; description: string }
 ): Promise<LegacyTransactionRow> {
   const existing = await ctx.db
     .query("accountingEvents")
     .withIndex("by_org_source", (q) =>
       q
-        .eq("orgId", tx._id as unknown as Id<"organizations">)
+        .eq("orgId", orgId)
         .eq("sourceType", "transactions")
         .eq("sourceId", tx._id.toString())
     )
     .first();
 
-  let eventType: string | null = null;
-  if (tx.category === "SALE") eventType = "SALE_COMPLETED";
-  else if (tx.category === "DEPOSIT") eventType = tx.type === "IN" ? "DEPOSIT_RECEIVED" : "DEPOSIT_REFUNDED";
-  else if (tx.category === "COLLECTION_PAYMENT") eventType = "COLLECTION_PAYMENT";
-  else if (tx.category === "EXPENSE") eventType = "EXPENSE_POSTED";
-  else if (tx.category === "COMMISSION") eventType = "COMMISSION_ACCRUED";
+  const eventType = mapCategoryToEventType(tx.category, tx.type);
 
   return {
     id: tx._id.toString(),
@@ -82,7 +86,7 @@ export const auditLegacyTransactions = query({
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .take(limit);
 
-    const rows = await Promise.all(txns.map((tx) => classifyLegacyTransaction(ctx, tx)));
+    const rows = await Promise.all(txns.map((tx) => classifyLegacyTransaction(ctx, args.orgId, tx)));
     const unposted = rows.filter((r) => !r.hasJournalEntry);
     const posted = rows.filter((r) => r.hasJournalEntry);
 
@@ -236,12 +240,7 @@ export const migrateUnpostedTransactions = mutation({
         continue;
       }
 
-      let eventType: string | null = null;
-      if (tx.category === "EXPENSE") eventType = "EXPENSE_POSTED";
-      else if (tx.category === "COLLECTION_PAYMENT" && tx.type === "IN") eventType = "COLLECTION_PAYMENT";
-      else if (tx.category === "DEPOSIT" && tx.type === "IN") eventType = "DEPOSIT_RECEIVED";
-      else if (tx.category === "DEPOSIT" && tx.type === "OUT") eventType = "DEPOSIT_REFUNDED";
-      else if (tx.category === "SALE") eventType = "SALE_COMPLETED";
+      const eventType = mapCategoryToEventType(tx.category, tx.type);
 
       if (!eventType) {
         results.push({ transactionId: tx._id.toString(), action: "SKIP", eventType: null, reason: "no_rule_for_category" });
@@ -265,22 +264,19 @@ export const migrateUnpostedTransactions = mutation({
         if (tx.vehicleId) payload.vehicleId = tx.vehicleId.toString();
 
         if (eventType === "EXPENSE_POSTED") {
-          payload.expenseId = tx._id.toString();
+          payload.expenseId = tx.expenseId?.toString() ?? tx._id.toString();
         } else if (eventType === "COLLECTION_PAYMENT") {
           payload.paymentId = tx._id.toString();
-          if (tx.customerId) payload.customerId = tx.customerId.toString();
           payload.paymentMethod = "CASH";
         } else if (eventType === "DEPOSIT_RECEIVED" || eventType === "DEPOSIT_REFUNDED") {
           payload.depositId = tx._id.toString();
-          if (tx.customerId) payload.customerId = tx.customerId.toString();
           payload.paymentMethod = "CASH";
         } else if (eventType === "SALE_COMPLETED") {
           payload.saleId = tx._id.toString();
           payload.saleAmountMinor = amountMinor;
-          if (tx.customerId) payload.customerId = tx.customerId.toString();
         }
 
-        await postAccountingEvent(ctx as unknown as MutationCtx, {
+        await postAccountingEvent(ctx, {
           orgId: args.orgId,
           eventType: eventType as "EXPENSE_POSTED" | "COLLECTION_PAYMENT" | "DEPOSIT_RECEIVED" | "DEPOSIT_REFUNDED" | "SALE_COMPLETED",
           sourceType: "transactions",

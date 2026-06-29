@@ -59,7 +59,7 @@ describe("Phase 6 — gap analysis", () => {
     await t.run((ctx) =>
       ctx.db.insert("transactions", {
         orgId, type: "OUT", amount: 250, date: Date.now(),
-        category: "EXPENSE", description: "Legacy rent",
+        category: "EXPENSE", description: "Legacy rent", idempotencyKey: "leg_rent_001",
       })
     );
 
@@ -111,7 +111,7 @@ describe("Phase 6 — audit legacy transactions", () => {
     await t.run((ctx) =>
       ctx.db.insert("transactions", {
         orgId, type: "OUT", amount: 100, date: Date.now(),
-        category: "EXPENSE", description: "Office supplies",
+        category: "EXPENSE", description: "Office supplies", idempotencyKey: "leg_office_001",
       })
     );
 
@@ -132,7 +132,7 @@ describe("Phase 6 — dry-run migration", () => {
     await t.run((ctx) =>
       ctx.db.insert("transactions", {
         orgId, type: "OUT", amount: 500, date: Date.now(),
-        category: "EXPENSE", description: "Marketing",
+        category: "EXPENSE", description: "Marketing", idempotencyKey: "leg_mkt_001",
       })
     );
 
@@ -156,7 +156,7 @@ describe("Phase 6 — dry-run migration", () => {
     await t.run((ctx) =>
       ctx.db.insert("transactions", {
         orgId, type: "OUT", amount: 300, date: now,
-        category: "EXPENSE", description: "Utilities",
+        category: "EXPENSE", description: "Utilities", idempotencyKey: "leg_util_001",
       })
     );
 
