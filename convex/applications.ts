@@ -4,8 +4,9 @@ import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
-import { closeLeadsAsWon } from "./utils/saleHelpers";
-import { releaseHoldForRejectedQuote, resolveDepositsForQuote } from "./utils/depositHelpers";
+import { releaseHoldForRejectedQuote } from "./utils/depositHelpers";
+import { completeSale } from "./utils/saleCompletion";
+import { runWithIdempotency } from "./utils/idempotency";
 
 export const list = query({
   args: {
@@ -95,6 +96,20 @@ export const createFromQuote = mutation({
     if (!quote || quote.orgId !== args.orgId) {
       throw new ConvexError("Quote not found.");
     }
+    const customer = await ctx.db.get(quote.customerId);
+    if (!customer || customer.orgId !== args.orgId) {
+      throw new ConvexError("Quote customer not found in this organization.");
+    }
+    const vehicle = await ctx.db.get(quote.vehicleId);
+    if (!vehicle || vehicle.orgId !== args.orgId) {
+      throw new ConvexError("Quote vehicle not found in this organization.");
+    }
+    if (quote.companyId) {
+      const company = await ctx.db.get(quote.companyId);
+      if (!company || company.orgId !== args.orgId) {
+        throw new ConvexError("Quote finance company not found in this organization.");
+      }
+    }
 
     // Check if application already exists for this quote
     const existing = await ctx.db
@@ -148,8 +163,6 @@ export const createFromQuote = mutation({
     }
 
     const actorName = await getActorName(ctx);
-    const customer = await ctx.db.get(quote.customerId);
-
     await notifyManagers(
       ctx,
       args.orgId,
@@ -249,69 +262,61 @@ export const finalizeDeal = mutation({
   args: {
     orgId: v.id("organizations"),
     applicationId: v.id("financeApplications"),
+    idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const auth = await requireTenantAuth(ctx, args.orgId);
-    const hasView = auth.role.permissions.includes(PERMISSIONS.VIEW_SALES);
-    if (!hasView) {
-      throw new ConvexError("Forbidden: Missing required permissions.");
-    }
+    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
 
-    const app = await ctx.db.get(args.applicationId);
-    if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
-    if (app.status !== "APPROVED") throw new ConvexError("Application must be APPROVED before finalizing");
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "applications.finalizeDeal",
+        idempotencyKey: args.idempotencyKey,
+        actorId: auth.user._id,
+      },
+      async () => {
+        const app = await ctx.db.get(args.applicationId);
+        if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
+        if (app.status === "CLOSED" && app.finalizedSaleId) return app.finalizedSaleId;
+        if (app.status !== "APPROVED") throw new ConvexError("Application must be APPROVED before finalizing");
 
-    const quote = await ctx.db.get(app.quoteId);
-    if (!quote) throw new ConvexError("Quote not found");
+        const quote = await ctx.db.get(app.quoteId);
+        if (!quote || quote.orgId !== args.orgId) throw new ConvexError("Quote not found");
+        if (quote.customerId !== app.customerId || quote.vehicleId !== app.vehicleId) {
+          throw new ConvexError("Application quote does not match the application customer and vehicle.");
+        }
+        if (quote.companyId && quote.companyId !== app.companyId) {
+          throw new ConvexError("Application finance company does not match the quote.");
+        }
 
-    const vehicle = await ctx.db.get(app.vehicleId);
-    if (!vehicle) throw new ConvexError("Vehicle not found");
+        const saleId = await completeSale(ctx, {
+          orgId: args.orgId,
+          vehicleId: app.vehicleId,
+          customerId: app.customerId,
+          salespersonId: app.salespersonId,
+          salePrice: quote.vehiclePrice,
+          saleDate: Date.now(),
+          status: "COMPLETED",
+          downPayment: quote.downPayment,
+          financingType: app.companyId ? "FINANCED" : "CASH",
+          loanAmount: quote.totalFinancedAmount,
+          termMonths: quote.termMonths,
+          applicationId: args.applicationId,
+          quoteId: app.quoteId,
+          idempotencyKey: args.idempotencyKey,
+          actorId: auth.user._id,
+        });
 
-    // Close the application
-    await ctx.db.patch(args.applicationId, {
-      status: "CLOSED",
-      updatedAt: Date.now(),
-    });
+        await ctx.db.patch(args.applicationId, {
+          status: "CLOSED",
+          finalizedSaleId: saleId,
+          finalizationIdempotencyKey: args.idempotencyKey,
+          updatedAt: Date.now(),
+        });
 
-    // Mark vehicle as sold
-    await ctx.db.patch(app.vehicleId, {
-      status: "SOLD",
-      updatedAt: Date.now(),
-      updatedBy: auth.user._id,
-    });
-
-    // Create the sale record
-    await ctx.db.insert("sales", {
-      orgId: args.orgId,
-      branchId: vehicle.branchId,
-      vehicleId: app.vehicleId,
-      customerId: app.customerId,
-      salespersonId: app.salespersonId,
-      salePrice: quote.vehiclePrice,
-      saleDate: Date.now(),
-      status: "COMPLETED",
-      downPayment: quote.downPayment,
-      financingType: app.companyId ? "FINANCED" : "CASH",
-      loanAmount: quote.totalFinancedAmount,
-      termMonths: quote.termMonths,
-      applicationId: args.applicationId,
-      quoteId: app.quoteId,
-      leadId: quote.leadId,
-    });
-
-    await closeLeadsAsWon(ctx, {
-      orgId: args.orgId,
-      customerId: app.customerId,
-      vehicleId: app.vehicleId,
-      leadId: quote.leadId,
-    });
-
-    await resolveDepositsForQuote(ctx, {
-      quoteId: app.quoteId,
-      resolution: "APPLIED",
-      actorId: auth.user._id,
-    });
-
-    return true;
+        return saleId;
+      }
+    );
   },
 });

@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3000/sign-in)",
+      "Bash(node -e \"const d=JSON.parse\\(require\\('fs'\\).readFileSync\\('e:/Auto/Auto/testsprite_tests/tmp/test_results.json'\\)\\); const keys=Object.keys\\(d\\); console.log\\('Total tests:', keys.length\\); keys.slice\\(0,3\\).forEach\\(k=>{ const t=d[k]; console.log\\(k, t.status, t.error?.slice\\(0,150\\)\\) }\\)\")",
+      "Bash(node -e \"const d=JSON.parse\\(require\\('fs'\\).readFileSync\\('e:/Auto/Auto/testsprite_tests/tmp/test_results.json'\\)\\); console.log\\(JSON.stringify\\(d[0], null, 2\\)\\)\")",
+      "Bash(pnpm add *)",
+      "Bash(pnpm lint *)",
+      "Skill(run)",
+      "Skill(run:*)",
+      "Bash(pnpm dev *)",
+      "PowerShell(Start-Process -FilePath \"pnpm\" -ArgumentList \"dev\" -WorkingDirectory \"E:\\\\Auto\\\\Auto\" -WindowStyle Normal)",
+      "Bash(git checkout *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "PowerShell(git push)",
+      "Bash(npx tsc *)"
+    ]
+  }
+}

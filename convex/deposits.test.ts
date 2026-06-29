@@ -24,11 +24,16 @@ async function setup() {
   const userId = await t.run((ctx) =>
     ctx.db.insert("users", { clerkId: "user_dep_1", email: "dep@test.com", name: "Deposit User" })
   );
+  const approverId = await t.run((ctx) =>
+    ctx.db.insert("users", { clerkId: "user_dep_approver", email: "dep.approver@test.com", name: "Deposit Approver" })
+  );
   const roleId = await t.run((ctx) =>
     ctx.db.insert("roles", { orgId, name: "Admin", permissions: PERMISSIONS })
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: approverId, roleId }));
   const asUser = t.withIdentity({ subject: "user_dep_1", clerkId: "user_dep_1" });
+  const asApprover = t.withIdentity({ subject: "user_dep_approver", clerkId: "user_dep_approver" });
 
   const vehicleId = await t.run((ctx) =>
     ctx.db.insert("vehicles", {
@@ -49,7 +54,7 @@ async function setup() {
     ctx.db.insert("customers", { orgId, firstName: "Nora", lastName: "Khaled" })
   );
 
-  return { t, orgId, userId, customerId, vehicleId, asUser };
+  return { t, orgId, userId, approverId, customerId, vehicleId, asUser, asApprover };
 }
 
 async function makeQuote(t: any, asUser: any, orgId: any, customerId: any, vehicleId: any, leadId?: any) {
@@ -117,11 +122,11 @@ describe("deposits.create", () => {
 
 describe("deposits.release", () => {
   test("REFUNDED releases the vehicle hold and books a reversing OUT transaction", async () => {
-    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
     const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1500 });
 
-    await asUser.mutation(api.deposits.release, { orgId, depositId, resolution: "REFUNDED" });
+    await asApprover.mutation(api.deposits.release, { orgId, depositId, resolution: "REFUNDED" });
 
     await t.run(async (ctx) => {
       const deposit = await ctx.db.get(depositId);
@@ -142,11 +147,11 @@ describe("deposits.release", () => {
   });
 
   test("FORFEITED releases the hold without a reversing transaction", async () => {
-    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
     const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1500 });
 
-    await asUser.mutation(api.deposits.release, { orgId, depositId, resolution: "FORFEITED" });
+    await asApprover.mutation(api.deposits.release, { orgId, depositId, resolution: "FORFEITED" });
 
     await t.run(async (ctx) => {
       const deposit = await ctx.db.get(depositId);

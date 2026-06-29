@@ -29,6 +29,7 @@ export async function createSaleTransaction(
     vehicle: Doc<"vehicles">;
     /** Amount already booked as separate DEPOSIT transactions for this deal — subtracted so it isn't double-counted as revenue. */
     previouslyCollected?: number;
+    idempotencyKey?: string;
   }
 ): Promise<void> {
   await ctx.db.insert("transactions", {
@@ -39,6 +40,7 @@ export async function createSaleTransaction(
     category: "VEHICLE_SALE",
     description: `Sale of vehicle ${args.vehicle.year} ${args.vehicle.make} ${args.vehicle.model} (VIN: ${args.vehicle.vin})`,
     vehicleId: args.vehicleId,
+    idempotencyKey: args.idempotencyKey,
   });
 }
 

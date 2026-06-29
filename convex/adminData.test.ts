@@ -78,6 +78,42 @@ describe("adminData", () => {
     expect(afterDelete).toBeNull();
   });
 
+  test("allowlisted admin cannot directly edit or hard-delete financial records", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asAdmin } = await seedOrgWithVehicle(t);
+    const transactionId = await t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId,
+        type: "IN",
+        amount: 1000,
+        date: Date.now(),
+        category: "OTHER",
+        description: "Financial record",
+      })
+    );
+
+    await expect(
+      asAdmin.mutation(api.adminData.adminUpdateRecord, {
+        table: "transactions",
+        id: transactionId,
+        patch: { amount: 1 },
+      })
+    ).rejects.toThrow(/financial table/i);
+
+    await expect(
+      asAdmin.mutation(api.adminData.adminHardDelete, {
+        table: "transactions",
+        id: transactionId,
+      })
+    ).rejects.toThrow(/financial table/i);
+
+    const afterAttempts = await asAdmin.query(api.adminData.adminGetRecord, {
+      table: "transactions",
+      id: transactionId,
+    });
+    expect(afterAttempts).toMatchObject({ amount: 1000 });
+  });
+
   test("every admin mutation writes an adminAuditLog entry", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const { vehicleId, asAdmin } = await seedOrgWithVehicle(t);

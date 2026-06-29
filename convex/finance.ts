@@ -1,7 +1,22 @@
 import { v, ConvexError } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { mutation, query, MutationCtx, QueryCtx } from "./_generated/server";
+import { Id } from "./_generated/dataModel";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+
+async function validateAcceptedStatuses(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  statusIds?: Id<"orgCustomerStatuses">[]
+) {
+  if (!statusIds) return;
+  for (const statusId of statusIds) {
+    const status = await ctx.db.get(statusId);
+    if (!status || status.orgId !== orgId) {
+      throw new ConvexError("Accepted customer status not found in this organization.");
+    }
+  }
+}
 
 // --- Finance Companies ---
 
@@ -33,6 +48,7 @@ export const createCompany = mutation({
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
+    await validateAcceptedStatuses(ctx, args.orgId, args.acceptedStatuses);
     return await ctx.db.insert("financeCompanies", {
       ...args,
     });
@@ -61,6 +77,7 @@ export const updateCompany = mutation({
     
     const existing = await ctx.db.get(id);
     if (!existing || existing.orgId !== orgId) throw new ConvexError("Not found");
+    await validateAcceptedStatuses(ctx, orgId, updates.acceptedStatuses);
     
     await ctx.db.patch(id, updates);
   },
@@ -72,10 +89,14 @@ export const deleteCompany = mutation({
     orgId: v.id("organizations"),
   },
   handler: async (ctx, { id, orgId }) => {
-    await requireOwner(ctx, orgId);
+    const { user } = await requireOwner(ctx, orgId);
     const existing = await ctx.db.get(id);
     if (!existing || existing.orgId !== orgId) throw new ConvexError("Not found");
-    await ctx.db.delete(id);
+    await ctx.db.patch(id, {
+      isActive: false,
+      deactivatedAt: Date.now(),
+      deactivatedBy: user._id,
+    });
   },
 });
 
@@ -88,6 +109,8 @@ export const listValuations = query({
   },
   handler: async (ctx, { orgId, vehicleId }) => {
     await requireTenantAuth(ctx, orgId, [PERMISSIONS.VIEW_VEHICLES]);
+    const vehicle = await ctx.db.get(vehicleId);
+    if (!vehicle || vehicle.orgId !== orgId) throw new ConvexError("Vehicle not found in this organization.");
     return await ctx.db
       .query("vehicleValuations")
       .withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicleId))
@@ -106,6 +129,14 @@ export const saveValuation = mutation({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+    const vehicle = await ctx.db.get(args.vehicleId);
+    if (!vehicle || vehicle.orgId !== args.orgId) {
+      throw new ConvexError("Vehicle not found in this organization.");
+    }
+    const company = await ctx.db.get(args.companyId);
+    if (!company || company.orgId !== args.orgId) {
+      throw new ConvexError("Finance company not found in this organization.");
+    }
     
     // Check if one already exists for this company
     const existing = await ctx.db

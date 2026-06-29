@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
@@ -30,6 +30,7 @@ export function ApplicationDetailsDialog({
   const { hasPermission } = usePermissions();
   const isManager = hasPermission(PERMISSIONS.MANAGE_SETTINGS);
   const [previewFile, setPreviewFile] = useState<{ url: string; name: string } | null>(null);
+  const finalizeDealIdempotencyKeyRef = useRef<string | null>(null);
 
   const app = useQuery(api.applications.get, activeOrgId ? { orgId: activeOrgId, applicationId } : "skip");
   const documents = useQuery(api.documents.getForApplication, activeOrgId ? { orgId: activeOrgId, applicationId } : "skip");
@@ -80,7 +81,13 @@ export function ApplicationDetailsDialog({
   const handleFinalizeDeal = async () => {
     if (!activeOrgId) return;
     try {
-      await finalizeDeal({ orgId: activeOrgId, applicationId });
+      finalizeDealIdempotencyKeyRef.current ??= `finalize-deal:${crypto.randomUUID()}`;
+      await finalizeDeal({
+        orgId: activeOrgId,
+        applicationId,
+        idempotencyKey: finalizeDealIdempotencyKeyRef.current,
+      });
+      finalizeDealIdempotencyKeyRef.current = null;
       toast.success(t("DealFinalizedSuccess" as any));
       onOpenChange(false);
     } catch (err: any) {

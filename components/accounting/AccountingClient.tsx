@@ -51,7 +51,7 @@ export function AccountingClient() {
             </TabsTrigger>
             <TabsTrigger value="collections" className="gap-2 data-[state=active]:bg-primary/5 data-[state=active]:text-primary data-[state=active]:shadow-none px-4">
               <WalletCards className="w-4 h-4" />
-              Collections
+              {t("Collections" as any)}
             </TabsTrigger>
           </TabsList>
         </div>

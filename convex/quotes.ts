@@ -57,10 +57,30 @@ export const saveQuote = mutation({
     // than CREATE_SALES, which is reserved for finalizing an actual sale.
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
 
+    const customer = await ctx.db.get(args.customerId);
+    if (!customer || customer.orgId !== args.orgId) {
+      throw new ConvexError("Customer not found in this organization.");
+    }
+
+    const vehicle = await ctx.db.get(args.vehicleId);
+    if (!vehicle || vehicle.orgId !== args.orgId) {
+      throw new ConvexError("Vehicle not found in this organization.");
+    }
+
+    if (args.companyId) {
+      const company = await ctx.db.get(args.companyId);
+      if (!company || company.orgId !== args.orgId) {
+        throw new ConvexError("Finance company not found in this organization.");
+      }
+    }
+
     if (args.leadId) {
       const lead = await ctx.db.get(args.leadId);
       if (!lead || lead.orgId !== args.orgId) {
         throw new ConvexError("Lead not found in this organization.");
+      }
+      if (lead.customerId !== args.customerId || (lead.vehicleId && lead.vehicleId !== args.vehicleId)) {
+        throw new ConvexError("Lead does not match the quote customer and vehicle.");
       }
     }
 

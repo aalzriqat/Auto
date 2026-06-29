@@ -5,6 +5,7 @@ import { Id, TableNames } from "./_generated/dataModel";
 import { requireSuperAdmin } from "./utils/tenancy";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { logAdminAction } from "./adminAudit";
+import { assertAdminMayMutateTable } from "./utils/financialGuards";
 
 // Tables browsable in the cross-org Data Browser UI. Deliberately a subset
 // of every org-scoped table (excludes internal/derived tables like
@@ -83,6 +84,7 @@ export const adminUpdateRecord = mutation({
   handler: async (ctx, args) => {
     const admin = await requireSuperAdmin(ctx);
     assertAdminTable(args.table);
+    assertAdminMayMutateTable(args.table, "adminUpdateRecord");
 
     const id = args.id as Id<TableNames>;
     const before = await ctx.db.get(id);
@@ -107,6 +109,7 @@ export const adminHardDelete = mutation({
   handler: async (ctx, args) => {
     const admin = await requireSuperAdmin(ctx);
     assertAdminTable(args.table);
+    assertAdminMayMutateTable(args.table, "adminHardDelete");
 
     const id = args.id as Id<TableNames>;
     const before = await ctx.db.get(id);

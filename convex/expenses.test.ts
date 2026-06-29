@@ -152,6 +152,42 @@ describe("expenses.create", () => {
   });
 });
 
+describe("expenses.update", () => {
+  test("syncs amount and date to the linked transaction row", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    const expenseId = await asUser.mutation(api.expenses.create, {
+      orgId,
+      title: "Utility Bill",
+      amount: 300,
+      date: Date.now(),
+      category: "OTHER",
+    });
+
+    const newDate = Date.now() + 1000;
+    await asUser.mutation(api.expenses.update, {
+      orgId,
+      expenseId,
+      amount: 450,
+      date: newDate,
+    });
+
+    await t.run(async (ctx) => {
+      const expense = await ctx.db.get(expenseId);
+      expect(expense?.amount).toBe(450);
+      expect(expense?.date).toBe(newDate);
+
+      const tx = await ctx.db
+        .query("transactions")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .filter((q) => q.eq(q.field("expenseId"), expenseId))
+        .first();
+      expect(tx?.amount).toBe(450);
+      expect(tx?.date).toBe(newDate);
+    });
+  });
+});
+
 describe("expenses.remove", () => {
   test("soft deletes an expense", async () => {
     const { t, orgId, asUser } = await setup();
@@ -169,6 +205,29 @@ describe("expenses.remove", () => {
     await t.run(async (ctx) => {
       const expense = await ctx.db.get(expenseId);
       expect(expense?.isDeleted).toBe(true);
+    });
+  });
+
+  test("also soft-deletes the linked transaction row", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    const expenseId = await asUser.mutation(api.expenses.create, {
+      orgId,
+      title: "Remove With TX",
+      amount: 100,
+      date: Date.now(),
+      category: "OTHER",
+    });
+
+    await asUser.mutation(api.expenses.remove, { orgId, expenseId });
+
+    await t.run(async (ctx) => {
+      const tx = await ctx.db
+        .query("transactions")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .filter((q) => q.eq(q.field("expenseId"), expenseId))
+        .first();
+      expect(tx?.isDeleted).toBe(true);
     });
   });
 });

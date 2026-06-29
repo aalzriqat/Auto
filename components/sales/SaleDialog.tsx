@@ -2,7 +2,7 @@
 
 "use client";
 
-import { useState, useEffect } from "react";
+import { useRef, useState, useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -65,6 +65,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
   const createSale = useMutation(api.sales.create);
   const updateSale = useMutation(api.sales.update);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const createSaleIdempotencyKeyRef = useRef<string | null>(null);
 
   const form = useForm<z.infer<typeof saleSchema>>({
     resolver: zodResolver(saleSchema as any),
@@ -208,6 +209,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
         toast.success(t("SaleUpdatedSuccess" as any));
       } else {
         // Creating
+        createSaleIdempotencyKeyRef.current ??= `sale:${crypto.randomUUID()}`;
         await createSale({
           orgId: activeOrgId,
           vehicleId: values.vehicleId as Id<"vehicles">,
@@ -228,7 +230,9 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
           termMonths: values.termMonths,
           warrantySold: values.warrantySold,
           gapSold: values.gapSold,
+          idempotencyKey: createSaleIdempotencyKeyRef.current,
         });
+        createSaleIdempotencyKeyRef.current = null;
         toast.success(t("SaleRecordedSuccess" as any));
       }
       onOpenChange(false);

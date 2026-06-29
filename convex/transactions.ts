@@ -4,6 +4,7 @@ import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
+import { runWithIdempotency } from "./utils/idempotency";
 
 export const list = query({
   args: {
@@ -51,45 +52,58 @@ export const add = mutation({
     vehicleId: v.optional(v.id("vehicles")),
     userId: v.optional(v.id("users")),
     expenseId: v.optional(v.id("expenses")),
+    idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
-    if (args.vehicleId) {
-      const vehicle = await ctx.db.get(args.vehicleId);
-      if (!vehicle || vehicle.orgId !== args.orgId) {
-        throw new ConvexError("Vehicle not found in this organization.");
-      }
-    }
-    if (args.expenseId) {
-      const expense = await ctx.db.get(args.expenseId);
-      if (!expense || expense.orgId !== args.orgId) {
-        throw new ConvexError("Expense not found in this organization.");
-      }
-    }
-
-    const transactionId = await ctx.db.insert("transactions", {
-      orgId: args.orgId,
-      type: args.type,
-      amount: args.amount,
-      date: args.date,
-      category: args.category,
-      description: args.description,
-      vehicleId: args.vehicleId,
-      userId: args.userId,
-      expenseId: args.expenseId,
-    });
-
-    const actorName = await getActorName(ctx);
-    await notifyManagers(
+    return await runWithIdempotency(
       ctx,
-      args.orgId,
-      "transaction.recorded",
-      { actorName, amount: String(args.amount) },
-      { link: `/${args.orgId}/accounting` }
-    );
+      {
+        orgId: args.orgId,
+        operation: "transactions.add",
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+      },
+      async () => {
+        if (args.vehicleId) {
+          const vehicle = await ctx.db.get(args.vehicleId);
+          if (!vehicle || vehicle.orgId !== args.orgId) {
+            throw new ConvexError("Vehicle not found in this organization.");
+          }
+        }
+        if (args.expenseId) {
+          const expense = await ctx.db.get(args.expenseId);
+          if (!expense || expense.orgId !== args.orgId) {
+            throw new ConvexError("Expense not found in this organization.");
+          }
+        }
 
-    return transactionId;
+        const transactionId = await ctx.db.insert("transactions", {
+          orgId: args.orgId,
+          type: args.type,
+          amount: args.amount,
+          date: args.date,
+          category: args.category,
+          description: args.description,
+          vehicleId: args.vehicleId,
+          userId: args.userId,
+          expenseId: args.expenseId,
+          idempotencyKey: args.idempotencyKey,
+        });
+
+        const actorName = await getActorName(ctx);
+        await notifyManagers(
+          ctx,
+          args.orgId,
+          "transaction.recorded",
+          { actorName, amount: String(args.amount) },
+          { link: `/${args.orgId}/accounting` }
+        );
+
+        return transactionId;
+      }
+    );
   },
 });
 

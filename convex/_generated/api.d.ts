@@ -47,6 +47,7 @@ import type * as facebookIntegrations from "../facebookIntegrations.js";
 import type * as facebookPosting from "../facebookPosting.js";
 import type * as feedback from "../feedback.js";
 import type * as finance from "../finance.js";
+import type * as financialAudit from "../financialAudit.js";
 import type * as fixedAssets from "../fixedAssets.js";
 import type * as guarantors from "../guarantors.js";
 import type * as http from "../http.js";
@@ -177,6 +178,7 @@ declare const fullApi: ApiFromModules<{
   facebookPosting: typeof facebookPosting;
   feedback: typeof feedback;
   finance: typeof finance;
+  financialAudit: typeof financialAudit;
   fixedAssets: typeof fixedAssets;
   guarantors: typeof guarantors;
   http: typeof http;

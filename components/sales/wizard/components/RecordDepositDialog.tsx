@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -48,6 +48,7 @@ export function RecordDepositDialog({ open, onOpenChange, quoteId, onRecorded }:
   const { t } = useLanguage();
   const createDeposit = useMutation(api.deposits.create);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const idempotencyKeyRef = useRef<string | null>(null);
 
   const form = useForm<DepositFormValues>({
     resolver: zodResolver(depositSchema as any),
@@ -58,13 +59,16 @@ export function RecordDepositDialog({ open, onOpenChange, quoteId, onRecorded }:
     if (!activeOrgId) return;
     setIsSubmitting(true);
     try {
+      idempotencyKeyRef.current ??= `deposit:${crypto.randomUUID()}`;
       await createDeposit({
         orgId: activeOrgId,
         quoteId,
         amount: values.amount,
         notes: values.notes || undefined,
+        idempotencyKey: idempotencyKeyRef.current,
       });
       toast.success(t("DepositRecordedSuccess" as any) ?? "Deposit recorded — vehicle is now on hold");
+      idempotencyKeyRef.current = null;
       onOpenChange(false);
       onRecorded();
     } catch (error: any) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { PaymentType, WizardData } from "../types";
@@ -52,6 +52,7 @@ export function Step4QuoteSuccess({
 
   const [saleId, setSaleId] = useState<Id<"sales"> | null>(null);
   const [isCompletingSale, setIsCompletingSale] = useState(false);
+  const completeSaleIdempotencyKeyRef = useRef<string | null>(null);
   const createSale = useMutation(api.sales.create);
   const markQuoteShared = useMutation(api.quotes.updateQuoteStatus);
   const quote = useQuery(
@@ -78,6 +79,7 @@ export function Step4QuoteSuccess({
     if (!activeOrgId || !quote || !me) return;
     setIsCompletingSale(true);
     try {
+      completeSaleIdempotencyKeyRef.current ??= `cash-sale:${crypto.randomUUID()}`;
       const id = await createSale({
         orgId: activeOrgId,
         vehicleId: wizardData.vehicleId as Id<"vehicles">,
@@ -89,8 +91,10 @@ export function Step4QuoteSuccess({
         financingType: "CASH",
         downPayment: quote.downPayment,
         quoteId,
+        idempotencyKey: completeSaleIdempotencyKeyRef.current,
       });
       setSaleId(id);
+      completeSaleIdempotencyKeyRef.current = null;
       toast.success(t("SaleCompletedSuccess" as any) ?? "Cash sale completed");
     } catch (error: any) {
       toast.error(error);

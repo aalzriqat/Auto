@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { format } from "date-fns";
 import {
@@ -17,6 +17,7 @@ import {
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
+import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import { usePermissions } from "@/hooks/use-permissions";
 import { Button } from "@/components/ui/button";
@@ -82,8 +83,15 @@ function sourceLabel(value: string) {
   return value.replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+function collectionLabel(t: (key: string) => string, value: string) {
+  const key = `CollectionLabel_${value}`;
+  const translated = t(key);
+  return translated === key ? sourceLabel(value) : translated;
+}
+
 export function CollectionsTab() {
   const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
   const formatCurrency = useCurrencyFormatter();
   const { hasPermission } = usePermissions();
   const canApprove = hasPermission("approve:requests");
@@ -153,10 +161,10 @@ export function CollectionsTab() {
     try {
       if (action === "deposit") {
         await depositCheque({ orgId: activeOrgId!, chequeId: cheque._id });
-        toast.success("Cheque marked deposited.");
+        toast.success(t("CollectionToastChequeDeposited" as any));
       } else {
         await clearCheque({ orgId: activeOrgId!, chequeId: cheque._id });
-        toast.success("Cheque cleared and payment posted.");
+        toast.success(t("CollectionToastChequeCleared" as any));
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
@@ -166,7 +174,7 @@ export function CollectionsTab() {
   async function decideApproval(row: ApprovalRow, status: "APPROVED" | "REJECTED") {
     try {
       await respondApproval({ orgId: activeOrgId!, requestId: row._id, status });
-      toast.success(`Request ${status.toLowerCase()}.`);
+      toast.success(status === "APPROVED" ? t("CollectionToastRequestApproved" as any) : t("CollectionToastRequestRejected" as any));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     }
@@ -175,7 +183,7 @@ export function CollectionsTab() {
   async function decideReconciliation(id: Id<"cashierReconciliations">, status: "APPROVED" | "REJECTED") {
     try {
       await reviewReconciliation({ orgId: activeOrgId!, reconciliationId: id, status });
-      toast.success(`Reconciliation ${status.toLowerCase()}.`);
+      toast.success(status === "APPROVED" ? t("CollectionToastReconciliationApproved" as any) : t("CollectionToastReconciliationRejected" as any));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     }
@@ -184,37 +192,37 @@ export function CollectionsTab() {
   return (
     <div className="h-full p-6 space-y-6">
       <div className="grid gap-3 md:grid-cols-5">
-        <Metric icon={Landmark} label="Outstanding" value={formatCurrency(summary?.totalOutstanding ?? 0)} />
-        <Metric icon={AlertTriangle} label="Overdue" value={formatCurrency(summary?.overdueOutstanding ?? 0)} tone="danger" />
-        <Metric icon={CalendarClock} label="Due Today" value={formatCurrency(summary?.dueToday ?? 0)} />
-        <Metric icon={HandCoins} label="Collected Today" value={formatCurrency(summary?.collectedToday ?? 0)} tone="success" />
-        <Metric icon={FileCheck2} label="Upcoming Cheques" value={formatCurrency(summary?.upcomingChequeTotal ?? 0)} />
+        <Metric icon={Landmark} label={t("CollectionOutstanding" as any)} value={formatCurrency(summary?.totalOutstanding ?? 0)} />
+        <Metric icon={AlertTriangle} label={t("CollectionOverdue" as any)} value={formatCurrency(summary?.overdueOutstanding ?? 0)} tone="danger" />
+        <Metric icon={CalendarClock} label={t("CollectionDueToday" as any)} value={formatCurrency(summary?.dueToday ?? 0)} />
+        <Metric icon={HandCoins} label={t("CollectionCollectedToday" as any)} value={formatCurrency(summary?.collectedToday ?? 0)} tone="success" />
+        <Metric icon={FileCheck2} label={t("CollectionUpcomingCheques" as any)} value={formatCurrency(summary?.upcomingChequeTotal ?? 0)} />
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 className="text-lg font-semibold text-slate-900">Receivables & Collections</h2>
-          <p className="text-sm text-slate-500">Deposits, installments, cheques, cashier closing, and aging.</p>
+          <h2 className="text-lg font-semibold text-slate-900">{t("CollectionsTitle" as any)}</h2>
+          <p className="text-sm text-slate-500">{t("CollectionsDesc" as any)}</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => setReconcileOpen(true)}>
             <ShieldCheck className="me-2 h-4 w-4" />
-            Reconcile Cashier
+            {t("ReconcileCashier" as any)}
           </Button>
           <Button onClick={() => setReceivableDialog(true)}>
             <Plus className="me-2 h-4 w-4" />
-            New Receivable
+            {t("NewReceivable" as any)}
           </Button>
         </div>
       </div>
 
       <Tabs defaultValue="receivables" className="space-y-4">
         <TabsList className="bg-slate-50 border border-slate-200">
-          <TabsTrigger value="receivables">Receivables</TabsTrigger>
-          <TabsTrigger value="cheques">Cheques</TabsTrigger>
-          <TabsTrigger value="payments">Payments</TabsTrigger>
-          <TabsTrigger value="reports">Reports</TabsTrigger>
-          {canApprove && <TabsTrigger value="approvals">Approvals</TabsTrigger>}
+          <TabsTrigger value="receivables">{t("Receivables" as any)}</TabsTrigger>
+          <TabsTrigger value="cheques">{t("Cheques" as any)}</TabsTrigger>
+          <TabsTrigger value="payments">{t("Payments" as any)}</TabsTrigger>
+          <TabsTrigger value="reports">{t("Reports" as any)}</TabsTrigger>
+          {canApprove && <TabsTrigger value="approvals">{t("Approvals" as any)}</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="receivables" className="space-y-3">
@@ -225,7 +233,7 @@ export function CollectionsTab() {
               </SelectTrigger>
               <SelectContent>
                 {["ALL", "OPEN", "PARTIALLY_PAID", "OVERDUE", "RESCHEDULED", "PAID", "CANCELLED", "REFUNDED"].map((status) => (
-                  <SelectItem key={status} value={status}>{sourceLabel(status)}</SelectItem>
+                  <SelectItem key={status} value={status}>{collectionLabel(t, status)}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -235,20 +243,20 @@ export function CollectionsTab() {
             <Table>
               <TableHeader className="bg-slate-50">
                 <TableRow>
-                  <TableHead>Due</TableHead>
-                  <TableHead>Customer</TableHead>
-                  <TableHead>Source</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Original</TableHead>
-                  <TableHead className="text-right">Outstanding</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead>{t("Due" as any)}</TableHead>
+                  <TableHead>{t("Customer" as any)}</TableHead>
+                  <TableHead>{t("Source" as any)}</TableHead>
+                  <TableHead>{t("Status" as any)}</TableHead>
+                  <TableHead className="text-right">{t("Original" as any)}</TableHead>
+                  <TableHead className="text-right">{t("CollectionOutstanding" as any)}</TableHead>
+                  <TableHead className="text-right">{t("Actions" as any)}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {!receivables ? (
-                  <EmptyRow colSpan={7} label="Loading receivables..." />
+                  <EmptyRow colSpan={7} label={t("LoadingReceivables" as any)} />
                 ) : receivables.length === 0 ? (
-                  <EmptyRow colSpan={7} label="No receivables found." />
+                  <EmptyRow colSpan={7} label={t("NoReceivablesFound" as any)} />
                 ) : (
                   receivables.map((row) => (
                     <TableRow key={row._id}>
@@ -257,7 +265,7 @@ export function CollectionsTab() {
                         <div className="font-medium">{row.customerName}</div>
                         <div className="text-xs text-slate-500">{row.vehicleLabel || row.title}</div>
                       </TableCell>
-                      <TableCell>{sourceLabel(row.sourceType)}</TableCell>
+                      <TableCell>{collectionLabel(t, row.sourceType)}</TableCell>
                       <TableCell><StatusBadge status={row.status} /></TableCell>
                       <TableCell className="text-right">{formatCurrency(row.originalAmount)}</TableCell>
                       <TableCell className="text-right font-semibold">{formatCurrency(row.outstandingAmount)}</TableCell>
@@ -283,7 +291,7 @@ export function CollectionsTab() {
               </TableBody>
             </Table>
           </div>
-          {receivableLoadStatus === "CanLoadMore" && <Button variant="outline" onClick={() => loadMoreReceivables(75)}>Load more</Button>}
+          {receivableLoadStatus === "CanLoadMore" && <Button variant="outline" onClick={() => loadMoreReceivables(75)}>{t("LoadMore" as any)}</Button>}
         </TabsContent>
 
         <TabsContent value="cheques" className="space-y-3">
@@ -291,7 +299,7 @@ export function CollectionsTab() {
             <SelectTrigger className="w-[220px]"><SelectValue /></SelectTrigger>
             <SelectContent>
               {["ALL", "HELD", "DEPOSITED", "CLEARED", "RETURNED", "REPLACED", "CANCELLED"].map((status) => (
-                <SelectItem key={status} value={status}>{sourceLabel(status)}</SelectItem>
+                <SelectItem key={status} value={status}>{collectionLabel(t, status)}</SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -299,20 +307,20 @@ export function CollectionsTab() {
             <Table>
               <TableHeader className="bg-slate-50">
                 <TableRow>
-                  <TableHead>Cheque Date</TableHead>
-                  <TableHead>Customer</TableHead>
-                  <TableHead>Bank</TableHead>
-                  <TableHead>Number</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead>{t("ChequeDate" as any)}</TableHead>
+                  <TableHead>{t("Customer" as any)}</TableHead>
+                  <TableHead>{t("Bank" as any)}</TableHead>
+                  <TableHead>{t("Number" as any)}</TableHead>
+                  <TableHead>{t("Status" as any)}</TableHead>
+                  <TableHead className="text-right">{t("Amount" as any)}</TableHead>
+                  <TableHead className="text-right">{t("Actions" as any)}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {!cheques ? (
-                  <EmptyRow colSpan={7} label="Loading cheques..." />
+                  <EmptyRow colSpan={7} label={t("LoadingCheques" as any)} />
                 ) : cheques.length === 0 ? (
-                  <EmptyRow colSpan={7} label="No cheques found." />
+                  <EmptyRow colSpan={7} label={t("NoChequesFound" as any)} />
                 ) : (
                   cheques.map((cheque) => (
                     <TableRow key={cheque._id}>
@@ -327,10 +335,10 @@ export function CollectionsTab() {
                       <TableCell className="text-right font-semibold">{formatCurrency(cheque.amount)}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
-                          <Button size="sm" variant="outline" disabled={cheque.status !== "HELD"} onClick={() => runChequeAction("deposit", cheque)}>Deposit</Button>
-                          <Button size="sm" variant="outline" disabled={cheque.status !== "HELD" && cheque.status !== "DEPOSITED"} onClick={() => runChequeAction("clear", cheque)}>Clear</Button>
-                          <Button size="sm" variant="outline" disabled={["CLEARED", "REPLACED", "CANCELLED"].includes(cheque.status)} onClick={() => setReturnTarget(cheque)}>Return</Button>
-                          <Button size="sm" variant="outline" disabled={["CLEARED", "CANCELLED"].includes(cheque.status)} onClick={() => setReplaceTarget(cheque)}>Replace</Button>
+                          <Button size="sm" variant="outline" disabled={cheque.status !== "HELD"} onClick={() => runChequeAction("deposit", cheque)}>{t("Deposit" as any)}</Button>
+                          <Button size="sm" variant="outline" disabled={cheque.status !== "HELD" && cheque.status !== "DEPOSITED"} onClick={() => runChequeAction("clear", cheque)}>{t("Clear" as any)}</Button>
+                          <Button size="sm" variant="outline" disabled={["CLEARED", "REPLACED", "CANCELLED"].includes(cheque.status)} onClick={() => setReturnTarget(cheque)}>{t("Return" as any)}</Button>
+                          <Button size="sm" variant="outline" disabled={["CLEARED", "CANCELLED"].includes(cheque.status)} onClick={() => setReplaceTarget(cheque)}>{t("Replace" as any)}</Button>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -339,7 +347,7 @@ export function CollectionsTab() {
               </TableBody>
             </Table>
           </div>
-          {chequeLoadStatus === "CanLoadMore" && <Button variant="outline" onClick={() => loadMoreCheques(75)}>Load more</Button>}
+          {chequeLoadStatus === "CanLoadMore" && <Button variant="outline" onClick={() => loadMoreCheques(75)}>{t("LoadMore" as any)}</Button>}
         </TabsContent>
 
         <TabsContent value="payments" className="space-y-3">
@@ -347,19 +355,19 @@ export function CollectionsTab() {
             <Table>
               <TableHeader className="bg-slate-50">
                 <TableRow>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Customer</TableHead>
-                  <TableHead>Method</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Reference</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
+                  <TableHead>{t("Date" as any)}</TableHead>
+                  <TableHead>{t("Customer" as any)}</TableHead>
+                  <TableHead>{t("Method" as any)}</TableHead>
+                  <TableHead>{t("Status" as any)}</TableHead>
+                  <TableHead>{t("Reference" as any)}</TableHead>
+                  <TableHead className="text-right">{t("Amount" as any)}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {!payments ? (
-                  <EmptyRow colSpan={6} label="Loading payments..." />
+                  <EmptyRow colSpan={6} label={t("LoadingPayments" as any)} />
                 ) : payments.length === 0 ? (
-                  <EmptyRow colSpan={6} label="No payments recorded." />
+                  <EmptyRow colSpan={6} label={t("NoPaymentsRecorded" as any)} />
                 ) : (
                   payments.map((payment) => (
                     <TableRow key={payment._id}>
@@ -368,7 +376,7 @@ export function CollectionsTab() {
                         <div className="font-medium">{payment.customerName}</div>
                         <div className="text-xs text-slate-500">{payment.receivableTitle || payment.vehicleLabel || "-"}</div>
                       </TableCell>
-                      <TableCell>{sourceLabel(payment.method)}</TableCell>
+                      <TableCell>{collectionLabel(t, payment.method)}</TableCell>
                       <TableCell><StatusBadge status={payment.status} /></TableCell>
                       <TableCell className="text-slate-500">{payment.reference || "-"}</TableCell>
                       <TableCell className={`text-right font-semibold ${payment.direction === "IN" ? "text-emerald-600" : "text-rose-600"}`}>
@@ -380,12 +388,12 @@ export function CollectionsTab() {
               </TableBody>
             </Table>
           </div>
-          {paymentLoadStatus === "CanLoadMore" && <Button variant="outline" onClick={() => loadMorePayments(75)}>Load more</Button>}
+          {paymentLoadStatus === "CanLoadMore" && <Button variant="outline" onClick={() => loadMorePayments(75)}>{t("LoadMore" as any)}</Button>}
         </TabsContent>
 
         <TabsContent value="reports" className="space-y-4">
           <div className="grid gap-4 lg:grid-cols-2">
-            <ReportPanel title="Daily Collection List">
+            <ReportPanel title={t("DailyCollectionList" as any)}>
               <div className="flex items-end gap-2">
                 <Input type="date" value={reportDate} onChange={(event) => setReportDate(event.target.value)} className="max-w-[180px]" />
                 <div className="text-sm font-semibold text-slate-700">{formatCurrency(dailyReport?.total ?? 0)}</div>
@@ -393,7 +401,7 @@ export function CollectionsTab() {
               <MethodTotals totals={dailyReport?.totalsByMethod ?? {}} />
             </ReportPanel>
 
-            <ReportPanel title="Upcoming Cheque Report">
+            <ReportPanel title={t("UpcomingChequeReport" as any)}>
               <div className="flex flex-wrap items-end gap-2">
                 <Input type="date" value={chequeStart} onChange={(event) => setChequeStart(event.target.value)} className="max-w-[180px]" />
                 <Input type="date" value={chequeEnd} onChange={(event) => setChequeEnd(event.target.value)} className="max-w-[180px]" />
@@ -410,10 +418,10 @@ export function CollectionsTab() {
             </ReportPanel>
           </div>
 
-          <ReportPanel title="Overdue Receivables Aging">
+          <ReportPanel title={t("OverdueReceivablesAging" as any)}>
             <div className="grid gap-3 md:grid-cols-5">
               {[
-                ["Current", aging?.current],
+                [t("Current" as any), aging?.current],
                 ["1-30", aging?.days1To30],
                 ["31-60", aging?.days31To60],
                 ["61-90", aging?.days61To90],
@@ -422,29 +430,29 @@ export function CollectionsTab() {
                 <div key={label as string} className="rounded-md border border-slate-200 p-3">
                   <p className="text-xs text-slate-500">{label as string}</p>
                   <p className="text-lg font-semibold">{formatCurrency((bucket as { amount: number } | undefined)?.amount ?? 0)}</p>
-                  <p className="text-xs text-slate-500">{(bucket as { count: number } | undefined)?.count ?? 0} item(s)</p>
+                  <p className="text-xs text-slate-500">{t("CollectionItemCount" as any).replace("{count}", String((bucket as { count: number } | undefined)?.count ?? 0))}</p>
                 </div>
               ))}
             </div>
           </ReportPanel>
 
-          <ReportPanel title="Cashier Reconciliations">
+          <ReportPanel title={t("CashierReconciliations" as any)}>
             <div className="rounded-md border border-slate-200 overflow-x-auto">
               <Table>
                 <TableHeader className="bg-slate-50">
                   <TableRow>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Cashier</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Expected</TableHead>
-                    <TableHead className="text-right">Counted</TableHead>
-                    <TableHead className="text-right">Difference</TableHead>
-                    {canApprove && <TableHead className="text-right">Review</TableHead>}
+                    <TableHead>{t("Date" as any)}</TableHead>
+                    <TableHead>{t("Cashier" as any)}</TableHead>
+                    <TableHead>{t("Status" as any)}</TableHead>
+                    <TableHead className="text-right">{t("Expected" as any)}</TableHead>
+                    <TableHead className="text-right">{t("Counted" as any)}</TableHead>
+                    <TableHead className="text-right">{t("Difference" as any)}</TableHead>
+                    {canApprove && <TableHead className="text-right">{t("Review" as any)}</TableHead>}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {!reconciliations || reconciliations.length === 0 ? (
-                    <EmptyRow colSpan={canApprove ? 7 : 6} label="No reconciliations yet." />
+                    <EmptyRow colSpan={canApprove ? 7 : 6} label={t("NoReconciliationsYet" as any)} />
                   ) : (
                     reconciliations.map((row) => (
                       <TableRow key={row._id}>
@@ -457,8 +465,8 @@ export function CollectionsTab() {
                         {canApprove && (
                           <TableCell className="text-right">
                             <div className="flex justify-end gap-1">
-                              <Button size="sm" variant="outline" disabled={row.status !== "SUBMITTED"} onClick={() => decideReconciliation(row._id, "APPROVED")}>Approve</Button>
-                              <Button size="sm" variant="outline" disabled={row.status !== "SUBMITTED"} onClick={() => decideReconciliation(row._id, "REJECTED")}>Reject</Button>
+                              <Button size="sm" variant="outline" disabled={row.status !== "SUBMITTED"} onClick={() => decideReconciliation(row._id, "APPROVED")}>{t("Approve" as any)}</Button>
+                              <Button size="sm" variant="outline" disabled={row.status !== "SUBMITTED"} onClick={() => decideReconciliation(row._id, "REJECTED")}>{t("Reject" as any)}</Button>
                             </div>
                           </TableCell>
                         )}
@@ -477,29 +485,29 @@ export function CollectionsTab() {
               <Table>
                 <TableHeader className="bg-slate-50">
                   <TableRow>
-                    <TableHead>Customer</TableHead>
-                    <TableHead>Receivable</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead>Requested By</TableHead>
-                    <TableHead className="text-right">Amount</TableHead>
-                    <TableHead className="text-right">Decision</TableHead>
+                    <TableHead>{t("Customer" as any)}</TableHead>
+                    <TableHead>{t("Receivable" as any)}</TableHead>
+                    <TableHead>{t("TypeLabel" as any)}</TableHead>
+                    <TableHead>{t("RequestedBy" as any)}</TableHead>
+                    <TableHead className="text-right">{t("Amount" as any)}</TableHead>
+                    <TableHead className="text-right">{t("Decision" as any)}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {!approvals || approvals.length === 0 ? (
-                    <EmptyRow colSpan={6} label="No pending collection approvals." />
+                    <EmptyRow colSpan={6} label={t("NoPendingCollectionApprovals" as any)} />
                   ) : (
                     approvals.map((row) => (
                       <TableRow key={row._id}>
                         <TableCell className="font-medium">{row.customerName}</TableCell>
                         <TableCell>{row.receivableTitle}</TableCell>
-                        <TableCell>{sourceLabel(row.requestType)}</TableCell>
+                        <TableCell>{collectionLabel(t, row.requestType)}</TableCell>
                         <TableCell>{row.requestedByName}</TableCell>
                         <TableCell className="text-right">{row.requestedAmount ? formatCurrency(row.requestedAmount) : "-"}</TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-1">
-                            <Button size="sm" variant="outline" onClick={() => decideApproval(row, "APPROVED")}>Approve</Button>
-                            <Button size="sm" variant="outline" onClick={() => decideApproval(row, "REJECTED")}>Reject</Button>
+                            <Button size="sm" variant="outline" onClick={() => decideApproval(row, "APPROVED")}>{t("Approve" as any)}</Button>
+                            <Button size="sm" variant="outline" onClick={() => decideApproval(row, "REJECTED")}>{t("Reject" as any)}</Button>
                           </div>
                         </TableCell>
                       </TableRow>
@@ -537,7 +545,8 @@ function Metric({ icon: Icon, label, value, tone }: { icon: React.ComponentType<
 }
 
 function StatusBadge({ status }: { status: string }) {
-  return <Badge variant="outline" className={statusBadgeClass(status)}>{sourceLabel(status)}</Badge>;
+  const { t } = useLanguage();
+  return <Badge variant="outline" className={statusBadgeClass(status)}>{collectionLabel(t, status)}</Badge>;
 }
 
 function EmptyRow({ colSpan, label }: { colSpan: number; label: string }) {
@@ -559,13 +568,14 @@ function ReportPanel({ title, children }: { title: string; children: React.React
 
 function MethodTotals({ totals }: { totals: Record<string, number> }) {
   const formatCurrency = useCurrencyFormatter();
+  const { t } = useLanguage();
   const entries = Object.entries(totals);
-  if (entries.length === 0) return <p className="text-sm text-slate-500">No collections for this date.</p>;
+  if (entries.length === 0) return <p className="text-sm text-slate-500">{t("NoCollectionsForDate" as any)}</p>;
   return (
     <div className="grid gap-2 sm:grid-cols-2">
       {entries.map(([method, amount]) => (
         <div key={method} className="flex justify-between rounded-md bg-slate-50 px-3 py-2 text-sm">
-          <span>{sourceLabel(method)}</span>
+          <span>{collectionLabel(t, method)}</span>
           <span className="font-medium">{formatCurrency(amount)}</span>
         </div>
       ))}
@@ -601,6 +611,7 @@ function useCustomerVehicleOptions() {
 
 function ReceivableDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
   const createReceivable = useMutation(api.collections.createReceivable);
   const createInstallmentPlan = useMutation(api.collections.createInstallmentPlan);
   const { customerOptions, vehicleOptions } = useCustomerVehicleOptions();
@@ -642,7 +653,7 @@ function ReceivableDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
           sourceType: sourceType as Doc<"receivables">["sourceType"],
         });
       }
-      toast.success("Receivable saved.");
+      toast.success(t("CollectionToastReceivableSaved" as any));
       onOpenChange(false);
       setTitle("");
       setAmount("");
@@ -658,36 +669,36 @@ function ReceivableDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>New Receivable</DialogTitle>
-          <DialogDescription>Create a one-off balance or a full installment plan.</DialogDescription>
+          <DialogTitle>{t("NewReceivable" as any)}</DialogTitle>
+          <DialogDescription>{t("NewReceivableDesc" as any)}</DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 sm:grid-cols-2">
           <Select value={mode} onValueChange={(value) => setMode(value as "single" | "plan")}>
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="single">Single receivable</SelectItem>
-              <SelectItem value="plan">Installment plan</SelectItem>
+              <SelectItem value="single">{t("SingleReceivable" as any)}</SelectItem>
+              <SelectItem value="plan">{t("InstallmentPlan" as any)}</SelectItem>
             </SelectContent>
           </Select>
           <Select value={sourceType} onValueChange={setSourceType}>
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
               {["CUSTOMER_DEPOSIT", "RESERVATION_PAYMENT", "INTERNAL_INSTALLMENT", "BANK_FINANCED_BALANCE", "BANK_TRANSFER", "PAYMENT_LINK", "CHEQUE", "OTHER"].map((source) => (
-                <SelectItem key={source} value={source}>{sourceLabel(source)}</SelectItem>
+                <SelectItem key={source} value={source}>{collectionLabel(t, source)}</SelectItem>
               ))}
             </SelectContent>
           </Select>
-          <SearchableSelect value={customerId} onValueChange={setCustomerId} options={customerOptions} placeholder="Customer" searchPlaceholder="Search customers" />
-          <SearchableSelect value={vehicleId} onValueChange={(value) => setVehicleId(value === "none" ? "" : value)} options={vehicleOptions} placeholder="Vehicle" noneLabel="No vehicle" searchPlaceholder="Search vehicles" />
-          <Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="Title" />
-          <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={mode === "single" ? "Amount" : "Total amount"} />
+          <SearchableSelect value={customerId} onValueChange={setCustomerId} options={customerOptions} placeholder={t("Customer" as any)} searchPlaceholder={t("SearchCustomersPlaceholder" as any)} />
+          <SearchableSelect value={vehicleId} onValueChange={(value) => setVehicleId(value === "none" ? "" : value)} options={vehicleOptions} placeholder={t("Vehicle" as any)} noneLabel={t("NoVehicle" as any)} searchPlaceholder={t("SearchVehiclesPlaceholder" as any)} />
+          <Input value={title} onChange={(event) => setTitle(event.target.value)} placeholder={t("Title" as any)} />
+          <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={mode === "single" ? t("Amount" as any) : t("TotalAmount" as any)} />
           <Input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />
-          {mode === "plan" && <Input type="number" min="1" max="120" value={installmentCount} onChange={(event) => setInstallmentCount(event.target.value)} placeholder="Installments" />}
-          <Textarea className="sm:col-span-2" value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Notes" />
+          {mode === "plan" && <Input type="number" min="1" max="120" value={installmentCount} onChange={(event) => setInstallmentCount(event.target.value)} placeholder={t("Installments" as any)} />}
+          <Textarea className="sm:col-span-2" value={notes} onChange={(event) => setNotes(event.target.value)} placeholder={t("NotesLabel" as any)} />
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={submit} disabled={submitting || !customerId || !title || !amount}>{submitting ? "Saving..." : "Save"}</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
+          <Button onClick={submit} disabled={submitting || !customerId || !title || !amount}>{submitting ? t("Saving" as any) : t("Save" as any)}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -696,6 +707,7 @@ function ReceivableDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
 
 function PaymentDialog({ receivable, onOpenChange }: { receivable: ReceivableRow | null; onOpenChange: (open: boolean) => void }) {
   const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
   const recordPayment = useMutation(api.collections.recordPayment);
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState("CASH");
@@ -703,11 +715,13 @@ function PaymentDialog({ receivable, onOpenChange }: { receivable: ReceivableRow
   const [reference, setReference] = useState("");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const idempotencyKeyRef = useRef<string | null>(null);
 
   async function submit() {
     if (!activeOrgId || !receivable) return;
     setSubmitting(true);
     try {
+      idempotencyKeyRef.current ??= `collection-payment:${crypto.randomUUID()}`;
       await recordPayment({
         orgId: activeOrgId,
         receivableId: receivable._id,
@@ -716,8 +730,10 @@ function PaymentDialog({ receivable, onOpenChange }: { receivable: ReceivableRow
         paymentDate: dateInputToMs(paymentDate),
         reference: reference || undefined,
         notes: notes || undefined,
+        idempotencyKey: idempotencyKeyRef.current,
       });
-      toast.success("Payment recorded.");
+      toast.success(t("CollectionToastPaymentRecorded" as any));
+      idempotencyKeyRef.current = null;
       onOpenChange(false);
       setAmount("");
       setReference("");
@@ -733,26 +749,26 @@ function PaymentDialog({ receivable, onOpenChange }: { receivable: ReceivableRow
     <Dialog open={!!receivable} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Record Payment</DialogTitle>
-          <DialogDescription>{receivable?.customerName} · {receivable ? sourceLabel(receivable.sourceType) : ""}</DialogDescription>
+          <DialogTitle>{t("RecordPayment" as any)}</DialogTitle>
+          <DialogDescription>{receivable?.customerName} · {receivable ? collectionLabel(t, receivable.sourceType) : ""}</DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
-          <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={`Amount due ${receivable?.outstandingAmount ?? ""}`} />
+          <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={`${t("AmountDue" as any)} ${receivable?.outstandingAmount ?? ""}`} />
           <Select value={method} onValueChange={setMethod}>
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
               {["CASH", "BANK_TRANSFER", "PAYMENT_LINK", "CARD", "OTHER"].map((value) => (
-                <SelectItem key={value} value={value}>{sourceLabel(value)}</SelectItem>
+                <SelectItem key={value} value={value}>{collectionLabel(t, value)}</SelectItem>
               ))}
             </SelectContent>
           </Select>
           <Input type="date" value={paymentDate} onChange={(event) => setPaymentDate(event.target.value)} />
-          <Input value={reference} onChange={(event) => setReference(event.target.value)} placeholder="Reference" />
-          <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Notes" />
+          <Input value={reference} onChange={(event) => setReference(event.target.value)} placeholder={t("Reference" as any)} />
+          <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder={t("NotesLabel" as any)} />
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={submit} disabled={submitting || !amount}>{submitting ? "Saving..." : "Record"}</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
+          <Button onClick={submit} disabled={submitting || !amount}>{submitting ? t("Saving" as any) : t("Record" as any)}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -761,6 +777,7 @@ function PaymentDialog({ receivable, onOpenChange }: { receivable: ReceivableRow
 
 function ChequeDialog({ receivable, onOpenChange }: { receivable: ReceivableRow | null; onOpenChange: (open: boolean) => void }) {
   const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
   const registerCheque = useMutation(api.collections.registerCheque);
   const [bank, setBank] = useState("");
   const [chequeNumber, setChequeNumber] = useState("");
@@ -785,7 +802,7 @@ function ChequeDialog({ receivable, onOpenChange }: { receivable: ReceivableRow 
         amount: Number(amount),
         notes: notes || undefined,
       });
-      toast.success("Cheque registered.");
+      toast.success(t("CollectionToastChequeRegistered" as any));
       onOpenChange(false);
       setBank("");
       setChequeNumber("");
@@ -802,19 +819,19 @@ function ChequeDialog({ receivable, onOpenChange }: { receivable: ReceivableRow 
     <Dialog open={!!receivable} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Register Post-Dated Cheque</DialogTitle>
+          <DialogTitle>{t("RegisterPostDatedCheque" as any)}</DialogTitle>
           <DialogDescription>{receivable?.customerName}</DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Input value={bank} onChange={(event) => setBank(event.target.value)} placeholder="Bank" />
-          <Input value={chequeNumber} onChange={(event) => setChequeNumber(event.target.value)} placeholder="Cheque number" />
+          <Input value={bank} onChange={(event) => setBank(event.target.value)} placeholder={t("Bank" as any)} />
+          <Input value={chequeNumber} onChange={(event) => setChequeNumber(event.target.value)} placeholder={t("ChequeNumber" as any)} />
           <Input type="date" value={chequeDate} onChange={(event) => setChequeDate(event.target.value)} />
-          <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="Amount" />
-          <Textarea className="sm:col-span-2" value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Notes" />
+          <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={t("Amount" as any)} />
+          <Textarea className="sm:col-span-2" value={notes} onChange={(event) => setNotes(event.target.value)} placeholder={t("NotesLabel" as any)} />
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={submit} disabled={submitting || !bank || !chequeNumber || !amount}>{submitting ? "Saving..." : "Register"}</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
+          <Button onClick={submit} disabled={submitting || !bank || !chequeNumber || !amount}>{submitting ? t("Saving" as any) : t("Register" as any)}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -823,6 +840,7 @@ function ChequeDialog({ receivable, onOpenChange }: { receivable: ReceivableRow 
 
 function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable: ReceivableRow; type: "REFUND" | "RESCHEDULE" | "CANCEL_RECEIVABLE" } | null; onOpenChange: (open: boolean) => void }) {
   const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
   const requestApproval = useMutation(api.collections.requestApproval);
   const [amount, setAmount] = useState("");
   const [dueDate, setDueDate] = useState(todayInput);
@@ -841,7 +859,7 @@ function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable:
         requestedDueDate: target.type === "RESCHEDULE" ? dateInputToMs(dueDate) : undefined,
         reason,
       });
-      toast.success("Approval request submitted.");
+      toast.success(t("CollectionToastApprovalSubmitted" as any));
       onOpenChange(false);
       setAmount("");
       setReason("");
@@ -856,17 +874,17 @@ function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable:
     <Dialog open={!!target} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{target ? sourceLabel(target.type) : "Approval Request"}</DialogTitle>
+          <DialogTitle>{target ? collectionLabel(t, target.type) : t("ApprovalRequest" as any)}</DialogTitle>
           <DialogDescription>{target?.receivable.customerName} · {target?.receivable.title}</DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
-          {target?.type === "REFUND" && <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="Refund amount" />}
+          {target?.type === "REFUND" && <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={t("RefundAmount" as any)} />}
           {target?.type === "RESCHEDULE" && <Input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />}
-          <Textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Reason" />
+          <Textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder={t("Reason" as any)} />
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={submit} disabled={submitting || !reason || (target?.type === "REFUND" && !amount)}>{submitting ? "Submitting..." : "Submit"}</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
+          <Button onClick={submit} disabled={submitting || !reason || (target?.type === "REFUND" && !amount)}>{submitting ? t("Submitting" as any) : t("Submit" as any)}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -875,6 +893,7 @@ function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable:
 
 function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null; onOpenChange: (open: boolean) => void }) {
   const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
   const returnCheque = useMutation(api.collections.returnCheque);
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -884,7 +903,7 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
     setSubmitting(true);
     try {
       await returnCheque({ orgId: activeOrgId, chequeId: cheque._id, returnReason: reason || undefined });
-      toast.success("Cheque returned.");
+      toast.success(t("CollectionToastChequeReturned" as any));
       onOpenChange(false);
       setReason("");
     } catch (error) {
@@ -898,13 +917,13 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
     <Dialog open={!!cheque} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Return Cheque</DialogTitle>
+          <DialogTitle>{t("ReturnCheque" as any)}</DialogTitle>
           <DialogDescription>{cheque?.bank} #{cheque?.chequeNumber}</DialogDescription>
         </DialogHeader>
-        <Textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Return reason" />
+        <Textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder={t("ReturnReason" as any)} />
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={submit} disabled={submitting}>{submitting ? "Saving..." : "Return"}</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
+          <Button onClick={submit} disabled={submitting}>{submitting ? t("Saving" as any) : t("Return" as any)}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -913,6 +932,7 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
 
 function ReplaceChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null; onOpenChange: (open: boolean) => void }) {
   const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
   const replaceCheque = useMutation(api.collections.replaceCheque);
   const [bank, setBank] = useState("");
   const [chequeNumber, setChequeNumber] = useState("");
@@ -932,7 +952,7 @@ function ReplaceChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | nul
         chequeDate: dateInputToMs(chequeDate),
         amount: Number(amount),
       });
-      toast.success("Replacement cheque registered.");
+      toast.success(t("CollectionToastReplacementChequeRegistered" as any));
       onOpenChange(false);
       setBank("");
       setChequeNumber("");
@@ -948,18 +968,18 @@ function ReplaceChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | nul
     <Dialog open={!!cheque} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Replacement Cheque</DialogTitle>
+          <DialogTitle>{t("ReplacementCheque" as any)}</DialogTitle>
           <DialogDescription>{cheque?.bank} #{cheque?.chequeNumber}</DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Input value={bank} onChange={(event) => setBank(event.target.value)} placeholder="Bank" />
-          <Input value={chequeNumber} onChange={(event) => setChequeNumber(event.target.value)} placeholder="Cheque number" />
+          <Input value={bank} onChange={(event) => setBank(event.target.value)} placeholder={t("Bank" as any)} />
+          <Input value={chequeNumber} onChange={(event) => setChequeNumber(event.target.value)} placeholder={t("ChequeNumber" as any)} />
           <Input type="date" value={chequeDate} onChange={(event) => setChequeDate(event.target.value)} />
-          <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder="Amount" />
+          <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={t("Amount" as any)} />
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={submit} disabled={submitting || !bank || !chequeNumber || !amount}>{submitting ? "Saving..." : "Replace"}</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
+          <Button onClick={submit} disabled={submitting || !bank || !chequeNumber || !amount}>{submitting ? t("Saving" as any) : t("Replace" as any)}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -968,11 +988,13 @@ function ReplaceChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | nul
 
 function ReconciliationDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { activeOrgId } = useOrg();
+  const { t } = useLanguage();
   const submitReconciliation = useMutation(api.collections.submitCashierReconciliation);
   const [businessDate, setBusinessDate] = useState(todayInput);
   const [countedCash, setCountedCash] = useState("");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const idempotencyKeyRef = useRef<string | null>(null);
   const draft = useQuery(
     api.collections.getReconciliationDraft,
     activeOrgId && open ? { orgId: activeOrgId, businessDate: dateInputToMs(businessDate) } : "skip"
@@ -983,13 +1005,16 @@ function ReconciliationDialog({ open, onOpenChange }: { open: boolean; onOpenCha
     if (!activeOrgId) return;
     setSubmitting(true);
     try {
+      idempotencyKeyRef.current ??= `cashier-reconciliation:${crypto.randomUUID()}`;
       await submitReconciliation({
         orgId: activeOrgId,
         businessDate: dateInputToMs(businessDate),
         countedCash: Number(countedCash),
         notes: notes || undefined,
+        idempotencyKey: idempotencyKeyRef.current,
       });
-      toast.success("Cashier reconciliation submitted.");
+      toast.success(t("CollectionToastReconciliationSubmitted" as any));
+      idempotencyKeyRef.current = null;
       onOpenChange(false);
       setCountedCash("");
       setNotes("");
@@ -1004,17 +1029,17 @@ function ReconciliationDialog({ open, onOpenChange }: { open: boolean; onOpenCha
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Cashier Reconciliation</DialogTitle>
-          <DialogDescription>{draft ? `${draft.paymentCount} cash payment(s), expected ${formatCurrency(draft.expectedCash)}` : "Loading expected cash..."}</DialogDescription>
+          <DialogTitle>{t("CashierReconciliation" as any)}</DialogTitle>
+          <DialogDescription>{draft ? t("CashierReconciliationDraftDesc" as any).replace("{count}", String(draft.paymentCount)).replace("{amount}", formatCurrency(draft.expectedCash)) : t("LoadingExpectedCash" as any)}</DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
           <Input type="date" value={businessDate} onChange={(event) => setBusinessDate(event.target.value)} />
-          <Input type="number" min="0" step="0.01" value={countedCash} onChange={(event) => setCountedCash(event.target.value)} placeholder="Counted cash" />
-          <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Notes" />
+          <Input type="number" min="0" step="0.01" value={countedCash} onChange={(event) => setCountedCash(event.target.value)} placeholder={t("CountedCash" as any)} />
+          <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder={t("NotesLabel" as any)} />
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-          <Button onClick={submit} disabled={submitting || !countedCash}>{submitting ? "Submitting..." : "Submit"}</Button>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
+          <Button onClick={submit} disabled={submitting || !countedCash}>{submitting ? t("Submitting" as any) : t("Submit" as any)}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

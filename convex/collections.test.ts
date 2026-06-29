@@ -14,6 +14,13 @@ async function seedFinanceMember(t: ReturnType<typeof convexTest>) {
       name: "Collections User",
     })
   );
+  const approverId = await t.run((ctx) =>
+    ctx.db.insert("users", {
+      clerkId: "collections_approver",
+      email: "collections.approver@example.com",
+      name: "Collections Approver",
+    })
+  );
   const roleId = await t.run((ctx) =>
     ctx.db.insert("roles", {
       orgId,
@@ -22,6 +29,7 @@ async function seedFinanceMember(t: ReturnType<typeof convexTest>) {
     })
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: approverId, roleId }));
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", {
       orgId,
@@ -34,8 +42,10 @@ async function seedFinanceMember(t: ReturnType<typeof convexTest>) {
   return {
     orgId,
     userId,
+    approverId,
     customerId,
     asFinance: t.withIdentity({ subject: "collections_user", clerkId: "collections_user" }),
+    asApprover: t.withIdentity({ subject: "collections_approver", clerkId: "collections_approver" }),
   };
 }
 
@@ -125,7 +135,7 @@ describe("Collections", () => {
 
   test("approved_refund_posts_outbound_payment_and_reopens_balance", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+    const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
       orgId,
@@ -150,7 +160,7 @@ describe("Collections", () => {
       reason: "Customer overpaid",
     });
 
-    await asFinance.mutation(api.collections.respondToApproval, {
+    await asApprover.mutation(api.collections.respondToApproval, {
       orgId,
       requestId,
       status: "APPROVED",
@@ -177,7 +187,7 @@ describe("Collections", () => {
 
   test("approved_reschedule_moves_overdue_receivable_to_new_due_date", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
-    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+    const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
     const tomorrow = Date.now() + 24 * 60 * 60 * 1000;
 
     const receivableId = await asFinance.mutation(api.collections.createReceivable, {
@@ -196,7 +206,7 @@ describe("Collections", () => {
       reason: "Customer requested a new payment date",
     });
 
-    await asFinance.mutation(api.collections.respondToApproval, {
+    await asApprover.mutation(api.collections.respondToApproval, {
       orgId,
       requestId,
       status: "APPROVED",

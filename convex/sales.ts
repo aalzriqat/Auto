@@ -1,6 +1,5 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -8,14 +7,10 @@ import { notifyManagers, getActorName } from "./utils/notifications";
 import { checkTenantWriteLimit } from "./rateLimit";
 import { validateInput } from "./utils/validation";
 import { CreateSaleSchema, UpdateSaleSchema } from "./validations/sales";
-import { calculateCommissionFromTiers } from "./utils/commission";
-import {
-  markVehicleAsSold,
-  restoreVehicleToAvailable,
-  createSaleTransaction,
-  closeLeadsAsWon,
-} from "./utils/saleHelpers";
-import { resolveDepositsForQuote } from "./utils/depositHelpers";
+import { restoreVehicleToAvailable } from "./utils/saleHelpers";
+import { completeSale } from "./utils/saleCompletion";
+import { runWithIdempotency } from "./utils/idempotency";
+import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
@@ -142,6 +137,7 @@ export const create = mutation({
     termMonths: v.optional(v.number()),
     warrantySold: v.optional(v.number()),
     gapSold: v.optional(v.number()),
+    idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
@@ -153,135 +149,16 @@ export const create = mutation({
 
     validateInput(CreateSaleSchema, args);
 
-    // Validate vehicle belongs to org and is available
-    const vehicle = await ctx.db.get(args.vehicleId);
-    if (!vehicle || vehicle.orgId !== args.orgId) {
-      throwAppError(AppErrorCode.VEHICLE_NOT_FOUND, "Vehicle not found in this organization.");
-    }
-    if (vehicle.status === "SOLD") {
-      throwAppError(AppErrorCode.VEHICLE_ALREADY_SOLD, "This vehicle has already been sold.");
-    }
-    if (vehicle.status === "ARCHIVED") {
-      throwAppError(AppErrorCode.VEHICLE_ARCHIVED, "Cannot sell an archived vehicle. Restore it first.");
-    }
-
-    // Validate customer belongs to org
-    const customer = await ctx.db.get(args.customerId);
-    if (!customer || customer.orgId !== args.orgId) {
-      throwAppError(AppErrorCode.CUSTOMER_NOT_FOUND, "Customer not found in this organization.");
-    }
-
-    // Validate quote belongs to org, and derive the originating lead from it
-    let leadId: Id<"leads"> | undefined;
-    if (args.quoteId) {
-      const quote = await ctx.db.get(args.quoteId);
-      if (!quote || quote.orgId !== args.orgId) {
-        throwAppError(AppErrorCode.QUOTE_NOT_FOUND, "Quote not found in this organization.");
-      }
-      leadId = quote!.leadId;
-    }
-
-    // Validate salesperson is a member of the org
-    const membership = await ctx.db
-      .query("memberships")
-      .withIndex("by_org_user", (q) =>
-        q.eq("orgId", args.orgId).eq("userId", args.salespersonId)
-      )
-      .unique();
-
-    if (!membership) {
-      throwAppError(AppErrorCode.SALESPERSON_NOT_MEMBER, "Salesperson is not a member of this organization.");
-    }
-
-    // Determine commission amount based on org's commission mode
-    const orgSettings = await ctx.db
-      .query("orgSettings")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .unique();
-
-    const commissionMode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
-    const grossProfit = vehicle!.purchasePrice != null
-      ? Math.max(0, args.salePrice - vehicle!.purchasePrice)
-      : args.salePrice;
-
-    let commissionAmount: number | undefined;
-
-    if (commissionMode === "AUTO_MEMBER") {
-      // Per-salesperson flat rate set on the team page
-      const rate = membership!.commissionRate ?? 0;
-      if (rate > 0) {
-        commissionAmount = grossProfit * (rate / 100);
-      }
-    } else if (commissionMode === "AUTO_TIERS") {
-      // Org-wide tier table (Settings → Commission)
-      const tiers = orgSettings?.commissionTiers ?? [];
-      const amount = calculateCommissionFromTiers(grossProfit, tiers);
-      if (amount > 0) commissionAmount = amount;
-    }
-    // MANUAL: commissionAmount stays undefined — manager sets it in Commissions page
-
-    // Create the sale
-    const saleId = await ctx.db.insert("sales", {
-      orgId: args.orgId,
-      vehicleId: args.vehicleId,
-      customerId: args.customerId,
-      salespersonId: args.salespersonId,
-      salePrice: args.salePrice,
-      saleDate: args.saleDate,
-      status: args.status ?? "PENDING",
-      taxRate: args.taxRate,
-      taxAmount: args.taxAmount,
-      dealerFees: args.dealerFees,
-      downPayment: args.downPayment,
-      tradeInVehicleId: args.tradeInVehicleId,
-      tradeInValue: args.tradeInValue,
-      financingType: args.financingType,
-      loanAmount: args.loanAmount,
-      apr: args.apr,
-      termMonths: args.termMonths,
-      warrantySold: args.warrantySold,
-      gapSold: args.gapSold,
-      commissionAmount,
-      quoteId: args.quoteId,
-      leadId,
-    });
-
-    await markVehicleAsSold(ctx, args.vehicleId);
-
-    let previouslyCollected = 0;
-    if (args.quoteId) {
-      previouslyCollected = await resolveDepositsForQuote(ctx, {
-        quoteId: args.quoteId,
-        resolution: "APPLIED",
-        actorId: user._id,
-      });
-    }
-
-    await createSaleTransaction(ctx, {
-      orgId: args.orgId,
-      vehicleId: args.vehicleId,
-      salePrice: args.salePrice,
-      saleDate: args.saleDate,
-      vehicle,
-      previouslyCollected,
-    });
-    await closeLeadsAsWon(ctx, {
-      orgId: args.orgId,
-      customerId: args.customerId,
-      vehicleId: args.vehicleId,
-      leadId,
-    });
-
-    const actorName = await getActorName(ctx);
-    await notifyManagers(
+    return await runWithIdempotency(
       ctx,
-      args.orgId,
-      "sale.created",
-      { actorName, vehicleLabel: `${vehicle.year} ${vehicle.make} ${vehicle.model}` },
-      { link: `/${args.orgId}/sales?highlightId=${saleId}` }
+      {
+        orgId: args.orgId,
+        operation: "sales.create",
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+      },
+      async () => await completeSale(ctx, { ...args, actorId: user._id })
     );
-
-    return saleId;
   },
 });
 
@@ -310,7 +187,7 @@ export const update = mutation({
     gapSold: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_SALES]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_SALES]);
 
     const statusLimit = await checkTenantWriteLimit(ctx, "standardApi", args.orgId);
     if (!statusLimit.ok) {
@@ -346,6 +223,12 @@ export const update = mutation({
     }
 
     if (args.status === "CANCELLED" && sale.status !== "CANCELLED") {
+      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+      assertDifferentActors(
+        user._id,
+        sale.salespersonId,
+        "Salesperson cannot approve cancellation of their own sale."
+      );
       await restoreVehicleToAvailable(ctx, sale.vehicleId);
     }
 
@@ -475,22 +358,37 @@ export const markCommissionPaid = mutation({
   args: {
     orgId: v.id("organizations"),
     saleId: v.id("sales"),
+    idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_COMMISSIONS]);
 
-    const sale = await ctx.db.get(args.saleId);
-    if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
-      throw new ConvexError("Sale not found.");
-    }
-    if (sale.commissionPaidAt != null) {
-      throw new ConvexError("Commission already marked as paid.");
-    }
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "sales.markCommissionPaid",
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+      },
+      async () => {
+        const sale = await ctx.db.get(args.saleId);
+        if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
+          throw new ConvexError("Sale not found.");
+        }
+        if (sale.commissionPaidAt != null) {
+          throw new ConvexError("Commission already marked as paid.");
+        }
 
-    await ctx.db.patch(args.saleId, {
-      commissionPaidAt: Date.now(),
-      commissionPaidBy: user._id,
-    });
+        await ctx.db.patch(args.saleId, {
+          commissionPaidAt: Date.now(),
+          commissionPaidBy: user._id,
+          commissionPaymentIdempotencyKey: args.idempotencyKey,
+        });
+
+        return args.saleId;
+      }
+    );
   },
 });
 
