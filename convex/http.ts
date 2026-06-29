@@ -1520,7 +1520,9 @@ http.route({
       }
 
       const settledStatuses = new Set(["captured", "paid", "CAPTURED", "successful", "COMPLETED", "settled"]);
-      const status = (body.status ?? body.charge?.status ?? "") as string;
+      const bodyAny = body as Record<string, unknown>;
+      const chargeObj = bodyAny.charge as Record<string, unknown> | undefined;
+      const status = ((bodyAny.status ?? chargeObj?.status) ?? "") as string;
 
       if (settledStatuses.has(status)) {
         await ctx.runMutation(internal.paymentIntents.settleByExternalId, {

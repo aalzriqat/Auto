@@ -984,11 +984,9 @@ export const returnClearedCheque = mutation({
         });
 
         const actorName = await getActorName(ctx);
-        await notifyManagers(ctx, args.orgId, "collection.cheque_returned_after_clearing", {
+        await notifyManagers(ctx, args.orgId, "collection.cheque_returned", {
           actorName,
           amount: String(cheque.amount),
-          bank: cheque.bank,
-          chequeNumber: cheque.chequeNumber,
         }, { link: `/${args.orgId}/accounting` });
       }
     );

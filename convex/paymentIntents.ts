@@ -38,7 +38,10 @@ export const list = query({
     const enriched = await Promise.all(
       page.page.map(async (intent) => {
         const customer = await ctx.db.get(intent.customerId);
-        return { ...intent, customerName: customer?.name ?? null };
+        const customerName = customer
+          ? `${customer.firstName ?? ""} ${customer.lastName ?? ""}`.trim() || null
+          : null;
+        return { ...intent, customerName };
       })
     );
 

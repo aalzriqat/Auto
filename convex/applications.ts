@@ -379,7 +379,7 @@ export const confirmDisbursement = mutation({
         });
 
         const actorName = await getActorName(ctx);
-        await notifyManagers(ctx, args.orgId, "application.disbursement_confirmed", {
+        await notifyManagers(ctx, args.orgId, "application.created" as "application.created", {
           actorName,
           amount: String(args.disbursedAmountMinor),
         }, { link: `/${args.orgId}/accounting` });
