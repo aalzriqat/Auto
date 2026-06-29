@@ -12,6 +12,7 @@ import {
   ALL_EVENT_TYPES,
   LineSpec,
 } from "./postingRules";
+import { auditLog } from "../financialAudit";
 
 export interface PostCommand {
   orgId: Id<"organizations">;
@@ -177,6 +178,18 @@ export async function postAccountingEvent(
   await ctx.db.patch(eventId, {
     status: "POSTED",
     journalEntryId,
+  });
+
+  // 13. Write immutable audit log entry
+  await auditLog(ctx, {
+    orgId: cmd.orgId,
+    actorId: cmd.actorId,
+    actionType: "POST_EVENT",
+    resourceType: "journalEntries",
+    resourceId: journalEntryId.toString(),
+    description: `Posted ${cmd.eventType} for ${cmd.sourceType}/${cmd.sourceId}`,
+    after: { eventType: cmd.eventType, journalNumber, lineCount: resolvedLines.length },
+    idempotencyKey: cmd.idempotencyKey,
   });
 
   return { eventId, journalEntryId, alreadyPosted: false };

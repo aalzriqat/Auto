@@ -134,10 +134,10 @@ export default defineSchema({
   journalEntries: defineTable({
     orgId: v.id("organizations"),
     branchId: v.optional(v.id("branches")),
-    accountingEventId: v.id("accountingEvents"),
+    accountingEventId: v.optional(v.id("accountingEvents")),
     journalNumber: v.string(),
     accountingDate: v.number(),
-    periodId: v.id("accountingPeriods"),
+    periodId: v.optional(v.id("accountingPeriods")),
     sourceType: v.string(),
     sourceId: v.string(),
     category: v.union(
@@ -306,6 +306,37 @@ export default defineSchema({
     .index("by_payment", ["paymentId"])
     .index("by_receivable", ["receivableDocumentId"])
     .index("by_org_status", ["orgId", "status"]),
+
+  // ─── Phase 7: Financial audit log ─────────────────────────────────────────
+
+  financialAuditLog: defineTable({
+    orgId: v.id("organizations"),
+    actorId: v.id("users"),
+    actionType: v.union(
+      v.literal("POST_EVENT"),
+      v.literal("REVERSE_EVENT"),
+      v.literal("OPEN_PERIOD"),
+      v.literal("CLOSE_PERIOD"),
+      v.literal("LOCK_PERIOD"),
+      v.literal("REOPEN_PERIOD"),
+      v.literal("INIT_CHART"),
+      v.literal("UPDATE_ACCOUNT"),
+      v.literal("MIGRATE_TRANSACTION"),
+      v.literal("ALLOCATE_PAYMENT"),
+      v.literal("REVERSE_ALLOCATION"),
+    ),
+    resourceType: v.string(),
+    resourceId: v.string(),
+    description: v.string(),
+    before: v.optional(v.any()),
+    after: v.optional(v.any()),
+    idempotencyKey: v.optional(v.string()),
+    occurredAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_actor", ["orgId", "actorId"])
+    .index("by_org_action", ["orgId", "actionType"])
+    .index("by_org_time", ["orgId", "occurredAt"]),
 
   roles: defineTable({
     orgId: v.id("organizations"), // Roles are scoped to orgs allowing custom roles
