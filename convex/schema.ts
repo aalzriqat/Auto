@@ -26,6 +26,172 @@ export default defineSchema({
     suspendedReason: v.optional(v.string()),
   }),
 
+  commandIdempotency: defineTable({
+    orgId: v.id("organizations"),
+    operation: v.string(),
+    idempotencyKey: v.string(),
+    status: v.union(v.literal("STARTED"), v.literal("COMPLETED")),
+    result: v.optional(v.any()),
+    createdBy: v.optional(v.id("users")),
+    createdAt: v.number(),
+    completedAt: v.optional(v.number()),
+  })
+    .index("by_org_operation_key", ["orgId", "operation", "idempotencyKey"])
+    .index("by_org_createdAt", ["orgId", "createdAt"]),
+
+  // ─── Phase 1 + 2: Accounting foundation and ledger ────────────────────────
+
+  chartOfAccounts: defineTable({
+    orgId: v.id("organizations"),
+    code: v.string(),
+    name: v.string(),
+    nameAr: v.optional(v.string()),
+    type: v.union(
+      v.literal("ASSET"),
+      v.literal("LIABILITY"),
+      v.literal("EQUITY"),
+      v.literal("REVENUE"),
+      v.literal("COGS"),
+      v.literal("EXPENSE"),
+      v.literal("OTHER_INCOME"),
+      v.literal("OTHER_EXPENSE"),
+    ),
+    subtype: v.optional(v.string()),
+    normalBalance: v.union(v.literal("DEBIT"), v.literal("CREDIT")),
+    parentAccountId: v.optional(v.id("chartOfAccounts")),
+    isControlAccount: v.boolean(),
+    allowManualPosting: v.boolean(),
+    currencyRestriction: v.optional(v.string()),
+    active: v.boolean(),
+    systemKey: v.optional(v.string()),
+    createdAt: v.number(),
+    createdBy: v.optional(v.id("users")),
+    updatedAt: v.number(),
+    updatedBy: v.optional(v.id("users")),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_code", ["orgId", "code"])
+    .index("by_org_systemKey", ["orgId", "systemKey"])
+    .index("by_org_type", ["orgId", "type"]),
+
+  accountingPeriods: defineTable({
+    orgId: v.id("organizations"),
+    startDate: v.number(),
+    endDate: v.number(),
+    fiscalYear: v.number(),
+    periodNumber: v.number(),
+    status: v.union(
+      v.literal("FUTURE"),
+      v.literal("OPEN"),
+      v.literal("CLOSING"),
+      v.literal("CLOSED"),
+      v.literal("LOCKED"),
+    ),
+    closedBy: v.optional(v.id("users")),
+    closedAt: v.optional(v.number()),
+    reopenedBy: v.optional(v.id("users")),
+    reopenedAt: v.optional(v.number()),
+    reopenReason: v.optional(v.string()),
+    createdAt: v.number(),
+    createdBy: v.optional(v.id("users")),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_year_period", ["orgId", "fiscalYear", "periodNumber"])
+    .index("by_org_startDate", ["orgId", "startDate"]),
+
+  accountingEvents: defineTable({
+    orgId: v.id("organizations"),
+    branchId: v.optional(v.id("branches")),
+    eventType: v.string(),
+    sourceType: v.string(),
+    sourceId: v.string(),
+    eventVersion: v.number(),
+    idempotencyKey: v.string(),
+    occurredAt: v.number(),
+    accountingDate: v.number(),
+    currency: v.string(),
+    payload: v.any(),
+    payloadHash: v.optional(v.string()),
+    status: v.union(
+      v.literal("PENDING"),
+      v.literal("POSTED"),
+      v.literal("FAILED"),
+      v.literal("REVERSED"),
+    ),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    reversedByEventId: v.optional(v.id("accountingEvents")),
+    reversalOfEventId: v.optional(v.id("accountingEvents")),
+    journalEntryId: v.optional(v.id("journalEntries")),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_eventType", ["orgId", "eventType"])
+    .index("by_org_source", ["orgId", "sourceType", "sourceId"])
+    .index("by_org_idempotency", ["orgId", "idempotencyKey"])
+    .index("by_org_event_source_version", ["orgId", "eventType", "sourceType", "sourceId", "eventVersion"]),
+
+  journalEntries: defineTable({
+    orgId: v.id("organizations"),
+    branchId: v.optional(v.id("branches")),
+    accountingEventId: v.id("accountingEvents"),
+    journalNumber: v.string(),
+    accountingDate: v.number(),
+    periodId: v.id("accountingPeriods"),
+    sourceType: v.string(),
+    sourceId: v.string(),
+    category: v.union(
+      v.literal("SYSTEM"),
+      v.literal("MANUAL"),
+      v.literal("REVERSAL"),
+      v.literal("ADJUSTMENT"),
+    ),
+    memo: v.string(),
+    status: v.union(
+      v.literal("DRAFT"),
+      v.literal("VALIDATED"),
+      v.literal("POSTED"),
+      v.literal("REVERSED"),
+    ),
+    currency: v.optional(v.string()),
+    reversalOfJournalEntryId: v.optional(v.id("journalEntries")),
+    reversedByJournalEntryId: v.optional(v.id("journalEntries")),
+    postedBy: v.id("users"),
+    postedAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_date", ["orgId", "accountingDate"])
+    .index("by_org_period", ["orgId", "periodId"])
+    .index("by_org_source", ["orgId", "sourceType", "sourceId"])
+    .index("by_accounting_event", ["accountingEventId"]),
+
+  journalLines: defineTable({
+    orgId: v.id("organizations"),
+    journalEntryId: v.id("journalEntries"),
+    lineNumber: v.number(),
+    accountId: v.id("chartOfAccounts"),
+    debitMinor: v.number(),
+    creditMinor: v.number(),
+    currency: v.string(),
+    scale: v.number(),
+    accountingDate: v.number(),
+    exchangeRate: v.optional(v.number()),
+    reportingDebitMinor: v.optional(v.number()),
+    reportingCreditMinor: v.optional(v.number()),
+    branchId: v.optional(v.id("branches")),
+    vehicleId: v.optional(v.id("vehicles")),
+    customerId: v.optional(v.id("customers")),
+    financeCompanyId: v.optional(v.id("financeCompanies")),
+    salespersonId: v.optional(v.id("users")),
+    cashierId: v.optional(v.id("users")),
+    description: v.optional(v.string()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_journal_entry", ["journalEntryId"])
+    .index("by_org_account", ["orgId", "accountId"])
+    .index("by_org_account_date", ["orgId", "accountId", "accountingDate"]),
+
   roles: defineTable({
     orgId: v.id("organizations"), // Roles are scoped to orgs allowing custom roles
     name: v.string(), // "OWNER", "SALES", etc.
@@ -271,6 +437,7 @@ export default defineSchema({
     salePrice: v.number(),
     saleDate: v.number(), // timestamp
     status: v.union(v.literal("PENDING"), v.literal("COMPLETED"), v.literal("CANCELLED")),
+    idempotencyKey: v.optional(v.string()),
 
     // Deal Structuring Fields
     taxRate: v.optional(v.number()),
@@ -291,6 +458,7 @@ export default defineSchema({
     commissionAmount: v.optional(v.number()), // Calculated at sale time
     commissionPaidAt: v.optional(v.number()),
     commissionPaidBy: v.optional(v.id("users")),
+    commissionPaymentIdempotencyKey: v.optional(v.string()),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
     deletedBy: v.optional(v.string()),
@@ -326,6 +494,7 @@ export default defineSchema({
     isPrepaid: v.optional(v.boolean()),
     amortizationMonths: v.optional(v.number()),
     status: v.optional(v.union(v.literal("PENDING"), v.literal("PAID"))),
+    idempotencyKey: v.optional(v.string()),
     vendor: v.optional(v.string()),
     payerId: v.optional(v.id("users")),
     notes: v.optional(v.string()),
@@ -481,6 +650,8 @@ export default defineSchema({
     maxFinancingLTV: v.optional(v.number()), // e.g. 85 for 85% Loan-to-Value
     isActive: v.boolean(),
     acceptedStatuses: v.optional(v.array(v.id("orgCustomerStatuses"))), // undefined/empty = accepts all
+    deactivatedAt: v.optional(v.number()),
+    deactivatedBy: v.optional(v.id("users")),
   }).index("by_org", ["orgId"]),
 
   vehicleValuations: defineTable({
@@ -575,6 +746,8 @@ export default defineSchema({
     updatedAt: v.number(),
     approvedBy: v.optional(v.id("users")),
     approvedAt: v.optional(v.number()),
+    finalizedSaleId: v.optional(v.id("sales")),
+    finalizationIdempotencyKey: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
     .index("by_customer", ["customerId"])
@@ -599,6 +772,7 @@ export default defineSchema({
     // the vehicle immediately while the deposit itself stays HELD pending a
     // manager's manual refund/forfeit decision.
     holdActive: v.boolean(),
+    idempotencyKey: v.optional(v.string()),
     notes: v.optional(v.string()),
     createdBy: v.id("users"),
     createdAt: v.number(),
@@ -693,6 +867,7 @@ export default defineSchema({
       v.literal("PENDING_CLEARANCE"),
       v.literal("VOIDED")
     ),
+    idempotencyKey: v.optional(v.string()),
     reference: v.optional(v.string()),
     cashierId: v.id("users"),
     notes: v.optional(v.string()),
@@ -732,6 +907,7 @@ export default defineSchema({
     returnedAt: v.optional(v.number()),
     returnReason: v.optional(v.string()),
     clearedAt: v.optional(v.number()),
+    idempotencyKey: v.optional(v.string()),
     notes: v.optional(v.string()),
     createdBy: v.id("users"),
     createdAt: v.number(),
@@ -763,6 +939,7 @@ export default defineSchema({
       v.literal("APPROVED"),
       v.literal("REJECTED")
     ),
+    idempotencyKey: v.optional(v.string()),
     notes: v.optional(v.string()),
     reviewedBy: v.optional(v.id("users")),
     reviewedAt: v.optional(v.number()),
@@ -795,6 +972,7 @@ export default defineSchema({
     decisionNotes: v.optional(v.string()),
     decidedBy: v.optional(v.id("users")),
     decidedAt: v.optional(v.number()),
+    responseIdempotencyKey: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -889,6 +1067,7 @@ export default defineSchema({
       v.literal("CLAIM_PAYMENT"), v.literal("OTHER")
     ),
     description: v.string(), // "البيان"
+    idempotencyKey: v.optional(v.string()),
     // Optional links to operational entities
     vehicleId: v.optional(v.id("vehicles")),
     userId: v.optional(v.id("users")), // For partner draws/salaries

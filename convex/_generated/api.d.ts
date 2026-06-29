@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as accountingPeriods from "../accountingPeriods.js";
 import type * as adminAudit from "../adminAudit.js";
 import type * as adminAuth from "../adminAuth.js";
 import type * as adminBroadcasts from "../adminBroadcasts.js";
@@ -20,6 +21,7 @@ import type * as adminUsers from "../adminUsers.js";
 import type * as applications from "../applications.js";
 import type * as approvals from "../approvals.js";
 import type * as branches from "../branches.js";
+import type * as chartOfAccounts from "../chartOfAccounts.js";
 import type * as claims from "../claims.js";
 import type * as collectionReminderActions from "../collectionReminderActions.js";
 import type * as collections from "../collections.js";
@@ -82,16 +84,21 @@ import type * as users from "../users.js";
 import type * as utils_auditLog from "../utils/auditLog.js";
 import type * as utils_commission from "../utils/commission.js";
 import type * as utils_dedup from "../utils/dedup.js";
+import type * as utils_defaultChart from "../utils/defaultChart.js";
 import type * as utils_depositHelpers from "../utils/depositHelpers.js";
 import type * as utils_env from "../utils/env.js";
 import type * as utils_errors from "../utils/errors.js";
 import type * as utils_facebookApi from "../utils/facebookApi.js";
+import type * as utils_financialGuards from "../utils/financialGuards.js";
+import type * as utils_idempotency from "../utils/idempotency.js";
 import type * as utils_instagramApi from "../utils/instagramApi.js";
 import type * as utils_leadAssignment from "../utils/leadAssignment.js";
 import type * as utils_leadStageHelpers from "../utils/leadStageHelpers.js";
 import type * as utils_mergeHelpers from "../utils/mergeHelpers.js";
+import type * as utils_money from "../utils/money.js";
 import type * as utils_notifications from "../utils/notifications.js";
 import type * as utils_permissions from "../utils/permissions.js";
+import type * as utils_saleCompletion from "../utils/saleCompletion.js";
 import type * as utils_saleHelpers from "../utils/saleHelpers.js";
 import type * as utils_smartReplyBuilder from "../utils/smartReplyBuilder.js";
 import type * as utils_smartReplyIntent from "../utils/smartReplyIntent.js";
@@ -123,6 +130,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  accountingPeriods: typeof accountingPeriods;
   adminAudit: typeof adminAudit;
   adminAuth: typeof adminAuth;
   adminBroadcasts: typeof adminBroadcasts;
@@ -135,6 +143,7 @@ declare const fullApi: ApiFromModules<{
   applications: typeof applications;
   approvals: typeof approvals;
   branches: typeof branches;
+  chartOfAccounts: typeof chartOfAccounts;
   claims: typeof claims;
   collectionReminderActions: typeof collectionReminderActions;
   collections: typeof collections;
@@ -197,16 +206,21 @@ declare const fullApi: ApiFromModules<{
   "utils/auditLog": typeof utils_auditLog;
   "utils/commission": typeof utils_commission;
   "utils/dedup": typeof utils_dedup;
+  "utils/defaultChart": typeof utils_defaultChart;
   "utils/depositHelpers": typeof utils_depositHelpers;
   "utils/env": typeof utils_env;
   "utils/errors": typeof utils_errors;
   "utils/facebookApi": typeof utils_facebookApi;
+  "utils/financialGuards": typeof utils_financialGuards;
+  "utils/idempotency": typeof utils_idempotency;
   "utils/instagramApi": typeof utils_instagramApi;
   "utils/leadAssignment": typeof utils_leadAssignment;
   "utils/leadStageHelpers": typeof utils_leadStageHelpers;
   "utils/mergeHelpers": typeof utils_mergeHelpers;
+  "utils/money": typeof utils_money;
   "utils/notifications": typeof utils_notifications;
   "utils/permissions": typeof utils_permissions;
+  "utils/saleCompletion": typeof utils_saleCompletion;
   "utils/saleHelpers": typeof utils_saleHelpers;
   "utils/smartReplyBuilder": typeof utils_smartReplyBuilder;
   "utils/smartReplyIntent": typeof utils_smartReplyIntent;
