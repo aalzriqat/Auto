@@ -88,7 +88,11 @@ export const listAuditLog = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    const limit = Math.min(args.limit ?? 50, 200);
+    const requestedLimit = args.limit ?? 50;
+    if (!Number.isSafeInteger(requestedLimit) || requestedLimit < 1) {
+      throw new ConvexError("limit must be a positive integer.");
+    }
+    const limit = Math.min(requestedLimit, 200);
     const actionType = args.actionType as AuditActionType | undefined;
 
     // When date bounds are specified with the time index we can push the lower
@@ -204,7 +208,8 @@ export const postManualJournal = mutation({
       throw new ConvexError("Manual journal must have at least one non-zero line.");
     }
 
-    // Validate all accounts exist, belong to this org, and allow manual posting
+    // Validate all accounts exist, belong to this org, allow manual posting, and use consistent currency
+    let journalCurrency: string | null = null;
     for (const line of args.lines) {
       const account = await ctx.db.get(line.accountId);
       if (!account || account.orgId !== args.orgId) {
@@ -213,9 +218,21 @@ export const postManualJournal = mutation({
       if (!account.allowManualPosting) {
         throw new ConvexError(`Account "${account.name}" does not allow manual posting.`);
       }
+      const lineCurrency = account.currencyRestriction ?? null;
+      if (journalCurrency === null) {
+        journalCurrency = lineCurrency;
+      } else if (lineCurrency !== null && lineCurrency !== journalCurrency) {
+        throw new ConvexError("All manual journal lines must use the same currency.");
+      }
     }
 
-    // Idempotency: namespaced under POST_MANUAL_JOURNAL to avoid collisions with POST_EVENT
+    // Idempotency: namespaced under POST_MANUAL_JOURNAL; also compare request fingerprint
+    // to catch same-key reuse with different content.
+    const fingerprint = JSON.stringify({
+      memo: args.memo,
+      lines: args.lines.map((l) => ({ a: l.accountId, d: l.debitMinor, c: l.creditMinor })),
+      reviewedBy: args.reviewedBy ?? null,
+    });
     const existing = await ctx.db
       .query("financialAuditLog")
       .withIndex("by_org_action_idempotency", (q) =>
@@ -223,6 +240,10 @@ export const postManualJournal = mutation({
       )
       .first();
     if (existing) {
+      const priorFingerprint = (existing.after as { fingerprint?: string } | undefined)?.fingerprint;
+      if (priorFingerprint && priorFingerprint !== fingerprint) {
+        throw new ConvexError("Idempotency key reused with different journal content.");
+      }
       return { alreadyPosted: true, resourceId: existing.resourceId };
     }
 
@@ -249,7 +270,7 @@ export const postManualJournal = mutation({
     const journalId = await ctx.db.insert("journalEntries", {
       orgId: args.orgId,
       periodId: period._id,
-      journalNumber: `MJ-${now.toString().slice(-8)}`,
+      journalNumber: "MJ-pending",
       accountingDate: now,
       sourceType: "manual",
       sourceId: user._id.toString(),
@@ -260,6 +281,9 @@ export const postManualJournal = mutation({
       postedAt: now,
       createdAt: now,
     });
+    // Derive journal number from the inserted record ID — guaranteed unique
+    const journalNumber = `MJ-${journalId.toString().replace(/[^a-z0-9]/gi, "").slice(-10).toUpperCase()}`;
+    await ctx.db.patch(journalId, { journalNumber });
 
     for (let i = 0; i < args.lines.length; i++) {
       const line = args.lines[i];
@@ -285,7 +309,7 @@ export const postManualJournal = mutation({
       resourceType: "journalEntries",
       resourceId: journalId.toString(),
       description: `Manual journal posted: ${args.memo}`,
-      after: { lines: args.lines.length, totalDebits, reviewedBy: args.reviewedBy },
+      after: { lines: args.lines.length, totalDebits, reviewedBy: args.reviewedBy, fingerprint },
       idempotencyKey: args.idempotencyKey,
     });
 

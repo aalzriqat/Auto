@@ -78,7 +78,7 @@ export const list = query({
     status: v.optional(periodStatusValidator),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
 
     let q;
     if (args.status) {
@@ -100,7 +100,7 @@ export const get = query({
     periodId: v.id("accountingPeriods"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     const period = await ctx.db.get(args.periodId);
     if (!period || period.orgId !== args.orgId) return null;
     return period;
@@ -110,7 +110,7 @@ export const get = query({
 export const currentOpenPeriod = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     const now = Date.now();
     return ctx.db
       .query("accountingPeriods")
@@ -136,8 +136,17 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
+    if (!Number.isFinite(args.startDate) || !Number.isFinite(args.endDate)) {
+      throw new ConvexError("Period dates must be valid timestamps.");
+    }
     if (args.startDate >= args.endDate) {
       throw new ConvexError("Period start date must be before end date.");
+    }
+    if (!Number.isInteger(args.fiscalYear) || args.fiscalYear < 1900 || args.fiscalYear > 2200) {
+      throw new ConvexError("Fiscal year must be a valid integer year (1900–2200).");
+    }
+    if (!Number.isInteger(args.periodNumber) || args.periodNumber < 1 || args.periodNumber > 13) {
+      throw new ConvexError("Period number must be an integer between 1 and 13.");
     }
 
     const conflict = await ctx.db
@@ -300,8 +309,12 @@ export const reopen = mutation({
     if (period.status !== "CLOSED" && period.status !== "CLOSING") {
       throw new ConvexError(`Cannot reopen a period with status "${period.status}".`);
     }
-    if (!args.reason.trim()) {
+    const reopenReason = args.reason.trim();
+    if (!reopenReason) {
       throw new ConvexError("A reason is required when reopening a period.");
+    }
+    if (reopenReason.length > 500) {
+      throw new ConvexError("Reopen reason must be 500 characters or fewer.");
     }
 
     const now = Date.now();
@@ -309,12 +322,12 @@ export const reopen = mutation({
       status: "OPEN",
       reopenedBy: user._id,
       reopenedAt: now,
-      reopenReason: args.reason.trim(),
+      reopenReason,
     });
     await auditLog(ctx, {
       orgId: args.orgId, actorId: user._id, actionType: "REOPEN_PERIOD",
       resourceType: "accountingPeriods", resourceId: args.periodId.toString(),
-      description: `Reopened period ${period.fiscalYear}-${String(period.periodNumber).padStart(2, "0")}: ${args.reason.trim()}`,
+      description: `Reopened period ${period.fiscalYear}-${String(period.periodNumber).padStart(2, "0")}: ${reopenReason}`,
     });
     return args.periodId;
   },

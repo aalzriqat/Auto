@@ -81,10 +81,12 @@ export const auditLegacyTransactions = query({
 
     const limit = Math.min(args.limit ?? 100, 500);
 
+    // Scan enough rows to collect `limit` unposted entries when onlyUnposted=true
+    const scanLimit = args.onlyUnposted ? limit * 5 : limit;
     const txns = await ctx.db
       .query("transactions")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .take(limit);
+      .take(scanLimit);
 
     const rows = await Promise.all(txns.map((tx) => classifyLegacyTransaction(ctx, args.orgId, tx)));
     const unposted = rows.filter((r) => !r.hasJournalEntry);
@@ -94,7 +96,7 @@ export const auditLegacyTransactions = query({
       total: rows.length,
       postedCount: posted.length,
       unpostedCount: unposted.length,
-      rows: args.onlyUnposted ? unposted : rows,
+      rows: args.onlyUnposted ? unposted.slice(0, limit) : rows,
     };
   },
 });
@@ -102,7 +104,7 @@ export const auditLegacyTransactions = query({
 export const duplicateEventCheck = query({
   args: {
     orgId: v.id("organizations"),
-    sourceType: v.string(),
+    eventType: v.string(),
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -110,7 +112,7 @@ export const duplicateEventCheck = query({
     const events = await ctx.db
       .query("accountingEvents")
       .withIndex("by_org_eventType", (q) =>
-        q.eq("orgId", args.orgId).eq("eventType", args.sourceType)
+        q.eq("orgId", args.orgId).eq("eventType", args.eventType)
       )
       .collect();
 
@@ -148,53 +150,56 @@ export const migrationGapAnalysis = query({
         .take(10000)
     ).length;
 
+    // Count only events sourced from the legacy transactions table for accurate progress
     const glEventCount = (
       await ctx.db
         .query("accountingEvents")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .collect()
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", args.orgId).eq("sourceType", "transactions")
+        )
+        .take(10000)
     ).length;
 
     const glJournalCount = (
       await ctx.db
         .query("journalEntries")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .collect()
+        .take(10000)
     ).length;
 
     const glLineCount = (
       await ctx.db
         .query("journalLines")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .collect()
+        .take(10000)
     ).length;
 
     const receivableCount = (
       await ctx.db
         .query("receivableDocuments")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .collect()
+        .take(10000)
     ).length;
 
     const paymentCount = (
       await ctx.db
         .query("canonicalPayments")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .collect()
+        .take(10000)
     ).length;
 
     const allocationCount = (
       await ctx.db
         .query("paymentAllocations")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .collect()
+        .take(10000)
     ).length;
 
     return {
       legacy: { transactions: legacyCount },
       gl: { events: glEventCount, journalEntries: glJournalCount, journalLines: glLineCount },
       subledger: { receivables: receivableCount, payments: paymentCount, allocations: allocationCount },
-      migrationProgress: legacyCount > 0 ? Math.round((glEventCount / legacyCount) * 100) : 100,
+      migrationProgress: legacyCount > 0 ? Math.min(100, Math.round((glEventCount / legacyCount) * 100)) : 100,
     };
   },
 });

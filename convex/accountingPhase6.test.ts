@@ -32,11 +32,12 @@ async function seedMigrationDealer() {
   const asUser = t.withIdentity({ subject: "mig_user", clerkId: "mig_user" });
 
   await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
+  const fiscalYear = new Date().getUTCFullYear();
   await asUser.mutation(api.accountingPeriods.create, {
     orgId,
-    startDate: Date.now() - 60 * 86400_000,
-    endDate: Date.now() + 30 * 86400_000,
-    fiscalYear: 2026, periodNumber: 1,
+    startDate: Date.UTC(fiscalYear, 0, 1),
+    endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+    fiscalYear, periodNumber: 1,
   });
   const period = (await asUser.query(api.accountingPeriods.list, { orgId }))[0];
   await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
@@ -74,7 +75,7 @@ describe("Phase 6 — duplicate event detection", () => {
   test("no duplicates in a fresh system", async () => {
     const { orgId, asUser } = await seedMigrationDealer();
     const result = await asUser.query(api.accountingMigration.duplicateEventCheck, {
-      orgId, sourceType: "EXPENSE_POSTED",
+      orgId, eventType: "EXPENSE_POSTED",
     });
     expect(result.duplicateCount).toBe(0);
   });
@@ -97,7 +98,7 @@ describe("Phase 6 — duplicate event detection", () => {
     });
 
     const result = await asUser.query(api.accountingMigration.duplicateEventCheck, {
-      orgId, sourceType: "EXPENSE_POSTED",
+      orgId, eventType: "EXPENSE_POSTED",
     });
     expect(result.totalEvents).toBe(1);
     expect(result.duplicateCount).toBe(0);

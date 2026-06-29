@@ -31,9 +31,12 @@ async function seedAuditDealer() {
   const asUser = t.withIdentity({ subject: "aud_user", clerkId: "aud_user" });
 
   await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
+  const fiscalYear = new Date().getUTCFullYear();
   await asUser.mutation(api.accountingPeriods.create, {
-    orgId, startDate: Date.now() - 60 * 86400_000, endDate: Date.now() + 30 * 86400_000,
-    fiscalYear: 2026, periodNumber: 1,
+    orgId,
+    startDate: Date.UTC(fiscalYear, 0, 1),
+    endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+    fiscalYear, periodNumber: 1,
   });
   const period = (await asUser.query(api.accountingPeriods.list, { orgId }))[0];
   await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
@@ -53,9 +56,12 @@ describe("Phase 7 — financial audit log", () => {
     await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
     const asUser = t.withIdentity({ subject: "aud2", clerkId: "aud2" });
 
+    const nextYear = new Date().getUTCFullYear() + 1;
     await asUser.mutation(api.accountingPeriods.create, {
-      orgId, startDate: Date.now() + 31 * 86400_000, endDate: Date.now() + 90 * 86400_000,
-      fiscalYear: 2026, periodNumber: 2,
+      orgId,
+      startDate: Date.UTC(nextYear, 0, 1),
+      endDate: Date.UTC(nextYear, 11, 31, 23, 59, 59, 999),
+      fiscalYear: nextYear, periodNumber: 1,
     });
     const periods = await asUser.query(api.accountingPeriods.list, { orgId });
     const futurePeriod = periods.find((p) => p.status === "FUTURE")!;
