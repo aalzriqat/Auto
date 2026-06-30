@@ -1519,10 +1519,10 @@ http.route({
       const url = new URL(request.url);
       const provider = (url.searchParams.get("provider") ?? "").toLowerCase();
 
-      // Fail closed when the webhook secret is not configured.
+      // Fail closed when the webhook secret is not configured or too weak.
       const secret = process.env.PAYMENT_WEBHOOK_SECRET;
-      if (!secret) {
-        console.error("[payment-webhook] PAYMENT_WEBHOOK_SECRET not configured — rejecting.");
+      if (!secret || secret.length < 16) {
+        console.error("[payment-webhook] PAYMENT_WEBHOOK_SECRET missing/invalid — rejecting.");
         return new Response("Webhook not configured", { status: 503 });
       }
 

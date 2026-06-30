@@ -14,7 +14,7 @@
  * if the original operation later posts directly.
  */
 import { v } from "convex/values";
-import { internalMutation, query } from "./_generated/server";
+import { internalMutation, mutation, query } from "./_generated/server";
 import { MutationCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { PostCommand, postAccountingEvent } from "./accounting/postingEngine";
@@ -113,7 +113,7 @@ export async function cancelPendingPostByKey(
       q.eq("orgId", orgId).eq("idempotencyKey", idempotencyKey)
     )
     .unique();
-  if (existing && existing.status === "PENDING" && existing.kind === "POST") {
+  if (existing && existing.kind === "POST" && existing.status !== "POSTED") {
     await ctx.db.delete(existing._id);
     return true;
   }
@@ -139,6 +139,7 @@ export async function drainPendingForOrg(
     try {
       if (p.kind === "POST") {
         if (!p.eventType) throw new Error("Pending POST record missing eventType");
+        if (!p.currency) throw new Error("Pending POST record missing currency");
         const res = await postAccountingEvent(ctx, {
           orgId: p.orgId,
           branchId: p.branchId,
@@ -148,7 +149,7 @@ export async function drainPendingForOrg(
           eventVersion: p.eventVersion ?? 1,
           accountingDate: p.accountingDate,
           occurredAt: p.occurredAt ?? p.accountingDate,
-          currency: p.currency ?? "JOD",
+          currency: p.currency,
           idempotencyKey: p.idempotencyKey,
           payload: (p.payload ?? {}) as Record<string, unknown>,
           actorId: p.actorId,
@@ -224,9 +225,10 @@ export const listPending = query({
 });
 
 /** Manual re-drive trigger (MANAGE_FINANCE) for operators clearing a backlog. */
-export const redrive = internalMutation({
+export const redrive = mutation({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     return drainPendingForOrg(ctx, args.orgId);
   },
 });

@@ -106,7 +106,7 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
 
   useEffect(() => {
     debouncedCheckEmail(watchedEmail);
-  }, [watchedEmail]);
+  }, [watchedEmail, debouncedCheckEmail]);
 
   // Reset everything when dialog closes
   useEffect(() => {

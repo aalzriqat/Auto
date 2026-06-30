@@ -789,3 +789,39 @@ A 4-reviewer production audit of commit `f016634` issued NO-GO verdicts citing s
 - Report performance: trial balance and AR-aging reports still do in-memory full scans / N+1 lookups; acceptable at current scale but will need balance projections before larger orgs.
 - Team invitations still rely on sharing a password by email rather than a Clerk invitation link; deferred pending a decision on the onboarding flow.
 - `paymentIntents` still has no provider-specific signature verification (HMAC, RSA) — only the shared-secret header check, now mandatory and constant-time.
+
+---
+
+# CodeRabbit Review Fixes (PR #2, 2026-06-30)
+
+Date completed: 2026-06-30
+
+Status: 14 of 17 actionable CodeRabbit findings fixed and verified. 3 deferred as architectural follow-ups (below).
+
+## Fixed
+
+- `components/team/InviteMemberDialog.tsx`: email-existence check effect now re-runs when `debouncedCheckEmail` changes identity (which happens on org switch), not just on email change.
+- `convex/accounting/workflowHooks.ts`: the `GENERAL_EXPENSE` self-heal moved from `hookExpensePosted` into the shared `postOrEnqueue` choke point, so every posting path (including cheque-return bank fees) benefits, not just expenses. Sale cancellation now cancels `FAILED` (not just `PENDING`) unposted `sale_completed_*` outbox rows, closing a path where a failed-but-unposted GL entry could still redrive after the sale was cancelled.
+- `convex/accountingOutbox.ts`: a pending `POST` row with no recorded currency now throws (stays retryable) instead of silently defaulting to JOD. `redrive` converted from `internalMutation` to a public `mutation` gated by `requireTenantAuth(..., [PERMISSIONS.MANAGE_FINANCE])` so operators can actually invoke it.
+- `convex/applications.ts`:
+  - DBR calculation now includes the customer's existing `totalMonthlyDebt`, not just the proposed installment.
+  - Guarantor underwriting snapshot stores `nationalIdLastFour` (last 4 digits) instead of the full national ID (schema field renamed in `convex/schema.ts`).
+  - `updateStatus` no longer accepts `VIEW_SALES` as a path to mutate finance-application status (including rejection); only `VIEW_FINANCE_APPLICATIONS` (or OWNER) now qualifies.
+  - `confirmDisbursement` validates the disbursed amount against the quote's `totalFinancedAmount` (converted to minor units) and rejects mismatches, instead of accepting any positive amount.
+  - `INTERNAL_INSTALLMENT` quotes are now classified as `FINANCED` at sale completion instead of falling through to `CASH`.
+- `convex/collections.ts`: idempotency fingerprints for `clearCheque` and `returnClearedCheque` now include `clearedAt` and `returnReason` respectively, so replaying a key with different effect-changing values is rejected instead of silently returning the original result.
+- `convex/http.ts`: the payment webhook now enforces the same `min(16)` length contract on `PAYMENT_WEBHOOK_SECRET` at runtime that `convex/utils/env.ts` declares, instead of accepting any non-empty value.
+- `convex/paymentIntents.ts`: `provider` is now trimmed and lowercased before both fingerprinting and storage, matching the casing the webhook and `settleByExternalId` already use — prevents a `Stripe`/`stripe` mismatch from missing settlement lookup.
+- `convex/quotes.ts`: `saveQuote` now rejects `companyId` when an explicit `mode` other than `CONFIGURED_FINANCE_COMPANY` is supplied (e.g. `CASH` or `MANUAL_FINANCE_COMPANY` with a `companyId` set), closing a path to a configured-finance-company GL trail on a non-configured quote.
+
+## Deferred (architectural follow-ups, not fixed in this pass)
+
+- **`convex/financialAudit.ts` — spoofable manual-journal reviewer.** `postManualJournal` verifies `reviewedBy` is a different, finance-authorized org member, but the *poster's own request* supplies that id — there is no proof the named reviewer actually approved anything. A correct fix requires a two-step flow (create a pending journal, then a separate `approveManualJournal` mutation authenticated as the reviewer), which is a workflow/schema change, not a local fix.
+- **`convex/utils/idempotency.ts` — fingerprint coverage gap.** `fingerprint` is optional and only compared when both sides provide one. Several money-moving mutations (`convex/collections.ts` payment recording, `convex/applications.ts` finalization, `convex/expenses.ts` posting) still call `runWithIdempotency` without a fingerprint, so a reused key with different request content can still return the prior result undetected. Needs either a `requiresFingerprint` guard or an audit + fingerprint addition across all money-moving call sites.
+- **`convex/accountingReports.ts` — trial balance mixes currencies.** `trialBalance` infers a row's currency from the account (`account.currencyRestriction ?? orgCurrency`), but manual journals now write `journalLines.currency` per line. An unrestricted account holding a non-org-currency journal line displays under the org currency and its totals mix minor units across currencies. Needs grouping by `(accountId, line.currency)` or conversion to a single reporting currency before aggregation — a reporting-logic redesign, not a quick fix.
+
+## Verification
+
+- `pnpm exec tsc --noEmit`: 0 errors.
+- `pnpm test`: full suite green (see commit for exact count).
+- All test fixtures affected by the permission/snapshot-field changes above (`financeLifecyclePhase8.test.ts` DBR/nationalId assertions) updated to match.

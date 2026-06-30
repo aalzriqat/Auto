@@ -89,7 +89,8 @@ export const create = mutation({
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
     if (args.amountMinor <= 0) throw new ConvexError("Amount must be positive.");
-    if (!args.provider.trim()) throw new ConvexError("Provider is required.");
+    const provider = args.provider.trim().toLowerCase();
+    if (!provider) throw new ConvexError("Provider is required.");
 
     return await runWithIdempotency(
       ctx,
@@ -102,7 +103,7 @@ export const create = mutation({
           customerId: args.customerId,
           amountMinor: args.amountMinor,
           currency: args.currency,
-          provider: args.provider,
+          provider,
           saleId: args.saleId ?? null,
           receivableDocumentId: args.receivableDocumentId ?? null,
         }),
@@ -119,7 +120,7 @@ export const create = mutation({
           saleId: args.saleId,
           amountMinor: args.amountMinor,
           currency: args.currency,
-          provider: args.provider.trim(),
+          provider,
           status: "PENDING",
           idempotencyKey: args.idempotencyKey ?? `pi_${args.orgId}_${now}`,
           expiresAt: args.expiresAt,

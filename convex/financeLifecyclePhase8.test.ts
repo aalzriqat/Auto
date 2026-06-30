@@ -153,7 +153,7 @@ describe("Finance lifecycle Phase 8 — underwriting snapshot", () => {
     expect(snapshot?.jobTitleAtSubmission).toBe("Operations Manager");
     expect(snapshot?.totalMonthlyDebtAtSubmission).toBe(700);
     expect(snapshot?.proposedMonthlyInstallment).toBe(1000);
-    expect(snapshot?.dbrAtSubmission).toBeCloseTo(0.2);
+    expect(snapshot?.dbrAtSubmission).toBeCloseTo(0.34);
     expect(snapshot?.vehicleValuationAtSubmission).toBe(20000);
     expect(snapshot?.ltvAtSubmission).toBe(75);
   });
@@ -210,7 +210,7 @@ describe("Finance lifecycle Phase 8 — underwriting snapshot", () => {
       guarantorId,
       firstName: "Lina",
       lastName: "Haddad",
-      nationalId: "G-001",
+      nationalIdLastFour: "-001",
       phone: "555-0101",
       income: 2500,
       relationship: "Sister",

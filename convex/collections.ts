@@ -715,7 +715,7 @@ export const clearCheque = mutation({
         operation: "collections.clearCheque",
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
-        fingerprint: JSON.stringify({ chequeId: args.chequeId }),
+        fingerprint: JSON.stringify({ chequeId: args.chequeId, clearedAt: args.clearedAt ?? null }),
       },
       async () => {
         const cheque = await ctx.db.get(args.chequeId);
@@ -914,7 +914,11 @@ export const returnClearedCheque = mutation({
         operation: "collections.returnClearedCheque",
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
-        fingerprint: JSON.stringify({ chequeId: args.chequeId, bankFeeMinor: args.bankFeeMinor ?? 0 }),
+        fingerprint: JSON.stringify({
+          chequeId: args.chequeId,
+          bankFeeMinor: args.bankFeeMinor ?? 0,
+          returnReason: args.returnReason ?? null,
+        }),
       },
       async () => {
         const cheque = await ctx.db.get(args.chequeId);

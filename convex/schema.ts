@@ -962,7 +962,7 @@ export default defineSchema({
         guarantorId: v.id("guarantors"),
         firstName: v.string(),
         lastName: v.string(),
-        nationalId: v.string(),
+        nationalIdLastFour: v.string(),
         phone: v.string(),
         income: v.optional(v.number()),
         relationship: v.optional(v.string()),

@@ -43,6 +43,13 @@ async function shouldPost(ctx: MutationCtx, orgId: Id<"organizations">, date: nu
  * the previous "silently return if not postable" behavior.
  */
 async function postOrEnqueue(ctx: MutationCtx, cmd: PostCommand): Promise<void> {
+  // Self-heal: make sure the GENERAL_EXPENSE system account is mapped for this
+  // org before the engine tries to resolve it (older charts lack the key).
+  // Centralized here (not just in hookExpensePosted) because other posting
+  // paths — e.g. cheque-return bank fees — can also resolve GENERAL_EXPENSE.
+  if (await isChartInitialized(ctx, cmd.orgId)) {
+    await ensureGeneralExpenseAccount(ctx, cmd.orgId, cmd.actorId);
+  }
   if (await shouldPost(ctx, cmd.orgId, cmd.accountingDate)) {
     await postAccountingEvent(ctx, cmd);
   } else {
@@ -237,11 +244,6 @@ export async function hookExpensePosted(
     occurredAt: number;
   }
 ) {
-  // Self-heal: make sure the GENERAL_EXPENSE system account is mapped for this
-  // org before the engine tries to resolve it (older charts lack the key).
-  if (await isChartInitialized(ctx, args.orgId)) {
-    await ensureGeneralExpenseAccount(ctx, args.orgId, args.actorId);
-  }
   await postOrEnqueue(ctx, {
     orgId: args.orgId,
     eventType: "EXPENSE_POSTED",

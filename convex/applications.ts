@@ -148,8 +148,12 @@ export const createFromQuote = mutation({
       .collect();
 
     const salary = customer.employment?.salary;
+    const existingMonthlyDebt = customer.financials?.totalMonthlyDebt;
     const proposedInstallment = quote.monthlyInstallment ?? 0;
-    const dbr = salary && salary > 0 ? proposedInstallment / salary : undefined;
+    const dbr =
+      salary && salary > 0
+        ? ((existingMonthlyDebt ?? 0) + proposedInstallment) / salary
+        : undefined;
 
     let vehicleValuation: number | undefined;
     let ltv: number | undefined;
@@ -169,14 +173,14 @@ export const createFromQuote = mutation({
       salaryAtSubmission: salary,
       employerAtSubmission: customer.employment?.employer,
       jobTitleAtSubmission: customer.employment?.title,
-      totalMonthlyDebtAtSubmission: customer.financials?.totalMonthlyDebt,
+      totalMonthlyDebtAtSubmission: existingMonthlyDebt,
       proposedMonthlyInstallment: proposedInstallment,
       dbrAtSubmission: dbr,
       guarantorsAtSubmission: guarantors.map((g) => ({
         guarantorId: g._id,
         firstName: g.firstName,
         lastName: g.lastName,
-        nationalId: g.nationalId,
+        nationalIdLastFour: g.nationalId.slice(-4),
         phone: g.phone,
         income: g.income,
         relationship: g.relationship,
@@ -256,8 +260,7 @@ export const updateStatus = mutation({
     const auth = await requireTenantAuth(ctx, args.orgId);
     const hasView =
       auth.role.name === "OWNER" ||
-      auth.role.permissions.includes(PERMISSIONS.VIEW_FINANCE_APPLICATIONS) ||
-      auth.role.permissions.includes(PERMISSIONS.VIEW_SALES);
+      auth.role.permissions.includes(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
     if (!hasView) {
       throw new ConvexError("Forbidden: Missing required permissions.");
     }
@@ -374,7 +377,9 @@ export const finalizeDeal = mutation({
         const financingType =
           quote.mode === "LEASE"
             ? "LEASE"
-            : quote.mode === "CONFIGURED_FINANCE_COMPANY" || quote.mode === "MANUAL_FINANCE_COMPANY"
+            : quote.mode === "CONFIGURED_FINANCE_COMPANY" ||
+                quote.mode === "MANUAL_FINANCE_COMPANY" ||
+                quote.mode === "INTERNAL_INSTALLMENT"
               ? "FINANCED"
               : "CASH";
 
@@ -459,6 +464,17 @@ export const confirmDisbursement = mutation({
         if (app.disbursedAt) throw new ConvexError("Disbursement has already been confirmed for this application.");
         if (!app.companyId) throw new ConvexError("This application has no finance company — no disbursement expected.");
         if (args.disbursedAmountMinor <= 0) throw new ConvexError("Disbursement amount must be positive.");
+
+        const quote = await ctx.db.get(app.quoteId);
+        if (quote?.totalFinancedAmount !== undefined) {
+          const currency = await getOrgCurrency(ctx, args.orgId);
+          const expectedAmountMinor = toMinorUnits(quote.totalFinancedAmount, currency);
+          if (args.disbursedAmountMinor !== expectedAmountMinor) {
+            throw new ConvexError(
+              `Disbursed amount (${args.disbursedAmountMinor}) does not match the financed amount on the deal (${expectedAmountMinor}).`
+            );
+          }
+        }
 
         const now = Date.now();
         await ctx.db.patch(args.applicationId, {
