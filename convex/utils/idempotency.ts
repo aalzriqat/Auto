@@ -23,6 +23,13 @@ export async function runWithIdempotency<T>(
     operation: string;
     idempotencyKey?: string;
     actorId?: Id<"users">;
+    /**
+     * Canonical fingerprint of the request inputs. When supplied, replaying the
+     * same idempotency key with a materially different payload is rejected
+     * rather than silently returning the prior result — critical for money
+     * movement (payments, disbursements, cheques).
+     */
+    fingerprint?: string;
   },
   run: () => Promise<T>
 ): Promise<T> {
@@ -46,6 +53,12 @@ export async function runWithIdempotency<T>(
     .unique();
 
   if (existing) {
+    // Reject key reuse with different inputs (only when both fingerprints exist).
+    if (args.fingerprint && existing.fingerprint && existing.fingerprint !== args.fingerprint) {
+      throw new ConvexError(
+        "Idempotency key reused with different request content. Use a new key for a different operation."
+      );
+    }
     if (existing.status !== "COMPLETED") {
       throw new ConvexError("This command is already being processed. Please retry shortly.");
     }
@@ -58,6 +71,7 @@ export async function runWithIdempotency<T>(
     operation: args.operation,
     idempotencyKey,
     status: "STARTED",
+    fingerprint: args.fingerprint,
     createdBy: args.actorId,
     createdAt: now,
   });

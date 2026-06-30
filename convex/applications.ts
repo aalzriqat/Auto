@@ -7,8 +7,25 @@ import { notifyManagers, getActorName } from "./utils/notifications";
 import { releaseHoldForRejectedQuote } from "./utils/depositHelpers";
 import { completeSale } from "./utils/saleCompletion";
 import { runWithIdempotency } from "./utils/idempotency";
-import { hookFinanceDisbursed, getOrgCurrency } from "./accounting/workflowHooks";
+import { hookFinanceDisbursed, hookFinanceCashReceived, getOrgCurrency } from "./accounting/workflowHooks";
 import { toMinorUnits } from "./utils/money";
+
+type FinanceApplicationStatus =
+  | "DRAFT"
+  | "PENDING_DOCS"
+  | "UNDER_REVIEW"
+  | "APPROVED"
+  | "REJECTED"
+  | "CLOSED";
+
+const VALID_STATUS_TRANSITIONS: Record<FinanceApplicationStatus, readonly FinanceApplicationStatus[]> = {
+  DRAFT: ["PENDING_DOCS"],
+  PENDING_DOCS: ["UNDER_REVIEW", "REJECTED"],
+  UNDER_REVIEW: ["APPROVED", "REJECTED", "PENDING_DOCS"],
+  APPROVED: ["CLOSED"],
+  REJECTED: ["PENDING_DOCS"],
+  CLOSED: [],
+};
 
 export const list = query({
   args: {
@@ -124,6 +141,54 @@ export const createFromQuote = mutation({
       throw new ConvexError("An application already exists for this quote.");
     }
 
+    const guarantors = await ctx.db
+      .query("guarantors")
+      .withIndex("by_customer", (q) => q.eq("customerId", quote.customerId))
+      .filter((q) => q.neq(q.field("isDeleted"), true))
+      .collect();
+
+    const salary = customer.employment?.salary;
+    const existingMonthlyDebt = customer.financials?.totalMonthlyDebt;
+    const proposedInstallment = quote.monthlyInstallment ?? 0;
+    const dbr =
+      salary && salary > 0
+        ? ((existingMonthlyDebt ?? 0) + proposedInstallment) / salary
+        : undefined;
+
+    let vehicleValuation: number | undefined;
+    let ltv: number | undefined;
+    if (quote.companyId) {
+      const valuation = await ctx.db
+        .query("vehicleValuations")
+        .withIndex("by_vehicle", (q) => q.eq("vehicleId", quote.vehicleId))
+        .filter((q) => q.eq(q.field("companyId"), quote.companyId))
+        .first();
+      vehicleValuation = valuation?.valuationAmount;
+      if (vehicleValuation && quote.totalFinancedAmount !== undefined) {
+        ltv = (quote.totalFinancedAmount / vehicleValuation) * 100;
+      }
+    }
+
+    const underwritingSnapshot = {
+      salaryAtSubmission: salary,
+      employerAtSubmission: customer.employment?.employer,
+      jobTitleAtSubmission: customer.employment?.title,
+      totalMonthlyDebtAtSubmission: existingMonthlyDebt,
+      proposedMonthlyInstallment: proposedInstallment,
+      dbrAtSubmission: dbr,
+      guarantorsAtSubmission: guarantors.map((g) => ({
+        guarantorId: g._id,
+        firstName: g.firstName,
+        lastName: g.lastName,
+        nationalIdLastFour: g.nationalId.slice(-4),
+        phone: g.phone,
+        income: g.income,
+        relationship: g.relationship,
+      })),
+      vehicleValuationAtSubmission: vehicleValuation,
+      ltvAtSubmission: ltv,
+    };
+
     const now = Date.now();
     const appId = await ctx.db.insert("financeApplications", {
       orgId: args.orgId,
@@ -136,6 +201,7 @@ export const createFromQuote = mutation({
       notes: args.notes,
       createdAt: now,
       updatedAt: now,
+      underwritingSnapshot,
     });
 
     await ctx.db.insert("applicationStatusLog", {
@@ -186,12 +252,15 @@ export const updateStatus = mutation({
       v.literal("PENDING_DOCS"),
       v.literal("UNDER_REVIEW"),
       v.literal("APPROVED"),
-      v.literal("REJECTED")
+      v.literal("REJECTED"),
+      v.literal("CLOSED")
     ),
   },
   handler: async (ctx, args) => {
     const auth = await requireTenantAuth(ctx, args.orgId);
-    const hasView = auth.role.permissions.includes(PERMISSIONS.VIEW_SALES);
+    const hasView =
+      auth.role.name === "OWNER" ||
+      auth.role.permissions.includes(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
     if (!hasView) {
       throw new ConvexError("Forbidden: Missing required permissions.");
     }
@@ -201,14 +270,27 @@ export const updateStatus = mutation({
       throw new ConvexError("Application not found");
     }
 
+    const allowedNextStatuses = VALID_STATUS_TRANSITIONS[app.status];
+    if (!allowedNextStatuses.includes(args.status)) {
+      throw new ConvexError(
+        `Invalid finance application status transition: ${app.status} -> ${args.status}.`
+      );
+    }
+
     let approvedBy = app.approvedBy;
     let approvedAt = app.approvedAt;
 
-    if (args.status === "APPROVED" && app.status !== "APPROVED") {
-      // Verify permissions for approval
-      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]); // Only managers can approve
+    if (args.status === "APPROVED") {
+      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_FINANCE_APPLICATION]);
+      if (auth.user._id === app.salespersonId) {
+        throw new ConvexError("You cannot approve your own application");
+      }
       approvedBy = auth.user._id;
       approvedAt = Date.now();
+    }
+
+    if (args.status === "CLOSED") {
+      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.FINALIZE_FINANCED_DEAL]);
     }
 
     const patchedAt = Date.now();
@@ -267,7 +349,7 @@ export const finalizeDeal = mutation({
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
+    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.FINALIZE_FINANCED_DEAL]);
 
     return await runWithIdempotency(
       ctx,
@@ -292,6 +374,15 @@ export const finalizeDeal = mutation({
           throw new ConvexError("Application finance company does not match the quote.");
         }
 
+        const financingType =
+          quote.mode === "LEASE"
+            ? "LEASE"
+            : quote.mode === "CONFIGURED_FINANCE_COMPANY" ||
+                quote.mode === "MANUAL_FINANCE_COMPANY" ||
+                quote.mode === "INTERNAL_INSTALLMENT"
+              ? "FINANCED"
+              : "CASH";
+
         const saleId = await completeSale(ctx, {
           orgId: args.orgId,
           vehicleId: app.vehicleId,
@@ -301,7 +392,7 @@ export const finalizeDeal = mutation({
           saleDate: Date.now(),
           status: "COMPLETED",
           downPayment: quote.downPayment,
-          financingType: app.companyId ? "FINANCED" : "CASH",
+          financingType: quote.mode === undefined && app.companyId ? "FINANCED" : financingType,
           loanAmount: quote.totalFinancedAmount,
           termMonths: quote.termMonths,
           applicationId: args.applicationId,
@@ -352,7 +443,7 @@ export const confirmDisbursement = mutation({
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT]);
 
     return await runWithIdempotency(
       ctx,
@@ -361,6 +452,10 @@ export const confirmDisbursement = mutation({
         operation: "applications.confirmDisbursement",
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
+        fingerprint: JSON.stringify({
+          applicationId: args.applicationId,
+          disbursedAmountMinor: args.disbursedAmountMinor,
+        }),
       },
       async () => {
         const app = await ctx.db.get(args.applicationId);
@@ -370,6 +465,17 @@ export const confirmDisbursement = mutation({
         if (!app.companyId) throw new ConvexError("This application has no finance company — no disbursement expected.");
         if (args.disbursedAmountMinor <= 0) throw new ConvexError("Disbursement amount must be positive.");
 
+        const quote = await ctx.db.get(app.quoteId);
+        if (quote?.totalFinancedAmount !== undefined) {
+          const currency = await getOrgCurrency(ctx, args.orgId);
+          const expectedAmountMinor = toMinorUnits(quote.totalFinancedAmount, currency);
+          if (args.disbursedAmountMinor !== expectedAmountMinor) {
+            throw new ConvexError(
+              `Disbursed amount (${args.disbursedAmountMinor}) does not match the financed amount on the deal (${expectedAmountMinor}).`
+            );
+          }
+        }
+
         const now = Date.now();
         await ctx.db.patch(args.applicationId, {
           disbursedAt: now,
@@ -378,8 +484,23 @@ export const confirmDisbursement = mutation({
           updatedAt: now,
         });
 
+        // Post the actual receipt of funds: DR Bank / CR Accounts Receivable —
+        // Finance Companies. Without this the finance-company receivable opened
+        // at finalizeDeal stays open forever even after the money arrives.
+        const currency = await getOrgCurrency(ctx, args.orgId);
+        await hookFinanceCashReceived(ctx, {
+          orgId: args.orgId,
+          applicationId: args.applicationId,
+          financeCompanyId: app.companyId,
+          customerId: app.customerId,
+          amountMinor: args.disbursedAmountMinor,
+          currency,
+          actorId: user._id,
+          occurredAt: now,
+        });
+
         const actorName = await getActorName(ctx);
-        await notifyManagers(ctx, args.orgId, "application.created" as "application.created", {
+        await notifyManagers(ctx, args.orgId, "application.created" as const, {
           actorName,
           amount: String(args.disbursedAmountMinor),
         }, { link: `/${args.orgId}/accounting` });

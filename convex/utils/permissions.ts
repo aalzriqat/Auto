@@ -99,6 +99,13 @@ export const PERMISSIONS = {
 
   // Approvals (profit approvals, finance application approvals, document verification)
   APPROVE_REQUESTS: "approve:requests", // Cache buster 1
+  VIEW_FINANCE_APPLICATIONS: "view:finance_applications",
+  CREATE_FINANCE_APPLICATION: "create:finance_application",
+  REVIEW_FINANCE_APPLICATION: "review:finance_application",
+  APPROVE_FINANCE_APPLICATION: "approve:finance_application",
+  FINALIZE_FINANCED_DEAL: "finalize:financed_deal",
+  CONFIRM_FINANCE_DISBURSEMENT: "confirm:finance_disbursement",
+  VERIFY_FINANCE_DOCUMENTS: "verify:finance_documents",
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -159,6 +166,13 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.VIEW_COMMISSIONS,
       PERMISSIONS.MANAGE_COMMISSIONS,
       PERMISSIONS.APPROVE_REQUESTS,
+      PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
+      PERMISSIONS.CREATE_FINANCE_APPLICATION,
+      PERMISSIONS.REVIEW_FINANCE_APPLICATION,
+      PERMISSIONS.APPROVE_FINANCE_APPLICATION,
+      PERMISSIONS.FINALIZE_FINANCED_DEAL,
+      PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
+      PERMISSIONS.VERIFY_FINANCE_DOCUMENTS,
     ],
   },
   {
@@ -186,6 +200,9 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.EDIT_TASKS,
       PERMISSIONS.VIEW_SETTINGS,
       PERMISSIONS.VIEW_COMMISSIONS,
+      PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
+      PERMISSIONS.CREATE_FINANCE_APPLICATION,
+      PERMISSIONS.FINALIZE_FINANCED_DEAL,
     ],
   },
   {
@@ -218,6 +235,8 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.VIEW_REPORTS,
       PERMISSIONS.VIEW_FINANCE,
       PERMISSIONS.MANAGE_FINANCE,
+      PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
+      PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
     ],
   },
 ];

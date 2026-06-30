@@ -2,9 +2,10 @@ import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
-import { DEFAULT_CHART, REQUIRED_SYSTEM_KEYS, SystemKey } from "./utils/defaultChart";
+import { DEFAULT_CHART, REQUIRED_SYSTEM_KEYS, SystemKey, SYSTEM_KEYS } from "./utils/defaultChart";
 
 const accountTypeValidator = v.union(
   v.literal("ASSET"),
@@ -50,6 +51,66 @@ export async function isChartInitialized(
   return first !== null;
 }
 
+/**
+ * Self-healing backfill for the GENERAL_EXPENSE system account.
+ *
+ * Charts seeded before GENERAL_EXPENSE was introduced have a "General Expenses"
+ * account (code 6300) with no systemKey, so resolveSystemAccount(GENERAL_EXPENSE)
+ * would throw and break expense posting. This idempotently maps the system key
+ * onto the existing 6300 account (or creates it if missing) the first time an
+ * expense posts after deploy — no separate migration run required.
+ *
+ * Safe to call repeatedly; returns immediately once the key is mapped.
+ */
+export async function ensureGeneralExpenseAccount(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  const mapped = await ctx.db
+    .query("chartOfAccounts")
+    .withIndex("by_org_systemKey", (q) =>
+      q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.GENERAL_EXPENSE)
+    )
+    .unique();
+  if (mapped) return;
+
+  const now = Date.now();
+  const byCode = await ctx.db
+    .query("chartOfAccounts")
+    .withIndex("by_org_code", (q) => q.eq("orgId", orgId).eq("code", "6300"))
+    .unique();
+
+  if (byCode) {
+    await ctx.db.patch(byCode._id, {
+      systemKey: SYSTEM_KEYS.GENERAL_EXPENSE,
+      active: true,
+      updatedAt: now,
+      updatedBy: actorId,
+    });
+    return;
+  }
+
+  const def = DEFAULT_CHART.find((d) => d.code === "6300")!;
+  await ctx.db.insert("chartOfAccounts", {
+    orgId,
+    code: def.code,
+    name: def.name,
+    nameAr: def.nameAr,
+    type: def.type,
+    normalBalance: def.normalBalance,
+    isControlAccount: def.isControlAccount,
+    allowManualPosting: def.allowManualPosting,
+    active: true,
+    systemKey: SYSTEM_KEYS.GENERAL_EXPENSE,
+    subtype: def.subtype,
+    createdAt: now,
+    createdBy: actorId,
+    updatedAt: now,
+    updatedBy: actorId,
+  });
+}
+
 // ─── Queries ──────────────────────────────────────────────────────────────────
 
 export const list = query({
@@ -59,7 +120,7 @@ export const list = query({
     activeOnly: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
 
     let q;
     if (args.type) {
@@ -84,7 +145,7 @@ export const get = query({
     accountId: v.id("chartOfAccounts"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     const account = await ctx.db.get(args.accountId);
     if (!account || account.orgId !== args.orgId) return null;
     return account;
@@ -94,7 +155,7 @@ export const get = query({
 export const isInitialized = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     return isChartInitialized(ctx, args.orgId);
   },
 });
@@ -130,6 +191,12 @@ export const initialize = mutation({
         updatedBy: user._id,
       });
     }
+
+    // Initializing the chart can unblock events enqueued before any chart
+    // existed — drain the accounting outbox.
+    await ctx.scheduler.runAfter(0, internal.accountingOutbox.drainPendingAccountingEvents, {
+      orgId: args.orgId,
+    });
 
     return true;
   },
@@ -226,7 +293,7 @@ export const update = mutation({
 export const validateSystemAccounts = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
 
     const missing: string[] = [];
     for (const key of REQUIRED_SYSTEM_KEYS) {

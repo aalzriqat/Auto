@@ -23,6 +23,11 @@ async function seedAuditDealer() {
     })
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+  // Second finance-authorized user, eligible to review/approve manual journals.
+  const reviewerId = await t.run((ctx) =>
+    ctx.db.insert("users", { clerkId: "aud_reviewer", email: "reviewer@example.com", name: "Reviewer" })
+  );
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: reviewerId, roleId }));
   await t.run((ctx) =>
     ctx.db.insert("orgSettings", {
       orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH"],
@@ -41,7 +46,7 @@ async function seedAuditDealer() {
   const period = (await asUser.query(api.accountingPeriods.list, { orgId }))[0];
   await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
 
-  return { t, orgId, userId, period, asUser };
+  return { t, orgId, userId, reviewerId, period, asUser };
 }
 
 describe("Phase 7 — financial audit log", () => {
@@ -125,7 +130,7 @@ describe("Phase 7 — financial audit log", () => {
 
 describe("Phase 7 — manual journal", () => {
   test("balanced manual journal is accepted", async () => {
-    const { orgId, asUser } = await seedAuditDealer();
+    const { orgId, reviewerId, asUser } = await seedAuditDealer();
 
     const accounts = await asUser.query(api.chartOfAccounts.list, { orgId });
     const manualAccounts = accounts.filter((a) => a.allowManualPosting);
@@ -139,6 +144,7 @@ describe("Phase 7 — manual journal", () => {
         { accountId: manualAccounts[1]._id, debitMinor: 0, creditMinor: 5000 },
       ],
       idempotencyKey: "mj_001",
+      reviewedBy: reviewerId,
     });
 
     expect(result.alreadyPosted).toBe(false);
@@ -146,7 +152,7 @@ describe("Phase 7 — manual journal", () => {
   });
 
   test("unbalanced manual journal is rejected", async () => {
-    const { orgId, asUser } = await seedAuditDealer();
+    const { orgId, reviewerId, asUser } = await seedAuditDealer();
 
     const accounts = await asUser.query(api.chartOfAccounts.list, { orgId });
     const manualAccounts = accounts.filter((a) => a.allowManualPosting);
@@ -160,6 +166,7 @@ describe("Phase 7 — manual journal", () => {
           { accountId: manualAccounts[0]._id, debitMinor: 0, creditMinor: 3000 },
         ],
         idempotencyKey: "mj_bad_001",
+        reviewedBy: reviewerId,
       })
     ).rejects.toThrow(/unbalanced/i);
   });
@@ -185,7 +192,7 @@ describe("Phase 7 — manual journal", () => {
   });
 
   test("manual journal is idempotent", async () => {
-    const { orgId, asUser } = await seedAuditDealer();
+    const { orgId, reviewerId, asUser } = await seedAuditDealer();
 
     const accounts = await asUser.query(api.chartOfAccounts.list, { orgId });
     const manualAccounts = accounts.filter((a) => a.allowManualPosting);
@@ -198,6 +205,7 @@ describe("Phase 7 — manual journal", () => {
         { accountId: manualAccounts[1]._id, debitMinor: 0, creditMinor: 2000 },
       ],
       idempotencyKey: "mj_idem_001",
+      reviewedBy: reviewerId,
     });
 
     const second = await asUser.mutation(api.financialAudit.postManualJournal, {
@@ -208,6 +216,7 @@ describe("Phase 7 — manual journal", () => {
         { accountId: manualAccounts[1]._id, debitMinor: 0, creditMinor: 2000 },
       ],
       idempotencyKey: "mj_idem_001",
+      reviewedBy: reviewerId,
     });
 
     expect(second.alreadyPosted).toBe(true);

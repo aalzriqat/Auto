@@ -10,7 +10,12 @@ import {
 } from "./saleHelpers";
 import { resolveDepositsForQuote } from "./depositHelpers";
 import { throwAppError, AppErrorCode } from "./errors";
-import { hookSaleCompleted, hookCommissionAccrued, getOrgCurrency } from "../accounting/workflowHooks";
+import {
+  hookSaleCompleted,
+  hookCommissionAccrued,
+  hookDepositApplied,
+  getOrgCurrency,
+} from "../accounting/workflowHooks";
 import { toMinorUnits } from "./money";
 
 type SaleStatus = "PENDING" | "COMPLETED" | "CANCELLED";
@@ -154,13 +159,29 @@ export async function completeSale(
 
   await markVehicleAsSold(ctx, args.vehicleId);
 
+  const currency = await getOrgCurrency(ctx, args.orgId);
+
   let previouslyCollected = 0;
   if (args.quoteId) {
-    previouslyCollected = await resolveDepositsForQuote(ctx, {
+    const resolvedResult = await resolveDepositsForQuote(ctx, {
       quoteId: args.quoteId,
       resolution: "APPLIED",
       actorId: args.actorId,
     });
+    previouslyCollected = resolvedResult.total;
+
+    for (const { depositId, customerId, amount } of resolvedResult.appliedDeposits) {
+      await hookDepositApplied(ctx, {
+        orgId: args.orgId,
+        depositId,
+        customerId,
+        amountMinor: toMinorUnits(amount, currency),
+        currency,
+        actorId: args.actorId,
+        occurredAt: args.saleDate,
+        saleId,
+      });
+    }
   }
 
   await createSaleTransaction(ctx, {
@@ -180,7 +201,6 @@ export async function completeSale(
     leadId,
   });
 
-  const currency = await getOrgCurrency(ctx, args.orgId);
   await hookSaleCompleted(ctx, {
     orgId: args.orgId,
     saleId,
@@ -218,4 +238,3 @@ export async function completeSale(
 
   return saleId;
 }
-

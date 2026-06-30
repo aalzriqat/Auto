@@ -1488,10 +1488,28 @@ http.route({
 
 // ─── Payment provider webhooks ────────────────────────────────────────────────
 // Generic webhook endpoint for payment providers (e.g. Tap, Stripe, Telr).
-// The body is provider-specific JSON. The provider name is in the URL path:
-//   POST /api/payment-webhook/:provider
-// A shared secret header (X-Webhook-Secret) is checked against the
-// PAYMENT_WEBHOOK_SECRET Convex env var when set.
+// The body is provider-specific JSON. The provider name is in the `provider`
+// query param. Authentication is MANDATORY: a shared secret header
+// (X-Webhook-Secret) is verified against the PAYMENT_WEBHOOK_SECRET Convex env
+// var with a constant-time compare. If the secret is not configured the
+// endpoint refuses all requests (fail closed) so an unsigned deployment can
+// never settle a payment. Only allow-listed provider names are accepted.
+
+const ALLOWED_PAYMENT_PROVIDERS = new Set(["tap", "stripe", "telr", "checkout", "hyperpay"]);
+
+/** Length-independent constant-time string comparison. */
+function timingSafeEqual(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const ab = enc.encode(a);
+  const bb = enc.encode(b);
+  // Compare a fixed-length digest of each so length differences don't short-circuit.
+  let mismatch = ab.length === bb.length ? 0 : 1;
+  const len = Math.max(ab.length, bb.length);
+  for (let i = 0; i < len; i++) {
+    mismatch |= (ab[i] ?? 0) ^ (bb[i] ?? 0);
+  }
+  return mismatch === 0;
+}
 
 http.route({
   path: "/api/payment-webhook",
@@ -1499,17 +1517,30 @@ http.route({
   handler: httpAction(async (ctx, request) => {
     try {
       const url = new URL(request.url);
-      const provider = url.searchParams.get("provider") ?? "unknown";
-      const body = await request.json() as Record<string, unknown>;
+      const provider = (url.searchParams.get("provider") ?? "").toLowerCase();
 
-      // Optional secret check — providers that sign payloads should verify here
+      // Fail closed when the webhook secret is not configured or too weak.
       const secret = process.env.PAYMENT_WEBHOOK_SECRET;
-      if (secret) {
-        const incoming = request.headers.get("x-webhook-secret");
-        if (incoming !== secret) {
-          return new Response("Unauthorized", { status: 401 });
-        }
+      if (!secret || secret.length < 16) {
+        console.error("[payment-webhook] PAYMENT_WEBHOOK_SECRET missing/invalid — rejecting.");
+        return new Response("Webhook not configured", { status: 503 });
       }
+
+      // Mandatory shared-secret authentication (constant-time).
+      const incoming = request.headers.get("x-webhook-secret") ?? "";
+      if (!timingSafeEqual(incoming, secret)) {
+        return new Response("Unauthorized", { status: 401 });
+      }
+
+      // Reject unknown providers.
+      if (!ALLOWED_PAYMENT_PROVIDERS.has(provider)) {
+        return new Response(JSON.stringify({ ok: false, error: "Unknown provider" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      const body = await request.json() as Record<string, unknown>;
 
       const externalId = (body.id ?? body.transaction_id ?? body.charge_id ?? "") as string;
       if (!externalId) {

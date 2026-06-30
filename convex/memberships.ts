@@ -1,5 +1,5 @@
 import { v, ConvexError } from "convex/values";
-import { mutation, query, action, internalMutation } from "./_generated/server";
+import { mutation, query, action, internalMutation, internalQuery } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { internal } from "./_generated/api";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
@@ -559,13 +559,36 @@ export const createAccount = action({
 });
 
 /**
+ * Internal guard: verifies the caller holds MANAGE_USERS in the given org.
+ * Used by the checkEmailExists action, which cannot call requireTenantAuth
+ * directly (actions have no db handle). Throws on failure.
+ */
+export const assertCanManageUsers = internalQuery({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_USERS]);
+    return true;
+  },
+});
+
+/**
  * Check whether an email address already has a Clerk account.
  * Returns exists flag and the user's first/last name if found.
- * Used by the frontend to decide whether to show the name-entry fields.
+ * Used by the team invite flow to decide whether to show name-entry fields.
+ *
+ * Gated by MANAGE_USERS in the target org: this leaks whether a person has an
+ * account plus their name (PII / account enumeration), so it must not be
+ * callable by any authenticated user — only by someone allowed to manage that
+ * org's members.
  */
 export const checkEmailExists = action({
-  args: { email: v.string() },
+  args: { orgId: v.id("organizations"), email: v.string() },
   handler: async (ctx, args): Promise<{ exists: boolean; firstName?: string; lastName?: string }> => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new ConvexError("Unauthenticated");
+    // Authorize against the target org (throws if the caller lacks MANAGE_USERS).
+    await ctx.runQuery(internal.memberships.assertCanManageUsers, { orgId: args.orgId });
+
     const clerkSecret = process.env.CLERK_SECRET_KEY;
     if (!clerkSecret) return { exists: false };
 
