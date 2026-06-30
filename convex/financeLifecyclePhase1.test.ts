@@ -1,10 +1,10 @@
-import { convexTest } from "convex-test";
+import { convexTest, TestConvex as ConvexTestInstance } from "convex-test";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 
-type TestConvex = ReturnType<typeof convexTest>;
+type TestConvex = ConvexTestInstance<typeof schema>;
 type AuthenticatedTestConvex = ReturnType<TestConvex["withIdentity"]>;
 
 interface SetupResult {

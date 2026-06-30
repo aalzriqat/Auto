@@ -1,4 +1,4 @@
-import { convexTest } from "convex-test";
+import { convexTest, TestConvex } from "convex-test";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
@@ -124,7 +124,7 @@ async function seedFinanceLifecycleDealer() {
 }
 
 async function listDepositAppliedRecords(
-  t: ReturnType<typeof convexTest>,
+  t: TestConvex<typeof schema>,
   orgId: Id<"organizations">
 ) {
   return await t.run(async (ctx) => {
