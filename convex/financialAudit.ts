@@ -11,6 +11,7 @@ import { Id } from "./_generated/dataModel";
 import { MutationCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { scaleForCurrency } from "./utils/money";
 
 type AuditActionType =
   | "CREATE_PERIOD"
@@ -158,27 +159,28 @@ export const postManualJournal = mutation({
       description: v.optional(v.string()),
     })),
     idempotencyKey: v.string(),
-    reviewedBy: v.optional(v.id("users")),
+    reviewedBy: v.id("users"),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
-    // SoD: reviewer cannot be the same person as poster
-    if (args.reviewedBy && args.reviewedBy === user._id) {
+    // Segregation of duties: a manual journal MUST be approved by a second,
+    // finance-authorized person who is not the poster.
+    if (args.reviewedBy === user._id) {
       throw new ConvexError("Manual journal reviewer cannot be the same as the poster.");
     }
-
-    // Reviewer must be a valid org member (server-side verification)
-    if (args.reviewedBy) {
-      const reviewerMembership = await ctx.db
-        .query("memberships")
-        .withIndex("by_org_user", (q) =>
-          q.eq("orgId", args.orgId).eq("userId", args.reviewedBy!)
-        )
-        .first();
-      if (!reviewerMembership) {
-        throw new ConvexError("Reviewer is not a member of this organization.");
-      }
+    const reviewerMembership = await ctx.db
+      .query("memberships")
+      .withIndex("by_org_user", (q) =>
+        q.eq("orgId", args.orgId).eq("userId", args.reviewedBy)
+      )
+      .first();
+    if (!reviewerMembership) {
+      throw new ConvexError("Reviewer is not a member of this organization.");
+    }
+    const reviewerRole = await ctx.db.get(reviewerMembership.roleId);
+    if (!reviewerRole || !reviewerRole.permissions.includes(PERMISSIONS.MANAGE_FINANCE)) {
+      throw new ConvexError("Reviewer must hold finance approval authority (MANAGE_FINANCE).");
     }
 
     // Per-line validation: safe integers, non-negative, exactly one side non-zero
@@ -225,6 +227,18 @@ export const postManualJournal = mutation({
         throw new ConvexError("All manual journal lines must use the same currency.");
       }
     }
+
+    // Resolve the journal currency (shared line restriction, else org default)
+    // and derive the correct minor-unit scale — never hardcode JOD/scale 3.
+    let effectiveCurrency = journalCurrency;
+    if (!effectiveCurrency) {
+      const settings = await ctx.db
+        .query("orgSettings")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .unique();
+      effectiveCurrency = settings?.currency ?? "JOD";
+    }
+    const journalScale = scaleForCurrency(effectiveCurrency);
 
     // Idempotency: namespaced under POST_MANUAL_JOURNAL; also compare request fingerprint
     // to catch same-key reuse with different content.
@@ -287,7 +301,6 @@ export const postManualJournal = mutation({
 
     for (let i = 0; i < args.lines.length; i++) {
       const line = args.lines[i];
-      const account = await ctx.db.get(line.accountId);
       await ctx.db.insert("journalLines", {
         orgId: args.orgId,
         journalEntryId: journalId,
@@ -295,8 +308,8 @@ export const postManualJournal = mutation({
         accountId: line.accountId,
         debitMinor: line.debitMinor,
         creditMinor: line.creditMinor,
-        currency: account?.currencyRestriction ?? "JOD",
-        scale: 3,
+        currency: effectiveCurrency,
+        scale: journalScale,
         accountingDate: now,
         description: line.description,
       });

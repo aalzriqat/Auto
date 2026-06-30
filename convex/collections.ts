@@ -15,9 +15,11 @@ import { PERMISSIONS } from "./utils/permissions";
 import { getActorName, notifyManagers, notifyUser } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
-import { hookCollectionPayment, getOrgCurrency } from "./accounting/workflowHooks";
+import { hookCollectionPayment, hookExpensePosted, getOrgCurrency } from "./accounting/workflowHooks";
 import { reverseAccountingEvent } from "./accounting/reversals";
-import { toMinorUnits } from "./utils/money";
+import { getOpenPeriodForDate } from "./accountingPeriods";
+import { enqueuePendingReversal, cancelPendingPostByKey } from "./accountingOutbox";
+import { toMinorUnits, fromMinorUnits } from "./utils/money";
 
 const receivableStatusValidator = v.union(
   v.literal("OPEN"),
@@ -713,6 +715,7 @@ export const clearCheque = mutation({
         operation: "collections.clearCheque",
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
+        fingerprint: JSON.stringify({ chequeId: args.chequeId }),
       },
       async () => {
         const cheque = await ctx.db.get(args.chequeId);
@@ -771,6 +774,23 @@ export const clearCheque = mutation({
           userId: user._id,
           category: "COLLECTION_PAYMENT",
           idempotencyKey: args.idempotencyKey,
+        });
+
+        // Post to the GL: a cleared cheque deposits funds into the bank and
+        // settles the receivable (DR Bank / CR Accounts Receivable). Booked as a
+        // COLLECTION_PAYMENT so the return-after-clearing flow can reverse it by
+        // its source event. Posts now, or enqueues to the outbox if the chart /
+        // period is not yet set up.
+        const currency = await getOrgCurrency(ctx, args.orgId);
+        await hookCollectionPayment(ctx, {
+          orgId: args.orgId,
+          paymentId,
+          customerId: cheque.customerId,
+          amountMinor: toMinorUnits(cheque.amount, currency),
+          currency,
+          paymentMethod: "BANK_TRANSFER",
+          actorId: user._id,
+          occurredAt: clearedAt,
         });
 
         return paymentId;
@@ -894,6 +914,7 @@ export const returnClearedCheque = mutation({
         operation: "collections.returnClearedCheque",
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
+        fingerprint: JSON.stringify({ chequeId: args.chequeId, bankFeeMinor: args.bankFeeMinor ?? 0 }),
       },
       async () => {
         const cheque = await ctx.db.get(args.chequeId);
@@ -911,7 +932,7 @@ export const returnClearedCheque = mutation({
           .filter((q) => q.eq(q.field("status"), "POSTED"))
           .first();
 
-        // Find and reverse the accounting event for the clearing
+        // Reverse the GL impact of the original clearing.
         if (clearedPayment) {
           const clearingEvent = await ctx.db
             .query("accountingEvents")
@@ -924,14 +945,35 @@ export const returnClearedCheque = mutation({
             .first();
 
           if (clearingEvent) {
-            await reverseAccountingEvent(ctx, {
-              orgId: args.orgId,
-              originalEventId: clearingEvent._id,
-              reversalDate: now,
-              reason: args.returnReason ?? "Cheque returned after clearing",
-              actorId: user._id,
-              idempotencyKey: `cheque_return_after_clear_${args.chequeId}`,
-            });
+            const reversalIdempotencyKey = `cheque_return_after_clear_${args.chequeId}`;
+            const period = await getOpenPeriodForDate(ctx, args.orgId, now);
+            if (period) {
+              await reverseAccountingEvent(ctx, {
+                orgId: args.orgId,
+                originalEventId: clearingEvent._id,
+                reversalDate: now,
+                reason: args.returnReason ?? "Cheque returned after clearing",
+                actorId: user._id,
+                idempotencyKey: reversalIdempotencyKey,
+              });
+            } else {
+              // No open period — defer the reversal so it is never silently lost.
+              await enqueuePendingReversal(ctx, {
+                orgId: args.orgId,
+                originalEventId: clearingEvent._id,
+                reversalDate: now,
+                reason: args.returnReason ?? "Cheque returned after clearing",
+                actorId: user._id,
+                idempotencyKey: reversalIdempotencyKey,
+                sourceType: "collectionPayments",
+                sourceId: clearedPayment._id.toString(),
+              });
+            }
+          } else {
+            // The clearing GL post may still be sitting unposted in the outbox
+            // (cleared before a chart/period existed). Cancel it so it never
+            // posts — the net effect of clear-then-return is zero.
+            await cancelPendingPostByKey(ctx, args.orgId, `collection_payment_${clearedPayment._id}`);
           }
 
           // Mark the payment as voided
@@ -950,10 +992,13 @@ export const returnClearedCheque = mutation({
           }
         }
 
-        // Post bank fee as expense if provided
+        // Post bank fee as expense if provided. Convert minor→major units with
+        // the central currency-aware helper (the old `JOD ? 3 : 2` was wrong for
+        // KWD/BHD/OMR/JPY) and route it through the posting engine so it hits the
+        // GL (DR General Expenses / CR Bank) instead of only the legacy tables.
         if (args.bankFeeMinor && args.bankFeeMinor > 0) {
           const currency = await getOrgCurrency(ctx, args.orgId);
-          const feeAmount = args.bankFeeMinor / Math.pow(10, currency === "JOD" ? 3 : 2);
+          const feeAmount = fromMinorUnits(args.bankFeeMinor, currency);
           const feeExpenseId = await ctx.db.insert("expenses", {
             orgId: args.orgId,
             title: `Bank return fee — cheque ${cheque.bank} #${cheque.chequeNumber}`,
@@ -970,6 +1015,16 @@ export const returnClearedCheque = mutation({
             category: "EXPENSE",
             description: `Bank return fee — cheque ${cheque.bank} #${cheque.chequeNumber}`,
             expenseId: feeExpenseId,
+          });
+          await hookExpensePosted(ctx, {
+            orgId: args.orgId,
+            expenseId: feeExpenseId,
+            amountMinor: args.bankFeeMinor,
+            currency,
+            category: "FEES",
+            paymentMethod: "BANK_TRANSFER",
+            actorId: user._id,
+            occurredAt: now,
           });
         }
 

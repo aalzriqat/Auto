@@ -11,6 +11,16 @@ import { QueryCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { fromMinorUnits } from "./utils/money";
+import { SYSTEM_KEYS } from "./utils/defaultChart";
+
+/** Resolve the organization's display currency (defaults to JOD). */
+async function getOrgCurrencyForReports(ctx: QueryCtx, orgId: Id<"organizations">): Promise<string> {
+  const settings = await ctx.db
+    .query("orgSettings")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .unique();
+  return settings?.currency ?? "JOD";
+}
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -60,6 +70,7 @@ export const trialBalance = query({
       .collect();
 
     const lines = await getPostedLines(ctx, args.orgId, args.fromDate, args.toDate);
+    const orgCurrency = await getOrgCurrencyForReports(ctx, args.orgId);
 
     const totals = new Map<string, { debitMinor: number; creditMinor: number }>();
 
@@ -76,6 +87,8 @@ export const trialBalance = query({
       const netMinor = account.normalBalance === "DEBIT"
         ? t.debitMinor - t.creditMinor
         : t.creditMinor - t.debitMinor;
+      // Display in the account's own currency where restricted, else the org currency.
+      const displayCurrency = account.currencyRestriction ?? orgCurrency;
       return {
         accountId: account._id,
         code: account.code,
@@ -86,7 +99,8 @@ export const trialBalance = query({
         debitMinor: t.debitMinor,
         creditMinor: t.creditMinor,
         netMinor,
-        netDisplay: fromMinorUnits(netMinor, "JOD"),
+        currency: displayCurrency,
+        netDisplay: fromMinorUnits(netMinor, displayCurrency),
       };
     }).filter((r) => r.debitMinor > 0 || r.creditMinor > 0);
 
@@ -94,7 +108,7 @@ export const trialBalance = query({
     const totalCredits = rows.reduce((s, r) => s + r.creditMinor, 0);
     const isBalanced = totalDebits === totalCredits;
 
-    return { rows, totalDebits, totalCredits, isBalanced };
+    return { rows, totalDebits, totalCredits, isBalanced, currency: orgCurrency };
   },
 });
 
@@ -332,7 +346,8 @@ export const subledgerReconciliation = query({
       .collect();
 
     const arAccountIds = new Set(accounts.filter((a) =>
-      a.systemKey === "accounts_receivable_customers" || a.systemKey === "accounts_receivable_finance_companies"
+      a.systemKey === SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS ||
+      a.systemKey === SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES
     ).map((a) => a._id));
 
     const lines = await getPostedLines(ctx, args.orgId, undefined, args.toDate);

@@ -2,6 +2,15 @@ import { MutationCtx } from "../_generated/server";
 import { Id } from "../_generated/dataModel";
 import { throwAppError, AppErrorCode } from "./errors";
 
+type ResolvedDepositsForQuoteResult = {
+  total: number;
+  appliedDeposits: Array<{
+    depositId: Id<"deposits">;
+    customerId: Id<"customers">;
+    amount: number;
+  }>;
+};
+
 /**
  * Puts a soft hold on a vehicle when a deposit is recorded. Reserving an
  * already-RESERVED vehicle is a no-op — multiple parallel deposits/quotes on
@@ -57,13 +66,14 @@ export async function resolveDepositsForQuote(
     resolution: "APPLIED" | "REFUNDED" | "FORFEITED";
     actorId: Id<"users">;
   }
-): Promise<number> {
+): Promise<ResolvedDepositsForQuoteResult> {
   const deposits = await ctx.db
     .query("deposits")
     .withIndex("by_quote", (q) => q.eq("quoteId", args.quoteId))
     .collect();
 
   let resolvedTotal = 0;
+  const appliedDeposits: ResolvedDepositsForQuoteResult["appliedDeposits"] = [];
   const now = Date.now();
   for (const deposit of deposits) {
     if (!deposit.holdActive) continue;
@@ -74,9 +84,16 @@ export async function resolveDepositsForQuote(
       resolvedAt: now,
     });
     resolvedTotal += deposit.amount;
+    if (args.resolution === "APPLIED") {
+      appliedDeposits.push({
+        depositId: deposit._id,
+        customerId: deposit.customerId,
+        amount: deposit.amount,
+      });
+    }
     await maybeReleaseVehicleHold(ctx, deposit.vehicleId);
   }
-  return resolvedTotal;
+  return { total: resolvedTotal, appliedDeposits };
 }
 
 /**

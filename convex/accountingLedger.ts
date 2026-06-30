@@ -14,7 +14,7 @@ export const listJournalEntries = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
 
     const limit = Math.min(args.limit ?? 50, 200);
     let q;
@@ -37,7 +37,7 @@ export const getJournalEntry = query({
     journalEntryId: v.id("journalEntries"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     const entry = await ctx.db.get(args.journalEntryId);
     if (!entry || entry.orgId !== args.orgId) return null;
     const lines = await ctx.db
@@ -58,7 +58,7 @@ export const getAccountActivity = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
 
     const account = await ctx.db.get(args.accountId);
     if (!account || account.orgId !== args.orgId) return null;
@@ -107,7 +107,7 @@ export const listAccountingEvents = query({
     limit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
 
     const limit = Math.min(args.limit ?? 50, 200);
     if (args.sourceType && args.sourceId) {

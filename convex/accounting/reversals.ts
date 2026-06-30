@@ -4,6 +4,7 @@ import { MutationCtx } from "../_generated/server";
 import { assertPostingAllowed } from "../accountingPeriods";
 import { scaleForCurrency } from "../utils/money";
 import { simplePayloadHash, validateBalance, LineSpec } from "./postingRules";
+import { auditLog } from "../financialAudit";
 
 export interface ReversalCommand {
   orgId: Id<"organizations">;
@@ -116,7 +117,7 @@ export async function reverseAccountingEvent(
     accountingDate: cmd.reversalDate,
     currency,
     payload: reversalPayload,
-    payloadHash: simplePayloadHash(reversalPayload),
+    payloadHash: await simplePayloadHash(reversalPayload),
     status: "PENDING",
     reversalOfEventId: cmd.originalEventId,
     createdBy: cmd.actorId,
@@ -178,6 +179,22 @@ export async function reverseAccountingEvent(
   await ctx.db.patch(original.journalEntryId!, {
     status: "REVERSED",
     reversedByJournalEntryId: reversalJournalEntryId,
+  });
+
+  // Immutable financial audit record for the reversal (REVERSE_EVENT).
+  await auditLog(ctx, {
+    orgId: cmd.orgId,
+    actorId: cmd.actorId,
+    actionType: "REVERSE_EVENT",
+    resourceType: "journalEntries",
+    resourceId: reversalJournalEntryId.toString(),
+    description: `Reversed ${original.eventType} (${original.sourceType}/${original.sourceId}): ${cmd.reason}`,
+    before: {
+      originalEventId: cmd.originalEventId.toString(),
+      originalJournalEntryId: original.journalEntryId!.toString(),
+    },
+    after: { reversalEventId: reversalEventId.toString(), journalNumber },
+    idempotencyKey: cmd.idempotencyKey,
   });
 
   return { reversalEventId, reversalJournalEntryId, alreadyReversed: false };

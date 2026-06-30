@@ -5,6 +5,14 @@ import { PERMISSIONS } from "./utils/permissions";
 import { advanceLeadStage } from "./utils/leadStageHelpers";
 import { notifyUser, getActorName } from "./utils/notifications";
 
+const quoteModeValidator = v.optional(v.union(
+  v.literal("CASH"),
+  v.literal("CONFIGURED_FINANCE_COMPANY"),
+  v.literal("MANUAL_FINANCE_COMPANY"),
+  v.literal("INTERNAL_INSTALLMENT"),
+  v.literal("LEASE"),
+));
+
 export const listQuotesByCustomer = query({
   args: { 
     orgId: v.id("organizations"),
@@ -41,6 +49,7 @@ export const saveQuote = mutation({
     customerId: v.id("customers"),
     vehicleId: v.id("vehicles"),
     companyId: v.optional(v.id("financeCompanies")),
+    mode: quoteModeValidator,
     leadId: v.optional(v.id("leads")),
     vehiclePrice: v.number(),
     downPayment: v.number(),
@@ -50,6 +59,12 @@ export const saveQuote = mutation({
     profitRateApplied: v.optional(v.number()),
     totalProfit: v.optional(v.number()),
     recipientName: v.optional(v.string()),
+    manualProviderName: v.optional(v.string()),
+    manualProfitRate: v.optional(v.number()),
+    manualInsuranceRate: v.optional(v.number()),
+    manualAdminFees: v.optional(v.number()),
+    manualCommission: v.optional(v.number()),
+    manualIncludesCommissionInDebt: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     // A quote is an informational financing draft, not a committed sale —
@@ -65,6 +80,10 @@ export const saveQuote = mutation({
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.orgId !== args.orgId) {
       throw new ConvexError("Vehicle not found in this organization.");
+    }
+
+    if (args.mode === "CONFIGURED_FINANCE_COMPANY" && !args.companyId) {
+      throw new ConvexError("Configured finance company quotes require a finance company.");
     }
 
     if (args.companyId) {
@@ -84,8 +103,24 @@ export const saveQuote = mutation({
       }
     }
 
+    const {
+      manualProviderName,
+      manualProfitRate,
+      manualInsuranceRate,
+      manualAdminFees,
+      manualCommission,
+      manualIncludesCommissionInDebt,
+      ...quoteArgs
+    } = args;
+
     return await ctx.db.insert("quotes", {
-      ...args,
+      ...quoteArgs,
+      ...(args.mode === "MANUAL_FINANCE_COMPANY" && manualProviderName !== undefined ? { manualProviderName } : {}),
+      ...(args.mode === "MANUAL_FINANCE_COMPANY" && manualProfitRate !== undefined ? { manualProfitRate } : {}),
+      ...(args.mode === "MANUAL_FINANCE_COMPANY" && manualInsuranceRate !== undefined ? { manualInsuranceRate } : {}),
+      ...(args.mode === "MANUAL_FINANCE_COMPANY" && manualAdminFees !== undefined ? { manualAdminFees } : {}),
+      ...(args.mode === "MANUAL_FINANCE_COMPANY" && manualCommission !== undefined ? { manualCommission } : {}),
+      ...(args.mode === "MANUAL_FINANCE_COMPANY" && manualIncludesCommissionInDebt !== undefined ? { manualIncludesCommissionInDebt } : {}),
       status: "DRAFT",
       createdBy: user._id,
       createdAt: Date.now(),

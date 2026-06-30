@@ -32,6 +32,10 @@ export default defineSchema({
     idempotencyKey: v.string(),
     status: v.union(v.literal("STARTED"), v.literal("COMPLETED")),
     result: v.optional(v.any()),
+    // Canonical hash of the request inputs. When present, replaying the same
+    // key with materially different inputs is rejected instead of silently
+    // returning the prior result.
+    fingerprint: v.optional(v.string()),
     createdBy: v.optional(v.id("users")),
     createdAt: v.number(),
     completedAt: v.optional(v.number()),
@@ -130,6 +134,40 @@ export default defineSchema({
     .index("by_org_source", ["orgId", "sourceType", "sourceId"])
     .index("by_org_idempotency", ["orgId", "idempotencyKey"])
     .index("by_org_event_source_version", ["orgId", "eventType", "sourceType", "sourceId", "eventVersion"]),
+
+  // Durable outbox for accounting events that could not post at the time of the
+  // domain operation (no chart of accounts or no open period). Instead of
+  // silently dropping the GL entry, the hook enqueues it here; the events are
+  // re-driven (and posted idempotently) when a chart is initialized or a period
+  // is opened. This guarantees no financial operation is ever final without a
+  // captured, retryable GL record.
+  pendingAccountingEvents: defineTable({
+    orgId: v.id("organizations"),
+    kind: v.union(v.literal("POST"), v.literal("REVERSE")),
+    status: v.union(v.literal("PENDING"), v.literal("POSTED"), v.literal("FAILED")),
+    idempotencyKey: v.string(),
+    accountingDate: v.number(),
+    actorId: v.id("users"),
+    branchId: v.optional(v.id("branches")),
+    reason: v.optional(v.string()),
+    attempts: v.number(),
+    lastError: v.optional(v.string()),
+    createdAt: v.number(),
+    resolvedAt: v.optional(v.number()),
+    // POST shape (mirrors PostCommand)
+    eventType: v.optional(v.string()),
+    sourceType: v.string(),
+    sourceId: v.string(),
+    eventVersion: v.optional(v.number()),
+    occurredAt: v.optional(v.number()),
+    currency: v.optional(v.string()),
+    payload: v.optional(v.any()),
+    // REVERSE shape
+    originalEventId: v.optional(v.id("accountingEvents")),
+    resultEventId: v.optional(v.id("accountingEvents")),
+  })
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_idempotency", ["orgId", "idempotencyKey"]),
 
   journalEntries: defineTable({
     orgId: v.id("organizations"),
@@ -835,6 +873,13 @@ export default defineSchema({
     customerId: v.id("customers"),
     vehicleId: v.id("vehicles"),
     companyId: v.optional(v.id("financeCompanies")), // Null if cash deal
+    mode: v.optional(v.union(
+      v.literal("CASH"),
+      v.literal("CONFIGURED_FINANCE_COMPANY"),
+      v.literal("MANUAL_FINANCE_COMPANY"),
+      v.literal("INTERNAL_INSTALLMENT"),
+      v.literal("LEASE"),
+    )),
     leadId: v.optional(v.id("leads")), // Set when the quote was generated from a lead's context
 
     // Core parameters
@@ -849,6 +894,12 @@ export default defineSchema({
     totalProfit: v.optional(v.number()),
 
     recipientName: v.optional(v.string()), // Who the quote is addressed to (e.g. a financing company, for installment deals)
+    manualProviderName: v.optional(v.string()),
+    manualProfitRate: v.optional(v.number()),
+    manualInsuranceRate: v.optional(v.number()),
+    manualAdminFees: v.optional(v.number()),
+    manualCommission: v.optional(v.number()),
+    manualIncludesCommissionInDebt: v.optional(v.boolean()),
 
     status: v.union(v.literal("DRAFT"), v.literal("SHARED"), v.literal("ACCEPTED"), v.literal("EXPIRED")),
     expiresAt: v.optional(v.number()),
@@ -900,6 +951,26 @@ export default defineSchema({
     disbursedAt: v.optional(v.number()),
     disbursedAmountMinor: v.optional(v.number()),
     disbursementIdempotencyKey: v.optional(v.string()),
+    underwritingSnapshot: v.optional(v.object({
+      salaryAtSubmission: v.optional(v.number()),
+      employerAtSubmission: v.optional(v.string()),
+      jobTitleAtSubmission: v.optional(v.string()),
+      totalMonthlyDebtAtSubmission: v.optional(v.number()),
+      proposedMonthlyInstallment: v.optional(v.number()),
+      dbrAtSubmission: v.optional(v.number()),
+      guarantorsAtSubmission: v.optional(v.array(v.object({
+        guarantorId: v.id("guarantors"),
+        firstName: v.string(),
+        lastName: v.string(),
+        nationalId: v.string(),
+        phone: v.string(),
+        income: v.optional(v.number()),
+        relationship: v.optional(v.string()),
+      }))),
+      customerStatusAtSubmission: v.optional(v.string()),
+      vehicleValuationAtSubmission: v.optional(v.number()),
+      ltvAtSubmission: v.optional(v.number()),
+    })),
   })
     .index("by_org", ["orgId"])
     .index("by_customer", ["customerId"])

@@ -14,6 +14,13 @@ const PERMISSIONS = [
   "edit:vehicles",
   "view:vehicles",
   "approve:requests",
+  "view:finance_applications",
+  "create:finance_application",
+  "review:finance_application",
+  "approve:finance_application",
+  "finalize:financed_deal",
+  "confirm:finance_disbursement",
+  "verify:finance_documents",
 ];
 
 async function setup() {
@@ -224,12 +231,13 @@ describe("applications deposit hooks", () => {
   });
 
   test("finalizing a deal resolves the deposit to APPLIED", async () => {
-    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
     const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1500 });
 
     const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
-    await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
+    await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
+    await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
     await asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId });
 
     await t.run(async (ctx) => {

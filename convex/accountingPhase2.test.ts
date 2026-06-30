@@ -101,13 +101,13 @@ describe("Phase 2 — posting rule validation", () => {
     ).toThrow(/non-negative/i);
   });
 
-  test("simplePayloadHash is deterministic", () => {
+  test("simplePayloadHash is deterministic", async () => {
     const p = { a: 1, b: "x" };
-    expect(simplePayloadHash(p)).toBe(simplePayloadHash(p));
+    expect(await simplePayloadHash(p)).toBe(await simplePayloadHash(p));
   });
 
-  test("simplePayloadHash differs for different payloads", () => {
-    expect(simplePayloadHash({ a: 1 })).not.toBe(simplePayloadHash({ a: 2 }));
+  test("simplePayloadHash differs for different payloads", async () => {
+    expect(await simplePayloadHash({ a: 1 })).not.toBe(await simplePayloadHash({ a: 2 }));
   });
 });
 

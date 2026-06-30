@@ -669,9 +669,9 @@ After Phases 0–7 and the targeted audit fixes, four architectural gaps remaine
 - `paymentIntents.create`: creates a `PENDING` intent with idempotency.
 - `paymentIntents.markSettled`: transitions to `SETTLED`, stores `externalId` + `providerPayload`, calls `hookPaymentLinkReceived`.
 - `paymentIntents.expire`: transitions `PENDING` → `EXPIRED`; no GL post.
-- `paymentIntents.settleByExternalId` (internal mutation): looks up intent by `provider + externalId`; idempotent on duplicate; resolves a member user from the org's memberships to use as `actorId` for the GL hook.
-- `paymentIntents.list`/`getByExternalId`: standard queries with `MANAGE_FINANCE` permission.
-- `POST /api/payment-webhook?provider=<name>`: HTTP route in `convex/http.ts`. Parses JSON body, optionally validates `X-Webhook-Secret` header against `PAYMENT_WEBHOOK_SECRET` env var, detects settled-status values from common provider formats (`captured`, `paid`, `CAPTURED`, `successful`, `COMPLETED`, `settled`), and calls `internal.paymentIntents.settleByExternalId`.
+- `paymentIntents.settleByExternalId` (internal mutation): looks up intent by `provider + externalId`; idempotent on duplicate. **Superseded in Phase 9** — originally resolved an arbitrary first org membership to use as `actorId`; now uses the intent's own `createdBy`, which is deterministic and always present.
+- `paymentIntents.list`: standard query, gated on `MANAGE_FINANCE`. **`getByExternalId` corrected in Phase 9** — it returns a full payment-intent record (amounts, customer, provider payload) with no inherent tenant scoping, so it was converted from a public `query` to an `internalQuery`; the only caller is the trusted internal webhook path.
+- `POST /api/payment-webhook?provider=<name>`: HTTP route in `convex/http.ts`. Parses JSON body, detects settled-status values from common provider formats (`captured`, `paid`, `CAPTURED`, `successful`, `COMPLETED`, `settled`), and calls `internal.paymentIntents.settleByExternalId`. **Hardened in Phase 9** — `PAYMENT_WEBHOOK_SECRET` is now mandatory (the route fails closed with 503 if unset, rather than skipping validation), the secret comparison is constant-time, and the `provider` query param is checked against an allowlist.
 
 ## Files Changed
 
@@ -715,8 +715,8 @@ After Phases 0–7 and the targeted audit fixes, four architectural gaps remaine
 - `returnClearedCheque` reverses the `COLLECTION_PAYMENT` event (the one posted when the cheque was deposited/cleared), not a separate `CHEQUE_CLEARED` event. This is the financially correct entry to reverse.
 - `FINANCE_DISBURSED` moves AR between account types (customer AR → finance company AR) rather than recording cash receipt; actual cash from the finance company is tracked via `confirmDisbursement` + a manual journal or future `FINANCE_PAYMENT_RECEIVED` event.
 - The payment webhook route accepts any provider name via query param (`?provider=tap`). This avoids provider-specific routes and keeps the handler generic.
-- `settleByExternalId` falls back gracefully when no membership exists for the org (GL hook skipped); this is safe because the intent's status is still updated to `SETTLED`.
-- Optional `PAYMENT_WEBHOOK_SECRET` env var follows the same pattern as `SUPER_ADMIN_EMAILS` (Convex env vars, not hardcoded).
+- ~~`settleByExternalId` falls back gracefully when no membership exists for the org (GL hook skipped)~~ — **superseded in Phase 9**: this was a silent-skip risk (settlement could become final with no GL record and no retry). The hook now always has a deterministic actor and either posts immediately or durably enqueues to the accounting outbox; it is never silently dropped.
+- `PAYMENT_WEBHOOK_SECRET` env var follows the same pattern as `SUPER_ADMIN_EMAILS` (Convex env vars, not hardcoded). **As of Phase 9 it is mandatory at runtime** (validated via `convex/utils/env.ts`, min length 16) — the webhook route fails closed rather than accepting unauthenticated requests when unset.
 
 ## Remaining Risks / Future Work
 
@@ -725,3 +725,67 @@ After Phases 0–7 and the targeted audit fixes, four architectural gaps remaine
 - No cash-drawer session lifecycle (R17) is implemented.
 - Legacy operational tables (`expenses`, `collections`, etc.) still use JS `number` amounts; GL uses minor units. Full migration (R10) is a long-term track.
 - `paymentIntents` has no provider-specific signature verification (HMAC, RSA); only a shared-secret header check. Production deployments for Tap/Stripe/Telr should add provider-specific webhook verification middleware.
+
+---
+
+# Phase 9 — Production Re-Audit Fixes
+
+Date completed: 2026-06-30
+
+Status: Implemented and verified. 440 tests pass (0 type errors, 0 lint errors).
+
+## Background
+
+A 4-reviewer production audit of commit `f016634` issued NO-GO verdicts citing security, accounting-integrity, and reliability gaps. Findings were independently traced against source before any change was made; the audit was confirmed largely correct, plus additional issues were found during verification.
+
+## Completed Work
+
+### Security
+
+- `paymentIntents.getByExternalId`: converted from public `query` to `internalQuery` — it returned a full payment-intent record (amounts, customer, provider payload) with no auth check and no caller in the app.
+- `memberships.checkEmailExists`: now scoped to `orgId` and gated on `MANAGE_USERS` via a new internal guard (`assertCanManageUsers`); previously any authenticated user could probe email existence org-wide.
+- Payment webhook (`convex/http.ts`): fails closed (503) when `PAYMENT_WEBHOOK_SECRET` is unset, instead of skipping validation; secret comparison is constant-time; `provider` query param checked against an allowlist (`tap`, `stripe`, `telr`, `checkout`, `hyperpay`).
+- Chart-of-accounts / GL read queries (`accountingLedger.ts`, `chartOfAccounts.ts`): permission corrected from `VIEW_SALES` to `VIEW_FINANCE`.
+
+### Accounting integrity
+
+- **Durable accounting outbox** (`convex/accountingOutbox.ts`, new `pendingAccountingEvents` table): every workflow hook previously called `shouldPost()` and silently returned when no chart/period existed — a financial event could become permanently final with no GL record and no way to retry. Hooks now call `postOrEnqueue()`, which posts immediately or durably enqueues; the outbox drains automatically when a chart is initialized or a period opens.
+- **Cheque clearing now posts to the GL.** `collections.clearCheque` previously updated operational state only; it now posts a `COLLECTION_PAYMENT` event (DR Bank / CR AR), which means `returnClearedCheque`'s existing reversal lookup (added in Phase 8) now actually finds something to reverse.
+- **Cheque-return bank fee** scale bug fixed (`JOD ? 3 : 2` → `fromMinorUnits` using the org's actual currency scale) and routed through the posting engine instead of a raw legacy transaction.
+- **Finance disbursement cash receipt**: `applications.confirmDisbursement` previously only updated operational fields. It now posts a new `FINANCE_CASH_RECEIVED` event (DR Bank / CR Finance-company AR), closing the gap left open by Phase 8's note that "actual cash from the finance company is tracked via `confirmDisbursement` + a manual journal."
+- **Expense account mapping fixed**: general expenses were posting to `COMMISSION_EXPENSE` (6100) for lack of a mapped account; added a `GENERAL_EXPENSE` system key wired to account 6300, plus a self-healing `ensureGeneralExpenseAccount()` called on every expense post so pre-existing orgs backfill the mapping without a migration.
+- **Reversals now write a `REVERSE_EVENT` audit log entry** (`accounting/reversals.ts`) — previously reversals changed GL state with no audit trail.
+- **Manual journal reviewer made mandatory** (`financialAudit.postManualJournal`): `reviewedBy` was optional, so segregation-of-duties was opt-in; it is now a required argument, and the reviewer must independently hold `MANAGE_FINANCE`. Currency and minor-unit scale are now resolved from the journal's accounts / org settings instead of being hardcoded to JOD / scale 3.
+- **Idempotency fingerprinting** (`utils/idempotency.ts`): idempotency keys are now bound to a hash/JSON fingerprint of the request payload, so reusing a key with different request content throws instead of silently returning the first result.
+- **Trial balance / subledger reconciliation fixes** (`accountingReports.ts`): display currency now resolved per-org instead of hardcoded JOD; `subledgerReconciliation` compared `systemKey` against a lowercase literal (`"accounts_receivable_customers"`) that never matched the uppercase seeded keys (`SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS`), so the check always silently reported zero discrepancy — fixed to use the constant.
+- **`simplePayloadHash` canonicalization bug** (`postingRules.ts`): `JSON.stringify(payload, Object.keys(payload).sort())` passed the sorted key array as `JSON.stringify`'s *property allowlist* argument, not a key sorter — nested objects/arrays were silently dropped from the digest. Replaced with a recursive `canonicalize()` helper.
+- **`settleByExternalId` actor determinism**: switched from picking an arbitrary first org membership to the payment intent's own `createdBy`, which is always present and deterministic.
+
+## Files Changed
+
+- `convex/paymentIntents.ts`, `convex/http.ts`, `convex/utils/env.ts`
+- `convex/memberships.ts`, `components/team/InviteMemberDialog.tsx`
+- `convex/accountingLedger.ts`, `convex/chartOfAccounts.ts`, `convex/utils/defaultChart.ts`
+- `convex/accounting/postingRules.ts`, `convex/accounting/workflowHooks.ts`, `convex/accounting/reversals.ts`
+- `convex/accountingOutbox.ts` (new), `convex/schema.ts` (`pendingAccountingEvents` table, `fingerprint` field on `commandIdempotency`)
+- `convex/collections.ts`, `convex/applications.ts`, `convex/accountingPeriods.ts`
+- `convex/financialAudit.ts`, `convex/accountingReports.ts`, `convex/utils/idempotency.ts`
+- `convex/accountingPhase9.test.ts` (new), `convex/accountingPhase7.test.ts`, `convex/accountingPhase4.test.ts`
+
+## Tests Added
+
+`convex/accountingPhase9.test.ts` — 8 tests: expense account mapping, outbox enqueue-then-drain on period open, idempotency fingerprint rejection (and acceptance of identical replays), reversal audit logging, manual journal reviewer authority rejection, cheque clear + return-after-clearing GL posting, finance disbursement GL posting.
+
+## Acceptance Gates Passed
+
+- Full suite: 440 tests pass, 22 skipped, 0 type errors, 0 lint errors. ✓
+- No workflow hook silently drops a financial event when chart/period is missing — all route through the outbox. ✓
+- Cheque clearing and finance disbursement both have a GL trail. ✓
+- Manual journals cannot be posted without an independent finance-authorized reviewer. ✓
+- Idempotency keys cannot be replayed with altered request content. ✓
+
+## Remaining Risks / Future Work
+
+- Report performance: trial balance and AR-aging reports still do in-memory full scans / N+1 lookups; acceptable at current scale but will need balance projections before larger orgs.
+- Team invitations still rely on sharing a password by email rather than a Clerk invitation link; deferred pending a decision on the onboarding flow.
+- `paymentIntents` still has no provider-specific signature verification (HMAC, RSA) — only the shared-secret header check, now mandatory and constant-time.

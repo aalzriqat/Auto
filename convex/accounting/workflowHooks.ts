@@ -2,19 +2,24 @@
  * workflowHooks.ts
  *
  * Convenience wrappers called from domain mutations to emit accounting events
- * through the central posting engine. Each hook is fire-and-store — it posts
- * a double-entry journal if (and only if) a covering open period exists for the
- * accounting date. If no period exists the operational workflow still succeeds
- * so existing orgs without periods set up are not broken. Once periods exist
- * every event posts atomically.
+ * through the central posting engine. Each hook posts a balanced double-entry
+ * journal when a chart of accounts and a covering open period exist. When they
+ * do NOT, the event is durably enqueued in the accounting outbox instead of
+ * being silently dropped — so no sale/payment/expense/disbursement is ever made
+ * operationally final without a captured, retryable GL record. The queue is
+ * re-driven idempotently when a chart is initialized or a period is opened.
  */
 import { Id } from "../_generated/dataModel";
 import { MutationCtx } from "../_generated/server";
-import { postAccountingEvent } from "./postingEngine";
+import { postAccountingEvent, PostCommand } from "./postingEngine";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate } from "../accountingPeriods";
-import { isChartInitialized } from "../chartOfAccounts";
-import { toMinorUnits } from "../utils/money";
+import { isChartInitialized, ensureGeneralExpenseAccount } from "../chartOfAccounts";
+import {
+  enqueuePendingPost,
+  enqueuePendingReversal,
+  cancelPendingPostByKey,
+} from "../accountingOutbox";
 
 export async function getOrgCurrency(ctx: MutationCtx, orgId: Id<"organizations">): Promise<string> {
   const settings = await ctx.db
@@ -32,6 +37,19 @@ async function shouldPost(ctx: MutationCtx, orgId: Id<"organizations">, date: nu
   return chartReady && period !== null;
 }
 
+/**
+ * Posts the event now if the chart + an open period exist, otherwise enqueues it
+ * to the durable outbox for retry. This is the single choke point that replaced
+ * the previous "silently return if not postable" behavior.
+ */
+async function postOrEnqueue(ctx: MutationCtx, cmd: PostCommand): Promise<void> {
+  if (await shouldPost(ctx, cmd.orgId, cmd.accountingDate)) {
+    await postAccountingEvent(ctx, cmd);
+  } else {
+    await enqueuePendingPost(ctx, cmd, "No chart of accounts or open period at operation time");
+  }
+}
+
 export async function hookDepositReceived(
   ctx: MutationCtx,
   args: {
@@ -45,8 +63,7 @@ export async function hookDepositReceived(
     occurredAt: number;
   }
 ) {
-  if (!(await shouldPost(ctx, args.orgId, args.occurredAt))) return;
-  await postAccountingEvent(ctx, {
+  await postOrEnqueue(ctx, {
     orgId: args.orgId,
     eventType: "DEPOSIT_RECEIVED",
     sourceType: "deposits",
@@ -80,8 +97,7 @@ export async function hookDepositApplied(
     saleId?: Id<"sales">;
   }
 ) {
-  if (!(await shouldPost(ctx, args.orgId, args.occurredAt))) return;
-  await postAccountingEvent(ctx, {
+  await postOrEnqueue(ctx, {
     orgId: args.orgId,
     eventType: "DEPOSIT_APPLIED",
     sourceType: "deposits",
@@ -114,8 +130,7 @@ export async function hookDepositRefunded(
     occurredAt: number;
   }
 ) {
-  if (!(await shouldPost(ctx, args.orgId, args.occurredAt))) return;
-  await postAccountingEvent(ctx, {
+  await postOrEnqueue(ctx, {
     orgId: args.orgId,
     eventType: "DEPOSIT_REFUNDED",
     sourceType: "deposits",
@@ -151,8 +166,7 @@ export async function hookSaleCompleted(
     occurredAt: number;
   }
 ) {
-  if (!(await shouldPost(ctx, args.orgId, args.occurredAt))) return;
-  await postAccountingEvent(ctx, {
+  await postOrEnqueue(ctx, {
     orgId: args.orgId,
     eventType: "SALE_COMPLETED",
     sourceType: "sales",
@@ -189,8 +203,7 @@ export async function hookCollectionPayment(
     occurredAt: number;
   }
 ) {
-  if (!(await shouldPost(ctx, args.orgId, args.occurredAt))) return;
-  await postAccountingEvent(ctx, {
+  await postOrEnqueue(ctx, {
     orgId: args.orgId,
     eventType: "COLLECTION_PAYMENT",
     sourceType: "collectionPayments",
@@ -218,12 +231,18 @@ export async function hookExpensePosted(
     expenseId: Id<"expenses">;
     amountMinor: number;
     currency: string;
+    category?: string;
+    paymentMethod?: string;
     actorId: Id<"users">;
     occurredAt: number;
   }
 ) {
-  if (!(await shouldPost(ctx, args.orgId, args.occurredAt))) return;
-  await postAccountingEvent(ctx, {
+  // Self-heal: make sure the GENERAL_EXPENSE system account is mapped for this
+  // org before the engine tries to resolve it (older charts lack the key).
+  if (await isChartInitialized(ctx, args.orgId)) {
+    await ensureGeneralExpenseAccount(ctx, args.orgId, args.actorId);
+  }
+  await postOrEnqueue(ctx, {
     orgId: args.orgId,
     eventType: "EXPENSE_POSTED",
     sourceType: "expenses",
@@ -237,6 +256,8 @@ export async function hookExpensePosted(
       expenseId: args.expenseId.toString(),
       amountMinor: args.amountMinor,
       currency: args.currency,
+      category: args.category,
+      paymentMethod: args.paymentMethod,
     },
     actorId: args.actorId,
   });
@@ -254,8 +275,7 @@ export async function hookCommissionAccrued(
     occurredAt: number;
   }
 ) {
-  if (!(await shouldPost(ctx, args.orgId, args.occurredAt))) return;
-  await postAccountingEvent(ctx, {
+  await postOrEnqueue(ctx, {
     orgId: args.orgId,
     eventType: "COMMISSION_ACCRUED",
     sourceType: "sales",
@@ -295,19 +315,37 @@ export async function hookSaleCancelled(
     .filter((q) => q.eq(q.field("status"), "POSTED"))
     .first();
 
-  if (!originalEvent) return; // No GL entry to reverse — sale never posted
+  if (originalEvent) {
+    const period = await getOpenPeriodForDate(ctx, args.orgId, args.reversalDate);
+    if (period) {
+      await reverseAccountingEvent(ctx, {
+        orgId: args.orgId,
+        originalEventId: originalEvent._id,
+        reversalDate: args.reversalDate,
+        reason: args.reason,
+        actorId: args.actorId,
+        idempotencyKey: `sale_cancelled_${args.saleId}`,
+      });
+    } else {
+      // No open period — defer the reversal to the outbox instead of skipping it.
+      await enqueuePendingReversal(ctx, {
+        orgId: args.orgId,
+        originalEventId: originalEvent._id,
+        reversalDate: args.reversalDate,
+        reason: args.reason,
+        actorId: args.actorId,
+        idempotencyKey: `sale_cancelled_${args.saleId}`,
+        sourceType: "sales",
+        sourceId: args.saleId.toString(),
+      });
+    }
+    return;
+  }
 
-  const period = await getOpenPeriodForDate(ctx, args.orgId, args.reversalDate);
-  if (!period) return; // No open period; skip silently
-
-  await reverseAccountingEvent(ctx, {
-    orgId: args.orgId,
-    originalEventId: originalEvent._id,
-    reversalDate: args.reversalDate,
-    reason: args.reason,
-    actorId: args.actorId,
-    idempotencyKey: `sale_cancelled_${args.saleId}`,
-  });
+  // No posted GL entry. If the SALE_COMPLETED is still sitting unposted in the
+  // outbox, cancel it so it never posts (net GL effect of the round trip is
+  // zero). If neither exists, there is genuinely nothing to do.
+  await cancelPendingPostByKey(ctx, args.orgId, `sale_completed_${args.saleId}`);
 }
 
 export async function hookFinanceDisbursed(
@@ -324,8 +362,7 @@ export async function hookFinanceDisbursed(
     occurredAt: number;
   }
 ) {
-  if (!(await shouldPost(ctx, args.orgId, args.occurredAt))) return;
-  await postAccountingEvent(ctx, {
+  await postOrEnqueue(ctx, {
     orgId: args.orgId,
     eventType: "FINANCE_DISBURSED",
     sourceType: "financeApplications",
@@ -347,6 +384,40 @@ export async function hookFinanceDisbursed(
   });
 }
 
+export async function hookFinanceCashReceived(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    applicationId: Id<"financeApplications">;
+    financeCompanyId: Id<"financeCompanies">;
+    customerId?: Id<"customers">;
+    amountMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postOrEnqueue(ctx, {
+    orgId: args.orgId,
+    eventType: "FINANCE_CASH_RECEIVED",
+    sourceType: "financeApplications",
+    sourceId: `disbursement_${args.applicationId}`,
+    eventVersion: 1,
+    accountingDate: args.occurredAt,
+    occurredAt: args.occurredAt,
+    currency: args.currency,
+    idempotencyKey: `finance_cash_received_${args.applicationId}`,
+    payload: {
+      applicationId: args.applicationId.toString(),
+      financeCompanyId: args.financeCompanyId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      customerId: args.customerId?.toString(),
+    },
+    actorId: args.actorId,
+  });
+}
+
 export async function hookPaymentLinkReceived(
   ctx: MutationCtx,
   args: {
@@ -360,8 +431,7 @@ export async function hookPaymentLinkReceived(
     occurredAt: number;
   }
 ) {
-  if (!(await shouldPost(ctx, args.orgId, args.occurredAt))) return;
-  await postAccountingEvent(ctx, {
+  await postOrEnqueue(ctx, {
     orgId: args.orgId,
     eventType: "PAYMENT_LINK_RECEIVED",
     sourceType: "paymentIntents",
@@ -394,8 +464,7 @@ export async function hookCommissionPaid(
     occurredAt: number;
   }
 ) {
-  if (!(await shouldPost(ctx, args.orgId, args.occurredAt))) return;
-  await postAccountingEvent(ctx, {
+  await postOrEnqueue(ctx, {
     orgId: args.orgId,
     eventType: "COMMISSION_PAID",
     sourceType: "sales",

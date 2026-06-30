@@ -2,6 +2,7 @@ import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { auditLog } from "./financialAudit";
@@ -228,6 +229,11 @@ export const open = mutation({
       orgId: args.orgId, actorId: user._id, actionType: "OPEN_PERIOD",
       resourceType: "accountingPeriods", resourceId: args.periodId.toString(),
       description: `Opened period ${period.fiscalYear}-${String(period.periodNumber).padStart(2, "0")}`,
+    });
+    // Opening a period can unblock events that were enqueued while no period
+    // covered their date — drain the accounting outbox.
+    await ctx.scheduler.runAfter(0, internal.accountingOutbox.drainPendingAccountingEvents, {
+      orgId: args.orgId,
     });
     return args.periodId;
   },

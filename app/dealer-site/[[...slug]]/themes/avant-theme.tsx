@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { ArrowRight, Car, CheckCircle2, Globe2, Mail, MapPin, Menu, Phone, ShieldCheck, X } from "lucide-react";
 import type { ThemeProps, PublicVehicle, FormState, SiteStrings } from "./theme-props";
 
@@ -64,7 +65,7 @@ export function AvantTheme(props: ThemeProps) {
           </div>
         )}
         <div style={{ maxWidth: 1280, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "0 24px", height: 64 }}>
-          <a href="/" style={{ display: "flex", alignItems: "center", gap: 12, textDecoration: "none" }}>
+          <Link href="/" style={{ display: "flex", alignItems: "center", gap: 12, textDecoration: "none" }}>
             {profile.logoUrl ? (
               <img src={profile.logoUrl} alt={profile.dealershipName} style={{ height: 36, width: "auto", maxWidth: 140, objectFit: "contain", filter: "brightness(0) invert(1)" }} />
             ) : (
@@ -75,7 +76,7 @@ export function AvantTheme(props: ThemeProps) {
                 <span style={{ fontSize: 15, fontWeight: 700, color: "#fff" }}>{profile.dealershipName}</span>
               </>
             )}
-          </a>
+          </Link>
 
           <nav style={{ display: "flex", gap: 28, alignItems: "center" }} className="av-desktop-nav">
             {navLinks.map(([label, href]) => (

@@ -39,6 +39,11 @@ const backendEnvSchema = z.object({
   INSTAGRAM_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
   // Optional secret used only by the protected Convex load-test health probe.
   LOAD_TEST_SECRET: z.string().min(16).optional(),
+  // Shared secret for the generic payment-provider webhook (X-Webhook-Secret
+  // header). The /api/payment-webhook route fails closed when this is unset, so
+  // it is required before any provider can settle a payment intent. Min length
+  // keeps it from being a trivially guessable value.
+  PAYMENT_WEBHOOK_SECRET: z.string().min(16).optional(),
   // Auto-injected by Convex at runtime; validated here so a missing value
   // fails loudly instead of producing a broken OAuth redirect URI.
   CONVEX_SITE_URL: z.string().url().optional(),
@@ -85,6 +90,7 @@ export function getValidatedEnv() {
     WHATSAPP_APP_SECRET: process.env.WHATSAPP_APP_SECRET,
     INSTAGRAM_WEBHOOK_VERIFY_TOKEN: process.env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN,
     LOAD_TEST_SECRET: process.env.LOAD_TEST_SECRET,
+    PAYMENT_WEBHOOK_SECRET: process.env.PAYMENT_WEBHOOK_SECRET,
     CONVEX_SITE_URL: process.env.CONVEX_SITE_URL,
   });
   

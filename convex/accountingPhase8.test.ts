@@ -35,6 +35,10 @@ async function seedDealer(tag = "p8") {
         "view:vehicles", "create:vehicles", "edit:vehicles",
         "manage:collection", "view:collection",
         "approve:requests",
+        "view:finance_applications", "create:finance_application",
+        "review:finance_application", "approve:finance_application",
+        "finalize:financed_deal", "confirm:finance_disbursement",
+        "verify:finance_documents",
       ],
     })
   );

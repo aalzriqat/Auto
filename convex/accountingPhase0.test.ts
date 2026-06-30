@@ -51,6 +51,10 @@ async function seedPhase0Dealer() {
         "view:expenses",
         "view:commissions",
         "manage:commissions",
+        "view:finance_applications", "create:finance_application",
+        "review:finance_application", "approve:finance_application",
+        "finalize:financed_deal", "confirm:finance_disbursement",
+        "verify:finance_documents",
       ],
     })
   );
@@ -150,7 +154,7 @@ describe("Phase 0 financial safety controls", () => {
   });
 
   test("finance_finalization_uses_canonical_sale_completion_and_is_idempotent", async () => {
-    const { t, orgId, userId, customerId, asUser } = await seedPhase0Dealer();
+    const { t, orgId, userId, customerId, asUser, asApprover } = await seedPhase0Dealer();
     const vehicleId = await seedVehicle(t, orgId, "PHASE0VIN2");
     const quoteId = await asUser.mutation(api.quotes.saveQuote, {
       orgId,
@@ -161,7 +165,8 @@ describe("Phase 0 financial safety controls", () => {
       termMonths: 36,
     });
     const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
-    await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
+    await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
+    await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
 
     const firstSaleId = await asUser.mutation(api.applications.finalizeDeal, {
       orgId,

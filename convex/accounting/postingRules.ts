@@ -17,6 +17,7 @@ export type EventType =
   | "COMMISSION_ACCRUED"
   | "COMMISSION_PAID"
   | "FINANCE_DISBURSED"
+  | "FINANCE_CASH_RECEIVED"
   | "PAYMENT_LINK_RECEIVED"
   | "JOURNAL_REVERSAL";
 
@@ -25,8 +26,9 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "SALE_COMPLETED", "SALE_CANCELLED", "COLLECTION_PAYMENT", "EXPENSE_POSTED",
   "CHEQUE_RECEIVED", "CHEQUE_DEPOSITED", "CHEQUE_CLEARED", "CHEQUE_RETURNED",
   "COMMISSION_ACCRUED", "COMMISSION_PAID",
-  "FINANCE_DISBURSED", "PAYMENT_LINK_RECEIVED",
-  "JOURNAL_REVERSAL",
+  "FINANCE_DISBURSED", "FINANCE_CASH_RECEIVED", "PAYMENT_LINK_RECEIVED",
+  // JOURNAL_REVERSAL is intentionally excluded: it is written directly by
+  // reverseAccountingEvent() in reversals.ts and never goes through postAccountingEvent().
 ]);
 
 export interface LineSpec {
@@ -122,6 +124,18 @@ export interface ExpensePostedPayload {
   amountMinor: number;
   currency: string;
   paymentMethod?: string;
+  category?: string;
+}
+
+/**
+ * Maps an operational expense category to a GL expense account system key.
+ * Today every category routes to GENERAL_EXPENSE (the default chart has no
+ * dedicated marketing/rent/salary accounts yet); the map exists so dedicated
+ * accounts can be added later without touching the posting engine. Crucially,
+ * general expenses are NO LONGER booked to COMMISSION_EXPENSE.
+ */
+export function expenseAccountKeyForCategory(_category?: string): SystemKey {
+  return SYSTEM_KEYS.GENERAL_EXPENSE;
 }
 
 export interface CommissionAccruedPayload {
@@ -237,9 +251,11 @@ export function ruleCollectionPayment(p: CollectionPaymentPayload): RuleResult {
 
 export function ruleExpensePosted(p: ExpensePostedPayload): RuleResult {
   const cashKey = cashAccountKey(p.paymentMethod);
+  const expenseKey = expenseAccountKeyForCategory(p.category);
+  const label = p.category ? `Expense (${p.category})` : "General expense";
   return {
     lines: [
-      line(SYSTEM_KEYS.COMMISSION_EXPENSE, p.amountMinor, 0, "General expense"),
+      line(expenseKey, p.amountMinor, 0, label),
       line(cashKey, 0, p.amountMinor, "Cash payment"),
     ],
     memo: "Expense posted",
@@ -275,7 +291,7 @@ export function ruleChequeReturned(p: ChequeReturnedPayload): RuleResult {
     line(SYSTEM_KEYS.BANK_ACCOUNT, 0, p.amountMinor, "Bank reversal", { customerId: p.customerId }),
   ];
   if (p.bankFeeMinor && p.bankFeeMinor > 0) {
-    lines.push(line(SYSTEM_KEYS.COMMISSION_EXPENSE, p.bankFeeMinor, 0, "Bank return fee"));
+    lines.push(line(SYSTEM_KEYS.GENERAL_EXPENSE, p.bankFeeMinor, 0, "Bank return fee"));
     lines.push(line(SYSTEM_KEYS.BANK_ACCOUNT, 0, p.bankFeeMinor, "Bank fee paid"));
   }
   return { lines, memo: "Cheque returned", category: "SYSTEM" };
@@ -303,6 +319,23 @@ export function ruleCommissionPaid(p: CommissionPaidPayload): RuleResult {
   };
 }
 
+export interface SaleCancelledPayload {
+  saleId: string;
+  saleAmountMinor: number;
+  costMinor?: number;
+  currency: string;
+  customerId: string;
+  vehicleId: string;
+  salespersonId?: string;
+  taxMinor?: number;
+}
+
+export interface ChequeDepositedPayload {
+  chequeId: string;
+  amountMinor: number;
+  currency: string;
+}
+
 export interface FinanceDisbursedPayload {
   applicationId: string;
   saleId: string;
@@ -320,6 +353,14 @@ export interface PaymentLinkReceivedPayload {
   provider: string;
 }
 
+export interface FinanceCashReceivedPayload {
+  applicationId: string;
+  financeCompanyId: string;
+  amountMinor: number;
+  currency: string;
+  customerId?: string;
+}
+
 export function ruleFinanceDisbursed(p: FinanceDisbursedPayload): RuleResult {
   return {
     lines: [
@@ -328,6 +369,18 @@ export function ruleFinanceDisbursed(p: FinanceDisbursedPayload): RuleResult {
       line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, 0, p.amountMinor, "Customer AR offset by finance co", { customerId: p.customerId }),
     ],
     memo: "Finance company disbursement expected",
+    category: "SYSTEM",
+  };
+}
+
+export function ruleFinanceCashReceived(p: FinanceCashReceivedPayload): RuleResult {
+  return {
+    lines: [
+      // Actual receipt of funds from the finance company settles their receivable
+      line(SYSTEM_KEYS.BANK_ACCOUNT, p.amountMinor, 0, "Finance company disbursement received", { financeCompanyId: p.financeCompanyId }),
+      line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES, 0, p.amountMinor, "Finance company receivable settled", { financeCompanyId: p.financeCompanyId, customerId: p.customerId }),
+    ],
+    memo: "Finance company disbursement received",
     category: "SYSTEM",
   };
 }
@@ -343,6 +396,34 @@ export function rulePaymentLinkReceived(p: PaymentLinkReceivedPayload): RuleResu
   };
 }
 
+export function ruleSaleCancelled(p: SaleCancelledPayload): RuleResult {
+  const revenueMinor = p.taxMinor ? p.saleAmountMinor - p.taxMinor : p.saleAmountMinor;
+  const dims = { customerId: p.customerId, vehicleId: p.vehicleId, salespersonId: p.salespersonId };
+  const lines: LineSpec[] = [
+    line(SYSTEM_KEYS.SALES_REVENUE, revenueMinor, 0, "Revenue reversed", dims),
+    line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, 0, p.saleAmountMinor, "AR cancelled", dims),
+  ];
+  if (p.taxMinor && p.taxMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.SALES_TAX_PAYABLE, p.taxMinor, 0, "Sales tax reversed", { vehicleId: p.vehicleId }));
+  }
+  if (p.costMinor && p.costMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.VEHICLE_INVENTORY, p.costMinor, 0, "Inventory restored", { vehicleId: p.vehicleId }));
+    lines.push(line(SYSTEM_KEYS.COST_OF_VEHICLES_SOLD, 0, p.costMinor, "COGS reversed", { vehicleId: p.vehicleId }));
+  }
+  return { lines, memo: "Vehicle sale cancelled", category: "SYSTEM" };
+}
+
+export function ruleChequeDeposited(p: ChequeDepositedPayload): RuleResult {
+  return {
+    lines: [
+      line(SYSTEM_KEYS.CHEQUES_UNDER_COLLECTION, p.amountMinor, 0, "Cheque deposited for collection"),
+      line(SYSTEM_KEYS.CHEQUES_IN_HAND, 0, p.amountMinor, "Cheque removed from hand"),
+    ],
+    memo: "Cheque deposited to bank",
+    category: "SYSTEM",
+  };
+}
+
 // ─── Dispatch ─────────────────────────────────────────────────────────────────
 
 export function applyPostingRule(eventType: string, payload: Record<string, unknown>): RuleResult {
@@ -352,6 +433,8 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "DEPOSIT_REFUNDED": return ruleDepositRefunded(payload as unknown as DepositRefundedPayload);
     case "DEPOSIT_FORFEITED": return ruleDepositForfeited(payload as unknown as DepositForfeitedPayload);
     case "SALE_COMPLETED": return ruleSaleCompleted(payload as unknown as SaleCompletedPayload);
+    case "SALE_CANCELLED": return ruleSaleCancelled(payload as unknown as SaleCancelledPayload);
+    case "CHEQUE_DEPOSITED": return ruleChequeDeposited(payload as unknown as ChequeDepositedPayload);
     case "COLLECTION_PAYMENT": return ruleCollectionPayment(payload as unknown as CollectionPaymentPayload);
     case "EXPENSE_POSTED": return ruleExpensePosted(payload as unknown as ExpensePostedPayload);
     case "CHEQUE_RECEIVED": return ruleChequeReceived(payload as unknown as ChequeReceivedPayload);
@@ -360,6 +443,7 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "COMMISSION_ACCRUED": return ruleCommissionAccrued(payload as unknown as CommissionAccruedPayload);
     case "COMMISSION_PAID": return ruleCommissionPaid(payload as unknown as CommissionPaidPayload);
     case "FINANCE_DISBURSED": return ruleFinanceDisbursed(payload as unknown as FinanceDisbursedPayload);
+    case "FINANCE_CASH_RECEIVED": return ruleFinanceCashReceived(payload as unknown as FinanceCashReceivedPayload);
     case "PAYMENT_LINK_RECEIVED": return rulePaymentLinkReceived(payload as unknown as PaymentLinkReceivedPayload);
     default:
       throw new Error(`No posting rule defined for event type: ${eventType}`);
@@ -389,12 +473,29 @@ export function validateBalance(lines: LineSpec[]): void {
   }
 }
 
-export function simplePayloadHash(payload: Record<string, unknown>): string {
-  const str = JSON.stringify(payload, Object.keys(payload).sort());
-  let hash = 5381;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) + hash) + str.charCodeAt(i);
-    hash = hash & hash;
+/** Recursively sorts object keys so the JSON serialization is canonical. */
+function canonicalize(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalize);
+  if (value && typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    return Object.keys(obj)
+      .sort()
+      .reduce<Record<string, unknown>>((acc, k) => {
+        acc[k] = canonicalize(obj[k]);
+        return acc;
+      }, {});
   }
-  return (hash >>> 0).toString(16).padStart(8, "0");
+  return value;
+}
+
+export async function simplePayloadHash(payload: Record<string, unknown>): Promise<string> {
+  // NOTE: the previous implementation passed the sorted key array as the second
+  // JSON.stringify argument, which is a property *allowlist*, not a sort — nested
+  // objects and arrays were silently dropped from the digest. Canonicalize first.
+  const str = JSON.stringify(canonicalize(payload));
+  const data = new TextEncoder().encode(str);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map(b => b.toString(16).padStart(2, "0"))
+    .join("");
 }

@@ -8,6 +8,13 @@ const PERMISSIONS = [
   "view:sales",
   "edit:vehicles",
   "approve:requests",
+  "view:finance_applications",
+  "create:finance_application",
+  "review:finance_application",
+  "approve:finance_application",
+  "finalize:financed_deal",
+  "confirm:finance_disbursement",
+  "verify:finance_documents",
 ];
 
 async function setup() {
@@ -18,11 +25,16 @@ async function setup() {
   const userId = await t.run((ctx) =>
     ctx.db.insert("users", { clerkId: "user_app_1", email: "app@test.com", name: "App User" })
   );
+  const approverId = await t.run((ctx) =>
+    ctx.db.insert("users", { clerkId: "user_app_approver", email: "app.approver@test.com", name: "App Approver" })
+  );
   const roleId = await t.run((ctx) =>
     ctx.db.insert("roles", { orgId, name: "Admin", permissions: PERMISSIONS })
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: approverId, roleId }));
   const asUser = t.withIdentity({ subject: "user_app_1", clerkId: "user_app_1" });
+  const asApprover = t.withIdentity({ subject: "user_app_approver", clerkId: "user_app_approver" });
 
   const vehicleId = await t.run((ctx) =>
     ctx.db.insert("vehicles", {
@@ -43,12 +55,12 @@ async function setup() {
     ctx.db.insert("customers", { orgId, firstName: "Sam", lastName: "Lee" })
   );
 
-  return { t, orgId, userId, customerId, vehicleId, asUser };
+  return { t, orgId, userId, approverId, customerId, vehicleId, asUser, asApprover };
 }
 
 describe("applications.finalizeDeal", () => {
   test("closes the quote's lead as WON and stamps quoteId/leadId on the sale", async () => {
-    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
 
     const leadId = await t.run((ctx) =>
       ctx.db.insert("leads", { orgId, customerId, vehicleId, source: "Walk-in", stage: "NEGOTIATION" })
@@ -70,6 +82,12 @@ describe("applications.finalizeDeal", () => {
     });
 
     await asUser.mutation(api.applications.updateStatus, {
+      orgId,
+      applicationId,
+      status: "UNDER_REVIEW",
+    });
+
+    await asApprover.mutation(api.applications.updateStatus, {
       orgId,
       applicationId,
       status: "APPROVED",

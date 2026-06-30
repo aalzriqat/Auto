@@ -1,5 +1,5 @@
 import { v, ConvexError } from "convex/values";
-import { mutation, query, internalMutation } from "./_generated/server";
+import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -25,7 +25,7 @@ export const list = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
-    let q = ctx.db
+    const q = ctx.db
       .query("paymentIntents")
       .withIndex("by_org_status", (q) =>
         args.status
@@ -49,7 +49,14 @@ export const list = query({
   },
 });
 
-export const getByExternalId = query({
+/**
+ * Internal-only lookup by provider + externalId. This intentionally has NO
+ * tenant auth because it exposes a full payment-intent record (amounts,
+ * customer, provider payload); it must never be a public `query`. The webhook
+ * settlement path (settleByExternalId) is the only caller-shape that needs it,
+ * and it runs in a trusted internal context.
+ */
+export const getByExternalId = internalQuery({
   args: {
     provider: v.string(),
     externalId: v.string(),
@@ -91,6 +98,14 @@ export const create = mutation({
         operation: "paymentIntents.create",
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
+        fingerprint: JSON.stringify({
+          customerId: args.customerId,
+          amountMinor: args.amountMinor,
+          currency: args.currency,
+          provider: args.provider,
+          saleId: args.saleId ?? null,
+          receivableDocumentId: args.receivableDocumentId ?? null,
+        }),
       },
       async () => {
         const customer = await ctx.db.get(args.customerId);
@@ -135,6 +150,7 @@ export const markSettled = mutation({
         operation: "paymentIntents.markSettled",
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
+        fingerprint: JSON.stringify({ intentId: args.intentId, externalId: args.externalId ?? null }),
       },
       async () => {
         const intent = await ctx.db.get(args.intentId);
@@ -229,25 +245,21 @@ export const settleByExternalId = internalMutation({
       updatedAt: now,
     });
 
-    // Attempt GL posting; the hook's shouldPost gate keeps it safe when no chart exists
-    const membership = await ctx.db
-      .query("memberships")
-      .withIndex("by_org", (q) => q.eq("orgId", intent.orgId))
-      .first();
-    const systemUser = membership ? await ctx.db.get(membership.userId) : null;
-
-    if (systemUser) {
-      await hookPaymentLinkReceived(ctx, {
-        orgId: intent.orgId,
-        intentId: intent._id,
-        customerId: intent.customerId,
-        amountMinor: intent.amountMinor,
-        currency: intent.currency,
-        provider: intent.provider,
-        actorId: systemUser._id,
-        occurredAt: now,
-      });
-    }
+    // Post to the GL using the staff member who created the intent as the actor
+    // (always present, deterministic — never an arbitrary "first membership").
+    // The hook posts immediately when a chart + open period exist, otherwise it
+    // durably enqueues the event to the accounting outbox so settlement is never
+    // committed without a corresponding GL record being captured for retry.
+    await hookPaymentLinkReceived(ctx, {
+      orgId: intent.orgId,
+      intentId: intent._id,
+      customerId: intent.customerId,
+      amountMinor: intent.amountMinor,
+      currency: intent.currency,
+      provider: intent.provider,
+      actorId: intent.createdBy,
+      occurredAt: now,
+    });
 
     return intent._id;
   },

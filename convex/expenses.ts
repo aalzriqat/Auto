@@ -182,6 +182,7 @@ export const create = mutation({
           expenseId: id,
           amountMinor: toMinorUnits(args.amount, currency),
           currency,
+          category: args.category,
           actorId: user._id,
           occurredAt: args.date,
         });

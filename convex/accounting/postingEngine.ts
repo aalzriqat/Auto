@@ -111,7 +111,7 @@ export async function postAccountingEvent(
 
   // 9. Create accounting event record
   const now = Date.now();
-  const payloadHash = simplePayloadHash(cmd.payload);
+  const payloadHash = await simplePayloadHash(cmd.payload);
 
   const eventId = await ctx.db.insert("accountingEvents", {
     orgId: cmd.orgId,

@@ -79,10 +79,14 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
           setEmailCheckState("idle");
           return;
         }
+        if (!activeOrgId) {
+          setEmailCheckState("idle");
+          return;
+        }
         setEmailCheckState("checking");
         timer = setTimeout(async () => {
           try {
-            const result = await checkEmailExists({ email });
+            const result = await checkEmailExists({ email, orgId: activeOrgId });
             if (result.exists) {
               setEmailCheckState("exists");
               // Pre-fill with the name already on file for this email — admin doesn't retype it.
@@ -97,7 +101,7 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
         }, 700);
       };
     })(),
-    [checkEmailExists]
+    [checkEmailExists, activeOrgId]
   );
 
   useEffect(() => {
