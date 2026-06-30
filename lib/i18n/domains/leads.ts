@@ -54,6 +54,13 @@ export const leadsEn = {
   // Lead-to-sale conversion visibility
   ConvertedToSale: "Converted to Sale",
   OnDate: "on",
+
+  // Audit columns
+  CreatedAt: "Created At",
+  LastUpdated: "Last Updated",
+  CreatedBy: "Created By",
+  LastUpdatedBy: "Last Updated By",
+  System: "System",
 };
 
 export const leadsAr = {
@@ -112,4 +119,11 @@ export const leadsAr = {
   // Lead-to-sale conversion visibility
   ConvertedToSale: "تم تحويله إلى عملية بيع",
   OnDate: "بتاريخ",
+
+  // Audit columns
+  CreatedAt: "تاريخ الإنشاء",
+  LastUpdated: "آخر تحديث",
+  CreatedBy: "أنشئ بواسطة",
+  LastUpdatedBy: "آخر تحديث بواسطة",
+  System: "النظام",
 };

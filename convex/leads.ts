@@ -71,6 +71,8 @@ export const list = query({
         const assignedUser = lead.assignedUserId
           ? await ctx.db.get(lead.assignedUserId)
           : null;
+        const createdByUser = lead.createdBy ? await ctx.db.get(lead.createdBy) : null;
+        const updatedByUser = lead.updatedBy ? await ctx.db.get(lead.updatedBy) : null;
 
         return {
           ...lead,
@@ -83,6 +85,8 @@ export const list = query({
             ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`
             : null,
           assignedUserName: assignedUser?.name ?? assignedUser?.email ?? null,
+          createdByName: createdByUser?.name ?? createdByUser?.email ?? null,
+          updatedByName: updatedByUser?.name ?? updatedByUser?.email ?? null,
         };
       })
     );
@@ -112,6 +116,8 @@ export const get = query({
     const assignedUser = lead.assignedUserId
       ? await ctx.db.get(lead.assignedUserId)
       : null;
+    const createdByUser = lead.createdBy ? await ctx.db.get(lead.createdBy) : null;
+    const updatedByUser = lead.updatedBy ? await ctx.db.get(lead.updatedBy) : null;
 
     return {
       ...lead,
@@ -120,6 +126,8 @@ export const get = query({
       assignedUser: assignedUser
         ? { _id: assignedUser._id, name: assignedUser.name, email: assignedUser.email }
         : null,
+      createdByName: createdByUser?.name ?? createdByUser?.email ?? null,
+      updatedByName: updatedByUser?.name ?? updatedByUser?.email ?? null,
     };
   },
 });
@@ -258,6 +266,7 @@ export const create = mutation({
       source: args.source.trim(),
       stage: args.stage ?? "NEW",
       notes: args.notes,
+      createdBy: user._id,
     });
 
     const actorName = await getActorName(ctx);
@@ -299,7 +308,7 @@ export const update = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_LEADS]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_LEADS]);
 
     const lead = await ctx.db.get(args.leadId);
     if (!lead || lead.isDeleted || lead.orgId !== args.orgId) {
@@ -345,6 +354,8 @@ export const update = mutation({
     if (args.notes !== undefined) patch.notes = args.notes;
 
     if (Object.keys(patch).length > 0) {
+      patch.updatedAt = Date.now();
+      patch.updatedBy = user._id;
       await ctx.db.patch(args.leadId, patch);
 
       const actorName = await getActorName(ctx);

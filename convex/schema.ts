@@ -606,6 +606,9 @@ export default defineSchema({
       v.literal("LOST")
     ),
     notes: v.optional(v.string()),
+    createdBy: v.optional(v.id("users")),
+    updatedAt: v.optional(v.number()),
+    updatedBy: v.optional(v.id("users")),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
     deletedBy: v.optional(v.string()),

@@ -251,13 +251,17 @@ export default function LeadsPage() {
                   <TableHead className="py-4 px-6 font-medium">{t("Vehicle" as any) || "Vehicle"}</TableHead>
                   <TableHead className="py-4 px-6 font-medium">{t("Stage" as any) || "Stage"}</TableHead>
                   <TableHead className="py-4 px-6 font-medium">{t("AssignedTo" as any) || "Assigned To"}</TableHead>
+                  <TableHead className="py-4 px-6 font-medium">{t("CreatedAt" as any) || "Created At"}</TableHead>
+                  <TableHead className="py-4 px-6 font-medium">{t("LastUpdated" as any) || "Last Updated"}</TableHead>
+                  <TableHead className="py-4 px-6 font-medium">{t("CreatedBy" as any) || "Created By"}</TableHead>
+                  <TableHead className="py-4 px-6 font-medium">{t("LastUpdatedBy" as any) || "Last Updated By"}</TableHead>
                   <TableHead className="py-4 px-6 font-medium text-end">{t("Actions" as any) || "Actions"}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {leads?.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={5} className="text-center py-12 text-muted-foreground">
+                    <TableCell colSpan={9} className="text-center py-12 text-muted-foreground">
                       {t("Empty" as any) || "No leads found. Add a new lead to get started."}
                     </TableCell>
                   </TableRow>
@@ -298,6 +302,24 @@ export default function LeadsPage() {
                             <User className="w-4 h-4 flex-shrink-0" />
                             <span className="truncate max-w-[150px]">{lead.assignedUserName}</span>
                           </div>
+                        ) : (
+                          <span className="text-muted-foreground/50">-</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="py-4 px-6 text-muted-foreground whitespace-nowrap">
+                        {new Date(lead._creationTime).toLocaleDateString()}
+                      </TableCell>
+                      <TableCell className="py-4 px-6 text-muted-foreground whitespace-nowrap">
+                        {lead.updatedAt ? new Date(lead.updatedAt).toLocaleDateString() : "-"}
+                      </TableCell>
+                      <TableCell className="py-4 px-6">
+                        <span className="truncate max-w-[150px] block">
+                          {lead.createdByName || lead.source || (t("System" as any) || "System")}
+                        </span>
+                      </TableCell>
+                      <TableCell className="py-4 px-6">
+                        {lead.updatedByName ? (
+                          <span className="truncate max-w-[150px] block">{lead.updatedByName}</span>
                         ) : (
                           <span className="text-muted-foreground/50">-</span>
                         )}
