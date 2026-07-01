@@ -3,8 +3,10 @@ import { query, mutation, internalMutation, MutationCtx, QueryCtx } from "./_gen
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth, requireSupportAgent } from "./utils/tenancy";
+import { isSystemOwnerRole } from "./utils/permissions";
 import { rateLimiter } from "./rateLimit";
 import { logAdminAction } from "./adminAudit";
+import { requireFeature } from "./subscriptions";
 
 const OFFER_TIMEOUT_MS = 30_000;
 const GRANT_DURATION_MS = 60 * 60_000;
@@ -75,6 +77,7 @@ export const startOrGetMyThread = mutation({
   handler: async (ctx, args) => {
     assertLiveChatEnabled();
     const { user } = await requireTenantAuth(ctx, args.orgId);
+    await requireFeature(ctx, args.orgId, "internalMessaging");
 
     const existing = await ctx.db
       .query("liveChatThreads")
@@ -105,6 +108,7 @@ export const getMyThread = query({
   handler: async (ctx, args) => {
     assertLiveChatEnabled();
     const { user } = await requireTenantAuth(ctx, args.orgId);
+    await requireFeature(ctx, args.orgId, "internalMessaging");
 
     const thread = await ctx.db
       .query("liveChatThreads")
@@ -124,6 +128,7 @@ export const sendDealerMessage = mutation({
     const thread = await ctx.db.get(args.threadId);
     if (!thread || !thread.orgId) throw new ConvexError("Thread not found.");
     const { user } = await requireTenantAuth(ctx, thread.orgId);
+    await requireFeature(ctx, thread.orgId, "internalMessaging");
     if (thread.dealerUserId !== user._id) {
       throw new ConvexError("Thread not found.");
     }
@@ -176,6 +181,7 @@ export const markThreadReadByDealer = mutation({
     const thread = await ctx.db.get(args.threadId);
     if (!thread || !thread.orgId) throw new ConvexError("Thread not found.");
     const { user } = await requireTenantAuth(ctx, thread.orgId);
+    await requireFeature(ctx, thread.orgId, "internalMessaging");
     if (thread.dealerUserId !== user._id) {
       throw new ConvexError("Thread not found.");
     }
@@ -190,6 +196,7 @@ export const setDealerTyping = mutation({
     const thread = await ctx.db.get(args.threadId);
     if (!thread || !thread.orgId) throw new ConvexError("Thread not found.");
     const { user } = await requireTenantAuth(ctx, thread.orgId);
+    await requireFeature(ctx, thread.orgId, "internalMessaging");
     if (thread.dealerUserId !== user._id) {
       throw new ConvexError("Thread not found.");
     }
@@ -204,6 +211,7 @@ export const updateDealerPresence = mutation({
     const thread = await ctx.db.get(args.threadId);
     if (!thread || !thread.orgId) throw new ConvexError("Thread not found.");
     const { user } = await requireTenantAuth(ctx, thread.orgId);
+    await requireFeature(ctx, thread.orgId, "internalMessaging");
     if (thread.dealerUserId !== user._id) {
       throw new ConvexError("Thread not found.");
     }
@@ -226,6 +234,7 @@ export const endThreadByDealer = mutation({
     const thread = await ctx.db.get(args.threadId);
     if (!thread || !thread.orgId) throw new ConvexError("Thread not found.");
     const { user } = await requireTenantAuth(ctx, thread.orgId);
+    await requireFeature(ctx, thread.orgId, "internalMessaging");
     if (thread.dealerUserId !== user._id) {
       throw new ConvexError("Thread not found.");
     }
@@ -253,6 +262,7 @@ export const getActiveOrgAccessGrant = query({
   handler: async (ctx, args) => {
     assertLiveChatEnabled();
     await requireTenantAuth(ctx, args.orgId);
+    await requireFeature(ctx, args.orgId, "internalMessaging");
 
     const grants = await ctx.db
       .query("supportOrgAccessGrants")
@@ -1073,7 +1083,7 @@ export const requestOrgAccess = mutation({
       .withIndex("by_org", (q) => q.eq("orgId", orgId))
       .filter((q) => q.neq(q.field("isDeleted"), true))
       .collect();
-    const ownerRole = orgRoles.find((r) => r.name === "OWNER");
+    const ownerRole = orgRoles.find((r) => isSystemOwnerRole(r));
     if (!ownerRole) throw new ConvexError("This organization has no OWNER role to grant.");
 
     const membershipId = await ctx.db.insert("memberships", {

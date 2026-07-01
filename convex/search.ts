@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { query } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
+import { isSystemOwnerRole, PERMISSIONS, type Permission } from "./utils/permissions";
 
 type VehicleResult = {
   id: Id<"vehicles">;
@@ -33,7 +34,15 @@ export const globalSearch = query({
     query: v.string(),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId);
+    const { role } = await requireTenantAuth(ctx, args.orgId);
+    const isOwner = isSystemOwnerRole(role);
+    const hasPermission = (permission: Permission) =>
+      isOwner || role.permissions.includes(permission);
+
+    const canViewVehicles = hasPermission(PERMISSIONS.VIEW_VEHICLES);
+    const canViewCustomers = hasPermission(PERMISSIONS.VIEW_CUSTOMERS);
+    const canViewLeads = hasPermission(PERMISSIONS.VIEW_LEADS);
+    const canSearchCustomers = canViewCustomers;
 
     const searchTerm = args.query.trim();
     if (searchTerm.length < 2) {
@@ -41,22 +50,30 @@ export const globalSearch = query({
     }
 
     const [vehiclesByMake, vehiclesByVin, customersByFirstName, customersByLastName] = await Promise.all([
-      ctx.db
-        .query("vehicles")
-        .withSearchIndex("search_make", (q) => q.search("make", searchTerm).eq("orgId", args.orgId))
-        .take(10),
-      ctx.db
-        .query("vehicles")
-        .withSearchIndex("search_vin", (q) => q.search("vin", searchTerm).eq("orgId", args.orgId))
-        .take(10),
-      ctx.db
-        .query("customers")
-        .withSearchIndex("search_firstName", (q) => q.search("firstName", searchTerm).eq("orgId", args.orgId))
-        .take(10),
-      ctx.db
-        .query("customers")
-        .withSearchIndex("search_lastName", (q) => q.search("lastName", searchTerm).eq("orgId", args.orgId))
-        .take(10),
+      canViewVehicles
+        ? ctx.db
+          .query("vehicles")
+          .withSearchIndex("search_make", (q) => q.search("make", searchTerm).eq("orgId", args.orgId))
+          .take(10)
+        : Promise.resolve([]),
+      canViewVehicles
+        ? ctx.db
+          .query("vehicles")
+          .withSearchIndex("search_vin", (q) => q.search("vin", searchTerm).eq("orgId", args.orgId))
+          .take(10)
+        : Promise.resolve([]),
+      canSearchCustomers
+        ? ctx.db
+          .query("customers")
+          .withSearchIndex("search_firstName", (q) => q.search("firstName", searchTerm).eq("orgId", args.orgId))
+          .take(10)
+        : Promise.resolve([]),
+      canSearchCustomers
+        ? ctx.db
+          .query("customers")
+          .withSearchIndex("search_lastName", (q) => q.search("lastName", searchTerm).eq("orgId", args.orgId))
+          .take(10)
+        : Promise.resolve([]),
     ]);
 
     const vehicleMap = new Map<Id<"vehicles">, VehicleResult>();
@@ -75,44 +92,46 @@ export const globalSearch = query({
       if (vehicleMap.size >= 5) break;
     }
 
-    const customerMap = new Map<Id<"customers">, CustomerResult>();
+    const matchingCustomers = new Map<Id<"customers">, CustomerResult>();
     for (const customer of [...customersByFirstName, ...customersByLastName]) {
-      if (customer.orgId !== args.orgId || customer.isDeleted === true || customerMap.has(customer._id)) {
+      if (customer.orgId !== args.orgId || customer.isDeleted === true || matchingCustomers.has(customer._id)) {
         continue;
       }
-      customerMap.set(customer._id, {
+      matchingCustomers.set(customer._id, {
         id: customer._id,
         firstName: customer.firstName,
         lastName: customer.lastName,
         phone: customer.phone,
         email: customer.email,
       });
-      if (customerMap.size >= 5) break;
+      if (matchingCustomers.size >= 5) break;
     }
 
     const leads: LeadResult[] = [];
-    for (const customer of customerMap.values()) {
-      const customerLeads = await ctx.db
-        .query("leads")
-        .withIndex("by_org_customer", (q) => q.eq("orgId", args.orgId).eq("customerId", customer.id))
-        .take(5);
+    if (canViewLeads && canViewCustomers) {
+      for (const customer of matchingCustomers.values()) {
+        const customerLeads = await ctx.db
+          .query("leads")
+          .withIndex("by_org_customer", (q) => q.eq("orgId", args.orgId).eq("customerId", customer.id))
+          .take(5);
 
-      for (const lead of customerLeads) {
-        if (lead.isDeleted === true) continue;
-        leads.push({
-          id: lead._id,
-          stage: lead.stage,
-          customerId: lead.customerId,
-          customerName: `${customer.firstName} ${customer.lastName}`.trim(),
-        });
+        for (const lead of customerLeads) {
+          if (lead.isDeleted === true) continue;
+          leads.push({
+            id: lead._id,
+            stage: lead.stage,
+            customerId: lead.customerId,
+            customerName: `${customer.firstName} ${customer.lastName}`.trim(),
+          });
+          if (leads.length >= 5) break;
+        }
         if (leads.length >= 5) break;
       }
-      if (leads.length >= 5) break;
     }
 
     return {
       vehicles: Array.from(vehicleMap.values()),
-      customers: Array.from(customerMap.values()),
+      customers: canViewCustomers ? Array.from(matchingCustomers.values()) : [],
       leads,
     };
   },

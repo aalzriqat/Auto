@@ -1,8 +1,9 @@
 import { MutationCtx } from "../_generated/server";
 import { Id } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
-import { PERMISSIONS } from "./permissions";
+import { PERMISSIONS, isSystemOwnerRole } from "./permissions";
 import { NotificationType, NOTIFICATION_TYPES } from "../../lib/notifications/types";
+import { hasPlanFeature } from "../subscriptions";
 
 interface DispatchOpts {
   link?: string;
@@ -74,7 +75,8 @@ export async function dispatch(
     });
   }
 
-  if (whatsappEnabled && user.whatsappPhone) {
+  const whatsappPlanEnabled = whatsappEnabled && await hasPlanFeature(ctx, orgId, "whatsapp");
+  if (whatsappPlanEnabled && user.whatsappPhone) {
     await ctx.scheduler.runAfter(0, internal.whatsappSend.sendNotificationWhatsapp, {
       orgId,
       toPhone: user.whatsappPhone,
@@ -154,7 +156,7 @@ export async function notifyOwner(
 
   for (const membership of memberships) {
     const role = await ctx.db.get(membership.roleId);
-    if (role?.name === "OWNER") {
+    if (isSystemOwnerRole(role)) {
       await dispatch(ctx, orgId, membership.userId, type, data, opts);
     }
   }

@@ -1,9 +1,70 @@
 import { v, ConvexError } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { MutationCtx, mutation, query } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
+import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyUser, getActorName } from "./utils/notifications";
+
+async function requireTaskAssignee(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  userId: Id<"users">,
+) {
+  const membership = await ctx.db
+    .query("memberships")
+    .withIndex("by_org_user", (q) =>
+      q.eq("orgId", orgId).eq("userId", userId)
+    )
+    .unique();
+
+  if (!membership) {
+    throw new ConvexError("Assigned user is not a member of this organization.");
+  }
+}
+
+async function validateTaskReferences(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    customerId?: Id<"customers"> | null;
+    leadId?: Id<"leads"> | null;
+    vehicleId?: Id<"vehicles"> | null;
+  },
+) {
+  const customerId = args.customerId ?? undefined;
+  const leadId = args.leadId ?? undefined;
+  const vehicleId = args.vehicleId ?? undefined;
+
+  let customer: Doc<"customers"> | null = null;
+  if (customerId) {
+    customer = await ctx.db.get(customerId);
+    if (!customer || customer.orgId !== args.orgId || customer.isDeleted) {
+      throw new ConvexError("Customer not found.");
+    }
+  }
+
+  let vehicle: Doc<"vehicles"> | null = null;
+  if (vehicleId) {
+    vehicle = await ctx.db.get(vehicleId);
+    if (!vehicle || vehicle.orgId !== args.orgId || vehicle.isDeleted) {
+      throw new ConvexError("Vehicle not found.");
+    }
+  }
+
+  if (leadId) {
+    const lead = await ctx.db.get(leadId);
+    if (!lead || lead.orgId !== args.orgId || lead.isDeleted) {
+      throw new ConvexError("Lead not found.");
+    }
+    if (customer && lead.customerId !== customer._id) {
+      throw new ConvexError("Lead does not belong to the selected customer.");
+    }
+    if (vehicle && lead.vehicleId && lead.vehicleId !== vehicle._id) {
+      throw new ConvexError("Lead does not belong to the selected vehicle.");
+    }
+  }
+}
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
@@ -79,17 +140,13 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_TASKS]);
 
-    // Ensure assignee is a member
-    const membership = await ctx.db
-      .query("memberships")
-      .withIndex("by_org_user", (q) =>
-        q.eq("orgId", args.orgId).eq("userId", args.assignedTo)
-      )
-      .unique();
-
-    if (!membership) {
-      throw new ConvexError("Assigned user is not a member of this organization.");
-    }
+    await requireTaskAssignee(ctx, args.orgId, args.assignedTo);
+    await validateTaskReferences(ctx, {
+      orgId: args.orgId,
+      customerId: args.customerId,
+      leadId: args.leadId,
+      vehicleId: args.vehicleId,
+    });
 
     const taskId = await ctx.db.insert("tasks", {
       orgId: args.orgId,
@@ -152,7 +209,17 @@ export const update = mutation({
       throw new ConvexError("Task not found.");
     }
 
-    const patch: Record<string, any> = {};
+    if (args.assignedTo !== undefined) {
+      await requireTaskAssignee(ctx, args.orgId, args.assignedTo);
+    }
+    await validateTaskReferences(ctx, {
+      orgId: args.orgId,
+      customerId: args.customerId === undefined ? undefined : args.customerId,
+      leadId: task.leadId,
+      vehicleId: args.vehicleId === undefined ? undefined : args.vehicleId,
+    });
+
+    const patch: Partial<Doc<"tasks">> = {};
     let action: "UPDATE" | "RESCHEDULE" | "CANCEL" | "STATUS_CHANGE" = "UPDATE";
     let details = "Updated task details.";
     const changes: string[] = [];
@@ -171,6 +238,7 @@ export const update = mutation({
     }
     if (args.dueDate !== undefined && args.dueDate !== task.dueDate) {
       patch.dueDate = args.dueDate;
+      patch.alarmTriggered = false;
       action = "RESCHEDULE";
       details = "Rescheduled the task.";
     }
@@ -182,6 +250,9 @@ export const update = mutation({
       } else {
         action = "STATUS_CHANGE";
         details = `Marked task as ${args.status.toLowerCase()}.`;
+        if (args.status === "PENDING") {
+          patch.alarmTriggered = false;
+        }
       }
     }
     if (args.statusNote !== undefined) {
@@ -240,12 +311,16 @@ export const getHistory = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_TASKS]);
+    const task = await ctx.db.get(args.taskId);
+    if (!task || task.isDeleted || task.orgId !== args.orgId) {
+      throw new ConvexError("Task not found.");
+    }
 
-    const history = await ctx.db
+    const history = (await ctx.db
       .query("taskHistory")
       .withIndex("by_task", (q) => q.eq("taskId", args.taskId))
       .order("desc")
-      .collect();
+      .collect()).filter((entry) => entry.orgId === args.orgId);
 
     // Resolve user names
     return Promise.all(

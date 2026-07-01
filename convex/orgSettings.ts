@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { requireFeature } from "./subscriptions";
 
 // ─── Defaults ─────────────────────────────────────────────────────────────────
 
@@ -70,6 +71,13 @@ export const upsert = mutation({
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
+    const touchesWhatsApp =
+      args.whatsappPhoneNumberId !== undefined ||
+      args.whatsappApiToken !== undefined ||
+      args.whatsappWebhookSecret !== undefined;
+    if (touchesWhatsApp) {
+      await requireFeature(ctx, args.orgId, "whatsapp");
+    }
 
     const existing = await ctx.db
       .query("orgSettings")

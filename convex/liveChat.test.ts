@@ -34,7 +34,12 @@ async function seedOrgAndDealer(t: ReturnType<typeof convexTest>, suffix: string
     ctx.db.insert("organizations", { name: `Org ${suffix}`, createdAt: Date.now() })
   );
   const ownerRoleId = await t.run(async (ctx) =>
-    ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ["view:org", "edit:org"] })
+    ctx.db.insert("roles", {
+      orgId,
+      name: "OWNER",
+      permissions: ["view:org", "edit:org"],
+      isSystemOwnerRole: true,
+    })
   );
   const dealerUserId = await t.run(async (ctx) =>
     ctx.db.insert("users", { clerkId: `dealer_${suffix}`, email: `dealer_${suffix}@test.com`, name: "Dealer" })

@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { NOTIFICATION_CATEGORIES, categoryDefaultEmail } from "../lib/notifications/types";
+import { requireFeature } from "./subscriptions";
 
 /**
  * Returns the caller's preferences for every category, filling in the
@@ -40,6 +41,9 @@ export const setPreference = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId);
+    if (args.whatsappEnabled) {
+      await requireFeature(ctx, args.orgId, "whatsapp");
+    }
 
     const existing = await ctx.db
       .query("notificationPreferences")
