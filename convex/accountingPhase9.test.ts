@@ -24,6 +24,7 @@ const FINANCE_PERMS = [
   "view:sales", "create:sales", "edit:sales",
   "view:expenses", "create:expenses", "edit:expenses",
   "manage:finance", "view:finance",
+  "view:commissions", "manage:commissions",
   "view:customers", "create:customers",
   "view:vehicles", "create:vehicles", "edit:vehicles",
   "approve:requests",
@@ -37,6 +38,15 @@ async function seedDealer(tag = "p9", openPeriod = true) {
   const t = convexTest(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: `Phase9 ${tag}`, createdAt: Date.now() })
+  );
+  await t.run((ctx) =>
+    ctx.db.insert("subscriptions", {
+      orgId,
+      plan: "professional",
+      status: "active",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
   );
   const userId = await t.run((ctx) =>
     ctx.db.insert("users", { clerkId: `${tag}_user`, email: `${tag}@example.com`, name: `${tag} User` })
@@ -321,5 +331,68 @@ describe("Phase 9 — finance disbursement receipt", () => {
     const byCode = await journalByCode(asUser, orgId, event.journalEntryId);
     expect(byCode["1110"]?.debit).toBe(10_000_000); // Bank debited
     expect(byCode["1210"]?.credit).toBe(10_000_000); // Finance-company AR credited
+  });
+});
+
+// ─── Commission payment hits the GL payable ──────────────────────────────────
+
+describe("Phase 9 — commission payment GL posting", () => {
+  test("markCommissionPaid posts DR Commission Payable / CR Cash exactly once", async () => {
+    const { t, orgId, asUser, customerId, userId } = await seedDealer("comm");
+
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "VIN_COMM_9",
+        make: "Toyota",
+        model: "Camry",
+        year: 2023,
+        mileage: 0,
+        color: "White",
+        fuelType: "Petrol",
+        transmission: "Automatic",
+        purchasePrice: 12_000,
+        sellingPrice: 18_000,
+        status: "AVAILABLE",
+      })
+    );
+
+    const saleId = await asUser.mutation(api.sales.create, {
+      orgId,
+      vehicleId,
+      customerId,
+      salespersonId: userId,
+      salePrice: 18_000,
+      saleDate: Date.now(),
+      status: "COMPLETED",
+      financingType: "CASH",
+      idempotencyKey: "comm_sale_1",
+    });
+    await t.run((ctx) => ctx.db.patch(saleId, { commissionAmount: 500 }));
+
+    await asUser.mutation(api.sales.markCommissionPaid, {
+      orgId,
+      saleId,
+      idempotencyKey: "comm_paid_1",
+    });
+    await asUser.mutation(api.sales.markCommissionPaid, {
+      orgId,
+      saleId,
+      idempotencyKey: "comm_paid_1",
+    });
+
+    const event = await eventForSource(asUser, orgId, "sales", `commission_paid_${saleId}`);
+    expect(event).toBeTruthy();
+    expect(event.eventType).toBe("COMMISSION_PAID");
+    const byCode = await journalByCode(asUser, orgId, event.journalEntryId);
+    expect(byCode["2300"]?.debit).toBe(500_000); // Commission Payable settled
+    expect(byCode["1100"]?.credit).toBe(500_000); // Cash paid
+
+    const events = await asUser.query(api.accountingLedger.listAccountingEvents, {
+      orgId,
+      sourceType: "sales",
+      sourceId: `commission_paid_${saleId}`,
+    });
+    expect(events.filter((row) => row.eventType === "COMMISSION_PAID")).toHaveLength(1);
   });
 });

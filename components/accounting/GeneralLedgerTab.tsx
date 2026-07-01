@@ -25,6 +25,7 @@ type LedgerTransaction = {
   vehicleLabel?: string;
   customerName?: string;
   quoteReference?: string;
+  reservationReference?: string;
 };
 
 function translatedKey(t: (key: string) => string, key: string, fallback: string): string {
@@ -71,6 +72,7 @@ function localizedDetails(transaction: LedgerTransaction, locale: string): strin
   if (locale === "ar") {
     return [
       transaction.quoteReference ? `العرض ${transaction.quoteReference}` : null,
+      transaction.reservationReference ? `الحجز ${transaction.reservationReference}` : null,
       transaction.vehicleLabel,
       transaction.customerName ? `العميل ${transaction.customerName}` : null,
     ].filter((detail): detail is string => Boolean(detail));
@@ -78,6 +80,7 @@ function localizedDetails(transaction: LedgerTransaction, locale: string): strin
 
   return [
     transaction.quoteReference ? `Quote ${transaction.quoteReference}` : null,
+    transaction.reservationReference ? `Reservation ${transaction.reservationReference}` : null,
     transaction.vehicleLabel,
     transaction.customerName ? `Customer ${transaction.customerName}` : null,
   ].filter((detail): detail is string => Boolean(detail));

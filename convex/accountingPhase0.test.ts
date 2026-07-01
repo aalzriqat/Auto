@@ -311,12 +311,13 @@ describe("Phase 0 financial safety controls", () => {
 
   test("duplicate_expense_posting_key_creates_one_expense_transaction", async () => {
     const { t, orgId, asUser } = await seedPhase0Dealer();
+    const expenseDate = Date.now();
 
     const firstExpenseId = await asUser.mutation(api.expenses.create, {
       orgId,
       title: "Phase 0 Expense",
       amount: 150,
-      date: Date.now(),
+      date: expenseDate,
       category: "OTHER",
       idempotencyKey: "expense-post-1",
     });
@@ -324,7 +325,7 @@ describe("Phase 0 financial safety controls", () => {
       orgId,
       title: "Phase 0 Expense",
       amount: 150,
-      date: Date.now(),
+      date: expenseDate,
       category: "OTHER",
       idempotencyKey: "expense-post-1",
     });

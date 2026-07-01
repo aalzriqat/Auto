@@ -12,6 +12,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { fromMinorUnits } from "./utils/money";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
+import { requireFeature } from "./subscriptions";
 
 /** Resolve the organization's display currency (defaults to JOD). */
 async function getOrgCurrencyForReports(ctx: QueryCtx, orgId: Id<"organizations">): Promise<string> {
@@ -61,6 +62,7 @@ export const trialBalance = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
 
     // Include all accounts (active and inactive) so historical postings on
     // deactivated accounts still appear in the trial balance.
@@ -122,6 +124,7 @@ export const incomeStatement = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
 
     const accounts = await ctx.db
       .query("chartOfAccounts")
@@ -191,6 +194,7 @@ export const balanceSheet = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
 
     const accounts = await ctx.db
       .query("chartOfAccounts")
@@ -256,6 +260,7 @@ export const arAging = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
 
     const asOfDate = args.asOfDate ?? Date.now();
 
@@ -336,6 +341,7 @@ export const subledgerReconciliation = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
 
     // GL total for AR accounts — cumulative from inception to toDate so the
     // basis matches the subledger outstanding balance (not period movement).

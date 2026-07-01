@@ -6,6 +6,7 @@ import { internal } from "./_generated/api";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { DEFAULT_CHART, REQUIRED_SYSTEM_KEYS, SystemKey, SYSTEM_KEYS } from "./utils/defaultChart";
+import { requireFeature } from "./subscriptions";
 
 const accountTypeValidator = v.union(
   v.literal("ASSET"),
@@ -175,6 +176,7 @@ export const list = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
 
     let q;
     if (args.type) {
@@ -200,6 +202,7 @@ export const get = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
     const account = await ctx.db.get(args.accountId);
     if (!account || account.orgId !== args.orgId) return null;
     return account;
@@ -210,6 +213,7 @@ export const isInitialized = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
     return isChartInitialized(ctx, args.orgId);
   },
 });
@@ -220,6 +224,7 @@ export const initialize = mutation({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
 
     if (await isChartInitialized(ctx, args.orgId)) {
       throw new ConvexError("Chart of accounts is already initialized for this organization.");
@@ -272,6 +277,7 @@ export const create = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
 
     const existing = await ctx.db
       .query("chartOfAccounts")
@@ -322,6 +328,7 @@ export const update = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
 
     const account = await ctx.db.get(args.accountId);
     if (!account || account.orgId !== args.orgId) {
@@ -348,6 +355,7 @@ export const validateSystemAccounts = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
 
     const missing: string[] = [];
     for (const key of REQUIRED_SYSTEM_KEYS) {

@@ -19,6 +19,15 @@ async function seedDealer(tag = "p8") {
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: `Phase8 Dealer ${tag}`, createdAt: Date.now() })
   );
+  await t.run((ctx) =>
+    ctx.db.insert("subscriptions", {
+      orgId,
+      plan: "professional",
+      status: "active",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+  );
   const userId = await t.run((ctx) =>
     ctx.db.insert("users", {
       clerkId: `${tag}_user`, email: `${tag}@example.com`, name: `${tag} User`,
@@ -155,6 +164,14 @@ describe("Phase 8 — payment intent settlement", () => {
     const settled = await t.run((ctx) => ctx.db.get(intentId));
     expect(settled?.status).toBe("SETTLED");
     expect(settled?.externalId).toBe("tap_charge_abc123");
+    expect(settled?.canonicalPaymentId).toBeTruthy();
+    const canonicalPayment = await t.run(async (ctx) => {
+      if (!settled?.canonicalPaymentId) return null;
+      return await ctx.db.get(settled.canonicalPaymentId);
+    });
+    expect(canonicalPayment?.method).toBe("PAYMENT_LINK");
+    expect(canonicalPayment?.provider).toBe("tap");
+    expect(canonicalPayment?.providerTransactionId).toBe("tap_charge_abc123");
 
     const glEvents = await t.run((ctx) =>
       ctx.db.query("accountingEvents")
@@ -171,17 +188,36 @@ describe("Phase 8 — payment intent settlement", () => {
 
     const intentId = await asUser.mutation(api.paymentIntents.create, {
       orgId, customerId, amountMinor: 1000_000, currency: "JOD", provider: "stripe",
+      externalId: "stripe_pi_abc",
+      checkoutUrl: "https://checkout.stripe.com/c/pay/stripe_pi_abc",
+      providerAccountId: "acct_phase8",
       idempotencyKey: "pi_stripe_001",
     });
 
-    await t.run((ctx) => ctx.db.patch(intentId, { externalId: "stripe_pi_abc" }));
+    await t.mutation(internal.paymentIntents.settleByExternalId, {
+      provider: "stripe", externalId: "stripe_pi_abc",
+      amountMinor: 1000_000,
+      currency: "JOD",
+      providerSignatureVerifiedAt: Date.now(),
+      providerEventId: "evt_phase8_1",
+      providerEventType: "payment_intent.succeeded",
+      providerAccountId: "acct_phase8",
+    });
+    await t.mutation(internal.paymentIntents.settleByExternalId, {
+      provider: "stripe", externalId: "stripe_pi_abc",
+      amountMinor: 1000_000,
+      currency: "JOD",
+      providerSignatureVerifiedAt: Date.now(),
+      providerEventId: "evt_phase8_1",
+      providerEventType: "payment_intent.succeeded",
+      providerAccountId: "acct_phase8",
+    });
 
-    await t.mutation(internal.paymentIntents.settleByExternalId, {
-      provider: "stripe", externalId: "stripe_pi_abc",
-    });
-    await t.mutation(internal.paymentIntents.settleByExternalId, {
-      provider: "stripe", externalId: "stripe_pi_abc",
-    });
+    const settled = await t.run((ctx) => ctx.db.get(intentId));
+    expect(settled?.status).toBe("SETTLED");
+    expect(settled?.providerEventId).toBe("evt_phase8_1");
+    expect(settled?.providerAmountMinor).toBe(1000_000);
+    expect(settled?.providerCurrency).toBe("JOD");
 
     const glEvents = await t.run((ctx) =>
       ctx.db.query("accountingEvents")
@@ -190,6 +226,98 @@ describe("Phase 8 — payment intent settlement", () => {
         .collect()
     );
     expect(glEvents).toHaveLength(1);
+  });
+
+  test("internal settleByExternalId rejects signed provider money mismatch before posting", async () => {
+    const { t, orgId, asUser, customerId } = await seedDealer("pi_mismatch");
+
+    const intentId = await asUser.mutation(api.paymentIntents.create, {
+      orgId,
+      customerId,
+      amountMinor: 1000_000,
+      currency: "JOD",
+      provider: "tap",
+      externalId: "tap_charge_mismatch",
+      checkoutUrl: "https://tap.example/checkout/tap_charge_mismatch",
+      providerAccountId: "merchant_123",
+      idempotencyKey: "pi_mismatch_001",
+    });
+
+    const result = await t.mutation(internal.paymentIntents.settleByExternalId, {
+      provider: "tap",
+      externalId: "tap_charge_mismatch",
+      amountMinor: 999_000,
+      currency: "JOD",
+      providerSignatureVerifiedAt: Date.now(),
+      providerEventId: "tap_charge_mismatch",
+      providerEventType: "tap.charge.CAPTURED",
+      providerAccountId: "merchant_123",
+    });
+    expect(result).toBeNull();
+
+    const failed = await t.run((ctx) => ctx.db.get(intentId));
+    expect(failed?.status).toBe("FAILED");
+    expect(failed?.providerAmountMinor).toBe(999_000);
+    expect(failed?.canonicalPaymentId).toBeUndefined();
+
+    const glEvents = await t.run((ctx) =>
+      ctx.db.query("accountingEvents")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .filter((q) => q.eq(q.field("eventType"), "PAYMENT_LINK_RECEIVED"))
+        .collect()
+    );
+    expect(glEvents).toHaveLength(0);
+  });
+
+  test("settling an intent linked to a receivable allocates the canonical payment", async () => {
+    const { t, orgId, asUser, customerId } = await seedDealer("pi_alloc");
+
+    const receivableDocumentId = await asUser.mutation(api.subledger.createReceivable, {
+      orgId,
+      documentType: "INVOICE",
+      payerType: "CUSTOMER",
+      customerId,
+      sourceType: "test_intent",
+      sourceId: "pi_alloc_receivable",
+      originalAmountMinor: 1_000_000,
+      currency: "JOD",
+      issueDate: Date.now(),
+      dueDate: Date.now(),
+    });
+
+    const intentId = await asUser.mutation(api.paymentIntents.create, {
+      orgId,
+      customerId,
+      receivableDocumentId,
+      amountMinor: 400_000,
+      currency: "JOD",
+      provider: "tap",
+      idempotencyKey: "pi_alloc_001",
+    });
+
+    await asUser.mutation(api.paymentIntents.markSettled, {
+      orgId,
+      intentId,
+      externalId: "tap_alloc_001",
+      idempotencyKey: "settle_tap_alloc_001",
+    });
+
+    const settled = await t.run((ctx) => ctx.db.get(intentId));
+    expect(settled?.canonicalPaymentId).toBeTruthy();
+    expect(settled?.paymentAllocationId).toBeTruthy();
+
+    const allocation = await t.run(async (ctx) => {
+      if (!settled?.paymentAllocationId) return null;
+      return await ctx.db.get(settled.paymentAllocationId);
+    });
+    expect(allocation?.amountMinor).toBe(400_000);
+    expect(allocation?.receivableDocumentId).toBe(receivableDocumentId);
+
+    const balance = await asUser.query(api.subledger.getReceivableBalance, {
+      orgId,
+      receivableDocumentId,
+    });
+    expect(balance?.outstandingMinor).toBe(600_000);
   });
 
   test("expiring a pending intent marks it EXPIRED without posting GL", async () => {

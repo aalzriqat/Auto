@@ -15,6 +15,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { postAccountingEvent } from "./accounting/postingEngine";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { toMinorUnits } from "./utils/money";
+import { requireFeature } from "./subscriptions";
 
 // ─── Snapshot / classification helpers ───────────────────────────────────────
 
@@ -79,6 +80,7 @@ export const auditLegacyTransactions = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
 
     const rawLimit = args.limit ?? 100;
     if (!Number.isSafeInteger(rawLimit) || rawLimit < 1) {
@@ -115,6 +117,7 @@ export const duplicateEventCheck = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
 
     const events = await ctx.db
       .query("accountingEvents")
@@ -149,6 +152,7 @@ export const migrationGapAnalysis = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
 
     const legacyCount = (
       await ctx.db
@@ -221,6 +225,7 @@ export const migrateUnpostedTransactions = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
 
     const dryRun = args.dryRun !== false;
     const rawMigLimit = args.limit ?? 50;
