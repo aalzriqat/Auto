@@ -135,10 +135,30 @@ export const PLANS = {
 export type PlanId = keyof typeof PLANS;
 export type PlanGate = keyof (typeof PLANS)["enterprise"]["gates"];
 
+export const planGateValidator = v.union(
+  v.literal("socialInbox"),
+  v.literal("whatsapp"),
+  v.literal("internalMessaging"),
+  v.literal("accounting"),
+  v.literal("customRoles"),
+  v.literal("websiteBuilder"),
+  v.literal("multiBranch")
+);
+
+const PLAN_GATE_LABELS: Record<PlanGate, string> = {
+  socialInbox: "Social Inbox",
+  whatsapp: "WhatsApp",
+  internalMessaging: "internal messaging",
+  accounting: "accounting",
+  customRoles: "custom roles",
+  websiteBuilder: "website builder",
+  multiBranch: "multi-branch",
+};
+
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 /** Returns the org's active plan, defaulting to "free" if no subscription row exists. */
-async function getOrgPlan(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">): Promise<PlanId> {
+export async function getOrgPlan(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">): Promise<PlanId> {
   const sub = await ctx.db
     .query("subscriptions")
     .withIndex("by_org", (q) => q.eq("orgId", orgId))
@@ -148,6 +168,24 @@ async function getOrgPlan(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations"
   // Expired paid plan falls back to free
   if (sub.status === "expired") return "free";
   return sub.plan;
+}
+
+export async function hasPlanFeature(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  gate: PlanGate
+) {
+  const planId = await getOrgPlan(ctx, orgId);
+  return PLANS[planId].gates[gate];
+}
+
+export async function requireFeature(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  gate: PlanGate
+) {
+  if (await hasPlanFeature(ctx, orgId, gate)) return;
+  throw new ConvexError(`Upgrade required: your current plan does not include ${PLAN_GATE_LABELS[gate]}.`);
 }
 
 export const createFreeSubscription = internalMutation({

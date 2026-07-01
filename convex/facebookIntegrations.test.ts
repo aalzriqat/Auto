@@ -21,6 +21,16 @@ async function seedOwner(t: ReturnType<typeof convexTest>) {
   const orgId = await t.run(async (ctx) =>
     ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() })
   );
+  // Seed a professional subscription so requireFeature("socialInbox") passes.
+  await t.run(async (ctx) =>
+    ctx.db.insert("subscriptions", {
+      orgId,
+      plan: "professional",
+      status: "active",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+  );
   const userId = await t.run(async (ctx) =>
     ctx.db.insert("users", { clerkId: "fb_owner_001", email: "fbowner@test.com", name: "Owner" })
   );

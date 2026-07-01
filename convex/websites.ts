@@ -507,20 +507,39 @@ export const publish = mutation({
     if (!primaryDomain) throw new ConvexError("Choose a website address before publishing.");
     if (primaryDomain.status !== "active") throw new ConvexError("The selected domain is not active yet.");
 
-    const snapshotJson = await websitePublicProjection(ctx, args.orgId, settings);
+    const now = Date.now();
+    const publishedSettings = {
+      ...settings,
+      enabled: true,
+      status: "active" as const,
+      activeDomainId: primaryDomain._id,
+      publishedAt: now,
+      updatedAt: now,
+    };
+    const snapshotJson = await websitePublicProjection(ctx, args.orgId, publishedSettings);
+    const snapshotId = await ctx.db.insert("websitePublishSnapshots", {
+      orgId: args.orgId,
+      websiteSettingsId: settings._id,
+      domain: primaryDomain.domain,
+      version: `pending-${now}`,
+      snapshotJson,
+      createdAt: now,
+      publishedAt: now,
+      publishedByUserId: user._id,
+    });
+    const snapshotVersion = snapshotId.toString();
+    await ctx.db.patch(snapshotId, { version: snapshotVersion });
     await ctx.db.patch(settings._id, {
       enabled: true,
       status: "active",
       activeDomainId: primaryDomain._id,
-      publishedAt: Date.now(),
-      updatedAt: Date.now(),
+      publishedAt: now,
+      publishedSnapshotId: snapshotId,
+      updatedAt: now,
     });
-    const snapshotId = await ctx.db.insert("websitePublishSnapshots", {
-      orgId: args.orgId,
-      websiteSettingsId: settings._id,
-      snapshotJson,
-      createdAt: Date.now(),
-      publishedByUserId: user._id,
+    await ctx.db.patch(primaryDomain._id, {
+      publishedSnapshotId: snapshotId,
+      updatedAt: now,
     });
 
     await writeAuditLog(ctx, user, {
