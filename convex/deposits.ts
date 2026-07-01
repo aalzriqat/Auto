@@ -56,10 +56,10 @@ export const create = mutation({
         ]);
         const vehicleLabel = vehicle
           ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim()
-          : "المركبة";
+          : "Vehicle";
         const customerLabel = customer
-          ? `${customer.firstName ?? ""} ${customer.lastName ?? ""}`.trim() || "عميل"
-          : "عميل";
+          ? `${customer.firstName ?? ""} ${customer.lastName ?? ""}`.trim() || "Customer"
+          : "Customer";
         const quoteReference = args.quoteId.toString();
 
         const now = Date.now();
@@ -83,8 +83,9 @@ export const create = mutation({
           amount: args.amount,
           date: now,
           category: "DEPOSIT",
-          description: `عربون للعرض ${quoteReference} - ${vehicleLabel} - ${customerLabel}`,
+          description: `Deposit for quote ${quoteReference} - ${vehicleLabel} - ${customerLabel}`,
           vehicleId: quote.vehicleId,
+          depositId,
           idempotencyKey: args.idempotencyKey,
         });
 
@@ -180,10 +181,10 @@ export const release = mutation({
           ]);
           const refundVehicleLabel = refundVehicle
             ? `${refundVehicle.year} ${refundVehicle.make} ${refundVehicle.model}`.trim()
-            : "المركبة";
+            : "Vehicle";
           const refundCustomerLabel = refundCustomer
-            ? `${refundCustomer.firstName ?? ""} ${refundCustomer.lastName ?? ""}`.trim() || "عميل"
-            : "عميل";
+            ? `${refundCustomer.firstName ?? ""} ${refundCustomer.lastName ?? ""}`.trim() || "Customer"
+            : "Customer";
 
           await ctx.db.insert("transactions", {
             orgId: args.orgId,
@@ -191,8 +192,9 @@ export const release = mutation({
             amount: deposit.amount,
             date: now,
             category: "DEPOSIT",
-            description: `استرداد عربون للعرض ${deposit.quoteId} - ${refundVehicleLabel} - ${refundCustomerLabel}`,
+            description: `Deposit refund for quote ${deposit.quoteId} - ${refundVehicleLabel} - ${refundCustomerLabel}`,
             vehicleId: deposit.vehicleId,
+            depositId: args.depositId,
             idempotencyKey: args.idempotencyKey,
           });
 

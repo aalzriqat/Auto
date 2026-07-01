@@ -21,6 +21,7 @@ const PERMISSIONS = [
   "finalize:financed_deal",
   "confirm:finance_disbursement",
   "verify:finance_documents",
+  "view:finance",
 ];
 
 async function setup() {
@@ -103,7 +104,8 @@ describe("deposits.create", () => {
       expect(tx?.category).toBe("DEPOSIT");
       expect(tx?.type).toBe("IN");
       expect(tx?.amount).toBe(1500);
-      expect(tx?.description).toContain("عربون للعرض");
+      expect(tx?.depositId).toBe(depositId);
+      expect(tx?.description).toContain("Deposit for quote");
       expect(tx?.description).toContain(quoteId.toString());
       expect(tx?.description).toContain("Mazda CX-5");
       expect(tx?.description).toContain("Nora Khaled");
@@ -154,9 +156,42 @@ describe("deposits.release", () => {
         .first();
       expect(outTx?.amount).toBe(1500);
       expect(outTx?.category).toBe("DEPOSIT");
-      expect(outTx?.description).toContain("استرداد عربون");
+      expect(outTx?.depositId).toBe(depositId);
+      expect(outTx?.description).toContain("Deposit refund");
       expect(outTx?.description).toContain(quoteId.toString());
     });
+  });
+
+  test("ledger enrichment uses each transaction's exact deposit link", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const firstQuoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
+    const firstDepositId = await asUser.mutation(api.deposits.create, {
+      orgId,
+      quoteId: firstQuoteId,
+      amount: 1500,
+    });
+
+    const secondCustomerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Omar", lastName: "Saleh" })
+    );
+    const secondQuoteId = await makeQuote(t, asUser, orgId, secondCustomerId, vehicleId);
+    const secondDepositId = await asUser.mutation(api.deposits.create, {
+      orgId,
+      quoteId: secondQuoteId,
+      amount: 1500,
+    });
+
+    const ledger = await asUser.query(api.transactions.list, {
+      orgId,
+      paginationOpts: { cursor: null, numItems: 10 },
+    });
+    const depositRows = ledger.page.filter((row) => row.category === "DEPOSIT");
+    const rowByDepositId = new Map(depositRows.map((row) => [row.depositId, row]));
+
+    expect(rowByDepositId.get(firstDepositId)?.quoteReference).toBe(firstQuoteId.toString());
+    expect(rowByDepositId.get(firstDepositId)?.customerName).toBe("Nora Khaled");
+    expect(rowByDepositId.get(secondDepositId)?.quoteReference).toBe(secondQuoteId.toString());
+    expect(rowByDepositId.get(secondDepositId)?.customerName).toBe("Omar Saleh");
   });
 
   test("FORFEITED releases the hold without a reversing transaction", async () => {

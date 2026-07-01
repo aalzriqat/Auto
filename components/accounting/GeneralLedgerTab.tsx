@@ -58,22 +58,40 @@ function isArabicLedgerDescription(description: string): boolean {
   return /^(بيع مركبة|عربون|استرداد عربون|مصروف:)/.test(description);
 }
 
-function enrichedArabicDetails(transaction: LedgerTransaction): string[] {
+function depositPrefix(type: "IN" | "OUT", locale: string): string {
+  if (locale === "ar") return type === "OUT" ? "استرداد عربون" : "عربون";
+  return type === "OUT" ? "Deposit refund" : "Deposit";
+}
+
+function localizedDetails(transaction: LedgerTransaction, locale: string): string[] {
+  if (locale === "ar") {
+    return [
+      transaction.quoteReference ? `العرض ${transaction.quoteReference}` : null,
+      transaction.vehicleLabel,
+      transaction.customerName ? `العميل ${transaction.customerName}` : null,
+    ].filter((detail): detail is string => Boolean(detail));
+  }
+
   return [
-    transaction.quoteReference ? `العرض ${transaction.quoteReference}` : null,
+    transaction.quoteReference ? `Quote ${transaction.quoteReference}` : null,
     transaction.vehicleLabel,
-    transaction.customerName ? `العميل ${transaction.customerName}` : null,
+    transaction.customerName ? `Customer ${transaction.customerName}` : null,
   ].filter((detail): detail is string => Boolean(detail));
 }
 
-function enrichedArabicDescription(transaction: LedgerTransaction): string | null {
-  const details = enrichedArabicDetails(transaction);
+function enrichedDescription(transaction: LedgerTransaction, locale: string): string | null {
+  const details = localizedDetails(transaction, locale);
   if (transaction.category === "DEPOSIT" && details.length > 0) {
-    const prefix = transaction.type === "OUT" ? "استرداد عربون" : "عربون";
-    return `${prefix} - ${details.join(" - ")}`;
+    return `${depositPrefix(transaction.type, locale)} - ${details.join(" - ")}`;
   }
   if (transaction.category === "VEHICLE_SALE" && transaction.vehicleLabel) {
-    return `بيع مركبة ${transaction.vehicleLabel}`;
+    if (locale === "ar") {
+      const customer = transaction.customerName ? ` للعميل ${transaction.customerName}` : "";
+      return `بيع مركبة ${transaction.vehicleLabel}${customer}`;
+    }
+
+    const customer = transaction.customerName ? ` to ${transaction.customerName}` : "";
+    return `Sale of vehicle ${transaction.vehicleLabel}${customer}`;
   }
   return null;
 }
@@ -112,10 +130,11 @@ export function GeneralLedgerTab() {
   }
 
   function transactionDescription(transaction: LedgerTransaction): string {
+    const structuredDescription = enrichedDescription(transaction, locale);
+    if (structuredDescription) return structuredDescription;
     if (locale !== "ar") return transaction.description;
     if (isArabicLedgerDescription(transaction.description)) return transaction.description;
-    return enrichedArabicDescription(transaction) ??
-      legacyArabicDescription(transaction) ??
+    return legacyArabicDescription(transaction) ??
       transaction.description;
   }
 

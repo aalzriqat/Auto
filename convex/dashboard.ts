@@ -1,23 +1,8 @@
 import { v } from "convex/values";
 import { query } from "./_generated/server";
-import { Doc, Id } from "./_generated/dataModel";
+import { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { validateVinChecksum } from "../lib/vinHelpers";
-
-type DashboardSale = Doc<"sales">;
-type DashboardTransaction = Doc<"transactions">;
-
-function visibleSale(sale: DashboardSale): boolean {
-  return sale.status !== "CANCELLED" && sale.isDeleted !== true;
-}
-
-function visibleVehicleSaleTransaction(transaction: DashboardTransaction): boolean {
-  return (
-    transaction.category === "VEHICLE_SALE" &&
-    transaction.type === "IN" &&
-    transaction.isDeleted !== true
-  );
-}
 
 /**
  * Retrieves aggregate statistics for the dashboard.
@@ -76,29 +61,45 @@ export const stats = query({
       periodSales = await ctx.db
         .query("sales")
         .withIndex("by_org_saleDate", (q) => q.eq("orgId", args.orgId).gte("saleDate", filterStart))
-        .filter(q => q.neq(q.field("status"), "CANCELLED"))
+        .filter(q => q.and(
+          q.neq(q.field("status"), "CANCELLED"),
+          q.neq(q.field("isDeleted"), true)
+        ))
         .collect();
     } else {
       periodSales = await ctx.db
         .query("sales")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .filter(q => q.neq(q.field("status"), "CANCELLED"))
+        .filter(q => q.and(
+          q.neq(q.field("status"), "CANCELLED"),
+          q.neq(q.field("isDeleted"), true)
+        ))
         .take(5000);
     }
 
-    const activeSales = periodSales.filter(visibleSale);
+    const activeSales = periodSales;
 
     const transactionCandidates =
       filterStart > 0
         ? await ctx.db
           .query("transactions")
           .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId).gte("date", filterStart))
+          .filter(q => q.and(
+            q.eq(q.field("category"), "VEHICLE_SALE"),
+            q.eq(q.field("type"), "IN"),
+            q.neq(q.field("isDeleted"), true)
+          ))
           .take(5000)
         : await ctx.db
           .query("transactions")
           .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId))
+          .filter(q => q.and(
+            q.eq(q.field("category"), "VEHICLE_SALE"),
+            q.eq(q.field("type"), "IN"),
+            q.neq(q.field("isDeleted"), true)
+          ))
           .take(5000);
-    const saleTransactions = transactionCandidates.filter(visibleVehicleSaleTransaction);
+    const saleTransactions = transactionCandidates;
 
     const salesVolume = activeSales.length > 0
       ? activeSales.reduce((acc, sale) => acc + sale.salePrice, 0)

@@ -144,6 +144,17 @@ describe("dashboard.stats", () => {
         description: "Sale of vehicle 2024 BYD QIN L (VIN: LCOC76CA9R4807882)",
       })
     );
+    await t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId,
+        type: "IN",
+        amount: 99999,
+        date: Date.UTC(2026, 5, 29),
+        category: "VEHICLE_SALE",
+        description: "Deleted sale transaction",
+        isDeleted: true,
+      })
+    );
 
     const result = await asUser.query(api.dashboard.stats, { orgId, timeRange: "ALL_TIME" });
 

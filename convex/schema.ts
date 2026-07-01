@@ -1036,6 +1036,9 @@ export default defineSchema({
     createdAt: v.number(),
     resolvedBy: v.optional(v.id("users")),
     resolvedAt: v.optional(v.number()),
+    isDeleted: v.optional(v.boolean()),
+    deletedAt: v.optional(v.number()),
+    deletedBy: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
     .index("by_quote", ["quoteId"])
@@ -1330,6 +1333,8 @@ export default defineSchema({
     idempotencyKey: v.optional(v.string()),
     // Optional links to operational entities
     vehicleId: v.optional(v.id("vehicles")),
+    customerId: v.optional(v.id("customers")),
+    depositId: v.optional(v.id("deposits")),
     userId: v.optional(v.id("users")), // For partner draws/salaries
     expenseId: v.optional(v.id("expenses")),
     isDeleted: v.optional(v.boolean()),
