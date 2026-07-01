@@ -55,9 +55,11 @@ export const create = mutation({
           ctx.db.get(quote.customerId),
         ]);
         const vehicleLabel = vehicle
-          ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`
+          ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim()
           : "Vehicle";
-        const customerLabel = customer ? `${customer.firstName} ${customer.lastName}` : "Customer";
+        const customerLabel = customer
+          ? `${customer.firstName ?? ""} ${customer.lastName ?? ""}`.trim() || "Customer"
+          : "Customer";
 
         const now = Date.now();
         const depositId = await ctx.db.insert("deposits", {
@@ -176,9 +178,11 @@ export const release = mutation({
             ctx.db.get(deposit.customerId),
           ]);
           const refundVehicleLabel = refundVehicle
-            ? `${refundVehicle.year} ${refundVehicle.make} ${refundVehicle.model}`
+            ? `${refundVehicle.year} ${refundVehicle.make} ${refundVehicle.model}`.trim()
             : "Vehicle";
-          const refundCustomerLabel = refundCustomer ? `${refundCustomer.firstName} ${refundCustomer.lastName}` : "Customer";
+          const refundCustomerLabel = refundCustomer
+            ? `${refundCustomer.firstName ?? ""} ${refundCustomer.lastName ?? ""}`.trim() || "Customer"
+            : "Customer";
 
           await ctx.db.insert("transactions", {
             orgId: args.orgId,
