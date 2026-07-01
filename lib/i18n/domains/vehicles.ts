@@ -154,7 +154,7 @@ export const vehiclesEn = {
   ImportVehiclesTitle: "Import Vehicles via Excel",
   ImportVehiclesDesc: "Upload an Excel file to bulk import vehicles.",
   DropFileHere: "Click or drop Excel file here",
-  FileTypesAccepted: "Supports .xlsx, .xls, .csv",
+  FileTypesAccepted: "Supports .xlsx, .csv",
   DownloadTemplate: "Download Template",
   ReadyToImport: "ready",
   ImportErrors: "errors",
@@ -207,6 +207,7 @@ export const vehiclesEn = {
   ReservationStatusActive: "Active",
   ReservationStatusReleased: "Released",
   ReservationStatusConverted: "Converted",
+  ReservationStatusExpired: "Expired",
 };
 
 export const vehiclesAr = {
@@ -365,7 +366,7 @@ export const vehiclesAr = {
   ImportVehiclesTitle: "استيراد المركبات عبر إكسل",
   ImportVehiclesDesc: "قم برفع ملف إكسل لاستيراد المركبات دفعة واحدة.",
   DropFileHere: "انقر أو أسحب ملف إكسل هنا",
-  FileTypesAccepted: "يدعم .xlsx, .xls, .csv",
+  FileTypesAccepted: "يدعم .xlsx و .csv",
   DownloadTemplate: "تحميل القالب",
   ReadyToImport: "جاهز",
   ImportErrors: "أخطاء",
@@ -418,4 +419,5 @@ export const vehiclesAr = {
   ReservationStatusActive: "نشط",
   ReservationStatusReleased: "ملغى",
   ReservationStatusConverted: "محول",
+  ReservationStatusExpired: "منتهي",
 };

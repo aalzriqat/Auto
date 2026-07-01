@@ -3,12 +3,14 @@ import { internalMutation, internalQuery } from "./_generated/server";
 import { Doc } from "./_generated/dataModel";
 import { notifyManagers, notifyUser } from "./utils/notifications";
 import { nextGeneratedLeadAssignee } from "./utils/leadAssignment";
+import { hasPlanFeature } from "./subscriptions";
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
 export const getSettingsByOrg = internalQuery({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
+    if (!(await hasPlanFeature(ctx, args.orgId, "whatsapp"))) return null;
     return await ctx.db
       .query("orgSettings")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
@@ -42,6 +44,7 @@ export const handleIncomingMessage = internalMutation({
   },
   handler: async (ctx, args) => {
     const { orgId, senderPhone, senderName, messageText } = args;
+    if (!(await hasPlanFeature(ctx, orgId, "whatsapp"))) return;
 
     // Find or create customer
     const customers = await ctx.db

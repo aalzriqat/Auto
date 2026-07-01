@@ -28,6 +28,24 @@ const STRIP_REQUEST_HEADERS = new Set([
   "x-real-ip",
 ]);
 
+const PUBLIC_API_ROUTE_METHODS: Record<string, readonly string[]> = {
+  "/api/build-id": ["GET", "HEAD"],
+};
+
+function isAllowedPublicApiRoute(pathname: string, method: string): boolean {
+  return PUBLIC_API_ROUTE_METHODS[pathname]?.includes(method.toUpperCase()) ?? false;
+}
+
+function blockedApiResponse(): Response {
+  return new Response("Not found", {
+    status: 404,
+    headers: {
+      "Cache-Control": "no-store",
+      "X-Robots-Tag": "noindex",
+    },
+  });
+}
+
 export default {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -52,10 +70,21 @@ export default {
     cleanHeaders.set("X-Forwarded-Host", hostname);
     cleanHeaders.set("X-Dealer-Subdomain", subdomain);
 
-    // Static assets and API routes: proxy directly, no path rewrite
+    if (pathname.startsWith("/api/")) {
+      if (!isAllowedPublicApiRoute(pathname, request.method)) {
+        return blockedApiResponse();
+      }
+      return fetch(NEXT_APP_ORIGIN + pathname + search, {
+        method: request.method,
+        headers: cleanHeaders,
+        body: request.method !== "GET" && request.method !== "HEAD" ? request.body : undefined,
+        redirect: "follow",
+      });
+    }
+
+    // Static assets: proxy directly, no path rewrite
     if (
       pathname.startsWith("/_next/") ||
-      pathname.startsWith("/api/") ||
       pathname === "/favicon.ico" ||
       pathname.startsWith("/favicon") ||
       pathname.endsWith(".txt") ||

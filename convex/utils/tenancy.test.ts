@@ -100,5 +100,36 @@ describe("Tenancy Utilities", () => {
       expect(result.membership).toEqual(mockMembership);
       expect(result.role).toEqual(mockRole);
     });
+
+    it("does not treat a display-name-only OWNER role as an owner", async () => {
+      const mockMembership = { _id: "m1", orgId: "org1", userId: "u1", roleId: "r1" };
+      const mockRole = { _id: "r1", name: "OWNER", permissions: [] };
+
+      const ctx = createMockCtx(mockIdentity, {
+        get: { "org1": { _id: "org1" }, "r1": mockRole },
+      });
+
+      ctx.db.query = vi.fn()
+        .mockReturnValueOnce({ withIndex: () => ({ unique: () => Promise.resolve(mockUser) }) })
+        .mockReturnValueOnce({ withIndex: () => ({ unique: () => Promise.resolve(mockMembership) }) });
+
+      await expect(requireTenantAuth(ctx, mockOrgId as any, ["edit:vehicles"] as any)).rejects.toThrow(/Forbidden: Missing required permissions/);
+    });
+
+    it("allows the flagged system owner role to satisfy permission checks", async () => {
+      const mockMembership = { _id: "m1", orgId: "org1", userId: "u1", roleId: "r1" };
+      const mockRole = { _id: "r1", name: "OWNER", permissions: [], isSystemOwnerRole: true };
+
+      const ctx = createMockCtx(mockIdentity, {
+        get: { "org1": { _id: "org1" }, "r1": mockRole },
+      });
+
+      ctx.db.query = vi.fn()
+        .mockReturnValueOnce({ withIndex: () => ({ unique: () => Promise.resolve(mockUser) }) })
+        .mockReturnValueOnce({ withIndex: () => ({ unique: () => Promise.resolve(mockMembership) }) });
+
+      const result = await requireTenantAuth(ctx, mockOrgId as any, ["edit:vehicles"] as any);
+      expect(result.role).toEqual(mockRole);
+    });
   });
 });

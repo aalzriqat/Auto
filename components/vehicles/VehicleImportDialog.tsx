@@ -1,11 +1,11 @@
 "use client";
 
-import * as XLSX from "xlsx";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { ImportWizard, ImportFieldConfig, ImportRow, normalizeKey } from "@/components/import/ImportWizard";
+import { downloadXlsxTemplate, SpreadsheetRows } from "@/lib/spreadsheet";
 
 const NEW_COMPANY_PREFIX = "valuation:new:";
 const EXISTING_COMPANY_PREFIX = "valuation:id:";
@@ -99,8 +99,7 @@ const PREVIEW_COLUMNS = [
  * When row 2 contains Arabic valuation sub-headers, we merge both rows into
  * a single header and start data from row 3.
  */
-function parseVehicleWorksheet(ws: XLSX.WorkSheet): { headers: string[]; rows: any[][]; valuationHeaders: string[] } {
-  const rawRows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+function parseVehicleWorksheet(rawRows: SpreadsheetRows): { headers: string[]; rows: any[][]; valuationHeaders: string[] } {
   if (rawRows.length === 0) return { headers: [], rows: [], valuationHeaders: [] };
 
   // Only these three trigger double-header detection (matches the dealership's
@@ -225,32 +224,33 @@ function renderVehiclePreviewCell(row: ImportRow, key: string) {
 // ---------------------------------------------------------------------------
 // Template download — matches the dealership's existing spreadsheet layout
 // ---------------------------------------------------------------------------
-function downloadTemplate() {
-  const wb = XLSX.utils.book_new();
-
+async function downloadTemplate() {
   const row1 = ["TYPE/Name", "VIN", "Color", "KM", "Cost", "Model", "المتخصصة", "الكوتر", "التخمين", "", ""];
   const row2 = ["",           "",    "",      "",   "",     "",       "",          "",        "بندار",    "تمكين", "السماحة"];
   // KM=number → zero-km or known mileage; KM=empty → used car, mileage to be added later
   const example1 = ["Toyota", "JTDKARFU7G3529873", "White", "45000", "14000", "Camry 2022", "18000", "17500", "19000", "18500", "17000"];
   const example2 = ["BYD", "LJ136HBDA4P123456", "Black", "", "22000", "Dolphin 2024", "26000", "25000", "27000", "26500", "25500"];
 
-  const ws = XLSX.utils.aoa_to_sheet([row1, row2, example1, example2]);
-
-  // Merge التخمين across columns I–K (0-indexed: cols 8–10, row 0)
-  ws["!merges"] = [{ s: { r: 0, c: 8 }, e: { r: 0, c: 10 } }];
-  ws["!cols"] = Array(11).fill({ wch: 16 });
-
-  // Right-align Arabic header cells
-  const arabicCols = [6, 7, 8, 9, 10];
-  arabicCols.forEach(c => {
-    const addr = XLSX.utils.encode_cell({ r: 0, c });
-    if (ws[addr]) ws[addr].s = { alignment: { horizontal: "right", readingOrder: 2 } };
-    const addr2 = XLSX.utils.encode_cell({ r: 1, c });
-    if (ws[addr2]) ws[addr2].s = { alignment: { horizontal: "right", readingOrder: 2 } };
+  await downloadXlsxTemplate({
+    fileName: "vehicle_import_template.xlsx",
+    sheetName: "Vehicles",
+    rows: [row1, row2, example1, example2],
+    columnWidth: 16,
+    // Merge التخمين across columns I-K.
+    merges: [{ startRow: 1, startCol: 9, endRow: 1, endCol: 11 }],
+    rightAlignedCells: [
+      { row: 1, col: 7 },
+      { row: 1, col: 8 },
+      { row: 1, col: 9 },
+      { row: 1, col: 10 },
+      { row: 1, col: 11 },
+      { row: 2, col: 7 },
+      { row: 2, col: 8 },
+      { row: 2, col: 9 },
+      { row: 2, col: 10 },
+      { row: 2, col: 11 },
+    ],
   });
-
-  XLSX.utils.book_append_sheet(wb, ws, "Vehicles");
-  XLSX.writeFile(wb, "vehicle_import_template.xlsx");
 }
 
 // ---------------------------------------------------------------------------

@@ -1,14 +1,33 @@
 import { v, ConvexError } from "convex/values";
-import { MutationCtx, mutation, query } from "./_generated/server";
+import { MutationCtx, internalMutation, mutation, query } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
-import { PERMISSIONS } from "./utils/permissions";
+import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { checkTenantWriteLimit } from "./rateLimit";
 import { validateInput } from "./utils/validation";
 import { CreateVehicleSchema, UpdateVehicleSchema } from "./validations/vehicles";
 import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socialAutoPost";
 import { internal } from "./_generated/api";
+import { getOrgCurrency } from "./accounting/workflowHooks";
+import { syncVehicleHoldStatus } from "./utils/depositHelpers";
+import {
+  amountToMinorOrThrow,
+  depositMethodValidator,
+  methodOrDefault,
+  normalizeCurrency,
+  recordHeldDeposit,
+} from "./utils/depositRecording";
+import {
+  assertVehicleImagesAllowed,
+  VEHICLE_IMAGE_CONTENT_TYPES,
+} from "./utils/storageValidation";
+import {
+  assertDirectVehicleCreateStatus,
+  assertDirectVehicleStatusTransition,
+  normalizeVehicleStatus,
+  type VehicleLifecycleStatus,
+} from "./utils/vehicleStatusGuards";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -394,6 +413,8 @@ export const create = mutation({
     }
 
     validateInput(CreateVehicleSchema, args);
+    assertDirectVehicleCreateStatus(args.status);
+    await assertVehicleImagesAllowed(ctx, args.imageIds);
 
     const isSourced = args.sourceType === "SOURCED";
 
@@ -526,6 +547,8 @@ export const update = mutation({
     if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
       throw new ConvexError("Vehicle not found in this organization.");
     }
+    assertDirectVehicleStatusTransition(vehicle.status, args.status);
+    await assertVehicleImagesAllowed(ctx, args.imageIds);
 
     // When switching to or retaining SOURCED, mirror the create-time invariant:
     // sourcedFromName and sourceCost are both required.
@@ -685,17 +708,15 @@ export const createReservation = mutation({
     vehicleId: v.id("vehicles"),
     customerId: v.id("customers"),
     depositAmount: v.optional(v.number()),
+    depositMethod: v.optional(depositMethodValidator),
     expiresAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
 
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
       throw new ConvexError("Vehicle not found in this organization.");
-    }
-    if (vehicle.status !== "AVAILABLE") {
-      throw new ConvexError("Vehicle must be available before it can be reserved.");
     }
 
     const customer = await ctx.db.get(args.customerId);
@@ -703,31 +724,90 @@ export const createReservation = mutation({
       throw new ConvexError("Customer not found in this organization.");
     }
 
+    const now = Date.now();
+    if (args.expiresAt !== undefined && args.expiresAt <= now) {
+      throw new ConvexError("Reservation expiry must be in the future.");
+    }
+
+    const hasDeposit = args.depositAmount !== undefined;
+    if (
+      hasDeposit &&
+      !isSystemOwnerRole(role) &&
+      !role.permissions.includes(PERMISSIONS.VIEW_SALES)
+    ) {
+      throw new ConvexError(`Forbidden: Missing required permissions: ${PERMISSIONS.VIEW_SALES}`);
+    }
+    const currency = hasDeposit ? normalizeCurrency(await getOrgCurrency(ctx, args.orgId)) : undefined;
+    const method = methodOrDefault(args.depositMethod);
+    const amountMinor = hasDeposit
+      ? amountToMinorOrThrow(args.depositAmount!, currency!, "Reservation deposit amount")
+      : undefined;
+
     const existingReservations = await ctx.db
       .query("vehicleReservations")
       .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
       .take(100);
-    if (existingReservations.some((reservation) => reservation.status === "ACTIVE")) {
+    for (const reservation of existingReservations) {
+      if (reservation.status === "ACTIVE" && reservation.expiresAt !== undefined && reservation.expiresAt <= now) {
+        if (reservation.depositId) {
+          const deposit = await ctx.db.get(reservation.depositId);
+          if (deposit && deposit.orgId === args.orgId && deposit.status === "HELD" && deposit.holdActive) {
+            await ctx.db.patch(reservation.depositId, { holdActive: false });
+          }
+        }
+        await ctx.db.patch(reservation._id, {
+          status: "EXPIRED",
+          expiredAt: now,
+        });
+      }
+    }
+    await syncVehicleHoldStatus(ctx, args.vehicleId, user._id);
+    const currentVehicle = await ctx.db.get(args.vehicleId);
+    if (!currentVehicle || currentVehicle.isDeleted || currentVehicle.orgId !== args.orgId) {
+      throw new ConvexError("Vehicle not found in this organization.");
+    }
+    if (currentVehicle.status !== "AVAILABLE") {
+      throw new ConvexError("Vehicle must be available before it can be reserved.");
+    }
+    if (existingReservations.some((reservation) =>
+      reservation.status === "ACTIVE" &&
+      (reservation.expiresAt === undefined || reservation.expiresAt > now)
+    )) {
       throw new ConvexError("Vehicle already has an active reservation.");
     }
 
-    const now = Date.now();
     const reservationId = await ctx.db.insert("vehicleReservations", {
       orgId: args.orgId,
       vehicleId: args.vehicleId,
       customerId: args.customerId,
       depositAmount: args.depositAmount,
+      depositAmountMinor: amountMinor,
+      depositCurrency: currency,
+      depositMethod: hasDeposit ? method : undefined,
       expiresAt: args.expiresAt,
       status: "ACTIVE",
       reservedBy: user._id,
       reservedAt: now,
     });
 
-    await ctx.db.patch(args.vehicleId, {
-      status: "RESERVED",
-      updatedAt: now,
-      updatedBy: user._id,
-    });
+    if (hasDeposit && amountMinor !== undefined && currency !== undefined) {
+      const depositId = await recordHeldDeposit(ctx, {
+        orgId: args.orgId,
+        vehicleId: args.vehicleId,
+        customerId: args.customerId,
+        reservationId,
+        amount: args.depositAmount!,
+        amountMinor,
+        currency,
+        method,
+        actorId: user._id,
+        now,
+        sourceLabel: `reservation ${reservationId}`,
+      });
+      await ctx.db.patch(reservationId, { depositId });
+    }
+
+    await syncVehicleHoldStatus(ctx, args.vehicleId, user._id);
 
     return reservationId;
   },
@@ -755,16 +835,51 @@ export const releaseReservation = mutation({
     }
 
     const now = Date.now();
+    if (reservation.depositId) {
+      const deposit = await ctx.db.get(reservation.depositId);
+      if (deposit && deposit.orgId === args.orgId && deposit.status === "HELD" && deposit.holdActive) {
+        await ctx.db.patch(reservation.depositId, { holdActive: false });
+      }
+    }
     await ctx.db.patch(args.reservationId, {
       status: "RELEASED",
       releasedAt: now,
       releasedBy: user._id,
     });
-    await ctx.db.patch(reservation.vehicleId, {
-      status: "AVAILABLE",
-      updatedAt: now,
-      updatedBy: user._id,
-    });
+    await syncVehicleHoldStatus(ctx, reservation.vehicleId, user._id);
+  },
+});
+
+export const expireReservations = internalMutation({
+  args: {
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const limit = Math.min(Math.max(args.limit ?? 50, 1), 100);
+    const reservations = await ctx.db
+      .query("vehicleReservations")
+      .withIndex("by_status_expiresAt", (q) =>
+        q.eq("status", "ACTIVE").lte("expiresAt", now)
+      )
+      .take(limit);
+
+    for (const reservation of reservations) {
+      if (reservation.expiresAt === undefined || reservation.expiresAt > now) continue;
+      if (reservation.depositId) {
+        const deposit = await ctx.db.get(reservation.depositId);
+        if (deposit && deposit.orgId === reservation.orgId && deposit.status === "HELD" && deposit.holdActive) {
+          await ctx.db.patch(reservation.depositId, { holdActive: false });
+        }
+      }
+      await ctx.db.patch(reservation._id, {
+        status: "EXPIRED",
+        expiredAt: now,
+      });
+      await syncVehicleHoldStatus(ctx, reservation.vehicleId);
+    }
+
+    return { expired: reservations.length };
   },
 });
 
@@ -955,8 +1070,8 @@ export const generateUploadUrl = mutation({
       throw new ConvexError("File size exceeds 5MB limit.");
     }
 
-    if (!args.mimeType.startsWith("image/")) {
-      throw new ConvexError("Only image files are allowed for vehicles.");
+    if (!VEHICLE_IMAGE_CONTENT_TYPES.includes(args.mimeType.toLowerCase() as typeof VEHICLE_IMAGE_CONTENT_TYPES[number])) {
+      throw new ConvexError("Only JPEG, PNG, or WebP images are allowed for vehicles.");
     }
 
     return await ctx.storage.generateUploadUrl();
@@ -1186,10 +1301,8 @@ export const importBulk = mutation({
       }
 
       if (!vehicleId) {
-        const validStatuses = ["AVAILABLE", "RESERVED", "SOLD", "IN_INSPECTION", "IN_REPAIR", "ARCHIVED"];
-        const status = row.status && validStatuses.includes(row.status.toUpperCase())
-          ? (row.status.toUpperCase() as "AVAILABLE" | "RESERVED" | "SOLD" | "IN_INSPECTION" | "IN_REPAIR" | "ARCHIVED")
-          : "AVAILABLE";
+        const status = normalizeVehicleStatus(row.status) ?? "AVAILABLE";
+        assertDirectVehicleCreateStatus(status);
 
         vehicleId = await ctx.db.insert("vehicles", {
           orgId: args.orgId,
@@ -1203,7 +1316,7 @@ export const importBulk = mutation({
           transmission: row.transmission,
           sellingPrice: row.sellingPrice,
           purchasePrice: row.purchasePrice,
-          status,
+          status: status as VehicleLifecycleStatus,
           notes: row.notes,
           addedBy: user._id,
           updatedBy: user._id,

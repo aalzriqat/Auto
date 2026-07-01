@@ -1,6 +1,6 @@
 import { QueryCtx, MutationCtx } from "../_generated/server";
 import { Id, Doc } from "../_generated/dataModel";
-import { Permission } from "./permissions";
+import { Permission, isSystemOwnerRole } from "./permissions";
 import { throwAppError, AppErrorCode } from "./errors";
 import { getValidatedEnv } from "./env";
 import { writeAuditLog } from "./auditLog";
@@ -130,13 +130,16 @@ export async function requireTenantAuth(
   if (!membership) {
     throwAppError(AppErrorCode.UNAUTHORIZED, "Unauthorized: You are not a member of this organization.");
   }
+  if (membership.offboardingStatus) {
+    throwAppError(AppErrorCode.UNAUTHORIZED, "Unauthorized: This organization membership is no longer active.");
+  }
 
   const role = await ctx.db.get(membership.roleId);
   if (!role) {
     throwAppError(AppErrorCode.ROLE_NOT_FOUND, "Membership role not found or corrupted.");
   }
 
-  if (requiredPermissions.length > 0 && role.name !== "OWNER") {
+  if (requiredPermissions.length > 0 && !isSystemOwnerRole(role)) {
     const missing = requiredPermissions.filter((p) => !role.permissions.includes(p));
     if (missing.length > 0) {
       throwAppError(
@@ -168,14 +171,14 @@ export async function requireTenantAuth(
 
 /**
  * Shorthand for operations restricted to the OWNER role.
- * Throws if the caller's role name is not "OWNER".
+ * Throws if the caller is not assigned the immutable system OWNER role.
  */
 export async function requireOwner(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">
 ): Promise<TenantAuthContext> {
   const authCtx = await requireTenantAuth(ctx, orgId);
-  if (authCtx.role.name !== "OWNER") {
+  if (!isSystemOwnerRole(authCtx.role)) {
     throwAppError(AppErrorCode.FORBIDDEN, "Forbidden: Only the organization owner can perform this action.");
   }
   return authCtx;

@@ -4,6 +4,7 @@ import { internalMutation, internalQuery, internalAction, MutationCtx, ActionCtx
 import { internal } from "./_generated/api";
 import { notifyManagers, notifyUser } from "./utils/notifications";
 import { PLANS } from "./subscriptions";
+import { isSystemOwnerRole } from "./utils/permissions";
 
 const crons = cronJobs();
 
@@ -27,6 +28,40 @@ crons.cron(
   "collection-reminders",
   "30 6 * * *",
   internal.collections.processDailyCollectionReminders,
+  {}
+);
+
+// Retry membership removals whose external Clerk cleanup did not complete.
+crons.interval(
+  "membership-offboarding-retries",
+  { minutes: 5 },
+  internal.memberships.drainDueMembershipOffboardingJobs,
+  {}
+);
+
+// Release expired inventory reservations and their non-financial vehicle holds.
+crons.interval(
+  "expire-vehicle-reservations",
+  { minutes: 15 },
+  internal.vehicles.expireReservations,
+  {}
+);
+
+// Refresh Instagram long-lived tokens for orgs whose token expires within 7 days.
+// Instagram tokens last 60 days; refreshing weekly keeps them perpetually valid.
+crons.cron(
+  "instagram-token-refresh",
+  "0 5 * * *",
+  internal.crons.triggerInstagramTokenRefresh,
+  {}
+);
+
+// Scan for webhook events stuck in "received" status for >2 h and flag them as
+// dead_letter so they surface clearly in the admin Webhook Delivery Log.
+crons.interval(
+  "dead-letter-webhook-scan",
+  { hours: 2 },
+  internal.adminSystem.scanDeadLetterWebhooks,
   {}
 );
 
@@ -167,6 +202,40 @@ async function runSubscriptionReminders(ctx: ActionCtx): Promise<string> {
   return `Sent ${sent} renewal reminder(s).`;
 }
 
+// ─── Instagram token refresh cron ────────────────────────────────────────────
+
+export const triggerInstagramTokenRefresh = internalAction({
+  args: {},
+  handler: async (ctx: ActionCtx) => {
+    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+    const orgs = await ctx.runQuery(
+      internal.socialIntegrations.getOrgsNeedingInstagramRefresh,
+      { withinMs: SEVEN_DAYS_MS }
+    );
+
+    let refreshed = 0;
+    for (const org of orgs) {
+      try {
+        await ctx.runAction(internal.socialIntegrations.refreshInstagramToken, {
+          orgId: org.orgId,
+        });
+        refreshed++;
+      } catch (err) {
+        // Individual failures are already logged inside refreshInstagramToken;
+        // continue so one bad token doesn't block the rest.
+      }
+    }
+
+    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+      source: "instagram",
+      status: "success",
+      summary: `Instagram token refresh cron: refreshed ${refreshed}/${orgs.length} token(s).`,
+    });
+
+    return `Refreshed ${refreshed}/${orgs.length} Instagram token(s).`;
+  },
+});
+
 /** Returns the email address of the org's OWNER-role member. */
 export const getOrgOwnerEmail = internalQuery({
   args: { orgId: v.id("organizations") },
@@ -175,7 +244,7 @@ export const getOrgOwnerEmail = internalQuery({
       .query("roles")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .take(20);
-    const ownerRole = roles.find((r) => r.name === "OWNER");
+    const ownerRole = roles.find((r) => isSystemOwnerRole(r));
     if (!ownerRole) return null;
 
     const memberships = await ctx.db

@@ -1,6 +1,8 @@
 import { internalMutation, mutation, query } from "./_generated/server";
 import { v, ConvexError } from "convex/values";
 import { requireAuth } from "./utils/tenancy";
+import { isSystemOwnerRole } from "./utils/permissions";
+import { Id } from "./_generated/dataModel";
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
@@ -68,16 +70,14 @@ export const updateOrCreateUser = internalMutation({
       .withIndex("by_clerkId", (q) => q.eq("clerkId", args.clerkId))
       .unique();
 
-    let userId;
     if (existingUser) {
       await ctx.db.patch(existingUser._id, {
         email: args.email,
         name: args.name,
         imageUrl: args.imageUrl,
       });
-      userId = existingUser._id;
     } else {
-      userId = await ctx.db.insert("users", {
+      await ctx.db.insert("users", {
         clerkId: args.clerkId,
         email: args.email,
         name: args.name,
@@ -85,37 +85,18 @@ export const updateOrCreateUser = internalMutation({
       });
     }
 
-    // Process any pending invitations for this email
-    const pendingInvites = await ctx.db
-      .query("invitations")
-      .withIndex("by_email", (q) => q.eq("email", args.email.toLowerCase().trim()))
-      .collect();
-
-    for (const invite of pendingInvites) {
-      // Check if membership already exists to prevent duplicates
-      const existingMembership = await ctx.db
-        .query("memberships")
-        .withIndex("by_org_user", (q) =>
-          q.eq("orgId", invite.orgId).eq("userId", userId)
-        )
-        .unique();
-
-      if (!existingMembership) {
-        await ctx.db.insert("memberships", {
-          orgId: invite.orgId,
-          userId: userId,
-          roleId: invite.roleId,
-        });
-      }
-      
-      // Delete the invitation once processed
-      await ctx.db.delete(invite._id);
-    }
+    // Invitations are accepted through memberships.acceptInvitation using a
+    // hashed token. A Clerk webhook with a matching email is not sufficient to
+    // grant organization access.
   },
 });
 
 /**
- * Deletes a user record and all their memberships when Clerk sends user.deleted.
+ * Soft-disables a user when Clerk sends user.deleted.
+ *
+ * Do not delete the user row or memberships here: those IDs are referenced by
+ * audit logs, ownership checks, sales, tasks, and other historical records.
+ * Instead, anonymize profile data and queue a super-admin offboarding review.
  */
 export const deleteUser = internalMutation({
   args: {
@@ -127,18 +108,54 @@ export const deleteUser = internalMutation({
       .withIndex("by_clerkId", (q) => q.eq("clerkId", args.clerkId))
       .unique();
 
-    if (existingUser) {
-      // Clean up all memberships for this user
-      const memberships = await ctx.db
-        .query("memberships")
-        .withIndex("by_user", (q) => q.eq("userId", existingUser._id))
-        .collect();
+    if (!existingUser) return;
 
-      for (const m of memberships) {
-        await ctx.db.delete(m._id);
+    const memberships = await ctx.db
+      .query("memberships")
+      .withIndex("by_user", (q) => q.eq("userId", existingUser._id))
+      .collect();
+
+    const ownerOrgIds: Id<"organizations">[] = [];
+    for (const membership of memberships) {
+      const role = await ctx.db.get(membership.roleId);
+      if (isSystemOwnerRole(role)) {
+        ownerOrgIds.push(membership.orgId);
       }
+    }
 
-      await ctx.db.delete(existingUser._id);
+    const now = Date.now();
+    await ctx.db.patch(existingUser._id, {
+      email: `deleted-user-${existingUser._id}@deleted.autoflow.local`,
+      name: "Deleted user",
+      imageUrl: undefined,
+      whatsappPhone: undefined,
+      disabled: true,
+      disabledAt: now,
+      disabledReason: "clerk_user_deleted",
+      clerkDeletedAt: now,
+    });
+
+    const pendingReview = await ctx.db
+      .query("userOffboardingReviews")
+      .withIndex("by_user_status", (q) => q.eq("userId", existingUser._id).eq("status", "PENDING_REVIEW"))
+      .unique();
+
+    if (pendingReview) {
+      await ctx.db.patch(pendingReview._id, {
+        membershipCount: memberships.length,
+        ownerOrgIds,
+        createdAt: now,
+      });
+    } else {
+      await ctx.db.insert("userOffboardingReviews", {
+        userId: existingUser._id,
+        clerkId: args.clerkId,
+        source: "clerk_user_deleted",
+        status: "PENDING_REVIEW",
+        membershipCount: memberships.length,
+        ownerOrgIds,
+        createdAt: now,
+      });
     }
   },
 });

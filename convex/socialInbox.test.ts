@@ -7,6 +7,15 @@ async function seedOrgWithEditor(t: ReturnType<typeof convexTest>) {
   const orgId = await t.run(async (ctx) =>
     ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() })
   );
+  await t.run(async (ctx) =>
+    ctx.db.insert("subscriptions", {
+      orgId,
+      plan: "professional",
+      status: "active",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+  );
   const userId = await t.run(async (ctx) =>
     ctx.db.insert("users", { clerkId: "inbox_editor_001", email: "inboxeditor@test.com", name: "Editor" })
   );

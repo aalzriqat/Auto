@@ -8,6 +8,15 @@ async function seedPhase3Dealer() {
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Phase 3 Dealer", createdAt: Date.now() })
   );
+  await t.run((ctx) =>
+    ctx.db.insert("subscriptions", {
+      orgId,
+      plan: "professional",
+      status: "active",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+  );
   const userId = await t.run((ctx) =>
     ctx.db.insert("users", { clerkId: "p3_user", email: "p3@example.com", name: "P3 User" })
   );

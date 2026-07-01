@@ -6,13 +6,14 @@ import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { checkTenantWriteLimit } from "./rateLimit";
 import { validateInput } from "./utils/validation";
-import { CreateSaleSchema, UpdateSaleSchema } from "./validations/sales";
+import { CreateDraftSaleSchema, CreateSaleSchema, UpdateSaleSchema } from "./validations/sales";
 import { restoreVehicleToAvailable } from "./utils/saleHelpers";
-import { completeSale } from "./utils/saleCompletion";
+import { completeExistingSale, completeSale, createDraftSale } from "./utils/saleCompletion";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
-import { hookSaleCancelled } from "./accounting/workflowHooks";
+import { getOrgCurrency, hookCommissionPaid, hookSaleCancelled } from "./accounting/workflowHooks";
+import { toMinorUnits } from "./utils/money";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -113,8 +114,8 @@ export const get = query({
 // ─── Mutations ───────────────────────────────────────────────────────────────
 
 /**
- * Creates a new sale record.
- * Validates all cross-references and automatically marks the vehicle as SOLD.
+ * Completes a new sale record.
+ * Validates all cross-references and marks the vehicle as SOLD.
  */
 export const create = mutation({
   args: {
@@ -124,7 +125,7 @@ export const create = mutation({
     salespersonId: v.id("users"),
     salePrice: v.number(),
     saleDate: v.number(),
-    status: v.optional(saleStatus),
+    status: v.literal("COMPLETED"),
     quoteId: v.optional(v.id("quotes")),
     taxRate: v.optional(v.number()),
     taxAmount: v.optional(v.number()),
@@ -159,6 +160,92 @@ export const create = mutation({
         actorId: user._id,
       },
       async () => await completeSale(ctx, { ...args, actorId: user._id })
+    );
+  },
+});
+
+/**
+ * Creates a PENDING sale draft without inventory, deposit, CRM, or accounting side effects.
+ */
+export const createDraft = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    customerId: v.id("customers"),
+    salespersonId: v.id("users"),
+    salePrice: v.number(),
+    saleDate: v.number(),
+    status: v.optional(v.literal("PENDING")),
+    quoteId: v.optional(v.id("quotes")),
+    taxRate: v.optional(v.number()),
+    taxAmount: v.optional(v.number()),
+    dealerFees: v.optional(v.number()),
+    downPayment: v.optional(v.number()),
+    tradeInVehicleId: v.optional(v.id("vehicles")),
+    tradeInValue: v.optional(v.number()),
+    financingType: v.optional(v.union(v.literal("CASH"), v.literal("FINANCED"), v.literal("LEASE"))),
+    loanAmount: v.optional(v.number()),
+    apr: v.optional(v.number()),
+    termMonths: v.optional(v.number()),
+    warrantySold: v.optional(v.number()),
+    gapSold: v.optional(v.number()),
+    idempotencyKey: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
+
+    const statusLimit = await checkTenantWriteLimit(ctx, "create", args.orgId);
+    if (!statusLimit.ok) {
+      throwAppError(AppErrorCode.RATE_LIMIT_EXCEEDED, `Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+    }
+
+    validateInput(CreateDraftSaleSchema, args);
+
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "sales.createDraft",
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+      },
+      async () => await createDraftSale(ctx, { ...args, actorId: user._id })
+    );
+  },
+});
+
+/**
+ * Explicitly completes a PENDING sale draft and runs completion side effects once.
+ */
+export const completeDraft = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    saleId: v.id("sales"),
+    idempotencyKey: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
+
+    const statusLimit = await checkTenantWriteLimit(ctx, "standardApi", args.orgId);
+    if (!statusLimit.ok) {
+      throwAppError(AppErrorCode.RATE_LIMIT_EXCEEDED, `Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+    }
+
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "sales.completeDraft",
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+      },
+      async () =>
+        await completeExistingSale(ctx, {
+          orgId: args.orgId,
+          saleId: args.saleId,
+          actorId: user._id,
+          idempotencyKey: args.idempotencyKey,
+        })
     );
   },
 });
@@ -200,6 +287,37 @@ export const update = mutation({
     const sale = await ctx.db.get(args.saleId);
     if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
       throwAppError(AppErrorCode.SALE_NOT_FOUND, "Sale not found in this organization.");
+    }
+    if (args.status === "COMPLETED" && sale.status !== "COMPLETED") {
+      throwAppError(
+        AppErrorCode.VALIDATION_FAILED,
+        "Use sales.completeDraft to complete a pending sale."
+      );
+    }
+    const isCancellingCompletedSale = args.status === "CANCELLED" && sale.status === "COMPLETED";
+    const hasCompletedSaleFinancialChange =
+      args.salePrice !== undefined ||
+      args.saleDate !== undefined ||
+      args.taxRate !== undefined ||
+      args.taxAmount !== undefined ||
+      args.dealerFees !== undefined ||
+      args.downPayment !== undefined ||
+      args.tradeInVehicleId !== undefined ||
+      args.tradeInValue !== undefined ||
+      args.financingType !== undefined ||
+      args.loanAmount !== undefined ||
+      args.apr !== undefined ||
+      args.termMonths !== undefined ||
+      args.warrantySold !== undefined ||
+      args.gapSold !== undefined;
+    if (sale.status === "COMPLETED" && hasCompletedSaleFinancialChange) {
+      throwAppError(
+        AppErrorCode.SALE_ALREADY_COMPLETED,
+        "Completed sale financial fields are locked. Cancel and recreate the sale or use a correction workflow."
+      );
+    }
+    if (sale.status === "COMPLETED" && args.status !== undefined && args.status !== "COMPLETED" && !isCancellingCompletedSale) {
+      throwAppError(AppErrorCode.SALE_ALREADY_COMPLETED, "Completed sales can only transition through cancellation.");
     }
 
     const patch: Record<string, unknown> = {};
@@ -379,6 +497,7 @@ export const markCommissionPaid = mutation({
         operation: "sales.markCommissionPaid",
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
+        fingerprint: JSON.stringify({ saleId: args.saleId }),
       },
       async () => {
         const sale = await ctx.db.get(args.saleId);
@@ -388,11 +507,28 @@ export const markCommissionPaid = mutation({
         if (sale.commissionPaidAt != null) {
           throw new ConvexError("Commission already marked as paid.");
         }
+        if (sale.status !== "COMPLETED") {
+          throwAppError(AppErrorCode.VALIDATION_FAILED, "Only completed sale commissions can be paid.");
+        }
+        if (sale.commissionAmount == null || sale.commissionAmount <= 0) {
+          throwAppError(AppErrorCode.VALIDATION_FAILED, "This sale has no commission amount to pay.");
+        }
 
+        const now = Date.now();
         await ctx.db.patch(args.saleId, {
-          commissionPaidAt: Date.now(),
+          commissionPaidAt: now,
           commissionPaidBy: user._id,
           commissionPaymentIdempotencyKey: args.idempotencyKey,
+        });
+        const currency = await getOrgCurrency(ctx, args.orgId);
+        await hookCommissionPaid(ctx, {
+          orgId: args.orgId,
+          saleId: args.saleId,
+          salespersonId: sale.salespersonId,
+          amountMinor: toMinorUnits(sale.commissionAmount, currency),
+          currency,
+          actorId: user._id,
+          occurredAt: now,
         });
 
         return args.saleId;
@@ -412,6 +548,12 @@ export const markCommissionUnpaid = mutation({
     const sale = await ctx.db.get(args.saleId);
     if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
       throw new ConvexError("Sale not found.");
+    }
+    if (sale.commissionPaidAt != null) {
+      throwAppError(
+        AppErrorCode.VALIDATION_FAILED,
+        "Paid commissions are locked. Use a reversal workflow before marking them unpaid."
+      );
     }
 
     await ctx.db.patch(args.saleId, {
@@ -433,6 +575,15 @@ export const setCommissionAmount = mutation({
     const sale = await ctx.db.get(args.saleId);
     if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
       throw new ConvexError("Sale not found.");
+    }
+    if (sale.status === "COMPLETED") {
+      throwAppError(
+        AppErrorCode.SALE_ALREADY_COMPLETED,
+        "Completed sale commission amounts are locked. Use a correction workflow."
+      );
+    }
+    if (sale.commissionPaidAt != null) {
+      throwAppError(AppErrorCode.VALIDATION_FAILED, "Paid commission amounts cannot be changed.");
     }
 
     await ctx.db.patch(args.saleId, {

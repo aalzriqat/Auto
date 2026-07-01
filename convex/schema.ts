@@ -1,6 +1,15 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 
+const organizationDeletionRequestStatus = v.union(
+  v.literal("PENDING_REVIEW"),
+  v.literal("REJECTED"),
+  v.literal("APPROVED"),
+  v.literal("RUNNING"),
+  v.literal("COMPLETED"),
+  v.literal("FAILED")
+);
+
 export default defineSchema({
   users: defineTable({
     clerkId: v.string(),
@@ -8,6 +17,9 @@ export default defineSchema({
     name: v.optional(v.string()),
     imageUrl: v.optional(v.string()),
     disabled: v.optional(v.boolean()),
+    disabledAt: v.optional(v.number()),
+    disabledReason: v.optional(v.string()),
+    clerkDeletedAt: v.optional(v.number()),
     // Server-known language for email/WhatsApp notifications — the client's
     // locale toggle (LanguageProvider) lives only in localStorage, so this
     // mirrors it server-side whenever an authenticated user changes it.
@@ -24,7 +36,31 @@ export default defineSchema({
     suspended: v.optional(v.boolean()),
     suspendedAt: v.optional(v.number()),
     suspendedReason: v.optional(v.string()),
+    deletionRequestedAt: v.optional(v.number()),
+    deletionRequestId: v.optional(v.id("organizationDeletionRequests")),
   }),
+
+  organizationDeletionRequests: defineTable({
+    orgId: v.id("organizations"),
+    orgName: v.string(),
+    requestedBy: v.id("users"),
+    requestedAt: v.number(),
+    reason: v.optional(v.string()),
+    status: organizationDeletionRequestStatus,
+    reviewedBy: v.optional(v.id("users")),
+    reviewedAt: v.optional(v.number()),
+    reviewNotes: v.optional(v.string()),
+    startedAt: v.optional(v.number()),
+    completedAt: v.optional(v.number()),
+    failedAt: v.optional(v.number()),
+    error: v.optional(v.string()),
+    currentStepIndex: v.optional(v.number()),
+    deletedCounts: v.optional(v.record(v.string(), v.number())),
+    lastProcessedAt: v.optional(v.number()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_status_and_requestedAt", ["status", "requestedAt"]),
 
   commandIdempotency: defineTable({
     orgId: v.id("organizations"),
@@ -228,7 +264,8 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_journal_entry", ["journalEntryId"])
     .index("by_org_account", ["orgId", "accountId"])
-    .index("by_org_account_date", ["orgId", "accountId", "accountingDate"]),
+    .index("by_org_account_date", ["orgId", "accountId", "accountingDate"])
+    .index("by_org_customer", ["orgId", "customerId"]),
 
   // ─── Phase 3: Receivables, payments, and allocations subledger ────────────
 
@@ -383,6 +420,7 @@ export default defineSchema({
     orgId: v.id("organizations"), // Roles are scoped to orgs allowing custom roles
     name: v.string(), // "OWNER", "SALES", etc.
     permissions: v.array(v.string()),
+    isSystemOwnerRole: v.optional(v.boolean()),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
     deletedBy: v.optional(v.string()),
@@ -395,6 +433,15 @@ export default defineSchema({
     branchId: v.optional(v.id("branches")),
     commissionRate: v.optional(v.number()), // % of gross profit per sale
     impersonationGrantId: v.optional(v.id("impersonationGrants")), // set when this membership exists only for an active super-admin impersonation session
+    offboardingStatus: v.optional(
+      v.union(v.literal("PENDING_EXTERNAL_REMOVAL"), v.literal("EXTERNAL_REMOVAL_RETRYING"))
+    ),
+    offboardingRequestedAt: v.optional(v.number()),
+    offboardingRequestedBy: v.optional(v.id("users")),
+    offboardingAttempts: v.optional(v.number()),
+    offboardingLastAttemptAt: v.optional(v.number()),
+    offboardingLastError: v.optional(v.string()),
+    offboardingNextRetryAt: v.optional(v.number()),
     // "Last seen" timestamp for the Team > Members presence indicator. Written
     // by memberships.touchLastSeen, throttled client-side (PresenceTracker)
     // and server-side to a few writes per user per hour — deliberately NOT a
@@ -406,14 +453,69 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_user", ["orgId", "userId"]),
 
+  membershipOffboardingJobs: defineTable({
+    membershipId: v.id("memberships"),
+    orgId: v.id("organizations"),
+    userId: v.id("users"),
+    clerkId: v.string(),
+    requestedBy: v.id("users"),
+    requiresClerkUserDeletion: v.boolean(),
+    status: v.union(v.literal("PENDING"), v.literal("RETRYING"), v.literal("SUCCEEDED")),
+    attempts: v.number(),
+    nextAttemptAt: v.number(),
+    lastAttemptAt: v.optional(v.number()),
+    lastError: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    succeededAt: v.optional(v.number()),
+  })
+    .index("by_membership", ["membershipId"])
+    .index("by_status_and_nextAttemptAt", ["status", "nextAttemptAt"])
+    .index("by_org", ["orgId"]),
+
+  // Cross-tenant, super-admin–only table. A single user deletion can span
+  // multiple orgs; orgId is optional (null = global event). All access paths
+  // must go through requireSuperAdmin — never exposed to org-scoped queries.
+  userOffboardingReviews: defineTable({
+    orgId: v.optional(v.id("organizations")),
+    userId: v.id("users"),
+    clerkId: v.string(),
+    source: v.union(v.literal("clerk_user_deleted"), v.literal("admin_requested")),
+    status: v.union(v.literal("PENDING_REVIEW"), v.literal("RESOLVED")),
+    membershipCount: v.number(),
+    ownerOrgIds: v.array(v.id("organizations")),
+    createdAt: v.number(),
+    resolvedAt: v.optional(v.number()),
+    resolvedBy: v.optional(v.id("users")),
+    notes: v.optional(v.string()),
+  })
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_status", ["status"])
+    .index("by_user", ["userId"])
+    .index("by_user_status", ["userId", "status"]),
+
   invitations: defineTable({
     orgId: v.id("organizations"),
     email: v.string(),
     roleId: v.id("roles"),
+    createdBy: v.optional(v.id("users")),
+    ownerRoleAuthorizedAt: v.optional(v.number()),
+    tokenHash: v.optional(v.string()),
+    status: v.optional(
+      v.union(v.literal("PENDING"), v.literal("ACCEPTED"), v.literal("EXPIRED"), v.literal("REVOKED"))
+    ),
+    source: v.optional(v.union(v.literal("EMAIL_INVITE"), v.literal("DIRECT_ACCOUNT"))),
+    expiresAt: v.optional(v.number()),
+    acceptedAt: v.optional(v.number()),
+    acceptedBy: v.optional(v.id("users")),
+    updatedAt: v.optional(v.number()),
     createdAt: v.number(),
   })
     .index("by_org", ["orgId"])
-    .index("by_email", ["email"]),
+    .index("by_email", ["email"])
+    .index("by_org_email", ["orgId", "email"])
+    .index("by_tokenHash", ["tokenHash"])
+    .index("by_status_and_expiresAt", ["status", "expiresAt"]),
 
   vehicles: defineTable({
     orgId: v.id("organizations"),
@@ -507,15 +609,29 @@ export default defineSchema({
     orgId: v.id("organizations"),
     customerId: v.id("customers"),
     depositAmount: v.optional(v.number()),
+    depositAmountMinor: v.optional(v.number()),
+    depositCurrency: v.optional(v.string()),
+    depositMethod: v.optional(v.union(
+      v.literal("CASH"),
+      v.literal("BANK_TRANSFER"),
+      v.literal("PAYMENT_LINK"),
+      v.literal("CARD"),
+      v.literal("CHEQUE"),
+      v.literal("OTHER")
+    )),
+    depositId: v.optional(v.id("deposits")),
     expiresAt: v.optional(v.number()),
-    status: v.union(v.literal("ACTIVE"), v.literal("RELEASED"), v.literal("CONVERTED")),
+    status: v.union(v.literal("ACTIVE"), v.literal("RELEASED"), v.literal("CONVERTED"), v.literal("EXPIRED")),
     reservedBy: v.id("users"),
     reservedAt: v.number(),
     releasedAt: v.optional(v.number()),
     releasedBy: v.optional(v.id("users")),
+    expiredAt: v.optional(v.number()),
   })
     .index("by_org_vehicle", ["orgId", "vehicleId"])
-    .index("by_org_status", ["orgId", "status"]),
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_customer", ["orgId", "customerId"])
+    .index("by_status_expiresAt", ["status", "expiresAt"]),
 
   vehicleStatusRequests: defineTable({
     orgId: v.id("organizations"),
@@ -604,6 +720,7 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_email", ["orgId", "email"])
     .index("by_org_phone", ["orgId", "phone"])
+    .index("by_org_whatsapp", ["orgId", "whatsapp"])
     .searchIndex("search_firstName", { searchField: "firstName", filterFields: ["orgId", "isDeleted"] })
     .searchIndex("search_lastName", { searchField: "lastName", filterFields: ["orgId", "isDeleted"] }),
 
@@ -673,6 +790,7 @@ export default defineSchema({
     applicationId: v.optional(v.id("financeApplications")),
     quoteId: v.optional(v.id("quotes")),
     leadId: v.optional(v.id("leads")),
+    canonicalReceivableDocumentId: v.optional(v.id("receivableDocuments")),
     commissionAmount: v.optional(v.number()), // Calculated at sale time
     commissionPaidAt: v.optional(v.number()),
     commissionPaidBy: v.optional(v.id("users")),
@@ -793,7 +911,9 @@ export default defineSchema({
     .index("by_org_user", ["orgId", "userId"])
     // Unread badge/count without a full-table filter scan.
     .index("by_org_user_read", ["orgId", "userId", "isRead"])
-    .index("by_org_user_category", ["orgId", "userId", "category"]),
+    .index("by_org_user_category", ["orgId", "userId", "category"])
+    // Paginated history filtered by archived state without post-cursor memory filtering.
+    .index("by_org_user_archived", ["orgId", "userId", "isArchived"]),
 
   notificationPreferences: defineTable({
     orgId: v.id("organizations"),
@@ -811,7 +931,9 @@ export default defineSchema({
     createdBy: v.id("users"),
     createdAt: v.number(),
     recipientCount: v.number(),
-  }).index("by_createdAt", ["createdAt"]),
+  })
+    .index("by_createdAt", ["createdAt"])
+    .index("by_org", ["orgId"]),
 
   test_drives: defineTable({
     orgId: v.id("organizations"),
@@ -976,6 +1098,24 @@ export default defineSchema({
     notes: v.optional(v.string()),
     createdAt: v.number(),
     updatedAt: v.number(),
+    quoteModeAtSubmission: v.optional(v.union(
+      v.literal("CASH"),
+      v.literal("CONFIGURED_FINANCE_COMPANY"),
+      v.literal("MANUAL_FINANCE_COMPANY"),
+      v.literal("INTERNAL_INSTALLMENT"),
+      v.literal("LEASE"),
+    )),
+    manualFinanceSnapshot: v.optional(v.object({
+      providerName: v.optional(v.string()),
+      profitRate: v.optional(v.number()),
+      insuranceRate: v.optional(v.number()),
+      adminFees: v.optional(v.number()),
+      commission: v.optional(v.number()),
+      includesCommissionInDebt: v.optional(v.boolean()),
+      totalFinancedAmount: v.optional(v.number()),
+      monthlyInstallment: v.optional(v.number()),
+      totalProfit: v.optional(v.number()),
+    })),
     approvedBy: v.optional(v.id("users")),
     approvedAt: v.optional(v.number()),
     finalizedSaleId: v.optional(v.id("sales")),
@@ -1017,19 +1157,32 @@ export default defineSchema({
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
     customerId: v.id("customers"),
-    quoteId: v.id("quotes"),
+    quoteId: v.optional(v.id("quotes")),
+    reservationId: v.optional(v.id("vehicleReservations")),
     amount: v.number(),
+    amountMinor: v.optional(v.number()),
+    currency: v.optional(v.string()),
+    method: v.optional(v.union(
+      v.literal("CASH"),
+      v.literal("BANK_TRANSFER"),
+      v.literal("PAYMENT_LINK"),
+      v.literal("CARD"),
+      v.literal("CHEQUE"),
+      v.literal("OTHER")
+    )),
     status: v.union(
       v.literal("HELD"),
       v.literal("APPLIED"),
       v.literal("REFUNDED"),
-      v.literal("FORFEITED")
+      v.literal("FORFEITED"),
+      v.literal("VOIDED")
     ),
     // Whether this deposit is currently contributing to the vehicle's RESERVED
     // hold. Kept separate from `status` so a rejected application can release
     // the vehicle immediately while the deposit itself stays HELD pending a
     // manager's manual refund/forfeit decision.
     holdActive: v.boolean(),
+    canonicalPaymentId: v.optional(v.id("canonicalPayments")),
     idempotencyKey: v.optional(v.string()),
     notes: v.optional(v.string()),
     createdBy: v.id("users"),
@@ -1042,7 +1195,9 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_quote", ["quoteId"])
+    .index("by_reservation", ["reservationId"])
     .index("by_org_status", ["orgId", "status"])
+    .index("by_org_customer", ["orgId", "customerId"])
     .index("by_vehicle_hold", ["vehicleId", "holdActive"]),
 
   receivables: defineTable({
@@ -1080,6 +1235,7 @@ export default defineSchema({
     totalInstallments: v.optional(v.number()),
     paymentPlanLabel: v.optional(v.string()),
     assignedTo: v.optional(v.id("users")),
+    canonicalReceivableDocumentId: v.optional(v.id("receivableDocuments")),
     lastReminderAt: v.optional(v.number()),
     lastPaymentAt: v.optional(v.number()),
     notes: v.optional(v.string()),
@@ -1109,6 +1265,8 @@ export default defineSchema({
     vehicleId: v.optional(v.id("vehicles")),
     saleId: v.optional(v.id("sales")),
     chequeId: v.optional(v.id("postDatedCheques")),
+    canonicalPaymentId: v.optional(v.id("canonicalPayments")),
+    paymentAllocationId: v.optional(v.id("paymentAllocations")),
     reconciliationId: v.optional(v.id("cashierReconciliations")),
     direction: v.union(v.literal("IN"), v.literal("OUT")),
     method: v.union(
@@ -1242,7 +1400,8 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])
     .index("by_receivable", ["receivableId"])
-    .index("by_requestedBy", ["requestedBy"]),
+    .index("by_requestedBy", ["requestedBy"])
+    .index("by_org_customer", ["orgId", "customerId"]),
 
   collectionReminders: defineTable({
     orgId: v.id("organizations"),
@@ -1297,11 +1456,15 @@ export default defineSchema({
       v.literal("MISSING"),
       v.literal("UPLOADED"),
       v.literal("VERIFIED"),
-      v.literal("REJECTED")
+      v.literal("REJECTED"),
+      v.literal("WAIVED")
     ),
     rejectionReason: v.optional(v.string()),
+    waiverReason: v.optional(v.string()),
     uploadedAt: v.optional(v.number()),
     verifiedBy: v.optional(v.id("users")),
+    waivedBy: v.optional(v.id("users")),
+    waivedAt: v.optional(v.number()),
   })
     .index("by_org", ["orgId"])
     .index("by_application", ["applicationId"])
@@ -1343,7 +1506,8 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_org_date", ["orgId", "date"])
-    .index("by_org_vehicle", ["orgId", "vehicleId"]),
+    .index("by_org_vehicle", ["orgId", "vehicleId"])
+    .index("by_org_customer", ["orgId", "customerId"]),
 
   fixedAssets: defineTable({
     orgId: v.id("organizations"),
@@ -1516,6 +1680,17 @@ export default defineSchema({
     // Undefined = use the built-in copy from socialSmartReplyEn / socialSmartReplyAr.
     smartReplyCustomTemplatesEn: v.optional(v.string()),
     smartReplyCustomTemplatesAr: v.optional(v.string()),
+    // Client-safe picker list: id + name only (no tokens).
+    // Populated by exchangeCodeForToken when the user manages >1 Facebook Page.
+    // Cleared after selectFacebookPage completes.
+    facebookAvailablePages: v.optional(
+      v.array(v.object({ id: v.string(), name: v.string() }))
+    ),
+    // Server-only pending credentials — includes access tokens; never sent to clients.
+    // Cleared after selectFacebookPage completes.
+    facebookPendingCredentials: v.optional(
+      v.array(v.object({ id: v.string(), name: v.string(), token: v.string() }))
+    ),
   })
     .index("by_org", ["orgId"])
     .index("by_instagram_business_account_id", ["instagramBusinessAccountId"])
@@ -1553,6 +1728,7 @@ export default defineSchema({
     createdAt: v.number(),
     updatedAt: v.number(),
     publishedAt: v.optional(v.number()),
+    publishedSnapshotId: v.optional(v.id("websitePublishSnapshots")),
   })
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"]),
@@ -1579,6 +1755,7 @@ export default defineSchema({
     sslStatus: v.union(v.literal("pending"), v.literal("active"), v.literal("failed")),
     registrationExpiresAt: v.optional(v.number()),
     autoRenew: v.boolean(),
+    publishedSnapshotId: v.optional(v.id("websitePublishSnapshots")),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -1612,15 +1789,59 @@ export default defineSchema({
     .index("by_settings", ["websiteSettingsId"])
     .index("by_org_settings_form", ["orgId", "websiteSettingsId", "formType"]),
 
+  websiteLeadAbuseEvents: defineTable({
+    orgId: v.id("organizations"),
+    host: v.string(),
+    formType: v.string(),
+    reason: v.union(
+      v.literal("blocked"),
+      v.literal("rate_limited"),
+      v.literal("duplicate_suppressed"),
+      v.literal("validation_failed")
+    ),
+    fingerprintHash: v.optional(v.string()),
+    clientIpHash: v.optional(v.string()),
+    contactKeyHash: v.optional(v.string()),
+    detail: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_org_createdAt", ["orgId", "createdAt"])
+    .index("by_host_createdAt", ["host", "createdAt"])
+    .index("by_reason_createdAt", ["reason", "createdAt"]),
+
+  websiteLeadBlocklist: defineTable({
+    orgId: v.id("organizations"),
+    host: v.optional(v.string()),
+    kind: v.union(
+      v.literal("fingerprint"),
+      v.literal("ipHash"),
+      v.literal("email"),
+      v.literal("emailDomain"),
+      v.literal("phone")
+    ),
+    valueHash: v.string(),
+    reason: v.optional(v.string()),
+    expiresAt: v.optional(v.number()),
+    createdAt: v.number(),
+    createdBy: v.optional(v.id("users")),
+  })
+    .index("by_kind_and_valueHash", ["kind", "valueHash"])
+    .index("by_org", ["orgId"])
+    .index("by_host", ["host"]),
+
   websitePublishSnapshots: defineTable({
     orgId: v.id("organizations"),
     websiteSettingsId: v.id("websiteSettings"),
+    domain: v.string(),
+    version: v.string(),
     snapshotJson: v.any(),
     createdAt: v.number(),
+    publishedAt: v.number(),
     publishedByUserId: v.id("users"),
   })
     .index("by_org", ["orgId"])
-    .index("by_settings", ["websiteSettingsId"]),
+    .index("by_settings", ["websiteSettingsId"])
+    .index("by_domain_version", ["domain", "version"]),
 
   domainSearchLogs: defineTable({
     orgId: v.id("organizations"),
@@ -1639,7 +1860,9 @@ export default defineSchema({
     provider: v.union(v.literal("instagram"), v.literal("facebook")),
     createdAt: v.number(),
     expiresAt: v.number(),
-  }).index("by_state", ["state"]),
+  })
+    .index("by_state", ["state"])
+    .index("by_org", ["orgId"]),
 
   instagramEvents: defineTable({
     orgId: v.id("organizations"),
@@ -1706,6 +1929,7 @@ export default defineSchema({
     fbConversationId: v.optional(v.string()),
     sentByUserId: v.optional(v.id("users")),
   })
+    .index("by_org", ["orgId"])
     .index("by_org_customer_ts", ["orgId", "customerId", "timestamp"])
     .index("by_org_fb_message", ["orgId", "fbMessageId"]),
 
@@ -1911,11 +2135,21 @@ export default defineSchema({
       v.literal("support-inbox-notification"),
       v.literal("upgrade-request")
     ),
-    status: v.union(v.literal("success"), v.literal("error")),
+    status: v.union(v.literal("received"), v.literal("success"), v.literal("error"), v.literal("dead_letter")),
     summary: v.string(),
+    eventId: v.optional(v.string()),
+    payloadSha256: v.optional(v.string()),
+    rawPayload: v.optional(v.string()),
+    payloadPreview: v.optional(v.string()),
+    payloadTruncated: v.optional(v.boolean()),
+    receiveCount: v.optional(v.number()),
+    lastReceivedAt: v.optional(v.number()),
     error: v.optional(v.string()),
     createdAt: v.number(),
-  }).index("by_createdAt", ["createdAt"]),
+  })
+    .index("by_createdAt", ["createdAt"])
+    .index("by_source_and_eventId", ["source", "eventId"])
+    .index("by_status_createdAt", ["status", "createdAt"]),
 
   // ─── Company-level support inboxes (support@ / info@ autoflowdealer.com) ───
   // Not org-scoped — this is the AutoFlow operator's own inbox for talking to
@@ -2014,6 +2248,7 @@ export default defineSchema({
     agentPresenceAt: v.optional(v.number()),
     agentPresenceSince: v.optional(v.number()),
   })
+    .index("by_org", ["orgId"])
     .index("by_dealerUserId", ["dealerUserId"])
     .index("by_leadId", ["leadId"])
     .index("by_status", ["status", "createdAt"])
@@ -2137,6 +2372,10 @@ export default defineSchema({
     currency: v.string(),
     provider: v.string(),
     externalId: v.optional(v.string()),
+    checkoutUrl: v.optional(v.string()),
+    providerAccountId: v.optional(v.string()),
+    canonicalPaymentId: v.optional(v.id("canonicalPayments")),
+    paymentAllocationId: v.optional(v.id("paymentAllocations")),
     status: v.union(
       v.literal("PENDING"),
       v.literal("SETTLED"),
@@ -2146,6 +2385,11 @@ export default defineSchema({
     ),
     idempotencyKey: v.string(),
     providerPayload: v.optional(v.any()),
+    providerEventId: v.optional(v.string()),
+    providerEventType: v.optional(v.string()),
+    providerSignatureVerifiedAt: v.optional(v.number()),
+    providerAmountMinor: v.optional(v.number()),
+    providerCurrency: v.optional(v.string()),
     settledAt: v.optional(v.number()),
     expiresAt: v.optional(v.number()),
     createdBy: v.id("users"),
@@ -2155,5 +2399,6 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"])
     .index("by_external_id", ["provider", "externalId"])
-    .index("by_org_idempotency", ["orgId", "idempotencyKey"]),
+    .index("by_org_idempotency", ["orgId", "idempotencyKey"])
+    .index("by_org_customer", ["orgId", "customerId"]),
 });

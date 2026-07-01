@@ -5,6 +5,7 @@ import { MutationCtx, QueryCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { scaleForCurrency, assertValidMinorAmount, assertSameCurrency } from "./utils/money";
+import { requireFeature } from "./subscriptions";
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -92,6 +93,20 @@ export async function createReceivableDocument(
   });
 }
 
+export async function ensureReceivableDocument(
+  ctx: MutationCtx,
+  args: Parameters<typeof createReceivableDocument>[1]
+): Promise<Id<"receivableDocuments">> {
+  const existing = await ctx.db
+    .query("receivableDocuments")
+    .withIndex("by_org_source", (q) =>
+      q.eq("orgId", args.orgId).eq("sourceType", args.sourceType).eq("sourceId", args.sourceId)
+    )
+    .unique();
+  if (existing) return existing._id;
+  return await createReceivableDocument(ctx, args);
+}
+
 export async function createCanonicalPayment(
   ctx: MutationCtx,
   args: {
@@ -107,6 +122,8 @@ export async function createCanonicalPayment(
     actorId: Id<"users">;
     status?: "DRAFT" | "PENDING_VERIFICATION" | "VERIFIED" | "PENDING_SETTLEMENT" | "SETTLED";
     externalReference?: string;
+    provider?: string;
+    providerTransactionId?: string;
     receivedAt?: number;
     branchId?: Id<"branches">;
     cashierSessionId?: Id<"cashierReconciliations">;
@@ -141,6 +158,8 @@ export async function createCanonicalPayment(
     status: args.status ?? "SETTLED",
     idempotencyKey: args.idempotencyKey,
     externalReference: args.externalReference,
+    provider: args.provider,
+    providerTransactionId: args.providerTransactionId,
     receivedAt: args.receivedAt ?? now,
     cashierSessionId: args.cashierSessionId,
     accountingEventId: args.accountingEventId,
@@ -258,6 +277,7 @@ export const listReceivables = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    await requireFeature(ctx, args.orgId, "accounting");
     const limit = Math.min(args.limit ?? 50, 200);
 
     if (args.customerId) {
@@ -280,6 +300,7 @@ export const getReceivableBalance = query({
   args: { orgId: v.id("organizations"), receivableDocumentId: v.id("receivableDocuments") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    await requireFeature(ctx, args.orgId, "accounting");
     const doc = await ctx.db.get(args.receivableDocumentId);
     if (!doc || doc.orgId !== args.orgId) return null;
     const outstandingMinor = await getReceivableOutstandingMinor(ctx, args.receivableDocumentId);
@@ -291,6 +312,7 @@ export const getPaymentBalance = query({
   args: { orgId: v.id("organizations"), paymentId: v.id("canonicalPayments") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    await requireFeature(ctx, args.orgId, "accounting");
     const payment = await ctx.db.get(args.paymentId);
     if (!payment || payment.orgId !== args.orgId) return null;
     const unappliedMinor = await getPaymentUnappliedMinor(ctx, args.paymentId);
@@ -306,6 +328,7 @@ export const listAllocations = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    await requireFeature(ctx, args.orgId, "accounting");
     if (args.receivableDocumentId) {
       return ctx.db.query("paymentAllocations").withIndex("by_receivable", (q) => q.eq("receivableDocumentId", args.receivableDocumentId!)).collect();
     }
@@ -337,6 +360,7 @@ export const createReceivable = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
     return createReceivableDocument(ctx, { ...args, actorId: user._id });
   },
 });
@@ -356,6 +380,7 @@ export const recordPayment = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
     return createCanonicalPayment(ctx, { ...args, actorId: user._id });
   },
 });
@@ -369,6 +394,7 @@ export const allocate = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
     return allocatePaymentToReceivable(ctx, { ...args, actorId: user._id });
   },
 });
@@ -380,6 +406,7 @@ export const reverseAllocationMutation = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
     return reverseAllocation(ctx, { ...args, actorId: user._id });
   },
 });

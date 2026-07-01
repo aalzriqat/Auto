@@ -30,6 +30,7 @@ async function seedFinanceLifecycleDealer() {
       orgId,
       name: "OWNER",
       permissions: ["create:sales", "view:sales", "manage:users"],
+      isSystemOwnerRole: true,
     })
   );
 

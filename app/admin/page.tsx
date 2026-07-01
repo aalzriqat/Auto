@@ -12,6 +12,14 @@ import { Switch } from "@/components/ui/switch";
 import { toast } from "@/components/ui/sonner";
 import { X, Plus } from "lucide-react";
 
+type WebhookStatus = "received" | "success" | "error";
+
+function WebhookStatusBadge({ status }: { status: WebhookStatus }) {
+  if (status === "success") return <Badge variant="secondary">OK</Badge>;
+  if (status === "received") return <Badge variant="outline">Received</Badge>;
+  return <Badge variant="destructive">Error</Badge>;
+}
+
 export default function AdminOverviewPage() {
   const overview = useQuery(api.adminSystem.getOverview);
   const cronStatus = useQuery(api.adminSystem.getCronStatus);
@@ -191,7 +199,7 @@ export default function AdminOverviewPage() {
                   <p className="font-medium">{w.source} · {w.summary}</p>
                   <p className="text-xs text-muted-foreground">{new Date(w.createdAt).toLocaleString()}</p>
                 </div>
-                {w.status === "success" ? <Badge variant="secondary">OK</Badge> : <Badge variant="destructive">Error</Badge>}
+                <WebhookStatusBadge status={w.status} />
               </div>
             ))}
           </CardContent>

@@ -1,8 +1,13 @@
 import { v } from "convex/values";
 import { query } from "./_generated/server";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { validateVinChecksum } from "../lib/vinHelpers";
+import { isSystemOwnerRole, PERMISSIONS, type Permission } from "./utils/permissions";
+
+function canRoleView(role: Doc<"roles">, permission: Permission): boolean {
+  return isSystemOwnerRole(role) || role.permissions.includes(permission);
+}
 
 /**
  * Retrieves aggregate statistics for the dashboard.
@@ -14,8 +19,21 @@ export const stats = query({
     timeRange: v.optional(v.union(v.literal("DAY"), v.literal("MONTH"), v.literal("YEAR"), v.literal("ALL_TIME"))),
   },
   handler: async (ctx, args) => {
-    // 1. Authenticate and verify membership
-    await requireTenantAuth(ctx, args.orgId);
+    // 1. Authenticate and verify membership, then derive domain visibility.
+    const { role } = await requireTenantAuth(ctx, args.orgId);
+    const canViewVehicles = canRoleView(role, PERMISSIONS.VIEW_VEHICLES);
+    const canViewLeads = canRoleView(role, PERMISSIONS.VIEW_LEADS);
+    const canViewUsers = canRoleView(role, PERMISSIONS.VIEW_USERS);
+    const canViewTasks = canRoleView(role, PERMISSIONS.VIEW_TASKS);
+    const canViewSalesMetrics =
+      canRoleView(role, PERMISSIONS.VIEW_SALES) ||
+      canRoleView(role, PERMISSIONS.VIEW_REPORTS) ||
+      canRoleView(role, PERMISSIONS.VIEW_FINANCE);
+    const canViewCostMetrics =
+      canRoleView(role, PERMISSIONS.VIEW_EXPENSES) ||
+      canRoleView(role, PERMISSIONS.VIEW_REPORTS) ||
+      canRoleView(role, PERMISSIONS.VIEW_FINANCE);
+    const canViewProfitMetrics = canViewSalesMetrics && canViewCostMetrics;
 
     const now = Date.now();
     let filterStart = 0;
@@ -29,82 +47,89 @@ export const stats = query({
     }
 
     // 2. Total Vehicles & Available Vehicles
-    const availableVehicles = await ctx.db
-      .query("vehicles")
-      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "AVAILABLE"))
-      .filter(q => q.and(q.neq(q.field("isDeleted"), true), q.neq(q.field("sourceType"), "SOURCED")))
-      .take(1000)
-      .then(res => res.length); // Use take to avoid memory bounds on huge orgs
-
-    const totalVehicles = await ctx.db
-      .query("vehicles")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter(q => q.and(q.neq(q.field("isDeleted"), true), q.neq(q.field("sourceType"), "SOURCED")))
-      .take(2000)
-      .then(res => res.length);
+    const VEHICLE_CAP = 2000;
+    const vehicleRows = canViewVehicles
+      ? await ctx.db
+        .query("vehicles")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .filter(q => q.and(q.neq(q.field("isDeleted"), true), q.neq(q.field("sourceType"), "SOURCED")))
+        .take(VEHICLE_CAP)
+      : [];
+    const totalVehicles = vehicleRows.length;
+    const vehiclesTruncated = vehicleRows.length === VEHICLE_CAP;
+    const availableVehicles = canViewVehicles
+      ? vehicleRows.filter(v => v.status === "AVAILABLE").length
+      : 0;
 
     // 3. Active Leads (not WON/LOST)
-    const activeLeads = await ctx.db
-      .query("leads")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter(q => q.and(
-        q.neq(q.field("stage"), "WON"),
-        q.neq(q.field("stage"), "LOST"),
-        q.neq(q.field("isDeleted"), true)
-      ))
-      .take(1000)
-      .then(res => res.length);
-
-    // 4. Sales this period
-    let periodSales;
-    if (filterStart > 0) {
-      periodSales = await ctx.db
-        .query("sales")
-        .withIndex("by_org_saleDate", (q) => q.eq("orgId", args.orgId).gte("saleDate", filterStart))
-        .filter(q => q.and(
-          q.neq(q.field("status"), "CANCELLED"),
-          q.neq(q.field("isDeleted"), true)
-        ))
-        .collect();
-    } else {
-      periodSales = await ctx.db
-        .query("sales")
+    const activeLeads = canViewLeads
+      ? await ctx.db
+        .query("leads")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
         .filter(q => q.and(
-          q.neq(q.field("status"), "CANCELLED"),
+          q.neq(q.field("stage"), "WON"),
+          q.neq(q.field("stage"), "LOST"),
           q.neq(q.field("isDeleted"), true)
         ))
-        .take(5000);
+        .take(1000)
+        .then(res => res.length)
+      : 0;
+
+    // 4. Sales this period
+    let periodSales: Doc<"sales">[] = [];
+    if (canViewSalesMetrics) {
+      if (filterStart > 0) {
+        periodSales = await ctx.db
+          .query("sales")
+          .withIndex("by_org_saleDate", (q) => q.eq("orgId", args.orgId).gte("saleDate", filterStart))
+          .filter(q => q.and(
+            q.eq(q.field("status"), "COMPLETED"),
+            q.neq(q.field("isDeleted"), true)
+          ))
+          .collect();
+      } else {
+        periodSales = await ctx.db
+          .query("sales")
+          .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+          .filter(q => q.and(
+            q.eq(q.field("status"), "COMPLETED"),
+            q.neq(q.field("isDeleted"), true)
+          ))
+          .take(5000);
+      }
     }
 
     const activeSales = periodSales;
 
-    const transactionCandidates =
-      filterStart > 0
-        ? await ctx.db
-          .query("transactions")
-          .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId).gte("date", filterStart))
-          .filter(q => q.and(
-            q.eq(q.field("category"), "VEHICLE_SALE"),
-            q.eq(q.field("type"), "IN"),
-            q.neq(q.field("isDeleted"), true)
-          ))
-          .take(5000)
-        : await ctx.db
-          .query("transactions")
-          .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId))
-          .filter(q => q.and(
-            q.eq(q.field("category"), "VEHICLE_SALE"),
-            q.eq(q.field("type"), "IN"),
-            q.neq(q.field("isDeleted"), true)
-          ))
-          .take(5000);
+    const transactionCandidates: Doc<"transactions">[] = canViewSalesMetrics
+      ? filterStart > 0
+          ? await ctx.db
+            .query("transactions")
+            .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId).gte("date", filterStart))
+            .filter(q => q.and(
+              q.eq(q.field("category"), "VEHICLE_SALE"),
+              q.eq(q.field("type"), "IN"),
+              q.neq(q.field("isDeleted"), true)
+            ))
+            .take(5000)
+          : await ctx.db
+            .query("transactions")
+            .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId))
+            .filter(q => q.and(
+              q.eq(q.field("category"), "VEHICLE_SALE"),
+              q.eq(q.field("type"), "IN"),
+              q.neq(q.field("isDeleted"), true)
+            ))
+            .take(5000)
+      : [];
     const saleTransactions = transactionCandidates;
 
+    const SALES_CAP = 5000;
     const salesVolume = activeSales.length > 0
       ? activeSales.reduce((acc, sale) => acc + sale.salePrice, 0)
       : saleTransactions.reduce((acc, transaction) => acc + transaction.amount, 0);
     const salesCount = activeSales.length > 0 ? activeSales.length : saleTransactions.length;
+    const salesTruncated = activeSales.length === SALES_CAP || saleTransactions.length === SALES_CAP;
 
     const getChartKey = (dateTs: number) => {
       const d = new Date(dateTs);
@@ -122,17 +147,19 @@ export const stats = query({
     const monthlyProfits: Record<string, number> = {};
 
     // Fetch all expenses to deduct from profit
-    let allExpenses;
-    if (filterStart > 0) {
-      allExpenses = await ctx.db
-        .query("expenses")
-        .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId).gte("date", filterStart))
-        .collect();
-    } else {
-      allExpenses = await ctx.db
-        .query("expenses")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .take(5000);
+    let allExpenses: Doc<"expenses">[] = [];
+    if (canViewCostMetrics) {
+      if (filterStart > 0) {
+        allExpenses = await ctx.db
+          .query("expenses")
+          .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId).gte("date", filterStart))
+          .collect();
+      } else {
+        allExpenses = await ctx.db
+          .query("expenses")
+          .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+          .take(5000);
+      }
     }
 
     const vehicleExpenses: Record<string, number> = {};
@@ -143,11 +170,13 @@ export const stats = query({
 
       const key = getChartKey(exp.date);
 
-      totalExpensesByMonth[key] = (totalExpensesByMonth[key] || 0) + exp.amount;
+      if (canViewCostMetrics) {
+        totalExpensesByMonth[key] = (totalExpensesByMonth[key] || 0) + exp.amount;
+      }
 
-      if (exp.vehicleId) {
+      if (canViewProfitMetrics && exp.vehicleId) {
         vehicleExpenses[exp.vehicleId] = (vehicleExpenses[exp.vehicleId] || 0) + exp.amount;
-      } else {
+      } else if (canViewProfitMetrics) {
         generalExpensesByMonth[key] = (generalExpensesByMonth[key] || 0) + exp.amount;
       }
     }
@@ -160,7 +189,7 @@ export const stats = query({
 
         // Calculate profit if purchase price is available
         const vehicle = await ctx.db.get(sale.vehicleId);
-        if (vehicle && vehicle.purchasePrice !== undefined) {
+        if (canViewProfitMetrics && vehicle && vehicle.purchasePrice !== undefined) {
           const vehicleCost = vehicle.purchasePrice + (vehicleExpenses[sale.vehicleId] || 0);
           const profit = sale.salePrice - vehicleCost;
           monthlyProfits[key] = (monthlyProfits[key] || 0) + profit;
@@ -199,18 +228,24 @@ export const stats = query({
     });
 
     // 5. Team Members
-    const members = await ctx.db
-      .query("memberships")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .take(500);
+    const MEMBERS_CAP = 500;
+    const members = canViewUsers
+      ? await ctx.db
+        .query("memberships")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .take(MEMBERS_CAP)
+      : [];
+    const membersTruncated = members.length === MEMBERS_CAP;
 
     // 6. Tasks and Team Activity
     // Limit to 1000 most recent to prevent dashboard timeouts on massive orgs
-    const tasks = await ctx.db
-      .query("tasks")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .order("desc")
-      .take(1000);
+    const tasks = canViewTasks
+      ? await ctx.db
+        .query("tasks")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .order("desc")
+        .take(1000)
+      : [];
 
     const todayStart = new Date().setHours(0, 0, 0, 0);
 
@@ -222,7 +257,7 @@ export const stats = query({
     const memberTaskStats: Record<string, { pending: number, overdue: number, completed: number, name: string }> = {};
 
     // Batch fetch assignees to prevent N+1 queries
-    const assigneeIds = Array.from(new Set(tasks.map(t => t.assignedTo)));
+    const assigneeIds = canViewUsers ? Array.from(new Set(tasks.map(t => t.assignedTo))) : [];
     const assignees = await Promise.all(assigneeIds.map(id => ctx.db.get(id)));
     const assigneeMap = Object.fromEntries(
       assignees.filter(Boolean).map(user => [user!._id, user!.name || user!.email || "Unknown"])
@@ -237,13 +272,15 @@ export const stats = query({
       else pendingTasks++;
 
       // Track by assignee
-      const assigneeId = task.assignedTo;
-      if (!memberTaskStats[assigneeId]) {
-        memberTaskStats[assigneeId] = { pending: 0, overdue: 0, completed: 0, name: assigneeMap[assigneeId] || "Unknown" };
+      if (canViewUsers) {
+        const assigneeId = task.assignedTo;
+        if (!memberTaskStats[assigneeId]) {
+          memberTaskStats[assigneeId] = { pending: 0, overdue: 0, completed: 0, name: assigneeMap[assigneeId] || "Unknown" };
+        }
+        if (task.status === "COMPLETED") memberTaskStats[assigneeId].completed++;
+        else if (isOverdue) memberTaskStats[assigneeId].overdue++;
+        else memberTaskStats[assigneeId].pending++;
       }
-      if (task.status === "COMPLETED") memberTaskStats[assigneeId].completed++;
-      else if (isOverdue) memberTaskStats[assigneeId].overdue++;
-      else memberTaskStats[assigneeId].pending++;
     }
 
     const teamTasks = Object.values(memberTaskStats).sort((a, b) => (b.pending + b.overdue) - (a.pending + a.overdue));
@@ -251,19 +288,21 @@ export const stats = query({
     // 7. Top performer — ranked by visible sale revenue in this period
     // (not the task backlog leaderboard above, which tracks a different thing).
     const revenueBySalesperson: Record<string, { revenue: number; deals: number }> = {};
-    for (const sale of activeSales) {
-      const entry = revenueBySalesperson[sale.salespersonId] ?? { revenue: 0, deals: 0 };
-      entry.revenue += sale.salePrice;
-      entry.deals += 1;
-      revenueBySalesperson[sale.salespersonId] = entry;
-    }
-
     let topPerformer: { name: string; revenue: number; deals: number } | null = null;
-    const topEntry = Object.entries(revenueBySalesperson).sort((a, b) => b[1].revenue - a[1].revenue)[0];
-    if (topEntry) {
-      const [salespersonId, { revenue, deals }] = topEntry;
-      const salesperson = await ctx.db.get(salespersonId as Id<"users">);
-      topPerformer = { name: salesperson?.name || salesperson?.email || "Unknown", revenue, deals };
+    if (canViewSalesMetrics && canViewUsers) {
+      for (const sale of activeSales) {
+        const entry = revenueBySalesperson[sale.salespersonId] ?? { revenue: 0, deals: 0 };
+        entry.revenue += sale.salePrice;
+        entry.deals += 1;
+        revenueBySalesperson[sale.salespersonId] = entry;
+      }
+
+      const topEntry = Object.entries(revenueBySalesperson).sort((a, b) => b[1].revenue - a[1].revenue)[0];
+      if (topEntry) {
+        const [salespersonId, { revenue, deals }] = topEntry;
+        const salesperson = await ctx.db.get(salespersonId as Id<"users">);
+        topPerformer = { name: salesperson?.name || salesperson?.email || "Unknown", revenue, deals };
+      }
     }
 
     return {
@@ -274,6 +313,11 @@ export const stats = query({
       salesVolumeThisMonth: salesVolume,
       teamMembers: members.length,
       salesTrend,
+      truncated: {
+        vehicles: vehiclesTruncated,
+        sales: salesTruncated,
+        members: membersTruncated,
+      },
       taskStats: {
         total: totalTasks,
         pending: pendingTasks,
@@ -293,13 +337,17 @@ export const stats = query({
 export const dataQualityStats = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId);
+    const { role } = await requireTenantAuth(ctx, args.orgId);
+    const canViewCustomers = canRoleView(role, PERMISSIONS.VIEW_CUSTOMERS);
+    const canViewVehicles = canRoleView(role, PERMISSIONS.VIEW_VEHICLES);
 
-    const customers = await ctx.db
-      .query("customers")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.neq(q.field("isDeleted"), true))
-      .take(2000);
+    const customers = canViewCustomers
+      ? await ctx.db
+        .query("customers")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .filter((q) => q.neq(q.field("isDeleted"), true))
+        .take(2000)
+      : [];
 
     let customersMissingPhone = 0;
     let customersMissingEmail = 0;
@@ -308,11 +356,13 @@ export const dataQualityStats = query({
       if (!c.email) customersMissingEmail++;
     }
 
-    const vehicles = await ctx.db
-      .query("vehicles")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.neq(q.field("isDeleted"), true))
-      .take(2000);
+    const vehicles = canViewVehicles
+      ? await ctx.db
+        .query("vehicles")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .filter((q) => q.neq(q.field("isDeleted"), true))
+        .take(2000)
+      : [];
 
     const vehiclesWithVinWarning = vehicles.filter((v) => v.vin && !validateVinChecksum(v.vin)).length;
 

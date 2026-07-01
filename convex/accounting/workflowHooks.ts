@@ -158,6 +158,38 @@ export async function hookDepositRefunded(
   });
 }
 
+export async function hookDepositForfeited(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    depositId: Id<"deposits">;
+    customerId: Id<"customers">;
+    amountMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postOrEnqueue(ctx, {
+    orgId: args.orgId,
+    eventType: "DEPOSIT_FORFEITED",
+    sourceType: "deposits",
+    sourceId: args.depositId.toString(),
+    eventVersion: 1,
+    accountingDate: args.occurredAt,
+    occurredAt: args.occurredAt,
+    currency: args.currency,
+    idempotencyKey: `deposit_forfeited_${args.depositId}`,
+    payload: {
+      depositId: args.depositId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      customerId: args.customerId.toString(),
+    },
+    actorId: args.actorId,
+  });
+}
+
 export async function hookSaleCompleted(
   ctx: MutationCtx,
   args: {

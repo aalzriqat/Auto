@@ -21,6 +21,15 @@ async function seedOwner(t: ReturnType<typeof convexTest>) {
   const orgId = await t.run(async (ctx) =>
     ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() }),
   );
+  await t.run(async (ctx) =>
+    ctx.db.insert("subscriptions", {
+      orgId,
+      plan: "professional",
+      status: "active",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }),
+  );
   const userId = await t.run(async (ctx) =>
     ctx.db.insert("users", {
       clerkId: "owner_001",
@@ -33,6 +42,7 @@ async function seedOwner(t: ReturnType<typeof convexTest>) {
       orgId,
       name: "OWNER",
       permissions: ["view:settings", "edit:settings"],
+      isSystemOwnerRole: true,
     }),
   );
   await t.run(async (ctx) =>

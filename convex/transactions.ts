@@ -12,6 +12,7 @@ type LedgerEntityContext = {
   vehicleId?: Id<"vehicles">;
   customerId?: Id<"customers">;
   quoteReference?: string;
+  reservationReference?: string;
 };
 type LedgerContextByTransactionId = Map<Id<"transactions">, LedgerEntityContext>;
 
@@ -44,11 +45,13 @@ async function contextFromDepositId(
     return null;
   }
 
-  return {
+  const context: LedgerEntityContext = {
     vehicleId: deposit.vehicleId,
     customerId: deposit.customerId,
-    quoteReference: deposit.quoteId.toString(),
   };
+  if (deposit.quoteId) context.quoteReference = deposit.quoteId.toString();
+  if (deposit.reservationId) context.reservationReference = deposit.reservationId.toString();
+  return context;
 }
 
 async function contextFromLegacyQuoteDescription(
@@ -138,6 +141,7 @@ function enrichLedgerTransaction(
     ...(vehicle ? { vehicleLabel: vehicleLabel(vehicle) } : {}),
     ...(customer ? { customerName: customerName(customer) } : {}),
     ...(context?.quoteReference ? { quoteReference: context.quoteReference } : {}),
+    ...(context?.reservationReference ? { reservationReference: context.reservationReference } : {}),
   };
 }
 

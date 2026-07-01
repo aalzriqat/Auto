@@ -23,8 +23,7 @@ const BaseSaleSchema = z.object({
   gapSold: z.number().min(0).optional(),
 });
 
-export const CreateSaleSchema = BaseSaleSchema.refine(
-  (data) => {
+function downPaymentDoesNotExceedSalePrice(data: { downPayment?: number; salePrice?: number }) {
     if (
       data.downPayment !== undefined &&
       data.salePrice !== undefined &&
@@ -33,29 +32,22 @@ export const CreateSaleSchema = BaseSaleSchema.refine(
       return false;
     }
     return true;
-  },
-  {
-    message: "Down payment cannot exceed the sale price",
-    path: ["downPayment"],
-  }
-);
+}
+
+const downPaymentRefinement = {
+  message: "Down payment cannot exceed the sale price",
+  path: ["downPayment"],
+};
+
+export const CreateSaleSchema = BaseSaleSchema.extend({
+  status: z.literal("COMPLETED"),
+}).refine(downPaymentDoesNotExceedSalePrice, downPaymentRefinement);
+
+export const CreateDraftSaleSchema = BaseSaleSchema.extend({
+  status: z.literal("PENDING").optional(),
+}).refine(downPaymentDoesNotExceedSalePrice, downPaymentRefinement);
 
 export const UpdateSaleSchema = BaseSaleSchema.partial().extend({
   orgId: z.string().min(1, "Organization ID is required"),
   saleId: z.string().min(1, "Sale ID is required"),
-}).refine(
-  (data) => {
-    if (
-      data.downPayment !== undefined &&
-      data.salePrice !== undefined &&
-      data.downPayment > data.salePrice
-    ) {
-      return false;
-    }
-    return true;
-  },
-  {
-    message: "Down payment cannot exceed the sale price",
-    path: ["downPayment"],
-  }
-);
+}).refine(downPaymentDoesNotExceedSalePrice, downPaymentRefinement);

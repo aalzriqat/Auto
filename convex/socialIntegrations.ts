@@ -11,6 +11,7 @@ import { requireOwner, requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { getValidatedEnv } from "./utils/env";
 import { DEFAULT_SETTINGS } from "./orgSettings";
+import { requireFeature } from "./subscriptions";
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const INSTAGRAM_GRAPH_VERSION = "v21.0";
@@ -157,6 +158,7 @@ export const createConnectUrl = mutation({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
+    await requireFeature(ctx, args.orgId, "socialInbox");
 
     const env = getValidatedEnv();
     if (!env.INSTAGRAM_APP_ID) {
@@ -200,6 +202,7 @@ export const getConnectionStatus = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SETTINGS]);
+    await requireFeature(ctx, args.orgId, "socialInbox");
 
     const settings = await ctx.db
       .query("orgSettings")
@@ -266,6 +269,7 @@ export const setInstagramAutoReplyConfig = mutation({
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
+    await requireFeature(ctx, args.orgId, "socialInbox");
 
     const cleaned = args.messages.map((m) => m.trim()).filter(Boolean);
     if (cleaned.length > 5) {
@@ -314,6 +318,7 @@ export const setInstagramLeadCreationConfig = mutation({
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
+    await requireFeature(ctx, args.orgId, "socialInbox");
 
     const settings = await ctx.db
       .query("orgSettings")
@@ -369,6 +374,7 @@ export const disconnect = mutation({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
+    await requireFeature(ctx, args.orgId, "socialInbox");
 
     const settings = await ctx.db
       .query("orgSettings")
@@ -399,6 +405,7 @@ export const setAutoPostEnabled = mutation({
   args: { orgId: v.id("organizations"), enabled: v.boolean() },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
+    await requireFeature(ctx, args.orgId, "socialInbox");
 
     const settings = await ctx.db
       .query("orgSettings")
@@ -626,5 +633,99 @@ export const exchangeCodeForToken = internalAction({
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  },
+});
+
+// ─── Instagram token refresh ──────────────────────────────────────────────────
+
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Queries all org-settings rows that have a live Instagram token expiring within `withinMs`. */
+export const getOrgsNeedingInstagramRefresh = internalQuery({
+  args: { withinMs: v.number() },
+  handler: async (ctx, args) => {
+    const cutoff = Date.now() + args.withinMs;
+    const rows = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_org")
+      .collect();
+    return rows.filter(
+      (s) =>
+        s.instagramAccessToken &&
+        s.instagramTokenExpiresAt !== undefined &&
+        s.instagramTokenExpiresAt <= cutoff
+    );
+  },
+});
+
+/** Refreshes the Instagram long-lived token for a single org. */
+export const refreshInstagramToken = internalAction({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const settings = await ctx.runQuery(internal.socialIntegrations.getOrgSettingsInternal, {
+      orgId: args.orgId,
+    });
+    const token = settings?.instagramAccessToken;
+    if (!token) return;
+
+    const refreshUrl = new URL("https://graph.instagram.com/refresh_access_token");
+    refreshUrl.searchParams.set("grant_type", "ig_refresh_token");
+    refreshUrl.searchParams.set("access_token", token);
+
+    const res = await fetch(refreshUrl.toString());
+    const json = await res.json();
+
+    if (!res.ok || !json?.access_token) {
+      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+        source: "instagram",
+        status: "error",
+        summary: `Token refresh failed for org ${args.orgId}`,
+        error: json?.error?.message ?? res.statusText,
+      });
+      return;
+    }
+
+    const newToken: string = json.access_token;
+    const expiresInSeconds: number | undefined =
+      typeof json.expires_in === "number" ? json.expires_in : undefined;
+    const newExpiresAt = expiresInSeconds !== undefined
+      ? Date.now() + expiresInSeconds * 1000
+      : undefined;
+
+    await ctx.runMutation(internal.socialIntegrations.patchInstagramToken, {
+      orgId: args.orgId,
+      instagramAccessToken: newToken,
+      instagramTokenExpiresAt: newExpiresAt,
+    });
+  },
+});
+
+export const patchInstagramToken = internalMutation({
+  args: {
+    orgId: v.id("organizations"),
+    instagramAccessToken: v.string(),
+    instagramTokenExpiresAt: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const row = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .unique();
+    if (!row) return;
+    await ctx.db.patch(row._id, {
+      instagramAccessToken: args.instagramAccessToken,
+      instagramTokenExpiresAt: args.instagramTokenExpiresAt,
+    });
+  },
+});
+
+/** Returns the raw orgSettings row for internal action use. */
+export const getOrgSettingsInternal = internalQuery({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("orgSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .unique();
   },
 });

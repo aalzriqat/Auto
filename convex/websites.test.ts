@@ -1,7 +1,25 @@
 import { convexTest } from "convex-test";
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { api } from "./_generated/api";
 import schema from "./schema";
+
+vi.mock("./rateLimit", () => ({
+  rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
+  checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
+}));
+
+const ORIGINAL_CLERK_ISSUER = process.env.CLERK_JWT_ISSUER_DOMAIN;
+const ORIGINAL_APP_URL = process.env.NEXT_PUBLIC_APP_URL;
+const ORIGINAL_TURNSTILE_SECRET = process.env.TURNSTILE_SECRET_KEY;
+const ORIGINAL_DOMAIN_REGISTRAR_MODE = process.env.DOMAIN_REGISTRAR_MODE;
+
+function restoreEnv(name: string, value: string | undefined) {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+}
 
 const WEBSITE_PERMISSIONS = [
   "website.view",
@@ -12,10 +30,27 @@ const WEBSITE_PERMISSIONS = [
   "view:settings",
 ];
 
+beforeEach(() => {
+  process.env.DOMAIN_REGISTRAR_MODE = "mock";
+});
+
+afterEach(() => {
+  restoreEnv("DOMAIN_REGISTRAR_MODE", ORIGINAL_DOMAIN_REGISTRAR_MODE);
+});
+
 async function seedDealer() {
   const convex = convexTest(schema, import.meta.glob("./**/*.*s"));
   const orgId = await convex.run((ctx) =>
     ctx.db.insert("organizations", { name: "Premium Cars", createdAt: Date.now() })
+  );
+  await convex.run((ctx) =>
+    ctx.db.insert("subscriptions", {
+      orgId,
+      plan: "enterprise",
+      status: "active",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
   );
   const ownerId = await convex.run((ctx) =>
     ctx.db.insert("users", { clerkId: "owner_clerk", email: "owner@example.com", name: "Owner" })
@@ -39,7 +74,7 @@ async function seedDealer() {
   return { convex, orgId, ownerId, asOwner: convex.withIdentity({ subject: "owner_clerk" }) };
 }
 
-async function publishDealerWebsite() {
+async function saveDealerWebsiteDraft() {
   const seededDealer = await seedDealer();
   await seededDealer.asOwner.mutation(api.websites.startSetup, { orgId: seededDealer.orgId });
   await seededDealer.asOwner.mutation(api.websites.saveDraft, {
@@ -54,6 +89,11 @@ async function publishDealerWebsite() {
       { sectionKey: "vehicle.exteriorColor", enabled: true },
     ],
   });
+  return seededDealer;
+}
+
+async function publishDealerWebsite() {
+  const seededDealer = await saveDealerWebsiteDraft();
   await seededDealer.asOwner.mutation(api.websites.publish, { orgId: seededDealer.orgId });
   return seededDealer;
 }
@@ -119,6 +159,28 @@ describe("dealer website domain validation", () => {
       });
     });
   });
+
+  test("custom_domain_purchase_fails_closed_when_registrar_is_disabled", async () => {
+    process.env.DOMAIN_REGISTRAR_MODE = "disabled";
+    const { orgId, asOwner } = await seedDealer();
+    await asOwner.mutation(api.websites.startSetup, { orgId });
+
+    const search = await asOwner.mutation(api.websites.searchDomain, {
+      orgId,
+      domain: "PremiumCarsJo.com",
+    });
+    expect(search).toMatchObject({
+      available: false,
+      provider: "disabled",
+    });
+
+    await expect(
+      asOwner.mutation(api.websites.purchaseDomain, {
+        orgId,
+        domain: "premiumcarsjo.com",
+      })
+    ).rejects.toThrow(/not available|unavailable/i);
+  });
 });
 
 describe("dealer website publishing", () => {
@@ -146,7 +208,7 @@ describe("dealer website publishing", () => {
   });
 
   test("resolve_domain_returns_public_projection_without_private_vehicle_fields", async () => {
-    const { convex, orgId } = await publishDealerWebsite();
+    const { convex, orgId, asOwner } = await saveDealerWebsiteDraft();
     await convex.run((ctx) =>
       ctx.db.insert("vehicles", {
         orgId,
@@ -167,6 +229,7 @@ describe("dealer website publishing", () => {
         notes: "Internal margin note",
       })
     );
+    await asOwner.mutation(api.websites.publish, { orgId });
 
     const site = await convex.query(api.websites.resolveDomain, {
       host: "premiumcars.autoflowdealer.com",
@@ -183,6 +246,42 @@ describe("dealer website publishing", () => {
     expect(site?.vehicles[0]).not.toHaveProperty("landedCostTotal");
     expect(site?.vehicles[0]).not.toHaveProperty("minimumProfit");
     expect(site?.vehicles[0]).not.toHaveProperty("notes");
+  });
+
+  test("resolve_domain_serves_the_published_snapshot_until_republished", async () => {
+    const { convex, orgId, asOwner } = await saveDealerWebsiteDraft();
+    const vehicleId = await convex.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "SNAPSHOTVIN123",
+        make: "Toyota",
+        model: "Prado",
+        year: 2023,
+        mileage: 2500,
+        color: "Silver",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        sellingPrice: 35_000,
+        status: "AVAILABLE",
+      })
+    );
+    const firstPublish = await asOwner.mutation(api.websites.publish, { orgId });
+
+    await convex.run((ctx) => ctx.db.patch(vehicleId, { sellingPrice: 38_000 }));
+
+    const firstResolve = await convex.query(api.websites.resolveDomain, {
+      host: "premiumcars.autoflowdealer.com",
+    });
+    expect(firstResolve?.publishedSnapshot.version).toBe(firstPublish.version);
+    expect(firstResolve?.vehicles[0].price).toBe(35_000);
+
+    const secondPublish = await asOwner.mutation(api.websites.publish, { orgId });
+    const secondResolve = await convex.query(api.websites.resolveDomain, {
+      host: "premiumcars.autoflowdealer.com",
+    });
+
+    expect(secondResolve?.publishedSnapshot.version).toBe(secondPublish.version);
+    expect(secondResolve?.vehicles[0].price).toBe(38_000);
   });
 
   test("publish_requires_publish_permission", async () => {
@@ -205,16 +304,39 @@ describe("dealer website publishing", () => {
 });
 
 describe("dealer website leads", () => {
+  beforeEach(() => {
+    process.env.CLERK_JWT_ISSUER_DOMAIN = "https://test.clerk.accounts.dev";
+    process.env.NEXT_PUBLIC_APP_URL = "https://test.example.com";
+    process.env.TURNSTILE_SECRET_KEY = "test_turnstile_secret_123456";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        new Response(JSON.stringify({ success: true, action: "turnstile-spin-v1" }), {
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+  });
+
+  afterEach(() => {
+    restoreEnv("CLERK_JWT_ISSUER_DOMAIN", ORIGINAL_CLERK_ISSUER);
+    restoreEnv("NEXT_PUBLIC_APP_URL", ORIGINAL_APP_URL);
+    restoreEnv("TURNSTILE_SECRET_KEY", ORIGINAL_TURNSTILE_SECRET);
+    vi.unstubAllGlobals();
+  });
+
   test("contact_form_creates_customer_and_lead", async () => {
     const { convex, orgId } = await publishDealerWebsite();
 
-    await convex.mutation(api.websites.submitPublicLead, {
+    await convex.action(api.websites.submitPublicLead, {
       host: "premiumcars.autoflowdealer.com",
       formType: "contact",
       firstName: "Lina",
       lastName: "Saleh",
       email: "lina@example.com",
       message: "Interested in inventory",
+      turnstileToken: "valid-token",
+      clientFingerprint: "visitor-1",
     });
 
     await convex.run(async (ctx) => {
@@ -236,17 +358,21 @@ describe("dealer website leads", () => {
       await ctx.db.patch(settings!._id, { generatedLeadAutoAssignmentEnabled: true });
     });
 
-    await convex.mutation(api.websites.submitPublicLead, {
+    await convex.action(api.websites.submitPublicLead, {
       host: "premiumcars.autoflowdealer.com",
       formType: "contact",
       firstName: "Rami",
       email: "rami@example.com",
+      turnstileToken: "valid-token",
+      clientFingerprint: "visitor-1",
     });
-    await convex.mutation(api.websites.submitPublicLead, {
+    await convex.action(api.websites.submitPublicLead, {
       host: "premiumcars.autoflowdealer.com",
       formType: "contact",
       firstName: "Dana",
       email: "dana@example.com",
+      turnstileToken: "valid-token",
+      clientFingerprint: "visitor-2",
     });
 
     await convex.run(async (ctx) => {
@@ -258,6 +384,65 @@ describe("dealer website leads", () => {
         .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", firstSalesId))
         .collect();
       expect(firstSalesNotifications.some((notification) => notification.type === "lead.assigned")).toBe(true);
+    });
+  });
+
+  test("duplicate public contact submission reuses the existing open lead", async () => {
+    const { convex, orgId } = await publishDealerWebsite();
+
+    const first = await convex.action(api.websites.submitPublicLead, {
+      host: "premiumcars.autoflowdealer.com",
+      formType: "contact",
+      firstName: "Lina",
+      email: "lina@example.com",
+      message: "First request",
+      turnstileToken: "valid-token",
+      clientFingerprint: "visitor-1",
+    });
+    const second = await convex.action(api.websites.submitPublicLead, {
+      host: "premiumcars.autoflowdealer.com",
+      formType: "contact",
+      firstName: "Lina",
+      email: "lina@example.com",
+      message: "Duplicate request",
+      turnstileToken: "valid-token",
+      clientFingerprint: "visitor-1",
+    });
+
+    expect(second).toMatchObject({ success: true, leadId: first.leadId, duplicate: true });
+    await convex.run(async (ctx) => {
+      const customers = await ctx.db.query("customers").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect();
+      const leads = await ctx.db.query("leads").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect();
+      const abuseEvents = await ctx.db
+        .query("websiteLeadAbuseEvents")
+        .withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId))
+        .collect();
+
+      expect(customers).toHaveLength(1);
+      expect(leads).toHaveLength(1);
+      expect(abuseEvents.some((event) => event.reason === "duplicate_suppressed")).toBe(true);
+    });
+  });
+
+  test("public lead submission rejects invalid email before creating CRM rows", async () => {
+    const { convex, orgId } = await publishDealerWebsite();
+
+    await expect(
+      convex.action(api.websites.submitPublicLead, {
+        host: "premiumcars.autoflowdealer.com",
+        formType: "contact",
+        firstName: "Bad Email",
+        email: "not-an-email",
+        turnstileToken: "valid-token",
+        clientFingerprint: "visitor-1",
+      }),
+    ).rejects.toThrow(/Email is invalid/);
+
+    await convex.run(async (ctx) => {
+      const customers = await ctx.db.query("customers").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect();
+      const leads = await ctx.db.query("leads").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect();
+      expect(customers).toHaveLength(0);
+      expect(leads).toHaveLength(0);
     });
   });
 });

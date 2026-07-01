@@ -11,7 +11,9 @@ vi.mock("../rateLimit", () => ({
 async function seedOrg(t: ReturnType<typeof convexTest>) {
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() }));
 
-  const ownerRoleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ["manage:users"] }));
+  const ownerRoleId = await t.run((ctx) =>
+    ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ["manage:users"], isSystemOwnerRole: true })
+  );
   const managerRoleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "MANAGER", permissions: ["manage:users"] }));
   const salesRoleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "SALES", permissions: ["view:vehicles"] }));
 

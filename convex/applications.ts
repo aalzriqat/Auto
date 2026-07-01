@@ -1,8 +1,9 @@
 import { v, ConvexError } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { MutationCtx, mutation, query } from "./_generated/server";
+import { Doc } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
-import { PERMISSIONS } from "./utils/permissions";
+import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { releaseHoldForApplicationQuote, holdVehicleForDeposit } from "./utils/depositHelpers";
 import { completeSale } from "./utils/saleCompletion";
@@ -28,6 +29,13 @@ type FinanceApplicationStatus =
   | "CLOSED"
   | "CANCELLED";
 
+type QuoteMode =
+  | "CASH"
+  | "CONFIGURED_FINANCE_COMPANY"
+  | "MANUAL_FINANCE_COMPANY"
+  | "INTERNAL_INSTALLMENT"
+  | "LEASE";
+
 const VALID_STATUS_TRANSITIONS: Record<FinanceApplicationStatus, readonly FinanceApplicationStatus[]> = {
   DRAFT: ["PENDING_DOCS"],
   PENDING_DOCS: ["UNDER_REVIEW", "REJECTED"],
@@ -51,6 +59,38 @@ const CANCELLABLE_STATUSES: readonly FinanceApplicationStatus[] = [
   "REJECTED",
   "CLOSED",
 ];
+
+async function assertRequiredApplicationDocumentsComplete(
+  ctx: MutationCtx,
+  app: Doc<"financeApplications">,
+  quote: Doc<"quotes">
+) {
+  const rules = await ctx.db
+    .query("companyDocumentRules")
+    .withIndex("by_org", (q) => q.eq("orgId", app.orgId))
+    .collect();
+  const requiredRules = rules.filter((rule) => rule.isRequired && (!rule.companyId || rule.companyId === quote.companyId));
+  if (requiredRules.length === 0) return;
+
+  const docs = await ctx.db
+    .query("applicationDocuments")
+    .withIndex("by_application", (q) => q.eq("applicationId", app._id))
+    .collect();
+  const docsByRule = new Map(docs.map((doc) => [doc.ruleId, doc]));
+
+  const missing = requiredRules
+    .filter((rule) => {
+      const doc = docsByRule.get(rule._id);
+      return !doc || (doc.status !== "VERIFIED" && doc.status !== "WAIVED");
+    })
+    .map((rule) => rule.documentName);
+
+  if (missing.length > 0) {
+    throw new ConvexError(
+      `Required finance documents must be verified or waived before approval: ${missing.join(", ")}`
+    );
+  }
+}
 
 export const list = query({
   args: {
@@ -232,6 +272,23 @@ export const createFromQuote = mutation({
     };
 
     const now = Date.now();
+    const manualFinanceSnapshot =
+      quote.mode === "MANUAL_FINANCE_COMPANY"
+        ? {
+            ...(quote.manualProviderName !== undefined ? { providerName: quote.manualProviderName } : {}),
+            ...(quote.manualProfitRate !== undefined ? { profitRate: quote.manualProfitRate } : {}),
+            ...(quote.manualInsuranceRate !== undefined ? { insuranceRate: quote.manualInsuranceRate } : {}),
+            ...(quote.manualAdminFees !== undefined ? { adminFees: quote.manualAdminFees } : {}),
+            ...(quote.manualCommission !== undefined ? { commission: quote.manualCommission } : {}),
+            ...(quote.manualIncludesCommissionInDebt !== undefined
+              ? { includesCommissionInDebt: quote.manualIncludesCommissionInDebt }
+              : {}),
+            ...(quote.totalFinancedAmount !== undefined ? { totalFinancedAmount: quote.totalFinancedAmount } : {}),
+            ...(quote.monthlyInstallment !== undefined ? { monthlyInstallment: quote.monthlyInstallment } : {}),
+            ...(quote.totalProfit !== undefined ? { totalProfit: quote.totalProfit } : {}),
+          }
+        : undefined;
+
     const appId = await ctx.db.insert("financeApplications", {
       orgId: args.orgId,
       quoteId: quote._id,
@@ -243,6 +300,8 @@ export const createFromQuote = mutation({
       notes: args.notes,
       createdAt: now,
       updatedAt: now,
+      ...(quote.mode !== undefined ? { quoteModeAtSubmission: quote.mode } : {}),
+      ...(manualFinanceSnapshot ? { manualFinanceSnapshot } : {}),
       underwritingSnapshot,
     });
 
@@ -301,7 +360,7 @@ export const updateStatus = mutation({
   handler: async (ctx, args) => {
     const auth = await requireTenantAuth(ctx, args.orgId);
     const hasView =
-      auth.role.name === "OWNER" ||
+      isSystemOwnerRole(auth.role) ||
       auth.role.permissions.includes(PERMISSIONS.VIEW_FINANCE_APPLICATIONS);
     if (!hasView) {
       throw new ConvexError("Forbidden: Missing required permissions.");
@@ -327,6 +386,11 @@ export const updateStatus = mutation({
       if (auth.user._id === app.salespersonId) {
         throw new ConvexError("You cannot approve your own application");
       }
+      const quote = await ctx.db.get(app.quoteId);
+      if (!quote || quote.orgId !== args.orgId) {
+        throw new ConvexError("Application quote not found.");
+      }
+      await assertRequiredApplicationDocumentsComplete(ctx, app, quote);
       approvedBy = auth.user._id;
       approvedAt = Date.now();
     }
@@ -572,13 +636,15 @@ export const finalizeDeal = mutation({
         if (quote.companyId && quote.companyId !== app.companyId) {
           throw new ConvexError("Application finance company does not match the quote.");
         }
+        await assertRequiredApplicationDocumentsComplete(ctx, app, quote);
 
+        const quoteMode: QuoteMode | undefined = app.quoteModeAtSubmission ?? quote.mode;
         const financingType =
-          quote.mode === "LEASE"
+          quoteMode === "LEASE"
             ? "LEASE"
-            : quote.mode === "CONFIGURED_FINANCE_COMPANY" ||
-                quote.mode === "MANUAL_FINANCE_COMPANY" ||
-                quote.mode === "INTERNAL_INSTALLMENT"
+            : quoteMode === "CONFIGURED_FINANCE_COMPANY" ||
+                quoteMode === "MANUAL_FINANCE_COMPANY" ||
+                quoteMode === "INTERNAL_INSTALLMENT"
               ? "FINANCED"
               : "CASH";
 
@@ -591,7 +657,7 @@ export const finalizeDeal = mutation({
           saleDate: Date.now(),
           status: "COMPLETED",
           downPayment: quote.downPayment,
-          financingType: quote.mode === undefined && app.companyId ? "FINANCED" : financingType,
+          financingType: quoteMode === undefined && app.companyId ? "FINANCED" : financingType,
           loanAmount: quote.totalFinancedAmount,
           termMonths: quote.termMonths,
           applicationId: args.applicationId,

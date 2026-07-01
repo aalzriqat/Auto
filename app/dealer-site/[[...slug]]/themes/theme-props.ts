@@ -118,6 +118,7 @@ export type ThemeProps = {
   formSuccess: string | null;
   setFormSuccess: (s: string | null) => void;
   onSubmit: (e: FormEvent<HTMLFormElement>, formType: string) => void;
+  turnstileSiteKey?: string;
   onToggleLang: () => void;
   mobileNavOpen: boolean;
   setMobileNavOpen: (open: boolean) => void;

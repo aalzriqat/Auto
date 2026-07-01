@@ -1,3 +1,5 @@
+import { ConvexError } from "convex/values";
+
 export type DomainAvailability = {
   domain: string;
   available: boolean;
@@ -6,6 +8,9 @@ export type DomainAvailability = {
   provider: string;
   reason?: string;
 };
+
+const DISABLED_REGISTRAR_MESSAGE =
+  "Custom domain purchasing is not available yet. Connect a real registrar integration before enabling this production feature.";
 
 export type DomainPurchaseResult = {
   domain: string;
@@ -79,4 +84,80 @@ export class MockDomainRegistrarService implements DomainRegistrarService {
   }
 }
 
-export const domainRegistrarService: DomainRegistrarService = new MockDomainRegistrarService();
+export class DisabledDomainRegistrarService implements DomainRegistrarService {
+  private provider = "disabled";
+
+  async searchDomain(domain: string): Promise<DomainAvailability> {
+    return {
+      domain,
+      available: false,
+      price: 0,
+      currency: "USD",
+      provider: this.provider,
+      reason: DISABLED_REGISTRAR_MESSAGE,
+    };
+  }
+
+  async getDomainPrice(domain: string): Promise<{ price: number; currency: string }> {
+    void domain;
+    throw new ConvexError(DISABLED_REGISTRAR_MESSAGE);
+  }
+
+  async purchaseDomain(domain: string, dealerId: string): Promise<DomainPurchaseResult> {
+    void domain;
+    void dealerId;
+    throw new ConvexError(DISABLED_REGISTRAR_MESSAGE);
+  }
+
+  async configureDns(domain: string, target: string): Promise<DomainStatus> {
+    void target;
+    return { domain, dnsStatus: "failed", sslStatus: "failed" };
+  }
+
+  async enableAutoRenew(domain: string): Promise<DomainStatus> {
+    void domain;
+    throw new ConvexError(DISABLED_REGISTRAR_MESSAGE);
+  }
+
+  async disableAutoRenew(domain: string): Promise<DomainStatus> {
+    void domain;
+    throw new ConvexError(DISABLED_REGISTRAR_MESSAGE);
+  }
+
+  async getDomainStatus(domain: string): Promise<DomainStatus> {
+    return { domain, dnsStatus: "failed", sslStatus: "failed" };
+  }
+}
+
+const mockDomainRegistrarService = new MockDomainRegistrarService();
+const disabledDomainRegistrarService = new DisabledDomainRegistrarService();
+
+function currentDomainRegistrarService(): DomainRegistrarService {
+  return process.env.DOMAIN_REGISTRAR_MODE === "mock"
+    ? mockDomainRegistrarService
+    : disabledDomainRegistrarService;
+}
+
+export const domainRegistrarService: DomainRegistrarService = {
+  searchDomain(domain) {
+    return currentDomainRegistrarService().searchDomain(domain);
+  },
+  getDomainPrice(domain) {
+    return currentDomainRegistrarService().getDomainPrice(domain);
+  },
+  purchaseDomain(domain, dealerId) {
+    return currentDomainRegistrarService().purchaseDomain(domain, dealerId);
+  },
+  configureDns(domain, target) {
+    return currentDomainRegistrarService().configureDns(domain, target);
+  },
+  enableAutoRenew(domain) {
+    return currentDomainRegistrarService().enableAutoRenew(domain);
+  },
+  disableAutoRenew(domain) {
+    return currentDomainRegistrarService().disableAutoRenew(domain);
+  },
+  getDomainStatus(domain) {
+    return currentDomainRegistrarService().getDomainStatus(domain);
+  },
+};

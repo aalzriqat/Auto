@@ -201,6 +201,67 @@ export const removeMembership = mutation({
   },
 });
 
+export const listOffboardingReviews = query({
+  args: {
+    status: v.optional(v.union(v.literal("PENDING_REVIEW"), v.literal("RESOLVED"))),
+  },
+  handler: async (ctx, args) => {
+    await requireSuperAdmin(ctx);
+
+    const reviews = args.status
+      ? await ctx.db
+        .query("userOffboardingReviews")
+        .withIndex("by_status", (q) => q.eq("status", args.status!))
+        .take(100)
+      : await ctx.db.query("userOffboardingReviews").order("desc").take(100);
+
+    return await Promise.all(
+      reviews.map(async (review) => {
+        const user = await ctx.db.get(review.userId);
+        const ownerOrgs = await Promise.all(
+          review.ownerOrgIds.map(async (orgId) => {
+            const org = await ctx.db.get(orgId);
+            return { orgId, orgName: org?.name ?? "Unknown" };
+          })
+        );
+        return {
+          ...review,
+          userEmail: user?.email ?? "Deleted user",
+          userName: user?.name ?? "Deleted user",
+          ownerOrgs,
+        };
+      })
+    );
+  },
+});
+
+export const resolveOffboardingReview = mutation({
+  args: {
+    reviewId: v.id("userOffboardingReviews"),
+    notes: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const admin = await requireSuperAdmin(ctx);
+    const review = await ctx.db.get(args.reviewId);
+    if (!review) throw new ConvexError("Offboarding review not found.");
+
+    await ctx.db.patch(args.reviewId, {
+      status: "RESOLVED",
+      resolvedAt: Date.now(),
+      resolvedBy: admin._id,
+      notes: args.notes?.trim() || undefined,
+    });
+
+    await logAdminAction(ctx, admin, {
+      action: "resolveUserOffboardingReview",
+      targetTable: "userOffboardingReviews",
+      targetId: args.reviewId,
+      before: { status: review.status, membershipCount: review.membershipCount },
+      after: { status: "RESOLVED" },
+    });
+  },
+});
+
 // ─── Hard user delete (DB + Clerk account) ───────────────────────────────────
 
 export const deleteUserInternal = internalMutation({

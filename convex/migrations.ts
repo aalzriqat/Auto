@@ -1,5 +1,5 @@
 import { internalMutation } from "./_generated/server";
-import { ALL_PERMISSIONS } from "./utils/permissions";
+import { ALL_PERMISSIONS, isSystemOwnerRole, normalizeRoleName, SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";
 
 export const backfillPermissions = internalMutation({
   args: {},
@@ -8,10 +8,11 @@ export const backfillPermissions = internalMutation({
     const roles = await ctx.db.query("roles").collect();
 
     for (const role of roles) {
-      if (role.name === "OWNER") {
+      if (isSystemOwnerRole(role) || normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME) {
         // Owner gets all permissions
         await ctx.db.patch(role._id, {
           permissions: ALL_PERMISSIONS,
+          isSystemOwnerRole: true,
         });
       } else if (role.name === "MANAGER") {
         // Add new settings/approval permissions to MANAGER if not present.

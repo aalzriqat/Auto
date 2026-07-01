@@ -1,6 +1,7 @@
 import { MutationCtx } from "../_generated/server";
 import { Id, Doc } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
+import { hasPlanFeature } from "../subscriptions";
 
 /**
  * Queues an auto-post to Instagram when a vehicle transitions to AVAILABLE,
@@ -19,6 +20,7 @@ export async function maybeAutoPostToInstagram(
   }
 ): Promise<void> {
   const { orgId, vehicle, triggeredByUserId } = args;
+  if (!(await hasPlanFeature(ctx, orgId, "socialInbox"))) return;
 
   const orgSettings = await ctx.db
     .query("orgSettings")
@@ -61,6 +63,7 @@ export async function maybeAutoPostToFacebook(
   }
 ): Promise<void> {
   const { orgId, vehicle, triggeredByUserId } = args;
+  if (!(await hasPlanFeature(ctx, orgId, "socialInbox"))) return;
 
   const orgSettings = await ctx.db
     .query("orgSettings")

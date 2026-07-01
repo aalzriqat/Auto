@@ -18,6 +18,15 @@ async function seedPhase4Dealer() {
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Phase 4 Dealer", createdAt: Date.now() })
   );
+  await t.run((ctx) =>
+    ctx.db.insert("subscriptions", {
+      orgId,
+      plan: "professional",
+      status: "active",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+  );
   const userId = await t.run((ctx) =>
     ctx.db.insert("users", { clerkId: "p4_user", email: "p4@example.com", name: "P4 User" })
   );
@@ -80,6 +89,15 @@ async function seedWithoutPeriod() {
   const t = convexTest(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "NoPeriod Dealer", createdAt: Date.now() })
+  );
+  await t.run((ctx) =>
+    ctx.db.insert("subscriptions", {
+      orgId,
+      plan: "professional",
+      status: "active",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
   );
   const userId = await t.run((ctx) =>
     ctx.db.insert("users", { clerkId: "np_user", email: "np@example.com", name: "NP User" })

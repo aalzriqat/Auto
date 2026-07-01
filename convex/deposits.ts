@@ -1,4 +1,4 @@
-import { v } from "convex/values";
+import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -7,22 +7,27 @@ import { holdVehicleForDeposit, maybeReleaseVehicleHold } from "./utils/depositH
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
-import { hookDepositReceived, hookDepositRefunded, getOrgCurrency } from "./accounting/workflowHooks";
-import { toMinorUnits } from "./utils/money";
+import {
+  hookDepositForfeited,
+  hookDepositRefunded,
+  getOrgCurrency,
+} from "./accounting/workflowHooks";
+import {
+  amountToMinorOrThrow,
+  depositMethodValidator,
+  methodOrDefault,
+  normalizeCurrency,
+  recordHeldDeposit,
+} from "./utils/depositRecording";
+import { createCanonicalPayment } from "./subledger";
 
 export const create = mutation({
   args: {
     orgId: v.id("organizations"),
     quoteId: v.id("quotes"),
     amount: v.number(),
-    method: v.optional(v.union(
-      v.literal("CASH"),
-      v.literal("BANK_TRANSFER"),
-      v.literal("PAYMENT_LINK"),
-      v.literal("CARD"),
-      v.literal("CHEQUE"),
-      v.literal("OTHER")
-    )),
+    currency: v.optional(v.string()),
+    method: v.optional(depositMethodValidator),
     notes: v.optional(v.string()),
     idempotencyKey: v.optional(v.string()),
   },
@@ -31,6 +36,13 @@ export const create = mutation({
     // day-to-day sales activity, not a committed sale — VIEW_SALES (held by
     // SALES/MANAGER/ACCOUNTANT/OWNER) is the right bar, same as quotes.ts.
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    const orgCurrency = normalizeCurrency(await getOrgCurrency(ctx, args.orgId));
+    const currency = args.currency ? normalizeCurrency(args.currency) : orgCurrency;
+    if (currency !== orgCurrency) {
+      throw new ConvexError(`Deposit currency must match organization currency (${orgCurrency}).`);
+    }
+    const method = methodOrDefault(args.method);
+    const amountMinor = amountToMinorOrThrow(args.amount, currency);
 
     return await runWithIdempotency(
       ctx,
@@ -39,82 +51,52 @@ export const create = mutation({
         operation: "deposits.create",
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
+        fingerprint: JSON.stringify({
+          quoteId: args.quoteId,
+          amountMinor,
+          currency,
+          method,
+          notes: args.notes ?? null,
+        }),
       },
       async () => {
         const quote = await ctx.db.get(args.quoteId);
         if (!quote || quote.orgId !== args.orgId) {
           throwAppError(AppErrorCode.QUOTE_NOT_FOUND, "Quote not found in this organization.");
         }
+        const quoteAmountMinor = amountToMinorOrThrow(quote.vehiclePrice, currency, "Quote amount");
+        const existingDeposits = await ctx.db
+          .query("deposits")
+          .withIndex("by_quote", (q) => q.eq("quoteId", args.quoteId))
+          .collect();
+        const existingActiveMinor = existingDeposits.reduce((sum, deposit) => {
+          if (deposit.isDeleted === true) return sum;
+          if (deposit.status !== "HELD" && deposit.status !== "APPLIED") return sum;
+          return sum + (deposit.amountMinor ?? amountToMinorOrThrow(deposit.amount, currency));
+        }, 0);
+        if (existingActiveMinor + amountMinor > quoteAmountMinor) {
+          throw new ConvexError("Total deposits cannot exceed the quote amount.");
+        }
 
         // Throws if the vehicle is SOLD/ARCHIVED; otherwise patches AVAILABLE -> RESERVED
         // (no-op if it's already RESERVED — parallel deposits are allowed).
         await holdVehicleForDeposit(ctx, quote.vehicleId);
 
-        const [vehicle, customer] = await Promise.all([
-          ctx.db.get(quote.vehicleId),
-          ctx.db.get(quote.customerId),
-        ]);
-        const vehicleLabel = vehicle
-          ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim()
-          : "Vehicle";
-        const customerLabel = customer
-          ? `${customer.firstName ?? ""} ${customer.lastName ?? ""}`.trim() || "Customer"
-          : "Customer";
-        const quoteReference = args.quoteId.toString();
-
         const now = Date.now();
-        const depositId = await ctx.db.insert("deposits", {
+        const depositId = await recordHeldDeposit(ctx, {
           orgId: args.orgId,
           vehicleId: quote.vehicleId,
           customerId: quote.customerId,
           quoteId: args.quoteId,
           amount: args.amount,
-          status: "HELD",
-          holdActive: true,
-          idempotencyKey: args.idempotencyKey,
-          notes: args.notes,
-          createdBy: user._id,
-          createdAt: now,
-        });
-
-        await ctx.db.insert("transactions", {
-          orgId: args.orgId,
-          type: "IN",
-          amount: args.amount,
-          date: now,
-          category: "DEPOSIT",
-          description: `Deposit for quote ${quoteReference} - ${vehicleLabel} - ${customerLabel}`,
-          vehicleId: quote.vehicleId,
-          depositId,
-          idempotencyKey: args.idempotencyKey,
-        });
-
-        await ctx.db.insert("collectionPayments", {
-          orgId: args.orgId,
-          customerId: quote.customerId,
-          vehicleId: quote.vehicleId,
-          direction: "IN",
-          method: args.method ?? "CASH",
-          amount: args.amount,
-          paymentDate: now,
-          status: "POSTED",
-          idempotencyKey: args.idempotencyKey,
-          reference: `Deposit ${depositId}`,
-          cashierId: user._id,
-          notes: args.notes,
-          createdAt: now,
-        });
-
-        const currency = await getOrgCurrency(ctx, args.orgId);
-        await hookDepositReceived(ctx, {
-          orgId: args.orgId,
-          depositId,
-          customerId: quote.customerId,
-          amountMinor: toMinorUnits(args.amount, currency),
+          amountMinor,
           currency,
-          paymentMethod: args.method ?? "CASH",
+          method,
+          idempotencyKey: args.idempotencyKey,
+          notes: args.notes,
           actorId: user._id,
-          occurredAt: now,
+          now,
+          sourceLabel: `quote ${args.quoteId}`,
         });
 
         const actorName = await getActorName(ctx);
@@ -149,6 +131,11 @@ export const release = mutation({
         operation: "deposits.release",
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
+        fingerprint: JSON.stringify({
+          depositId: args.depositId,
+          resolution: args.resolution,
+          notes: args.notes ?? null,
+        }),
       },
       async () => {
 
@@ -166,6 +153,8 @@ export const release = mutation({
         );
 
         const now = Date.now();
+        const currency = normalizeCurrency(deposit.currency ?? await getOrgCurrency(ctx, args.orgId));
+        const amountMinor = deposit.amountMinor ?? amountToMinorOrThrow(deposit.amount, currency);
         await ctx.db.patch(args.depositId, {
           status: args.resolution,
           holdActive: false,
@@ -185,6 +174,11 @@ export const release = mutation({
           const refundCustomerLabel = refundCustomer
             ? `${refundCustomer.firstName ?? ""} ${refundCustomer.lastName ?? ""}`.trim() || "Customer"
             : "Customer";
+          const depositSourceLabel = deposit.quoteId
+            ? `quote ${deposit.quoteId}`
+            : deposit.reservationId
+              ? `reservation ${deposit.reservationId}`
+              : "vehicle hold";
 
           await ctx.db.insert("transactions", {
             orgId: args.orgId,
@@ -192,13 +186,13 @@ export const release = mutation({
             amount: deposit.amount,
             date: now,
             category: "DEPOSIT",
-            description: `Deposit refund for quote ${deposit.quoteId} - ${refundVehicleLabel} - ${refundCustomerLabel}`,
+            description: `Deposit refund for ${depositSourceLabel} - ${refundVehicleLabel} - ${refundCustomerLabel}`,
             vehicleId: deposit.vehicleId,
             depositId: args.depositId,
             idempotencyKey: args.idempotencyKey,
           });
 
-          await ctx.db.insert("collectionPayments", {
+          const refundPaymentId = await ctx.db.insert("collectionPayments", {
             orgId: args.orgId,
             customerId: deposit.customerId,
             vehicleId: deposit.vehicleId,
@@ -214,12 +208,37 @@ export const release = mutation({
             createdAt: now,
           });
 
-          const currency = await getOrgCurrency(ctx, args.orgId);
+          const canonicalRefundPaymentId = await createCanonicalPayment(ctx, {
+            orgId: args.orgId,
+            direction: "OUT",
+            payerType: "CUSTOMER",
+            customerId: deposit.customerId,
+            method: "OTHER",
+            amountMinor,
+            currency,
+            idempotencyKey: `deposit_refund_${args.depositId}`,
+            actorId: user._id,
+            status: "SETTLED",
+            externalReference: `Deposit refund ${args.depositId}`,
+            receivedAt: now,
+          });
+          await ctx.db.patch(refundPaymentId, { canonicalPaymentId: canonicalRefundPaymentId });
+
           await hookDepositRefunded(ctx, {
             orgId: args.orgId,
             depositId: args.depositId,
             customerId: deposit.customerId,
-            amountMinor: toMinorUnits(deposit.amount, currency),
+            amountMinor,
+            currency,
+            actorId: user._id,
+            occurredAt: now,
+          });
+        } else {
+          await hookDepositForfeited(ctx, {
+            orgId: args.orgId,
+            depositId: args.depositId,
+            customerId: deposit.customerId,
+            amountMinor,
             currency,
             actorId: user._id,
             occurredAt: now,
@@ -240,6 +259,68 @@ export const release = mutation({
         return args.depositId;
       }
     );
+  },
+});
+
+export const voidDeposit = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    depositId: v.id("deposits"),
+    reason: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+
+    const deposit = await ctx.db.get(args.depositId);
+    if (!deposit || deposit.orgId !== args.orgId || deposit.isDeleted === true) {
+      throwAppError(AppErrorCode.DEPOSIT_NOT_FOUND, "Deposit not found in this organization.");
+    }
+    if (deposit.status !== "HELD") {
+      throwAppError(AppErrorCode.DEPOSIT_ALREADY_RESOLVED, "Only HELD deposits can be voided.");
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(args.depositId, {
+      status: "VOIDED",
+      isDeleted: true,
+      deletedAt: now,
+      deletedBy: user._id.toString(),
+      holdActive: false,
+      resolvedBy: user._id,
+      resolvedAt: now,
+      notes: args.reason !== undefined ? args.reason : deposit.notes,
+    });
+
+    const depositSourceLabel = deposit.quoteId
+      ? `quote ${deposit.quoteId}`
+      : deposit.reservationId
+        ? `reservation ${deposit.reservationId}`
+        : "vehicle hold";
+    const [voidVehicle, voidCustomer] = await Promise.all([
+      ctx.db.get(deposit.vehicleId),
+      ctx.db.get(deposit.customerId),
+    ]);
+    const voidVehicleLabel = voidVehicle
+      ? `${voidVehicle.year} ${voidVehicle.make} ${voidVehicle.model}`.trim()
+      : "Vehicle";
+    const voidCustomerLabel = voidCustomer
+      ? `${voidCustomer.firstName ?? ""} ${voidCustomer.lastName ?? ""}`.trim() || "Customer"
+      : "Customer";
+
+    await ctx.db.insert("transactions", {
+      orgId: args.orgId,
+      type: "OUT",
+      amount: deposit.amount,
+      date: now,
+      category: "DEPOSIT",
+      description: `Deposit voided for ${depositSourceLabel} - ${voidVehicleLabel} - ${voidCustomerLabel}`,
+      vehicleId: deposit.vehicleId,
+      depositId: args.depositId,
+    });
+
+    await maybeReleaseVehicleHold(ctx, deposit.vehicleId);
+
+    return args.depositId;
   },
 });
 

@@ -1,8 +1,25 @@
 import { v, ConvexError } from "convex/values";
-import { mutation, query, internalQuery } from "./_generated/server";
+import { mutation, query, internalQuery, MutationCtx } from "./_generated/server";
+import { Id } from "./_generated/dataModel";
 import { requireAuth, requireTenantAuth, requireOwner } from "./utils/tenancy";
-import { PERMISSIONS, DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
+import { PERMISSIONS, DEFAULT_ROLE_TEMPLATES, SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
+import { throwAppError, AppErrorCode } from "./utils/errors";
+
+const ACTIVE_DELETION_STATUSES = ["PENDING_REVIEW", "APPROVED", "RUNNING"] as const;
+
+async function findActiveDeletionRequest(ctx: MutationCtx, orgId: Id<"organizations">) {
+  for (const status of ACTIVE_DELETION_STATUSES) {
+    const request = await ctx.db
+      .query("organizationDeletionRequests")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
+      .first();
+    if (request) {
+      return request;
+    }
+  }
+  return null;
+}
 
 /** Internal lookup (no auth) for server-side flows like account-creation emails. */
 export const getInternal = internalQuery({
@@ -37,8 +54,9 @@ export const create = mutation({
         orgId,
         name: template.name,
         permissions: [...template.permissions],
+        isSystemOwnerRole: template.name === SYSTEM_OWNER_ROLE_NAME,
       });
-      if (template.name === "OWNER") {
+      if (template.name === SYSTEM_OWNER_ROLE_NAME) {
         ownerRoleId = roleId;
       }
     }
@@ -94,36 +112,50 @@ export const update = mutation({
 });
 
 /**
- * Permanently deletes an organization and all associated data.
- * Restricted to the OWNER role.
+ * Requests organization deletion. Restricted to the OWNER role.
+ * Platform super-admin review is required before any data is permanently deleted.
  */
 export const remove = mutation({
   args: {
     orgId: v.id("organizations"),
+    reason: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireOwner(ctx, args.orgId);
-
-    // Delete all memberships
-    const memberships = await ctx.db
-      .query("memberships")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .collect();
-    for (const m of memberships) {
-      await ctx.db.delete(m._id);
+    const { user } = await requireOwner(ctx, args.orgId);
+    const org = await ctx.db.get(args.orgId);
+    if (!org) {
+      throwAppError(AppErrorCode.ORG_NOT_FOUND, "Organization not found.");
     }
 
-    // Delete all roles
-    const roles = await ctx.db
-      .query("roles")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .collect();
-    for (const r of roles) {
-      await ctx.db.delete(r._id);
+    const existingRequest = await findActiveDeletionRequest(ctx, args.orgId);
+    if (existingRequest) {
+      throwAppError(AppErrorCode.PENDING_REQUEST_EXISTS, "This organization already has an active deletion request.");
     }
 
-    // Delete the organization itself
-    await ctx.db.delete(args.orgId);
+    const now = Date.now();
+    const requestId = await ctx.db.insert("organizationDeletionRequests", {
+      orgId: args.orgId,
+      orgName: org.name,
+      requestedBy: user._id,
+      requestedAt: now,
+      reason: args.reason,
+      status: "PENDING_REVIEW",
+      lastProcessedAt: now,
+    });
+
+    await ctx.db.patch(args.orgId, {
+      suspended: true,
+      suspendedAt: now,
+      suspendedReason: "Organization deletion requested by owner and awaiting platform review.",
+      deletionRequestedAt: now,
+      deletionRequestId: requestId,
+    });
+
+    await notifyManagers(ctx, args.orgId, "admin.org_suspended", {
+      reason: "Organization deletion requested by owner and awaiting platform review.",
+    });
+
+    return { requestId, status: "PENDING_REVIEW" as const };
   },
 });
 

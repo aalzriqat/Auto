@@ -52,22 +52,34 @@ export const listPage = query({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId);
 
+    const wantArchived = Boolean(args.showArchived);
+
     const baseQuery = args.category
       ? ctx.db
           .query("notifications")
           .withIndex("by_org_user_category", (q) =>
             q.eq("orgId", args.orgId).eq("userId", user._id).eq("category", args.category)
           )
+          // Filter archived state in the query chain (before paginate) to avoid
+          // sparse pages from post-cursor JS filtering.
+          .filter((q) =>
+            wantArchived
+              ? q.eq(q.field("isArchived"), true)
+              : q.neq(q.field("isArchived"), true)
+          )
       : ctx.db
           .query("notifications")
-          .withIndex("by_org_user", (q) => q.eq("orgId", args.orgId).eq("userId", user._id));
+          // by_org_user_archived index covers the common case; isArchived is
+          // stored as true or undefined (never false) so archived=false means
+          // the field is absent, which Convex treats as undefined in eq checks.
+          .withIndex("by_org_user_archived", (q) =>
+            q
+              .eq("orgId", args.orgId)
+              .eq("userId", user._id)
+              .eq("isArchived", wantArchived ? (true as const) : undefined)
+          );
 
-    const result = await baseQuery.order("desc").paginate(args.paginationOpts);
-
-    return {
-      ...result,
-      page: result.page.filter((n) => Boolean(n.isArchived) === Boolean(args.showArchived)),
-    };
+    return await baseQuery.order("desc").paginate(args.paginationOpts);
   },
 });
 

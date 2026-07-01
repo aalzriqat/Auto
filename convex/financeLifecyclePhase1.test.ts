@@ -198,15 +198,37 @@ describe("Finance lifecycle phase 1 quote mode", () => {
       manualProviderName: "Manual Bank",
       manualProfitRate: 6.25,
       manualInsuranceRate: 2.5,
+      manualAdminFees: 150,
+      manualCommission: 300,
+      manualIncludesCommissionInDebt: false,
       vehiclePrice: 31000,
       downPayment: 7000,
       termMonths: 48,
       totalFinancedAmount: 24000,
+      monthlyInstallment: 610,
+      totalProfit: 5280,
     });
 
-    await finalizeQuote(asUser, asApprover, orgId, quoteId);
+    const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
+    await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
+    await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
+    await asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId });
 
     await t.run(async (ctx) => {
+      const application = await ctx.db.get(applicationId);
+      expect(application?.quoteModeAtSubmission).toBe("MANUAL_FINANCE_COMPANY");
+      expect(application?.manualFinanceSnapshot).toMatchObject({
+        providerName: "Manual Bank",
+        profitRate: 6.25,
+        insuranceRate: 2.5,
+        adminFees: 150,
+        commission: 300,
+        includesCommissionInDebt: false,
+        totalFinancedAmount: 24000,
+        monthlyInstallment: 610,
+        totalProfit: 5280,
+      });
+
       const sale = await ctx.db.query("sales").withIndex("by_quote", (q) => q.eq("quoteId", quoteId)).first();
       expect(sale?.financingType).toBe("FINANCED");
     });

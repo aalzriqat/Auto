@@ -1,10 +1,11 @@
 import { v, ConvexError } from "convex/values";
-import { mutation, query, internalMutation, internalQuery, internalAction } from "./_generated/server";
+import { action, mutation, query, internalMutation, internalQuery, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { requireOwner, requireTenantAuth } from "./utils/tenancy";
-import { PERMISSIONS } from "./utils/permissions";
+import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { getValidatedEnv } from "./utils/env";
 import { DEFAULT_SETTINGS } from "./orgSettings";
+import { requireFeature } from "./subscriptions";
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const FACEBOOK_GRAPH_VERSION = "v25.0";
@@ -46,6 +47,7 @@ export const createConnectUrl = mutation({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
+    await requireFeature(ctx, args.orgId, "socialInbox");
 
     const env = getValidatedEnv();
     if (!env.FACEBOOK_APP_ID) {
@@ -85,6 +87,7 @@ export const getConnectionStatus = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SETTINGS]);
+    await requireFeature(ctx, args.orgId, "socialInbox");
 
     const settings = await ctx.db
       .query("orgSettings")
@@ -94,6 +97,7 @@ export const getConnectionStatus = query({
     return {
       facebookConnected: Boolean(settings?.facebookPageAccessToken && settings?.facebookPageId),
       facebookPageName: settings?.facebookPageName,
+      facebookAvailablePages: settings?.facebookAvailablePages ?? [],
       facebookAutoReplyEnabled: settings?.facebookAutoReplyEnabled ?? false,
       facebookAutoReplyForDmsEnabled: settings?.facebookAutoReplyForDmsEnabled ?? settings?.facebookAutoReplyEnabled ?? false,
       facebookAutoReplyForCommentsEnabled: settings?.facebookAutoReplyForCommentsEnabled ?? settings?.facebookAutoReplyEnabled ?? false,
@@ -130,6 +134,7 @@ export const setFacebookAutoReplyConfig = mutation({
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
+    await requireFeature(ctx, args.orgId, "socialInbox");
 
     const cleaned = args.messages.map((m) => m.trim()).filter(Boolean);
     if (cleaned.length > 5) {
@@ -174,6 +179,7 @@ export const setFacebookLeadCreationConfig = mutation({
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
+    await requireFeature(ctx, args.orgId, "socialInbox");
 
     const settings = await ctx.db
       .query("orgSettings")
@@ -219,11 +225,15 @@ export const disconnectByFacebookConnectedUserId = internalMutation({
       facebookPageName: undefined,
       facebookConnectedByUserId: undefined,
       facebookAutoReplyEnabled: false,
+      facebookAvailablePages: undefined,
+      facebookPendingCredentials: undefined,
     });
   },
 });
 
-/** Disconnects Facebook for the org. Owner-only. */
+/** Disconnects Facebook for the org. Owner-only.
+ *  Intentionally NOT gated behind requireFeature — downgraded orgs must
+ *  still be able to revoke stored credentials. */
 export const disconnect = mutation({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
@@ -242,6 +252,8 @@ export const disconnect = mutation({
       facebookPageName: undefined,
       facebookConnectedByUserId: undefined,
       facebookAutoReplyEnabled: false,
+      facebookAvailablePages: undefined,
+      facebookPendingCredentials: undefined,
     });
   },
 });
@@ -286,7 +298,12 @@ export const saveFacebookCredentials = internalMutation({
       .unique();
 
     if (existing) {
-      await ctx.db.patch(existing._id, fields);
+      // Clear both pending-page fields now that selection is finalised.
+      await ctx.db.patch(existing._id, {
+        ...fields,
+        facebookAvailablePages: undefined,
+        facebookPendingCredentials: undefined,
+      });
     } else {
       await ctx.db.insert("orgSettings", {
         orgId,
@@ -315,11 +332,11 @@ export const getEnvForExchange = internalQuery({
 });
 
 /**
- * Exchanges the OAuth `code` for a long-lived user token, then resolves the
- * Page(s) that user manages and stores the first Page's own (non-expiring)
- * Page Access Token. Multi-page orgs aren't given a picker yet — the first
- * Page returned by /me/accounts is used, same simplicity as Instagram's
- * single-connection model; reconnect-to-change is the escape hatch.
+ * Exchanges the OAuth `code` for a long-lived user token, fetches all Pages
+ * this user manages, and stores them in `facebookAvailablePages` for the org
+ * admin to choose from. The frontend shows a page-picker dialog while
+ * `facebookAvailablePages` is populated and `facebookPageId` is absent;
+ * the org admin then calls `selectFacebookPage` to complete the connection.
  * Runs as a Node action since it needs `fetch`.
  */
 export const exchangeCodeForToken = internalAction({
@@ -382,40 +399,142 @@ export const exchangeCodeForToken = internalAction({
         `No Facebook Pages available to connect: ${accountsJson?.error?.message ?? "this account doesn't manage any Pages."}`
       );
     }
-    const page = pages[0];
 
-    await ctx.runMutation(internal.facebookIntegrations.saveFacebookCredentials, {
+    // 5. Store the full page list so the admin can pick which Page to connect.
+    //    selectFacebookPage finalises the connection; we do NOT auto-select here.
+    await ctx.runMutation(internal.facebookIntegrations.saveFacebookPendingPages, {
       orgId: args.orgId,
-      facebookPageId: page.id,
-      facebookPageAccessToken: page.access_token,
-      facebookPageName: page.name,
-      facebookConnectedByUserId: connectedByUserId,
+      pages,
+      connectedByUserId,
     });
+  },
+});
 
-    // 5. Subscribe this Page to webhook delivery. The app-level Webhooks
-    // product config (callback URL + verify token + field selection) is
-    // necessary but not sufficient — each connected Page must also opt in
-    // via this call, using the Page's own access token, or comments/messages
-    // will never be delivered to /facebook-webhook.
+/** Persists the pending page list from the OAuth flow.
+ *  Writes picker-safe data to `facebookAvailablePages` and tokens to
+ *  `facebookPendingCredentials` (server-only). The active connection is
+ *  intentionally preserved so the current Page keeps working while the
+ *  admin picks a new one from the picker. */
+export const saveFacebookPendingPages = internalMutation({
+  args: {
+    orgId: v.id("organizations"),
+    pages: v.array(v.object({ id: v.string(), name: v.string(), access_token: v.string() })),
+    connectedByUserId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { orgId, pages, connectedByUserId } = args;
+    const existing = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .unique();
+
+    // Picker-safe subset for the client; credentials kept server-side only.
+    const pickerPages = pages.map(({ id, name }) => ({ id, name }));
+    const pendingCredentials = pages.map(({ id, name, access_token }) => ({
+      id,
+      name,
+      token: access_token,
+    }));
+
+    const patch = {
+      facebookAvailablePages: pickerPages,
+      facebookPendingCredentials: pendingCredentials,
+      facebookConnectedByUserId: connectedByUserId,
+      // Active connection (facebookPageId / facebookPageAccessToken / facebookPageName)
+      // is intentionally NOT cleared here — the current Page keeps working while the
+      // admin picks from the pending list. selectFacebookPage finalises the switch.
+    };
+
+    if (existing) {
+      await ctx.db.patch(existing._id, patch);
+    } else {
+      await ctx.db.insert("orgSettings", {
+        orgId,
+        currency: DEFAULT_SETTINGS.currency,
+        currencySymbol: DEFAULT_SETTINGS.currencySymbol,
+        enabledPaymentTypes: DEFAULT_SETTINGS.enabledPaymentTypes,
+        ...patch,
+      });
+    }
+  },
+});
+
+/** Auth guard run inside a mutation so `requireTenantAuth` receives a MutationCtx.
+ *  Also resolves the pending token for the chosen page, returning it so the
+ *  action can call the Graph API without touching DB credentials from ActionCtx. */
+export const validateFacebookPageSelectAuth = internalMutation({
+  args: { orgId: v.id("organizations"), pageId: v.string() },
+  handler: async (ctx, args) => {
+    const { role } = await requireTenantAuth(ctx, args.orgId);
+    if (!isSystemOwnerRole(role) && !role.permissions.includes(PERMISSIONS.MANAGE_SETTINGS)) {
+      throw new ConvexError("Only org owners and admins can connect Facebook Pages.");
+    }
+    await requireFeature(ctx, args.orgId, "socialInbox");
+
+    const settings = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .unique();
+
+    const creds = settings?.facebookPendingCredentials ?? [];
+    const cred = creds.find((c) => c.id === args.pageId);
+    if (!cred) {
+      throw new ConvexError("The selected Facebook Page is not in the pending list. Please reconnect via OAuth.");
+    }
+    return {
+      pageId: cred.id,
+      pageName: cred.name,
+      pageAccessToken: cred.token,
+      facebookConnectedByUserId: settings?.facebookConnectedByUserId,
+    };
+  },
+});
+
+/**
+ * Completes the Facebook Page connection the admin started via OAuth.
+ * Auth is delegated to validateFacebookPageSelectAuth (internalMutation) so
+ * requireTenantAuth receives a MutationCtx rather than an ActionCtx.
+ * Calls subscribed_apps, then saves credentials and clears pending state.
+ */
+export const selectFacebookPage = action({
+  args: {
+    orgId: v.id("organizations"),
+    pageId: v.string(),
+  },
+  handler: async (ctx, args): Promise<void> => {
+    // Auth + token resolution run inside a mutation (MutationCtx required).
+    const page = await ctx.runMutation(
+      internal.facebookIntegrations.validateFacebookPageSelectAuth,
+      { orgId: args.orgId, pageId: args.pageId }
+    );
+
+    // Subscribe the selected Page to webhook delivery.
     try {
-      const subscribeUrl = new URL(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${page.id}/subscribed_apps`);
+      const subscribeUrl = new URL(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${page.pageId}/subscribed_apps`);
       subscribeUrl.searchParams.set("subscribed_fields", "feed,messages");
-      subscribeUrl.searchParams.set("access_token", page.access_token);
+      subscribeUrl.searchParams.set("access_token", page.pageAccessToken);
       const subscribeRes = await fetch(subscribeUrl.toString(), { method: "POST" });
       const subscribeJson = await subscribeRes.json();
       if (!subscribeRes.ok || subscribeJson?.success !== true) {
         throw new ConvexError(subscribeJson?.error?.message ?? subscribeRes.statusText);
       }
     } catch (err) {
-      // Non-fatal — the Page is connected and posting still works; only
-      // inbound webhook delivery is affected. Logged so it's visible in the
-      // admin Overview rather than silently swallowed.
+      // Non-fatal — save credentials anyway; only inbound webhook is affected.
       await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
         source: "facebook",
         status: "error",
-        summary: `subscribed_apps failed for Page ${page.id}`,
+        summary: `subscribed_apps failed for Page ${page.pageId}`,
         error: err instanceof Error ? err.message : String(err),
       });
     }
+
+    await ctx.runMutation(internal.facebookIntegrations.saveFacebookCredentials, {
+      orgId: args.orgId,
+      facebookPageId: page.pageId,
+      facebookPageAccessToken: page.pageAccessToken,
+      facebookPageName: page.pageName,
+      facebookConnectedByUserId: page.facebookConnectedByUserId,
+    });
   },
 });
+

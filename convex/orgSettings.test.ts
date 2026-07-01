@@ -20,6 +20,7 @@ async function seedOwner(t: ReturnType<typeof convexTest>) {
       orgId,
       name: "OWNER",
       permissions: ["view:settings", "edit:settings"],
+      isSystemOwnerRole: true,
     })
   );
   await t.run(async (ctx) =>

@@ -122,9 +122,10 @@ export function VehicleDetailsDialog({
 
   const formatMoney = (value: number) => `${value.toLocaleString()} JOD`;
 
-  const getReservationStatusLabel = (status: "ACTIVE" | "RELEASED" | "CONVERTED") => {
+  const getReservationStatusLabel = (status: "ACTIVE" | "RELEASED" | "CONVERTED" | "EXPIRED") => {
     if (status === "ACTIVE") return t("ReservationStatusActive" as any);
     if (status === "RELEASED") return t("ReservationStatusReleased" as any);
+    if (status === "EXPIRED") return t("ReservationStatusExpired" as any);
     return t("ReservationStatusConverted" as any);
   };
 

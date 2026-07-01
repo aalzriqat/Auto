@@ -6,6 +6,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { suggestVehiclesFromText } from "./utils/vehicleTextMatch";
+import { requireFeature } from "./subscriptions";
 
 /**
  * Unifies `instagramEvents` and `facebookEvents` for the Social Inbox UI.
@@ -161,6 +162,7 @@ export const listConversations = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
+    await requireFeature(ctx, args.orgId, "socialInbox");
 
     const [igEvents, fbEvents] = await Promise.all([
       ctx.db.query("instagramEvents").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).collect(),
@@ -285,6 +287,7 @@ export const listEventsForConversation = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
+    await requireFeature(ctx, args.orgId, "socialInbox");
 
     const matchesConversation = (kind: string, postId: string | undefined): boolean => {
       if (kind !== args.conversationKind) return false;
@@ -354,6 +357,7 @@ export const listEventsForCustomer = query({
   args: { orgId: v.id("organizations"), customerId: v.id("customers") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
+    await requireFeature(ctx, args.orgId, "socialInbox");
     const suggestionVehicles = await loadVehiclesForSuggestions(ctx, args.orgId);
 
     const [igEvents, fbEvents] = await Promise.all([
@@ -405,6 +409,7 @@ export const setConversationVehicle = mutation({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    await requireFeature(ctx, args.orgId, "socialInbox");
 
     const [igEvents, fbEvents] = await Promise.all([
       ctx.db
@@ -459,6 +464,7 @@ export const platformStats = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
+    await requireFeature(ctx, args.orgId, "socialInbox");
 
     const [igEvents, fbEvents] = await Promise.all([
       ctx.db.query("instagramEvents").withIndex("by_org", (q) => q.eq("orgId", args.orgId)).collect(),

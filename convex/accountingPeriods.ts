@@ -6,6 +6,7 @@ import { internal } from "./_generated/api";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { auditLog } from "./financialAudit";
+import { requireFeature } from "./subscriptions";
 
 const periodStatusValidator = v.union(
   v.literal("FUTURE"),
@@ -80,6 +81,7 @@ export const list = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
 
     let q;
     if (args.status) {
@@ -102,6 +104,7 @@ export const get = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
     const period = await ctx.db.get(args.periodId);
     if (!period || period.orgId !== args.orgId) return null;
     return period;
@@ -112,6 +115,7 @@ export const currentOpenPeriod = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
     const now = Date.now();
     return ctx.db
       .query("accountingPeriods")
@@ -136,6 +140,7 @@ export const create = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
 
     if (!Number.isFinite(args.startDate) || !Number.isFinite(args.endDate)) {
       throw new ConvexError("Period dates must be valid timestamps.");
@@ -215,6 +220,7 @@ export const open = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
 
     const period = await ctx.db.get(args.periodId);
     if (!period || period.orgId !== args.orgId) {
@@ -246,6 +252,7 @@ export const close = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
 
     const period = await ctx.db.get(args.periodId);
     if (!period || period.orgId !== args.orgId) {
@@ -277,6 +284,7 @@ export const lock = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
 
     const period = await ctx.db.get(args.periodId);
     if (!period || period.orgId !== args.orgId) {
@@ -304,6 +312,7 @@ export const reopen = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
 
     const period = await ctx.db.get(args.periodId);
     if (!period || period.orgId !== args.orgId) {

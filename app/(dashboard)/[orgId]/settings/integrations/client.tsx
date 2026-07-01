@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { useQuery, useMutation } from "convex/react";
+import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -65,6 +65,7 @@ export function IntegrationsClient() {
 
   const createFacebookConnectUrl = useMutation(api.facebookIntegrations.createConnectUrl);
   const disconnectFacebook = useMutation(api.facebookIntegrations.disconnect);
+  const selectFacebookPage = useAction(api.facebookIntegrations.selectFacebookPage);
   const setFacebookAutoReplyConfig = useMutation(api.facebookIntegrations.setFacebookAutoReplyConfig);
   const setFacebookLeadCreationConfig = useMutation(api.facebookIntegrations.setFacebookLeadCreationConfig);
 
@@ -92,6 +93,7 @@ export function IntegrationsClient() {
   const [fbLeadFromComments, setFbLeadFromComments] = useState(true);
   const [fbLeadFromDms, setFbLeadFromDms] = useState(true);
   const [fbLeadFromDmsRequiresMobile, setFbLeadFromDmsRequiresMobile] = useState(false);
+  const [fbSelectingPage, setFbSelectingPage] = useState(false);
 
   // ── Generated lead assignment state ──
   const [autoAssignGeneratedLeads, setAutoAssignGeneratedLeads] = useState(false);
@@ -234,6 +236,19 @@ export function IntegrationsClient() {
       toast.success(t("FacebookDisconnectedSuccess" as any));
     } catch (error: any) {
       toast.error(error);
+    }
+  };
+
+  const handleSelectFacebookPage = async (pageId: string) => {
+    if (!activeOrgId) return;
+    setFbSelectingPage(true);
+    try {
+      await selectFacebookPage({ orgId: activeOrgId, pageId });
+      toast.success(t("FacebookConnectedSuccess" as any));
+    } catch (error: any) {
+      toast.error(error?.message ?? String(error));
+    } finally {
+      setFbSelectingPage(false);
     }
   };
 
@@ -673,6 +688,28 @@ export function IntegrationsClient() {
                 <Button onClick={handleConnectFacebook}>{t("ConnectFacebook" as any)}</Button>
               )}
             </div>
+
+            {/* Page picker — shown after OAuth when the admin manages >1 Facebook Page */}
+            {!fbStatus?.facebookConnected && (fbStatus?.facebookAvailablePages ?? []).length > 0 && (
+              <div className="space-y-2 border border-border rounded-md p-4 bg-muted/30">
+                <p className="text-sm font-medium">{t("SelectFacebookPage" as any)}</p>
+                <p className="text-xs text-muted-foreground">{t("SelectFacebookPageDescription" as any)}</p>
+                <div className="space-y-2 mt-2">
+                  {(fbStatus?.facebookAvailablePages ?? []).map((page: { id: string; name: string }) => (
+                    <Button
+                      key={page.id}
+                      variant="outline"
+                      size="sm"
+                      disabled={fbSelectingPage}
+                      onClick={() => handleSelectFacebookPage(page.id)}
+                      className="w-full justify-start"
+                    >
+                      {page.name}
+                    </Button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {fbStatus?.facebookConnected && (
               <div className="space-y-3 border-t border-border pt-4">

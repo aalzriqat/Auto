@@ -14,6 +14,7 @@ const PERMISSIONS = [
   "edit:vehicles",
   "view:vehicles",
   "approve:requests",
+  "manage:finance",
   "view:finance_applications",
   "create:finance_application",
   "review:finance_application",
@@ -28,6 +29,15 @@ async function setup() {
   const t = convexTest(schema, import.meta.glob("./**/*.ts"));
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Test Dealer", createdAt: Date.now() })
+  );
+  await t.run((ctx) =>
+    ctx.db.insert("subscriptions", {
+      orgId,
+      plan: "professional",
+      status: "active",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
   );
   const userId = await t.run((ctx) =>
     ctx.db.insert("users", { clerkId: "user_dep_1", email: "dep@test.com", name: "Deposit User" })
@@ -77,6 +87,20 @@ async function makeQuote(t: any, asUser: any, orgId: any, customerId: any, vehic
   });
 }
 
+async function openAccountingPeriod(asUser: any, orgId: any) {
+  await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
+  const fiscalYear = new Date().getUTCFullYear();
+  await asUser.mutation(api.accountingPeriods.create, {
+    orgId,
+    startDate: Date.UTC(fiscalYear, 0, 1),
+    endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+    fiscalYear,
+    periodNumber: 1,
+  });
+  const period = (await asUser.query(api.accountingPeriods.list, { orgId }))[0];
+  await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+}
+
 describe("deposits.create", () => {
   test("places a vehicle on hold and records a DEPOSIT transaction", async () => {
     const { t, orgId, customerId, vehicleId, asUser } = await setup();
@@ -93,6 +117,16 @@ describe("deposits.create", () => {
       expect(deposit?.status).toBe("HELD");
       expect(deposit?.holdActive).toBe(true);
       expect(deposit?.amount).toBe(1500);
+      expect(deposit?.amountMinor).toBe(1_500_000);
+      expect(deposit?.currency).toBe("JOD");
+      expect(deposit?.method).toBe("CASH");
+      expect(deposit?.canonicalPaymentId).toBeTruthy();
+      const canonicalPayment = deposit?.canonicalPaymentId
+        ? await ctx.db.get(deposit.canonicalPaymentId)
+        : null;
+      expect(canonicalPayment?.direction).toBe("IN");
+      expect(canonicalPayment?.method).toBe("CASH");
+      expect(canonicalPayment?.amountMinor).toBe(1_500_000);
 
       const vehicle = await ctx.db.get(vehicleId);
       expect(vehicle?.status).toBe("RESERVED");
@@ -131,6 +165,65 @@ describe("deposits.create", () => {
       expect(vehicle?.status).toBe("RESERVED");
     });
   });
+
+  test("rejects non-positive and sub-minor deposit amounts", async () => {
+    const { orgId, customerId, vehicleId, asUser } = await setup();
+    const quoteId = await makeQuote(null, asUser, orgId, customerId, vehicleId);
+
+    await expect(
+      asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 0 })
+    ).rejects.toThrow(/greater than 0/i);
+
+    await expect(
+      asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 0.0001 })
+    ).rejects.toThrow(/decimal places|minor-unit/i);
+  });
+
+  test("rejects deposits in a currency different from the organization currency", async () => {
+    const { orgId, customerId, vehicleId, asUser } = await setup();
+    const quoteId = await makeQuote(null, asUser, orgId, customerId, vehicleId);
+
+    await expect(
+      asUser.mutation(api.deposits.create, {
+        orgId,
+        quoteId,
+        amount: 100,
+        currency: "USD",
+      })
+    ).rejects.toThrow(/organization currency/i);
+  });
+
+  test("caps cumulative active deposits at the quote amount", async () => {
+    const { orgId, customerId, vehicleId, asUser } = await setup();
+    const quoteId = await makeQuote(null, asUser, orgId, customerId, vehicleId);
+
+    await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 21_000 });
+
+    await expect(
+      asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1_001 })
+    ).rejects.toThrow(/cannot exceed the quote amount/i);
+  });
+
+  test("rejects idempotency key reuse with different deposit content", async () => {
+    const { orgId, customerId, vehicleId, asUser } = await setup();
+    const quoteId = await makeQuote(null, asUser, orgId, customerId, vehicleId);
+
+    await asUser.mutation(api.deposits.create, {
+      orgId,
+      quoteId,
+      amount: 1000,
+      idempotencyKey: "deposit_reuse",
+    });
+
+    await expect(
+      asUser.mutation(api.deposits.create, {
+        orgId,
+        quoteId,
+        amount: 1001,
+        idempotencyKey: "deposit_reuse",
+      })
+    ).rejects.toThrow(/different request content/i);
+  });
 });
 
 describe("deposits.release", () => {
@@ -159,6 +252,18 @@ describe("deposits.release", () => {
       expect(outTx?.depositId).toBe(depositId);
       expect(outTx?.description).toContain("Deposit refund");
       expect(outTx?.description).toContain(quoteId.toString());
+
+      const refundPayment = await ctx.db
+        .query("collectionPayments")
+        .withIndex("by_org_customer", (q) => q.eq("orgId", orgId).eq("customerId", customerId))
+        .filter((q) => q.eq(q.field("direction"), "OUT"))
+        .first();
+      expect(refundPayment?.canonicalPaymentId).toBeTruthy();
+      const canonicalRefund = refundPayment?.canonicalPaymentId
+        ? await ctx.db.get(refundPayment.canonicalPaymentId)
+        : null;
+      expect(canonicalRefund?.direction).toBe("OUT");
+      expect(canonicalRefund?.method).toBe("OTHER");
     });
   });
 
@@ -216,6 +321,84 @@ describe("deposits.release", () => {
       expect(outTx).toBeNull();
     });
   });
+
+  test("FORFEITED posts a deposit forfeiture accounting event when accounting is open", async () => {
+    const { orgId, customerId, vehicleId, asUser, asApprover } = await setup();
+    await openAccountingPeriod(asUser, orgId);
+    const quoteId = await makeQuote(null, asUser, orgId, customerId, vehicleId);
+    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1500 });
+
+    await asApprover.mutation(api.deposits.release, { orgId, depositId, resolution: "FORFEITED" });
+
+    const events = await asUser.query(api.accountingLedger.listAccountingEvents, {
+      orgId,
+      sourceType: "deposits",
+      sourceId: depositId.toString(),
+    });
+    const forfeiture = events.find((event) => event.eventType === "DEPOSIT_FORFEITED");
+    expect(forfeiture).toBeTruthy();
+    expect(forfeiture?.status).toBe("POSTED");
+  });
+});
+
+describe("deposits.voidDeposit", () => {
+  test("marks deposit VOIDED, releases vehicle hold, and creates a reversing OUT transaction", async () => {
+    const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
+    const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
+    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1500 });
+
+    await asApprover.mutation(api.deposits.voidDeposit, {
+      orgId,
+      depositId,
+      reason: "Created in error",
+    });
+
+    await t.run(async (ctx) => {
+      const deposit = await ctx.db.get(depositId);
+      expect(deposit?.status).toBe("VOIDED");
+      expect(deposit?.isDeleted).toBe(true);
+      expect(deposit?.holdActive).toBe(false);
+      expect(deposit?.notes).toBe("Created in error");
+
+      const vehicle = await ctx.db.get(vehicleId);
+      expect(vehicle?.status).toBe("AVAILABLE");
+
+      const outTx = await ctx.db
+        .query("transactions")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .filter((q) => q.eq(q.field("type"), "OUT"))
+        .first();
+      expect(outTx?.amount).toBe(1500);
+      expect(outTx?.category).toBe("DEPOSIT");
+      expect(outTx?.depositId).toBe(depositId);
+      expect(outTx?.description).toContain("voided");
+      expect(outTx?.description).toContain(quoteId.toString());
+    });
+  });
+
+  test("rejects void on an already-resolved deposit", async () => {
+    const { orgId, customerId, vehicleId, asUser, asApprover } = await setup();
+    const quoteId = await makeQuote(null, asUser, orgId, customerId, vehicleId);
+    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1500 });
+
+    await asApprover.mutation(api.deposits.release, { orgId, depositId, resolution: "REFUNDED" });
+
+    await expect(
+      asApprover.mutation(api.deposits.voidDeposit, { orgId, depositId })
+    ).rejects.toThrow(/HELD/i);
+  });
+
+  test("voided deposits are excluded from the cumulative deposit cap", async () => {
+    const { orgId, customerId, vehicleId, asUser, asApprover } = await setup();
+    const quoteId = await makeQuote(null, asUser, orgId, customerId, vehicleId);
+    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 21000 });
+
+    await asApprover.mutation(api.deposits.voidDeposit, { orgId, depositId });
+
+    await expect(
+      asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 21000 })
+    ).resolves.toBeDefined();
+  });
 });
 
 describe("sales.create resolves deposits", () => {
@@ -224,7 +407,7 @@ describe("sales.create resolves deposits", () => {
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
     const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 2000 });
 
-    await asUser.mutation(api.sales.create, {
+    const saleId = await asUser.mutation(api.sales.create, {
       orgId,
       vehicleId,
       customerId,
@@ -248,6 +431,16 @@ describe("sales.create resolves deposits", () => {
         .first();
       // 22000 sale price minus the 2000 already booked as a DEPOSIT transaction
       expect(saleTx?.amount).toBe(20000);
+
+      const sale = await ctx.db.get(saleId);
+      expect(sale?.canonicalReceivableDocumentId).toBeTruthy();
+      const allocations = sale?.canonicalReceivableDocumentId
+        ? await ctx.db
+            .query("paymentAllocations")
+            .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", sale.canonicalReceivableDocumentId!))
+            .collect()
+        : [];
+      expect(allocations.some((allocation) => allocation.amountMinor === 2_000_000)).toBe(true);
     });
   });
 });
