@@ -14,6 +14,15 @@ async function seedMigrationDealer() {
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Migration Dealer", createdAt: Date.now() })
   );
+  await t.run((ctx) =>
+    ctx.db.insert("subscriptions", {
+      orgId,
+      plan: "professional",
+      status: "active",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+  );
   const userId = await t.run((ctx) =>
     ctx.db.insert("users", { clerkId: "mig_user", email: "mig@example.com", name: "Mig User" })
   );

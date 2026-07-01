@@ -4,6 +4,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { postAccountingEvent } from "./accounting/postingEngine";
 import { reverseAccountingEvent } from "./accounting/reversals";
+import { requireFeature } from "./subscriptions";
 
 // ─── Queries ──────────────────────────────────────────────────────────────────
 
@@ -15,6 +16,7 @@ export const listJournalEntries = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
 
     const limit = Math.min(args.limit ?? 50, 200);
     let q;
@@ -38,6 +40,7 @@ export const getJournalEntry = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
     const entry = await ctx.db.get(args.journalEntryId);
     if (!entry || entry.orgId !== args.orgId) return null;
     const lines = await ctx.db
@@ -59,6 +62,7 @@ export const getAccountActivity = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
 
     const account = await ctx.db.get(args.accountId);
     if (!account || account.orgId !== args.orgId) return null;
@@ -108,6 +112,7 @@ export const listAccountingEvents = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
 
     const limit = Math.min(args.limit ?? 50, 200);
     if (args.sourceType && args.sourceId) {
@@ -144,6 +149,7 @@ export const post = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
     return postAccountingEvent(ctx, { ...args, actorId: user._id });
   },
 });
@@ -158,6 +164,7 @@ export const reverse = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
     return reverseAccountingEvent(ctx, { ...args, actorId: user._id });
   },
 });

@@ -13,6 +13,15 @@ async function seedAuditDealer() {
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Audit Dealer", createdAt: Date.now() })
   );
+  await t.run((ctx) =>
+    ctx.db.insert("subscriptions", {
+      orgId,
+      plan: "professional",
+      status: "active",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+  );
   const userId = await t.run((ctx) =>
     ctx.db.insert("users", { clerkId: "aud_user", email: "aud@example.com", name: "Audit User" })
   );
