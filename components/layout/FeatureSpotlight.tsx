@@ -51,6 +51,11 @@ export function FeatureSpotlight() {
   const [visible, setVisible] = useState(false);
   const [slide, setSlide] = useState(0);
 
+  const dismiss = () => {
+    localStorage.setItem(STORAGE_KEY, "1");
+    setVisible(false);
+  };
+
   useEffect(() => {
     setMounted(true);
     if (!localStorage.getItem(STORAGE_KEY)) {
@@ -66,11 +71,6 @@ export function FeatureSpotlight() {
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [visible]);
-
-  const dismiss = () => {
-    localStorage.setItem(STORAGE_KEY, "1");
-    setVisible(false);
-  };
 
   const current = SLIDES[slide];
   const isLast = slide === SLIDES.length - 1;
