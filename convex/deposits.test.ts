@@ -25,7 +25,7 @@ const PERMISSIONS = [
 ];
 
 async function setup() {
-  const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+  const t = convexTest(schema, import.meta.glob("./**/*.ts"));
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Test Dealer", createdAt: Date.now() })
   );
