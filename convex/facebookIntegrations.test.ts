@@ -21,11 +21,25 @@ async function seedOwner(t: ReturnType<typeof convexTest>) {
   const orgId = await t.run(async (ctx) =>
     ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() })
   );
+  await t.run(async (ctx) =>
+    ctx.db.insert("subscriptions", {
+      orgId,
+      plan: "professional",
+      status: "active",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+  );
   const userId = await t.run(async (ctx) =>
     ctx.db.insert("users", { clerkId: "fb_owner_001", email: "fbowner@test.com", name: "Owner" })
   );
   const roleId = await t.run(async (ctx) =>
-    ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ["view:settings", "edit:settings"] })
+    ctx.db.insert("roles", {
+      orgId,
+      name: "OWNER",
+      permissions: ["view:settings", "edit:settings"],
+      isSystemOwnerRole: true,
+    })
   );
   await t.run(async (ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
   return { orgId, userId, asOwner: t.withIdentity({ subject: "fb_owner_001" }) };
