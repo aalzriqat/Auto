@@ -19,6 +19,7 @@ export type EventType =
   | "FINANCE_DISBURSED"
   | "FINANCE_CASH_RECEIVED"
   | "PAYMENT_LINK_RECEIVED"
+  | "SUPPLIER_PAYMENT_SETTLED"
   | "JOURNAL_REVERSAL";
 
 export const ALL_EVENT_TYPES = new Set<string>([
@@ -27,6 +28,7 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "CHEQUE_RECEIVED", "CHEQUE_DEPOSITED", "CHEQUE_CLEARED", "CHEQUE_RETURNED",
   "COMMISSION_ACCRUED", "COMMISSION_PAID",
   "FINANCE_DISBURSED", "FINANCE_CASH_RECEIVED", "PAYMENT_LINK_RECEIVED",
+  "SUPPLIER_PAYMENT_SETTLED",
   // JOURNAL_REVERSAL is intentionally excluded: it is written directly by
   // reverseAccountingEvent() in reversals.ts and never goes through postAccountingEvent().
 ]);
@@ -109,6 +111,16 @@ export interface SaleCompletedPayload {
   vehicleId: string;
   salespersonId?: string;
   taxMinor?: number;
+  /** When true the vehicle was sourced from another dealer; credits AP-Suppliers instead of Vehicle Inventory for COGS. */
+  isSourced?: boolean;
+}
+
+export interface SupplierPaymentSettledPayload {
+  payableId: string;
+  sourcedFromName: string;
+  amountMinor: number;
+  currency: string;
+  paymentMethod?: string;
 }
 
 export interface CollectionPaymentPayload {
@@ -232,9 +244,27 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
   }
   if (p.costMinor && p.costMinor > 0) {
     lines.push(line(SYSTEM_KEYS.COST_OF_VEHICLES_SOLD, p.costMinor, 0, "Cost of vehicle sold", { vehicleId: p.vehicleId }));
-    lines.push(line(SYSTEM_KEYS.VEHICLE_INVENTORY, 0, p.costMinor, "Inventory relief", { vehicleId: p.vehicleId }));
+    // For sourced/drop-ship vehicles the dealer owes the supplier dealer — credit
+    // AP-Suppliers instead of Vehicle Inventory (the car was never in stock).
+    const costCreditKey = p.isSourced
+      ? SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS
+      : SYSTEM_KEYS.VEHICLE_INVENTORY;
+    const costCreditDesc = p.isSourced ? "Supplier payable created" : "Inventory relief";
+    lines.push(line(costCreditKey, 0, p.costMinor, costCreditDesc, { vehicleId: p.vehicleId }));
   }
   return { lines, memo: "Vehicle sale completed", category: "SYSTEM" };
+}
+
+export function ruleSupplierPaymentSettled(p: SupplierPaymentSettledPayload): RuleResult {
+  const cashKey = cashAccountKey(p.paymentMethod);
+  return {
+    lines: [
+      line(SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, p.amountMinor, 0, `AP settled — ${p.sourcedFromName}`),
+      line(cashKey, 0, p.amountMinor, "Cash paid to supplier"),
+    ],
+    memo: `Supplier payment — ${p.sourcedFromName}`,
+    category: "SYSTEM",
+  };
 }
 
 export function ruleCollectionPayment(p: CollectionPaymentPayload): RuleResult {
@@ -445,6 +475,7 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "FINANCE_DISBURSED": return ruleFinanceDisbursed(payload as unknown as FinanceDisbursedPayload);
     case "FINANCE_CASH_RECEIVED": return ruleFinanceCashReceived(payload as unknown as FinanceCashReceivedPayload);
     case "PAYMENT_LINK_RECEIVED": return rulePaymentLinkReceived(payload as unknown as PaymentLinkReceivedPayload);
+    case "SUPPLIER_PAYMENT_SETTLED": return ruleSupplierPaymentSettled(payload as unknown as SupplierPaymentSettledPayload);
     default:
       throw new Error(`No posting rule defined for event type: ${eventType}`);
   }

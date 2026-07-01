@@ -246,7 +246,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                         options={availableVehicles?.map((v) => ({
                           value: v._id,
                           label: `${v.year} ${v.make} ${v.model}`,
-                          subLabel: v.vin.slice(-6),
+                          subLabel: (v.vin ?? "").slice(-6),
                         })) ?? []}
                       />
                     </FormControl>

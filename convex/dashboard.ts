@@ -32,14 +32,14 @@ export const stats = query({
     const availableVehicles = await ctx.db
       .query("vehicles")
       .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "AVAILABLE"))
-      .filter(q => q.neq(q.field("isDeleted"), true))
+      .filter(q => q.and(q.neq(q.field("isDeleted"), true), q.neq(q.field("sourceType"), "SOURCED")))
       .take(1000)
       .then(res => res.length); // Use take to avoid memory bounds on huge orgs
 
     const totalVehicles = await ctx.db
       .query("vehicles")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter(q => q.neq(q.field("isDeleted"), true))
+      .filter(q => q.and(q.neq(q.field("isDeleted"), true), q.neq(q.field("sourceType"), "SOURCED")))
       .take(2000)
       .then(res => res.length);
 
@@ -276,7 +276,7 @@ export const dataQualityStats = query({
       .filter((q) => q.neq(q.field("isDeleted"), true))
       .take(2000);
 
-    const vehiclesWithVinWarning = vehicles.filter((v) => !validateVinChecksum(v.vin)).length;
+    const vehiclesWithVinWarning = vehicles.filter((v) => v.vin && !validateVinChecksum(v.vin)).length;
 
     return {
       customersMissingPhone,

@@ -19,6 +19,7 @@ export const SYSTEM_KEYS = {
   CASH_OVER_SHORT: "CASH_OVER_SHORT",
   RETAINED_EARNINGS: "RETAINED_EARNINGS",
   DEPOSIT_FORFEITURE_INCOME: "DEPOSIT_FORFEITURE_INCOME",
+  ACCOUNTS_PAYABLE_SUPPLIERS: "ACCOUNTS_PAYABLE_SUPPLIERS",
 } as const;
 
 export type SystemKey = typeof SYSTEM_KEYS[keyof typeof SYSTEM_KEYS];
@@ -180,6 +181,17 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     isControlAccount: false,
     allowManualPosting: false,
     systemKey: SYSTEM_KEYS.COMMISSION_PAYABLE,
+  },
+
+  {
+    code: "2400",
+    name: "Accounts Payable — Vehicle Suppliers",
+    nameAr: "ذمم الدفع — موردو المركبات",
+    type: "LIABILITY",
+    normalBalance: "CREDIT",
+    isControlAccount: true,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS,
   },
 
   // ── Equity ───────────────────────────────────────────────────────────────

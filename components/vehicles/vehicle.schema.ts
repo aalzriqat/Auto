@@ -3,9 +3,9 @@ import { Doc } from "@/convex/_generated/dataModel";
 
 export const vehicleSchema = z.object({
   vin: z.string()
-    .min(17, "VIN must be at least 17 characters")
-    .max(17, "VIN must be exactly 17 characters")
-    .refine((vin) => !/[IOQ]/i.test(vin), "VIN cannot contain the letters I, O, or Q"),
+    .max(17, "VIN must be at most 17 characters")
+    .refine((vin) => !vin || !/[IOQ]/i.test(vin), "VIN cannot contain the letters I, O, or Q")
+    .optional(),
   make: z.string().min(1, "Make is required"),
   model: z.string().min(1, "Model is required"),
   year: z.coerce.number().min(1900).max(new Date().getFullYear() + 1),
@@ -17,7 +17,10 @@ export const vehicleSchema = z.object({
   purchasePrice: z.coerce.number().min(0).optional(),
   minimumProfit: z.coerce.number().min(0).optional(),
   sellingPrice: z.coerce.number().min(0),
-  status: z.enum(["AVAILABLE", "RESERVED", "SOLD", "IN_INSPECTION", "IN_REPAIR", "ARCHIVED"]).optional(),
+  status: z.enum(["AVAILABLE", "RESERVED", "SOLD", "IN_INSPECTION", "IN_REPAIR", "ARCHIVED", "SOURCING"]).optional(),
+  sourceType: z.enum(["STOCK", "SOURCED"]).optional(),
+  sourcedFromName: z.string().optional(),
+  sourceCost: z.coerce.number().min(0).optional(),
   notes: z.string().optional(),
   imageIds: z.array(z.string()).optional(),
 });

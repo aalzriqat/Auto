@@ -418,7 +418,7 @@ export default defineSchema({
   vehicles: defineTable({
     orgId: v.id("organizations"),
     branchId: v.optional(v.id("branches")),
-    vin: v.string(),
+    vin: v.optional(v.string()),
     make: v.string(),
     model: v.string(),
 
@@ -438,8 +438,13 @@ export default defineSchema({
       v.literal("SOLD"),
       v.literal("IN_INSPECTION"),
       v.literal("IN_REPAIR"),
-      v.literal("ARCHIVED")
+      v.literal("ARCHIVED"),
+      v.literal("SOURCING")
     ),
+    // Sourced / drop-ship vehicles: dealer locates from another dealer on demand
+    sourceType: v.optional(v.union(v.literal("STOCK"), v.literal("SOURCED"))),
+    sourcedFromName: v.optional(v.string()),
+    sourceCost: v.optional(v.number()),
     notes: v.optional(v.string()),
     imageIds: v.optional(v.array(v.id("_storage"))),
     createdAt: v.optional(v.number()),
@@ -467,6 +472,26 @@ export default defineSchema({
     updatedAt: v.number(),
     updatedBy: v.id("users"),
   }).index("by_org_vehicle", ["orgId", "vehicleId"]),
+
+  vehicleSupplierPayables: defineTable({
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    saleId: v.optional(v.id("sales")),
+    sourcedFromName: v.string(),
+    amountDue: v.number(),
+    currency: v.string(),
+    status: v.union(v.literal("PENDING"), v.literal("PAID")),
+    paidAt: v.optional(v.number()),
+    paidBy: v.optional(v.id("users")),
+    paymentNotes: v.optional(v.string()),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_vehicle", ["vehicleId"])
+    .index("by_sale", ["saleId"])
+    .index("by_org_status", ["orgId", "status"]),
 
   vehiclePriceHistory: defineTable({
     vehicleId: v.id("vehicles"),
@@ -533,6 +558,9 @@ export default defineSchema({
       minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),
       status: v.optional(v.string()),
+      sourceType: v.optional(v.union(v.literal("STOCK"), v.literal("SOURCED"))),
+      sourcedFromName: v.optional(v.string()),
+      sourceCost: v.optional(v.number()),
       notes: v.optional(v.string()),
       imageIds: v.optional(v.array(v.id("_storage"))),
     }), // The partial vehicle data
@@ -941,7 +969,8 @@ export default defineSchema({
       v.literal("UNDER_REVIEW"),
       v.literal("APPROVED"),
       v.literal("REJECTED"),
-      v.literal("CLOSED")
+      v.literal("CLOSED"),
+      v.literal("CANCELLED")
     ),
 
     notes: v.optional(v.string()),
@@ -954,6 +983,9 @@ export default defineSchema({
     disbursedAt: v.optional(v.number()),
     disbursedAmountMinor: v.optional(v.number()),
     disbursementIdempotencyKey: v.optional(v.string()),
+    cancelledBy: v.optional(v.id("users")),
+    cancelledAt: v.optional(v.number()),
+    cancellationReason: v.optional(v.string()),
     underwritingSnapshot: v.optional(v.object({
       salaryAtSubmission: v.optional(v.number()),
       employerAtSubmission: v.optional(v.string()),

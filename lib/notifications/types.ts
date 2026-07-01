@@ -45,6 +45,7 @@ export const NOTIFICATION_TYPES = {
   "sale.updated": { category: "sales", priority: "low", criticalDefault: false },
   "sale.deleted": { category: "sales", priority: "normal", criticalDefault: false },
   "application.created": { category: "sales", priority: "normal", criticalDefault: false },
+  "application.cancelled": { category: "sales", priority: "normal", criticalDefault: false },
   "guarantor.added": { category: "sales", priority: "normal", criticalDefault: false },
   "quote.accepted": { category: "sales", priority: "normal", criticalDefault: false },
   "quote.declined": { category: "sales", priority: "normal", criticalDefault: false },

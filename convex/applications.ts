@@ -4,10 +4,19 @@ import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
-import { releaseHoldForRejectedQuote } from "./utils/depositHelpers";
+import { releaseHoldForApplicationQuote, holdVehicleForDeposit } from "./utils/depositHelpers";
 import { completeSale } from "./utils/saleCompletion";
+import { restoreVehicleToAvailable } from "./utils/saleHelpers";
 import { runWithIdempotency } from "./utils/idempotency";
-import { hookFinanceDisbursed, hookFinanceCashReceived, getOrgCurrency } from "./accounting/workflowHooks";
+import {
+  hookFinanceDisbursed,
+  hookFinanceCashReceived,
+  hookFinanceDisbursementCancelled,
+  hookSaleCancelled,
+  hookCommissionReversed,
+  hookDepositApplicationReversed,
+  getOrgCurrency,
+} from "./accounting/workflowHooks";
 import { toMinorUnits } from "./utils/money";
 
 type FinanceApplicationStatus =
@@ -16,7 +25,8 @@ type FinanceApplicationStatus =
   | "UNDER_REVIEW"
   | "APPROVED"
   | "REJECTED"
-  | "CLOSED";
+  | "CLOSED"
+  | "CANCELLED";
 
 const VALID_STATUS_TRANSITIONS: Record<FinanceApplicationStatus, readonly FinanceApplicationStatus[]> = {
   DRAFT: ["PENDING_DOCS"],
@@ -25,7 +35,22 @@ const VALID_STATUS_TRANSITIONS: Record<FinanceApplicationStatus, readonly Financ
   APPROVED: ["CLOSED"],
   REJECTED: ["PENDING_DOCS"],
   CLOSED: [],
+  CANCELLED: [],
 };
+
+// Statuses from which an application can be voided via cancelApplication —
+// e.g. when it was submitted against the wrong car. CLOSED applications can
+// also be cancelled (see cancelApplication's CLOSED branch), which unwinds
+// the sale, vehicle, deposits, and posted GL entries it created — but only
+// while no disbursement has been confirmed yet (see the disbursedAt guard).
+const CANCELLABLE_STATUSES: readonly FinanceApplicationStatus[] = [
+  "DRAFT",
+  "PENDING_DOCS",
+  "UNDER_REVIEW",
+  "APPROVED",
+  "REJECTED",
+  "CLOSED",
+];
 
 export const list = query({
   args: {
@@ -139,6 +164,23 @@ export const createFromQuote = mutation({
 
     if (existing) {
       throw new ConvexError("An application already exists for this quote.");
+    }
+
+    // A vehicle should only have one in-flight application at a time.
+    // Use an explicit allowlist of blocking statuses so REJECTED and CLOSED
+    // applications (which are effectively terminal) don't strand the vehicle
+    // indefinitely and allow a fresh deal to begin without requiring cancellation.
+    const IN_FLIGHT_STATUSES: string[] = ["DRAFT", "PENDING_DOCS", "UNDER_REVIEW", "APPROVED"];
+    const activeForVehicle = await ctx.db
+      .query("financeApplications")
+      .withIndex("by_vehicle", (q) => q.eq("vehicleId", quote.vehicleId))
+      .filter((q) => q.eq(q.field("orgId"), args.orgId))
+      .collect()
+      .then((rows) => rows.find((r) => IN_FLIGHT_STATUSES.includes(r.status)));
+    if (activeForVehicle) {
+      throw new ConvexError(
+        "This vehicle already has an active finance application. Cancel it before starting a new one."
+      );
     }
 
     const guarantors = await ctx.db
@@ -311,8 +353,165 @@ export const updateStatus = mutation({
     });
 
     if (args.status === "REJECTED" && app.status !== "REJECTED") {
-      await releaseHoldForRejectedQuote(ctx, { quoteId: app.quoteId });
+      await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId });
     }
+  },
+});
+
+/**
+ * Voids an application that was submitted in error (e.g. against the wrong
+ * vehicle) so the deal can be redone cleanly on a fresh quote. CANCELLED is
+ * terminal — the application stays visible for audit purposes but can no
+ * longer be acted on. Releases any deposit-driven vehicle hold tied to the
+ * quote, same as a rejection. Not available once CLOSED, since finalizeDeal
+ * has already created a sale.
+ */
+export const cancelApplication = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    reason: v.optional(v.string()),
+    idempotencyKey: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_FINANCE_APPLICATION]);
+
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "applications.cancelApplication",
+        idempotencyKey: args.idempotencyKey,
+        actorId: auth.user._id,
+        fingerprint: JSON.stringify({ applicationId: args.applicationId, reason: args.reason }),
+      },
+      async () => {
+        const app = await ctx.db.get(args.applicationId);
+        if (!app || app.orgId !== args.orgId) {
+          throw new ConvexError("Application not found");
+        }
+
+        if (!CANCELLABLE_STATUSES.includes(app.status)) {
+          throw new ConvexError("This application has already been cancelled.");
+        }
+
+        // Reversing an already-APPROVED decision is more sensitive than voiding
+        // a draft/in-review one, so require the same permission used to approve.
+        if (app.status === "APPROVED") {
+          await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_FINANCE_APPLICATION]);
+        }
+
+        const reason = args.reason ?? "Finance application cancelled";
+        const now = Date.now();
+
+        if (app.status === "CLOSED") {
+          // Undoing a finalized deal touches the sale, vehicle, deposits, and
+          // posted GL — require finalization authority (the same permission
+          // needed to close the deal in the first place), not just approval.
+          await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.FINALIZE_FINANCED_DEAL]);
+
+          if (app.disbursedAt) {
+            throw new ConvexError(
+              "Disbursement has already been confirmed for this deal — funds have been received from the finance company. " +
+              "This can't be auto-reversed from here; void it through a manual accounting correction instead."
+            );
+          }
+
+          if (app.finalizedSaleId) {
+            const sale = await ctx.db.get(app.finalizedSaleId);
+            if (sale && sale.orgId === args.orgId && sale.status !== "CANCELLED") {
+              await restoreVehicleToAvailable(ctx, sale.vehicleId);
+              await ctx.db.patch(sale._id, { status: "CANCELLED" });
+              await hookSaleCancelled(ctx, {
+                orgId: args.orgId,
+                saleId: sale._id,
+                reason,
+                actorId: auth.user._id,
+                reversalDate: now,
+              });
+              if (sale.commissionAmount != null && sale.commissionAmount > 0) {
+                await hookCommissionReversed(ctx, {
+                  orgId: args.orgId,
+                  saleId: sale._id,
+                  reason,
+                  actorId: auth.user._id,
+                  reversalDate: now,
+                });
+              }
+            }
+          }
+
+          const quote = await ctx.db.get(app.quoteId);
+          if (app.companyId && quote?.totalFinancedAmount && quote.totalFinancedAmount > 0) {
+            await hookFinanceDisbursementCancelled(ctx, {
+              orgId: args.orgId,
+              applicationId: args.applicationId,
+              reason,
+              actorId: auth.user._id,
+              reversalDate: now,
+            });
+          }
+
+          // Deposits applied at finalization go back to being an active hold
+          // (re-reserving the vehicle) rather than vanishing, so the same
+          // customer money can be carried over to a corrected quote.
+          const appliedDeposits = await ctx.db
+            .query("deposits")
+            .withIndex("by_quote", (q) => q.eq("quoteId", app.quoteId))
+            .filter((q) => q.eq(q.field("status"), "APPLIED"))
+            .collect();
+          for (const deposit of appliedDeposits) {
+            await ctx.db.patch(deposit._id, {
+              status: "HELD",
+              holdActive: true,
+              resolvedBy: undefined,
+              resolvedAt: undefined,
+            });
+            await hookDepositApplicationReversed(ctx, {
+              orgId: args.orgId,
+              depositId: deposit._id,
+              reason,
+              actorId: auth.user._id,
+              reversalDate: now,
+            });
+            await holdVehicleForDeposit(ctx, deposit.vehicleId);
+          }
+        } else {
+          await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId });
+        }
+
+        await ctx.db.patch(args.applicationId, {
+          status: "CANCELLED",
+          updatedAt: now,
+          cancelledBy: auth.user._id,
+          cancelledAt: now,
+          cancellationReason: args.reason,
+        });
+
+        await ctx.db.insert("applicationStatusLog", {
+          orgId: args.orgId,
+          applicationId: args.applicationId,
+          fromStatus: app.status,
+          toStatus: "CANCELLED",
+          changedBy: auth.user._id,
+          changedAt: now,
+          note: args.reason,
+        });
+
+        const actorName = await getActorName(ctx);
+        const customer = await ctx.db.get(app.customerId);
+        await notifyManagers(
+          ctx,
+          args.orgId,
+          "application.cancelled",
+          {
+            actorName,
+            customerName: customer ? `${customer.firstName} ${customer.lastName}` : "Unknown",
+          },
+          { link: `/${args.orgId}/applications`, excludeUserId: auth.user._id }
+        );
+      }
+    );
   },
 });
 

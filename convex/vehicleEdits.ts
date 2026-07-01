@@ -23,6 +23,9 @@ export const requestCreate = mutation({
       minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),
       status: v.optional(v.string()),
+      sourceType: v.optional(v.union(v.literal("STOCK"), v.literal("SOURCED"))),
+      sourcedFromName: v.optional(v.string()),
+      sourceCost: v.optional(v.number()),
       notes: v.optional(v.string()),
       imageIds: v.optional(v.array(v.id("_storage"))),
     }), // The vehicle creation payload
@@ -37,6 +40,15 @@ export const requestCreate = mutation({
       throw new ConvexError(
         `Forbidden: Missing required permissions: ${PERMISSIONS.CREATE_VEHICLES_REQUEST}`
       );
+    }
+
+    if (args.payload.sourceType === "SOURCED") {
+      if (!args.payload.sourcedFromName?.trim()) {
+        throw new ConvexError("Sourced vehicles require a supplier dealer name.");
+      }
+      if (args.payload.sourceCost === undefined || args.payload.sourceCost === null) {
+        throw new ConvexError("Sourced vehicles require a supplier cost.");
+      }
     }
 
     const requestId = await ctx.db.insert("vehicleEdits", {
@@ -79,6 +91,9 @@ export const requestUpdate = mutation({
       minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),
       status: v.optional(v.string()),
+      sourceType: v.optional(v.union(v.literal("STOCK"), v.literal("SOURCED"))),
+      sourcedFromName: v.optional(v.string()),
+      sourceCost: v.optional(v.number()),
       notes: v.optional(v.string()),
       imageIds: v.optional(v.array(v.id("_storage"))),
     }), // The vehicle update payload (patch)

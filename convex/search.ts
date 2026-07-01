@@ -7,7 +7,7 @@ type VehicleResult = {
   id: Id<"vehicles">;
   make: string;
   model: string;
-  vin: string;
+  vin?: string;
   year: number;
   status: string;
 };

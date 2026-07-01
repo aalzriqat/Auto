@@ -18,8 +18,11 @@ const vehicleStatus = v.union(
   v.literal("SOLD"),
   v.literal("IN_INSPECTION"),
   v.literal("IN_REPAIR"),
-  v.literal("ARCHIVED")
+  v.literal("ARCHIVED"),
+  v.literal("SOURCING")
 );
+
+const vehicleSourceType = v.optional(v.union(v.literal("STOCK"), v.literal("SOURCED")));
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
@@ -120,6 +123,8 @@ export const listAll = query({
     status: v.optional(vehicleStatus),
     /** When status is "AVAILABLE", also include RESERVED vehicles (soft-warning hold, not a hard block on deal-entry pickers). */
     includeReserved: v.optional(v.boolean()),
+    /** Filter to a specific sourceType. Useful for the sourcing dashboard (SOURCED) or excluding sourced from owned-stock lists. */
+    sourceType: vehicleSourceType,
   },
   handler: async (ctx, args) => {
     const { role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
@@ -156,6 +161,12 @@ export const listAll = query({
       pendingMap.set(req.vehicleId, req.requestedStatus);
     }
 
+    if (args.sourceType) {
+      // Treat null/undefined sourceType as "STOCK" (all pre-existing vehicles
+      // have no sourceType field; they are dealer-owned stock by definition).
+      vehicles = vehicles.filter((v) => (v.sourceType ?? "STOCK") === args.sourceType);
+    }
+
     return await Promise.all(
       vehicles.map(async (vehicle) => {
         const docUrls = await Promise.all(
@@ -163,13 +174,16 @@ export const listAll = query({
         );
 
         let purchasePrice = vehicle.purchasePrice;
+        let sourceCost = vehicle.sourceCost;
         if (!canViewCostPrice) {
           purchasePrice = undefined;
+          sourceCost = undefined;
         }
 
         return {
           ...vehicle,
           purchasePrice,
+          sourceCost,
           pendingStatusRequest: pendingMap.get(vehicle._id) || null,
           imageUrls: docUrls,
         };
@@ -345,7 +359,7 @@ export const getReservationHistory = query({
 export const create = mutation({
   args: {
     orgId: v.id("organizations"),
-    vin: v.string(),
+    vin: v.optional(v.string()),
     make: v.string(),
     model: v.string(),
     year: v.number(),
@@ -358,6 +372,9 @@ export const create = mutation({
     minimumProfit: v.optional(v.number()),
     sellingPrice: v.number(),
     status: v.optional(vehicleStatus),
+    sourceType: vehicleSourceType,
+    sourcedFromName: v.optional(v.string()),
+    sourceCost: v.optional(v.number()),
     notes: v.optional(v.string()),
     imageIds: v.optional(v.array(v.id("_storage"))),
   },
@@ -378,9 +395,29 @@ export const create = mutation({
 
     validateInput(CreateVehicleSchema, args);
 
-    const normalizedVin = args.vin.trim().toUpperCase();
+    const isSourced = args.sourceType === "SOURCED";
 
-    // Check for duplicate VIN within the org
+    // Sourced vehicles must identify the supplier and cost so that downstream
+    // GL posting (AP-Suppliers credit) and supplier payable creation work correctly.
+    if (isSourced) {
+      if (!args.sourcedFromName?.trim()) {
+        throw new ConvexError("Sourced vehicles require a supplier dealer name (sourcedFromName).");
+      }
+      if (args.sourceCost === undefined || args.sourceCost === null) {
+        throw new ConvexError("Sourced vehicles require a supplier cost (sourceCost).");
+      }
+    }
+
+    // VIN is optional for sourced vehicles (car doesn't exist yet); generate a
+    // stable placeholder so schema uniqueness stays valid. Users update it when
+    // the car physically arrives.
+    const rawVin = args.vin?.trim().toUpperCase() || (isSourced ? `SOURCING-${Date.now()}` : "");
+    if (!rawVin) {
+      throw new ConvexError("VIN is required for non-sourced vehicles.");
+    }
+    const normalizedVin = rawVin;
+
+    // Check for duplicate VIN within the org (auto-placeholders are unique by timestamp)
     const existing = await ctx.db
       .query("vehicles")
       .withIndex("by_org_vin", (q) =>
@@ -391,6 +428,12 @@ export const create = mutation({
     if (existing) {
       throw new ConvexError(`A vehicle with VIN "${normalizedVin}" already exists.`);
     }
+
+    // For sourced vehicles, purchasePrice mirrors sourceCost so all downstream
+    // grossProfit / commission / report logic stays correct without changes.
+    const effectivePurchasePrice = isSourced
+      ? (args.sourceCost ?? args.purchasePrice)
+      : args.purchasePrice;
 
     const id = await ctx.db.insert("vehicles", {
       orgId: args.orgId,
@@ -403,10 +446,13 @@ export const create = mutation({
       color: args.color.trim(),
       fuelType: args.fuelType,
       transmission: args.transmission,
-      purchasePrice: args.purchasePrice,
+      purchasePrice: effectivePurchasePrice,
       minimumProfit: args.minimumProfit,
       sellingPrice: args.sellingPrice,
-      status: args.status ?? "AVAILABLE",
+      status: args.status ?? (isSourced ? "SOURCING" : "AVAILABLE"),
+      sourceType: args.sourceType,
+      sourcedFromName: isSourced ? args.sourcedFromName : undefined,
+      sourceCost: isSourced ? args.sourceCost : undefined,
       notes: args.notes,
       imageIds: args.imageIds,
       createdAt: Date.now(),
@@ -460,6 +506,9 @@ export const update = mutation({
     minimumProfit: v.optional(v.number()),
     sellingPrice: v.optional(v.number()),
     status: v.optional(vehicleStatus),
+    sourceType: vehicleSourceType,
+    sourcedFromName: v.optional(v.string()),
+    sourceCost: v.optional(v.number()),
     notes: v.optional(v.string()),
     imageIds: v.optional(v.array(v.id("_storage"))),
   },
@@ -476,6 +525,20 @@ export const update = mutation({
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
       throw new ConvexError("Vehicle not found in this organization.");
+    }
+
+    // When switching to or retaining SOURCED, mirror the create-time invariant:
+    // sourcedFromName and sourceCost are both required.
+    const effectiveSourceType = args.sourceType ?? vehicle.sourceType;
+    if (effectiveSourceType === "SOURCED") {
+      const effectiveName = args.sourcedFromName ?? vehicle.sourcedFromName;
+      const effectiveCost = args.sourceCost ?? vehicle.sourceCost;
+      if (!effectiveName?.trim()) {
+        throw new ConvexError("Sourced vehicles require a supplier dealer name (sourcedFromName).");
+      }
+      if (effectiveCost === undefined || effectiveCost === null) {
+        throw new ConvexError("Sourced vehicles require a supplier cost (sourceCost).");
+      }
     }
 
     // If VIN is being changed, check for duplicates
@@ -706,6 +769,124 @@ export const releaseReservation = mutation({
 });
 
 /**
+ * Lightweight mutation used by the Sales Wizard to create a sourced vehicle
+ * inline without leaving the quote flow. Sets sourceType=SOURCED, status=SOURCING,
+ * and auto-generates a VIN placeholder if none is provided.
+ */
+export const createSourced = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    make: v.string(),
+    model: v.string(),
+    year: v.number(),
+    trim: v.optional(v.string()),
+    color: v.string(),
+    mileage: v.number(),
+    fuelType: v.string(),
+    transmission: v.string(),
+    sourcedFromName: v.string(),
+    sourceCost: v.number(),
+    sellingPrice: v.number(),
+    vin: v.optional(v.string()),
+    notes: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
+
+    const vehicleGate = await ctx.runQuery(internal.subscriptions.canAddVehicle, { orgId: args.orgId });
+    if (!vehicleGate.allowed) {
+      throw new ConvexError(
+        `You've reached the ${vehicleGate.limit}-vehicle limit on your current plan. Upgrade to add more vehicles.`
+      );
+    }
+
+    if (!args.sourcedFromName.trim()) {
+      throw new ConvexError("Sourced vehicles require a supplier dealer name (sourcedFromName).");
+    }
+    if (args.sourceCost <= 0) {
+      throw new ConvexError("Supplier cost must be greater than zero.");
+    }
+    if (!args.make.trim() || !args.model.trim() || !args.color.trim()) {
+      throw new ConvexError("Make, model, and color are required.");
+    }
+
+    const normalizedVin = args.vin?.trim().toUpperCase() || `SOURCING-${Date.now()}`;
+
+    const existing = await ctx.db
+      .query("vehicles")
+      .withIndex("by_org_vin", (q) => q.eq("orgId", args.orgId).eq("vin", normalizedVin))
+      .unique();
+    if (existing) {
+      throw new ConvexError(`A vehicle with VIN "${normalizedVin}" already exists.`);
+    }
+
+    const now = Date.now();
+    const id = await ctx.db.insert("vehicles", {
+      orgId: args.orgId,
+      vin: normalizedVin,
+      make: args.make.trim(),
+      model: args.model.trim(),
+      year: args.year,
+      trim: args.trim?.trim(),
+      color: args.color.trim(),
+      mileage: args.mileage,
+      fuelType: args.fuelType,
+      transmission: args.transmission,
+      purchasePrice: args.sourceCost,
+      sourceCost: args.sourceCost,
+      sourcedFromName: args.sourcedFromName.trim(),
+      sourceType: "SOURCED",
+      sellingPrice: args.sellingPrice,
+      status: "SOURCING",
+      notes: args.notes,
+      createdAt: now,
+      addedBy: user._id,
+      updatedBy: user._id,
+      updatedAt: now,
+    });
+
+    // Audit trail — mirror what create records so sourced vehicles appear in
+    // vehicle history reports and manager audit views.
+    await ctx.db.insert("vehicleEdits", {
+      orgId: args.orgId,
+      requestedBy: user._id,
+      type: "CREATE",
+      payload: {
+        vin: normalizedVin,
+        make: args.make,
+        model: args.model,
+        year: args.year,
+        trim: args.trim,
+        color: args.color,
+        mileage: args.mileage,
+        fuelType: args.fuelType,
+        transmission: args.transmission,
+        sourceCost: args.sourceCost,
+        sourcedFromName: args.sourcedFromName,
+        sourceType: "SOURCED" as const,
+        sellingPrice: args.sellingPrice,
+        status: "SOURCING" as const,
+      },
+      status: "APPROVED",
+      resolvedBy: user._id,
+      resolvedAt: now,
+      createdAt: now,
+    });
+
+    const actorName = await getActorName(ctx);
+    await notifyManagers(
+      ctx,
+      args.orgId,
+      "vehicle.created",
+      { actorName, vehicleLabel: `${args.year} ${args.make.trim()} ${args.model.trim()} (Sourced)` },
+      { link: `/${args.orgId}/vehicles?highlightId=${id}` }
+    );
+
+    return id;
+  },
+});
+
+/**
  * Soft deletes a vehicle. Only vehicles with status AVAILABLE or ARCHIVED can be deleted.
  */
 // TODO: Add admin recovery endpoint if needed
@@ -747,7 +928,7 @@ export const softDelete = mutation({
       ctx,
       args.orgId,
       "vehicle.deleted",
-      { actorName, vehicleLabel: `${vehicle.year} ${vehicle.make} ${vehicle.model}`, vin: vehicle.vin }
+      { actorName, vehicleLabel: `${vehicle.year} ${vehicle.make} ${vehicle.model}`, vin: vehicle.vin ?? "" }
     );
   },
 });
