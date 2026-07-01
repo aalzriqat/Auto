@@ -1,10 +1,243 @@
 import { v, ConvexError } from "convex/values";
-import { mutation, query, action, internalMutation, internalQuery } from "./_generated/server";
+import { mutation, query, action, internalMutation, internalQuery, internalAction, MutationCtx } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { internal } from "./_generated/api";
-import { requireTenantAuth, requireOwner } from "./utils/tenancy";
-import { PERMISSIONS, ALL_PERMISSIONS, DEFAULT_ROLE_TEMPLATES } from "./utils/permissions";
+import { Doc, Id } from "./_generated/dataModel";
+import { requireAuth, requireTenantAuth, requireOwner } from "./utils/tenancy";
+import { PERMISSIONS, ALL_PERMISSIONS, DEFAULT_ROLE_TEMPLATES, isSystemOwnerRole } from "./utils/permissions";
 import { notifyUser, notifyManagers } from "./utils/notifications";
+
+const MEMBERSHIP_OFFBOARDING_RETRY_BASE_MS = 60_000;
+const MEMBERSHIP_OFFBOARDING_RETRY_MAX_MS = 60 * 60_000;
+const MEMBERSHIP_OFFBOARDING_DRAIN_LIMIT = 25;
+const INVITATION_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+const DIRECT_ACCOUNT_INVITATION_TTL_MS = 60 * 60 * 1000;
+
+type MembershipOffboardingStatus = "PENDING" | "RETRYING" | "SUCCEEDED";
+type MembershipOffboardingJobResult = {
+  jobId: Id<"membershipOffboardingJobs">;
+  status: MembershipOffboardingStatus;
+  requiresClerkUserDeletion: boolean;
+};
+type MembershipOffboardingJobSnapshot =
+  | (Doc<"membershipOffboardingJobs"> & {
+      membershipExists: boolean;
+      clerkIdForDeletion: string | null;
+      requiresClerkUserDeletionNow: boolean;
+    })
+  | null;
+type InvitationStatus = "PENDING" | "ACCEPTED" | "EXPIRED" | "REVOKED";
+
+async function countOwners(ctx: MutationCtx, orgId: Id<"organizations">): Promise<number> {
+  const memberships = await ctx.db
+    .query("memberships")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+
+  let ownerCount = 0;
+  for (const membership of memberships) {
+    if (membership.offboardingStatus) continue;
+    const role = await ctx.db.get(membership.roleId);
+    if (isSystemOwnerRole(role)) ownerCount++;
+  }
+  return ownerCount;
+}
+
+async function requireRealOwner(ctx: MutationCtx, orgId: Id<"organizations">) {
+  const auth = await requireOwner(ctx, orgId);
+  if (auth.membership.impersonationGrantId) {
+    throw new ConvexError("Impersonation sessions cannot change organization ownership.");
+  }
+  return auth;
+}
+
+async function requireOwnerForOwnerRole(ctx: MutationCtx, orgId: Id<"organizations">, roleId: Id<"roles">) {
+  const role = await ctx.db.get(roleId);
+  if (!role || role.orgId !== orgId || role.isDeleted) {
+    throw new ConvexError("The specified role does not belong to this organization.");
+  }
+  if (isSystemOwnerRole(role)) {
+    await requireRealOwner(ctx, orgId);
+  }
+  return role;
+}
+
+function normalizeEmail(email: string): string {
+  return email.toLowerCase().trim();
+}
+
+function generateInvitationToken(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function hashInvitationToken(token: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function invitationStatus(invite: Doc<"invitations">): InvitationStatus {
+  return invite.status ?? "PENDING";
+}
+
+async function expireInvitation(ctx: MutationCtx, invite: Doc<"invitations">, now: number) {
+  if (invitationStatus(invite) !== "PENDING") return;
+  await ctx.db.patch(invite._id, {
+    status: "EXPIRED",
+    updatedAt: now,
+  });
+}
+
+async function findReusablePendingInvitation(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  email: string
+): Promise<Doc<"invitations"> | null> {
+  const now = Date.now();
+  const invitations = await ctx.db
+    .query("invitations")
+    .withIndex("by_org_email", (q) => q.eq("orgId", orgId).eq("email", email))
+    .collect();
+
+  for (const invite of invitations) {
+    if (invitationStatus(invite) !== "PENDING") continue;
+    if (!invite.expiresAt || invite.expiresAt <= now) {
+      await expireInvitation(ctx, invite, now);
+      continue;
+    }
+    return invite;
+  }
+
+  return null;
+}
+
+async function assertInvitationCanBeAccepted(
+  ctx: MutationCtx,
+  invite: Doc<"invitations">,
+  recipientEmail: string
+) {
+  const now = Date.now();
+  if (invitationStatus(invite) !== "PENDING") {
+    throw new ConvexError("Invitation is no longer valid.");
+  }
+  if (!invite.expiresAt || invite.expiresAt <= now) {
+    await expireInvitation(ctx, invite, now);
+    throw new ConvexError("Invitation has expired. Ask your administrator for a new invite.");
+  }
+  if (invite.email !== normalizeEmail(recipientEmail)) {
+    throw new ConvexError("Invitation is not assigned to this account.");
+  }
+
+  const org = await ctx.db.get(invite.orgId);
+  if (!org || org.suspended) {
+    throw new ConvexError("Invitation organization is no longer available.");
+  }
+
+  const role = await ctx.db.get(invite.roleId);
+  if (!role || role.orgId !== invite.orgId || role.isDeleted) {
+    throw new ConvexError("The invitation role is no longer valid.");
+  }
+  if (isSystemOwnerRole(role) && !invite.ownerRoleAuthorizedAt) {
+    throw new ConvexError("This owner invitation is no longer valid. Create a new owner-authorized invitation.");
+  }
+
+  const memberGate = await ctx.runQuery(internal.subscriptions.canAddMember, { orgId: invite.orgId });
+  if (!memberGate.allowed) {
+    throw new ConvexError(
+      `You've reached the ${memberGate.limit}-user limit on your current plan. Upgrade to add more team members.`
+    );
+  }
+
+  return { org, role };
+}
+
+function normalizeOffboardingError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
+
+function nextOffboardingRetryDelay(attempts: number): number {
+  const exponential = MEMBERSHIP_OFFBOARDING_RETRY_BASE_MS * 2 ** Math.min(Math.max(attempts - 1, 0), 6);
+  return Math.min(exponential, MEMBERSHIP_OFFBOARDING_RETRY_MAX_MS);
+}
+
+async function createOrReuseMembershipOffboardingJob(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    membershipId: Id<"memberships">;
+    requestedBy: Id<"users">;
+  }
+): Promise<MembershipOffboardingJobResult> {
+  const membership = await ctx.db.get(args.membershipId);
+  if (!membership || membership.orgId !== args.orgId) {
+    throw new ConvexError("Membership not found in this organization.");
+  }
+
+  const user = await ctx.db.get(membership.userId);
+  if (!user) {
+    throw new ConvexError("Membership user record is missing.");
+  }
+
+  const existingJob = await ctx.db
+    .query("membershipOffboardingJobs")
+    .withIndex("by_membership", (q) => q.eq("membershipId", membership._id))
+    .first();
+
+  if (existingJob && existingJob.status !== "SUCCEEDED") {
+    if (!membership.offboardingStatus) {
+      await ctx.db.patch(membership._id, {
+        offboardingStatus: "PENDING_EXTERNAL_REMOVAL",
+        offboardingRequestedAt: existingJob.createdAt,
+        offboardingRequestedBy: existingJob.requestedBy,
+        offboardingAttempts: existingJob.attempts,
+        offboardingNextRetryAt: existingJob.nextAttemptAt,
+      });
+    }
+    await ctx.scheduler.runAfter(0, internal.memberships.processMembershipOffboardingJob, {
+      jobId: existingJob._id,
+    });
+    return {
+      jobId: existingJob._id,
+      status: existingJob.status,
+      requiresClerkUserDeletion: existingJob.requiresClerkUserDeletion,
+    };
+  }
+
+  const now = Date.now();
+  const otherMemberships = await ctx.db
+    .query("memberships")
+    .withIndex("by_user", (q) => q.eq("userId", user._id))
+    .collect();
+  const requiresClerkUserDeletion = otherMemberships.every((m) => m._id === membership._id);
+
+  await ctx.db.patch(membership._id, {
+    offboardingStatus: "PENDING_EXTERNAL_REMOVAL",
+    offboardingRequestedAt: now,
+    offboardingRequestedBy: args.requestedBy,
+    offboardingAttempts: 0,
+    offboardingNextRetryAt: now,
+  });
+
+  const jobId = await ctx.db.insert("membershipOffboardingJobs", {
+    membershipId: membership._id,
+    orgId: args.orgId,
+    userId: user._id,
+    clerkId: user.clerkId,
+    requestedBy: args.requestedBy,
+    requiresClerkUserDeletion,
+    status: "PENDING",
+    attempts: 0,
+    nextAttemptAt: now,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  await ctx.scheduler.runAfter(0, internal.memberships.processMembershipOffboardingJob, { jobId });
+
+  return { jobId, status: "PENDING", requiresClerkUserDeletion };
+}
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
@@ -24,8 +257,10 @@ export const list = query({
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .paginate(args.paginationOpts);
 
+    const activePage = pageResult.page.filter((m) => !m.offboardingStatus);
+
     const page = await Promise.all(
-      pageResult.page.map(async (m) => {
+      activePage.map(async (m) => {
         const user = await ctx.db.get(m.userId);
         const role = await ctx.db.get(m.roleId);
         return {
@@ -39,6 +274,7 @@ export const list = query({
           roleName: role?.name ?? "UNKNOWN",
           commissionRate: m.commissionRate ?? 0,
           lastSeenAt: m.lastSeenAt,
+          offboardingStatus: m.offboardingStatus,
         };
       })
     );
@@ -59,7 +295,7 @@ export const getMyMembership = query({
   handler: async (ctx, args) => {
     const { user, membership, role } = await requireTenantAuth(ctx, args.orgId);
     // OWNER always gets all permissions — prevents stale DB roles when new permissions are added
-    const permissions: string[] = role.name === "OWNER"
+    const permissions: string[] = isSystemOwnerRole(role)
       ? [...ALL_PERMISSIONS]
       : role.permissions;
     return {
@@ -86,13 +322,10 @@ export const add = mutation({
     roleId: v.id("roles"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_USERS]);
+    const { user: callingUser } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_USERS]);
 
     // Verify the role belongs to this org
-    const role = await ctx.db.get(args.roleId);
-    if (!role || role.orgId !== args.orgId) {
-      throw new ConvexError("The specified role does not belong to this organization.");
-    }
+    const role = await requireOwnerForOwnerRole(ctx, args.orgId, args.roleId);
 
     const memberGate = await ctx.runQuery(internal.subscriptions.canAddMember, { orgId: args.orgId });
     if (!memberGate.allowed) {
@@ -114,28 +347,33 @@ export const add = mutation({
 
     if (!targetUser) {
       // User doesn't exist yet, create an invitation!
-      // Check if they are already invited
-      const existingInvite = await ctx.db
-        .query("invitations")
-        .withIndex("by_email", (q) => q.eq("email", email))
-        .filter((q) => q.eq(q.field("orgId"), args.orgId))
-        .first();
+      const existingInvite = await findReusablePendingInvitation(ctx, args.orgId, email);
 
       if (existingInvite) {
         throw new ConvexError("An invitation is already pending for this email.");
       }
 
+      const now = Date.now();
+      const inviteToken = generateInvitationToken();
       await ctx.db.insert("invitations", {
         orgId: args.orgId,
         email,
         roleId: args.roleId,
-        createdAt: Date.now(),
+        createdBy: callingUser._id,
+        tokenHash: await hashInvitationToken(inviteToken),
+        status: "PENDING",
+        source: "EMAIL_INVITE",
+        expiresAt: now + INVITATION_TTL_MS,
+        updatedAt: now,
+        ...(isSystemOwnerRole(role) ? { ownerRoleAuthorizedAt: now } : {}),
+        createdAt: now,
       });
 
       // Schedule the invite email
       await ctx.scheduler.runAfter(0, internal.email.sendTeamInvite, {
         toEmail: email,
         orgName: org.name,
+        inviteToken,
       });
 
       return { status: "invited" };
@@ -178,7 +416,7 @@ export const updateRole = mutation({
     newRoleId: v.id("roles"),
   },
   handler: async (ctx, args) => {
-    const { user: callingUser } = await requireTenantAuth(ctx, args.orgId, [
+    const { user: callingUser, membership: callingMembership } = await requireTenantAuth(ctx, args.orgId, [
       PERMISSIONS.MANAGE_USERS,
     ]);
 
@@ -186,22 +424,40 @@ export const updateRole = mutation({
     if (!membership || membership.orgId !== args.orgId) {
       throw new ConvexError("Membership not found in this organization.");
     }
+    if (membership.offboardingStatus) {
+      throw new ConvexError("Membership removal is already in progress.");
+    }
 
     // Prevent changing the original OWNER's role
     const currentRole = await ctx.db.get(membership.roleId);
-    if (currentRole?.name === "OWNER" && membership.userId === callingUser._id) {
-      throw new ConvexError("You cannot change your own OWNER role. Transfer ownership first.");
+    if (!currentRole || currentRole.orgId !== args.orgId || currentRole.isDeleted) {
+      throw new ConvexError("Membership role not found or corrupted.");
     }
 
     // Verify the new role belongs to this org
     const newRole = await ctx.db.get(args.newRoleId);
-    if (!newRole || newRole.orgId !== args.orgId) {
+    if (!newRole || newRole.orgId !== args.orgId || newRole.isDeleted) {
       throw new ConvexError("The specified role does not belong to this organization.");
     }
 
-    // Only an OWNER can assign the OWNER role
-    if (newRole.name === "OWNER") {
-      await requireOwner(ctx, args.orgId);
+    const currentRoleIsOwner = isSystemOwnerRole(currentRole);
+    const newRoleIsOwner = isSystemOwnerRole(newRole);
+
+    // Only an OWNER can assign, demote, or otherwise modify an OWNER membership.
+    if (currentRoleIsOwner || newRoleIsOwner) {
+      if (callingMembership.impersonationGrantId) {
+        throw new ConvexError("Impersonation sessions cannot change organization ownership.");
+      }
+      await requireRealOwner(ctx, args.orgId);
+    }
+
+    if (currentRoleIsOwner && !newRoleIsOwner) {
+      if (await countOwners(ctx, args.orgId) <= 1) {
+        throw new ConvexError("Cannot demote the last owner. Transfer ownership to another member first.");
+      }
+      if (membership.userId === callingUser._id) {
+        throw new ConvexError("You cannot change your own OWNER role. Transfer ownership first.");
+      }
     }
 
     await ctx.db.patch(args.membershipId, {
@@ -209,6 +465,59 @@ export const updateRole = mutation({
     });
 
     await notifyUser(ctx, args.orgId, membership.userId, "membership.role_changed", { roleName: newRole.name });
+  },
+});
+
+/**
+ * Atomically transfers the caller's OWNER role to another membership and
+ * demotes the caller to a non-owner role. Use this instead of manually
+ * changing OWNER memberships.
+ */
+export const transferOwnership = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    targetMembershipId: v.id("memberships"),
+    currentOwnerNewRoleId: v.id("roles"),
+  },
+  handler: async (ctx, args) => {
+    const { user, membership: currentOwnerMembership, role: ownerRole } = await requireRealOwner(ctx, args.orgId);
+
+    const targetMembership = await ctx.db.get(args.targetMembershipId);
+    if (!targetMembership || targetMembership.orgId !== args.orgId) {
+      throw new ConvexError("Target membership not found in this organization.");
+    }
+    if (targetMembership.offboardingStatus) {
+      throw new ConvexError("Membership removal is already in progress.");
+    }
+    if (targetMembership.userId === user._id) {
+      throw new ConvexError("Choose another member to transfer ownership to.");
+    }
+
+    const currentOwnerNewRole = await ctx.db.get(args.currentOwnerNewRoleId);
+    if (!currentOwnerNewRole || currentOwnerNewRole.orgId !== args.orgId || currentOwnerNewRole.isDeleted) {
+      throw new ConvexError("The replacement role does not belong to this organization.");
+    }
+    if (isSystemOwnerRole(currentOwnerNewRole)) {
+      throw new ConvexError("The replacement role must be a non-owner role.");
+    }
+
+    const targetCurrentRole = await ctx.db.get(targetMembership.roleId);
+    if (!targetCurrentRole || targetCurrentRole.orgId !== args.orgId || targetCurrentRole.isDeleted) {
+      throw new ConvexError("Target membership role not found or corrupted.");
+    }
+    if (isSystemOwnerRole(targetCurrentRole)) {
+      throw new ConvexError("The target member is already an owner.");
+    }
+
+    await ctx.db.patch(args.targetMembershipId, { roleId: ownerRole._id });
+    await ctx.db.patch(currentOwnerMembership._id, { roleId: args.currentOwnerNewRoleId });
+
+    await notifyUser(ctx, args.orgId, targetMembership.userId, "membership.role_changed", {
+      roleName: ownerRole.name,
+    });
+    await notifyUser(ctx, args.orgId, user._id, "membership.role_changed", {
+      roleName: currentOwnerNewRole.name,
+    });
   },
 });
 
@@ -223,53 +532,46 @@ export const removeMembershipInternal = internalMutation({
     membershipId: v.id("memberships"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_USERS]);
+    const { user: callingUser } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_USERS]);
 
     const membership = await ctx.db.get(args.membershipId);
     if (!membership || membership.orgId !== args.orgId) {
       throw new ConvexError("Membership not found in this organization.");
     }
+    if (membership.offboardingStatus) {
+      const existingJob = await ctx.db
+        .query("membershipOffboardingJobs")
+        .withIndex("by_membership", (q) => q.eq("membershipId", membership._id))
+        .first();
+      if (existingJob && existingJob.status !== "SUCCEEDED") {
+        await ctx.scheduler.runAfter(0, internal.memberships.processMembershipOffboardingJob, {
+          jobId: existingJob._id,
+        });
+        return {
+          jobId: existingJob._id,
+          status: existingJob.status,
+          requiresClerkUserDeletion: existingJob.requiresClerkUserDeletion,
+        };
+      }
+      throw new ConvexError("Membership removal is already in progress.");
+    }
 
     // Prevent removing the last OWNER
     const memberRole = await ctx.db.get(membership.roleId);
-    if (memberRole?.name === "OWNER") {
-      const allMemberships = await ctx.db
-        .query("memberships")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .collect();
-
-      let ownerCount = 0;
-      for (const m of allMemberships) {
-        const r = await ctx.db.get(m.roleId);
-        if (r?.name === "OWNER") ownerCount++;
-      }
-
-      if (ownerCount <= 1) {
+    if (isSystemOwnerRole(memberRole)) {
+      await requireRealOwner(ctx, args.orgId);
+      if (await countOwners(ctx, args.orgId) <= 1) {
         throw new ConvexError(
           "Cannot remove the last owner. Transfer ownership to another member first."
         );
       }
     }
 
-    const user = await ctx.db.get(membership.userId);
-
-    await ctx.db.delete(args.membershipId);
-
-    // Only delete the Convex user record and Clerk account if this was
-    // their last org membership. Multi-org users must not be evicted globally.
-    if (user) {
-      const remaining = await ctx.db
-        .query("memberships")
-        .withIndex("by_user", (q) => q.eq("userId", user._id))
-        .collect();
-
-      if (remaining.length === 0) {
-        await ctx.db.delete(user._id);
-        return user.clerkId;
-      }
-    }
-
-    return null;
+    return await createOrReuseMembershipOffboardingJob(ctx, {
+      orgId: args.orgId,
+      membershipId: args.membershipId,
+      requestedBy: callingUser._id,
+    });
   },
 });
 
@@ -279,29 +581,246 @@ export const remove = action({
     membershipId: v.id("memberships"),
   },
   handler: async (ctx, args) => {
-    const clerkId = await ctx.runMutation(internal.memberships.removeMembershipInternal, args);
+    const result: MembershipOffboardingJobResult = await ctx.runMutation(
+      internal.memberships.removeMembershipInternal,
+      args
+    );
+    return result;
+  }
+});
 
-    if (clerkId) {
-      const clerkSecret = process.env.CLERK_SECRET_KEY;
-      if (clerkSecret) {
-        try {
-          const res = await fetch(`https://api.clerk.com/v1/users/${clerkId}`, {
-            method: "DELETE",
-            headers: {
-              "Authorization": `Bearer ${clerkSecret}`
-            }
-          });
-          
-          if (!res.ok) {
-            throw new ConvexError("User removed from DB, but failed to remove from authentication provider.");
-          }
-        } catch (error) {
-          if (error instanceof ConvexError) throw error;
-          throw new ConvexError("Failed to connect to authentication provider to remove user.");
-        }
+export const getMembershipOffboardingJob = internalQuery({
+  args: {
+    jobId: v.id("membershipOffboardingJobs"),
+  },
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    if (!job) return null;
+
+    const membership = await ctx.db.get(job.membershipId);
+    const user = await ctx.db.get(job.userId);
+    const memberships = await ctx.db
+      .query("memberships")
+      .withIndex("by_user", (q) => q.eq("userId", job.userId))
+      .collect();
+    const otherMembershipCount = memberships.filter((m) => m._id !== job.membershipId).length;
+
+    return {
+      ...job,
+      membershipExists: Boolean(membership),
+      clerkIdForDeletion: user?.clerkId ?? job.clerkId ?? null,
+      requiresClerkUserDeletionNow: Boolean(user && otherMembershipCount === 0),
+    };
+  },
+});
+
+export const listDueMembershipOffboardingJobs = internalQuery({
+  args: {
+    now: v.number(),
+    limit: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const limit = Math.max(1, Math.min(args.limit, MEMBERSHIP_OFFBOARDING_DRAIN_LIMIT));
+    const pending = await ctx.db
+      .query("membershipOffboardingJobs")
+      .withIndex("by_status_and_nextAttemptAt", (q) =>
+        q.eq("status", "PENDING").lte("nextAttemptAt", args.now)
+      )
+      .take(limit);
+    const retrying = await ctx.db
+      .query("membershipOffboardingJobs")
+      .withIndex("by_status_and_nextAttemptAt", (q) =>
+        q.eq("status", "RETRYING").lte("nextAttemptAt", args.now)
+      )
+      .take(limit);
+
+    return [...pending, ...retrying].slice(0, limit).map((job) => ({ _id: job._id }));
+  },
+});
+
+export const recordMembershipOffboardingRetry = internalMutation({
+  args: {
+    jobId: v.id("membershipOffboardingJobs"),
+    error: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    if (!job || job.status === "SUCCEEDED") return null;
+
+    const now = Date.now();
+    const attempts = job.attempts + 1;
+    const delayMs = nextOffboardingRetryDelay(attempts);
+    const nextAttemptAt = now + delayMs;
+    const cleanError = args.error.slice(0, 500);
+
+    await ctx.db.patch(job._id, {
+      status: "RETRYING",
+      attempts,
+      lastAttemptAt: now,
+      lastError: cleanError,
+      nextAttemptAt,
+      updatedAt: now,
+    });
+
+    const membership = await ctx.db.get(job.membershipId);
+    if (membership) {
+      await ctx.db.patch(membership._id, {
+        offboardingStatus: "EXTERNAL_REMOVAL_RETRYING",
+        offboardingAttempts: attempts,
+        offboardingLastAttemptAt: now,
+        offboardingLastError: cleanError,
+        offboardingNextRetryAt: nextAttemptAt,
+      });
+    }
+
+    await ctx.scheduler.runAfter(delayMs, internal.memberships.processMembershipOffboardingJob, {
+      jobId: job._id,
+    });
+
+    return { attempts, nextAttemptAt };
+  },
+});
+
+export const finalizeMembershipOffboardingJob = internalMutation({
+  args: {
+    jobId: v.id("membershipOffboardingJobs"),
+    clerkUserDeleted: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const job = await ctx.db.get(args.jobId);
+    if (!job || job.status === "SUCCEEDED") return null;
+
+    const membership = await ctx.db.get(job.membershipId);
+    if (membership) {
+      await ctx.db.delete(membership._id);
+    }
+
+    const remainingMemberships = await ctx.db
+      .query("memberships")
+      .withIndex("by_user", (q) => q.eq("userId", job.userId))
+      .collect();
+    if (remainingMemberships.length === 0 && args.clerkUserDeleted) {
+      const user = await ctx.db.get(job.userId);
+      if (user) {
+        await ctx.db.delete(user._id);
       }
     }
-  }
+
+    const now = Date.now();
+    await ctx.db.patch(job._id, {
+      status: "SUCCEEDED",
+      requiresClerkUserDeletion: args.clerkUserDeleted,
+      nextAttemptAt: now,
+      updatedAt: now,
+      succeededAt: now,
+    });
+
+    return { status: "SUCCEEDED" };
+  },
+});
+
+export const processMembershipOffboardingJob = internalAction({
+  args: {
+    jobId: v.id("membershipOffboardingJobs"),
+  },
+  handler: async (ctx, args) => {
+    const job: MembershipOffboardingJobSnapshot = await ctx.runQuery(
+      internal.memberships.getMembershipOffboardingJob,
+      { jobId: args.jobId }
+    );
+    if (!job || job.status === "SUCCEEDED") return null;
+
+    if (!job.membershipExists && !job.requiresClerkUserDeletionNow) {
+      await ctx.runMutation(internal.memberships.finalizeMembershipOffboardingJob, {
+        jobId: args.jobId,
+        clerkUserDeleted: false,
+      });
+      return { status: "SUCCEEDED" };
+    }
+
+    let clerkUserDeleted = false;
+    if (job.requiresClerkUserDeletionNow) {
+      const clerkSecret = process.env.CLERK_SECRET_KEY;
+      if (!clerkSecret) {
+        console.error("Membership offboarding cannot delete Clerk user: CLERK_SECRET_KEY is not configured.");
+        await ctx.runMutation(internal.memberships.recordMembershipOffboardingRetry, {
+          jobId: args.jobId,
+          error: "Authentication provider cleanup is not configured.",
+        });
+        return { status: "RETRYING" };
+      }
+
+      if (!job.clerkIdForDeletion) {
+        console.error("Membership offboarding cannot delete Clerk user: no Clerk id is available.", {
+          jobId: args.jobId,
+          userId: job.userId,
+        });
+        await ctx.runMutation(internal.memberships.recordMembershipOffboardingRetry, {
+          jobId: args.jobId,
+          error: "Authentication provider identity is missing.",
+        });
+        return { status: "RETRYING" };
+      }
+
+      try {
+        const res = await fetch(`https://api.clerk.com/v1/users/${job.clerkIdForDeletion}`, {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${clerkSecret}`,
+          },
+        });
+
+        if (!res.ok && res.status !== 404) {
+          const body = await res.text().catch(() => "");
+          console.error("Membership offboarding Clerk delete failed.", {
+            jobId: args.jobId,
+            status: res.status,
+            body: body.slice(0, 500),
+          });
+          await ctx.runMutation(internal.memberships.recordMembershipOffboardingRetry, {
+            jobId: args.jobId,
+            error: "Authentication provider cleanup failed.",
+          });
+          return { status: "RETRYING" };
+        }
+
+        clerkUserDeleted = true;
+      } catch (error) {
+        console.error("Membership offboarding Clerk delete request failed.", {
+          jobId: args.jobId,
+          error: normalizeOffboardingError(error),
+        });
+        await ctx.runMutation(internal.memberships.recordMembershipOffboardingRetry, {
+          jobId: args.jobId,
+          error: "Authentication provider cleanup failed.",
+        });
+        return { status: "RETRYING" };
+      }
+    }
+
+    await ctx.runMutation(internal.memberships.finalizeMembershipOffboardingJob, {
+      jobId: args.jobId,
+      clerkUserDeleted,
+    });
+
+    return { status: "SUCCEEDED" };
+  },
+});
+
+export const drainDueMembershipOffboardingJobs = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    const dueJobs: Array<{ _id: Id<"membershipOffboardingJobs"> }> = await ctx.runQuery(
+      internal.memberships.listDueMembershipOffboardingJobs,
+      { now: Date.now(), limit: MEMBERSHIP_OFFBOARDING_DRAIN_LIMIT }
+    );
+
+    for (const job of dueJobs) {
+      await ctx.runAction(internal.memberships.processMembershipOffboardingJob, { jobId: job._id });
+    }
+
+    return { processed: dueJobs.length };
+  },
 });
 
 /**
@@ -316,19 +835,8 @@ export const leave = mutation({
     const { user, membership, role } = await requireTenantAuth(ctx, args.orgId);
 
     // Prevent the last OWNER from leaving
-    if (role.name === "OWNER") {
-      const allMemberships = await ctx.db
-        .query("memberships")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .collect();
-
-      let ownerCount = 0;
-      for (const m of allMemberships) {
-        const r = await ctx.db.get(m.roleId);
-        if (r?.name === "OWNER") ownerCount++;
-      }
-
-      if (ownerCount <= 1) {
+    if (isSystemOwnerRole(role)) {
+      if (await countOwners(ctx, args.orgId) <= 1) {
         throw new ConvexError(
           "You are the last owner. Transfer ownership before leaving."
         );
@@ -360,14 +868,11 @@ export const prepareDirectAccount = internalMutation({
     roleId: v.id("roles"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_USERS]);
+    const { user: callingUser } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_USERS]);
 
-    const role = await ctx.db.get(args.roleId);
-    if (!role || role.orgId !== args.orgId) {
-      throw new ConvexError("The specified role does not belong to this organization.");
-    }
+    const role = await requireOwnerForOwnerRole(ctx, args.orgId, args.roleId);
 
-    const email = args.email.toLowerCase().trim();
+    const email = normalizeEmail(args.email);
 
     // Find the target user by email
     const targetUser = await ctx.db
@@ -388,22 +893,24 @@ export const prepareDirectAccount = internalMutation({
       }
     }
 
-    // Check if they are already invited
-    const existingInvite = await ctx.db
-      .query("invitations")
-      .withIndex("by_email", (q) => q.eq("email", email))
-      .filter((q) => q.eq(q.field("orgId"), args.orgId))
-      .first();
+    const existingInvite = await findReusablePendingInvitation(ctx, args.orgId, email);
 
     if (existingInvite) {
       throw new ConvexError("An invitation is already pending for this email. Delete it first if you want to recreate.");
     }
 
+    const now = Date.now();
     return await ctx.db.insert("invitations", {
       orgId: args.orgId,
       email,
       roleId: args.roleId,
-      createdAt: Date.now(),
+      createdBy: callingUser._id,
+      status: "PENDING",
+      source: "DIRECT_ACCOUNT",
+      expiresAt: now + DIRECT_ACCOUNT_INVITATION_TTL_MS,
+      updatedAt: now,
+      ...(isSystemOwnerRole(role) ? { ownerRoleAuthorizedAt: now } : {}),
+      createdAt: now,
     });
   }
 });
@@ -411,7 +918,12 @@ export const prepareDirectAccount = internalMutation({
 export const rollbackDirectAccount = internalMutation({
   args: { inviteId: v.id("invitations") },
   handler: async (ctx, args) => {
-    await ctx.db.delete(args.inviteId);
+    const invite = await ctx.db.get(args.inviteId);
+    if (!invite || invitationStatus(invite) !== "PENDING") return;
+    await ctx.db.patch(args.inviteId, {
+      status: "REVOKED",
+      updatedAt: Date.now(),
+    });
   }
 });
 
@@ -614,6 +1126,62 @@ export const checkEmailExists = action({
   }
 });
 
+export const acceptInvitation = mutation({
+  args: {
+    token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await requireAuth(ctx);
+    const token = args.token.trim();
+    if (token.length < 32) {
+      throw new ConvexError("Invitation is no longer valid.");
+    }
+
+    const tokenHash = await hashInvitationToken(token);
+    const invite = await ctx.db
+      .query("invitations")
+      .withIndex("by_tokenHash", (q) => q.eq("tokenHash", tokenHash))
+      .unique();
+
+    if (!invite || invite.source !== "EMAIL_INVITE") {
+      throw new ConvexError("Invitation is no longer valid.");
+    }
+    if (invitationStatus(invite) === "PENDING" && (!invite.expiresAt || invite.expiresAt <= Date.now())) {
+      await expireInvitation(ctx, invite, Date.now());
+      return { status: "expired", orgId: invite.orgId };
+    }
+
+    await assertInvitationCanBeAccepted(ctx, invite, user.email);
+
+    const existingMembership = await ctx.db
+      .query("memberships")
+      .withIndex("by_org_user", (q) => q.eq("orgId", invite.orgId).eq("userId", user._id))
+      .unique();
+
+    if (existingMembership?.offboardingStatus) {
+      throw new ConvexError("This account is still being removed from the organization.");
+    }
+
+    if (!existingMembership) {
+      await ctx.db.insert("memberships", {
+        orgId: invite.orgId,
+        userId: user._id,
+        roleId: invite.roleId,
+      });
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(invite._id, {
+      status: "ACCEPTED",
+      acceptedAt: now,
+      acceptedBy: user._id,
+      updatedAt: now,
+    });
+
+    return { status: "accepted", orgId: invite.orgId };
+  },
+});
+
 
 /**
  * Re-applies the default permission template to all standard roles in the org.
@@ -680,6 +1248,9 @@ export const updateCommissionRate = mutation({
     if (!membership || membership.orgId !== args.orgId) {
       throw new ConvexError("Membership not found in this organization.");
     }
+    if (membership.offboardingStatus) {
+      throw new ConvexError("Membership removal is already in progress.");
+    }
 
     if (args.commissionRate < 0 || args.commissionRate > 100) {
       throw new ConvexError("Commission rate must be between 0 and 100.");
@@ -703,6 +1274,15 @@ export const finalizeDirectAccount = internalMutation({
     inviteId: v.id("invitations"),
   },
   handler: async (ctx, args) => {
+    const invite = await ctx.db.get(args.inviteId);
+    if (!invite || invite.orgId !== args.orgId || invite.roleId !== args.roleId) {
+      throw new ConvexError("Invitation not found or no longer valid.");
+    }
+    if (invite.source !== "DIRECT_ACCOUNT") {
+      throw new ConvexError("Invitation not found or no longer valid.");
+    }
+    await assertInvitationCanBeAccepted(ctx, invite, args.email);
+
     // Upsert User
     const existingUser = await ctx.db
       .query("users")
@@ -742,10 +1322,12 @@ export const finalizeDirectAccount = internalMutation({
       });
     }
 
-    // Clean up Invitation
-    const invite = await ctx.db.get(args.inviteId);
-    if (invite) {
-      await ctx.db.delete(args.inviteId);
-    }
+    const now = Date.now();
+    await ctx.db.patch(args.inviteId, {
+      status: "ACCEPTED",
+      acceptedAt: now,
+      acceptedBy: userId,
+      updatedAt: now,
+    });
   }
 });

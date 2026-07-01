@@ -112,10 +112,52 @@ export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 
 /** All defined permission values as an array — useful for the OWNER role. */
 export const ALL_PERMISSIONS: Permission[] = Object.values(PERMISSIONS);
+const ALL_PERMISSION_VALUES = new Set<string>(ALL_PERMISSIONS);
+
+export const SYSTEM_OWNER_ROLE_NAME = "OWNER";
+
+type RoleLike = {
+  name: string;
+  permissions: string[];
+  isDeleted?: boolean;
+  isSystemOwnerRole?: boolean;
+};
+
+export function normalizeRoleName(name: string): string {
+  return name.trim().replace(/\s+/g, " ").toUpperCase();
+}
+
+export function isReservedRoleName(name: string): boolean {
+  return normalizeRoleName(name) === SYSTEM_OWNER_ROLE_NAME;
+}
+
+export function getInvalidPermissions(permissions: readonly string[]): string[] {
+  return permissions.filter((permission) => !ALL_PERMISSION_VALUES.has(permission));
+}
+
+export function dedupePermissions<T extends string>(permissions: readonly T[]): T[] {
+  return Array.from(new Set(permissions));
+}
+
+function hasEveryDefinedPermission(permissions: readonly string[]): boolean {
+  const permissionSet = new Set(permissions);
+  return ALL_PERMISSIONS.every((permission) => permissionSet.has(permission));
+}
+
+/**
+ * OWNER is a system role, not a mutable display-name convention. The fallback
+ * keeps old seeded OWNER rows working until the backfill marks them explicitly.
+ */
+export function isSystemOwnerRole(role: RoleLike | null | undefined): boolean {
+  if (!role || role.isDeleted) return false;
+  if (role.isSystemOwnerRole === true) return true;
+  if (role.isSystemOwnerRole === false) return false;
+  return role.name === SYSTEM_OWNER_ROLE_NAME && hasEveryDefinedPermission(role.permissions);
+}
 
 export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }[] = [
   {
-    name: "OWNER",
+    name: SYSTEM_OWNER_ROLE_NAME,
     permissions: [...ALL_PERMISSIONS],
   },
   {
