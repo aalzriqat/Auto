@@ -173,11 +173,23 @@ export const logWebhookEvent = internalMutation({
 export const retryWebhookEvent = mutation({
   args: { webhookLogId: v.id("webhookLogs") },
   handler: async (ctx, args) => {
-    await requireSuperAdmin(ctx);
+    const admin = await requireSuperAdmin(ctx);
     const log = await ctx.db.get(args.webhookLogId);
     if (!log) throw new Error("Webhook log not found.");
     if (log.status === "success") throw new Error("Cannot retry a successfully-processed event.");
-    await ctx.db.patch(args.webhookLogId, { status: "received", error: undefined });
+    await ctx.db.patch(args.webhookLogId, {
+      status: "received",
+      error: undefined,
+      lastReceivedAt: Date.now(),
+    });
+    await ctx.db.insert("adminAuditLog", {
+      actorUserId: admin._id,
+      actorEmail: admin.email,
+      action: "webhook.retry",
+      targetTable: "webhookLogs",
+      targetId: args.webhookLogId,
+      createdAt: Date.now(),
+    });
   },
 });
 
@@ -200,10 +212,18 @@ export const getStuckWebhookIds = internalQuery({
   args: {},
   handler: async (ctx) => {
     const cutoff = Date.now() - TWO_HOURS_MS;
+    // Use the index to pre-filter by createdAt; then verify lastReceivedAt
+    // (if set) so events that received a late retry don't get re-flagged.
     const rows = await ctx.db
       .query("webhookLogs")
       .withIndex("by_status_createdAt", (q) =>
         q.eq("status", "received").lte("createdAt", cutoff)
+      )
+      .filter((q) =>
+        q.or(
+          q.eq(q.field("lastReceivedAt"), undefined),
+          q.lte(q.field("lastReceivedAt"), cutoff)
+        )
       )
       .take(200);
     return rows.map((r) => r._id);
@@ -213,6 +233,11 @@ export const getStuckWebhookIds = internalQuery({
 export const markWebhookDeadLetter = internalMutation({
   args: { webhookLogId: v.id("webhookLogs") },
   handler: async (ctx, args) => {
+    const log = await ctx.db.get(args.webhookLogId);
+    if (!log || log.status !== "received") return; // already processed or retried — skip
+    const cutoff = Date.now() - TWO_HOURS_MS;
+    const lastActivity = log.lastReceivedAt ?? log.createdAt;
+    if (lastActivity > cutoff) return; // received a late retry between scan and mark — skip
     await ctx.db.patch(args.webhookLogId, {
       status: "dead_letter",
       error: "Processing timed out — event stuck in received state for >2 hours.",

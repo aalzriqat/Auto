@@ -1675,12 +1675,16 @@ export default defineSchema({
     // Undefined = use the built-in copy from socialSmartReplyEn / socialSmartReplyAr.
     smartReplyCustomTemplatesEn: v.optional(v.string()),
     smartReplyCustomTemplatesAr: v.optional(v.string()),
+    // Client-safe picker list: id + name only (no tokens).
     // Populated by exchangeCodeForToken when the user manages >1 Facebook Page.
-    // Cleared after selectFacebookPage completes. Frontend shows a picker while
-    // this is set and facebookPageId is absent, allowing the org admin to choose
-    // which Page to connect instead of always defaulting to pages[0].
+    // Cleared after selectFacebookPage completes.
     facebookAvailablePages: v.optional(
-      v.array(v.object({ id: v.string(), name: v.string(), access_token: v.string() }))
+      v.array(v.object({ id: v.string(), name: v.string() }))
+    ),
+    // Server-only pending credentials — includes access tokens; never sent to clients.
+    // Cleared after selectFacebookPage completes.
+    facebookPendingCredentials: v.optional(
+      v.array(v.object({ id: v.string(), name: v.string(), token: v.string() }))
     ),
   })
     .index("by_org", ["orgId"])
@@ -1781,7 +1785,7 @@ export default defineSchema({
     .index("by_org_settings_form", ["orgId", "websiteSettingsId", "formType"]),
 
   websiteLeadAbuseEvents: defineTable({
-    orgId: v.optional(v.id("organizations")),
+    orgId: v.id("organizations"),
     host: v.string(),
     formType: v.string(),
     reason: v.union(
@@ -1801,7 +1805,7 @@ export default defineSchema({
     .index("by_reason_createdAt", ["reason", "createdAt"]),
 
   websiteLeadBlocklist: defineTable({
-    orgId: v.optional(v.id("organizations")),
+    orgId: v.id("organizations"),
     host: v.optional(v.string()),
     kind: v.union(
       v.literal("fingerprint"),
@@ -1810,7 +1814,7 @@ export default defineSchema({
       v.literal("emailDomain"),
       v.literal("phone")
     ),
-    value: v.string(),
+    valueHash: v.string(),
     reason: v.optional(v.string()),
     expiresAt: v.optional(v.number()),
     createdAt: v.number(),
