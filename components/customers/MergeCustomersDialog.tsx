@@ -100,7 +100,7 @@ export function MergeCustomersDialog({ open, onOpenChange }: MergeCustomersDialo
   };
 
   const totalReassigned = preview
-    ? Object.values(preview.reassignedCounts).reduce((sum, n) => sum + n, 0)
+    ? Object.values(preview.reassignedCounts as Record<string, number>).reduce((sum: number, n: number) => sum + n, 0)
     : 0;
 
   return (
@@ -119,14 +119,14 @@ export function MergeCustomersDialog({ open, onOpenChange }: MergeCustomersDialo
             {candidates && candidates.length > 0 && (
               <div className="space-y-2">
                 <p className="text-sm font-medium">{t("PossibleDuplicates" as any) || "Possible duplicates"}</p>
-                {candidates.map((group, i) => (
+                {candidates.map((group: { firstName: string; lastName: string; customers: { _id: string; phone?: string; email?: string }[] }, i: number) => (
                   <div key={i} className="rounded-md border p-3 space-y-2">
                     <p className="text-sm font-semibold flex items-center gap-2">
                       <Users className="h-4 w-4 text-muted-foreground" />
                       {group.firstName} {group.lastName}
                     </p>
                     <div className="flex flex-wrap gap-2">
-                      {group.customers.map((c) => (
+                      {group.customers.map((c: { _id: string; phone?: string; email?: string }) => (
                         <span key={c._id} className="text-xs rounded-full border px-2 py-1 text-muted-foreground">
                           {c.phone || c.email || t("NoContactInfo" as any) || "No contact info"}
                         </span>
@@ -242,7 +242,7 @@ export function MergeCustomersDialog({ open, onOpenChange }: MergeCustomersDialo
                     {t("WillBeReassigned" as any) || "The following records will be reassigned to the surviving customer:"}
                   </p>
                   <ul className="list-disc ps-5 space-y-0.5">
-                    {Object.entries(preview.reassignedCounts)
+                    {Object.entries(preview.reassignedCounts as Record<string, number>)
                       .filter(([, count]) => count > 0)
                       .map(([table, count]) => (
                         <li key={table}>

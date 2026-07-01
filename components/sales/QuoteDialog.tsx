@@ -6,7 +6,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { Id } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { toast } from "@/components/ui/sonner";
@@ -93,7 +93,7 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
     });
 
     // 2. Active Finance Companies
-    const activeCompanies = financeCompanies.filter(c => c.isActive);
+    const activeCompanies = financeCompanies.filter((c: Doc<"financeCompanies">) => c.isActive);
     for (const company of activeCompanies) {
 
       const executionFees = company.adminFees || 0;
@@ -111,7 +111,7 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
         includesCommissionInDebt: company.includesCommissionInDebt,
       });
 
-      const actualValuation = valuations?.find(v => v.companyId === company._id)?.valuationAmount || 0;
+      const actualValuation = valuations?.find((v: Doc<"vehicleValuations">) => v.companyId === company._id)?.valuationAmount || 0;
       const maxLTV = company.maxFinancingLTV || 0;
 
       const maxFinancingAllowed = maxLTV > 0 && actualValuation > 0
@@ -125,7 +125,7 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
         ? result.financedAmount / (maxLTV / 100)
         : 0;
 
-      const companyRules = documentRules?.filter(r => r.companyId === company._id || !r.companyId) || [];
+      const companyRules = documentRules?.filter((r: Doc<"companyDocumentRules">) => r.companyId === company._id || !r.companyId) || [];
 
       results.push({
         companyId: company._id,
@@ -204,11 +204,11 @@ export function QuoteDialog({ open, onOpenChange, defaultVehicleId, defaultCusto
                         value={field.value}
                         onValueChange={(val) => {
                           field.onChange(val);
-                          const v = availableVehicles?.find(v => v._id === val);
+                          const v = availableVehicles?.find((v: Doc<"vehicles">) => v._id === val);
                           if (v) form.setValue("vehiclePrice", v.sellingPrice);
                         }}
                         placeholder={t("SelectVehicle" as any)}
-                        options={availableVehicles?.map((v) => ({
+                        options={availableVehicles?.map((v: Doc<"vehicles">) => ({
                           value: v._id,
                           label: `${v.year} ${v.make} ${v.model}`,
                           subLabel: `${v.sellingPrice.toLocaleString()} JOD`,

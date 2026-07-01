@@ -8,7 +8,7 @@ import { Bell, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/components/ui/sonner";
-import { Id } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 import Link from "next/link";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { renderNotification } from "@/lib/notifications/render";
@@ -37,7 +37,7 @@ export function NotificationsBell() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [dropdownRef]);
 
-  const unreadCount = notifications?.filter(n => !n.isRead).length || 0;
+  const unreadCount = notifications?.filter((n: Doc<"notifications">) => !n.isRead).length || 0;
   const prevUnreadCountRef = useRef(unreadCount);
 
   useEffect(() => {
@@ -153,7 +153,7 @@ export function NotificationsBell() {
               <div className="p-4 text-center text-sm text-muted-foreground">{t("NoNotifications")}</div>
             ) : (
               <div className="flex flex-col">
-                {notifications.map((notif) => {
+                {notifications.map((notif: Doc<"notifications">) => {
                   const { title, message } = renderNotif(notif);
                   const CategoryIcon = notif.category ? CATEGORY_ICONS[notif.category as keyof typeof CATEGORY_ICONS] : undefined;
                   return (

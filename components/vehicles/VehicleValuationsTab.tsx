@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { Id } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { toast } from "@/components/ui/sonner";
@@ -28,7 +28,7 @@ export function VehicleValuationsTab({ vehicleId }: VehicleValuationsTabProps) {
   useEffect(() => {
     if (valuations) {
       const initial: Record<string, string> = {};
-      valuations.forEach(v => {
+      valuations.forEach((v: Doc<"vehicleValuations">) => {
         initial[v.companyId] = v.valuationAmount.toString();
       });
       setLocalValuations(initial);
@@ -56,7 +56,7 @@ export function VehicleValuationsTab({ vehicleId }: VehicleValuationsTabProps) {
 
   if (!financeCompanies) return <div className="p-4">{t("Loading" as any) || "Loading..."}</div>;
 
-  const activeCompanies = financeCompanies.filter(c => c.isActive);
+  const activeCompanies = financeCompanies.filter((c: Doc<"financeCompanies">) => c.isActive);
 
   return (
     <div className="space-y-4 pt-4">
@@ -68,9 +68,9 @@ export function VehicleValuationsTab({ vehicleId }: VehicleValuationsTabProps) {
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        {activeCompanies.map((company) => {
+        {activeCompanies.map((company: Doc<"financeCompanies">) => {
           const val = localValuations[company._id] || "";
-          const originalVal = valuations?.find(v => v.companyId === company._id)?.valuationAmount?.toString() || "";
+          const originalVal = valuations?.find((v: Doc<"vehicleValuations">) => v.companyId === company._id)?.valuationAmount?.toString() || "";
           const isChanged = val !== originalVal;
 
           return (

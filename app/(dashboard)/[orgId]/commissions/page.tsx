@@ -77,15 +77,15 @@ export default function CommissionsPage() {
     if (!commissions) return [];
     if (!search) return commissions;
     const q = search.toLowerCase();
-    return commissions.filter(c =>
+    return commissions.filter((c: CommissionSale) =>
       c.salespersonName.toLowerCase().includes(q) ||
       c.vehicleSummary.toLowerCase().includes(q) ||
       c.customerName.toLowerCase().includes(q)
     );
   }, [commissions, search]);
 
-  const totalEarned = filtered.reduce((s, c) => s + (c.commissionAmount ?? 0), 0);
-  const totalPaid = filtered.filter(c => c.commissionPaidAt).reduce((s, c) => s + (c.commissionAmount ?? 0), 0);
+  const totalEarned = filtered.reduce((s: number, c: CommissionSale) => s + (c.commissionAmount ?? 0), 0);
+  const totalPaid = filtered.filter((c: CommissionSale) => c.commissionPaidAt).reduce((s: number, c: CommissionSale) => s + (c.commissionAmount ?? 0), 0);
   const totalPending = totalEarned - totalPaid;
 
   // Group by salesperson for summary
@@ -166,7 +166,7 @@ export default function CommissionsPage() {
             </CardHeader>
             <CardContent>
               <p className="text-2xl font-bold text-green-600">{formatCurrency(totalPaid)}</p>
-              <p className="text-xs text-muted-foreground mt-1">{filtered.filter(c => c.commissionPaidAt).length} {t("Paid" as any)}</p>
+              <p className="text-xs text-muted-foreground mt-1">{filtered.filter((c: CommissionSale) => c.commissionPaidAt).length} {t("Paid" as any)}</p>
             </CardContent>
           </Card>
           <Card>
@@ -176,7 +176,7 @@ export default function CommissionsPage() {
             </CardHeader>
             <CardContent>
               <p className="text-2xl font-bold text-orange-600">{formatCurrency(totalPending)}</p>
-              <p className="text-xs text-muted-foreground mt-1">{filtered.filter(c => !c.commissionPaidAt).length} {t("Unpaid" as any)}</p>
+              <p className="text-xs text-muted-foreground mt-1">{filtered.filter((c: CommissionSale) => !c.commissionPaidAt).length} {t("Unpaid" as any)}</p>
             </CardContent>
           </Card>
         </div>
@@ -220,7 +220,7 @@ export default function CommissionsPage() {
               placeholder={t("AllSalespeople" as any)}
               options={[
                 { value: "all", label: t("AllSalespeople" as any) },
-                ...(members?.page.map(m => ({ value: m.userId, label: m.userName })) ?? []),
+                ...(members?.page.map((m: { userId: string; userName: string }) => ({ value: m.userId, label: m.userName })) ?? []),
               ]}
             />
           )}
@@ -265,7 +265,7 @@ export default function CommissionsPage() {
                   </TableCell>
                 </TableRow>
               ) : (
-                filtered.map(c => (
+                filtered.map((c: CommissionSale) => (
                   <TableRow key={c._id}>
                     <TableCell className="font-medium">{c.salespersonName}</TableCell>
                     <TableCell>{c.vehicleSummary}</TableCell>

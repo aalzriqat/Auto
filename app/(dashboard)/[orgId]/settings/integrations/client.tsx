@@ -950,8 +950,8 @@ export function IntegrationsClient() {
                         </SelectTrigger>
                         <SelectContent>
                           {(financeCompanies ?? [])
-                            .filter((c) => c.isActive)
-                            .map((c) => (
+                            .filter((c: { _id: string; isActive: boolean; name: string }) => c.isActive)
+                            .map((c: { _id: string; isActive: boolean; name: string }) => (
                               <SelectItem key={c._id} value={c._id}>
                                 {c.name}
                               </SelectItem>

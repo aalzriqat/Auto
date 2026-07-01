@@ -2,7 +2,7 @@
 
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { Id } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -57,7 +57,7 @@ export function CustomFieldsSection({ orgId, entityType, entityId, onChange }: P
     onChange?.(values);
   }, [values]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const activeFields = fields?.filter((f) => f.isActive) ?? [];
+  const activeFields = fields?.filter((f: Doc<"orgCustomFields">) => f.isActive) ?? [];
   if (activeFields.length === 0) return null;
 
   const handleChange = (fieldId: string, value: string) => {
@@ -71,7 +71,7 @@ export function CustomFieldsSection({ orgId, entityType, entityId, onChange }: P
         Additional Fields
       </p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {activeFields.map((field) => (
+        {activeFields.map((field: Doc<"orgCustomFields">) => (
           <div key={field._id} className="space-y-1">
             <Label>
               {field.fieldName}
@@ -86,7 +86,7 @@ export function CustomFieldsSection({ orgId, entityType, entityId, onChange }: P
                   <SelectValue placeholder={`Select ${field.fieldName}`} />
                 </SelectTrigger>
                 <SelectContent>
-                  {field.options?.map((opt) => (
+                  {field.options?.map((opt: string) => (
                     <SelectItem key={opt} value={opt}>{opt}</SelectItem>
                   ))}
                 </SelectContent>

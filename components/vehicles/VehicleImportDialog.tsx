@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { Doc } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { ImportWizard, ImportFieldConfig, ImportRow, normalizeKey } from "@/components/import/ImportWizard";
@@ -293,7 +294,7 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
         valuationHeaders.forEach((h) => {
           const name = h.trim();
           if (!name) return;
-          const match = companies.find((c) => c.name.trim() === name);
+          const match = companies.find((c: Doc<"financeCompanies">) => c.name.trim() === name);
           const key = match
             ? `${EXISTING_COMPANY_PREFIX}${match._id}:${name}`
             : `${NEW_COMPANY_PREFIX}${name}`;

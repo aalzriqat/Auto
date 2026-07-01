@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { Id } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -94,7 +94,7 @@ export function DocumentRuleDialog({ open, onOpenChange }: DocumentRuleDialogPro
               placeholder={t("Select scope" as any)}
               options={[
                 { value: "GLOBAL", label: t("All Finance Companies" as any) },
-                ...(companies?.map(c => ({ value: c._id, label: c.name })) ?? []),
+                ...(companies?.map((c: Doc<"financeCompanies">) => ({ value: c._id, label: c.name })) ?? []),
               ]}
             />
           </div>

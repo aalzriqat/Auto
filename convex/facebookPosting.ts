@@ -39,7 +39,7 @@ export const publishToFacebook = internalAction({
       const imageUrls = await ctx.runQuery(internal.socialPostingData.getImageUrls, {
         storageIds: post.imageStorageIds,
       });
-      if (imageUrls.some((url) => !url)) {
+      if (imageUrls.some((url: string | null) => !url)) {
         throw new ConvexError("One or more selected photos could not be resolved to a public URL.");
       }
 

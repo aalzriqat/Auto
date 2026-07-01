@@ -13,9 +13,18 @@ import { Truck, CheckCircle2, Clock, AlertCircle } from "lucide-react";
 import { format } from "date-fns";
 import { toast } from "@/components/ui/sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Doc } from "@/convex/_generated/dataModel";
 import { Textarea } from "@/components/ui/textarea";
 
 type StatusFilter = "PENDING" | "PAID" | "ALL";
+
+type SourcingPayable = Doc<"vehicleSupplierPayables"> & {
+  vehicleDesc: string;
+  vehicleVin?: string;
+  customerName: string | null;
+  paidByName: string | null | undefined;
+  daysOutstanding: number;
+};
 
 export function SourcingClient() {
   const { activeOrgId } = useOrg();
@@ -62,8 +71,8 @@ export function SourcingClient() {
   };
 
   // Summary stats always reflect the full dataset, not the current filter.
-  const allPending = allPayables?.filter((p) => p.status === "PENDING") ?? [];
-  const totalOwed = allPending.reduce((sum, p) => sum + p.amountDue, 0);
+  const allPending = allPayables?.filter((p: SourcingPayable) => p.status === "PENDING") ?? [];
+  const totalOwed = allPending.reduce((sum: number, p: SourcingPayable) => sum + p.amountDue, 0);
 
   return (
     <div className="flex-1 space-y-6 p-4 md:p-8 pt-6">
@@ -88,7 +97,7 @@ export function SourcingClient() {
           <CardContent className="pt-4">
             <p className="text-sm text-muted-foreground">{t("OldestOutstanding" as any)}</p>
             <p className="text-2xl font-bold">
-              {allPending.length > 0 ? Math.max(...allPending.map((p) => p.daysOutstanding)) : 0} {t("Days" as any)}
+              {allPending.length > 0 ? Math.max(...allPending.map((p: SourcingPayable) => p.daysOutstanding)) : 0} {t("Days" as any)}
             </p>
           </CardContent>
         </Card>
@@ -146,7 +155,7 @@ export function SourcingClient() {
                   </TableCell>
                 </TableRow>
               ) : (
-                payables.map((p) => (
+                payables.map((p: SourcingPayable) => (
                   <TableRow key={p._id}>
                     <TableCell className="font-medium">{p.vehicleDesc}</TableCell>
                     <TableCell>{p.sourcedFromName}</TableCell>

@@ -110,7 +110,7 @@ function SupportConsoleImpl() {
   // is still pending — like an incoming call — until it's accepted/rejected/expires.
   const knownOfferIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    const ids = new Set((queue?.offeredToMe ?? []).map((t) => t._id as string));
+    const ids = new Set<string>((queue?.offeredToMe ?? []).map((t: { _id: string }) => t._id));
     let hasNew = false;
     for (const id of ids) {
       if (!knownOfferIdsRef.current.has(id)) hasNew = true;
@@ -142,7 +142,7 @@ function SupportConsoleImpl() {
   return (
     <div className="flex h-full gap-4">
       <div className="w-80 shrink-0 overflow-y-auto flex flex-col gap-4">
-        {queue?.offeredToMe.map((thread) => (
+        {queue?.offeredToMe.map((thread: any) => (
           <OfferedCard key={thread._id} thread={thread} />
         ))}
 
@@ -150,7 +150,7 @@ function SupportConsoleImpl() {
           <p className="text-xs font-medium uppercase tracking-wide text-slate-400 mb-2">My active chats</p>
           <Card className="overflow-hidden p-0">
             {myActive?.length === 0 && <p className="text-sm text-slate-500 p-4">No active chats.</p>}
-            {myActive?.map((thread) => {
+            {myActive?.map((thread: any) => {
               const isUnread =
                 thread.lastMessageAt > (thread.agentLastReadAt ?? 0) && activeThreadId !== thread._id;
               return (
@@ -179,7 +179,7 @@ function SupportConsoleImpl() {
           <p className="text-xs font-medium uppercase tracking-wide text-slate-400 mb-2">Unassigned</p>
           <Card className="overflow-hidden p-0">
             {queue?.unassigned.length === 0 && <p className="text-sm text-slate-500 p-4">Nothing waiting.</p>}
-            {queue?.unassigned.map((thread) => (
+            {queue?.unassigned.map((thread: any) => (
               <div key={thread._id} className="flex items-center justify-between px-4 py-3 border-b border-slate-100 last:border-b-0">
                 <span className="flex items-center gap-1.5 min-w-0">
                   <span className="text-sm text-slate-700 truncate">
@@ -377,7 +377,7 @@ function ThreadView({ threadId, onClosed }: { threadId: Id<"liveChatThreads">; o
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 bg-slate-50/50">
-        {messages.map((m) =>
+        {messages.map((m: any) =>
           m.isSystem ? (
             <p key={m._id} className="self-center text-xs text-slate-400 italic">
               {m.bodyText}

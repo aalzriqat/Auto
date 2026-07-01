@@ -290,7 +290,7 @@ export const sendReply = action({
 
     await ctx.runMutation(internal.support.recordOutboundMessage, {
       threadId: args.threadId,
-      fromEmail: FROM_EMAIL[threadData.inbox],
+      fromEmail: FROM_EMAIL[threadData.inbox as Inbox],
       toEmail: threadData.participantEmail,
       bodyText: args.bodyText,
       resendEmailId: result.resendEmailId,

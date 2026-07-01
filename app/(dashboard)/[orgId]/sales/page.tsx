@@ -16,7 +16,7 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Id } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 
 export default function SalesHomePage() {
     const { activeOrgId } = useOrg();
@@ -286,7 +286,7 @@ export default function SalesHomePage() {
                             {t("PendingDeals" as any) ?? "Pending Deals"}
                         </h2>
                         <div className="space-y-2">
-                            {myPendingApprovals.map((approval) => (
+                            {myPendingApprovals.map((approval: Doc<"profitApprovalRequests"> & { vehicleSummary: string }) => (
                                 <div
                                     key={approval._id}
                                     className="flex items-center justify-between rounded-lg border border-amber-500/20 bg-amber-500/5 px-4 py-3"

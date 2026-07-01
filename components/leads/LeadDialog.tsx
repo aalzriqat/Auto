@@ -224,7 +224,7 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                         onValueChange={field.onChange}
                         placeholder={t("SelectVehicle" as any) || "Select a vehicle"}
                         noneLabel={t("NoSpecificVehicle" as any) || "No specific vehicle yet"}
-                        options={vehicles?.map((v) => ({
+                        options={vehicles?.map((v: Doc<"vehicles">) => ({
                           value: v._id,
                           label: `${v.year} ${v.make} ${v.model}`,
                           subLabel: `${v.vin} · ${v.sellingPrice.toLocaleString()} JOD${v.status === "RESERVED" ? " · Reserved (pending deal)" : ""}`,
@@ -274,7 +274,7 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                       </FormControl>
                       <SelectContent>
                         {(pipelineStages && pipelineStages.length > 0
-                          ? pipelineStages.filter((s) => s.isActive)
+                          ? pipelineStages.filter((s: Doc<"orgPipelineStages">) => s.isActive)
                           : [
                               { stageKey: "NEW", label: "New" },
                               { stageKey: "CONTACTED", label: "Contacted" },
@@ -285,7 +285,7 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                               { stageKey: "WON", label: "Won" },
                               { stageKey: "LOST", label: "Lost" },
                             ]
-                        ).map((s) => (
+                        ).map((s: { stageKey: string; label: string }) => (
                           <SelectItem key={s.stageKey} value={s.stageKey}>
                             {translatePipelineStageLabel(s.label, locale)}
                           </SelectItem>
@@ -311,7 +311,7 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                       </FormControl>
                       <SelectContent>
                         {(dynamicLeadSources && dynamicLeadSources.length > 0
-                          ? dynamicLeadSources.filter((s) => s.isActive)
+                          ? dynamicLeadSources.filter((s: Doc<"orgLeadSources">) => s.isActive)
                           : [
                               { label: "Walk-in" },
                               { label: "Website" },
@@ -321,7 +321,7 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                               { label: "Phone" },
                               { label: "Other" },
                             ]
-                        ).map((s) => (
+                        ).map((s: { label: string }) => (
                           <SelectItem key={s.label} value={s.label}>
                             {translateLeadSourceLabel(s.label, locale)}
                           </SelectItem>

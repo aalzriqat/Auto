@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { toast } from "@/components/ui/sonner";
 import { ChevronUp, ChevronDown, Loader2 } from "lucide-react";
-import { Id } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 import { translatePipelineStageLabel } from "@/lib/i18n/defaultLabels";
 
 export default function PipelineSettingsPage() {
@@ -76,7 +76,7 @@ export default function PipelineSettingsPage() {
 
   const handleMoveUp = async (index: number) => {
     if (!activeOrgId || !stages || index === 0) return;
-    const orderedIds = stages.map((s) => s._id);
+    const orderedIds = stages.map((s: Doc<"orgPipelineStages">) => s._id);
     [orderedIds[index - 1], orderedIds[index]] = [orderedIds[index], orderedIds[index - 1]];
     try {
       await reorderStages({ orgId: activeOrgId, orderedIds });
@@ -87,7 +87,7 @@ export default function PipelineSettingsPage() {
 
   const handleMoveDown = async (index: number) => {
     if (!activeOrgId || !stages || index === stages.length - 1) return;
-    const orderedIds = stages.map((s) => s._id);
+    const orderedIds = stages.map((s: Doc<"orgPipelineStages">) => s._id);
     [orderedIds[index], orderedIds[index + 1]] = [orderedIds[index + 1], orderedIds[index]];
     try {
       await reorderStages({ orgId: activeOrgId, orderedIds });
@@ -126,7 +126,7 @@ export default function PipelineSettingsPage() {
               {t("NoStagesYet" as any)}
             </div>
           ) : (
-            stages.map((stage, index) => {
+            stages.map((stage: Doc<"orgPipelineStages">, index: number) => {
               const currentLabel = editingLabel[stage._id] ?? translatePipelineStageLabel(stage.label, locale);
 
               return (

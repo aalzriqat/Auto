@@ -297,13 +297,13 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                                 value={field.value}
                                 onValueChange={(val) => {
                                   field.onChange(val);
-                                  const v = availableVehicles?.find(v => v._id === val);
+                                  const v = availableVehicles?.find((v: Doc<"vehicles">) => v._id === val);
                                   if (v && form.getValues("salePrice") === 0) {
                                     form.setValue("salePrice", v.sellingPrice);
                                   }
                                 }}
                                 placeholder={t("SelectVehicle" as any)}
-                                options={availableVehicles?.map((v) => ({
+                                options={availableVehicles?.map((v: Doc<"vehicles">) => ({
                                   value: v._id,
                                   label: `${v.year} ${v.make} ${v.model}`,
                                   subLabel: `${v.vin} · ${v.sellingPrice.toLocaleString()} JOD`,
@@ -452,7 +452,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                             onValueChange={field.onChange}
                             placeholder={t("SelectTradeIn" as any)}
                             noneLabel={t("None" as any)}
-                            options={availableVehicles?.map((v) => ({
+                            options={availableVehicles?.map((v: Doc<"vehicles">) => ({
                               value: v._id,
                               label: `${v.year} ${v.make} ${v.model}`,
                               subLabel: v.vin,

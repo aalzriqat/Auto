@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { Doc } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { marketingFaqCategories } from "@/lib/marketingFaq";
 import { playChatMessagePing } from "@/lib/chatSound";
@@ -206,7 +207,7 @@ function MarketingChatWidgetImpl() {
 
   const unreadCount =
     thread && messages
-      ? messages.filter((m) => m.senderType === "AGENT" && (!thread.dealerLastReadAt || m.createdAt > thread.dealerLastReadAt)).length
+      ? messages.filter((m: Doc<"liveChatMessages">) => m.senderType === "AGENT" && (!thread.dealerLastReadAt || m.createdAt > thread.dealerLastReadAt)).length
       : 0;
 
   const prevUnreadRef = useRef(0);
@@ -300,7 +301,7 @@ function MarketingChatWidgetImpl() {
           <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3 min-h-[280px]">
             {inLiveMode ? (
               <>
-                {messages?.map((m) =>
+                {messages?.map((m: Doc<"liveChatMessages">) =>
                   m.isSystem ? (
                     <p key={m._id} className="self-center text-[11px] text-white/40 italic">
                       {m.bodyText}

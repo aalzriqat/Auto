@@ -243,7 +243,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                         onValueChange={field.onChange}
                         placeholder={t("SelectVehicle" as any)}
                         noneLabel={t("GeneralNoVehicle" as any)}
-                        options={availableVehicles?.map((v) => ({
+                        options={availableVehicles?.map((v: Doc<"vehicles">) => ({
                           value: v._id,
                           label: `${v.year} ${v.make} ${v.model}`,
                           subLabel: (v.vin ?? "").slice(-6),

@@ -2,7 +2,7 @@
 
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { Id, Doc } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import {
@@ -49,7 +49,7 @@ export function VehicleHistoryDialog({ open, onOpenChange, vehicle }: VehicleHis
             <div className="text-center py-8 text-muted-foreground">{t("NoEditHistory" as any) || "No edit history found for this vehicle."}</div>
           ) : (
             <div className="space-y-6">
-              {history.map((edit) => (
+              {history.map((edit: Doc<"vehicleEdits"> & { requestedByName: string; resolvedByName?: string }) => (
                 <div key={edit._id} className="relative ps-6 pb-2 border-s-2 last:border-0 border-muted">
                   <div className="absolute -start-[9px] top-1 h-4 w-4 rounded-full bg-background border-2 border-primary" />
                   

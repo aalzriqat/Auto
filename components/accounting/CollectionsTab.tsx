@@ -408,7 +408,7 @@ export function CollectionsTab() {
                 <div className="text-sm font-semibold text-slate-700">{formatCurrency(chequeReport?.total ?? 0)}</div>
               </div>
               <div className="max-h-48 overflow-y-auto text-sm">
-                {(chequeReport?.rows ?? []).slice(0, 8).map((cheque) => (
+                {(chequeReport?.rows ?? []).slice(0, 8).map((cheque: { _id: string; customerName: string; bank: string; chequeNumber: string; amount: number }) => (
                   <div key={cheque._id} className="flex justify-between border-b border-slate-100 py-2">
                     <span>{cheque.customerName} · {cheque.bank} #{cheque.chequeNumber}</span>
                     <span className="font-medium">{formatCurrency(cheque.amount)}</span>

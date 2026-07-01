@@ -256,7 +256,7 @@ export function TaskDialog({ open, onOpenChange, task }: TaskDialogProps) {
                         onValueChange={field.onChange}
                         placeholder={t("SelectVehicle" as any) || "Select vehicle"}
                         noneLabel={t("GeneralTaskNoVehicle" as any) || "-- General Task (No Vehicle) --"}
-                        options={vehicles?.map((v) => ({
+                        options={vehicles?.map((v: Doc<"vehicles">) => ({
                           value: v._id,
                           label: `${v.year} ${v.make} ${v.model}`,
                           subLabel: v.vin,

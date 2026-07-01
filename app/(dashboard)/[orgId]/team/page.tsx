@@ -3,7 +3,7 @@
 import { useState, useRef } from "react";
 import { useQuery, useMutation, useAction, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { Id } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Button } from "@/components/ui/button";
@@ -318,7 +318,7 @@ export default function TeamPage() {
                       </TableCell>
                     </TableRow>
                   ) : (
-                    roles.map((role) => (
+                    roles.map((role: Doc<"roles">) => (
                       <TableRow key={role._id}>
                         <TableCell className="font-medium">
                           {t(role.name as any) || role.name}

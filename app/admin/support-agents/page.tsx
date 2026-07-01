@@ -93,7 +93,7 @@ export default function AdminSupportAgentsPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {agents?.map((agent) => (
+            {agents?.map((agent: (typeof agents)[number]) => (
               <TableRow key={agent._id}>
                 <TableCell className="font-medium">{agent.email}</TableCell>
                 <TableCell>{agent.name ?? "—"}</TableCell>

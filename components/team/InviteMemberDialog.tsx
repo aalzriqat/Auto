@@ -6,7 +6,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
 import { useQuery, useAction } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { Id } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { toast } from "@/components/ui/sonner";
 import {
@@ -239,7 +239,7 @@ export function InviteMemberDialog({ open, onOpenChange }: InviteMemberDialogPro
                         value={field.value}
                         onValueChange={field.onChange}
                         placeholder={t("SelectARole" as any)}
-                        options={roles?.map((r) => ({
+                        options={roles?.map((r: Doc<"roles">) => ({
                           value: r._id,
                           label: t(r.name as any) || r.name,
                         })) ?? []}

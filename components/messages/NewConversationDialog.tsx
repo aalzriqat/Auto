@@ -38,7 +38,8 @@ export function NewConversationDialog({
   const [groupName, setGroupName] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const filtered = (members ?? []).filter((m) =>
+  type OrgMember = { _id: Id<"users">; name?: string; email: string; imageUrl?: string; roleName?: string } | null;
+  const filtered = (members ?? [] as OrgMember[]).filter((m: OrgMember) =>
     m && (m.name?.toLowerCase().includes(search.toLowerCase()) ||
       m.email.toLowerCase().includes(search.toLowerCase()))
   );
@@ -95,7 +96,7 @@ export function NewConversationDialog({
           {selected.length > 0 && mode === "group" && (
             <div className="flex flex-wrap gap-1">
               {selected.map((uid) => {
-                const m = (members ?? []).find((x) => x?._id === uid);
+                const m = (members ?? [] as OrgMember[]).find((x: OrgMember) => x?._id === uid);
                 return (
                   <Badge key={uid} variant="secondary" className="gap-1 pe-1">
                     {m?.name ?? "…"}
@@ -118,7 +119,7 @@ export function NewConversationDialog({
           />
 
           <div className="max-h-60 overflow-y-auto space-y-1">
-            {filtered.map((m) => {
+            {filtered.map((m: OrgMember) => {
               if (!m) return null;
               const isSelected = selected.includes(m._id);
               return (

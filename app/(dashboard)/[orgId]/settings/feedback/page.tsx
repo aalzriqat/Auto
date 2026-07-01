@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Bug, Lightbulb, Loader2, ExternalLink, MessageSquare } from "lucide-react";
 import { format } from "date-fns";
+import { Doc } from "@/convex/_generated/dataModel";
 
 export default function FeedbackInboxPage() {
   const { activeOrgId } = useOrg();
@@ -86,7 +87,7 @@ export default function FeedbackInboxPage() {
         </div>
       ) : (
         <div className="space-y-3">
-          {items.map((item) => (
+          {items.map((item: Doc<"feedback">) => (
             <Card key={item._id} className={`border-border ${item.status === "CLOSED" ? "opacity-70" : ""}`}>
               <CardHeader className="pb-2">
                 <div className="flex items-start gap-2.5 flex-1 min-w-0">

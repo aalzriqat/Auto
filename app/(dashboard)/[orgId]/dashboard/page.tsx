@@ -143,7 +143,7 @@ export default function DashboardPage() {
     avatar: lead.customerName.substring(0, 2).toUpperCase()
   }));
 
-  const lineChartData = stats?.salesTrend?.length ? stats.salesTrend.map(t => ({ name: t.name, value: t.Revenue })) : [];
+  const lineChartData = stats?.salesTrend?.length ? stats.salesTrend.map((t: { name: string; Revenue: number }) => ({ name: t.name, value: t.Revenue })) : [];
   const trendRange = (stats?.salesTrend?.length || 0) > 1
     ? `${stats!.salesTrend![0].name} - ${stats!.salesTrend![stats!.salesTrend!.length - 1].name}`
     : timeRange === "DAY" ? t("Today") : timeRange === "MONTH" ? t("ThisMonth") : timeRange === "YEAR" ? t("ThisYear") : t("AllTime");
@@ -452,7 +452,7 @@ export default function DashboardPage() {
             {t("InventoryAging" as any)}
           </h3>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {agingBuckets.map((bucket) => (
+            {agingBuckets.map((bucket: { bucket: "0-30" | "31-60" | "61-90" | "90+"; count: number; avgDays: number }) => (
               <div
                 key={bucket.bucket}
                 className={`rounded-xl border px-4 py-3 ${agingColorByBucket[bucket.bucket]}`}

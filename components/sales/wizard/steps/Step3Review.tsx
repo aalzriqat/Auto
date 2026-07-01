@@ -59,13 +59,13 @@ export function Step3Review({
   );
 
   const selectedVehicle = availableVehicles?.find(
-    (v) => v._id === wizardData.vehicleId
+    (v: Doc<"vehicles">) => v._id === wizardData.vehicleId
   );
 
   const isManualFinance = wizardData.selectedCompanyId === OTHER_COMPANY_ID;
 
   const selectedCompany = financeCompanies?.find(
-    (c) => c._id === wizardData.selectedCompanyId
+    (c: Doc<"financeCompanies">) => c._id === wizardData.selectedCompanyId
   );
 
   const effectivePrice =
@@ -124,7 +124,7 @@ export function Step3Review({
 
     const companyDocs =
       documentRules?.filter(
-        (r) => r.companyId === selectedCompany._id || !r.companyId
+        (r: Doc<"companyDocumentRules">) => r.companyId === selectedCompany._id || !r.companyId
       ) || [];
 
     return {

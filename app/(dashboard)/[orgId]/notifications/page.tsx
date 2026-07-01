@@ -197,7 +197,7 @@ function PreferencesPanel({ orgId }: { orgId: Id<"organizations"> }) {
         </div>
         {preferences === undefined
           ? null
-          : preferences.map((pref) => {
+          : preferences.map((pref: { category: string; emailEnabled: boolean; whatsappEnabled: boolean }) => {
               const CategoryIcon = CATEGORY_ICONS[pref.category as NotificationCategory];
               return (
                 <div key={pref.category} className="grid grid-cols-[1fr_auto_auto] gap-4 items-center px-4 py-3">

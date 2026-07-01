@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { Doc } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Button } from "@/components/ui/button";
@@ -63,7 +64,7 @@ function LiveChatWidgetImpl() {
   const unreadCount =
     threadInfo?.thread && messages
       ? messages.filter(
-          (m) =>
+          (m: Doc<"liveChatMessages">) =>
             m.senderType === "AGENT" &&
             (!threadInfo.thread!.dealerLastReadAt || m.createdAt > threadInfo.thread!.dealerLastReadAt)
         ).length
@@ -265,7 +266,7 @@ function LiveChatWidgetImpl() {
                 />
               ) : (
                 <>
-                  {messages?.map((m) =>
+                  {messages?.map((m: Doc<"liveChatMessages">) =>
                     m.isSystem ? (
                       <p key={m._id} className="self-center text-[11px] text-muted-foreground italic">
                         {m.bodyText}

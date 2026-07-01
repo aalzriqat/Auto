@@ -88,7 +88,7 @@ export default function Step1QuoteSetup({
   const customerStatusOptions = useQuery(
     api.orgCustomerStatuses.list,
     activeOrgId ? { orgId: activeOrgId } : "skip"
-  )?.filter((s) => s.isActive) ?? [];
+  )?.filter((s: Doc<"orgCustomerStatuses">) => s.isActive) ?? [];
 
   // Fetch AVAILABLE+RESERVED stock vehicles and SOURCING vehicles separately,
   // then merge — SOURCING vehicles are created inline by the wizard and must
@@ -121,7 +121,7 @@ export default function Step1QuoteSetup({
   const watchedDown = form.watch("downPayment");
   const watchedTerm = form.watch("termMonths");
 
-  const selectedVehicle = availableVehicles?.find(v => v._id === watchedVehicleId);
+  const selectedVehicle = availableVehicles?.find((v: Doc<"vehicles">) => v._id === watchedVehicleId);
   const minimumProfit = selectedVehicle?.minimumProfit || 0;
   const isProfitBelowMinimum = !isCash && watchedVehicleId && Number(watchedProfit) < minimumProfit;
 
@@ -356,7 +356,7 @@ export default function Step1QuoteSetup({
               </p>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-4">
-                {customerStatusOptions.map((option) => (
+                {customerStatusOptions.map((option: Doc<"orgCustomerStatuses">) => (
                   <div key={option._id} className="flex items-center gap-2 rounded-md border p-4">
                     <Checkbox
                       id={`status-${option._id}`}

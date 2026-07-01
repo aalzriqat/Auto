@@ -33,7 +33,7 @@ function ManageUserOrgsDialog({ userId, onClose }: { userId: Id<"users">; onClos
           <DialogDescription>Manage organization memberships and roles.</DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">
-          {detail?.orgs.map((o) => (
+          {detail?.orgs.map((o: { membershipId: string; orgId: Id<"organizations">; orgName: string; roleId: Id<"roles">; roleName: string }) => (
             <OrgMembershipRow
               key={o.membershipId}
               orgName={o.orgName}
@@ -117,7 +117,7 @@ function OrgMembershipRow({
             }}
           >
             <option value="" disabled>Change role…</option>
-            {roles?.map((r) => (
+            {roles?.map((r: { _id: Id<"roles">; name: string }) => (
               <option key={r._id} value={r._id}>{r.name}</option>
             ))}
           </select>
@@ -191,7 +191,7 @@ export default function AdminUsersPage() {
                 <TableCell>{user.name ?? "—"}</TableCell>
                 <TableCell>
                   <div className="flex flex-wrap gap-1">
-                    {user.orgs.map((o) => (
+                    {user.orgs.map((o: { orgId: string; orgName: string; roleName: string }) => (
                       <Badge key={o.orgId} variant="outline">
                         {o.orgName} ({o.roleName})
                       </Badge>

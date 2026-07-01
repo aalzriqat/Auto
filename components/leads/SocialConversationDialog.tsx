@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useAction, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { Id } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { usePermissions } from "@/hooks/use-permissions";
@@ -291,7 +291,7 @@ export function SocialConversationDialog({
                   <SelectValue placeholder={t("SelectVehicle" as any)} />
                 </SelectTrigger>
                 <SelectContent>
-                  {vehicles.map((v) => (
+                  {vehicles.map((v: Doc<"vehicles">) => (
                     <SelectItem key={v._id} value={v._id}>
                       {v.year} {v.make} {v.model}
                     </SelectItem>
@@ -373,7 +373,7 @@ export function SocialConversationDialog({
                 <p className="text-sm text-muted-foreground">{t("NoConversation" as any)}</p>
               )}
 
-              {fbMessages?.map((msg) => (
+              {fbMessages?.map((msg: Doc<"facebookMessages">) => (
                 <div
                   key={msg._id}
                   className={`flex ${msg.direction === "out" ? "justify-end" : "justify-start"}`}

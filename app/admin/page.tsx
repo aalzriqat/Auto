@@ -11,8 +11,9 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "@/components/ui/sonner";
 import { X, Plus } from "lucide-react";
+import { Doc } from "@/convex/_generated/dataModel";
 
-type WebhookStatus = "received" | "success" | "error";
+type WebhookStatus = "received" | "success" | "error" | "dead_letter";
 
 function WebhookStatusBadge({ status }: { status: WebhookStatus }) {
   if (status === "success") return <Badge variant="secondary">OK</Badge>;
@@ -106,7 +107,7 @@ export default function AdminOverviewPage() {
               <CardHeader className="pb-2">
                 <CardTitle className="text-sm capitalize text-muted-foreground">{key}</CardTitle>
               </CardHeader>
-              <CardContent className="text-2xl font-semibold">{count}</CardContent>
+              <CardContent className="text-2xl font-semibold">{count as number}</CardContent>
             </Card>
           ))}
       </div>
@@ -175,7 +176,7 @@ export default function AdminOverviewPage() {
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
             {cronStatus?.length === 0 && <p className="text-sm text-muted-foreground">No heartbeats recorded yet.</p>}
-            {cronStatus?.map((c) => (
+            {cronStatus?.map((c: Doc<"cronHeartbeats">) => (
               <div key={c.jobName} className="flex items-center justify-between text-sm border-b pb-2 last:border-0">
                 <div>
                   <p className="font-medium">{c.jobName}</p>

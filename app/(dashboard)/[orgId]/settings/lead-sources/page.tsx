@@ -11,7 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { toast } from "@/components/ui/sonner";
 import { Plus, Trash2, ChevronUp, ChevronDown, Loader2 } from "lucide-react";
-import { Id } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 import { translateLeadSourceLabel } from "@/lib/i18n/defaultLabels";
 
 export default function LeadSourcesPage() {
@@ -79,7 +79,7 @@ export default function LeadSourcesPage() {
 
   const handleMoveUp = async (index: number) => {
     if (!activeOrgId || !sources || index === 0) return;
-    const orderedIds = sources.map((s) => s._id);
+    const orderedIds = sources.map((s: Doc<"orgLeadSources">) => s._id);
     [orderedIds[index - 1], orderedIds[index]] = [orderedIds[index], orderedIds[index - 1]];
     try {
       await reorderSources({ orgId: activeOrgId, orderedIds });
@@ -90,7 +90,7 @@ export default function LeadSourcesPage() {
 
   const handleMoveDown = async (index: number) => {
     if (!activeOrgId || !sources || index === sources.length - 1) return;
-    const orderedIds = sources.map((s) => s._id);
+    const orderedIds = sources.map((s: Doc<"orgLeadSources">) => s._id);
     [orderedIds[index], orderedIds[index + 1]] = [orderedIds[index + 1], orderedIds[index]];
     try {
       await reorderSources({ orgId: activeOrgId, orderedIds });
@@ -157,7 +157,7 @@ export default function LeadSourcesPage() {
               {t("NoLeadSourcesYet" as any)}
             </div>
           ) : (
-            sources.map((source, index) => (
+            sources.map((source: Doc<"orgLeadSources">, index: number) => (
               <div
                 key={source._id}
                 className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3"

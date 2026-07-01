@@ -38,11 +38,13 @@ export function ConversationList({ orgId, currentUserId, activeId, onSelect }: P
 
   const conversations = useQuery(api.directMessages.listConversations, { orgId });
 
-  const filtered = (conversations ?? []).filter((c) => {
+  type ConvMember = { _id: string; name?: string; imageUrl?: string } | null;
+  type ConvItem = { _id: Id<"dmConversations">; type: string; name?: string; members?: ConvMember[]; isMuted?: boolean; hasUnread?: boolean; lastMessageAt: number; lastMessageSenderId?: string; lastMessageBody?: string };
+  const filtered = (conversations ?? [] as ConvItem[]).filter((c: ConvItem) => {
     if (!search.trim()) return true;
     const q = search.toLowerCase();
     if (c.name?.toLowerCase().includes(q)) return true;
-    return c.members?.some((m) => m?.name?.toLowerCase().includes(q));
+    return c.members?.some((m: ConvMember) => m?.name?.toLowerCase().includes(q));
   });
 
   return (
@@ -89,10 +91,10 @@ export function ConversationList({ orgId, currentUserId, activeId, onSelect }: P
           </div>
         )}
 
-        {filtered.map((conv) => {
+        {filtered.map((conv: ConvItem) => {
           const isDm = conv.type === "DM";
           const other = isDm
-            ? conv.members?.find((m) => m?._id !== currentUserId)
+            ? conv.members?.find((m: ConvMember) => m?._id !== currentUserId)
             : null;
 
           const displayName = isDm

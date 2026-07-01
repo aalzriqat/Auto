@@ -23,7 +23,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "@/components/ui/sonner";
-import { Id } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 import { translateCustomerStatusLabel } from "@/lib/i18n/defaultLabels";
 
 export function FinanceCompanyDialog({
@@ -228,7 +228,7 @@ export function FinanceCompanyDialog({
               </p>
             ) : (
               <div className="grid grid-cols-2 gap-2">
-                {customerStatusOptions.map((option) => (
+                {customerStatusOptions.map((option: Doc<"orgCustomerStatuses">) => (
                   <div key={option._id} className="flex items-center gap-2">
                     <input
                       type="checkbox"

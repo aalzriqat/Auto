@@ -196,7 +196,7 @@ async function recordWebsiteLeadAbuseEvent(
   },
 ) {
   await ctx.db.insert("websiteLeadAbuseEvents", {
-    orgId: args.orgId,
+    orgId: args.orgId as Id<"organizations">,
     host: args.host,
     formType: args.formType,
     reason: args.reason,

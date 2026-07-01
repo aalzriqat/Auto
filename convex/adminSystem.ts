@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { query, mutation, internalMutation, internalQuery, internalAction, ActionCtx } from "./_generated/server";
 import { requireSuperAdmin } from "./utils/tenancy";
@@ -203,7 +204,7 @@ export const retryWebhookEvent = mutation({
 export const scanDeadLetterWebhooks = internalAction({
   args: {},
   handler: async (ctx: ActionCtx) => {
-    const stuckIds = await ctx.runQuery(internal.adminSystem.getStuckWebhookIds, {});
+    const stuckIds: Id<"webhookLogs">[] = await ctx.runQuery(internal.adminSystem.getStuckWebhookIds, {});
     for (const id of stuckIds) {
       await ctx.runMutation(internal.adminSystem.markWebhookDeadLetter, { webhookLogId: id });
     }

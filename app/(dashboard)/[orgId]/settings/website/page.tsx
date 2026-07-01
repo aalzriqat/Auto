@@ -29,7 +29,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/sonner";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { Id } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 import {
   SENSITIVE_WEBSITE_SECTION_KEYS,
   WEBSITE_FORM_TYPES,
@@ -147,7 +147,7 @@ export default function WebsiteSettingsPage() {
       setSecondaryColor(settings.secondaryColor ?? "#f97316");
       setHeroTitle(settings.heroTitle ?? "");
       setHeroSubtitle(settings.heroSubtitle ?? "");
-      const platform = status.domains?.find((domain) => domain.type === "platform_subdomain");
+      const platform = status.domains?.find((domain: Doc<"websiteDomains">) => domain.type === "platform_subdomain");
       setSubdomainSlug(platform?.domain?.replace(".autoflowdealer.com", "") ?? "");
     }
 
@@ -340,7 +340,7 @@ export default function WebsiteSettingsPage() {
           <CardHeader className="pb-2">
             <CardDescription>{t("WebsiteCustomPurchasedDomain")}</CardDescription>
             <CardTitle className="text-sm break-words">
-              {status?.domains?.find((domain) => domain.type === "purchased_custom_domain")?.domain ?? t("WebsiteNone")}
+              {status?.domains?.find((domain: Doc<"websiteDomains">) => domain.type === "purchased_custom_domain")?.domain ?? t("WebsiteNone")}
             </CardTitle>
           </CardHeader>
         </Card>

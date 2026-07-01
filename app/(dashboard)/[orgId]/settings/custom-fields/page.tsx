@@ -21,7 +21,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/components/ui/sonner";
 import { Plus, Trash2, Loader2 } from "lucide-react";
-import { Id } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 
 type EntityType = "vehicle" | "customer" | "lead";
 type FieldType = "text" | "number" | "select" | "date";
@@ -177,7 +177,7 @@ function EntityFieldList({ orgId, entityType, descKey }: { orgId: string; entity
               {t("NoCustomFieldsYet" as any)}
             </div>
           ) : (
-            fields.map((field) => (
+            fields.map((field: Doc<"orgCustomFields">) => (
               <div key={field._id} className="flex items-center gap-3 rounded-lg border px-4 py-3 bg-card">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">

@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { Id } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { calculateUnifiedMurabaha } from "@/lib/financing";
 
@@ -83,7 +83,7 @@ export function useFinanceComparison({
     if (vehiclePrice <= 0) return [];
 
     let activeCompanies = financeCompanies.filter(
-      (company) => company.isActive
+      (company: Doc<"financeCompanies">) => company.isActive
     );
 
     // Filter companies by customer statuses
@@ -94,13 +94,13 @@ export function useFinanceComparison({
     // Each company opts into which customer statuses it accepts via its
     // `acceptedStatuses` setting (configured in Finance Settings). No
     // restriction configured (undefined/empty) means it accepts all.
-    activeCompanies = activeCompanies.filter((company) => {
+    activeCompanies = activeCompanies.filter((company: Doc<"financeCompanies">) => {
       const accepted = company.acceptedStatuses;
       if (!accepted || accepted.length === 0) return true;
       return customerStatuses.some((s) => accepted.includes(s as Id<"orgCustomerStatuses">));
     });
 
-    return activeCompanies.map((company) => {
+    return activeCompanies.map((company: Doc<"financeCompanies">) => {
       const result = calculateUnifiedMurabaha({
         vehiclePrice: effectivePrice,
         downPayment,
@@ -116,7 +116,7 @@ export function useFinanceComparison({
 
       const actualValuation =
         valuations?.find(
-          (valuation) => valuation.companyId === company._id
+          (valuation: Doc<"vehicleValuations">) => valuation.companyId === company._id
         )?.valuationAmount || 0;
 
       const maxLTV = company.maxFinancingLTV || 0;
@@ -137,7 +137,7 @@ export function useFinanceComparison({
 
       const companyDocs =
         documentRules?.filter(
-          (rule) =>
+          (rule: Doc<"companyDocumentRules">) =>
             rule.companyId === company._id ||
             !rule.companyId
         ) || [];

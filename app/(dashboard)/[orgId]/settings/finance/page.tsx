@@ -20,7 +20,7 @@ import { Building2, Plus, Pencil, Trash2, ChevronUp, ChevronDown, Loader2, Tag }
 import { FinanceCompanyDialog } from "@/components/settings/FinanceCompanyDialog";
 import { toast } from "@/components/ui/sonner";
 import { Badge } from "@/components/ui/badge";
-import { Id } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 import { DocumentRuleDialog } from "@/components/settings/DocumentRuleDialog";
 import { FileCheck } from "lucide-react";
 import { Switch } from "@/components/ui/switch";
@@ -110,7 +110,7 @@ export default function FinanceCompaniesPage() {
 
   const handleMoveStatusUp = async (index: number) => {
     if (!activeOrgId || !customerStatuses || index === 0) return;
-    const orderedIds = customerStatuses.map((s) => s._id);
+    const orderedIds = customerStatuses.map((s: Doc<"orgCustomerStatuses">) => s._id);
     [orderedIds[index - 1], orderedIds[index]] = [orderedIds[index], orderedIds[index - 1]];
     try {
       await reorderStatuses({ orgId: activeOrgId, orderedIds });
@@ -121,7 +121,7 @@ export default function FinanceCompaniesPage() {
 
   const handleMoveStatusDown = async (index: number) => {
     if (!activeOrgId || !customerStatuses || index === customerStatuses.length - 1) return;
-    const orderedIds = customerStatuses.map((s) => s._id);
+    const orderedIds = customerStatuses.map((s: Doc<"orgCustomerStatuses">) => s._id);
     [orderedIds[index], orderedIds[index + 1]] = [orderedIds[index + 1], orderedIds[index]];
     try {
       await reorderStatuses({ orgId: activeOrgId, orderedIds });
@@ -174,7 +174,7 @@ export default function FinanceCompaniesPage() {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  companies.map((company) => (
+                  companies.map((company: Doc<"financeCompanies">) => (
                     <TableRow key={company._id}>
                       <TableCell className="font-medium">{company.name}</TableCell>
                       <TableCell>{company.profitRate}%</TableCell>
@@ -248,8 +248,8 @@ export default function FinanceCompaniesPage() {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  rules.map((rule) => {
-                    const company = rule.companyId ? companies?.find(c => c._id === rule.companyId) : null;
+                  rules.map((rule: Doc<"companyDocumentRules">) => {
+                    const company = rule.companyId ? companies?.find((c: Doc<"financeCompanies">) => c._id === rule.companyId) : null;
                     return (
                       <TableRow key={rule._id}>
                         <TableCell className="font-medium">{rule.documentName}</TableCell>
@@ -344,7 +344,7 @@ export default function FinanceCompaniesPage() {
               {t("NoCustomerStatusesYet" as any)}
             </div>
           ) : (
-            customerStatuses.map((status, index) => (
+            customerStatuses.map((status: Doc<"orgCustomerStatuses">, index: number) => (
               <div
                 key={status._id}
                 className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3"

@@ -15,7 +15,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { SearchableSelect } from "@/components/ui/searchable-select";
-import { Id } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 
 export function BranchesClient() {
   const { activeOrgId } = useOrg();
@@ -162,7 +162,7 @@ export function BranchesClient() {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  branches.map((branch) => (
+                  branches.map((branch: Doc<"branches"> & { managerName: string }) => (
                     <TableRow key={branch._id}>
                       <TableCell className="font-medium">{branch.name}</TableCell>
                       <TableCell>{branch.address || "N/A"}</TableCell>

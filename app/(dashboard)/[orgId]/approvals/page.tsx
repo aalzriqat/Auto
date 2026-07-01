@@ -10,7 +10,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Loader2, CheckCircle2, XCircle, AlertCircle } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
-import { Id } from "@/convex/_generated/dataModel";
+import { Id, Doc } from "@/convex/_generated/dataModel";
+
+type ApprovalRequest = Doc<"profitApprovalRequests"> & {
+  salespersonName: string;
+  vehicleMakeModel: string;
+  vehicleVin: string;
+};
 
 export default function ApprovalsPage() {
   const { activeOrgId } = useOrg();
@@ -53,7 +59,7 @@ export default function ApprovalsPage() {
             <p className="text-sm text-slate-500">{t("AllCaughtUp")}</p>
           </div>
         ) : (
-          pendingApprovals.map((request) => (
+          pendingApprovals.map((request: ApprovalRequest) => (
             <Card key={request._id} className="relative overflow-hidden flex flex-col">
               <div className="absolute top-0 left-0 w-1 h-full bg-yellow-500" />
               <CardHeader className="pb-3">

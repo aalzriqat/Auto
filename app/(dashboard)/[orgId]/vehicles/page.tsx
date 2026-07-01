@@ -639,7 +639,7 @@ export default function VehiclesPage() {
             ) : (
               <>
                 {/* Edit Requests */}
-                {pendingEdits?.map((req) => (
+                {pendingEdits?.map((req: Doc<"vehicleEdits"> & { user: { name: string; email: string } | null; vehicle: Doc<"vehicles"> | null }) => (
                   <div key={req._id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 border rounded-lg bg-card">
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">
@@ -669,7 +669,7 @@ export default function VehiclesPage() {
                 ))}
 
                 {/* Status Requests */}
-                {pendingRequests?.map((req) => (
+                {pendingRequests?.map((req: Doc<"vehicleStatusRequests"> & { vehicle: { make: string; model: string; year: number; vin: string | undefined; currentStatus: string } | null; user: { name: string; email: string } | null }) => (
                   <div key={req._id} className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-4 border rounded-lg bg-card">
                     <div className="space-y-1">
                       <div className="flex items-center gap-2">

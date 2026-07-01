@@ -108,7 +108,7 @@ export function ChatThread({ conversationId, currentUserId }: Props) {
 
   const isDm = conversation.type === "DM";
   const otherMember = isDm
-    ? conversation.members?.find((m) => m?._id !== currentUserId)
+    ? conversation.members?.find((m: { _id: string; name?: string; imageUrl?: string } | null) => m?._id !== currentUserId)
     : null;
 
   const displayName = isDm

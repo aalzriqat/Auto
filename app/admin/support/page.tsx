@@ -135,7 +135,7 @@ function ThreadView({ threadId }: { threadId: Id<"supportThreads"> }) {
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-3">
-        {messages.map((m) => (
+        {messages.map((m: (typeof messages)[number]) => (
           <div
             key={m._id}
             className={cn(

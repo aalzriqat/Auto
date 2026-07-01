@@ -195,7 +195,7 @@ export function VehicleMarketingTab({ vehicleId }: VehicleMarketingTabProps) {
       {history && history.length > 0 && (
         <div className="space-y-2 pt-4 border-t">
           <p className="text-sm font-medium">{t("PostHistory" as any) || "Post History"}</p>
-          {history.map((post) => (
+          {history.map((post: Doc<"socialPosts">) => (
             <PostHistoryItem key={post._id} post={post} />
           ))}
         </div>

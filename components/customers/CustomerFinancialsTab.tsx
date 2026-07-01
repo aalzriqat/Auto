@@ -1,6 +1,6 @@
 import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { Id } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Button } from "@/components/ui/button";
@@ -162,7 +162,7 @@ export function CustomerFinancialsTab({ customer }: { customer: any }) {
           <p className="text-sm text-muted-foreground italic">{t("NoGuarantors" as any)}</p>
         ) : (
           <div className="space-y-3">
-            {guarantors.map((g) => (
+            {guarantors.map((g: Doc<"guarantors">) => (
               <div key={g._id} className="p-4 rounded-lg border bg-card flex justify-between items-start">
                 <div>
                   <h4 className="font-semibold">{g.firstName} {g.lastName}</h4>

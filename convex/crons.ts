@@ -3,7 +3,8 @@ import { v } from "convex/values";
 import { internalMutation, internalQuery, internalAction, MutationCtx, ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { notifyManagers, notifyUser } from "./utils/notifications";
-import { PLANS } from "./subscriptions";
+import { PLANS, PlanId } from "./subscriptions";
+import { Doc } from "./_generated/dataModel";
 import { isSystemOwnerRole } from "./utils/permissions";
 
 const crons = cronJobs();
@@ -188,9 +189,9 @@ async function runSubscriptionReminders(ctx: ActionCtx): Promise<string> {
         toEmail: ownerEmail,
         orgName: org.name,
         kind: "renewal_due",
-        planName: PLANS[sub.plan].name,
+        planName: PLANS[sub.plan as PlanId].name,
         endsAt: sub.currentPeriodEnd ?? Date.now(),
-        priceJod: PLANS[sub.plan].priceJod,
+        priceJod: PLANS[sub.plan as PlanId].priceJod,
       });
       await ctx.runMutation(internal.subscriptions.markRenewalReminderSent, {
         subscriptionId: sub._id,
@@ -208,7 +209,7 @@ export const triggerInstagramTokenRefresh = internalAction({
   args: {},
   handler: async (ctx: ActionCtx) => {
     const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
-    const orgs = await ctx.runQuery(
+    const orgs: Doc<"orgSettings">[] = await ctx.runQuery(
       internal.socialIntegrations.getOrgsNeedingInstagramRefresh,
       { withinMs: SEVEN_DAYS_MS }
     );

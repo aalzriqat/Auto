@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
-import { Id } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import {
@@ -67,7 +67,7 @@ export function ChangeMemberRoleDialog({
               value={selectedRoleId}
               onValueChange={setSelectedRoleId}
               placeholder={t("SelectARole")}
-              options={roles?.map((role) => ({
+              options={roles?.map((role: Doc<"roles">) => ({
                 value: role._id,
                 label: t(role.name) || role.name,
               })) ?? []}

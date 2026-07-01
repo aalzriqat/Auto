@@ -11,7 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { toast } from "@/components/ui/sonner";
 import { Plus, Trash2, Loader2 } from "lucide-react";
-import { Id } from "@/convex/_generated/dataModel";
+import { Doc, Id } from "@/convex/_generated/dataModel";
 
 export default function ValuationCompaniesPage() {
   const { activeOrgId } = useOrg();
@@ -150,7 +150,7 @@ export default function ValuationCompaniesPage() {
               No valuation companies yet. Click &quot;Load Defaults&quot; or add one manually.
             </div>
           ) : (
-            companies.map((company) => (
+            companies.map((company: Doc<"orgValuationCompanies">) => (
               <div
                 key={company._id}
                 className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3"

@@ -100,7 +100,7 @@ export function FloatingChatWindow({ conversationId, currentUserId, index }: Pro
 
   const isDm = conversation.type === "DM";
   const otherMember = isDm
-    ? conversation.members?.find((m) => m?._id !== currentUserId)
+    ? conversation.members?.find((m: { _id: string; name?: string; imageUrl?: string } | null) => m?._id !== currentUserId)
     : null;
   const displayName = isDm ? (otherMember?.name ?? "…") : (conversation.name ?? t("MessagesGroupWith"));
   const displayImage = isDm ? otherMember?.imageUrl : undefined;
