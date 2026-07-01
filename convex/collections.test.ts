@@ -82,6 +82,22 @@ describe("Collections", () => {
         .unique();
       expect(payment?.amount).toBe(300);
       expect(payment?.method).toBe("CASH");
+      expect(payment?.canonicalPaymentId).toBeTruthy();
+      expect(payment?.paymentAllocationId).toBeTruthy();
+
+      const canonicalReceivable = receivable?.canonicalReceivableDocumentId
+        ? await ctx.db.get(receivable.canonicalReceivableDocumentId)
+        : null;
+      expect(canonicalReceivable?.status).toBe("PARTIALLY_PAID");
+      const canonicalPayment = payment?.canonicalPaymentId
+        ? await ctx.db.get(payment.canonicalPaymentId)
+        : null;
+      expect(canonicalPayment?.method).toBe("CASH");
+      expect(canonicalPayment?.amountMinor).toBe(300_000);
+      const allocation = payment?.paymentAllocationId
+        ? await ctx.db.get(payment.paymentAllocationId)
+        : null;
+      expect(allocation?.amountMinor).toBe(300_000);
 
       const transaction = await ctx.db
         .query("transactions")
@@ -130,6 +146,45 @@ describe("Collections", () => {
         .unique();
       expect(payment?.method).toBe("CHEQUE");
       expect(payment?.status).toBe("POSTED");
+      expect(payment?.canonicalPaymentId).toBeTruthy();
+      expect(payment?.paymentAllocationId).toBeTruthy();
+      const canonicalPayment = payment?.canonicalPaymentId
+        ? await ctx.db.get(payment.canonicalPaymentId)
+        : null;
+      expect(canonicalPayment?.method).toBe("CHEQUE");
+      const canonicalReceivable = receivable?.canonicalReceivableDocumentId
+        ? await ctx.db.get(receivable.canonicalReceivableDocumentId)
+        : null;
+      expect(canonicalReceivable?.status).toBe("PAID");
+    });
+
+    await asFinance.mutation(api.collections.returnClearedCheque, {
+      orgId,
+      chequeId,
+      idempotencyKey: "return-cleared-cheque-1",
+    });
+
+    await t.run(async (ctx) => {
+      const cheque = await ctx.db.get(chequeId);
+      expect(cheque?.status).toBe("RETURNED");
+
+      const receivable = await ctx.db.get(receivableId);
+      expect(receivable?.outstandingAmount).toBe(500);
+
+      const payment = await ctx.db
+        .query("collectionPayments")
+        .withIndex("by_cheque", (q) => q.eq("chequeId", chequeId))
+        .unique();
+      expect(payment?.status).toBe("VOIDED");
+
+      const canonicalPayment = payment?.canonicalPaymentId
+        ? await ctx.db.get(payment.canonicalPaymentId)
+        : null;
+      expect(canonicalPayment?.status).toBe("VOIDED");
+      const allocation = payment?.paymentAllocationId
+        ? await ctx.db.get(payment.paymentAllocationId)
+        : null;
+      expect(allocation?.status).toBe("REVERSED");
     });
   });
 
@@ -176,6 +231,13 @@ describe("Collections", () => {
         .withIndex("by_receivable", (q) => q.eq("receivableId", receivableId))
         .collect();
       expect(payments.some((payment) => payment.direction === "OUT" && payment.method === "REFUND" && payment.amount === 200)).toBe(true);
+      const refund = payments.find((payment) => payment.direction === "OUT" && payment.method === "REFUND");
+      expect(refund?.canonicalPaymentId).toBeTruthy();
+      const canonicalRefund = refund?.canonicalPaymentId
+        ? await ctx.db.get(refund.canonicalPaymentId)
+        : null;
+      expect(canonicalRefund?.direction).toBe("OUT");
+      expect(canonicalRefund?.method).toBe("OTHER");
 
       const transactions = await ctx.db
         .query("transactions")

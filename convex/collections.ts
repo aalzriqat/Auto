@@ -20,6 +20,12 @@ import { reverseAccountingEvent } from "./accounting/reversals";
 import { getOpenPeriodForDate } from "./accountingPeriods";
 import { enqueuePendingReversal, cancelPendingPostByKey } from "./accountingOutbox";
 import { toMinorUnits, fromMinorUnits } from "./utils/money";
+import {
+  allocatePaymentToReceivable,
+  createCanonicalPayment,
+  ensureReceivableDocument,
+  reverseAllocation,
+} from "./subledger";
 
 const receivableStatusValidator = v.union(
   v.literal("OPEN"),
@@ -70,6 +76,8 @@ const approvalRequestTypeValidator = v.union(
 
 type ReceivableStatus = Doc<"receivables">["status"];
 type ReceivablePatch = Partial<Pick<Doc<"receivables">, "outstandingAmount" | "status" | "lastPaymentAt" | "updatedAt" | "dueDate" | "notes">>;
+type CanonicalPaymentMethod = Parameters<typeof createCanonicalPayment>[1]["method"];
+type ReceivableDocumentType = Parameters<typeof ensureReceivableDocument>[1]["documentType"];
 type ReminderMessageType = Doc<"collectionReminders">["messageType"];
 type ReminderChannel = Doc<"collectionReminders">["channel"];
 
@@ -115,6 +123,25 @@ function customerName(customer: Doc<"customers"> | null) {
 function vehicleLabel(vehicle: Doc<"vehicles"> | null | undefined) {
   if (!vehicle) return undefined;
   return `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim();
+}
+
+function receivableDocumentType(sourceType: Doc<"receivables">["sourceType"]): ReceivableDocumentType {
+  return sourceType === "INTERNAL_INSTALLMENT" ? "INSTALLMENT" : "INVOICE";
+}
+
+function canonicalPaymentMethod(method: Doc<"collectionPayments">["method"]): CanonicalPaymentMethod {
+  switch (method) {
+    case "CASH":
+    case "BANK_TRANSFER":
+    case "CHEQUE":
+    case "PAYMENT_LINK":
+    case "CARD":
+    case "OTHER":
+      return method;
+    case "DEPOSIT_APPLIED":
+    case "REFUND":
+      return "OTHER";
+  }
 }
 
 async function getOptionalVehicle(ctx: QueryCtx | MutationCtx, vehicleId?: Id<"vehicles">) {
@@ -219,6 +246,87 @@ async function applyPostedPayment(
     updatedAt: Date.now(),
   };
   await ctx.db.patch(receivable._id, patch);
+}
+
+async function ensureCanonicalReceivableForLegacy(
+  ctx: MutationCtx,
+  receivable: Doc<"receivables">,
+  actorId: Id<"users">,
+  currency: string
+) {
+  if (receivable.canonicalReceivableDocumentId) {
+    const existing = await ctx.db.get(receivable.canonicalReceivableDocumentId);
+    if (existing && existing.orgId === receivable.orgId) return existing._id;
+  }
+
+  const canonicalReceivableDocumentId = await ensureReceivableDocument(ctx, {
+    orgId: receivable.orgId,
+    branchId: receivable.branchId,
+    documentType: receivableDocumentType(receivable.sourceType),
+    payerType: "CUSTOMER",
+    customerId: receivable.customerId,
+    sourceType: "legacy_receivable",
+    sourceId: receivable._id,
+    originalAmountMinor: toMinorUnits(receivable.originalAmount, currency),
+    currency,
+    issueDate: receivable.createdAt,
+    dueDate: receivable.dueDate,
+    actorId,
+  });
+
+  await ctx.db.patch(receivable._id, { canonicalReceivableDocumentId });
+  return canonicalReceivableDocumentId;
+}
+
+async function mirrorCollectionPaymentToCanonical(
+  ctx: MutationCtx,
+  args: {
+    paymentId: Id<"collectionPayments">;
+    payment: Doc<"collectionPayments">;
+    receivable?: Doc<"receivables"> | null;
+    actorId: Id<"users">;
+    currency: string;
+  }
+) {
+  const amountMinor = toMinorUnits(args.payment.amount, args.currency);
+  const canonicalPaymentId = await createCanonicalPayment(ctx, {
+    orgId: args.payment.orgId,
+    branchId: args.payment.branchId,
+    direction: args.payment.direction,
+    payerType: "CUSTOMER",
+    customerId: args.payment.customerId,
+    method: canonicalPaymentMethod(args.payment.method),
+    amountMinor,
+    currency: args.currency,
+    idempotencyKey: `collection_payment_${args.paymentId}`,
+    actorId: args.actorId,
+    status: "SETTLED",
+    externalReference: args.payment.reference,
+    receivedAt: args.payment.paymentDate,
+  });
+
+  const patch: Partial<Pick<Doc<"collectionPayments">, "canonicalPaymentId" | "paymentAllocationId">> = {
+    canonicalPaymentId,
+  };
+
+  if (args.receivable && args.payment.direction === "IN") {
+    const canonicalReceivableDocumentId = await ensureCanonicalReceivableForLegacy(
+      ctx,
+      args.receivable,
+      args.actorId,
+      args.currency
+    );
+    patch.paymentAllocationId = await allocatePaymentToReceivable(ctx, {
+      orgId: args.payment.orgId,
+      paymentId: canonicalPaymentId,
+      receivableDocumentId: canonicalReceivableDocumentId,
+      amountMinor,
+      actorId: args.actorId,
+    });
+  }
+
+  await ctx.db.patch(args.paymentId, patch);
+  return patch;
 }
 
 async function insertLedgerTransaction(
@@ -422,6 +530,12 @@ export const createReceivable = mutation({
       updatedAt: now,
     });
 
+    const currency = await getOrgCurrency(ctx, args.orgId);
+    const receivable = await ctx.db.get(receivableId);
+    if (receivable) {
+      await ensureCanonicalReceivableForLegacy(ctx, receivable, user._id, currency);
+    }
+
     const actorName = await getActorName(ctx);
     await notifyManagers(ctx, args.orgId, "collection.receivable_created", {
       actorName,
@@ -468,6 +582,7 @@ export const createInstallmentPlan = mutation({
     const baseAmount = roundMoney(args.totalAmount / args.installmentCount);
     let allocated = 0;
     const ids: Id<"receivables">[] = [];
+    const currency = await getOrgCurrency(ctx, args.orgId);
 
     for (let i = 1; i <= args.installmentCount; i++) {
       const amount = i === args.installmentCount
@@ -498,6 +613,10 @@ export const createInstallmentPlan = mutation({
         createdAt: now,
         updatedAt: now,
       });
+      const receivable = await ctx.db.get(id);
+      if (receivable) {
+        await ensureCanonicalReceivableForLegacy(ctx, receivable, user._id, currency);
+      }
       ids.push(id);
     }
 
@@ -596,6 +715,17 @@ export const recordPayment = mutation({
         });
 
         const currency = await getOrgCurrency(ctx, args.orgId);
+        const payment = await ctx.db.get(paymentId);
+        if (payment) {
+          await mirrorCollectionPaymentToCanonical(ctx, {
+            paymentId,
+            payment,
+            receivable,
+            actorId: user._id,
+            currency,
+          });
+        }
+
         await hookCollectionPayment(ctx, {
           orgId: args.orgId,
           paymentId,
@@ -782,6 +912,17 @@ export const clearCheque = mutation({
         // its source event. Posts now, or enqueues to the outbox if the chart /
         // period is not yet set up.
         const currency = await getOrgCurrency(ctx, args.orgId);
+        const payment = await ctx.db.get(paymentId);
+        if (payment) {
+          await mirrorCollectionPaymentToCanonical(ctx, {
+            paymentId,
+            payment,
+            receivable,
+            actorId: user._id,
+            currency,
+          });
+        }
+
         await hookCollectionPayment(ctx, {
           orgId: args.orgId,
           paymentId,
@@ -978,6 +1119,17 @@ export const returnClearedCheque = mutation({
             // (cleared before a chart/period existed). Cancel it so it never
             // posts — the net effect of clear-then-return is zero.
             await cancelPendingPostByKey(ctx, args.orgId, `collection_payment_${clearedPayment._id}`);
+          }
+
+          if (clearedPayment.paymentAllocationId) {
+            await reverseAllocation(ctx, {
+              orgId: args.orgId,
+              allocationId: clearedPayment.paymentAllocationId,
+              actorId: user._id,
+            });
+          }
+          if (clearedPayment.canonicalPaymentId) {
+            await ctx.db.patch(clearedPayment.canonicalPaymentId, { status: "VOIDED" });
           }
 
           // Mark the payment as voided
@@ -1195,7 +1347,7 @@ export const respondToApproval = mutation({
             const paidAmount = roundMoney(receivable.originalAmount - receivable.outstandingAmount);
             if (refundAmount > paidAmount) throw new ConvexError("Refund amount cannot exceed collected amount.");
 
-            await ctx.db.insert("collectionPayments", {
+            const refundPaymentId = await ctx.db.insert("collectionPayments", {
               orgId: args.orgId,
               branchId: membership.branchId,
               receivableId: receivable._id,
@@ -1213,6 +1365,19 @@ export const respondToApproval = mutation({
               notes: args.decisionNotes,
               createdAt: now,
             });
+
+            const currency = await getOrgCurrency(ctx, args.orgId);
+            const refundPayment = await ctx.db.get(refundPaymentId);
+            if (refundPayment) {
+              await ensureCanonicalReceivableForLegacy(ctx, receivable, user._id, currency);
+              await mirrorCollectionPaymentToCanonical(ctx, {
+                paymentId: refundPaymentId,
+                payment: refundPayment,
+                receivable,
+                actorId: user._id,
+                currency,
+              });
+            }
 
             const newOutstanding = roundMoney(receivable.outstandingAmount + refundAmount);
             await ctx.db.patch(receivable._id, {

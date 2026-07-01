@@ -1,5 +1,6 @@
 import { v, ConvexError } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { mutation, query, MutationCtx } from "./_generated/server";
+import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -27,6 +28,69 @@ const expenseCategory = v.union(
   v.literal("PREPAID"),
   v.literal("OTHER")
 );
+
+async function hasExpenseAccountingExposure(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  expenseId: Id<"expenses">
+) {
+  const postedEvent = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_source", (q) =>
+      q.eq("orgId", orgId).eq("sourceType", "expenses").eq("sourceId", expenseId.toString())
+    )
+    .filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED"))
+    .first();
+  if (postedEvent) {
+    return true;
+  }
+
+  const pendingPost = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", `expense_posted_${expenseId}`))
+    .first();
+  return pendingPost !== null;
+}
+
+async function recordPaidExpenseSideEffects(
+  ctx: MutationCtx,
+  args: {
+    expense: Doc<"expenses">;
+    actorId: Id<"users">;
+    idempotencyKey?: string;
+  }
+) {
+  const existingTx = await ctx.db
+    .query("transactions")
+    .withIndex("by_org", (q) => q.eq("orgId", args.expense.orgId))
+    .filter((q) => q.eq(q.field("expenseId"), args.expense._id))
+    .first();
+
+  if (!existingTx) {
+    await ctx.db.insert("transactions", {
+      orgId: args.expense.orgId,
+      type: "OUT",
+      amount: args.expense.amount,
+      date: args.expense.date,
+      category: "EXPENSE",
+      description: `Expense: ${args.expense.title} (${args.expense.category})`,
+      vehicleId: args.expense.vehicleId,
+      expenseId: args.expense._id,
+      idempotencyKey: args.idempotencyKey,
+    });
+  }
+
+  const currency = await getOrgCurrency(ctx, args.expense.orgId);
+  await hookExpensePosted(ctx, {
+    orgId: args.expense.orgId,
+    expenseId: args.expense._id,
+    amountMinor: toMinorUnits(args.expense.amount, currency),
+    currency,
+    category: args.expense.category,
+    actorId: args.actorId,
+    occurredAt: args.expense.date,
+  });
+}
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
@@ -130,6 +194,7 @@ export const create = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_EXPENSES]);
+    const status = args.status ?? "PAID";
 
     return await runWithIdempotency(
       ctx,
@@ -138,6 +203,17 @@ export const create = mutation({
         operation: "expenses.create",
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
+        fingerprint: JSON.stringify({
+          vehicleId: args.vehicleId ?? null,
+          title: args.title,
+          amount: args.amount,
+          date: args.date,
+          category: args.category,
+          status,
+          vendor: args.vendor ?? null,
+          payerId: args.payerId ?? null,
+          notes: args.notes ?? null,
+        }),
       },
       async () => {
         validateInput(CreateExpenseSchema, args);
@@ -156,36 +232,22 @@ export const create = mutation({
           amount: args.amount,
           date: args.date,
           category: args.category,
-          status: args.status || "PAID",
+          status,
           idempotencyKey: args.idempotencyKey,
           vendor: args.vendor,
           payerId: args.payerId,
           notes: args.notes,
         });
 
-        // Legacy cashflow row. This is not the future general ledger.
-        await ctx.db.insert("transactions", {
-          orgId: args.orgId,
-          type: "OUT",
-          amount: args.amount,
-          date: args.date,
-          category: "EXPENSE",
-          description: `Expense: ${args.title} (${args.category})`,
-          vehicleId: args.vehicleId,
-          expenseId: id,
-          idempotencyKey: args.idempotencyKey,
-        });
-
-        const currency = await getOrgCurrency(ctx, args.orgId);
-        await hookExpensePosted(ctx, {
-          orgId: args.orgId,
-          expenseId: id,
-          amountMinor: toMinorUnits(args.amount, currency),
-          currency,
-          category: args.category,
-          actorId: user._id,
-          occurredAt: args.date,
-        });
+        if (status === "PAID") {
+          const expense = await ctx.db.get(id);
+          if (!expense) throw new ConvexError("Expense could not be created.");
+          await recordPaidExpenseSideEffects(ctx, {
+            expense,
+            actorId: user._id,
+            idempotencyKey: args.idempotencyKey,
+          });
+        }
 
         const actorName = await getActorName(ctx);
         await notifyManagers(
@@ -220,7 +282,7 @@ export const update = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_EXPENSES]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_EXPENSES]);
 
     const statusLimit = await checkTenantWriteLimit(ctx, "standardApi", args.orgId);
     if (!statusLimit.ok) {
@@ -244,7 +306,24 @@ export const update = mutation({
       throw new ConvexError("Expense not found.");
     }
 
-    const patch: Record<string, any> = {};
+    const currentStatus = expense.status ?? "PAID";
+    const nextStatus = args.status ?? currentStatus;
+    const willMarkPaid = currentStatus === "PENDING" && nextStatus === "PAID";
+    const hasAccountingExposure = await hasExpenseAccountingExposure(ctx, args.orgId, args.expenseId);
+    const hasMaterialAccountingChange =
+      (args.vehicleId !== undefined && args.vehicleId !== (expense.vehicleId ?? null)) ||
+      (args.title !== undefined && args.title !== expense.title) ||
+      (args.amount !== undefined && args.amount !== expense.amount) ||
+      (args.date !== undefined && args.date !== expense.date) ||
+      (args.category !== undefined && args.category !== expense.category) ||
+      (args.status !== undefined && args.status !== currentStatus);
+    if (hasAccountingExposure && hasMaterialAccountingChange) {
+      throw new ConvexError(
+        "Posted expenses are locked. Use a correction or reversal workflow before changing accounting fields."
+      );
+    }
+
+    const patch: Record<string, unknown> = {};
 
     if (args.vehicleId !== undefined) {
       if (args.vehicleId !== null) {
@@ -285,6 +364,15 @@ export const update = mutation({
         }
       }
 
+      if (willMarkPaid) {
+        const updatedExpense = await ctx.db.get(args.expenseId);
+        if (!updatedExpense) throw new ConvexError("Expense not found.");
+        await recordPaidExpenseSideEffects(ctx, {
+          expense: updatedExpense,
+          actorId: user._id,
+        });
+      }
+
       const actorName = await getActorName(ctx);
       await notifyManagers(
         ctx,
@@ -317,6 +405,9 @@ export const remove = mutation({
     const expense = await ctx.db.get(args.expenseId);
     if (!expense || expense.isDeleted || expense.orgId !== args.orgId) {
       throw new ConvexError("Expense not found.");
+    }
+    if (await hasExpenseAccountingExposure(ctx, args.orgId, args.expenseId)) {
+      throw new ConvexError("Posted expenses cannot be deleted. Use a reversal workflow instead.");
     }
 
     const identity = await ctx.auth.getUserIdentity();

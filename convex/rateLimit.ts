@@ -11,6 +11,10 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
   webhook: { kind: "token bucket", rate: 60, period: 60000, capacity: 60 }, // Inbound webhooks (Clerk, WhatsApp, Meta), keyed by source
   chatMessage: { kind: "token bucket", rate: 20, period: 60000, capacity: 20 }, // Live chat messages, keyed by sender userId
   contactForm: { kind: "token bucket", rate: 3, period: 600000, capacity: 3 }, // Public contact form, keyed by submitter email
+  websiteLeadHost: { kind: "token bucket", rate: 30, period: 600000, capacity: 30 }, // Public dealer-site lead intake, keyed by host
+  websiteLeadOrg: { kind: "token bucket", rate: 20, period: 600000, capacity: 20 }, // Destination dealership guardrail
+  websiteLeadContact: { kind: "token bucket", rate: 3, period: 600000, capacity: 3 }, // Normalized email/phone/WhatsApp
+  websiteLeadFingerprint: { kind: "token bucket", rate: 5, period: 600000, capacity: 5 }, // Browser/device fingerprint or trusted IP hash
   socialPosting: { kind: "token bucket", rate: 10, period: 60000, capacity: 10 }, // Instagram/Facebook posts, keyed by orgId — stays well under Meta's own API limits
   notificationWhatsapp: { kind: "token bucket", rate: 10, period: 60000, capacity: 10 }, // Outbound WhatsApp notification sends
   // System-wide circuit breaker for create/standardApi/upload, checked in addition to
