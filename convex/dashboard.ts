@@ -61,17 +61,50 @@ export const stats = query({
       periodSales = await ctx.db
         .query("sales")
         .withIndex("by_org_saleDate", (q) => q.eq("orgId", args.orgId).gte("saleDate", filterStart))
-        .filter(q => q.neq(q.field("status"), "CANCELLED"))
+        .filter(q => q.and(
+          q.neq(q.field("status"), "CANCELLED"),
+          q.neq(q.field("isDeleted"), true)
+        ))
         .collect();
     } else {
       periodSales = await ctx.db
         .query("sales")
         .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .filter(q => q.neq(q.field("status"), "CANCELLED"))
+        .filter(q => q.and(
+          q.neq(q.field("status"), "CANCELLED"),
+          q.neq(q.field("isDeleted"), true)
+        ))
         .take(5000);
     }
 
-    const salesVolume = periodSales.reduce((acc, sale) => acc + sale.salePrice, 0);
+    const activeSales = periodSales;
+
+    const transactionCandidates =
+      filterStart > 0
+        ? await ctx.db
+          .query("transactions")
+          .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId).gte("date", filterStart))
+          .filter(q => q.and(
+            q.eq(q.field("category"), "VEHICLE_SALE"),
+            q.eq(q.field("type"), "IN"),
+            q.neq(q.field("isDeleted"), true)
+          ))
+          .take(5000)
+        : await ctx.db
+          .query("transactions")
+          .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId))
+          .filter(q => q.and(
+            q.eq(q.field("category"), "VEHICLE_SALE"),
+            q.eq(q.field("type"), "IN"),
+            q.neq(q.field("isDeleted"), true)
+          ))
+          .take(5000);
+    const saleTransactions = transactionCandidates;
+
+    const salesVolume = activeSales.length > 0
+      ? activeSales.reduce((acc, sale) => acc + sale.salePrice, 0)
+      : saleTransactions.reduce((acc, transaction) => acc + transaction.amount, 0);
+    const salesCount = activeSales.length > 0 ? activeSales.length : saleTransactions.length;
 
     const getChartKey = (dateTs: number) => {
       const d = new Date(dateTs);
@@ -119,19 +152,24 @@ export const stats = query({
       }
     }
 
-    // Process all COMPLETED sales within the time range for the charts
-    const completedSales = periodSales.filter(s => s.status === "COMPLETED");
-    for (const sale of completedSales) {
-      const key = getChartKey(sale.saleDate);
+    if (activeSales.length > 0) {
+      for (const sale of activeSales) {
+        const key = getChartKey(sale.saleDate);
 
-      monthlySales[key] = (monthlySales[key] || 0) + sale.salePrice;
+        monthlySales[key] = (monthlySales[key] || 0) + sale.salePrice;
 
-      // Calculate profit if purchase price is available
-      const vehicle = await ctx.db.get(sale.vehicleId);
-      if (vehicle && vehicle.purchasePrice !== undefined) {
-        const vehicleCost = vehicle.purchasePrice + (vehicleExpenses[sale.vehicleId] || 0);
-        const profit = sale.salePrice - vehicleCost;
-        monthlyProfits[key] = (monthlyProfits[key] || 0) + profit;
+        // Calculate profit if purchase price is available
+        const vehicle = await ctx.db.get(sale.vehicleId);
+        if (vehicle && vehicle.purchasePrice !== undefined) {
+          const vehicleCost = vehicle.purchasePrice + (vehicleExpenses[sale.vehicleId] || 0);
+          const profit = sale.salePrice - vehicleCost;
+          monthlyProfits[key] = (monthlyProfits[key] || 0) + profit;
+        }
+      }
+    } else {
+      for (const transaction of saleTransactions) {
+        const key = getChartKey(transaction.date);
+        monthlySales[key] = (monthlySales[key] || 0) + transaction.amount;
       }
     }
 
@@ -210,10 +248,10 @@ export const stats = query({
 
     const teamTasks = Object.values(memberTaskStats).sort((a, b) => (b.pending + b.overdue) - (a.pending + a.overdue));
 
-    // 7. Top performer — ranked by revenue from completed sales in this period
+    // 7. Top performer — ranked by visible sale revenue in this period
     // (not the task backlog leaderboard above, which tracks a different thing).
     const revenueBySalesperson: Record<string, { revenue: number; deals: number }> = {};
-    for (const sale of completedSales) {
+    for (const sale of activeSales) {
       const entry = revenueBySalesperson[sale.salespersonId] ?? { revenue: 0, deals: 0 };
       entry.revenue += sale.salePrice;
       entry.deals += 1;
@@ -232,7 +270,7 @@ export const stats = query({
       totalVehicles,
       availableVehicles,
       activeLeads,
-      salesThisMonth: periodSales.length,
+      salesThisMonth: salesCount,
       salesVolumeThisMonth: salesVolume,
       teamMembers: members.length,
       salesTrend,

@@ -190,6 +190,7 @@ export async function completeSale(
     salePrice: args.salePrice,
     saleDate: args.saleDate,
     vehicle,
+    customer,
     previouslyCollected,
     idempotencyKey: args.idempotencyKey,
   });

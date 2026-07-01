@@ -1,10 +1,177 @@
 import { v, ConvexError } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { mutation, query, QueryCtx } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
+import { Doc, Id } from "./_generated/dataModel";
+
+type LedgerTransaction = Doc<"transactions">;
+type LedgerEntityContext = {
+  vehicleId?: Id<"vehicles">;
+  customerId?: Id<"customers">;
+  quoteReference?: string;
+};
+type LedgerContextByTransactionId = Map<Id<"transactions">, LedgerEntityContext>;
+
+function vehicleLabel(vehicle: Doc<"vehicles">): string {
+  return `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim();
+}
+
+function customerName(customer: Doc<"customers">): string {
+  return `${customer.firstName ?? ""} ${customer.lastName ?? ""}`.trim();
+}
+
+function quoteIdTextFromDescription(description: string): string | null {
+  return (
+    description.match(/^Deposit held for quote\s+([^\s-]+)/i)?.[1] ??
+    description.match(/^Deposit(?: refund)? for quote\s+([^\s-]+)/i)?.[1] ??
+    description.match(/^عربون للعرض\s+([^\s-]+)/)?.[1] ??
+    description.match(/^استرداد عربون للعرض\s+([^\s-]+)/)?.[1] ??
+    null
+  );
+}
+
+async function contextFromDepositId(
+  ctx: QueryCtx,
+  transaction: LedgerTransaction
+): Promise<LedgerEntityContext | null> {
+  if (!transaction.depositId) return null;
+
+  const deposit = await ctx.db.get(transaction.depositId);
+  if (!deposit || deposit.orgId !== transaction.orgId || deposit.isDeleted === true) {
+    return null;
+  }
+
+  return {
+    vehicleId: deposit.vehicleId,
+    customerId: deposit.customerId,
+    quoteReference: deposit.quoteId.toString(),
+  };
+}
+
+async function contextFromLegacyQuoteDescription(
+  ctx: QueryCtx,
+  transaction: LedgerTransaction
+): Promise<LedgerEntityContext | null> {
+  const quoteIdText = quoteIdTextFromDescription(transaction.description);
+  if (!quoteIdText) return null;
+
+  const quoteId = ctx.db.normalizeId("quotes", quoteIdText);
+  if (!quoteId) return null;
+
+  const quote = await ctx.db.get(quoteId);
+  if (!quote || quote.orgId !== transaction.orgId) return null;
+
+  return {
+    vehicleId: quote.vehicleId,
+    customerId: quote.customerId,
+    quoteReference: quote._id.toString(),
+  };
+}
+
+async function contextForDepositTransaction(
+  ctx: QueryCtx,
+  transaction: LedgerTransaction
+): Promise<LedgerEntityContext | null> {
+  return await contextFromDepositId(ctx, transaction) ??
+    await contextFromLegacyQuoteDescription(ctx, transaction);
+}
+
+async function contextsForDepositTransactions(
+  ctx: QueryCtx,
+  transactions: LedgerTransaction[]
+): Promise<LedgerContextByTransactionId> {
+  const entries = await Promise.all(
+    transactions.map(async (transaction) => {
+      const context = await contextForDepositTransaction(ctx, transaction);
+      return [transaction._id, context] as const;
+    })
+  );
+
+  return new Map(
+    entries.flatMap(([transactionId, context]) =>
+      context ? [[transactionId, context] as const] : []
+    )
+  );
+}
+
+function vehicleIdsForLedgerRows(
+  transactions: LedgerTransaction[],
+  contextByTransactionId: LedgerContextByTransactionId
+): Array<Id<"vehicles">> {
+  const vehicleIds = transactions.flatMap((transaction) =>
+    transaction.vehicleId ? [transaction.vehicleId] : []
+  );
+  for (const context of contextByTransactionId.values()) {
+    if (context.vehicleId) vehicleIds.push(context.vehicleId);
+  }
+  return vehicleIds;
+}
+
+function customerIdsForLedgerRows(
+  transactions: LedgerTransaction[],
+  contextByTransactionId: LedgerContextByTransactionId
+): Array<Id<"customers">> {
+  const customerIds = transactions.flatMap((transaction) =>
+    transaction.customerId ? [transaction.customerId] : []
+  );
+  for (const context of contextByTransactionId.values()) {
+    if (context.customerId) customerIds.push(context.customerId);
+  }
+  return customerIds;
+}
+
+function enrichLedgerTransaction(
+  transaction: LedgerTransaction,
+  context: LedgerEntityContext | null,
+  vehicles: Map<Id<"vehicles">, Doc<"vehicles">>,
+  customers: Map<Id<"customers">, Doc<"customers">>
+) {
+  const vehicleId = transaction.vehicleId ?? context?.vehicleId;
+  const vehicle = vehicleId ? vehicles.get(vehicleId) : null;
+  const customerId = transaction.customerId ?? context?.customerId;
+  const customer = customerId ? customers.get(customerId) : null;
+  return {
+    ...transaction,
+    ...(vehicle ? { vehicleLabel: vehicleLabel(vehicle) } : {}),
+    ...(customer ? { customerName: customerName(customer) } : {}),
+    ...(context?.quoteReference ? { quoteReference: context.quoteReference } : {}),
+  };
+}
+
+async function getRowsById<TTable extends "vehicles" | "customers">(
+  ctx: QueryCtx,
+  ids: Array<Id<TTable>>
+): Promise<Map<Id<TTable>, Doc<TTable>>> {
+  const uniqueIds = Array.from(new Set(ids));
+  const docs = await Promise.all(uniqueIds.map((id) => ctx.db.get(id)));
+  const pairs = docs.flatMap((doc) => doc ? [[doc._id, doc] as const] : []);
+  return new Map(pairs);
+}
+
+async function enrichLedgerTransactions(
+  ctx: QueryCtx,
+  rows: LedgerTransaction[]
+) {
+  const depositRows = rows.filter((row) => row.category === "DEPOSIT");
+  const contextByTransactionId = depositRows.length > 0
+    ? await contextsForDepositTransactions(ctx, depositRows)
+    : new Map<Id<"transactions">, LedgerEntityContext>();
+  const vehicleIds = vehicleIdsForLedgerRows(rows, contextByTransactionId);
+  const customerIds = customerIdsForLedgerRows(rows, contextByTransactionId);
+
+  const [vehicles, customers] = await Promise.all([
+    getRowsById(ctx, vehicleIds),
+    getRowsById(ctx, customerIds),
+  ]);
+
+  return rows.map((row) => {
+    const context = contextByTransactionId.get(row._id) ?? null;
+    return enrichLedgerTransaction(row, context, vehicles, customers);
+  });
+}
 
 export const list = query({
   args: {
@@ -19,7 +186,7 @@ export const list = query({
       .query("transactions")
       .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId))
       .order("desc");
-    return await q
+    const pageResult = await q
       .filter((q) => {
         const notDeleted = q.neq(q.field("isDeleted"), true);
         if (args.startDate && args.endDate) {
@@ -32,6 +199,9 @@ export const list = query({
         return notDeleted;
       })
       .paginate(args.paginationOpts);
+
+    const page = await enrichLedgerTransactions(ctx, pageResult.page);
+    return { ...pageResult, page };
   },
 });
 

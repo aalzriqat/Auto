@@ -27,19 +27,26 @@ export async function createSaleTransaction(
     salePrice: number;
     saleDate: number;
     vehicle: Doc<"vehicles">;
+    customer: Doc<"customers">;
     /** Amount already booked as separate DEPOSIT transactions for this deal — subtracted so it isn't double-counted as revenue. */
     previouslyCollected?: number;
     idempotencyKey?: string;
   }
 ): Promise<void> {
+  const vehicleLabel = `${args.vehicle.year} ${args.vehicle.make} ${args.vehicle.model}`.trim();
+  const customerLabel =
+    `${args.customer.firstName ?? ""} ${args.customer.lastName ?? ""}`.trim() || "Customer";
+  const vinLabel = args.vehicle.vin ? ` (VIN: ${args.vehicle.vin})` : "";
+
   await ctx.db.insert("transactions", {
     orgId: args.orgId,
     type: "IN",
     amount: args.salePrice - (args.previouslyCollected ?? 0),
     date: args.saleDate,
     category: "VEHICLE_SALE",
-    description: `Sale of vehicle ${args.vehicle.year} ${args.vehicle.make} ${args.vehicle.model} (VIN: ${args.vehicle.vin})`,
+    description: `Sale of vehicle ${vehicleLabel} to ${customerLabel}${vinLabel}`,
     vehicleId: args.vehicleId,
+    customerId: args.customer._id,
     idempotencyKey: args.idempotencyKey,
   });
 }

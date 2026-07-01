@@ -60,6 +60,7 @@ export const create = mutation({
         const customerLabel = customer
           ? `${customer.firstName ?? ""} ${customer.lastName ?? ""}`.trim() || "Customer"
           : "Customer";
+        const quoteReference = args.quoteId.toString();
 
         const now = Date.now();
         const depositId = await ctx.db.insert("deposits", {
@@ -82,8 +83,9 @@ export const create = mutation({
           amount: args.amount,
           date: now,
           category: "DEPOSIT",
-          description: `Deposit — ${vehicleLabel} (${customerLabel})`,
+          description: `Deposit for quote ${quoteReference} - ${vehicleLabel} - ${customerLabel}`,
           vehicleId: quote.vehicleId,
+          depositId,
           idempotencyKey: args.idempotencyKey,
         });
 
@@ -190,8 +192,9 @@ export const release = mutation({
             amount: deposit.amount,
             date: now,
             category: "DEPOSIT",
-            description: `Deposit refunded — ${refundVehicleLabel} (${refundCustomerLabel})`,
+            description: `Deposit refund for quote ${deposit.quoteId} - ${refundVehicleLabel} - ${refundCustomerLabel}`,
             vehicleId: deposit.vehicleId,
+            depositId: args.depositId,
             idempotencyKey: args.idempotencyKey,
           });
 

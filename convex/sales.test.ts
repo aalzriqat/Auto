@@ -13,7 +13,7 @@ vi.mock("./rateLimit", () => ({
 
 describe("Sales Mutations", () => {
   test("Creating a sale marks the vehicle as SOLD and creates a ledger transaction", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
 
     // Provide a mocked getValidatedEnv implementation or mocked ENV since auth/env hooks might run
     // convex-test handles auth simulation differently. Let's just run it as an admin.
@@ -119,11 +119,15 @@ describe("Sales Mutations", () => {
       expect(tx?.amount).toBe(15000);
       expect(tx?.category).toBe("VEHICLE_SALE");
       expect(tx?.type).toBe("IN");
+      expect(tx?.customerId).toBe(customerId);
+      expect(tx?.description).toContain("Sale of vehicle");
+      expect(tx?.description).toContain("Honda Accord");
+      expect(tx?.description).toContain("John Doe");
     });
   });
 
   test("Creating a sale from a quote closes the quote's exact lead as WON", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
 
     const orgId = await t.run((ctx) =>
       ctx.db.insert("organizations", { name: "Test Dealer", createdAt: Date.now() })

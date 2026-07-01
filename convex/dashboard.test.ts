@@ -6,7 +6,7 @@ import { api } from "./_generated/api";
 const PERMISSIONS = ["view:customers", "view:vehicles", "view:users"];
 
 async function setup() {
-  const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+  const t = convexTest(schema, import.meta.glob("./**/*.ts"));
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Test Dealer", createdAt: Date.now() })
   );
@@ -78,5 +78,87 @@ describe("dashboard.dataQualityStats", () => {
     expect(result.customersMissingPhone).toBe(1);
     expect(result.customersMissingEmail).toBe(1);
     expect(result.vehiclesWithVinWarning).toBe(1);
+  });
+});
+
+describe("dashboard.stats", () => {
+  test("counts visible sales and sale volume in the overview", async () => {
+    const { t, orgId, asUser } = await setup();
+    const saleDate = Date.UTC(2026, 5, 29);
+
+    const userId = await t.run((ctx) =>
+      ctx.db
+        .query("memberships")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .first()
+        .then((membership) => membership!.userId)
+    );
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "LCOC76CA9R4807882",
+        make: "BYD",
+        model: "QIN L",
+        year: 2024,
+        mileage: 100,
+        color: "White",
+        fuelType: "Hybrid",
+        transmission: "Automatic",
+        purchasePrice: 16000,
+        sellingPrice: 19600,
+        status: "SOLD",
+      })
+    );
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Sara", lastName: "Haddad" })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId,
+        vehicleId,
+        customerId,
+        salespersonId: userId,
+        salePrice: 19600,
+        saleDate,
+        status: "COMPLETED",
+      })
+    );
+
+    const result = await asUser.query(api.dashboard.stats, { orgId, timeRange: "ALL_TIME" });
+
+    expect(result.salesThisMonth).toBe(1);
+    expect(result.salesVolumeThisMonth).toBe(19600);
+    expect(result.salesTrend.some((point) => point.Revenue === 19600)).toBe(true);
+  });
+
+  test("falls back to vehicle sale transactions when sale rows are unavailable", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    await t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId,
+        type: "IN",
+        amount: 19600,
+        date: Date.UTC(2026, 5, 29),
+        category: "VEHICLE_SALE",
+        description: "Sale of vehicle 2024 BYD QIN L (VIN: LCOC76CA9R4807882)",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId,
+        type: "IN",
+        amount: 99999,
+        date: Date.UTC(2026, 5, 29),
+        category: "VEHICLE_SALE",
+        description: "Deleted sale transaction",
+        isDeleted: true,
+      })
+    );
+
+    const result = await asUser.query(api.dashboard.stats, { orgId, timeRange: "ALL_TIME" });
+
+    expect(result.salesThisMonth).toBe(1);
+    expect(result.salesVolumeThisMonth).toBe(19600);
   });
 });
