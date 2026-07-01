@@ -1,11 +1,11 @@
 "use client";
 
-import * as XLSX from "xlsx";
 import { useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { ImportWizard, ImportFieldConfig, ImportRow } from "@/components/import/ImportWizard";
+import { downloadXlsxTemplate } from "@/lib/spreadsheet";
 
 // Column name auto-guess — only a starting point; the dealer can remap any
 // column themselves, and their choice is remembered per-organization.
@@ -71,12 +71,13 @@ function renderCustomerPreviewCell(row: ImportRow, key: string) {
 const TEMPLATE_HEADERS = ["First Name", "Last Name", "Phone", "WhatsApp", "Email", "National ID", "Address"];
 const TEMPLATE_EXAMPLE = ["Ahmed", "Al-Hassan", "0791234567", "0791234567", "ahmed@email.com", "123456789", "Amman, Jordan"];
 
-function downloadTemplate() {
-  const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.aoa_to_sheet([TEMPLATE_HEADERS, TEMPLATE_EXAMPLE]);
-  ws["!cols"] = TEMPLATE_HEADERS.map(() => ({ wch: 20 }));
-  XLSX.utils.book_append_sheet(wb, ws, "Customers");
-  XLSX.writeFile(wb, "customer_import_template.xlsx");
+async function downloadTemplate() {
+  await downloadXlsxTemplate({
+    fileName: "customer_import_template.xlsx",
+    sheetName: "Customers",
+    rows: [TEMPLATE_HEADERS, TEMPLATE_EXAMPLE],
+    columnWidth: 20,
+  });
 }
 
 interface Props {

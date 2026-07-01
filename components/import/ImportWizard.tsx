@@ -1,7 +1,6 @@
 "use client";
 
 import { useRef, useState } from "react";
-import * as XLSX from "xlsx";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -34,6 +33,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { parseSpreadsheetFile, SpreadsheetRows } from "@/lib/spreadsheet";
 
 export interface ImportFieldConfig {
   key: string;
@@ -60,12 +60,12 @@ interface ImportWizardProps {
   description: string;
   fields: ImportFieldConfig[];
   autoGuess: Record<string, string>;
-  parseWorksheet?: (ws: XLSX.WorkSheet) => { headers: string[]; rows: any[][]; valuationHeaders?: string[] };
+  parseWorksheet?: (rows: SpreadsheetRows) => { headers: string[]; rows: any[][]; valuationHeaders?: string[] };
   deriveRow?: (mapped: Record<string, any>) => Record<string, any>;
   validateRow: (mapped: Record<string, any>) => string[];
   previewColumns: ImportPreviewColumn[];
   renderPreviewCell: (row: ImportRow, columnKey: string) => React.ReactNode;
-  templateBuilder: () => void;
+  templateBuilder: () => void | Promise<void>;
   /**
    * Lets the entity-specific dialog inject extra mapping targets discovered
    * only after parsing this file (e.g. one "Valuation: <company>" option per
@@ -85,8 +85,7 @@ export function normalizeKey(key: string): string {
   return key.toLowerCase().trim().replace(/\s+/g, " ");
 }
 
-function defaultParseWorksheet(ws: XLSX.WorkSheet): { headers: string[]; rows: any[][]; valuationHeaders: string[] } {
-  const rawRows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
+function defaultParseWorksheet(rawRows: SpreadsheetRows): { headers: string[]; rows: any[][]; valuationHeaders: string[] } {
   if (rawRows.length === 0) return { headers: [], rows: [], valuationHeaders: [] };
   const headers = (rawRows[0] ?? []).map((c: any) => String(c ?? "").trim());
   const rows = rawRows.slice(1).filter((row) => row.some((cell: any) => cell !== ""));
@@ -137,14 +136,11 @@ export function ImportWizard(props: ImportWizardProps) {
     setDynamicFields([]);
   }
 
-  function handleFile(file: File) {
+  async function handleFile(file: File) {
     setFileName(file.name);
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const data = e.target?.result;
-      const wb = XLSX.read(data, { type: "binary" });
-      const ws = wb.Sheets[wb.SheetNames[0]];
-      const { headers: detectedHeaders, rows: detectedRows, valuationHeaders } = parseWorksheet(ws);
+    try {
+      const spreadsheetRows = await parseSpreadsheetFile(file);
+      const { headers: detectedHeaders, rows: detectedRows, valuationHeaders } = parseWorksheet(spreadsheetRows);
 
       const dynamic = resolveDynamicFields?.({
         headers: detectedHeaders,
@@ -168,8 +164,10 @@ export function ImportWizard(props: ImportWizardProps) {
       setSampleValues(detectedHeaders.map((_, i) => String(detectedRows[0]?.[i] ?? "")));
       setRawRows(detectedRows);
       setMapping(initialMapping);
-    };
-    reader.readAsBinaryString(file);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not read this spreadsheet.");
+      resetAll();
+    }
   }
 
   function handleDrop(e: React.DragEvent) {
@@ -254,12 +252,12 @@ export function ImportWizard(props: ImportWizardProps) {
                 <input
                   ref={fileInputRef}
                   type="file"
-                  accept=".xlsx,.xls,.csv"
+                  accept=".xlsx,.csv"
                   className="hidden"
                   onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
                 />
               </div>
-              <Button variant="outline" size="sm" onClick={templateBuilder}>
+              <Button variant="outline" size="sm" onClick={() => { void templateBuilder(); }}>
                 <Download className="h-4 w-4 me-2" />
                 {t("DownloadTemplate" as any)}
               </Button>
