@@ -3,9 +3,9 @@ import { expect, test, describe } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 
-const PERMISSIONS = ["view:customers", "view:vehicles", "view:users"];
+const PERMISSIONS = ["view:customers", "view:vehicles", "view:users", "view:sales"];
 
-async function setup() {
+async function setup(permissions = PERMISSIONS) {
   const t = convexTest(schema, import.meta.glob("./**/*.ts"));
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Test Dealer", createdAt: Date.now() })
@@ -14,7 +14,7 @@ async function setup() {
     ctx.db.insert("users", { clerkId: "user_d1", email: "d@test.com", name: "Dashboard User" })
   );
   const roleId = await t.run((ctx) =>
-    ctx.db.insert("roles", { orgId, name: "ADMIN", permissions: PERMISSIONS })
+    ctx.db.insert("roles", { orgId, name: "ADMIN", permissions })
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
   const asUser = t.withIdentity({ subject: "user_d1" });
@@ -131,6 +131,65 @@ describe("dashboard.stats", () => {
     expect(result.salesTrend.some((point) => point.Revenue === 19600)).toBe(true);
   });
 
+  test("excludes PENDING and CANCELLED sales from counts and volume", async () => {
+    const { t, orgId, asUser } = await setup();
+    const saleDate = Date.UTC(2026, 5, 29);
+
+    const userId = await t.run((ctx) =>
+      ctx.db
+        .query("memberships")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .first()
+        .then((membership) => membership!.userId)
+    );
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "LCOC76CA9R4807883",
+        make: "BYD",
+        model: "Seal",
+        year: 2024,
+        mileage: 0,
+        color: "Blue",
+        fuelType: "Electric",
+        transmission: "Automatic",
+        sellingPrice: 25000,
+        status: "AVAILABLE",
+      })
+    );
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Test", lastName: "Buyer" })
+    );
+
+    await t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId,
+        vehicleId,
+        customerId,
+        salespersonId: userId,
+        salePrice: 25000,
+        saleDate,
+        status: "PENDING",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId,
+        vehicleId,
+        customerId,
+        salespersonId: userId,
+        salePrice: 25000,
+        saleDate,
+        status: "CANCELLED",
+      })
+    );
+
+    const result = await asUser.query(api.dashboard.stats, { orgId, timeRange: "ALL_TIME" });
+
+    expect(result.salesThisMonth).toBe(0);
+    expect(result.salesVolumeThisMonth).toBe(0);
+  });
+
   test("falls back to vehicle sale transactions when sale rows are unavailable", async () => {
     const { t, orgId, asUser } = await setup();
 
@@ -160,5 +219,82 @@ describe("dashboard.stats", () => {
 
     expect(result.salesThisMonth).toBe(1);
     expect(result.salesVolumeThisMonth).toBe(19600);
+  });
+
+  test("filters sensitive dashboard metrics by caller permissions", async () => {
+    const { t, orgId, asUser } = await setup(["view:vehicles"]);
+    const userId = await t.run((ctx) =>
+      ctx.db
+        .query("memberships")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .first()
+        .then((membership) => membership!.userId)
+    );
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "1HGCM82633A004352",
+        make: "Honda",
+        model: "Accord",
+        year: 2020,
+        mileage: 10000,
+        color: "Black",
+        fuelType: "Petrol",
+        transmission: "Automatic",
+        sellingPrice: 15000,
+        status: "AVAILABLE",
+      })
+    );
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Private", lastName: "Buyer" })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("leads", { orgId, customerId, source: "Walk-in", stage: "NEW" })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId,
+        vehicleId,
+        customerId,
+        salespersonId: userId,
+        salePrice: 19600,
+        saleDate: Date.UTC(2026, 5, 29),
+        status: "COMPLETED",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("expenses", {
+        orgId,
+        vehicleId,
+        title: "Private repair",
+        amount: 500,
+        date: Date.UTC(2026, 5, 29),
+        category: "MAINTENANCE",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("tasks", {
+        orgId,
+        title: "Sensitive task",
+        description: "Do the thing",
+        assignedTo: userId,
+        status: "PENDING",
+        dueDate: Date.now() + 86_400_000,
+        priority: "MEDIUM",
+      })
+    );
+
+    const result = await asUser.query(api.dashboard.stats, { orgId, timeRange: "ALL_TIME" });
+
+    expect(result.totalVehicles).toBe(1);
+    expect(result.availableVehicles).toBe(1);
+    expect(result.activeLeads).toBe(0);
+    expect(result.salesThisMonth).toBe(0);
+    expect(result.salesVolumeThisMonth).toBe(0);
+    expect(result.salesTrend).toEqual([]);
+    expect(result.teamMembers).toBe(0);
+    expect(result.taskStats).toEqual({ total: 0, pending: 0, completed: 0, overdue: 0 });
+    expect(result.teamTasks).toEqual([]);
+    expect(result.topPerformer).toBeNull();
   });
 });
