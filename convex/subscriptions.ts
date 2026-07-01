@@ -157,26 +157,6 @@ const PLAN_GATE_LABELS: Record<PlanGate, string> = {
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
-export const planGateValidator = v.union(
-  v.literal("socialInbox"),
-  v.literal("whatsapp"),
-  v.literal("internalMessaging"),
-  v.literal("accounting"),
-  v.literal("customRoles"),
-  v.literal("websiteBuilder"),
-  v.literal("multiBranch")
-);
-
-const PLAN_GATE_LABELS: Record<PlanGate, string> = {
-  socialInbox: "Social Inbox",
-  whatsapp: "WhatsApp",
-  internalMessaging: "internal messaging",
-  accounting: "accounting",
-  customRoles: "custom roles",
-  websiteBuilder: "website builder",
-  multiBranch: "multi-branch",
-};
-
 /** Returns the org's active plan, defaulting to "free" if no subscription row exists. */
 export async function getOrgPlan(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">): Promise<PlanId> {
   const sub = await ctx.db
