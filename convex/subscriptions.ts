@@ -157,6 +157,26 @@ const PLAN_GATE_LABELS: Record<PlanGate, string> = {
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
+export const planGateValidator = v.union(
+  v.literal("socialInbox"),
+  v.literal("whatsapp"),
+  v.literal("internalMessaging"),
+  v.literal("accounting"),
+  v.literal("customRoles"),
+  v.literal("websiteBuilder"),
+  v.literal("multiBranch")
+);
+
+const PLAN_GATE_LABELS: Record<PlanGate, string> = {
+  socialInbox: "Social Inbox",
+  whatsapp: "WhatsApp",
+  internalMessaging: "internal messaging",
+  accounting: "accounting",
+  customRoles: "custom roles",
+  websiteBuilder: "website builder",
+  multiBranch: "multi-branch",
+};
+
 /** Returns the org's active plan, defaulting to "free" if no subscription row exists. */
 export async function getOrgPlan(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">): Promise<PlanId> {
   const sub = await ctx.db
@@ -165,8 +185,8 @@ export async function getOrgPlan(ctx: QueryCtx | MutationCtx, orgId: Id<"organiz
     .unique();
 
   if (!sub) return "free";
-  // Expired paid plan falls back to free
-  if (sub.status === "expired") return "free";
+  if (sub.status !== "active") return "free";
+  if (sub.currentPeriodEnd !== undefined && sub.currentPeriodEnd < Date.now()) return "free";
   return sub.plan;
 }
 
@@ -239,7 +259,7 @@ export const getExpiringRenewals = internalQuery({
       .withIndex("by_status_period_end", (q) =>
         q.eq("status", "active").lte("currentPeriodEnd", cutoff)
       )
-      .take(100);
+      .take(1000);
 
     return rows.filter(
       (s) =>
@@ -259,13 +279,15 @@ export const canAddVehicle = internalQuery({
     const plan = PLANS[planId];
     if (plan.maxVehicles === -1) return { allowed: true };
 
-    // Count non-deleted vehicles for this org
+    // Count non-deleted vehicles — filter before take so deleted rows do not
+    // consume the prefix and cause the limit check to undercount.
     const vehicles = await ctx.db
       .query("vehicles")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .filter((q) => q.neq(q.field("isDeleted"), true))
       .take(plan.maxVehicles + 1);
 
-    const activeCount = vehicles.filter((v) => !v.isDeleted).length;
+    const activeCount = vehicles.length;
     if (activeCount >= plan.maxVehicles) {
       return {
         allowed: false,
@@ -285,13 +307,15 @@ export const canAddMember = internalQuery({
     const plan = PLANS[planId];
     if (plan.maxUsers === -1) return { allowed: true };
 
+    // Fetch enough rows to account for impersonation/offboarding rows that will
+    // be excluded, so the real-member count isn't undercounted by the prefix.
     const memberships = await ctx.db
       .query("memberships")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .take(plan.maxUsers + 1);
+      .take(plan.maxUsers + 50);
 
-    // Exclude impersonation grants
-    const realMembers = memberships.filter((m) => !m.impersonationGrantId);
+    // Exclude impersonation grants and members pending offboarding.
+    const realMembers = memberships.filter((m) => !m.impersonationGrantId && !m.offboardingStatus);
     if (realMembers.length >= plan.maxUsers) {
       return {
         allowed: false,
@@ -307,12 +331,10 @@ export const canAddMember = internalQuery({
 export const hasFeature = internalQuery({
   args: {
     orgId: v.id("organizations"),
-    gate: v.string(),
+    gate: planGateValidator,
   },
   handler: async (ctx, args) => {
-    const planId = await getOrgPlan(ctx, args.orgId);
-    const gates = PLANS[planId].gates as Record<string, boolean>;
-    return gates[args.gate] ?? false;
+    return await hasPlanFeature(ctx, args.orgId, args.gate);
   },
 });
 
@@ -328,7 +350,7 @@ export const getMySubscription = query({
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .unique();
 
-    const planId: PlanId = sub?.status === "expired" || !sub ? "free" : sub.plan;
+    const planId = await getOrgPlan(ctx, args.orgId);
     const plan = PLANS[planId];
     const now = Date.now();
 
@@ -369,7 +391,7 @@ export const getUsageStats = query({
       .query("memberships")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .collect();
-    const memberCount = memberships.filter((m) => !m.impersonationGrantId).length;
+    const memberCount = memberships.filter((m) => !m.impersonationGrantId && !m.offboardingStatus).length;
 
     return {
       vehicleCount,

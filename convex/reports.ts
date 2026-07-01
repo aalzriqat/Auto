@@ -19,13 +19,20 @@ export const getSalesAndProfitReport = query({
       throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
     }
 
-    // Use index range — avoids collecting ALL org sales
+    // Use index range — avoids collecting ALL org sales.
+    // Only COMPLETED non-deleted sales are counted.
     const salesInDateRange = await ctx.db
       .query("sales")
       .withIndex("by_org_saleDate", (q) =>
         q.eq("orgId", args.orgId).gte("saleDate", args.startDate)
       )
-      .filter((q) => q.lte(q.field("saleDate"), args.endDate))
+      .filter((q) =>
+        q.and(
+          q.lte(q.field("saleDate"), args.endDate),
+          q.eq(q.field("status"), "COMPLETED"),
+          q.neq(q.field("isDeleted"), true)
+        )
+      )
       .collect();
 
     let totalRevenue = 0;
@@ -231,13 +238,20 @@ export const getSalespersonPerformance = query({
       throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
     }
 
-    // Use index range — avoids collecting ALL org sales
+    // Use index range — avoids collecting ALL org sales.
+    // Only COMPLETED non-deleted sales are counted.
     const salesInDateRange = await ctx.db
       .query("sales")
       .withIndex("by_org_saleDate", (q) =>
         q.eq("orgId", args.orgId).gte("saleDate", args.startDate)
       )
-      .filter((q) => q.lte(q.field("saleDate"), args.endDate))
+      .filter((q) =>
+        q.and(
+          q.lte(q.field("saleDate"), args.endDate),
+          q.eq(q.field("status"), "COMPLETED"),
+          q.neq(q.field("isDeleted"), true)
+        )
+      )
       .collect();
 
     const salesBySalesperson: Record<string, any[]> = {};
@@ -321,11 +335,15 @@ export const getLeadConversionReport = query({
       throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
     }
 
-    // No _creationTime index — cap at 10 000 rows and filter in memory
+    // No compound index on creationTime — scan up to 50 000 rows and filter
+    // in memory. The response includes a `truncated` flag so the UI can warn
+    // users when the org has more leads than the cap.
+    const LEAD_SCAN_LIMIT = 50_000;
     const allLeads = await ctx.db
       .query("leads")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .take(10000);
+      .take(LEAD_SCAN_LIMIT);
+    const leadScanTruncated = allLeads.length === LEAD_SCAN_LIMIT;
 
     const leadsInDateRange = allLeads.filter(
       (lead) =>
@@ -374,7 +392,7 @@ export const getLeadConversionReport = query({
 
     salespersonMetrics.sort((a, b) => b.conversionRate - a.conversionRate);
 
-    return { totalLeads, wonLeads, overallConversionRate, stageCounts, salespersonMetrics };
+    return { totalLeads, wonLeads, overallConversionRate, stageCounts, salespersonMetrics, truncated: leadScanTruncated };
   },
 });
 
@@ -405,15 +423,23 @@ export const getProfitAndLoss = query({
     let costOfGoodsSold = 0;
     let operatingExpenses = 0;
 
+    // Revenue: only explicit sale and deposit receipts.
+    // COLLECTION_PAYMENT is an installment against an existing receivable — the
+    // matching VEHICLE_SALE transaction already recognised the full sale price,
+    // so counting COLLECTION_PAYMENT as additional revenue would double-count.
+    // Generic type="IN" rows (e.g. CLAIM_PAYMENT, REFUND-in) are also excluded.
+    const REVENUE_CATEGORIES = new Set(["VEHICLE_SALE", "DEPOSIT"]);
+
     for (const tx of txInDateRange) {
-      if (tx.category === "VEHICLE_SALE" || tx.category === "DEPOSIT" || tx.type === "IN") {
-        if (tx.category !== "CAPITAL_INJECTION" && tx.category !== "PARTNER_DRAW") {
-          totalRevenue += tx.amount;
+      if (tx.isDeleted) continue;
+      if (tx.type === "IN" && REVENUE_CATEGORIES.has(tx.category ?? "")) {
+        totalRevenue += tx.amount;
+      } else if (tx.type === "OUT") {
+        if (tx.category === "VEHICLE_PURCHASE" || (tx.category === "EXPENSE" && tx.vehicleId)) {
+          costOfGoodsSold += tx.amount;
+        } else if (tx.category === "EXPENSE" && !tx.vehicleId) {
+          operatingExpenses += tx.amount;
         }
-      } else if (tx.category === "VEHICLE_PURCHASE" || (tx.category === "EXPENSE" && tx.vehicleId)) {
-        costOfGoodsSold += tx.amount;
-      } else if (tx.category === "EXPENSE" && !tx.vehicleId) {
-        operatingExpenses += tx.amount;
       }
     }
 

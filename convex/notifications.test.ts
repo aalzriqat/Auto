@@ -11,6 +11,15 @@ vi.mock("./rateLimit", () => ({
 
 async function seedOrgWithMember(t: ReturnType<typeof convexTest>) {
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() }));
+  await t.run((ctx) =>
+    ctx.db.insert("subscriptions", {
+      orgId,
+      plan: "professional",
+      status: "active",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+  );
   const userId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "member_001", email: "member@test.com", name: "Member" }));
   const roleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "SALES", permissions: ["view:vehicles"] }));
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
