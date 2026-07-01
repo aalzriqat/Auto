@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { ArrowRight, Car, CheckCircle2, Globe2, Mail, MapPin, Menu, Phone, ShieldCheck, X } from "lucide-react";
 import type { ThemeProps, PublicVehicle, FormState, SiteStrings } from "./theme-props";
+import { TurnstileWidget } from "../turnstile-widget";
 
 export function AvantTheme(props: ThemeProps) {
   const {
     site, page, detailVehicle, lang, isArabic, dir, showLangToggle, isPreviewMode,
     form, setForm, setSelectedVehicleId, isSubmitting, formSuccess, setFormSuccess,
-    onSubmit, onToggleLang, mobileNavOpen, setMobileNavOpen,
+    onSubmit, turnstileSiteKey, onToggleLang, mobileNavOpen, setMobileNavOpen,
     t, primary, secondary, formatPrice, vehicles, featuredVehicles,
   } = props;
 
@@ -239,7 +240,7 @@ export function AvantTheme(props: ThemeProps) {
                   onSubmit={(e) => { setSelectedVehicleId(detailVehicle.id); onSubmit(e, "vehicle_inquiry"); }}
                 >
                   <h2 style={{ fontWeight: 700, marginBottom: 16 }}>{t.askAbout}</h2>
-                  <AvantFormFields form={form} setForm={setForm} t={t} isSubmitting={isSubmitting} submitLabel={t.sendInquiry} primary={primary} />
+                  <AvantFormFields form={form} setForm={setForm} t={t} isSubmitting={isSubmitting} submitLabel={t.sendInquiry} primary={primary} turnstileSiteKey={turnstileSiteKey} />
                 </form>
               )}
             </div>
@@ -261,7 +262,7 @@ export function AvantTheme(props: ThemeProps) {
             <AvantSuccess t={t} primary={primary} secondary={secondary} onReset={() => setFormSuccess(null)} />
           ) : (
             <form className="av-form-card" onSubmit={(e) => onSubmit(e, "financing")}>
-              <AvantFormFields form={form} setForm={setForm} t={t} isSubmitting={isSubmitting} submitLabel={t.requestFinancing} primary={primary} />
+              <AvantFormFields form={form} setForm={setForm} t={t} isSubmitting={isSubmitting} submitLabel={t.requestFinancing} primary={primary} turnstileSiteKey={turnstileSiteKey} />
             </form>
           )}
         </section>
@@ -332,7 +333,7 @@ export function AvantTheme(props: ThemeProps) {
               <AvantSuccess t={t} primary={primary} secondary={secondary} onReset={() => setFormSuccess(null)} />
             ) : (
               <form className="av-form-card" onSubmit={(e) => onSubmit(e, "contact")}>
-                <AvantFormFields form={form} setForm={setForm} t={t} isSubmitting={isSubmitting} submitLabel={t.sendMessage} primary={primary} />
+                <AvantFormFields form={form} setForm={setForm} t={t} isSubmitting={isSubmitting} submitLabel={t.sendMessage} primary={primary} turnstileSiteKey={turnstileSiteKey} />
               </form>
             )}
           </div>
@@ -457,13 +458,14 @@ function AvantSuccess({ t, primary, secondary, onReset }: { t: SiteStrings; prim
   );
 }
 
-function AvantFormFields({ form, setForm, t, isSubmitting, submitLabel, primary }: {
+function AvantFormFields({ form, setForm, t, isSubmitting, submitLabel, primary, turnstileSiteKey }: {
   form: FormState;
   setForm: (f: FormState) => void;
   t: SiteStrings;
   isSubmitting: boolean;
   submitLabel: string;
   primary: string;
+  turnstileSiteKey?: string;
 }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -480,6 +482,7 @@ function AvantFormFields({ form, setForm, t, isSubmitting, submitLabel, primary 
       <p style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#94a3b8" }}>
         <Mail size={12} style={{ flexShrink: 0 }} /> {t.contactMethodHint}
       </p>
+      <TurnstileWidget siteKey={turnstileSiteKey} theme="light" />
       <button type="submit" disabled={isSubmitting} className="av-btn-primary" style={{ justifyContent: "center" }}>
         {submitLabel}
       </button>

@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { ArrowRight, Car, CheckCircle2, Globe2, Mail, MapPin, Menu, Phone, ShieldCheck, X } from "lucide-react";
 import type { ThemeProps, PublicVehicle, FormState, SiteStrings } from "./theme-props";
+import { TurnstileWidget } from "../turnstile-widget";
 
 export function PrestigeTheme(props: ThemeProps) {
   const {
     site, page, detailVehicle, lang, isArabic, dir, showLangToggle, isPreviewMode,
     form, setForm, setSelectedVehicleId, isSubmitting, formSuccess, setFormSuccess,
-    onSubmit, onToggleLang, mobileNavOpen, setMobileNavOpen,
+    onSubmit, turnstileSiteKey, onToggleLang, mobileNavOpen, setMobileNavOpen,
     t, primary, secondary, formatPrice, vehicles, featuredVehicles,
   } = props;
 
@@ -266,7 +267,7 @@ export function PrestigeTheme(props: ThemeProps) {
                   onSubmit={(e) => { setSelectedVehicleId(detailVehicle.id); onSubmit(e, "vehicle_inquiry"); }}
                 >
                   <h2 style={{ fontWeight: 700, color: "#fff", marginBottom: 16 }}>{t.askAbout}</h2>
-                  <PrestigeFormFields form={form} setForm={setForm} t={t} isSubmitting={isSubmitting} submitLabel={t.sendInquiry} primary={primary} />
+                  <PrestigeFormFields form={form} setForm={setForm} t={t} isSubmitting={isSubmitting} submitLabel={t.sendInquiry} primary={primary} turnstileSiteKey={turnstileSiteKey} />
                 </form>
               )}
             </div>
@@ -289,7 +290,7 @@ export function PrestigeTheme(props: ThemeProps) {
               style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: 4, padding: 28 }}
               onSubmit={(e) => onSubmit(e, "financing")}
             >
-              <PrestigeFormFields form={form} setForm={setForm} t={t} isSubmitting={isSubmitting} submitLabel={t.requestFinancing} primary={primary} />
+              <PrestigeFormFields form={form} setForm={setForm} t={t} isSubmitting={isSubmitting} submitLabel={t.requestFinancing} primary={primary} turnstileSiteKey={turnstileSiteKey} />
             </form>
           )}
         </section>
@@ -360,7 +361,7 @@ export function PrestigeTheme(props: ThemeProps) {
                 style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: 4, padding: 32 }}
                 onSubmit={(e) => onSubmit(e, "contact")}
               >
-                <PrestigeFormFields form={form} setForm={setForm} t={t} isSubmitting={isSubmitting} submitLabel={t.sendMessage} primary={primary} />
+                <PrestigeFormFields form={form} setForm={setForm} t={t} isSubmitting={isSubmitting} submitLabel={t.sendMessage} primary={primary} turnstileSiteKey={turnstileSiteKey} />
               </form>
             )}
           </div>
@@ -458,13 +459,14 @@ function PrestigeSuccess({ t, primary, onReset }: { t: SiteStrings; primary: str
   );
 }
 
-function PrestigeFormFields({ form, setForm, t, isSubmitting, submitLabel, primary }: {
+function PrestigeFormFields({ form, setForm, t, isSubmitting, submitLabel, primary, turnstileSiteKey }: {
   form: FormState;
   setForm: (f: FormState) => void;
   t: SiteStrings;
   isSubmitting: boolean;
   submitLabel: string;
   primary: string;
+  turnstileSiteKey?: string;
 }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -481,6 +483,7 @@ function PrestigeFormFields({ form, setForm, t, isSubmitting, submitLabel, prima
       <p style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#555", letterSpacing: "0.05em" }}>
         <Mail size={11} style={{ flexShrink: 0 }} /> {t.contactMethodHint}
       </p>
+      <TurnstileWidget siteKey={turnstileSiteKey} theme="dark" />
       <button type="submit" disabled={isSubmitting} className="pt-btn-primary" style={{ marginTop: 4, justifyContent: "center" }}>
         {submitLabel}
       </button>
