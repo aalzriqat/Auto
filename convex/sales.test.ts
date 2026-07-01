@@ -11,6 +11,66 @@ vi.mock("./rateLimit", () => ({
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 
+async function seedSalesOrg(t: ReturnType<typeof convexTest>, suffix: string) {
+  const orgId = await t.run((ctx) =>
+    ctx.db.insert("organizations", { name: `Test Dealer ${suffix}`, createdAt: Date.now() })
+  );
+  const userId = await t.run((ctx) =>
+    ctx.db.insert("users", {
+      clerkId: `user_${suffix}`,
+      email: `${suffix}@example.com`,
+      name: "Test User",
+    })
+  );
+  const roleId = await t.run((ctx) =>
+    ctx.db.insert("roles", {
+      orgId,
+      name: "Admin",
+      permissions: [
+        "create:sales",
+        "view:sales",
+        "edit:sales",
+        "delete:sales",
+        "create:vehicles",
+        "view:vehicles",
+        "view:commissions",
+        "manage:commissions",
+      ],
+    })
+  );
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+  const vehicleId = await t.run((ctx) =>
+    ctx.db.insert("vehicles", {
+      orgId,
+      vin: `VIN-${suffix}`,
+      make: "Honda",
+      model: "Accord",
+      year: 2020,
+      color: "Black",
+      fuelType: "Gasoline",
+      transmission: "Automatic",
+      mileage: 50000,
+      sellingPrice: 15000,
+      status: "AVAILABLE",
+    })
+  );
+  const customerId = await t.run((ctx) =>
+    ctx.db.insert("customers", {
+      orgId,
+      firstName: "John",
+      lastName: "Doe",
+      email: `${suffix}.customer@example.com`,
+    })
+  );
+  return {
+    orgId,
+    userId,
+    vehicleId,
+    customerId,
+    asAdmin: t.withIdentity({ subject: `user_${suffix}`, clerkId: `user_${suffix}` }),
+  };
+}
+
 describe("Sales Mutations", () => {
   test("Creating a sale marks the vehicle as SOLD and creates a ledger transaction", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.ts"));
@@ -213,6 +273,106 @@ describe("Sales Mutations", () => {
 
       const untouchedLead = await ctx.db.get(otherLeadId);
       expect(untouchedLead?.stage).toBe("NEW");
+    });
+  });
+
+  test("creating a draft sale does not run completion side effects", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "draft_1");
+
+    const saleId = await asAdmin.mutation(api.sales.createDraft, {
+      orgId,
+      vehicleId,
+      customerId,
+      salespersonId: userId,
+      salePrice: 15000,
+      saleDate: Date.now(),
+      status: "PENDING",
+      financingType: "CASH",
+    });
+
+    await t.run(async (ctx) => {
+      const sale = await ctx.db.get(saleId);
+      expect(sale?.status).toBe("PENDING");
+      const vehicle = await ctx.db.get(vehicleId);
+      expect(vehicle?.status).toBe("AVAILABLE");
+      const tx = await ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect();
+      expect(tx).toHaveLength(0);
+    });
+  });
+
+  test("sale completion must use the explicit completeDraft transition", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "draft_2");
+
+    await expect(
+      asAdmin.mutation(api.sales.create, {
+        orgId,
+        vehicleId,
+        customerId,
+        salespersonId: userId,
+        salePrice: 15000,
+        saleDate: Date.now(),
+        status: "PENDING" as "COMPLETED",
+        financingType: "CASH",
+      })
+    ).rejects.toThrow();
+
+    const saleId = await asAdmin.mutation(api.sales.createDraft, {
+      orgId,
+      vehicleId,
+      customerId,
+      salespersonId: userId,
+      salePrice: 15000,
+      saleDate: Date.now(),
+      financingType: "CASH",
+    });
+
+    await expect(asAdmin.mutation(api.sales.update, { orgId, saleId, status: "COMPLETED" })).rejects.toThrow();
+
+    await asAdmin.mutation(api.sales.completeDraft, {
+      orgId,
+      saleId,
+      idempotencyKey: "complete-draft-test",
+    });
+
+    await t.run(async (ctx) => {
+      const sale = await ctx.db.get(saleId);
+      expect(sale?.status).toBe("COMPLETED");
+      const vehicle = await ctx.db.get(vehicleId);
+      expect(vehicle?.status).toBe("SOLD");
+      const tx = await ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect();
+      expect(tx).toHaveLength(1);
+      expect(tx[0].category).toBe("VEHICLE_SALE");
+    });
+  });
+
+  test("completed sale financial fields and commission amounts are locked", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, vehicleId, customerId, asAdmin } = await seedSalesOrg(t, "locked_1");
+
+    const saleId = await asAdmin.mutation(api.sales.create, {
+      orgId,
+      vehicleId,
+      customerId,
+      salespersonId: userId,
+      salePrice: 15000,
+      saleDate: Date.now(),
+      status: "COMPLETED",
+      financingType: "CASH",
+    });
+
+    await expect(asAdmin.mutation(api.sales.update, { orgId, saleId, salePrice: 14000 })).rejects.toThrow(
+      /completed sale financial fields are locked/i
+    );
+    await expect(
+      asAdmin.mutation(api.sales.setCommissionAmount, { orgId, saleId, commissionAmount: 500 })
+    ).rejects.toThrow(/commission amounts are locked/i);
+
+    await t.run(async (ctx) => {
+      const sale = await ctx.db.get(saleId);
+      expect(sale?.salePrice).toBe(15000);
+      expect(sale?.commissionAmount).toBeUndefined();
     });
   });
 });
