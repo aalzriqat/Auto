@@ -50,6 +50,15 @@ export const create = mutation({
         // (no-op if it's already RESERVED — parallel deposits are allowed).
         await holdVehicleForDeposit(ctx, quote.vehicleId);
 
+        const [vehicle, customer] = await Promise.all([
+          ctx.db.get(quote.vehicleId),
+          ctx.db.get(quote.customerId),
+        ]);
+        const vehicleLabel = vehicle
+          ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`
+          : "Vehicle";
+        const customerLabel = customer ? `${customer.firstName} ${customer.lastName}` : "Customer";
+
         const now = Date.now();
         const depositId = await ctx.db.insert("deposits", {
           orgId: args.orgId,
@@ -71,7 +80,7 @@ export const create = mutation({
           amount: args.amount,
           date: now,
           category: "DEPOSIT",
-          description: `Deposit held for quote ${args.quoteId}`,
+          description: `Deposit — ${vehicleLabel} (${customerLabel})`,
           vehicleId: quote.vehicleId,
           idempotencyKey: args.idempotencyKey,
         });
@@ -162,13 +171,22 @@ export const release = mutation({
         });
 
         if (args.resolution === "REFUNDED") {
+          const [refundVehicle, refundCustomer] = await Promise.all([
+            ctx.db.get(deposit.vehicleId),
+            ctx.db.get(deposit.customerId),
+          ]);
+          const refundVehicleLabel = refundVehicle
+            ? `${refundVehicle.year} ${refundVehicle.make} ${refundVehicle.model}`
+            : "Vehicle";
+          const refundCustomerLabel = refundCustomer ? `${refundCustomer.firstName} ${refundCustomer.lastName}` : "Customer";
+
           await ctx.db.insert("transactions", {
             orgId: args.orgId,
             type: "OUT",
             amount: deposit.amount,
             date: now,
             category: "DEPOSIT",
-            description: `Deposit refunded for quote ${deposit.quoteId}`,
+            description: `Deposit refunded — ${refundVehicleLabel} (${refundCustomerLabel})`,
             vehicleId: deposit.vehicleId,
             idempotencyKey: args.idempotencyKey,
           });

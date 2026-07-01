@@ -3,6 +3,8 @@
 import { useMemo, useRef, useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { ChevronDown, Search, Check, Truck, Loader2 } from "lucide-react";
+import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useCurrency } from "@/hooks/useCurrency";
 
 export type SourceVehicleData = {
   make: string;
@@ -51,6 +53,8 @@ export default function VehiclePicker({
   const [isSourcing, setIsSourcing] = useState(false);
   const [sourceData, setSourceData] = useState<SourceVehicleData>(DEFAULT_SOURCE_DATA);
   const containerRef = useRef<HTMLDivElement>(null);
+  const { t, isRtl } = useLanguage();
+  const currency = useCurrency();
 
   const selected = vehicles?.find((v) => v._id === value);
 
@@ -92,7 +96,7 @@ export default function VehiclePicker({
       setShowSourceForm(false);
       setSourceData(DEFAULT_SOURCE_DATA);
     } catch (err: any) {
-      throw err; // Propagate so the parent wizard can surface the error via toast
+      throw err;
     } finally {
       setIsSourcing(false);
     }
@@ -114,16 +118,16 @@ export default function VehiclePicker({
       >
         <span className={cn("flex items-center gap-2", selected ? "text-foreground" : "text-muted-foreground")}>
           {selected
-            ? `${selected.year} ${selected.make} ${selected.model}${selected.sourceType === "SOURCED" ? " · Sourced" : selected.vin ? ` — ${selected.vin}` : ""}`
-            : "Select an available vehicle…"}
+            ? `${selected.year} ${selected.make} ${selected.model}${selected.sourceType === "SOURCED" ? ` · ${t("Sourced" as any)}` : selected.vin ? ` — ${selected.vin}` : ""}`
+            : t("SelectAvailableVehicle" as any)}
           {selected?.status === "RESERVED" && (
             <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-500">
-              Reserved — pending deal
+              {t("ReservedPendingDeal" as any)}
             </span>
           )}
           {selected?.sourceType === "SOURCED" && (
             <span className="rounded-full bg-orange-500/15 px-2 py-0.5 text-xs font-medium text-orange-500">
-              Sourced
+              {t("Sourced" as any)}
             </span>
           )}
         </span>
@@ -143,7 +147,7 @@ export default function VehiclePicker({
                     autoFocus
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Search by make, model, year, VIN…"
+                    placeholder={t("SearchVehiclePicker" as any)}
                     className="w-full rounded-md border border-border bg-background ps-8 pe-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500/30"
                   />
                 </div>
@@ -152,7 +156,7 @@ export default function VehiclePicker({
               {/* Vehicle list */}
               <div className="max-h-64 overflow-y-auto">
                 {filtered.length === 0 ? (
-                  <p className="text-center text-sm text-muted-foreground py-6">No vehicles match your search</p>
+                  <p className="text-center text-sm text-muted-foreground py-6">{t("NoVehiclesMatchSearch" as any)}</p>
                 ) : (
                   filtered.map((v) => {
                     const isSelected = v._id === value;
@@ -176,19 +180,19 @@ export default function VehiclePicker({
                             {v.trim ? ` ${v.trim}` : ""}
                             {v.status === "RESERVED" && (
                               <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-500">
-                                Reserved
+                                {t("ReservedPendingDeal" as any)}
                               </span>
                             )}
                             {v.sourceType === "SOURCED" && (
                               <span className="rounded-full bg-orange-500/15 px-2 py-0.5 text-xs font-medium text-orange-500">
-                                Sourced
+                                {t("Sourced" as any)}
                               </span>
                             )}
                           </p>
-                          <p className="text-xs text-muted-foreground">{v.vin ?? "VIN pending"} · {v.color}</p>
+                          <p className="text-xs text-muted-foreground">{v.vin ?? t("VINPendingLabel" as any)} · {v.color}</p>
                         </div>
                         <div className="text-end flex-shrink-0 ms-4">
-                          <p className="font-semibold">{v.sellingPrice.toLocaleString()} JOD</p>
+                          <p className="font-semibold">{currency.format(v.sellingPrice)}</p>
                           {isSelected && <Check className="w-3.5 h-3.5 text-indigo-400 ms-auto mt-0.5" />}
                         </div>
                       </button>
@@ -206,7 +210,7 @@ export default function VehiclePicker({
                     className="w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm text-orange-600 hover:bg-orange-500/10 transition-colors font-medium"
                   >
                     <Truck className="w-4 h-4" />
-                    Source a vehicle for this customer
+                    {t("SourceVehicleForCustomer" as any)}
                   </button>
                 </div>
               )}
@@ -217,46 +221,46 @@ export default function VehiclePicker({
               <div className="flex items-center justify-between">
                 <p className="text-sm font-semibold flex items-center gap-1.5">
                   <Truck className="w-4 h-4 text-orange-500" />
-                  Source a vehicle for this customer
+                  {t("SourceVehicleForCustomer" as any)}
                 </p>
                 <button type="button" onClick={() => setShowSourceForm(false)} className="text-xs text-muted-foreground hover:text-foreground">
-                  ← Back to list
+                  {t("BackToList" as any)}
                 </button>
               </div>
 
               <div className="p-2.5 rounded-md bg-orange-50 dark:bg-orange-950/20 border border-orange-200 text-xs text-orange-700 dark:text-orange-400">
-                Car not in stock? Enter the details to create a sourced vehicle and continue building the quote.
+                {t("CarNotInStockHint" as any)}
               </div>
 
               <div className="grid grid-cols-3 gap-2">
                 <div>
-                  <p className={labelCls}>Make *</p>
+                  <p className={labelCls}>{t("Make" as any)} *</p>
                   <input className={inputCls} value={sourceData.make} onChange={(e) => setSourceData((d) => ({ ...d, make: e.target.value }))} placeholder="Toyota" />
                 </div>
                 <div>
-                  <p className={labelCls}>Model *</p>
+                  <p className={labelCls}>{t("Model" as any)} *</p>
                   <input className={inputCls} value={sourceData.model} onChange={(e) => setSourceData((d) => ({ ...d, model: e.target.value }))} placeholder="Camry" />
                 </div>
                 <div>
-                  <p className={labelCls}>Year *</p>
+                  <p className={labelCls}>{t("Year" as any)} *</p>
                   <input className={inputCls} type="number" min="2000" max="2030" value={sourceData.year} onChange={(e) => setSourceData((d) => ({ ...d, year: parseInt(e.target.value) || new Date().getFullYear() }))} />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <p className={labelCls}>Trim (optional)</p>
+                  <p className={labelCls}>{t("TrimOptional" as any)}</p>
                   <input className={inputCls} value={sourceData.trim ?? ""} onChange={(e) => setSourceData((d) => ({ ...d, trim: e.target.value }))} placeholder="LE, XLE…" />
                 </div>
                 <div>
-                  <p className={labelCls}>Color *</p>
+                  <p className={labelCls}>{t("Color" as any)} *</p>
                   <input className={inputCls} value={sourceData.color} onChange={(e) => setSourceData((d) => ({ ...d, color: e.target.value }))} placeholder="White" />
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <p className={labelCls}>Fuel Type</p>
+                  <p className={labelCls}>{t("FuelType" as any)}</p>
                   <select className={inputCls} value={sourceData.fuelType} onChange={(e) => setSourceData((d) => ({ ...d, fuelType: e.target.value }))}>
                     <option>Gasoline</option>
                     <option>Diesel</option>
@@ -265,7 +269,7 @@ export default function VehiclePicker({
                   </select>
                 </div>
                 <div>
-                  <p className={labelCls}>Transmission</p>
+                  <p className={labelCls}>{t("Transmission" as any)}</p>
                   <select className={inputCls} value={sourceData.transmission} onChange={(e) => setSourceData((d) => ({ ...d, transmission: e.target.value }))}>
                     <option>Automatic</option>
                     <option>Manual</option>
@@ -274,28 +278,28 @@ export default function VehiclePicker({
               </div>
 
               <div>
-                <p className={labelCls}>VIN (optional — can be updated when car arrives)</p>
-                <input className={inputCls} value={sourceData.vin ?? ""} onChange={(e) => setSourceData((d) => ({ ...d, vin: e.target.value }))} placeholder="Leave blank if not yet assigned" />
+                <p className={labelCls}>{t("VINOptionalLabel" as any)}</p>
+                <input className={inputCls} value={sourceData.vin ?? ""} onChange={(e) => setSourceData((d) => ({ ...d, vin: e.target.value }))} placeholder={t("VINBlankHint" as any)} />
               </div>
 
               <div className="border-t border-border pt-2 space-y-2">
                 <div>
-                  <p className={labelCls}>Source Dealer Name *</p>
+                  <p className={labelCls}>{t("SourceDealerName" as any)} *</p>
                   <input className={inputCls} value={sourceData.sourcedFromName} onChange={(e) => setSourceData((d) => ({ ...d, sourcedFromName: e.target.value }))} placeholder="Al-Safeer Motors" />
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
-                    <p className={labelCls}>Supplier Cost (JOD) *</p>
+                    <p className={labelCls}>{t("SupplierCostLabel" as any)} ({currency.displayLabel}) *</p>
                     <input className={inputCls} type="number" min="0" step="0.01" value={sourceData.sourceCost || ""} onChange={(e) => setSourceData((d) => ({ ...d, sourceCost: parseFloat(e.target.value) || 0 }))} placeholder="0.000" />
                   </div>
                   <div>
-                    <p className={labelCls}>Selling Price (JOD) *</p>
+                    <p className={labelCls}>{t("SellingPriceLabel" as any)} ({currency.displayLabel}) *</p>
                     <input className={inputCls} type="number" min="0" step="0.01" value={sourceData.sellingPrice || ""} onChange={(e) => setSourceData((d) => ({ ...d, sellingPrice: parseFloat(e.target.value) || 0 }))} placeholder="0.000" />
                   </div>
                 </div>
                 {sourceData.sourceCost > 0 && sourceData.sellingPrice > 0 && (
                   <p className="text-xs text-muted-foreground">
-                    Margin: <span className="font-medium text-green-600">{(sourceData.sellingPrice - sourceData.sourceCost).toLocaleString()} JOD</span>
+                    {t("MarginLabel" as any)}: <span className="font-medium text-green-600">{currency.format(sourceData.sellingPrice - sourceData.sourceCost)}</span>
                     {" "}({((sourceData.sellingPrice - sourceData.sourceCost) / sourceData.sourceCost * 100).toFixed(1)}%)
                   </p>
                 )}
@@ -308,7 +312,7 @@ export default function VehiclePicker({
                 className="w-full flex items-center justify-center gap-2 rounded-md bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white py-2 text-sm font-medium transition-colors"
               >
                 {isSourcing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Truck className="w-4 h-4" />}
-                {isSourcing ? "Creating sourced vehicle…" : "Create & select this vehicle"}
+                {isSourcing ? t("CreatingSourcingVehicle" as any) : t("CreateAndSelectVehicle" as any)}
               </button>
             </div>
           )}
