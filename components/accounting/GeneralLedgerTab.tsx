@@ -63,6 +63,10 @@ function depositPrefix(type: "IN" | "OUT", locale: string): string {
   return type === "OUT" ? "Deposit refund" : "Deposit";
 }
 
+function saleVinFromDescription(description: string): string | null {
+  return description.match(/\(VIN:\s*([^)]+)\)/i)?.[1]?.trim() ?? null;
+}
+
 function localizedDetails(transaction: LedgerTransaction, locale: string): string[] {
   if (locale === "ar") {
     return [
@@ -85,13 +89,16 @@ function enrichedDescription(transaction: LedgerTransaction, locale: string): st
     return `${depositPrefix(transaction.type, locale)} - ${details.join(" - ")}`;
   }
   if (transaction.category === "VEHICLE_SALE" && transaction.vehicleLabel) {
+    const vin = saleVinFromDescription(transaction.description);
     if (locale === "ar") {
       const customer = transaction.customerName ? ` للعميل ${transaction.customerName}` : "";
-      return `بيع مركبة ${transaction.vehicleLabel}${customer}`;
+      const vinText = vin ? ` (رقم الهيكل: ${vin})` : "";
+      return `بيع مركبة ${transaction.vehicleLabel}${customer}${vinText}`;
     }
 
     const customer = transaction.customerName ? ` to ${transaction.customerName}` : "";
-    return `Sale of vehicle ${transaction.vehicleLabel}${customer}`;
+    const vinText = vin ? ` (VIN: ${vin})` : "";
+    return `Sale of vehicle ${transaction.vehicleLabel}${customer}${vinText}`;
   }
   return null;
 }
