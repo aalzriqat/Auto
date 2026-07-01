@@ -103,6 +103,10 @@ describe("deposits.create", () => {
       expect(tx?.category).toBe("DEPOSIT");
       expect(tx?.type).toBe("IN");
       expect(tx?.amount).toBe(1500);
+      expect(tx?.description).toContain("عربون للعرض");
+      expect(tx?.description).toContain(quoteId.toString());
+      expect(tx?.description).toContain("Mazda CX-5");
+      expect(tx?.description).toContain("Nora Khaled");
     });
   });
 
@@ -150,6 +154,8 @@ describe("deposits.release", () => {
         .first();
       expect(outTx?.amount).toBe(1500);
       expect(outTx?.category).toBe("DEPOSIT");
+      expect(outTx?.description).toContain("استرداد عربون");
+      expect(outTx?.description).toContain(quoteId.toString());
     });
   });
 

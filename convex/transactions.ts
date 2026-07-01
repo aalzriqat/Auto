@@ -1,10 +1,126 @@
 import { v, ConvexError } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { mutation, query, QueryCtx } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
+import { Doc, Id } from "./_generated/dataModel";
+
+type LedgerTransaction = Doc<"transactions">;
+type DepositByTransactionId = Map<Id<"transactions">, Doc<"deposits"> | null>;
+
+function vehicleLabel(vehicle: Doc<"vehicles">): string {
+  return `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim();
+}
+
+function customerName(customer: Doc<"customers">): string {
+  return `${customer.firstName ?? ""} ${customer.lastName ?? ""}`.trim();
+}
+
+function depositEventTime(deposit: Doc<"deposits">, transactionType: "IN" | "OUT"): number {
+  return transactionType === "OUT" ? deposit.resolvedAt ?? deposit.createdAt : deposit.createdAt;
+}
+
+function matchingDeposit(
+  transaction: LedgerTransaction,
+  deposits: Array<Doc<"deposits">>
+): Doc<"deposits"> | null {
+  const candidates = deposits.filter((deposit) => {
+    const sameAmount = deposit.amount === transaction.amount;
+    const sameDirection = transaction.type === "IN" || deposit.status === "REFUNDED";
+    const sameVehicle = !transaction.vehicleId || deposit.vehicleId === transaction.vehicleId;
+    const quoteInDescription = transaction.description.includes(deposit.quoteId.toString());
+    return sameAmount && sameDirection && (sameVehicle || quoteInDescription);
+  });
+  return candidates.sort((a, b) =>
+    Math.abs(transaction.date - depositEventTime(a, transaction.type)) -
+    Math.abs(transaction.date - depositEventTime(b, transaction.type))
+  )[0] ?? null;
+}
+
+function matchDepositsToTransactions(
+  transactions: LedgerTransaction[],
+  deposits: Array<Doc<"deposits">>
+): DepositByTransactionId {
+  return new Map(
+    transactions.map((transaction) => [
+      transaction._id,
+      matchingDeposit(transaction, deposits),
+    ] as const)
+  );
+}
+
+function vehicleIdsForLedgerRows(
+  transactions: LedgerTransaction[],
+  depositByTransactionId: DepositByTransactionId
+): Array<Id<"vehicles">> {
+  const vehicleIds = transactions.flatMap((transaction) =>
+    transaction.vehicleId ? [transaction.vehicleId] : []
+  );
+  for (const deposit of depositByTransactionId.values()) {
+    if (deposit) vehicleIds.push(deposit.vehicleId);
+  }
+  return vehicleIds;
+}
+
+function customerIdsForDeposits(
+  depositByTransactionId: DepositByTransactionId
+): Array<Id<"customers">> {
+  return Array.from(depositByTransactionId.values())
+    .flatMap((deposit) => deposit ? [deposit.customerId] : []);
+}
+
+function enrichLedgerTransaction(
+  transaction: LedgerTransaction,
+  deposit: Doc<"deposits"> | null,
+  vehicles: Map<Id<"vehicles">, Doc<"vehicles">>,
+  customers: Map<Id<"customers">, Doc<"customers">>
+) {
+  const vehicleId = transaction.vehicleId ?? deposit?.vehicleId;
+  const vehicle = vehicleId ? vehicles.get(vehicleId) : null;
+  const customer = deposit ? customers.get(deposit.customerId) : null;
+  return {
+    ...transaction,
+    ...(vehicle ? { vehicleLabel: vehicleLabel(vehicle) } : {}),
+    ...(customer ? { customerName: customerName(customer) } : {}),
+    ...(deposit ? { quoteReference: deposit.quoteId.toString() } : {}),
+  };
+}
+
+async function getRowsById<TTable extends "vehicles" | "customers">(
+  ctx: QueryCtx,
+  ids: Array<Id<TTable>>
+): Promise<Map<Id<TTable>, Doc<TTable>>> {
+  const uniqueIds = Array.from(new Set(ids));
+  const docs = await Promise.all(uniqueIds.map((id) => ctx.db.get(id)));
+  const pairs = docs.flatMap((doc) => doc ? [[doc._id, doc] as const] : []);
+  return new Map(pairs);
+}
+
+async function enrichLedgerTransactions(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  rows: LedgerTransaction[]
+) {
+  const depositRows = rows.filter((row) => row.category === "DEPOSIT");
+  const deposits = depositRows.length > 0
+    ? await ctx.db.query("deposits").withIndex("by_org", (q) => q.eq("orgId", orgId)).order("desc").take(1000)
+    : [];
+  const depositByTransactionId = matchDepositsToTransactions(depositRows, deposits);
+  const vehicleIds = vehicleIdsForLedgerRows(rows, depositByTransactionId);
+  const customerIds = customerIdsForDeposits(depositByTransactionId);
+
+  const [vehicles, customers] = await Promise.all([
+    getRowsById(ctx, vehicleIds),
+    getRowsById(ctx, customerIds),
+  ]);
+
+  return rows.map((row) => {
+    const deposit = depositByTransactionId.get(row._id) ?? null;
+    return enrichLedgerTransaction(row, deposit, vehicles, customers);
+  });
+}
 
 export const list = query({
   args: {
@@ -19,7 +135,7 @@ export const list = query({
       .query("transactions")
       .withIndex("by_org_date", (q) => q.eq("orgId", args.orgId))
       .order("desc");
-    return await q
+    const pageResult = await q
       .filter((q) => {
         const notDeleted = q.neq(q.field("isDeleted"), true);
         if (args.startDate && args.endDate) {
@@ -32,6 +148,9 @@ export const list = query({
         return notDeleted;
       })
       .paginate(args.paginationOpts);
+
+    const page = await enrichLedgerTransactions(ctx, args.orgId, pageResult.page);
+    return { ...pageResult, page };
   },
 });
 

@@ -119,6 +119,9 @@ describe("Sales Mutations", () => {
       expect(tx?.amount).toBe(15000);
       expect(tx?.category).toBe("VEHICLE_SALE");
       expect(tx?.type).toBe("IN");
+      expect(tx?.description).toContain("بيع مركبة");
+      expect(tx?.description).toContain("Honda Accord");
+      expect(tx?.description).toContain("John Doe");
     });
   });
 

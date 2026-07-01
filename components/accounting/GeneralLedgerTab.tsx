@@ -10,15 +10,77 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { format } from "date-fns";
 
 const defaultEnd = new Date();
 const defaultStart = new Date();
 defaultStart.setDate(defaultStart.getDate() - 30);
 
+type LedgerTransaction = {
+  _id: string;
+  type: "IN" | "OUT";
+  amount: number;
+  date: number;
+  category: string;
+  description: string;
+  vehicleLabel?: string;
+  customerName?: string;
+  quoteReference?: string;
+};
+
+function translatedKey(t: (key: string) => string, key: string, fallback: string): string {
+  const translated = t(key);
+  return translated === key ? fallback : translated;
+}
+
+function legacyArabicDescription(transaction: LedgerTransaction): string | null {
+  const saleMatch = transaction.description.match(/^Sale of vehicle (.+?)(?: \(VIN: (.+)\))?$/);
+  if (saleMatch) {
+    const vin = saleMatch[2] ? ` (رقم الهيكل: ${saleMatch[2]})` : "";
+    return `بيع مركبة ${saleMatch[1]}${vin}`;
+  }
+
+  const oldDepositMatch = transaction.description.match(/^Deposit held for quote (.+)$/i);
+  if (oldDepositMatch) return `عربون محجوز للعرض ${oldDepositMatch[1]}`;
+
+  const depositMatch = transaction.description.match(/^Deposit\s+—\s+(.+)\s+\((.+)\)$/);
+  if (depositMatch) return `عربون - ${depositMatch[1]} - ${depositMatch[2]}`;
+
+  const refundMatch = transaction.description.match(/^Deposit refunded\s+—\s+(.+)\s+\((.+)\)$/);
+  if (refundMatch) return `استرداد عربون - ${refundMatch[1]} - ${refundMatch[2]}`;
+
+  const expenseMatch = transaction.description.match(/^Expense:\s+(.+)\s+\((.+)\)$/);
+  if (expenseMatch) return `مصروف: ${expenseMatch[1]} (${expenseMatch[2]})`;
+
+  return null;
+}
+
+function isArabicLedgerDescription(description: string): boolean {
+  return /^(بيع مركبة|عربون|استرداد عربون|مصروف:)/.test(description);
+}
+
+function enrichedArabicDetails(transaction: LedgerTransaction): string[] {
+  return [
+    transaction.quoteReference ? `العرض ${transaction.quoteReference}` : null,
+    transaction.vehicleLabel,
+    transaction.customerName ? `العميل ${transaction.customerName}` : null,
+  ].filter((detail): detail is string => Boolean(detail));
+}
+
+function enrichedArabicDescription(transaction: LedgerTransaction): string | null {
+  const details = enrichedArabicDetails(transaction);
+  if (transaction.category === "DEPOSIT" && details.length > 0) {
+    const prefix = transaction.type === "OUT" ? "استرداد عربون" : "عربون";
+    return `${prefix} - ${details.join(" - ")}`;
+  }
+  if (transaction.category === "VEHICLE_SALE" && transaction.vehicleLabel) {
+    return `بيع مركبة ${transaction.vehicleLabel}`;
+  }
+  return null;
+}
+
 export function GeneralLedgerTab() {
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, locale } = useLanguage();
   const formatCurrency = useCurrencyFormatter();
 
   const [startDateStr, setStartDateStr] = useState(defaultStart.toISOString().split("T")[0]);
@@ -38,6 +100,24 @@ export function GeneralLedgerTab() {
 
   const totalIn = transactions?.filter((t) => t.type === "IN").reduce((s, t) => s + t.amount, 0) ?? 0;
   const totalOut = transactions?.filter((t) => t.type === "OUT").reduce((s, t) => s + t.amount, 0) ?? 0;
+  const localeCode = locale === "ar" ? "ar-JO" : "en-US";
+
+  function transactionTypeLabel(type: "IN" | "OUT"): string {
+    return type === "IN" ? t("TxIn") : t("TxOut");
+  }
+
+  function transactionCategoryLabel(category: string): string {
+    const fallback = category.replace(/_/g, " ");
+    return translatedKey(t, `TransactionCategory_${category}`, fallback);
+  }
+
+  function transactionDescription(transaction: LedgerTransaction): string {
+    if (locale !== "ar") return transaction.description;
+    if (isArabicLedgerDescription(transaction.description)) return transaction.description;
+    return enrichedArabicDescription(transaction) ??
+      legacyArabicDescription(transaction) ??
+      transaction.description;
+  }
 
   return (
     <div className="p-6 space-y-4">
@@ -84,30 +164,33 @@ export function GeneralLedgerTab() {
                 <TableCell colSpan={5} className="text-center text-slate-500 py-8">{t("NoTransactionsFound" as any)}</TableCell>
               </TableRow>
             ) : (
-              transactions.map((tx) => (
-                <TableRow key={tx._id}>
-                  <TableCell className="font-medium">{format(new Date(tx.date), "MMM d, yyyy")}</TableCell>
-                  <TableCell>
-                    <Badge
-                      variant={tx.type === "IN" ? "default" : "destructive"}
-                      className={tx.type === "IN" ? "bg-green-100 text-green-800 hover:bg-green-100" : ""}
-                    >
-                      {tx.type}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="outline" className="bg-slate-50 text-slate-600">
-                      {tx.category.replace(/_/g, " ")}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="max-w-[300px] truncate" title={tx.description}>
-                    {tx.description}
-                  </TableCell>
-                  <TableCell className={`text-right font-semibold ${tx.type === "IN" ? "text-emerald-600" : "text-rose-600"}`}>
-                    {tx.type === "IN" ? "+" : "-"}{formatCurrency(tx.amount)}
-                  </TableCell>
-                </TableRow>
-              ))
+              transactions.map((tx) => {
+                const description = transactionDescription(tx);
+                return (
+                  <TableRow key={tx._id}>
+                    <TableCell className="font-medium">{new Date(tx.date).toLocaleDateString(localeCode)}</TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={tx.type === "IN" ? "default" : "destructive"}
+                        className={tx.type === "IN" ? "bg-green-100 text-green-800 hover:bg-green-100" : ""}
+                      >
+                        {transactionTypeLabel(tx.type)}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline" className="bg-slate-50 text-slate-600">
+                        {transactionCategoryLabel(tx.category)}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="max-w-[300px] truncate" title={description}>
+                      {description}
+                    </TableCell>
+                    <TableCell className={`text-right font-semibold ${tx.type === "IN" ? "text-emerald-600" : "text-rose-600"}`}>
+                      {tx.type === "IN" ? "+" : "-"}{formatCurrency(tx.amount)}
+                    </TableCell>
+                  </TableRow>
+                );
+              })
             )}
           </TableBody>
         </Table>

@@ -56,10 +56,11 @@ export const create = mutation({
         ]);
         const vehicleLabel = vehicle
           ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim()
-          : "Vehicle";
+          : "المركبة";
         const customerLabel = customer
-          ? `${customer.firstName ?? ""} ${customer.lastName ?? ""}`.trim() || "Customer"
-          : "Customer";
+          ? `${customer.firstName ?? ""} ${customer.lastName ?? ""}`.trim() || "عميل"
+          : "عميل";
+        const quoteReference = args.quoteId.toString();
 
         const now = Date.now();
         const depositId = await ctx.db.insert("deposits", {
@@ -82,7 +83,7 @@ export const create = mutation({
           amount: args.amount,
           date: now,
           category: "DEPOSIT",
-          description: `Deposit — ${vehicleLabel} (${customerLabel})`,
+          description: `عربون للعرض ${quoteReference} - ${vehicleLabel} - ${customerLabel}`,
           vehicleId: quote.vehicleId,
           idempotencyKey: args.idempotencyKey,
         });
@@ -179,10 +180,10 @@ export const release = mutation({
           ]);
           const refundVehicleLabel = refundVehicle
             ? `${refundVehicle.year} ${refundVehicle.make} ${refundVehicle.model}`.trim()
-            : "Vehicle";
+            : "المركبة";
           const refundCustomerLabel = refundCustomer
-            ? `${refundCustomer.firstName ?? ""} ${refundCustomer.lastName ?? ""}`.trim() || "Customer"
-            : "Customer";
+            ? `${refundCustomer.firstName ?? ""} ${refundCustomer.lastName ?? ""}`.trim() || "عميل"
+            : "عميل";
 
           await ctx.db.insert("transactions", {
             orgId: args.orgId,
@@ -190,7 +191,7 @@ export const release = mutation({
             amount: deposit.amount,
             date: now,
             category: "DEPOSIT",
-            description: `Deposit refunded — ${refundVehicleLabel} (${refundCustomerLabel})`,
+            description: `استرداد عربون للعرض ${deposit.quoteId} - ${refundVehicleLabel} - ${refundCustomerLabel}`,
             vehicleId: deposit.vehicleId,
             idempotencyKey: args.idempotencyKey,
           });
