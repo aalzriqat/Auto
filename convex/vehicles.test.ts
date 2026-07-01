@@ -1,7 +1,7 @@
 import { convexTest } from "convex-test";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -13,13 +13,22 @@ vi.mock("./rateLimit", () => ({
 
 const PERMISSIONS = [
   "create:vehicles", "edit:vehicles", "delete:vehicles",
-  "view:vehicles", "view:users", "manage:users", "view:reports",
+  "view:vehicles", "view:users", "manage:users", "view:reports", "view:sales",
 ];
 
 async function setup() {
   const t = convexTest(schema, import.meta.glob("./**/*.*s"));
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Test Dealer", createdAt: Date.now() })
+  );
+  await t.run((ctx) =>
+    ctx.db.insert("subscriptions", {
+      orgId,
+      plan: "professional",
+      status: "active",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
   );
   const userId = await t.run((ctx) =>
     ctx.db.insert("users", { clerkId: "user_v1", email: "v@test.com", name: "Vehicle User" })
@@ -89,6 +98,36 @@ describe("vehicles.create", () => {
     ).rejects.toThrow(/already exists/i);
   });
 
+  test.each(["SOLD", "RESERVED"] as const)(
+    "rejects creating vehicles directly as %s",
+    async (status) => {
+      const { orgId, asUser } = await setup();
+
+      await expect(
+        asUser.mutation(api.vehicles.create, {
+          orgId,
+          ...baseVehicle,
+          status,
+        })
+      ).rejects.toThrow(/sale|reservation|deposit/i);
+    }
+  );
+
+  test("rejects non-image storage IDs in vehicle images", async () => {
+    const { t, orgId, asUser } = await setup();
+    const pdfStorageId = await t.run((ctx) =>
+      ctx.storage.store(new Blob(["%PDF-1.4"], { type: "application/pdf" }))
+    );
+
+    await expect(
+      asUser.mutation(api.vehicles.create, {
+        orgId,
+        ...baseVehicle,
+        imageIds: [pdfStorageId],
+      })
+    ).rejects.toThrow(/allowed file type|JPEG|PNG|WebP/i);
+  });
+
   test("allows same VIN in a different org", async () => {
     const { t, asUser, orgId } = await setup();
 
@@ -108,6 +147,40 @@ describe("vehicles.create", () => {
     const id2 = await asUser2.mutation(api.vehicles.create, { orgId: orgId2, ...baseVehicle });
 
     expect(id2).toBeDefined();
+  });
+});
+
+describe("vehicles.update — protected lifecycle transitions", () => {
+  test.each(["SOLD", "RESERVED"] as const)(
+    "rejects direct updates to %s",
+    async (status) => {
+      const { orgId, asUser } = await setup();
+      const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+
+      await expect(
+        asUser.mutation(api.vehicles.update, { orgId, vehicleId, status })
+      ).rejects.toThrow(/sale|reservation|deposit/i);
+    }
+  );
+
+  test("rejects making a sold vehicle available outside the sale workflow", async () => {
+    const { t, orgId, asUser } = await setup();
+    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    await t.run((ctx) => ctx.db.patch(vehicleId, { status: "SOLD" }));
+
+    await expect(
+      asUser.mutation(api.vehicles.update, { orgId, vehicleId, status: "AVAILABLE" })
+    ).rejects.toThrow(/sale workflow/i);
+  });
+
+  test("rejects changing a reserved vehicle outside the reservation workflow", async () => {
+    const { t, orgId, asUser } = await setup();
+    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    await t.run((ctx) => ctx.db.patch(vehicleId, { status: "RESERVED" }));
+
+    await expect(
+      asUser.mutation(api.vehicles.update, { orgId, vehicleId, status: "IN_REPAIR" })
+    ).rejects.toThrow(/reservation|deposit/i);
   });
 });
 
@@ -280,10 +353,11 @@ describe("vehicles.update — auto-post on status → AVAILABLE", () => {
 
 describe("vehicles.listAll includeReserved", () => {
   test("status AVAILABLE without includeReserved excludes RESERVED vehicles", async () => {
-    const { orgId, asUser } = await setup();
+    const { t, orgId, asUser } = await setup();
 
     await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle, vin: "1HGCM82633A700001", status: "AVAILABLE" });
-    await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle, vin: "1HGCM82633A700002", status: "RESERVED" });
+    const reservedVehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle, vin: "1HGCM82633A700002", status: "AVAILABLE" });
+    await t.run((ctx) => ctx.db.patch(reservedVehicleId, { status: "RESERVED" }));
 
     const results = await asUser.query(api.vehicles.listAll, { orgId, status: "AVAILABLE" });
     expect(results.every((v) => v.status === "AVAILABLE")).toBe(true);
@@ -291,10 +365,11 @@ describe("vehicles.listAll includeReserved", () => {
   });
 
   test("status AVAILABLE with includeReserved also returns RESERVED vehicles", async () => {
-    const { orgId, asUser } = await setup();
+    const { t, orgId, asUser } = await setup();
 
     await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle, vin: "1HGCM82633A700003", status: "AVAILABLE" });
-    await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle, vin: "1HGCM82633A700004", status: "RESERVED" });
+    const reservedVehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle, vin: "1HGCM82633A700004", status: "AVAILABLE" });
+    await t.run((ctx) => ctx.db.patch(reservedVehicleId, { status: "RESERVED" }));
 
     const results = await asUser.query(api.vehicles.listAll, { orgId, status: "AVAILABLE", includeReserved: true });
     const statuses = results.map((v) => v.status).sort();
@@ -462,6 +537,59 @@ describe("inventory intelligence", () => {
     });
   });
 
+  test("vehicle edit requests reject direct sold and reserved status updates", async () => {
+    const { orgId, asUser } = await setup();
+    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+
+    await expect(
+      asUser.mutation(api.vehicleEdits.requestUpdate, {
+        orgId,
+        vehicleId,
+        payload: { status: "SOLD" },
+      })
+    ).rejects.toThrow(/sale/i);
+
+    await expect(
+      asUser.mutation(api.vehicleEdits.requestUpdate, {
+        orgId,
+        vehicleId,
+        payload: { status: "RESERVED" },
+      })
+    ).rejects.toThrow(/reservation|deposit/i);
+  });
+
+  test("vehicle edit approvals recheck protected lifecycle transitions", async () => {
+    const { t, orgId, userId, asUser } = await setup();
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      orgId,
+      ...baseVehicle,
+      status: "IN_INSPECTION",
+    });
+    const requestId = await t.run((ctx) =>
+      ctx.db.insert("vehicleEdits", {
+        orgId,
+        vehicleId,
+        requestedBy: userId,
+        type: "UPDATE",
+        payload: { status: "AVAILABLE" },
+        status: "PENDING",
+        createdAt: Date.now(),
+      })
+    );
+    await t.run((ctx) => ctx.db.patch(vehicleId, { status: "SOLD" }));
+
+    await expect(
+      asUser.mutation(api.vehicleEdits.resolve, { orgId, requestId, status: "APPROVED" })
+    ).rejects.toThrow(/sale workflow/i);
+
+    await t.run(async (ctx) => {
+      const request = await ctx.db.get(requestId);
+      const vehicle = await ctx.db.get(vehicleId);
+      expect(request?.status).toBe("PENDING");
+      expect(vehicle?.status).toBe("SOLD");
+    });
+  });
+
   test("createReservation reserves vehicle and releaseReservation makes it available", async () => {
     const { t, orgId, asUser } = await setup();
     const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
@@ -488,6 +616,149 @@ describe("inventory intelligence", () => {
       const reservation = await ctx.db.get(reservationId);
       expect(vehicle?.status).toBe("AVAILABLE");
       expect(reservation?.status).toBe("RELEASED");
+    });
+  });
+
+  test("createReservation with deposit records a real held deposit and accounting event", async () => {
+    const { t, orgId, asUser } = await setup();
+    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Deposit", lastName: "Customer" })
+    );
+
+    const reservationId = await asUser.mutation(api.vehicles.createReservation, {
+      orgId,
+      vehicleId,
+      customerId,
+      depositAmount: 750,
+      depositMethod: "CARD",
+    });
+
+    await t.run(async (ctx) => {
+      const reservation = await ctx.db.get(reservationId);
+      expect(reservation?.depositAmount).toBe(750);
+      expect(reservation?.depositAmountMinor).toBe(750_000);
+      expect(reservation?.depositCurrency).toBe("JOD");
+      expect(reservation?.depositMethod).toBe("CARD");
+      expect(reservation?.depositId).toBeTruthy();
+
+      const deposit = reservation?.depositId ? await ctx.db.get(reservation.depositId) : null;
+      expect(deposit).toMatchObject({
+        orgId,
+        vehicleId,
+        customerId,
+        reservationId,
+        amount: 750,
+        amountMinor: 750_000,
+        currency: "JOD",
+        method: "CARD",
+        status: "HELD",
+        holdActive: true,
+      });
+      expect(deposit?.canonicalPaymentId).toBeTruthy();
+
+      const tx = await ctx.db
+        .query("transactions")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .filter((q) => q.eq(q.field("depositId"), reservation?.depositId))
+        .first();
+      expect(tx?.type).toBe("IN");
+      expect(tx?.amount).toBe(750);
+
+      const pendingEvents = await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
+        .collect();
+      expect(pendingEvents.some((event) => event.eventType === "DEPOSIT_RECEIVED")).toBe(true);
+    });
+  });
+
+  test("releaseReservation keeps vehicle reserved when another active deposit hold exists", async () => {
+    const { t, orgId, userId, asUser } = await setup();
+    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Hold", lastName: "Customer" })
+    );
+    const reservationId = await asUser.mutation(api.vehicles.createReservation, {
+      orgId,
+      vehicleId,
+      customerId,
+    });
+    const quoteId = await t.run((ctx) =>
+      ctx.db.insert("quotes", {
+        orgId,
+        customerId,
+        vehicleId,
+        vehiclePrice: 20_000,
+        downPayment: 0,
+        termMonths: 0,
+        status: "DRAFT",
+        createdBy: userId,
+        createdAt: Date.now(),
+      })
+    );
+    await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 500 });
+
+    await asUser.mutation(api.vehicles.releaseReservation, { orgId, reservationId });
+
+    await t.run(async (ctx) => {
+      const vehicle = await ctx.db.get(vehicleId);
+      const reservation = await ctx.db.get(reservationId);
+      expect(reservation?.status).toBe("RELEASED");
+      expect(vehicle?.status).toBe("RESERVED");
+    });
+  });
+
+  test("expireReservations expires stale reservations and releases linked deposit holds", async () => {
+    const { t, orgId, userId, asUser } = await setup();
+    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Expired", lastName: "Customer" })
+    );
+    const reservationId = await t.run(async (ctx) => {
+      const insertedReservationId = await ctx.db.insert("vehicleReservations", {
+        orgId,
+        vehicleId,
+        customerId,
+        depositAmount: 250,
+        depositAmountMinor: 250_000,
+        depositCurrency: "JOD",
+        depositMethod: "CASH",
+        expiresAt: Date.now() - 1_000,
+        status: "ACTIVE",
+        reservedBy: userId,
+        reservedAt: Date.now() - 10_000,
+      });
+      const depositId = await ctx.db.insert("deposits", {
+        orgId,
+        vehicleId,
+        customerId,
+        reservationId: insertedReservationId,
+        amount: 250,
+        amountMinor: 250_000,
+        currency: "JOD",
+        method: "CASH",
+        status: "HELD",
+        holdActive: true,
+        createdBy: userId,
+        createdAt: Date.now() - 10_000,
+      });
+      await ctx.db.patch(insertedReservationId, { depositId });
+      await ctx.db.patch(vehicleId, { status: "RESERVED" });
+      return insertedReservationId;
+    });
+
+    await t.mutation(internal.vehicles.expireReservations, {});
+
+    await t.run(async (ctx) => {
+      const reservation = await ctx.db.get(reservationId);
+      const deposit = reservation?.depositId ? await ctx.db.get(reservation.depositId) : null;
+      const vehicle = await ctx.db.get(vehicleId);
+      expect(reservation?.status).toBe("EXPIRED");
+      expect(reservation?.expiredAt).toBeTruthy();
+      expect(deposit?.status).toBe("HELD");
+      expect(deposit?.holdActive).toBe(false);
+      expect(vehicle?.status).toBe("AVAILABLE");
     });
   });
 });

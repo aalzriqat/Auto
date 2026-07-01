@@ -1,10 +1,50 @@
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { requireTenantAuth } from "./utils/tenancy";
-import { PERMISSIONS } from "./utils/permissions";
+import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { ConvexError } from "convex/values";
 import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socialAutoPost";
+import { Id } from "./_generated/dataModel";
+import {
+  assertDirectVehicleCreateStatus,
+  assertDirectVehicleStatusTransition,
+  normalizeVehicleStatus,
+  type VehicleLifecycleStatus,
+} from "./utils/vehicleStatusGuards";
+import { assertVehicleImagesAllowed } from "./utils/storageValidation";
+
+type VehicleEditPayload = {
+  vin?: string;
+  make?: string;
+  model?: string;
+  year?: number;
+  trim?: string;
+  mileage?: number;
+  color?: string;
+  fuelType?: string;
+  transmission?: string;
+  purchasePrice?: number;
+  minimumProfit?: number;
+  sellingPrice?: number;
+  status?: string;
+  sourceType?: "STOCK" | "SOURCED";
+  sourcedFromName?: string;
+  sourceCost?: number;
+  notes?: string;
+  imageIds?: Id<"_storage">[];
+};
+
+type NormalizedVehicleEditPayload = Omit<VehicleEditPayload, "status"> & {
+  status?: VehicleLifecycleStatus;
+};
+
+function normalizeVehicleEditPayload(payload: VehicleEditPayload): NormalizedVehicleEditPayload {
+  const normalizedStatus = normalizeVehicleStatus(payload.status);
+  const { status: _status, ...rest } = payload;
+  if (!normalizedStatus) return rest;
+  return { ...rest, status: normalizedStatus };
+}
 
 export const requestCreate = mutation({
   args: {
@@ -32,8 +72,9 @@ export const requestCreate = mutation({
   },
   handler: async (ctx, args) => {
     const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+    const payload = normalizeVehicleEditPayload(args.payload);
     if (
-      role.name !== "OWNER" &&
+      !isSystemOwnerRole(role) &&
       !role.permissions.includes(PERMISSIONS.CREATE_VEHICLES) &&
       !role.permissions.includes(PERMISSIONS.CREATE_VEHICLES_REQUEST)
     ) {
@@ -41,12 +82,14 @@ export const requestCreate = mutation({
         `Forbidden: Missing required permissions: ${PERMISSIONS.CREATE_VEHICLES_REQUEST}`
       );
     }
+    assertDirectVehicleCreateStatus(payload.status);
+    await assertVehicleImagesAllowed(ctx, payload.imageIds);
 
-    if (args.payload.sourceType === "SOURCED") {
-      if (!args.payload.sourcedFromName?.trim()) {
+    if (payload.sourceType === "SOURCED") {
+      if (!payload.sourcedFromName?.trim()) {
         throw new ConvexError("Sourced vehicles require a supplier dealer name.");
       }
-      if (args.payload.sourceCost === undefined || args.payload.sourceCost === null) {
+      if (payload.sourceCost === undefined || payload.sourceCost === null) {
         throw new ConvexError("Sourced vehicles require a supplier cost.");
       }
     }
@@ -55,7 +98,7 @@ export const requestCreate = mutation({
       orgId: args.orgId,
       requestedBy: user._id,
       type: "CREATE",
-      payload: args.payload,
+      payload,
       status: "PENDING",
       createdAt: Date.now(),
     });
@@ -65,7 +108,7 @@ export const requestCreate = mutation({
       ctx,
       args.orgId,
       "vehicle.create_requested",
-      { actorName, vehicleLabel: `${args.payload.year} ${args.payload.make} ${args.payload.model}` },
+      { actorName, vehicleLabel: `${payload.year} ${payload.make} ${payload.model}` },
       { link: `/${args.orgId}/vehicles?approvals=true` }
     );
 
@@ -101,7 +144,7 @@ export const requestUpdate = mutation({
   handler: async (ctx, args) => {
     const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
     if (
-      role.name !== "OWNER" &&
+      !isSystemOwnerRole(role) &&
       !role.permissions.includes(PERMISSIONS.EDIT_VEHICLES) &&
       !role.permissions.includes(PERMISSIONS.EDIT_VEHICLES_REQUEST)
     ) {
@@ -114,9 +157,12 @@ export const requestUpdate = mutation({
     if (!vehicle || vehicle.orgId !== args.orgId) {
       throw new ConvexError("Vehicle not found.");
     }
+    const payload = normalizeVehicleEditPayload(args.payload);
+    assertDirectVehicleStatusTransition(vehicle.status, payload.status);
+    await assertVehicleImagesAllowed(ctx, payload.imageIds);
 
     const filteredPayload: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(args.payload)) {
+    for (const [key, value] of Object.entries(payload)) {
       if (key === "imageIds") {
         const oldImages = JSON.stringify(vehicle.imageIds || []);
         const newImages = JSON.stringify(value || []);
@@ -213,8 +259,11 @@ export const resolve = mutation({
 
     if (args.status === "APPROVED") {
       if (request.type === "CREATE") {
+        const payload = normalizeVehicleEditPayload(request.payload);
+        assertDirectVehicleCreateStatus(payload.status);
+        await assertVehicleImagesAllowed(ctx, payload.imageIds);
         await ctx.db.insert("vehicles", {
-          ...(request.payload as any),
+          ...(payload as any),
           orgId: args.orgId,
           addedBy: request.requestedBy,
           updatedBy: user._id, // Manager who approved it
@@ -226,7 +275,9 @@ export const resolve = mutation({
           throw new ConvexError("Vehicle not found.");
         }
 
-        const payload = request.payload as { status?: string; sellingPrice?: number };
+        const payload = normalizeVehicleEditPayload(request.payload);
+        assertDirectVehicleStatusTransition(previousVehicle.status, payload.status);
+        await assertVehicleImagesAllowed(ctx, payload.imageIds);
         if (
           typeof payload.sellingPrice === "number" &&
           payload.sellingPrice !== previousVehicle.sellingPrice
@@ -242,7 +293,7 @@ export const resolve = mutation({
         }
 
         await ctx.db.patch(request.vehicleId, {
-          ...(request.payload as any),
+          ...(payload as any),
           updatedBy: user._id, // Manager who approved it
           updatedAt: Date.now(),
         });

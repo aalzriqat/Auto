@@ -1,9 +1,11 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { Doc } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
-import { PERMISSIONS } from "./utils/permissions";
+import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socialAutoPost";
 import { notifyManagers, notifyUser, getActorName } from "./utils/notifications";
+import { assertDirectVehicleStatusTransition } from "./utils/vehicleStatusGuards";
 
 const vehicleStatus = v.union(
   v.literal("AVAILABLE"),
@@ -29,7 +31,7 @@ export const create = mutation({
   handler: async (ctx, args) => {
     const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
     if (
-      role.name !== "OWNER" &&
+      !isSystemOwnerRole(role) &&
       !role.permissions.includes(PERMISSIONS.EDIT_VEHICLES) &&
       !role.permissions.includes(PERMISSIONS.EDIT_VEHICLES_REQUEST)
     ) {
@@ -46,6 +48,7 @@ export const create = mutation({
     if (vehicle.status === args.requestedStatus) {
       throw new ConvexError(`Vehicle is already marked as ${args.requestedStatus}.`);
     }
+    assertDirectVehicleStatusTransition(vehicle.status, args.requestedStatus);
 
     // Check if there's already a pending request for this vehicle by this user
     const existing = await ctx.db
@@ -131,6 +134,15 @@ export const resolve = mutation({
       throw new ConvexError(`This request has already been ${request.status.toLowerCase()}.`);
     }
 
+    let vehicleToUpdate: Doc<"vehicles"> | null = null;
+    if (args.status === "APPROVED") {
+      vehicleToUpdate = await ctx.db.get(request.vehicleId);
+      if (!vehicleToUpdate || vehicleToUpdate.orgId !== args.orgId || vehicleToUpdate.isDeleted) {
+        throw new ConvexError("Vehicle not found in this organization.");
+      }
+      assertDirectVehicleStatusTransition(vehicleToUpdate.status, request.requestedStatus);
+    }
+
     await ctx.db.patch(args.requestId, {
       status: args.status,
       resolvedBy: user._id,
@@ -153,7 +165,7 @@ export const resolve = mutation({
     );
 
     if (args.status === "APPROVED") {
-      const vehicle = await ctx.db.get(request.vehicleId);
+      const vehicle = vehicleToUpdate;
       if (vehicle) {
         await ctx.db.patch(request.vehicleId, {
           status: request.requestedStatus,
