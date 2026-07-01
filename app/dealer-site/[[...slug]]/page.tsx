@@ -1,11 +1,12 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useQuery } from "convex/react";
 import {
   ArrowRight, Car, CheckCircle2, Globe2, Mail, MapPin, Menu, Phone, Send, ShieldCheck, X,
 } from "lucide-react";
 import Link from "next/link";
+import Script from "next/script";
 import { useParams, useSearchParams } from "next/navigation";
 import { api } from "@/convex/_generated/api";
 import { Button } from "@/components/ui/button";
@@ -16,6 +17,7 @@ import { Id } from "@/convex/_generated/dataModel";
 import { PrestigeTheme } from "./themes/prestige-theme";
 import { VelocityTheme } from "./themes/velocity-theme";
 import { AvantTheme } from "./themes/avant-theme";
+import { TurnstileWidget } from "./turnstile-widget";
 
 type PublicVehicle = {
   id: Id<"vehicles">;
@@ -31,6 +33,13 @@ type PublicVehicle = {
   price: number | null;
   status: string;
   imageUrls: string[];
+};
+
+type PublicBranch = {
+  id: Id<"branches">;
+  name: string;
+  address: string | null;
+  phone: string | null;
 };
 
 const STRINGS = {
@@ -133,6 +142,33 @@ const STRINGS = {
 } as const;
 
 type Lang = "en" | "ar";
+type TurnstileWindow = Window & {
+  turnstile?: { reset: (container?: HTMLElement | string) => void };
+};
+
+const PUBLIC_LEAD_FINGERPRINT_KEY = "autoflow_public_lead_fingerprint";
+const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
+
+function publicLeadFingerprint() {
+  let visitorId = window.localStorage.getItem(PUBLIC_LEAD_FINGERPRINT_KEY);
+  if (!visitorId) {
+    visitorId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    window.localStorage.setItem(PUBLIC_LEAD_FINGERPRINT_KEY, visitorId);
+  }
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone ?? "unknown";
+  return [
+    visitorId,
+    navigator.language,
+    timezone,
+    `${window.screen.width}x${window.screen.height}`,
+  ].join(":");
+}
+
+function resetTurnstile(formElement: HTMLFormElement) {
+  const turnstile = (window as TurnstileWindow).turnstile;
+  const widget = formElement.querySelector<HTMLElement>(".cf-turnstile");
+  if (turnstile && widget) turnstile.reset(widget);
+}
 
 export default function DealerSitePage() {
   const params = useParams<{ slug?: string[] }>();
@@ -142,7 +178,7 @@ export default function DealerSitePage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formSuccess, setFormSuccess] = useState<string | null>(null);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const submitLead = useMutation(api.websites.submitPublicLead);
+  const submitLead = useAction(api.websites.submitPublicLead);
 
   // Host detection
   const hostParam = searchParams.get("host");
@@ -197,6 +233,13 @@ export default function DealerSitePage() {
     event.preventDefault();
     if (isPreviewMode) { toast.error(t.previewNoSubmit); return; }
     if (!host) return;
+    const formElement = event.currentTarget;
+    const token = new FormData(formElement).get("cf-turnstile-response");
+    const turnstileToken = typeof token === "string" ? token : "";
+    if (!turnstileToken) {
+      toast.error("Please complete the verification challenge.");
+      return;
+    }
     setIsSubmitting(true);
     try {
       await submitLead({
@@ -208,6 +251,8 @@ export default function DealerSitePage() {
         phone: form.phone || undefined,
         whatsapp: form.whatsapp || undefined,
         message: form.message || undefined,
+        turnstileToken,
+        clientFingerprint: publicLeadFingerprint(),
       });
       toast.success(t.requestSent);
       setForm({ firstName: "", lastName: "", email: "", phone: "", whatsapp: "", message: "" });
@@ -217,6 +262,7 @@ export default function DealerSitePage() {
       console.error("Website lead submission failed", error);
       toast.error("An unexpected error occurred. Please try again later.");
     } finally {
+      resetTurnstile(formElement);
       setIsSubmitting(false);
     }
   }
@@ -258,6 +304,7 @@ export default function DealerSitePage() {
     formSuccess,
     setFormSuccess,
     onSubmit: handleSubmit,
+    turnstileSiteKey,
     onToggleLang: () => setUserSelectedLang(lang === "en" ? "ar" : "en"),
     mobileNavOpen,
     setMobileNavOpen,
@@ -269,9 +316,18 @@ export default function DealerSitePage() {
     featuredVehicles,
   };
 
-  if (templateId === "prestige") return <PrestigeTheme {...premiumThemeProps} />;
-  if (templateId === "velocity") return <VelocityTheme {...premiumThemeProps} />;
-  if (templateId === "avant") return <AvantTheme {...premiumThemeProps} />;
+  const turnstileScript = turnstileSiteKey ? (
+    <Script
+      src="https://challenges.cloudflare.com/turnstile/v0/api.js"
+      async
+      defer
+      strategy="afterInteractive"
+    />
+  ) : null;
+
+  if (templateId === "prestige") return <>{turnstileScript}<PrestigeTheme {...premiumThemeProps} /></>;
+  if (templateId === "velocity") return <>{turnstileScript}<VelocityTheme {...premiumThemeProps} /></>;
+  if (templateId === "avant") return <>{turnstileScript}<AvantTheme {...premiumThemeProps} /></>;
 
   const profile = site.profile;
   const nav = [
@@ -283,6 +339,8 @@ export default function DealerSitePage() {
   ];
 
   return (
+    <>
+    {turnstileScript}
     <main dir={dir} className="min-h-screen bg-white text-slate-950">
       {/* Header */}
       <header className="sticky top-0 z-30 border-b bg-white/95 backdrop-blur">
@@ -467,6 +525,7 @@ export default function DealerSitePage() {
                 >
                   <h2 className="font-bold">{t.askAbout}</h2>
                   <LeadFields form={form} setForm={setForm} t={t} />
+                  <TurnstileWidget siteKey={turnstileSiteKey} />
                   <Button type="submit" disabled={isSubmitting} className="w-full sm:w-auto" style={{ backgroundColor: primary }}>
                     <Send className="h-4 w-4" />
                     {t.sendInquiry}
@@ -493,6 +552,7 @@ export default function DealerSitePage() {
               onSubmit={(event) => void handleSubmit(event, "financing")}
             >
               <LeadFields form={form} setForm={setForm} t={t} />
+              <TurnstileWidget siteKey={turnstileSiteKey} />
               <Button type="submit" disabled={isSubmitting} className="w-full sm:w-auto" style={{ backgroundColor: primary }}>
                 {t.requestFinancing}
               </Button>
@@ -506,7 +566,7 @@ export default function DealerSitePage() {
         <section className="mx-auto max-w-5xl px-4 py-8 md:py-10">
           <h1 className="text-2xl font-bold sm:text-3xl">{t.branchesTitle}</h1>
           <div className="mt-6 grid gap-4 sm:grid-cols-2">
-            {profile.branches.map((branch) => (
+            {(profile.branches as PublicBranch[]).map((branch) => (
               <div key={branch.id} className="rounded-md border p-4">
                 <h2 className="font-bold text-base">{branch.name}</h2>
                 {branch.address && (
@@ -570,6 +630,7 @@ export default function DealerSitePage() {
                 onSubmit={(event) => void handleSubmit(event, "contact")}
               >
                 <LeadFields form={form} setForm={setForm} t={t} />
+                <TurnstileWidget siteKey={turnstileSiteKey} />
                 <Button type="submit" disabled={isSubmitting} className="w-full sm:w-auto" style={{ backgroundColor: primary }}>
                   {t.sendMessage}
                 </Button>
@@ -603,6 +664,7 @@ export default function DealerSitePage() {
         </div>
       </footer>
     </main>
+    </>
   );
 }
 

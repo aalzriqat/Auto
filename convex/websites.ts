@@ -1,6 +1,7 @@
 import { ConvexError, v } from "convex/values";
-import { MutationCtx, QueryCtx, mutation, query } from "./_generated/server";
-import { Id } from "./_generated/dataModel";
+import { ActionCtx, MutationCtx, QueryCtx, action, internalMutation, mutation, query } from "./_generated/server";
+import { internal } from "./_generated/api";
+import { Doc, Id } from "./_generated/dataModel";
 import { domainRegistrarService } from "./domainRegistrar";
 import {
   DEFAULT_ENABLED_WEBSITE_SECTIONS,
@@ -20,6 +21,46 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { writeAuditLog } from "./utils/auditLog";
 import { resolveGeneratedLeadAssignee } from "./utils/leadAssignment";
 import { notifyUser } from "./utils/notifications";
+import { getValidatedEnv } from "./utils/env";
+import { rateLimiter } from "./rateLimit";
+import { hasPlanFeature, requireFeature } from "./subscriptions";
+
+const PUBLIC_LEAD_MAX_NAME_CHARS = 80;
+const PUBLIC_LEAD_MAX_EMAIL_CHARS = 254;
+const PUBLIC_LEAD_MAX_PHONE_CHARS = 24;
+const PUBLIC_LEAD_MAX_MESSAGE_CHARS = 2000;
+const PUBLIC_LEAD_MAX_FINGERPRINT_CHARS = 256;
+const PUBLIC_LEAD_MAX_IP_HASH_CHARS = 128;
+const PUBLIC_LEAD_DUPLICATE_WINDOW_MS = 24 * 60 * 60 * 1000;
+const TURNSTILE_ACTION = "turnstile-spin-v1";
+
+const OPEN_LEAD_STAGES = new Set([
+  "NEW",
+  "CONTACTED",
+  "INTERESTED",
+  "TEST_DRIVE",
+  "NEGOTIATION",
+  "RESERVED",
+]);
+
+const publicLeadBaseArgs = {
+  host: v.string(),
+  formType: v.string(),
+  vehicleId: v.optional(v.id("vehicles")),
+  firstName: v.string(),
+  lastName: v.optional(v.string()),
+  email: v.optional(v.string()),
+  phone: v.optional(v.string()),
+  whatsapp: v.optional(v.string()),
+  message: v.optional(v.string()),
+  preferredDate: v.optional(v.number()),
+  clientFingerprint: v.string(),
+  clientIpHash: v.optional(v.string()),
+};
+
+type PublicLeadFormType = (typeof WEBSITE_FORM_TYPES)[number];
+type PublicLeadResult = { success: true; leadId: Id<"leads">; duplicate?: true };
+type BlocklistKind = "fingerprint" | "ipHash" | "email" | "emailDomain" | "phone";
 
 const sectionInputValidator = v.object({
   sectionKey: v.string(),
@@ -37,6 +78,189 @@ const routingInputValidator = v.object({
   notifyByWhatsApp: v.boolean(),
   configJson: v.optional(v.any()),
 });
+
+function optionalRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function hasControlCharacters(value: string): boolean {
+  return /[\u0000-\u001F\u007F]/.test(value);
+}
+
+function normalizeText(value: string | undefined, field: string, maxLength: number): string | undefined {
+  const text = value?.trim().replace(/\s+/g, " ");
+  if (!text) return undefined;
+  if (text.length > maxLength || hasControlCharacters(text)) {
+    throw new ConvexError(`${field} is invalid.`);
+  }
+  return text;
+}
+
+function normalizeRequiredText(value: string, field: string, maxLength: number): string {
+  const text = normalizeText(value, field, maxLength);
+  if (!text) throw new ConvexError(`${field} is required.`);
+  return text;
+}
+
+function normalizeEmail(value: string | undefined): string | undefined {
+  const email = normalizeText(value, "Email", PUBLIC_LEAD_MAX_EMAIL_CHARS)?.toLowerCase();
+  if (!email) return undefined;
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) {
+    throw new ConvexError("Email is invalid.");
+  }
+  return email;
+}
+
+function normalizePhone(value: string | undefined, field: string): string | undefined {
+  const text = normalizeText(value, field, PUBLIC_LEAD_MAX_PHONE_CHARS);
+  if (!text) return undefined;
+  const normalized = text.replace(/[^\d+]/g, "");
+  if (!/^\+?\d{7,20}$/.test(normalized)) {
+    throw new ConvexError(`${field} is invalid.`);
+  }
+  return normalized;
+}
+
+function normalizeLimitKey(value: string | undefined, field: string, maxLength: number): string | undefined {
+  const text = value?.trim();
+  if (!text) return undefined;
+  if (text.length > maxLength || hasControlCharacters(text)) {
+    throw new ConvexError(`${field} is invalid.`);
+  }
+  return text;
+}
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function verifyTurnstileToken(token: string): Promise<void> {
+  const env = getValidatedEnv();
+  if (!env.TURNSTILE_SECRET_KEY) {
+    console.error("TURNSTILE_SECRET_KEY is not configured for public website lead intake.");
+    throw new ConvexError("Request verification is unavailable. Please try again later.");
+  }
+
+  const responseToken = token.trim();
+  if (!responseToken || responseToken.length > 4096) {
+    throw new ConvexError("Please complete the verification challenge.");
+  }
+
+  const response = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      secret: env.TURNSTILE_SECRET_KEY,
+      response: responseToken,
+    }),
+  });
+
+  if (!response.ok) {
+    console.error("Turnstile siteverify request failed", response.status);
+    throw new ConvexError("Request verification failed. Please try again.");
+  }
+
+  const result = optionalRecord(await response.json());
+  if (result?.success !== true) {
+    console.error("Turnstile verification rejected public lead", result);
+    throw new ConvexError("Request verification failed. Please try again.");
+  }
+
+  const action = optionalString(result.action);
+  if (action && action !== TURNSTILE_ACTION) {
+    console.error("Turnstile verification returned unexpected action", action);
+    throw new ConvexError("Request verification failed. Please try again.");
+  }
+}
+
+async function recordWebsiteLeadAbuseEvent(
+  ctx: MutationCtx,
+  args: {
+    orgId?: Id<"organizations">;
+    host: string;
+    formType: string;
+    reason: "blocked" | "rate_limited" | "duplicate_suppressed" | "validation_failed";
+    clientFingerprint?: string;
+    clientIpHash?: string;
+    contactKey?: string;
+    detail?: string;
+  },
+) {
+  await ctx.db.insert("websiteLeadAbuseEvents", {
+    orgId: args.orgId,
+    host: args.host,
+    formType: args.formType,
+    reason: args.reason,
+    fingerprintHash: args.clientFingerprint ? await sha256Hex(args.clientFingerprint) : undefined,
+    clientIpHash: args.clientIpHash,
+    contactKeyHash: args.contactKey ? await sha256Hex(args.contactKey) : undefined,
+    detail: args.detail,
+    createdAt: Date.now(),
+  });
+}
+
+async function enforcePublicLeadRateLimit(
+  ctx: MutationCtx | ActionCtx,
+  name: "websiteLeadHost" | "websiteLeadOrg" | "websiteLeadContact" | "websiteLeadFingerprint",
+  key: string,
+) {
+  const status = await rateLimiter.limit(ctx, name, { key });
+  if (!status.ok) {
+    throw new ConvexError("Too many submissions. Please try again later.");
+  }
+}
+
+async function findWebsiteLeadBlock(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    host: string;
+    clientFingerprint: string;
+    clientIpHash?: string;
+    email?: string;
+    phone?: string;
+    whatsapp?: string;
+  },
+) {
+  const candidates: Array<{ kind: BlocklistKind; value: string }> = [
+    { kind: "fingerprint", value: args.clientFingerprint },
+  ];
+  if (args.clientIpHash) candidates.push({ kind: "ipHash", value: args.clientIpHash });
+  if (args.email) {
+    candidates.push({ kind: "email", value: args.email });
+    const emailDomain = args.email.split("@")[1];
+    if (emailDomain) candidates.push({ kind: "emailDomain", value: emailDomain });
+  }
+  if (args.phone) candidates.push({ kind: "phone", value: args.phone });
+  if (args.whatsapp) candidates.push({ kind: "phone", value: args.whatsapp });
+
+  const now = Date.now();
+  for (const candidate of candidates) {
+    const rows = await ctx.db
+      .query("websiteLeadBlocklist")
+      .withIndex("by_kind_and_value", (q) =>
+        q.eq("kind", candidate.kind).eq("value", candidate.value),
+      )
+      .take(10);
+    const active = rows.find((row) => {
+      if (row.expiresAt !== undefined && row.expiresAt <= now) return false;
+      if (row.orgId !== undefined && row.orgId !== args.orgId) return false;
+      if (row.host !== undefined && row.host !== args.host) return false;
+      return true;
+    });
+    if (active) return active;
+  }
+  return null;
+}
 
 function sectionDefaults() {
   return DEFAULT_WEBSITE_SECTION_KEYS.map((sectionKey) => ({
@@ -64,6 +288,32 @@ async function activePrimaryDomain(ctx: QueryCtx | MutationCtx, orgId: Id<"organ
     .query("websiteDomains")
     .withIndex("by_org_primary", (q) => q.eq("orgId", orgId).eq("isPrimary", true))
     .first();
+}
+
+async function activePublishedSnapshot(
+  ctx: QueryCtx | MutationCtx,
+  domain: Doc<"websiteDomains">,
+  settings: Doc<"websiteSettings">,
+) {
+  const snapshotId = domain.publishedSnapshotId ?? settings.publishedSnapshotId;
+  if (!snapshotId) return null;
+
+  const snapshot = await ctx.db.get(snapshotId);
+  if (!snapshot) return null;
+  if (snapshot.orgId !== domain.orgId) return null;
+  if (snapshot.websiteSettingsId !== settings._id) return null;
+  if (snapshot.domain !== domain.domain) return null;
+  return snapshot;
+}
+
+function snapshotSectionMap(snapshotJson: unknown): Record<string, boolean> {
+  const root = optionalRecord(snapshotJson);
+  const sections = optionalRecord(root?.sections);
+  const result: Record<string, boolean> = {};
+  for (const [key, value] of Object.entries(sections ?? {})) {
+    if (typeof value === "boolean") result[key] = value;
+  }
+  return result;
 }
 
 async function ensureDomainAvailableForOrg(ctx: QueryCtx | MutationCtx, domain: string, orgId: Id<"organizations">) {
@@ -164,6 +414,7 @@ export const getStatus = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.WEBSITE_VIEW]);
+    await requireFeature(ctx, args.orgId, "websiteBuilder");
 
     const settings = await getSettingsByOrg(ctx, args.orgId);
     if (!settings) {
@@ -196,6 +447,7 @@ export const startSetup = mutation({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.WEBSITE_MANAGE]);
+    await requireFeature(ctx, args.orgId, "websiteBuilder");
     const existing = await getSettingsByOrg(ctx, args.orgId);
     if (existing) return existing._id;
 
@@ -244,6 +496,7 @@ export const checkSubdomain = mutation({
   args: { orgId: v.id("organizations"), slug: v.string() },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.WEBSITE_DOMAIN_MANAGE]);
+    await requireFeature(ctx, args.orgId, "websiteBuilder");
     const validation = validateSubdomainSlug(args.slug);
     if (!validation.ok) {
       return { available: false, error: validation.error, previewUrl: null };
@@ -276,6 +529,7 @@ export const searchDomain = mutation({
   args: { orgId: v.id("organizations"), domain: v.string() },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.WEBSITE_DOMAIN_MANAGE]);
+    await requireFeature(ctx, args.orgId, "websiteBuilder");
     const validation = validateCustomDomain(args.domain);
     if (!validation.ok) return { available: false, error: validation.error, domain: normalizedCustomDomain(args.domain) };
 
@@ -327,6 +581,7 @@ export const saveDraft = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.WEBSITE_MANAGE]);
+    await requireFeature(ctx, args.orgId, "websiteBuilder");
     let settings = await getSettingsByOrg(ctx, args.orgId);
     if (!settings) {
       const settingsId = await ctx.db.insert("websiteSettings", {
@@ -434,6 +689,7 @@ export const purchaseDomain = mutation({
   args: { orgId: v.id("organizations"), domain: v.string() },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.WEBSITE_DOMAIN_MANAGE]);
+    await requireFeature(ctx, args.orgId, "websiteBuilder");
     const settings = await requireWebsiteSettings(ctx, args.orgId);
     const validation = validateCustomDomain(args.domain);
     if (!validation.ok) throw new ConvexError(validation.error);
@@ -502,25 +758,45 @@ export const publish = mutation({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.WEBSITE_PUBLISH]);
+    await requireFeature(ctx, args.orgId, "websiteBuilder");
     const settings = await requireWebsiteSettings(ctx, args.orgId);
     const primaryDomain = await activePrimaryDomain(ctx, args.orgId);
     if (!primaryDomain) throw new ConvexError("Choose a website address before publishing.");
     if (primaryDomain.status !== "active") throw new ConvexError("The selected domain is not active yet.");
 
-    const snapshotJson = await websitePublicProjection(ctx, args.orgId, settings);
+    const now = Date.now();
+    const publishedSettings = {
+      ...settings,
+      enabled: true,
+      status: "active" as const,
+      activeDomainId: primaryDomain._id,
+      publishedAt: now,
+      updatedAt: now,
+    };
+    const snapshotJson = await websitePublicProjection(ctx, args.orgId, publishedSettings);
+    const snapshotId = await ctx.db.insert("websitePublishSnapshots", {
+      orgId: args.orgId,
+      websiteSettingsId: settings._id,
+      domain: primaryDomain.domain,
+      version: `pending-${now}`,
+      snapshotJson,
+      createdAt: now,
+      publishedAt: now,
+      publishedByUserId: user._id,
+    });
+    const snapshotVersion = snapshotId.toString();
+    await ctx.db.patch(snapshotId, { version: snapshotVersion });
     await ctx.db.patch(settings._id, {
       enabled: true,
       status: "active",
       activeDomainId: primaryDomain._id,
-      publishedAt: Date.now(),
-      updatedAt: Date.now(),
+      publishedAt: now,
+      publishedSnapshotId: snapshotId,
+      updatedAt: now,
     });
-    const snapshotId = await ctx.db.insert("websitePublishSnapshots", {
-      orgId: args.orgId,
-      websiteSettingsId: settings._id,
-      snapshotJson,
-      createdAt: Date.now(),
-      publishedByUserId: user._id,
+    await ctx.db.patch(primaryDomain._id, {
+      publishedSnapshotId: snapshotId,
+      updatedAt: now,
     });
 
     await writeAuditLog(ctx, user, {
@@ -530,7 +806,7 @@ export const publish = mutation({
       orgId: args.orgId,
     });
 
-    return { snapshotId, url: `https://${primaryDomain.domain}` };
+    return { snapshotId, version: snapshotVersion, url: `https://${primaryDomain.domain}` };
   },
 });
 
@@ -538,6 +814,7 @@ export const unpublish = mutation({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.WEBSITE_PUBLISH]);
+    await requireFeature(ctx, args.orgId, "websiteBuilder");
     const settings = await requireWebsiteSettings(ctx, args.orgId);
     await ctx.db.patch(settings._id, { status: "draft", updatedAt: Date.now() });
     await writeAuditLog(ctx, user, {
@@ -553,6 +830,7 @@ export const preview = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.WEBSITE_VIEW]);
+    await requireFeature(ctx, args.orgId, "websiteBuilder");
     const settings = await requireWebsiteSettings(ctx, args.orgId);
     const projection = await websitePublicProjection(ctx, args.orgId, settings);
     return { ...projection, previewedBy: user._id };
@@ -569,28 +847,70 @@ export const resolveDomain = query({
       .unique();
 
     if (!domain || domain.status !== "active") return null;
+    if (!(await hasPlanFeature(ctx, domain.orgId, "websiteBuilder"))) return null;
     const settings = await ctx.db.get(domain.websiteSettingsId);
     if (!settings || settings.orgId !== domain.orgId || settings.status !== "active" || !settings.enabled) return null;
-    return await websitePublicProjection(ctx, domain.orgId, settings);
+    const snapshot = await activePublishedSnapshot(ctx, domain, settings);
+    if (!snapshot) return null;
+    return {
+      ...snapshot.snapshotJson,
+      publishedSnapshot: {
+        id: snapshot._id,
+        domain: snapshot.domain,
+        version: snapshot.version,
+        publishedAt: snapshot.publishedAt,
+      },
+    };
   },
 });
 
-export const submitPublicLead = mutation({
+export const submitPublicLead = action({
   args: {
-    host: v.string(),
-    formType: v.string(),
-    vehicleId: v.optional(v.id("vehicles")),
-    firstName: v.string(),
-    lastName: v.optional(v.string()),
-    email: v.optional(v.string()),
-    phone: v.optional(v.string()),
-    whatsapp: v.optional(v.string()),
-    message: v.optional(v.string()),
-    preferredDate: v.optional(v.number()),
+    ...publicLeadBaseArgs,
+    turnstileToken: v.string(),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<PublicLeadResult> => {
+    const clientFingerprint = normalizeLimitKey(
+      args.clientFingerprint,
+      "Client fingerprint",
+      PUBLIC_LEAD_MAX_FINGERPRINT_CHARS,
+    );
+    if (!clientFingerprint) throw new ConvexError("Request verification failed. Please try again.");
+
+    await verifyTurnstileToken(args.turnstileToken);
+    await enforcePublicLeadRateLimit(ctx, "websiteLeadFingerprint", clientFingerprint);
+
+    const { turnstileToken: _turnstileToken, ...leadArgs } = args;
+    const result: PublicLeadResult = await ctx.runMutation(internal.websites.createPublicLead, {
+      ...leadArgs,
+      clientFingerprint,
+    });
+    return result;
+  },
+});
+
+export const createPublicLead = internalMutation({
+  args: publicLeadBaseArgs,
+  handler: async (ctx, args): Promise<PublicLeadResult> => {
     const host = normalizedWebsiteHost(args.host);
-    if (!WEBSITE_FORM_TYPES.includes(args.formType as (typeof WEBSITE_FORM_TYPES)[number])) {
+    const formType = args.formType as PublicLeadFormType;
+    const clientFingerprint = normalizeLimitKey(
+      args.clientFingerprint,
+      "Client fingerprint",
+      PUBLIC_LEAD_MAX_FINGERPRINT_CHARS,
+    );
+    const clientIpHash = normalizeLimitKey(args.clientIpHash, "Client IP hash", PUBLIC_LEAD_MAX_IP_HASH_CHARS);
+
+    if (!clientFingerprint) throw new ConvexError("Request verification failed. Please try again.");
+    if (!WEBSITE_FORM_TYPES.includes(formType)) {
+      await recordWebsiteLeadAbuseEvent(ctx, {
+        host,
+        formType: args.formType,
+        reason: "validation_failed",
+        clientFingerprint,
+        clientIpHash,
+        detail: "unsupported_form_type",
+      });
       throw new ConvexError("Unsupported website form.");
     }
 
@@ -599,12 +919,79 @@ export const submitPublicLead = mutation({
       .withIndex("by_domain", (q) => q.eq("domain", host))
       .unique();
     if (!domain || domain.status !== "active") throw new ConvexError("Website not found.");
+    if (!(await hasPlanFeature(ctx, domain.orgId, "websiteBuilder"))) throw new ConvexError("Website not found.");
 
     const settings = await ctx.db.get(domain.websiteSettingsId);
     if (!settings || settings.status !== "active" || !settings.enabled) throw new ConvexError("Website is not active.");
+    const snapshot = await activePublishedSnapshot(ctx, domain, settings);
+    if (!snapshot) throw new ConvexError("Website is not active.");
 
-    const sections = await websiteSectionMap(ctx, settings._id);
-    const formSectionKey = sectionKeyForWebsiteForm(args.formType);
+    const firstName = normalizeRequiredText(args.firstName, "Name", PUBLIC_LEAD_MAX_NAME_CHARS);
+    const lastName = normalizeText(args.lastName, "Last name", PUBLIC_LEAD_MAX_NAME_CHARS) ?? "Website Lead";
+    const email = normalizeEmail(args.email);
+    const phone = normalizePhone(args.phone, "Phone");
+    const whatsapp = normalizePhone(args.whatsapp, "WhatsApp");
+    const message = normalizeText(args.message, "Message", PUBLIC_LEAD_MAX_MESSAGE_CHARS);
+    if (!email && !phone && !whatsapp) {
+      await recordWebsiteLeadAbuseEvent(ctx, {
+        orgId: domain.orgId,
+        host,
+        formType,
+        reason: "validation_failed",
+        clientFingerprint,
+        clientIpHash,
+        detail: "missing_contact_method",
+      });
+      throw new ConvexError("Provide an email, phone, or WhatsApp number.");
+    }
+
+    const contactKey = email ?? phone ?? whatsapp;
+    if (!contactKey) throw new ConvexError("Provide an email, phone, or WhatsApp number.");
+
+    const block = await findWebsiteLeadBlock(ctx, {
+      orgId: domain.orgId,
+      host,
+      clientFingerprint,
+      clientIpHash,
+      email,
+      phone,
+      whatsapp,
+    });
+    if (block) {
+      await recordWebsiteLeadAbuseEvent(ctx, {
+        orgId: domain.orgId,
+        host,
+        formType,
+        reason: "blocked",
+        clientFingerprint,
+        clientIpHash,
+        contactKey,
+        detail: block.kind,
+      });
+      throw new ConvexError("This request cannot be accepted.");
+    }
+
+    try {
+      await enforcePublicLeadRateLimit(ctx, "websiteLeadHost", host);
+      await enforcePublicLeadRateLimit(ctx, "websiteLeadOrg", domain.orgId);
+      await enforcePublicLeadRateLimit(ctx, "websiteLeadContact", contactKey);
+      if (clientIpHash) await enforcePublicLeadRateLimit(ctx, "websiteLeadFingerprint", clientIpHash);
+    } catch (error) {
+      await recordWebsiteLeadAbuseEvent(ctx, {
+        orgId: domain.orgId,
+        host,
+        formType,
+        reason: "rate_limited",
+        clientFingerprint,
+        clientIpHash,
+        contactKey,
+        detail: error instanceof Error ? error.message : "rate_limited",
+      });
+      throw error;
+    }
+
+    const sections = snapshotSectionMap(snapshot.snapshotJson);
+    const formSectionKey = sectionKeyForWebsiteForm(formType);
     if (sections[formSectionKey] === false) throw new ConvexError("This form is not enabled.");
 
     const vehicleId = args.vehicleId;
@@ -615,27 +1002,70 @@ export const submitPublicLead = mutation({
       }
     }
 
-    const firstName = args.firstName.trim();
-    if (!firstName) throw new ConvexError("Name is required.");
-    if (!args.email?.trim() && !args.phone?.trim() && !args.whatsapp?.trim()) {
-      throw new ConvexError("Provide an email, phone, or WhatsApp number.");
-    }
-
     const routing = await ctx.db
       .query("websiteLeadRouting")
       .withIndex("by_org_settings_form", (q) =>
-        q.eq("orgId", domain.orgId).eq("websiteSettingsId", settings._id).eq("formType", args.formType)
+        q.eq("orgId", domain.orgId).eq("websiteSettingsId", settings._id).eq("formType", formType)
       )
       .unique();
 
-    const customerId = await ctx.db.insert("customers", {
-      orgId: domain.orgId,
-      firstName,
-      lastName: args.lastName?.trim() || "Website Lead",
-      email: args.email?.trim(),
-      phone: args.phone?.trim(),
-      whatsapp: args.whatsapp?.trim(),
-    });
+    let customerId: Id<"customers"> | null = null;
+    if (email) {
+      customerId = (await ctx.db
+        .query("customers")
+        .withIndex("by_org_email", (q) => q.eq("orgId", domain.orgId).eq("email", email))
+        .first())?._id ?? null;
+    }
+    if (!customerId && phone) {
+      customerId = (await ctx.db
+        .query("customers")
+        .withIndex("by_org_phone", (q) => q.eq("orgId", domain.orgId).eq("phone", phone))
+        .first())?._id ?? null;
+    }
+    if (!customerId && whatsapp) {
+      customerId = (await ctx.db
+        .query("customers")
+        .withIndex("by_org_whatsapp", (q) => q.eq("orgId", domain.orgId).eq("whatsapp", whatsapp))
+        .first())?._id ?? null;
+    }
+
+    if (customerId) {
+      const existingLeads = await ctx.db
+        .query("leads")
+        .withIndex("by_org_customer", (q) => q.eq("orgId", domain.orgId).eq("customerId", customerId!))
+        .order("desc")
+        .take(10);
+      const source = `Dealer website: ${formType}`;
+      const duplicate = existingLeads.find(
+        (lead) =>
+          !lead.isDeleted &&
+          OPEN_LEAD_STAGES.has(lead.stage) &&
+          lead.source === source &&
+          (lead.vehicleId ?? null) === (vehicleId ?? null) &&
+          Date.now() - lead._creationTime <= PUBLIC_LEAD_DUPLICATE_WINDOW_MS,
+      );
+      if (duplicate) {
+        await recordWebsiteLeadAbuseEvent(ctx, {
+          orgId: domain.orgId,
+          host,
+          formType,
+          reason: "duplicate_suppressed",
+          clientFingerprint,
+          clientIpHash,
+          contactKey,
+        });
+        return { success: true, leadId: duplicate._id, duplicate: true };
+      }
+    } else {
+      customerId = await ctx.db.insert("customers", {
+        orgId: domain.orgId,
+        firstName,
+        lastName,
+        email,
+        phone,
+        whatsapp,
+      });
+    }
 
     const assignedUserId = await resolveGeneratedLeadAssignee(ctx, domain.orgId, routing?.routeToUserId);
 
@@ -645,9 +1075,9 @@ export const submitPublicLead = mutation({
       customerId,
       assignedUserId,
       vehicleId,
-      source: `Dealer website: ${args.formType}`,
-      stage: args.formType === "test_drive" ? "TEST_DRIVE" : "NEW",
-      notes: args.message?.trim(),
+      source: `Dealer website: ${formType}`,
+      stage: formType === "test_drive" ? "TEST_DRIVE" : "NEW",
+      notes: message,
     });
 
     if (assignedUserId) {
@@ -665,8 +1095,8 @@ export const submitPublicLead = mutation({
       await ctx.db.insert("tasks", {
         orgId: domain.orgId,
         assignedTo: assignedUserId,
-        title: args.formType === "test_drive" ? "Website test drive request" : "Follow up website lead",
-        description: args.message?.trim(),
+        title: formType === "test_drive" ? "Website test drive request" : "Follow up website lead",
+        description: message,
         dueDate: args.preferredDate ?? Date.now() + 24 * 60 * 60 * 1000,
         status: "PENDING",
         priority: "MEDIUM",

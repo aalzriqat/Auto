@@ -3,12 +3,13 @@
 import Link from "next/link";
 import { ArrowRight, Car, CheckCircle2, Globe2, Mail, MapPin, Menu, Phone, ShieldCheck, X, Zap } from "lucide-react";
 import type { ThemeProps, PublicVehicle, FormState, SiteStrings } from "./theme-props";
+import { TurnstileWidget } from "../turnstile-widget";
 
 export function VelocityTheme(props: ThemeProps) {
   const {
     site, page, detailVehicle, lang, isArabic, dir, showLangToggle, isPreviewMode,
     form, setForm, setSelectedVehicleId, isSubmitting, formSuccess, setFormSuccess,
-    onSubmit, onToggleLang, mobileNavOpen, setMobileNavOpen,
+    onSubmit, turnstileSiteKey, onToggleLang, mobileNavOpen, setMobileNavOpen,
     t, primary, secondary, formatPrice, vehicles, featuredVehicles,
   } = props;
 
@@ -253,7 +254,7 @@ export function VelocityTheme(props: ThemeProps) {
                   onSubmit={(e) => { setSelectedVehicleId(detailVehicle.id); onSubmit(e, "vehicle_inquiry"); }}
                 >
                   <h2 style={{ fontWeight: 700, marginBottom: 16 }}>{t.askAbout}</h2>
-                  <VelocityFormFields form={form} setForm={setForm} t={t} isSubmitting={isSubmitting} submitLabel={t.sendInquiry} primary={primary} />
+                  <VelocityFormFields form={form} setForm={setForm} t={t} isSubmitting={isSubmitting} submitLabel={t.sendInquiry} primary={primary} turnstileSiteKey={turnstileSiteKey} />
                 </form>
               )}
             </div>
@@ -276,7 +277,7 @@ export function VelocityTheme(props: ThemeProps) {
               style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 28, borderLeft: `4px solid ${primary}` }}
               onSubmit={(e) => onSubmit(e, "financing")}
             >
-              <VelocityFormFields form={form} setForm={setForm} t={t} isSubmitting={isSubmitting} submitLabel={t.requestFinancing} primary={primary} />
+              <VelocityFormFields form={form} setForm={setForm} t={t} isSubmitting={isSubmitting} submitLabel={t.requestFinancing} primary={primary} turnstileSiteKey={turnstileSiteKey} />
             </form>
           )}
         </section>
@@ -347,7 +348,7 @@ export function VelocityTheme(props: ThemeProps) {
                 style={{ border: "1px solid #e2e8f0", borderRadius: 10, padding: 32, borderLeft: `4px solid ${primary}` }}
                 onSubmit={(e) => onSubmit(e, "contact")}
               >
-                <VelocityFormFields form={form} setForm={setForm} t={t} isSubmitting={isSubmitting} submitLabel={t.sendMessage} primary={primary} />
+                <VelocityFormFields form={form} setForm={setForm} t={t} isSubmitting={isSubmitting} submitLabel={t.sendMessage} primary={primary} turnstileSiteKey={turnstileSiteKey} />
               </form>
             )}
           </div>
@@ -467,13 +468,14 @@ function VelocitySuccess({ t, primary, onReset }: { t: SiteStrings; primary: str
   );
 }
 
-function VelocityFormFields({ form, setForm, t, isSubmitting, submitLabel, primary }: {
+function VelocityFormFields({ form, setForm, t, isSubmitting, submitLabel, primary, turnstileSiteKey }: {
   form: FormState;
   setForm: (f: FormState) => void;
   t: SiteStrings;
   isSubmitting: boolean;
   submitLabel: string;
   primary: string;
+  turnstileSiteKey?: string;
 }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -490,6 +492,7 @@ function VelocityFormFields({ form, setForm, t, isSubmitting, submitLabel, prima
       <p style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#94a3b8" }}>
         <Mail size={12} style={{ flexShrink: 0 }} /> {t.contactMethodHint}
       </p>
+      <TurnstileWidget siteKey={turnstileSiteKey} theme="light" />
       <button
         type="submit"
         disabled={isSubmitting}
