@@ -473,7 +473,11 @@ export default defineSchema({
     .index("by_status_and_nextAttemptAt", ["status", "nextAttemptAt"])
     .index("by_org", ["orgId"]),
 
+  // Cross-tenant, super-admin–only table. A single user deletion can span
+  // multiple orgs; orgId is optional (null = global event). All access paths
+  // must go through requireSuperAdmin — never exposed to org-scoped queries.
   userOffboardingReviews: defineTable({
+    orgId: v.optional(v.id("organizations")),
     userId: v.id("users"),
     clerkId: v.string(),
     source: v.union(v.literal("clerk_user_deleted"), v.literal("admin_requested")),
@@ -485,6 +489,7 @@ export default defineSchema({
     resolvedBy: v.optional(v.id("users")),
     notes: v.optional(v.string()),
   })
+    .index("by_org_status", ["orgId", "status"])
     .index("by_status", ["status"])
     .index("by_user", ["userId"])
     .index("by_user_status", ["userId", "status"]),
