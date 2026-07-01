@@ -25,6 +25,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useCurrency } from "@/hooks/useCurrency";
 import { VehicleCostBar } from "../components/VehicleCostBar";
 import { translateCustomerStatusLabel } from "@/lib/i18n/defaultLabels";
 
@@ -51,6 +52,7 @@ export default function Step1QuoteSetup({
 }: Step1QuoteSetupProps) {
   const { activeOrgId } = useOrg();
   const { t, locale } = useLanguage();
+  const currency = useCurrency();
 
   const isCash = paymentType === "CASH";
 
@@ -404,7 +406,7 @@ export default function Step1QuoteSetup({
             <ShieldAlert className="h-4 w-4" />
             <AlertTitle>Approval Required</AlertTitle>
             <AlertDescription className="mt-2 flex flex-col gap-3 items-start">
-              <p>The desired profit ({Number(watchedProfit)} JOD) is below the minimum required profit for this vehicle ({minimumProfit} JOD).</p>
+              <p>The desired profit ({currency.format(Number(watchedProfit))}) is below the minimum required profit for this vehicle ({currency.format(minimumProfit)}).</p>
 
               {pendingApproval?.status === "PENDING" && pendingApproval.requestedProfit === Number(watchedProfit) ? (
                 <div className="flex items-center gap-2 text-yellow-600 dark:text-yellow-400 bg-yellow-500/10 px-3 py-1.5 rounded-md text-sm font-medium">
@@ -433,7 +435,7 @@ export default function Step1QuoteSetup({
             <CheckCircle2 className="h-4 w-4 text-emerald-500" />
             <AlertTitle>Profit Approved</AlertTitle>
             <AlertDescription>
-              Your requested profit of {pendingApproval.requestedProfit} JOD was approved by management. You may proceed.
+              Your requested profit of {currency.format(pendingApproval.requestedProfit)} was approved by management. You may proceed.
             </AlertDescription>
           </Alert>
         )}
