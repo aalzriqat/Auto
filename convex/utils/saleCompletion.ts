@@ -202,7 +202,11 @@ export async function completeSale(
   });
 
   const isSourced = vehicle.sourceType === "SOURCED";
-  const costMinor = vehicle.purchasePrice != null ? toMinorUnits(vehicle.purchasePrice, currency) : undefined;
+  // For sourced vehicles use sourceCost as the authoritative cost so the GL
+  // AP-Suppliers credit and the supplier payable both use the same figure.
+  // For owned vehicles fall back to purchasePrice as before.
+  const costAmount = isSourced ? vehicle.sourceCost : vehicle.purchasePrice;
+  const costMinor = costAmount != null ? toMinorUnits(costAmount, currency) : undefined;
 
   await hookSaleCompleted(ctx, {
     orgId: args.orgId,
@@ -221,14 +225,14 @@ export async function completeSale(
 
   // For sourced vehicles, record the outstanding payable to the supplier dealer.
   // The GL entry (DR COGS / CR AP-Suppliers) was already posted by hookSaleCompleted.
-  if (isSourced && vehicle.sourceCost && vehicle.sourceCost > 0) {
+  if (isSourced && costAmount != null && costAmount > 0) {
     const now = Date.now();
     await ctx.db.insert("vehicleSupplierPayables", {
       orgId: args.orgId,
       vehicleId: args.vehicleId,
       saleId,
       sourcedFromName: vehicle.sourcedFromName ?? "Unknown supplier",
-      amountDue: vehicle.sourceCost,
+      amountDue: costAmount,
       currency,
       status: "PENDING",
       createdBy: args.actorId,

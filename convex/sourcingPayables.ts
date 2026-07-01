@@ -3,7 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { runWithIdempotency } from "./utils/idempotency";
-import { hookSupplierPaymentSettled, getOrgCurrency } from "./accounting/workflowHooks";
+import { hookSupplierPaymentSettled } from "./accounting/workflowHooks";
 import { toMinorUnits } from "./utils/money";
 
 export const list = query({
@@ -31,19 +31,26 @@ export const list = query({
 
     return await Promise.all(
       payables.map(async (p) => {
+        // Guard: only surface joined records that belong to this org.
         const vehicle = await ctx.db.get(p.vehicleId);
+        const safeVehicle = vehicle?.orgId === args.orgId ? vehicle : null;
+
         const sale = p.saleId ? await ctx.db.get(p.saleId) : null;
-        const customer = sale ? await ctx.db.get(sale.customerId) : null;
+        const safeSale = sale?.orgId === args.orgId ? sale : null;
+
+        const customer = safeSale ? await ctx.db.get(safeSale.customerId) : null;
+        const safeCustomer = customer?.orgId === args.orgId ? customer : null;
+
         const paidByUser = p.paidBy ? await ctx.db.get(p.paidBy) : null;
 
         return {
           ...p,
-          vehicleDesc: vehicle
-            ? `${vehicle.year} ${vehicle.make} ${vehicle.model}${vehicle.trim ? ` ${vehicle.trim}` : ""}`
+          vehicleDesc: safeVehicle
+            ? `${safeVehicle.year} ${safeVehicle.make} ${safeVehicle.model}${safeVehicle.trim ? ` ${safeVehicle.trim}` : ""}`
             : "Unknown Vehicle",
-          vehicleVin: vehicle?.vin,
-          customerName: customer
-            ? `${customer.firstName} ${customer.lastName}`
+          vehicleVin: safeVehicle?.vin,
+          customerName: safeCustomer
+            ? `${safeCustomer.firstName} ${safeCustomer.lastName}`
             : null,
           paidByName: paidByUser && "name" in paidByUser ? paidByUser.name : null,
           daysOutstanding: Math.floor((Date.now() - p.createdAt) / (24 * 60 * 60 * 1000)),
@@ -65,14 +72,19 @@ export const get = query({
     if (!p || p.orgId !== args.orgId) return null;
 
     const vehicle = await ctx.db.get(p.vehicleId);
+    const safeVehicle = vehicle?.orgId === args.orgId ? vehicle : null;
+
     const sale = p.saleId ? await ctx.db.get(p.saleId) : null;
-    const customer = sale ? await ctx.db.get(sale.customerId) : null;
+    const safeSale = sale?.orgId === args.orgId ? sale : null;
+
+    const customer = safeSale ? await ctx.db.get(safeSale.customerId) : null;
+    const safeCustomer = customer?.orgId === args.orgId ? customer : null;
 
     return {
       ...p,
-      vehicle,
-      sale,
-      customerName: customer ? `${customer.firstName} ${customer.lastName}` : null,
+      vehicle: safeVehicle,
+      sale: safeSale,
+      customerName: safeCustomer ? `${safeCustomer.firstName} ${safeCustomer.lastName}` : null,
     };
   },
 });
@@ -114,7 +126,9 @@ export const markPaid = mutation({
           updatedAt: now,
         });
 
-        const currency = await getOrgCurrency(ctx, args.orgId);
+        // Use the currency snapshotted at sale time — not the current org
+        // currency — so settlement always matches the original AP posting scale.
+        const currency = payable.currency;
         await hookSupplierPaymentSettled(ctx, {
           orgId: args.orgId,
           payableId: args.payableId,
