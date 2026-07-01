@@ -201,6 +201,9 @@ export async function completeSale(
     leadId,
   });
 
+  const isSourced = vehicle.sourceType === "SOURCED";
+  const costMinor = vehicle.purchasePrice != null ? toMinorUnits(vehicle.purchasePrice, currency) : undefined;
+
   await hookSaleCompleted(ctx, {
     orgId: args.orgId,
     saleId,
@@ -208,12 +211,31 @@ export async function completeSale(
     vehicleId: args.vehicleId,
     salespersonId: args.salespersonId,
     saleAmountMinor: toMinorUnits(args.salePrice, currency),
-    costMinor: vehicle.purchasePrice != null ? toMinorUnits(vehicle.purchasePrice, currency) : undefined,
+    costMinor,
     currency,
     taxMinor: args.taxAmount != null ? toMinorUnits(args.taxAmount, currency) : undefined,
     actorId: args.actorId,
     occurredAt: args.saleDate,
+    isSourced,
   });
+
+  // For sourced vehicles, record the outstanding payable to the supplier dealer.
+  // The GL entry (DR COGS / CR AP-Suppliers) was already posted by hookSaleCompleted.
+  if (isSourced && vehicle.sourceCost && vehicle.sourceCost > 0) {
+    const now = Date.now();
+    await ctx.db.insert("vehicleSupplierPayables", {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      saleId,
+      sourcedFromName: vehicle.sourcedFromName ?? "Unknown supplier",
+      amountDue: vehicle.sourceCost,
+      currency,
+      status: "PENDING",
+      createdBy: args.actorId,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
 
   if (commissionAmount != null && commissionAmount > 0) {
     await hookCommissionAccrued(ctx, {

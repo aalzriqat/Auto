@@ -97,12 +97,12 @@ export async function resolveDepositsForQuote(
 }
 
 /**
- * Releases the vehicle hold for a rejected application's quote, but leaves
- * the deposit's own `status` as HELD — a manager still has to manually
- * refund or forfeit it, mirroring how a real cash refund needs a person to
- * confirm it rather than happening automatically.
+ * Releases the vehicle hold for a quote whose application was rejected or
+ * cancelled, but leaves the deposit's own `status` as HELD — a manager still
+ * has to manually refund or forfeit it, mirroring how a real cash refund
+ * needs a person to confirm it rather than happening automatically.
  */
-export async function releaseHoldForRejectedQuote(
+export async function releaseHoldForApplicationQuote(
   ctx: MutationCtx,
   args: { quoteId: Id<"quotes"> }
 ): Promise<void> {

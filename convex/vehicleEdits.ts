@@ -23,6 +23,9 @@ export const requestCreate = mutation({
       minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),
       status: v.optional(v.string()),
+      sourceType: v.optional(v.union(v.literal("STOCK"), v.literal("SOURCED"))),
+      sourcedFromName: v.optional(v.string()),
+      sourceCost: v.optional(v.number()),
       notes: v.optional(v.string()),
       imageIds: v.optional(v.array(v.id("_storage"))),
     }), // The vehicle creation payload
@@ -79,6 +82,9 @@ export const requestUpdate = mutation({
       minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),
       status: v.optional(v.string()),
+      sourceType: v.optional(v.union(v.literal("STOCK"), v.literal("SOURCED"))),
+      sourcedFromName: v.optional(v.string()),
+      sourceCost: v.optional(v.number()),
       notes: v.optional(v.string()),
       imageIds: v.optional(v.array(v.id("_storage"))),
     }), // The vehicle update payload (patch)

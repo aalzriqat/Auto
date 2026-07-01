@@ -92,6 +92,7 @@ export default function Step1QuoteSetup({
     api.vehicles.listAll,
     activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE", includeReserved: true } : "skip"
   );
+  const createSourced = useMutation(api.vehicles.createSourced);
 
   const form = useForm<Step1Values>({
     resolver: zodResolver(step1Schema),
@@ -227,6 +228,14 @@ export default function Step1QuoteSetup({
                     field.onChange(id);
                     form.setValue("vehiclePrice", price);
                     setSelectedCompanyId(undefined);
+                  }}
+                  onSourceVehicle={async (data) => {
+                    if (!activeOrgId) throw new Error("No org selected");
+                    const newId = await createSourced({
+                      orgId: activeOrgId,
+                      ...data,
+                    });
+                    return newId;
                   }}
                 />
               </FormControl>

@@ -75,6 +75,9 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
       minimumProfit: 0,
       sellingPrice: 0,
       status: "AVAILABLE",
+      sourceType: "STOCK",
+      sourcedFromName: "",
+      sourceCost: 0,
       notes: "",
       imageIds: [],
     },
@@ -96,6 +99,9 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
         minimumProfit: vehicle.minimumProfit,
         sellingPrice: vehicle.sellingPrice,
         status: vehicle.status,
+        sourceType: (vehicle as any).sourceType ?? "STOCK",
+        sourcedFromName: (vehicle as any).sourcedFromName ?? "",
+        sourceCost: (vehicle as any).sourceCost ?? 0,
         notes: vehicle.notes || "",
         imageIds: vehicle.imageIds || [],
       });
@@ -116,6 +122,9 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
         minimumProfit: 0,
         sellingPrice: 0,
         status: "AVAILABLE",
+        sourceType: "STOCK",
+        sourcedFromName: "",
+        sourceCost: 0,
         notes: "",
         imageIds: [],
       });
@@ -127,7 +136,9 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
   // Soft, non-blocking ISO 3779 check-digit warning — many non-North-American
   // VINs legitimately fail this, so it must never block submission.
   const watchedVin = form.watch("vin");
-  const showVinChecksumWarning = watchedVin.length === 17 && !validateVinChecksum(watchedVin);
+  const watchedSourceType = form.watch("sourceType");
+  const isSourced = watchedSourceType === "SOURCED";
+  const showVinChecksumWarning = (watchedVin?.length ?? 0) === 17 && !validateVinChecksum(watchedVin ?? "");
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -167,7 +178,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
   };
 
   const handleDecodeVIN = async () => {
-    const rawVin = form.getValues("vin");
+    const rawVin = form.getValues("vin") ?? "";
     const vin = rawVin.trim().toUpperCase();
     if (vin !== rawVin) form.setValue("vin", vin);
 
@@ -307,26 +318,102 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
 
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+
+            {/* Vehicle Source toggle — shown at the top so all conditional fields render correctly */}
+            <FormField
+              control={form.control}
+              name="sourceType"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t("VehicleSource" as any)}</FormLabel>
+                  <FormControl>
+                    <div className="flex rounded-md border overflow-hidden">
+                      {(["STOCK", "SOURCED"] as const).map((type) => (
+                        <button
+                          key={type}
+                          type="button"
+                          onClick={() => {
+                            field.onChange(type);
+                            if (type === "SOURCED") {
+                              form.setValue("status", "SOURCING");
+                            } else if (form.getValues("status") === "SOURCING") {
+                              form.setValue("status", "AVAILABLE");
+                            }
+                          }}
+                          className={`flex-1 py-2 text-sm font-medium transition-colors ${
+                            field.value === type
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-background text-muted-foreground hover:bg-muted"
+                          }`}
+                        >
+                          {type === "STOCK" ? t("OwnedStock" as any) : t("SourcedFromDealer" as any)}
+                        </button>
+                      ))}
+                    </div>
+                  </FormControl>
+                  {isSourced && (
+                    <p className="text-xs text-muted-foreground">
+                      {t("SourcedVehicleHint" as any)}
+                    </p>
+                  )}
+                </FormItem>
+              )}
+            />
+
+            {/* Sourced-only fields */}
+            {isSourced && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 p-4 rounded-lg border border-orange-200 bg-orange-50 dark:bg-orange-950/20">
+                <FormField
+                  control={form.control}
+                  name="sourcedFromName"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("SourceDealerName" as any)} *</FormLabel>
+                      <FormControl>
+                        <Input placeholder={t("SourceDealerPlaceholder" as any)} {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="sourceCost"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("SupplierCost" as any)} *</FormLabel>
+                      <FormControl>
+                        <Input type="number" min="0" step="0.01" {...field} onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
+            )}
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <FormField
                 control={form.control}
                 name="vin"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>{t("VIN" as any)}</FormLabel>
+                    <FormLabel>{t("VIN" as any)}{isSourced ? ` (${t("OptionalForSourced" as any)})` : ""}</FormLabel>
                     <FormControl>
                       <div className="flex gap-2">
-                        <Input placeholder="17-character VIN" {...field} />
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          onClick={handleDecodeVIN}
-                          disabled={isDecoding || field.value.length !== 17}
-                          className="shrink-0"
-                        >
-                          {isDecoding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4 me-2" />}
-                          {t("Decode" as any) || "Decode"}
-                        </Button>
+                        <Input placeholder={isSourced ? t("VinSourcedPlaceholder" as any) : "17-character VIN"} {...field} />
+                        {!isSourced && (
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            onClick={handleDecodeVIN}
+                            disabled={isDecoding || (field.value?.length ?? 0) !== 17}
+                            className="shrink-0"
+                          >
+                            {isDecoding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Search className="h-4 w-4 me-2" />}
+                            {t("Decode" as any) || "Decode"}
+                          </Button>
+                        )}
                       </div>
                     </FormControl>
                     {showVinChecksumWarning && (
@@ -351,7 +438,8 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                         </SelectTrigger>
                       </FormControl>
                       <SelectContent>
-                        <SelectItem value="AVAILABLE">{t("StatusAvailable" as any)}</SelectItem>
+                        {!isSourced && <SelectItem value="AVAILABLE">{t("StatusAvailable" as any)}</SelectItem>}
+                        {isSourced && <SelectItem value="SOURCING">{t("StatusSourcing" as any)}</SelectItem>}
                         <SelectItem value="IN_INSPECTION">{t("StatusInInspection" as any)}</SelectItem>
                         <SelectItem value="IN_REPAIR">{t("StatusInRepair" as any)}</SelectItem>
                         <SelectItem value="RESERVED">{t("StatusReserved" as any)}</SelectItem>
@@ -485,19 +573,22 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                   </FormItem>
                 )}
               />
-              <FormField
-                control={form.control}
-                name="purchasePrice"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>{t("PurchasePrice" as any) || "Purchase Price"} (JOD)</FormLabel>
-                    <FormControl>
-                      <Input type="number" {...field} />
-                    </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
+              {/* For owned vehicles, show purchasePrice directly; for sourced, sourceCost is used (shown in the sourcing section above). */}
+              {!isSourced && (
+                <FormField
+                  control={form.control}
+                  name="purchasePrice"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("PurchasePrice" as any) || "Purchase Price"} (JOD)</FormLabel>
+                      <FormControl>
+                        <Input type="number" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
               <FormField
                 control={form.control}
                 name="minimumProfit"

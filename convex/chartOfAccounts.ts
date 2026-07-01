@@ -111,6 +111,60 @@ export async function ensureGeneralExpenseAccount(
   });
 }
 
+/**
+ * Same self-healing backfill pattern as ensureGeneralExpenseAccount, but for
+ * the 2400 AP-Vehicle-Suppliers liability account used when posting sourced-
+ * vehicle deal completions. Idempotent; no migration needed.
+ */
+export async function ensureSupplierAPAccount(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  const mapped = await ctx.db
+    .query("chartOfAccounts")
+    .withIndex("by_org_systemKey", (q) =>
+      q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS)
+    )
+    .unique();
+  if (mapped) return;
+
+  const now = Date.now();
+  const byCode = await ctx.db
+    .query("chartOfAccounts")
+    .withIndex("by_org_code", (q) => q.eq("orgId", orgId).eq("code", "2400"))
+    .unique();
+
+  if (byCode) {
+    await ctx.db.patch(byCode._id, {
+      systemKey: SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS,
+      active: true,
+      updatedAt: now,
+      updatedBy: actorId,
+    });
+    return;
+  }
+
+  const def = DEFAULT_CHART.find((d) => d.code === "2400")!;
+  await ctx.db.insert("chartOfAccounts", {
+    orgId,
+    code: def.code,
+    name: def.name,
+    nameAr: def.nameAr,
+    type: def.type,
+    normalBalance: def.normalBalance,
+    isControlAccount: def.isControlAccount,
+    allowManualPosting: def.allowManualPosting,
+    active: true,
+    systemKey: SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS,
+    subtype: def.subtype,
+    createdAt: now,
+    createdBy: actorId,
+    updatedAt: now,
+    updatedBy: actorId,
+  });
+}
+
 // ─── Queries ──────────────────────────────────────────────────────────────────
 
 export const list = query({

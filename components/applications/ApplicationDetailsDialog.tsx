@@ -9,10 +9,11 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
 import { format } from "date-fns";
 import { toast } from "@/components/ui/sonner";
 import { Separator } from "@/components/ui/separator";
-import { Upload, CheckCircle, XCircle, Clock, Eye, X, Download, History } from "lucide-react";
+import { Upload, CheckCircle, XCircle, Clock, Eye, X, Download, History, Ban } from "lucide-react";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 
@@ -30,13 +31,17 @@ export function ApplicationDetailsDialog({
   const { hasPermission } = usePermissions();
   const isManager = hasPermission(PERMISSIONS.MANAGE_SETTINGS);
   const [previewFile, setPreviewFile] = useState<{ url: string; name: string } | null>(null);
+  const [isCancelDialogOpen, setIsCancelDialogOpen] = useState(false);
+  const [cancelReason, setCancelReason] = useState("");
   const finalizeDealIdempotencyKeyRef = useRef<string | null>(null);
+  const cancelApplicationIdempotencyKeyRef = useRef<string | null>(null);
 
   const app = useQuery(api.applications.get, activeOrgId ? { orgId: activeOrgId, applicationId } : "skip");
   const documents = useQuery(api.documents.getForApplication, activeOrgId ? { orgId: activeOrgId, applicationId } : "skip");
   const statusLog = useQuery(api.applications.getLog, activeOrgId ? { orgId: activeOrgId, applicationId } : "skip");
 
   const updateStatus = useMutation(api.applications.updateStatus);
+  const cancelApplication = useMutation(api.applications.cancelApplication);
   const finalizeDeal = useMutation(api.applications.finalizeDeal);
   const updateDocStatus = useMutation(api.documents.updateDocumentStatus);
   const generateUploadUrl = useMutation(api.documents.generateUploadUrl);
@@ -78,6 +83,26 @@ export function ApplicationDetailsDialog({
     }
   };
 
+  const handleCancelApplication = async () => {
+    if (!activeOrgId) return;
+    try {
+      cancelApplicationIdempotencyKeyRef.current ??= `cancel-application:${crypto.randomUUID()}`;
+      await cancelApplication({
+        orgId: activeOrgId,
+        applicationId,
+        reason: cancelReason.trim() || undefined,
+        idempotencyKey: cancelApplicationIdempotencyKeyRef.current,
+      });
+      cancelApplicationIdempotencyKeyRef.current = null;
+      toast.success(t("AppCancelledSuccess" as any));
+      setIsCancelDialogOpen(false);
+      setCancelReason("");
+      onOpenChange(false);
+    } catch (err: any) {
+      toast.error(err);
+    }
+  };
+
   const handleFinalizeDeal = async () => {
     if (!activeOrgId) return;
     try {
@@ -102,7 +127,14 @@ export function ApplicationDetailsDialog({
         app.status === "APPROVED" ? t("Approved" as any) :
           app.status === "REJECTED" ? t("Rejected" as any) :
             app.status === "CLOSED" ? t("Closed" as any) :
-              app.status;
+              app.status === "CANCELLED" ? t("Cancelled" as any) :
+                app.status;
+  const isCancellable = app.status !== "CANCELLED";
+  // Voiding an APPROVED or CLOSED (finalized) application reverses an
+  // approval decision and/or posted accounting — gate to managers, mirroring
+  // the backend's extra APPROVE_FINANCE_APPLICATION check for those states.
+  const canCancel = isCancellable && ((app.status !== "APPROVED" && app.status !== "CLOSED") || isManager);
+  const isClosedCancel = app.status === "CLOSED";
   return (
     <>
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -177,14 +209,14 @@ export function ApplicationDetailsDialog({
                     <Button
                       onClick={handleApproveApp}
                       className="bg-green-600 hover:bg-green-700 text-white"
-                      disabled={app.status === "APPROVED" || app.status === "CLOSED"}
+                      disabled={app.status === "APPROVED" || app.status === "CLOSED" || app.status === "CANCELLED"}
                     >
                       {t("ApproveApplication" as any)}
                     </Button>
                     <Button
                       onClick={() => updateStatus({ orgId: activeOrgId!, applicationId, status: "REJECTED" })}
                       variant="destructive"
-                      disabled={app.status === "REJECTED" || app.status === "CLOSED"}
+                      disabled={app.status === "REJECTED" || app.status === "CLOSED" || app.status === "CANCELLED"}
                     >
                       {t("RejectApplication" as any)}
                     </Button>
@@ -197,6 +229,17 @@ export function ApplicationDetailsDialog({
                     className="bg-blue-600 hover:bg-blue-700 text-white mt-2"
                   >
                     {t("FinalizeDealClose" as any)}
+                  </Button>
+                )}
+
+                {canCancel && (
+                  <Button
+                    onClick={() => setIsCancelDialogOpen(true)}
+                    variant="outline"
+                    className="text-destructive hover:text-destructive mt-2"
+                  >
+                    <Ban className="h-4 w-4 me-2" />
+                    {t("CancelApplication" as any)}
                   </Button>
                 )}
               </div>
@@ -326,6 +369,35 @@ export function ApplicationDetailsDialog({
         </div>
       </DialogContent>
     </Dialog>
+
+      {/* Cancel Application Confirmation Dialog */}
+      <Dialog open={isCancelDialogOpen} onOpenChange={setIsCancelDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t("ConfirmCancelApplication" as any)}</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            {isClosedCancel ? t("CancelClosedApplicationWarning" as any) : t("CancelApplicationWarning" as any)}
+          </p>
+          <div className="space-y-2">
+            <label className="text-sm font-medium">{t("CancellationReasonLabel" as any)}</label>
+            <Textarea
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              placeholder={t("CancellationReasonPlaceholder" as any)}
+              rows={3}
+            />
+          </div>
+          <div className="flex justify-end gap-2 mt-2">
+            <Button variant="outline" onClick={() => setIsCancelDialogOpen(false)}>
+              {t("KeepApplication" as any)}
+            </Button>
+            <Button variant="destructive" onClick={handleCancelApplication}>
+              {t("CancelApplication" as any)}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Document Preview Dialog */}
       <Dialog open={!!previewFile} onOpenChange={(o) => { if (!o) setPreviewFile(null); }}>

@@ -57,6 +57,8 @@ function StatusBadge({ status, t }: { status: string; t: any }) {
       return <Badge variant="outline" className="text-orange-500 border-orange-500">{t("InInspection" as any) || "Inspection"}</Badge>;
     case "IN_REPAIR":
       return <Badge variant="outline" className="text-red-500 border-red-500">{t("InRepair" as any) || "Repair"}</Badge>;
+    case "SOURCING":
+      return <Badge variant="outline" className="text-purple-600 border-purple-600">{t("StatusSourcing" as any) || "Sourcing"}</Badge>;
     case "ARCHIVED":
       return <Badge variant="secondary">{t("Archived" as any) || "Archived"}</Badge>;
     default:
@@ -174,10 +176,13 @@ export default function VehiclesPage() {
 
   const filteredVehicles = vehicles?.filter((v) => {
     const matchesSearch =
-      v.vin.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (v.vin ?? "").toLowerCase().includes(searchQuery.toLowerCase()) ||
       v.make.toLowerCase().includes(searchQuery.toLowerCase()) ||
       v.model.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesAge = agingFilter === "ALL" || getVehicleAgeBucket(v._creationTime) === agingFilter;
+    // Sourced vehicles are excluded from the aging filter since they were never owned stock.
+    const matchesAge = agingFilter === "ALL" || (
+      (v as any).sourceType !== "SOURCED" && getVehicleAgeBucket(v._creationTime) === agingFilter
+    );
     return matchesSearch && matchesAge;
   });
 
@@ -322,9 +327,14 @@ export default function VehiclesPage() {
                   {vehicle.year} {vehicle.make} {vehicle.model}
                   {vehicle.trim && <span className="text-muted-foreground text-xs ms-1">{vehicle.trim}</span>}
                 </p>
-                <p className="text-xs text-muted-foreground font-mono mt-0.5 truncate">{vehicle.vin}</p>
+                <p className="text-xs text-muted-foreground font-mono mt-0.5 truncate">{vehicle.vin ?? t("VinPending" as any)}</p>
               </div>
-              <StatusBadge status={vehicle.status} t={t} />
+              <div className="flex flex-col items-end gap-1">
+                <StatusBadge status={vehicle.status} t={t} />
+                {(vehicle as any).sourceType === "SOURCED" && (
+                  <Badge variant="outline" className="text-orange-600 border-orange-400 text-[10px] px-1.5 py-0">{t("SourcedVehicle" as any)}</Badge>
+                )}
+              </div>
             </div>
             <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
               {vehicle.mileage != null && <span>{vehicle.mileage.toLocaleString()} km</span>}
@@ -395,7 +405,12 @@ export default function VehiclesPage() {
                   <TableCell className="font-medium">
                     {vehicle.make} {vehicle.model} {vehicle.trim && <span className="text-muted-foreground text-xs ms-1">{vehicle.trim}</span>}
                   </TableCell>
-                  <TableCell className="font-mono text-xs">{vehicle.vin}</TableCell>
+                  <TableCell className="font-mono text-xs">
+                    {vehicle.vin ?? <span className="text-muted-foreground italic">{t("VinPending" as any)}</span>}
+                    {(vehicle as any).sourceType === "SOURCED" && (
+                      <Badge variant="outline" className="ms-1 text-orange-600 border-orange-400 text-[10px] px-1.5 py-0">{t("SourcedVehicle" as any)}</Badge>
+                    )}
+                  </TableCell>
                   <TableCell>{vehicle.year}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">
                     {vehicle.mileage != null ? vehicle.mileage.toLocaleString() : "-"} km

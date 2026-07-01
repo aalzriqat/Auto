@@ -68,7 +68,7 @@ export function ApplicationClient() {
                       <TableCell>
                         <Badge variant={
                           app.status === "APPROVED" ? "default" :
-                          app.status === "REJECTED" ? "destructive" :
+                          app.status === "REJECTED" || app.status === "CANCELLED" ? "destructive" :
                           app.status === "UNDER_REVIEW" ? "secondary" : "outline"
                         }>
                           {app.status}

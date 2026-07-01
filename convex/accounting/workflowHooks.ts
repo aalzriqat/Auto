@@ -14,7 +14,7 @@ import { MutationCtx } from "../_generated/server";
 import { postAccountingEvent, PostCommand } from "./postingEngine";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate } from "../accountingPeriods";
-import { isChartInitialized, ensureGeneralExpenseAccount } from "../chartOfAccounts";
+import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount } from "../chartOfAccounts";
 import {
   enqueuePendingPost,
   enqueuePendingReversal,
@@ -49,6 +49,7 @@ async function postOrEnqueue(ctx: MutationCtx, cmd: PostCommand): Promise<void> 
   // paths — e.g. cheque-return bank fees — can also resolve GENERAL_EXPENSE.
   if (await isChartInitialized(ctx, cmd.orgId)) {
     await ensureGeneralExpenseAccount(ctx, cmd.orgId, cmd.actorId);
+    await ensureSupplierAPAccount(ctx, cmd.orgId, cmd.actorId);
   }
   if (await shouldPost(ctx, cmd.orgId, cmd.accountingDate)) {
     await postAccountingEvent(ctx, cmd);
@@ -171,6 +172,8 @@ export async function hookSaleCompleted(
     taxMinor: number | undefined;
     actorId: Id<"users">;
     occurredAt: number;
+    /** Pass true for drop-shipped vehicles — credits AP-Suppliers instead of Vehicle Inventory for COGS. */
+    isSourced?: boolean;
   }
 ) {
   await postOrEnqueue(ctx, {
@@ -192,6 +195,41 @@ export async function hookSaleCompleted(
       vehicleId: args.vehicleId.toString(),
       salespersonId: args.salespersonId.toString(),
       taxMinor: args.taxMinor,
+      isSourced: args.isSourced ?? false,
+    },
+    actorId: args.actorId,
+  });
+}
+
+export async function hookSupplierPaymentSettled(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    payableId: Id<"vehicleSupplierPayables">;
+    sourcedFromName: string;
+    amountMinor: number;
+    currency: string;
+    paymentMethod?: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postOrEnqueue(ctx, {
+    orgId: args.orgId,
+    eventType: "SUPPLIER_PAYMENT_SETTLED",
+    sourceType: "vehicleSupplierPayables",
+    sourceId: args.payableId.toString(),
+    eventVersion: 1,
+    accountingDate: args.occurredAt,
+    occurredAt: args.occurredAt,
+    currency: args.currency,
+    idempotencyKey: `supplier_payment_settled_${args.payableId}`,
+    payload: {
+      payableId: args.payableId.toString(),
+      sourcedFromName: args.sourcedFromName,
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      paymentMethod: args.paymentMethod,
     },
     actorId: args.actorId,
   });
@@ -348,6 +386,139 @@ export async function hookSaleCancelled(
   // outbox, cancel it so it never posts (net GL effect of the round trip is
   // zero). If neither exists, there is genuinely nothing to do.
   await cancelPendingPostByKey(ctx, args.orgId, `sale_completed_${args.saleId}`);
+}
+
+/**
+ * Generic "undo this posted event, or drop it if it never posted" used when
+ * voiding an entire upstream operation (e.g. a finalized finance deal).
+ * Mirrors hookSaleCancelled's reverse-or-drop logic for any
+ * (eventType, sourceType, sourceId) triple.
+ */
+async function reverseEventIfPosted(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    sourceType: string;
+    sourceId: string;
+    eventType: string;
+    reason: string;
+    actorId: Id<"users">;
+    reversalDate: number;
+    reversalIdempotencyKey: string;
+    pendingPostIdempotencyKey: string;
+  }
+): Promise<void> {
+  const originalEvent = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_source", (q) =>
+      q.eq("orgId", args.orgId).eq("sourceType", args.sourceType).eq("sourceId", args.sourceId)
+    )
+    .filter((q) => q.eq(q.field("eventType"), args.eventType))
+    .filter((q) => q.eq(q.field("status"), "POSTED"))
+    .first();
+
+  if (originalEvent) {
+    const period = await getOpenPeriodForDate(ctx, args.orgId, args.reversalDate);
+    if (period) {
+      await reverseAccountingEvent(ctx, {
+        orgId: args.orgId,
+        originalEventId: originalEvent._id,
+        reversalDate: args.reversalDate,
+        reason: args.reason,
+        actorId: args.actorId,
+        idempotencyKey: args.reversalIdempotencyKey,
+      });
+    } else {
+      // No open period — defer the reversal to the outbox instead of skipping it.
+      await enqueuePendingReversal(ctx, {
+        orgId: args.orgId,
+        originalEventId: originalEvent._id,
+        reversalDate: args.reversalDate,
+        reason: args.reason,
+        actorId: args.actorId,
+        idempotencyKey: args.reversalIdempotencyKey,
+        sourceType: args.sourceType,
+        sourceId: args.sourceId,
+      });
+    }
+    return;
+  }
+
+  // No posted GL entry. If it's still sitting unposted in the outbox, cancel
+  // it so it never posts (net GL effect of the round trip is zero).
+  await cancelPendingPostByKey(ctx, args.orgId, args.pendingPostIdempotencyKey);
+}
+
+/** Reverses the FINANCE_DISBURSED entry created at finalizeDeal, when voiding a closed application that was never actually disbursed. */
+export async function hookFinanceDisbursementCancelled(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    applicationId: Id<"financeApplications">;
+    reason: string;
+    actorId: Id<"users">;
+    reversalDate: number;
+  }
+) {
+  await reverseEventIfPosted(ctx, {
+    orgId: args.orgId,
+    sourceType: "financeApplications",
+    sourceId: args.applicationId.toString(),
+    eventType: "FINANCE_DISBURSED",
+    reason: args.reason,
+    actorId: args.actorId,
+    reversalDate: args.reversalDate,
+    reversalIdempotencyKey: `finance_disbursement_cancelled_${args.applicationId}`,
+    pendingPostIdempotencyKey: `finance_disbursed_${args.applicationId}`,
+  });
+}
+
+/** Reverses a COMMISSION_ACCRUED entry when the underlying sale is voided. */
+export async function hookCommissionReversed(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    saleId: Id<"sales">;
+    reason: string;
+    actorId: Id<"users">;
+    reversalDate: number;
+  }
+) {
+  await reverseEventIfPosted(ctx, {
+    orgId: args.orgId,
+    sourceType: "sales",
+    sourceId: `commission_${args.saleId}`,
+    eventType: "COMMISSION_ACCRUED",
+    reason: args.reason,
+    actorId: args.actorId,
+    reversalDate: args.reversalDate,
+    reversalIdempotencyKey: `commission_reversed_${args.saleId}`,
+    pendingPostIdempotencyKey: `commission_accrued_${args.saleId}`,
+  });
+}
+
+/** Reverses a DEPOSIT_APPLIED entry when an applied deposit is reinstated as an active hold (e.g. the sale it was applied to gets voided). */
+export async function hookDepositApplicationReversed(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    depositId: Id<"deposits">;
+    reason: string;
+    actorId: Id<"users">;
+    reversalDate: number;
+  }
+) {
+  await reverseEventIfPosted(ctx, {
+    orgId: args.orgId,
+    sourceType: "deposits",
+    sourceId: args.depositId.toString(),
+    eventType: "DEPOSIT_APPLIED",
+    reason: args.reason,
+    actorId: args.actorId,
+    reversalDate: args.reversalDate,
+    reversalIdempotencyKey: `deposit_applied_reversed_${args.depositId}`,
+    pendingPostIdempotencyKey: `deposit_applied_${args.depositId}`,
+  });
 }
 
 export async function hookFinanceDisbursed(

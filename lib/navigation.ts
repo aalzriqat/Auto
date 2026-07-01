@@ -23,6 +23,7 @@ import {
   Bell,
   Globe2,
   CreditCard,
+  Truck,
   type LucideIcon,
 } from "lucide-react";
 
@@ -44,6 +45,7 @@ export const mainNavigation: NavItem[] = [
   { name: "Leads", href: "/leads", icon: Target, permission: "view:leads" },
   { name: "SocialInbox", href: "/social-inbox", icon: MessageCircle, permission: "view:leads" },
   { name: "FinanceApplications", href: "/applications", icon: ClipboardList, permission: "view:sales" },
+  { name: "Sourcing", href: "/sourcing", icon: Truck, permission: "view:sales" },
   { name: "Sales", href: "/sales", icon: BadgeDollarSign, permission: "view:sales" },
   { name: "Commissions", href: "/commissions", icon: TrendingUp, permission: "view:commissions" },
   { name: "Notifications", href: "/notifications", icon: Bell },

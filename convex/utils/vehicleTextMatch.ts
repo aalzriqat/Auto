@@ -6,7 +6,7 @@ type VehicleRecord = {
   make: string;
   model: string;
   trim?: string;
-  vin: string;
+  vin?: string;
   status?: string;
   isDeleted?: boolean;
 };
@@ -202,7 +202,7 @@ export function matchVehicleFromText(
   // 1. VIN — exactly 17 uppercase alphanumeric chars (no I, O, Q per ISO 3779)
   const vinMatch = upper.match(/\b([A-HJ-NPR-Z0-9]{17})\b/);
   if (vinMatch) {
-    const byVin = active.find((v) => v.vin.toUpperCase() === vinMatch[1]);
+    const byVin = active.find((v) => v.vin?.toUpperCase() === vinMatch[1]);
     if (byVin) return byVin._id;
   }
 

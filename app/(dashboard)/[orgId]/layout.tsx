@@ -18,6 +18,7 @@ import { FloatingMessenger } from "@/components/messages/FloatingMessenger";
 import { MessengerOnboarding } from "@/components/messages/MessengerOnboarding";
 import { GlobalSearchOnboarding } from "@/components/search/GlobalSearchOnboarding";
 import { WebsiteOnboarding } from "@/components/website/WebsiteOnboarding";
+import { FeatureSpotlight } from "@/components/layout/FeatureSpotlight";
 
 function DashboardWrapper({ children }: { children: React.ReactNode }) {
   const { activeOrgId, isLoading } = useOrg();
@@ -67,6 +68,7 @@ function DashboardWrapper({ children }: { children: React.ReactNode }) {
         <MessengerOnboarding />
         <GlobalSearchOnboarding />
         <WebsiteOnboarding />
+        <FeatureSpotlight />
       </div>
     </MessengerProvider>
   );
