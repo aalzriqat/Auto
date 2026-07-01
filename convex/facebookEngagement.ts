@@ -5,6 +5,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { notifyManagers, notifyUser } from "./utils/notifications";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { requireFeature } from "./subscriptions";
 import { postCommentReply, postDirectMessage, fetchFbConversationMessages, FACEBOOK_GRAPH_VERSION } from "./utils/facebookApi";
 import { matchIntent, detectLocale } from "./utils/smartReplyIntent";
 import { buildSmartReplyText } from "./utils/smartReplyBuilder";
@@ -372,6 +373,7 @@ export const requireReplyAccessForEvent = internalQuery({
     const event = await ctx.db.get(args.facebookEventId);
     if (!event) throw new ConvexError("Event not found.");
     const { user } = await requireTenantAuth(ctx, event.orgId, [PERMISSIONS.EDIT_LEADS]);
+    await requireFeature(ctx, event.orgId, "socialInbox");
 
     const orgSettings = await ctx.db
       .query("orgSettings")
@@ -440,6 +442,7 @@ export const requireSendDmAccess = internalQuery({
   args: { orgId: v.id("organizations"), customerId: v.id("customers") },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_LEADS]);
+    await requireFeature(ctx, args.orgId, "socialInbox");
 
     const events = await ctx.db
       .query("facebookEvents")
@@ -757,6 +760,7 @@ export const listFbMessages = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
+    await requireFeature(ctx, args.orgId, "socialInbox");
     return await ctx.db
       .query("facebookMessages")
       .withIndex("by_org_customer_ts", (q) => q.eq("orgId", args.orgId).eq("customerId", args.customerId))

@@ -5,6 +5,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyUser } from "./utils/notifications";
 import { rateLimiter } from "./rateLimit";
+import { requireFeature } from "./subscriptions";
 
 // ─── Public ───────────────────────────────────────────────────────────────────
 
@@ -30,6 +31,7 @@ export const requestPost = mutation({
     }
 
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+    await requireFeature(ctx, args.orgId, "socialInbox");
 
     if (args.imageStorageIds.length === 0) {
       throw new ConvexError("Select at least one photo to post.");
@@ -88,6 +90,7 @@ export const listForVehicle = query({
   args: { orgId: v.id("organizations"), vehicleId: v.id("vehicles") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLE_INFO]);
+    await requireFeature(ctx, args.orgId, "socialInbox");
 
     const posts = await ctx.db
       .query("socialPosts")

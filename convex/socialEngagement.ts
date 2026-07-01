@@ -3,6 +3,7 @@ import { action, internalQuery, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { requireFeature } from "./subscriptions";
 
 const INSTAGRAM_GRAPH_VERSION = "v21.0";
 
@@ -17,6 +18,7 @@ export const requireViewAccessForAction = internalQuery({
     const post = await ctx.db.get(args.socialPostId);
     if (!post) throw new ConvexError("Post not found.");
     await requireTenantAuth(ctx, post.orgId, [PERMISSIONS.VIEW_VEHICLE_INFO]);
+    await requireFeature(ctx, post.orgId, "socialInbox");
 
     const orgSettings = await ctx.db
       .query("orgSettings")
@@ -33,6 +35,7 @@ export const requireEditAccessForAction = internalQuery({
     const post = await ctx.db.get(args.socialPostId);
     if (!post) throw new ConvexError("Post not found.");
     await requireTenantAuth(ctx, post.orgId, [PERMISSIONS.EDIT_VEHICLES]);
+    await requireFeature(ctx, post.orgId, "socialInbox");
 
     const orgSettings = await ctx.db
       .query("orgSettings")

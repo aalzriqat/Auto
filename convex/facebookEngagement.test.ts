@@ -18,6 +18,15 @@ async function seedOrgWithManager(t: ReturnType<typeof convexTest>) {
   const orgId = await t.run(async (ctx) =>
     ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() })
   );
+  await t.run(async (ctx) =>
+    ctx.db.insert("subscriptions", {
+      orgId,
+      plan: "professional",
+      status: "active",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
+  );
   const userId = await t.run(async (ctx) =>
     ctx.db.insert("users", { clerkId: "fb_manager_001", email: "fbmanager@test.com", name: "Manager" })
   );
@@ -31,6 +40,15 @@ async function seedOrgWithManager(t: ReturnType<typeof convexTest>) {
 async function seedOrgWithEditor(t: ReturnType<typeof convexTest>) {
   const orgId = await t.run(async (ctx) =>
     ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() })
+  );
+  await t.run(async (ctx) =>
+    ctx.db.insert("subscriptions", {
+      orgId,
+      plan: "professional",
+      status: "active",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    })
   );
   const userId = await t.run(async (ctx) =>
     ctx.db.insert("users", { clerkId: "fb_editor_001", email: "fbeditor@test.com", name: "Editor" })

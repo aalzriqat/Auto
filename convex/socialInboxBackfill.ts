@@ -6,11 +6,13 @@ import { PERMISSIONS } from "./utils/permissions";
 import { INSTAGRAM_GRAPH_VERSION } from "./utils/instagramApi";
 import { FACEBOOK_GRAPH_VERSION } from "./utils/facebookApi";
 import { matchVehicleFromText, suggestVehiclesFromText } from "./utils/vehicleTextMatch";
+import { requireFeature } from "./subscriptions";
 
 export const requireManagerAuthQuery = internalQuery({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    await requireFeature(ctx, args.orgId, "socialInbox");
   },
 });
 

@@ -6,6 +6,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { notifyManagers, notifyUser } from "./utils/notifications";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { requireFeature } from "./subscriptions";
 import { postCommentReply, postDirectMessage, INSTAGRAM_GRAPH_VERSION } from "./utils/instagramApi";
 import { matchIntent, detectLocale } from "./utils/smartReplyIntent";
 import { buildSmartReplyText } from "./utils/smartReplyBuilder";
@@ -408,6 +409,7 @@ export const listEvents = query({
   args: { orgId: v.id("organizations"), paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
+    await requireFeature(ctx, args.orgId, "socialInbox");
 
     const pageResult = await ctx.db
       .query("instagramEvents")
@@ -444,6 +446,7 @@ export const listConversations = query({
   args: { orgId: v.id("organizations"), paginationOpts: paginationOptsValidator },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
+    await requireFeature(ctx, args.orgId, "socialInbox");
 
     const events = await ctx.db
       .query("instagramEvents")
@@ -528,6 +531,7 @@ export const listEventsForLead = query({
   args: { orgId: v.id("organizations"), leadId: v.id("leads") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_LEADS]);
+    await requireFeature(ctx, args.orgId, "socialInbox");
 
     const events = await ctx.db
       .query("instagramEvents")
@@ -558,6 +562,7 @@ export const requireReplyAccessForEvent = internalQuery({
     const event = await ctx.db.get(args.instagramEventId);
     if (!event) throw new ConvexError("Event not found.");
     const { user } = await requireTenantAuth(ctx, event.orgId, [PERMISSIONS.EDIT_LEADS]);
+    await requireFeature(ctx, event.orgId, "socialInbox");
 
     const orgSettings = await ctx.db
       .query("orgSettings")
@@ -627,6 +632,7 @@ export const requireSendDmAccess = internalQuery({
   args: { orgId: v.id("organizations"), customerId: v.id("customers") },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_LEADS]);
+    await requireFeature(ctx, args.orgId, "socialInbox");
 
     const events = await ctx.db
       .query("instagramEvents")
