@@ -63,9 +63,12 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
   );
 
   const createSale = useMutation(api.sales.create);
+  const createDraftSale = useMutation(api.sales.createDraft);
+  const completeDraftSale = useMutation(api.sales.completeDraft);
   const updateSale = useMutation(api.sales.update);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const createSaleIdempotencyKeyRef = useRef<string | null>(null);
+  const completeDraftIdempotencyKeyRef = useRef<string | null>(null);
 
   const form = useForm<z.infer<typeof saleSchema>>({
     resolver: zodResolver(saleSchema as any),
@@ -187,12 +190,13 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
 
       if (sale) {
         // Updating
+        const completingDraft = sale.status === "PENDING" && values.status === "COMPLETED";
         await updateSale({
           orgId: activeOrgId,
           saleId: sale._id,
           salePrice: values.salePrice,
           saleDate: parsedDate,
-          status: values.status,
+          status: completingDraft ? "PENDING" : values.status,
           taxRate: values.taxRate,
           taxAmount: values.taxAmount,
           dealerFees: values.dealerFees,
@@ -206,18 +210,30 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
           warrantySold: values.warrantySold,
           gapSold: values.gapSold,
         });
+        if (completingDraft) {
+          completeDraftIdempotencyKeyRef.current ??= `complete-draft-sale:${crypto.randomUUID()}`;
+          await completeDraftSale({
+            orgId: activeOrgId,
+            saleId: sale._id,
+            idempotencyKey: completeDraftIdempotencyKeyRef.current,
+          });
+          completeDraftIdempotencyKeyRef.current = null;
+        }
         toast.success(t("SaleUpdatedSuccess" as any));
       } else {
+        if (values.status === "CANCELLED") {
+          toast.error("A new sale cannot be created as cancelled.");
+          return;
+        }
         // Creating
         createSaleIdempotencyKeyRef.current ??= `sale:${crypto.randomUUID()}`;
-        await createSale({
+        const saleArgs = {
           orgId: activeOrgId,
           vehicleId: values.vehicleId as Id<"vehicles">,
           customerId: values.customerId as Id<"customers">,
           salespersonId: values.salespersonId as Id<"users">,
           salePrice: values.salePrice,
           saleDate: parsedDate,
-          status: values.status,
           taxRate: values.taxRate,
           taxAmount: values.taxAmount,
           dealerFees: values.dealerFees,
@@ -231,7 +247,12 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
           warrantySold: values.warrantySold,
           gapSold: values.gapSold,
           idempotencyKey: createSaleIdempotencyKeyRef.current,
-        });
+        };
+        if (values.status === "PENDING") {
+          await createDraftSale({ ...saleArgs, status: "PENDING" });
+        } else {
+          await createSale({ ...saleArgs, status: "COMPLETED" });
+        }
         createSaleIdempotencyKeyRef.current = null;
         toast.success(t("SaleRecordedSuccess" as any));
       }
@@ -365,7 +386,7 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                           <SelectContent>
                             <SelectItem value="PENDING">{t("PendingStatus" as any)}</SelectItem>
                             <SelectItem value="COMPLETED">{t("CompletedStatus" as any)}</SelectItem>
-                            <SelectItem value="CANCELLED">{t("CancelledStatus" as any)}</SelectItem>
+                            {sale && <SelectItem value="CANCELLED">{t("CancelledStatus" as any)}</SelectItem>}
                           </SelectContent>
                         </Select>
                         <FormMessage />

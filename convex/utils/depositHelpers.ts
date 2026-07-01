@@ -34,25 +34,74 @@ export async function holdVehicleForDeposit(
   }
 }
 
+async function hasActiveDepositHold(
+  ctx: MutationCtx,
+  vehicleId: Id<"vehicles">
+): Promise<boolean> {
+  const deposits = await ctx.db
+    .query("deposits")
+    .withIndex("by_vehicle_hold", (q) => q.eq("vehicleId", vehicleId).eq("holdActive", true))
+    .take(50);
+
+  return deposits.some((deposit) => deposit.isDeleted !== true);
+}
+
+async function hasActiveReservationHold(
+  ctx: MutationCtx,
+  args: { orgId: Id<"organizations">; vehicleId: Id<"vehicles"> }
+): Promise<boolean> {
+  const now = Date.now();
+  const reservations = await ctx.db
+    .query("vehicleReservations")
+    .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
+    .take(50);
+
+  return reservations.some(
+    (reservation) =>
+      reservation.status === "ACTIVE" &&
+      (reservation.expiresAt === undefined || reservation.expiresAt > now),
+  );
+}
+
+export async function syncVehicleHoldStatus(
+  ctx: MutationCtx,
+  vehicleId: Id<"vehicles">,
+  actorId?: Id<"users">,
+): Promise<void> {
+  const vehicle = await ctx.db.get(vehicleId);
+  if (!vehicle || vehicle.isDeleted) return;
+  if (vehicle.status === "SOLD" || vehicle.status === "ARCHIVED") return;
+
+  const hasHold =
+    (await hasActiveDepositHold(ctx, vehicleId)) ||
+    (await hasActiveReservationHold(ctx, { orgId: vehicle.orgId, vehicleId }));
+
+  if (hasHold && vehicle.status === "AVAILABLE") {
+    const patch: { status: "RESERVED"; updatedAt: number; updatedBy?: Id<"users"> } = {
+      status: "RESERVED" as const,
+      updatedAt: Date.now(),
+    };
+    if (actorId) patch.updatedBy = actorId;
+    await ctx.db.patch(vehicleId, patch);
+  } else if (!hasHold && vehicle.status === "RESERVED") {
+    const patch: { status: "AVAILABLE"; updatedAt: number; updatedBy?: Id<"users"> } = {
+      status: "AVAILABLE" as const,
+      updatedAt: Date.now(),
+    };
+    if (actorId) patch.updatedBy = actorId;
+    await ctx.db.patch(vehicleId, patch);
+  }
+}
+
 /**
  * Releases a vehicle's RESERVED hold back to AVAILABLE once no deposit is
- * still actively holding it.
+ * or reservation is still actively holding it.
  */
 export async function maybeReleaseVehicleHold(
   ctx: MutationCtx,
   vehicleId: Id<"vehicles">
 ): Promise<void> {
-  const vehicle = await ctx.db.get(vehicleId);
-  if (!vehicle || vehicle.status !== "RESERVED") return;
-
-  const activeDeposit = await ctx.db
-    .query("deposits")
-    .withIndex("by_vehicle_hold", (q) => q.eq("vehicleId", vehicleId).eq("holdActive", true))
-    .first();
-
-  if (!activeDeposit) {
-    await ctx.db.patch(vehicleId, { status: "AVAILABLE" as const });
-  }
+  await syncVehicleHoldStatus(ctx, vehicleId);
 }
 
 /**

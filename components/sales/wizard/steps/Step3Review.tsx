@@ -18,6 +18,7 @@ import { ArrowLeft, CheckCircle2, Car, User, TrendingUp, FileText } from "lucide
 import  ReviewVehicleCard  from "../components/ReviewVehicleCard";
 import  ReviewCustomerCard  from "../components/ReviewCustomerCard";
 import  ReviewFinanceSummary  from "../components/ReviewFinanceSummary";
+import { buildWizardQuotePayload } from "../quotePayload";
 
 export function Step3Review({
   paymentType,
@@ -154,25 +155,23 @@ export function Step3Review({
     setIsSubmitting(true);
 
     try {
-      const quoteId = await saveQuote({
+      const quotePayload = buildWizardQuotePayload({
         orgId: activeOrgId,
-        vehicleId: wizardData.vehicleId as Id<"vehicles">,
         customerId: selectedCustomer._id,
-        leadId: wizardData.leadId as Id<"leads"> | undefined,
-        companyId:
-          paymentType === "CASH" || isManualFinance
-            ? undefined
-            : (wizardData.selectedCompanyId as Id<"financeCompanies">),
+        paymentType,
+        wizardData,
+        selectedResult,
+        recipientName,
+        manualProviderName: t("OtherFinanceOption" as any),
+      });
 
-        vehiclePrice: effectivePrice,
-        downPayment: wizardData.downPayment,
-        termMonths: wizardData.termMonths,
-
-        totalFinancedAmount: selectedResult.totalFinancedAmount,
-        monthlyInstallment: selectedResult.monthlyInstallment,
-        profitRateApplied: (selectedResult as any).profitRateApplied,
-        totalProfit: selectedResult.totalProfit,
-        recipientName: recipientName.trim() || undefined,
+      const quoteId = await saveQuote({
+        ...quotePayload,
+        orgId: quotePayload.orgId as Id<"organizations">,
+        vehicleId: quotePayload.vehicleId as Id<"vehicles">,
+        customerId: quotePayload.customerId as Id<"customers">,
+        leadId: quotePayload.leadId as Id<"leads"> | undefined,
+        companyId: quotePayload.companyId as Id<"financeCompanies"> | undefined,
       });
 
       toast.success(t("QuoteSavedSuccess"));
