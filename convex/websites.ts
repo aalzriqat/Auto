@@ -247,8 +247,8 @@ async function findWebsiteLeadBlock(
   for (const candidate of candidates) {
     const rows = await ctx.db
       .query("websiteLeadBlocklist")
-      .withIndex("by_kind_and_value", (q) =>
-        q.eq("kind", candidate.kind).eq("value", candidate.value),
+      .withIndex("by_kind_and_valueHash", (q) =>
+        q.eq("kind", candidate.kind).eq("valueHash", candidate.value),
       )
       .take(10);
     const active = rows.find((row) => {
