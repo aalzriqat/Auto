@@ -595,6 +595,7 @@ export default function VehiclesPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="AVAILABLE">{t("StatusAvailable" as any)}</SelectItem>
+                  <SelectItem value="SOURCING">{t("StatusSourcing" as any)}</SelectItem>
                   <SelectItem value="RESERVED">{t("StatusReserved" as any)}</SelectItem>
                   <SelectItem value="SOLD">{t("StatusSold" as any)}</SelectItem>
                   <SelectItem value="IN_INSPECTION">{t("StatusInInspection" as any)}</SelectItem>

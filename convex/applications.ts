@@ -166,16 +166,17 @@ export const createFromQuote = mutation({
       throw new ConvexError("An application already exists for this quote.");
     }
 
-    // A vehicle should only have one application in flight at a time —
-    // otherwise two reviewers can be working the same car for different
-    // customers, or a stray PENDING_DOCS application from a wrong-car mistake
-    // sits open indefinitely. CANCELLED applications don't count, since
-    // cancelling is exactly how staff redo a deal with the correct vehicle.
+    // A vehicle should only have one in-flight application at a time.
+    // Use an explicit allowlist of blocking statuses so REJECTED and CLOSED
+    // applications (which are effectively terminal) don't strand the vehicle
+    // indefinitely and allow a fresh deal to begin without requiring cancellation.
+    const IN_FLIGHT_STATUSES: string[] = ["DRAFT", "PENDING_DOCS", "UNDER_REVIEW", "APPROVED"];
     const activeForVehicle = await ctx.db
       .query("financeApplications")
       .withIndex("by_vehicle", (q) => q.eq("vehicleId", quote.vehicleId))
-      .filter((q) => q.and(q.eq(q.field("orgId"), args.orgId), q.neq(q.field("status"), "CANCELLED")))
-      .first();
+      .filter((q) => q.eq(q.field("orgId"), args.orgId))
+      .collect()
+      .then((rows) => rows.find((r) => IN_FLIGHT_STATUSES.includes(r.status)));
     if (activeForVehicle) {
       throw new ConvexError(
         "This vehicle already has an active finance application. Cancel it before starting a new one."
@@ -382,6 +383,7 @@ export const cancelApplication = mutation({
         operation: "applications.cancelApplication",
         idempotencyKey: args.idempotencyKey,
         actorId: auth.user._id,
+        fingerprint: JSON.stringify({ applicationId: args.applicationId, reason: args.reason }),
       },
       async () => {
         const app = await ctx.db.get(args.applicationId);
@@ -404,9 +406,9 @@ export const cancelApplication = mutation({
 
         if (app.status === "CLOSED") {
           // Undoing a finalized deal touches the sale, vehicle, deposits, and
-          // posted GL — require the same authority as approving, not just
-          // the lighter bar used to create/withdraw an in-flight application.
-          await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_FINANCE_APPLICATION]);
+          // posted GL — require finalization authority (the same permission
+          // needed to close the deal in the first place), not just approval.
+          await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.FINALIZE_FINANCED_DEAL]);
 
           if (app.disbursedAt) {
             throw new ConvexError(

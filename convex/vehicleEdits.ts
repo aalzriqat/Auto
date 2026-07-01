@@ -42,6 +42,15 @@ export const requestCreate = mutation({
       );
     }
 
+    if (args.payload.sourceType === "SOURCED") {
+      if (!args.payload.sourcedFromName?.trim()) {
+        throw new ConvexError("Sourced vehicles require a supplier dealer name.");
+      }
+      if (args.payload.sourceCost === undefined || args.payload.sourceCost === null) {
+        throw new ConvexError("Sourced vehicles require a supplier cost.");
+      }
+    }
+
     const requestId = await ctx.db.insert("vehicleEdits", {
       orgId: args.orgId,
       requestedBy: user._id,

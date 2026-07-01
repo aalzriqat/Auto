@@ -88,10 +88,18 @@ export default function Step1QuoteSetup({
     activeOrgId ? { orgId: activeOrgId } : "skip"
   )?.filter((s) => s.isActive) ?? [];
 
+  // Fetch AVAILABLE+RESERVED stock vehicles and SOURCING vehicles separately,
+  // then merge — SOURCING vehicles are created inline by the wizard and must
+  // appear immediately in the picker without a page reload.
   const availableVehicles = useQuery(
     api.vehicles.listAll,
     activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE", includeReserved: true } : "skip"
   );
+  const sourcingVehicles = useQuery(
+    api.vehicles.listAll,
+    activeOrgId ? { orgId: activeOrgId, status: "SOURCING" } : "skip"
+  );
+  const allPickerVehicles = [...(availableVehicles ?? []), ...(sourcingVehicles ?? [])];
   const createSourced = useMutation(api.vehicles.createSourced);
 
   const form = useForm<Step1Values>({
@@ -222,7 +230,7 @@ export default function Step1QuoteSetup({
               <FormLabel>{t("Vehicle" as any)}</FormLabel>
               <FormControl>
                 <VehiclePicker
-                  vehicles={availableVehicles}
+                  vehicles={allPickerVehicles}
                   value={field.value}
                   onChange={(id, price) => {
                     field.onChange(id);

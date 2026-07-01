@@ -92,7 +92,7 @@ export default function VehiclePicker({
       setShowSourceForm(false);
       setSourceData(DEFAULT_SOURCE_DATA);
     } catch (err: any) {
-      // error propagates to parent toast handler
+      throw err; // Propagate so the parent wizard can surface the error via toast
     } finally {
       setIsSourcing(false);
     }

@@ -30,6 +30,9 @@ export function ApplicationDetailsDialog({
   const { t } = useLanguage();
   const { hasPermission } = usePermissions();
   const isManager = hasPermission(PERMISSIONS.MANAGE_SETTINGS);
+  const canCreateApplication = hasPermission(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+  const canApproveApplication = hasPermission(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
+  const canFinalizeApplication = hasPermission(PERMISSIONS.FINALIZE_FINANCED_DEAL);
   const [previewFile, setPreviewFile] = useState<{ url: string; name: string } | null>(null);
   const [isCancelDialogOpen, setIsCancelDialogOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
@@ -130,10 +133,15 @@ export function ApplicationDetailsDialog({
               app.status === "CANCELLED" ? t("Cancelled" as any) :
                 app.status;
   const isCancellable = app.status !== "CANCELLED";
-  // Voiding an APPROVED or CLOSED (finalized) application reverses an
-  // approval decision and/or posted accounting — gate to managers, mirroring
-  // the backend's extra APPROVE_FINANCE_APPLICATION check for those states.
-  const canCancel = isCancellable && ((app.status !== "APPROVED" && app.status !== "CLOSED") || isManager);
+  // Mirror the backend permission tiers exactly:
+  // - DRAFT/PENDING_DOCS/UNDER_REVIEW/REJECTED: requires CREATE_FINANCE_APPLICATION
+  // - APPROVED: additionally requires APPROVE_FINANCE_APPLICATION
+  // - CLOSED: requires FINALIZE_FINANCED_DEAL (same authority as closing the deal)
+  const canCancel =
+    isCancellable &&
+    canCreateApplication &&
+    (app.status === "APPROVED" ? canApproveApplication : true) &&
+    (app.status === "CLOSED" ? canFinalizeApplication : true);
   const isClosedCancel = app.status === "CLOSED";
   return (
     <>

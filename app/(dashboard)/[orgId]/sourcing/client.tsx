@@ -26,6 +26,11 @@ export function SourcingClient() {
   const [isPaying, setIsPaying] = useState(false);
   const markPaidIdempotencyKeyRef = useRef<string | null>(null);
 
+  // allPayables for summary cards (unfiltered); payables for the table (filtered by statusFilter).
+  const allPayables = useQuery(
+    api.sourcingPayables.list,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
   const payables = useQuery(
     api.sourcingPayables.list,
     activeOrgId ? { orgId: activeOrgId, status: statusFilter === "ALL" ? undefined : statusFilter } : "skip"
@@ -46,6 +51,7 @@ export function SourcingClient() {
       });
       markPaidIdempotencyKeyRef.current = null;
       toast.success(t("SupplierMarkedPaid" as any));
+      markPaidIdempotencyKeyRef.current = null;
       setPayDialogPayable(null);
       setPaymentNotes("");
     } catch (err: any) {
@@ -55,8 +61,9 @@ export function SourcingClient() {
     }
   };
 
-  const pending = payables?.filter((p) => p.status === "PENDING") ?? [];
-  const totalOwed = pending.reduce((sum, p) => sum + p.amountDue, 0);
+  // Summary stats always reflect the full dataset, not the current filter.
+  const allPending = allPayables?.filter((p) => p.status === "PENDING") ?? [];
+  const totalOwed = allPending.reduce((sum, p) => sum + p.amountDue, 0);
 
   return (
     <div className="flex-1 space-y-6 p-4 md:p-8 pt-6">
@@ -74,21 +81,21 @@ export function SourcingClient() {
           <CardContent className="pt-4">
             <p className="text-sm text-muted-foreground">{t("OutstandingPayables" as any)}</p>
             <p className="text-2xl font-bold text-orange-600">{totalOwed.toLocaleString()} JOD</p>
-            <p className="text-xs text-muted-foreground">{pending.length} {t("PendingPayments" as any)}</p>
+            <p className="text-xs text-muted-foreground">{allPending.length} {t("PendingPayments" as any)}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-4">
             <p className="text-sm text-muted-foreground">{t("OldestOutstanding" as any)}</p>
             <p className="text-2xl font-bold">
-              {pending.length > 0 ? Math.max(...pending.map((p) => p.daysOutstanding)) : 0} {t("Days" as any)}
+              {allPending.length > 0 ? Math.max(...allPending.map((p) => p.daysOutstanding)) : 0} {t("Days" as any)}
             </p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-4">
             <p className="text-sm text-muted-foreground">{t("TotalSourcedDeals" as any)}</p>
-            <p className="text-2xl font-bold">{payables?.length ?? 0}</p>
+            <p className="text-2xl font-bold">{allPayables?.length ?? 0}</p>
           </CardContent>
         </Card>
       </div>
@@ -188,7 +195,7 @@ export function SourcingClient() {
       </Card>
 
       {/* Mark Paid Dialog */}
-      <Dialog open={!!payDialogPayable} onOpenChange={(o) => { if (!o) { setPayDialogPayable(null); setPaymentNotes(""); } }}>
+      <Dialog open={!!payDialogPayable} onOpenChange={(o) => { if (!o) { markPaidIdempotencyKeyRef.current = null; setPayDialogPayable(null); setPaymentNotes(""); } }}>
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle>{t("ConfirmSupplierPayment" as any)}</DialogTitle>

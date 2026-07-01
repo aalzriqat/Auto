@@ -107,6 +107,7 @@ export const markPaid = mutation({
         operation: "sourcingPayables.markPaid",
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
+        fingerprint: JSON.stringify({ payableId: args.payableId, paymentMethod: args.paymentMethod }),
       },
       async () => {
         const payable = await ctx.db.get(args.payableId);

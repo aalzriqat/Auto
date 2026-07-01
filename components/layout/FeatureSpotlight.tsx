@@ -59,6 +59,14 @@ export function FeatureSpotlight() {
     }
   }, []);
 
+  // Dismiss on Escape key
+  useEffect(() => {
+    if (!visible) return;
+    const handler = (e: KeyboardEvent) => { if (e.key === "Escape") dismiss(); };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [visible]);
+
   const dismiss = () => {
     localStorage.setItem(STORAGE_KEY, "1");
     setVisible(false);
@@ -116,6 +124,7 @@ export function FeatureSpotlight() {
                   : "w-2 bg-muted-foreground/30 hover:bg-muted-foreground/50"
               )}
               aria-label={`Go to slide ${i + 1}`}
+              aria-current={i === slide ? "true" : undefined}
             />
           ))}
         </div>

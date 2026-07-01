@@ -162,7 +162,9 @@ export const listAll = query({
     }
 
     if (args.sourceType) {
-      vehicles = vehicles.filter((v) => v.sourceType === args.sourceType);
+      // Treat null/undefined sourceType as "STOCK" (all pre-existing vehicles
+      // have no sourceType field; they are dealer-owned stock by definition).
+      vehicles = vehicles.filter((v) => (v.sourceType ?? "STOCK") === args.sourceType);
     }
 
     return await Promise.all(
@@ -525,6 +527,20 @@ export const update = mutation({
       throw new ConvexError("Vehicle not found in this organization.");
     }
 
+    // When switching to or retaining SOURCED, mirror the create-time invariant:
+    // sourcedFromName and sourceCost are both required.
+    const effectiveSourceType = args.sourceType ?? vehicle.sourceType;
+    if (effectiveSourceType === "SOURCED") {
+      const effectiveName = args.sourcedFromName ?? vehicle.sourcedFromName;
+      const effectiveCost = args.sourceCost ?? vehicle.sourceCost;
+      if (!effectiveName?.trim()) {
+        throw new ConvexError("Sourced vehicles require a supplier dealer name (sourcedFromName).");
+      }
+      if (effectiveCost === undefined || effectiveCost === null) {
+        throw new ConvexError("Sourced vehicles require a supplier cost (sourceCost).");
+      }
+    }
+
     // If VIN is being changed, check for duplicates
     if (args.vin) {
       const normalizedVin = args.vin.trim().toUpperCase();
@@ -782,6 +798,16 @@ export const createSourced = mutation({
       throw new ConvexError(
         `You've reached the ${vehicleGate.limit}-vehicle limit on your current plan. Upgrade to add more vehicles.`
       );
+    }
+
+    if (!args.sourcedFromName.trim()) {
+      throw new ConvexError("Sourced vehicles require a supplier dealer name (sourcedFromName).");
+    }
+    if (args.sourceCost <= 0) {
+      throw new ConvexError("Supplier cost must be greater than zero.");
+    }
+    if (!args.make.trim() || !args.model.trim() || !args.color.trim()) {
+      throw new ConvexError("Make, model, and color are required.");
     }
 
     const normalizedVin = args.vin?.trim().toUpperCase() || `SOURCING-${Date.now()}`;
