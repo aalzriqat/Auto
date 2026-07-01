@@ -9,7 +9,10 @@
       "esbuild",
       "sharp",
       "unrs-resolver"
-    ]
+    ],
+    "overrides": {
+      "undici": "^7.28.0"
+    }
   },
   "scripts": {
     "dev": "convex dev --start \"next dev -H 0.0.0.0\"",
@@ -17,6 +20,12 @@
     "start": "next start",
     "lint": "eslint .",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "typecheck:convex": "tsc -p convex/tsconfig.json --noEmit",
+    "convex:codegen": "convex codegen --typecheck enable",
+    "dealer-worker:typecheck": "tsc -p dealer-worker/tsconfig.json --noEmit",
+    "dealer-worker:build": "npm run --prefix dealer-worker build",
     "load:smoke": "k6 run load-tests/k6/autoflow-smoke.js",
     "load:auth-smoke": "k6 run load-tests/k6/autoflow-authenticated-smoke.js",
     "load:1000": "k6 run load-tests/k6/autoflow-1000-users.js"
@@ -44,8 +53,9 @@
     "class-variance-authority": "^0.7.1",
     "clerk": "^1.5.0",
     "clsx": "^2.1.1",
-    "convex": "^1.36.1",
+    "convex": "^1.42.1",
     "date-fns": "^4.4.0",
+    "exceljs": "^4.4.0",
     "framer-motion": "^12.40.0",
     "html2canvas": "^1.4.1",
     "jspdf": "^4.2.1",
@@ -53,7 +63,6 @@
     "lucide-react": "^1.17.0",
     "next": "^16.2.7",
     "next-themes": "^0.4.6",
-    "pnpm": "^11.5.1",
     "react": "^19.2.7",
     "react-day-picker": "^8.10.1",
     "react-dom": "^19.2.5",
@@ -65,7 +74,6 @@
     "svix": "^1.95.1",
     "tailwind-merge": "^3.6.0",
     "tailwindcss-animate": "^1.0.7",
-    "xlsx": "^0.18.5",
     "zod": "^3.25.76"
   },
   "devDependencies": {
@@ -84,6 +92,6 @@
     "prettier": "^3.8.3",
     "tailwindcss": "^4.2.2",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.9"
   }
 }

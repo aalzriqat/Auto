@@ -1,5 +1,11 @@
 import { internalMutation } from "./_generated/server";
-import { DEFAULT_ROLE_TEMPLATES, PERMISSIONS } from "./utils/permissions";
+import {
+  DEFAULT_ROLE_TEMPLATES,
+  PERMISSIONS,
+  SYSTEM_OWNER_ROLE_NAME,
+  isSystemOwnerRole,
+  normalizeRoleName,
+} from "./utils/permissions";
 
 export const fixExistingRoles = internalMutation({
   args: {},
@@ -9,7 +15,7 @@ export const fixExistingRoles = internalMutation({
 
     for (const role of roles) {
       // Find the corresponding template
-      const template = DEFAULT_ROLE_TEMPLATES.find((t) => t.name === role.name);
+      const template = DEFAULT_ROLE_TEMPLATES.find((t) => normalizeRoleName(t.name) === normalizeRoleName(role.name));
       if (template) {
         // We only want to ensure VIEW_USERS is present for these specific roles
         // Or we can just sync the permissions entirely if they haven't been customized,
@@ -62,9 +68,9 @@ export const backfillFinanceApplicationPermissions = internalMutation({
         toAdd.add(PERMISSIONS.CREATE_FINANCE_APPLICATION);
       }
       // Owners always get full finance-application authority. requireTenantAuth
-      // already exempts role.name === "OWNER" from permission checks, but this
+      // exempts only the immutable system owner role from permission checks; this
       // keeps the stored permission list accurate for UI display.
-      if (role.name === "OWNER") {
+      if (isSystemOwnerRole(role) || normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME) {
         [
           PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
           PERMISSIONS.CREATE_FINANCE_APPLICATION,
@@ -77,9 +83,10 @@ export const backfillFinanceApplicationPermissions = internalMutation({
       }
 
       const missing = [...toAdd].filter((p) => !has(p));
-      if (missing.length > 0) {
+      if (missing.length > 0 || (normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME && !role.isSystemOwnerRole)) {
         await ctx.db.patch(role._id, {
           permissions: [...role.permissions, ...missing],
+          ...(normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME ? { isSystemOwnerRole: true } : {}),
         });
         updatedCount++;
         updates.push(`${role.name} (${role.orgId}): +${missing.join(", ")}`);
