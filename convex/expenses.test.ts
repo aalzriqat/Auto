@@ -150,46 +150,123 @@ describe("expenses.create", () => {
       expect(tx?.vehicleId).toBe(vehicleId);
     });
   });
-});
 
-describe("expenses.update", () => {
-  test("syncs amount and date to the linked transaction row", async () => {
+  test("creates PENDING expense without cash transaction or accounting event", async () => {
     const { t, orgId, asUser } = await setup();
 
     const expenseId = await asUser.mutation(api.expenses.create, {
       orgId,
-      title: "Utility Bill",
-      amount: 300,
+      title: "Vendor invoice awaiting payment",
+      amount: 750,
       date: Date.now(),
-      category: "OTHER",
-    });
-
-    const newDate = Date.now() + 1000;
-    await asUser.mutation(api.expenses.update, {
-      orgId,
-      expenseId,
-      amount: 450,
-      date: newDate,
+      category: "OFFICE",
+      status: "PENDING",
     });
 
     await t.run(async (ctx) => {
       const expense = await ctx.db.get(expenseId);
-      expect(expense?.amount).toBe(450);
-      expect(expense?.date).toBe(newDate);
+      expect(expense?.status).toBe("PENDING");
 
       const tx = await ctx.db
         .query("transactions")
         .withIndex("by_org", (q) => q.eq("orgId", orgId))
         .filter((q) => q.eq(q.field("expenseId"), expenseId))
         .first();
-      expect(tx?.amount).toBe(450);
-      expect(tx?.date).toBe(newDate);
+      expect(tx).toBeNull();
+
+      const pendingPost = await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", orgId).eq("idempotencyKey", `expense_posted_${expenseId}`)
+        )
+        .first();
+      expect(pendingPost).toBeNull();
+    });
+  });
+});
+
+describe("expenses.update", () => {
+  test("marking a PENDING expense PAID records the cash transaction and accounting event", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    const expenseId = await asUser.mutation(api.expenses.create, {
+      orgId,
+      title: "Pending utility bill",
+      amount: 300,
+      date: Date.now(),
+      category: "UTILITIES",
+      status: "PENDING",
+    });
+
+    await asUser.mutation(api.expenses.update, {
+      orgId,
+      expenseId,
+      status: "PAID",
+    });
+
+    await t.run(async (ctx) => {
+      const expense = await ctx.db.get(expenseId);
+      expect(expense?.status).toBe("PAID");
+
+      const tx = await ctx.db
+        .query("transactions")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .filter((q) => q.eq(q.field("expenseId"), expenseId))
+        .first();
+      expect(tx?.type).toBe("OUT");
+      expect(tx?.amount).toBe(300);
+      expect(tx?.category).toBe("EXPENSE");
+
+      const pendingPost = await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", orgId).eq("idempotencyKey", `expense_posted_${expenseId}`)
+        )
+        .first();
+      expect(pendingPost?.eventType).toBe("EXPENSE_POSTED");
+    });
+  });
+
+  test("rejects accounting field changes after an expense is posted", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    const originalDate = Date.now();
+    const expenseId = await asUser.mutation(api.expenses.create, {
+      orgId,
+      title: "Utility Bill",
+      amount: 300,
+      date: originalDate,
+      category: "OTHER",
+    });
+
+    const newDate = Date.now() + 1000;
+    await expect(
+      asUser.mutation(api.expenses.update, {
+        orgId,
+        expenseId,
+        amount: 450,
+        date: newDate,
+      })
+    ).rejects.toThrow(/posted expenses are locked/i);
+
+    await t.run(async (ctx) => {
+      const expense = await ctx.db.get(expenseId);
+      expect(expense?.amount).toBe(300);
+      expect(expense?.date).toBe(originalDate);
+
+      const tx = await ctx.db
+        .query("transactions")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .filter((q) => q.eq(q.field("expenseId"), expenseId))
+        .first();
+      expect(tx?.amount).toBe(300);
+      expect(tx?.date).toBe(originalDate);
     });
   });
 });
 
 describe("expenses.remove", () => {
-  test("soft deletes an expense", async () => {
+  test("rejects deletion after an expense is posted", async () => {
     const { t, orgId, asUser } = await setup();
 
     const expenseId = await asUser.mutation(api.expenses.create, {
@@ -200,15 +277,17 @@ describe("expenses.remove", () => {
       category: "OTHER",
     });
 
-    await asUser.mutation(api.expenses.remove, { orgId, expenseId });
+    await expect(asUser.mutation(api.expenses.remove, { orgId, expenseId })).rejects.toThrow(
+      /posted expenses cannot be deleted/i
+    );
 
     await t.run(async (ctx) => {
       const expense = await ctx.db.get(expenseId);
-      expect(expense?.isDeleted).toBe(true);
+      expect(expense?.isDeleted).not.toBe(true);
     });
   });
 
-  test("also soft-deletes the linked transaction row", async () => {
+  test("leaves the linked transaction row active when deletion is rejected", async () => {
     const { t, orgId, asUser } = await setup();
 
     const expenseId = await asUser.mutation(api.expenses.create, {
@@ -219,7 +298,7 @@ describe("expenses.remove", () => {
       category: "OTHER",
     });
 
-    await asUser.mutation(api.expenses.remove, { orgId, expenseId });
+    await expect(asUser.mutation(api.expenses.remove, { orgId, expenseId })).rejects.toThrow();
 
     await t.run(async (ctx) => {
       const tx = await ctx.db
@@ -227,7 +306,7 @@ describe("expenses.remove", () => {
         .withIndex("by_org", (q) => q.eq("orgId", orgId))
         .filter((q) => q.eq(q.field("expenseId"), expenseId))
         .first();
-      expect(tx?.isDeleted).toBe(true);
+      expect(tx?.isDeleted).not.toBe(true);
     });
   });
 });
