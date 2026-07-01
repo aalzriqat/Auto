@@ -1,13 +1,16 @@
 import { ConvexError } from "convex/values";
 import { httpRouter } from "convex/server";
-import { httpAction } from "./_generated/server";
+import { httpAction, type ActionCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Webhook } from "svix";
 import { Id } from "./_generated/dataModel";
 import { getValidatedEnv } from "./utils/env";
+import { verifyPaymentWebhook } from "./utils/paymentWebhook";
 import { rateLimiter } from "./rateLimit";
 
 const http = httpRouter();
+const WEBHOOK_RAW_PAYLOAD_MAX_CHARS = 700_000;
+const WEBHOOK_PAYLOAD_PREVIEW_CHARS = 16_384;
 
 function clientIp(request: Request): string {
   return (
@@ -23,6 +26,56 @@ function jsonResponse(body: Record<string, unknown>, status: number): Response {
       "Content-Type": "application/json",
     },
   });
+}
+
+function webhookProcessingFailedResponse(): Response {
+  return new Response("Webhook processing failed", { status: 500 });
+}
+
+type VerifiedWebhookSource =
+  | "clerk"
+  | "whatsapp"
+  | "resend"
+  | "instagram"
+  | "facebook";
+
+async function sha256Hex(value: string): Promise<string> {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(value),
+  );
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+async function logVerifiedWebhookDelivery(
+  ctx: ActionCtx,
+  args: {
+    source: VerifiedWebhookSource;
+    summary: string;
+    rawPayload: string;
+    eventId?: string;
+  },
+): Promise<void> {
+  const payloadSha256 = await sha256Hex(args.rawPayload);
+  const payloadTruncated = args.rawPayload.length > WEBHOOK_RAW_PAYLOAD_MAX_CHARS;
+  const deliveryLog = {
+    source: args.source,
+    status: "received" as const,
+    summary: args.summary,
+    eventId: args.eventId ?? payloadSha256,
+    payloadSha256,
+    payloadPreview: args.rawPayload.slice(0, WEBHOOK_PAYLOAD_PREVIEW_CHARS),
+    payloadTruncated,
+  };
+
+  await ctx.runMutation(
+    internal.adminSystem.logWebhookEvent,
+    payloadTruncated
+      ? deliveryLog
+      : { ...deliveryLog, rawPayload: args.rawPayload },
+  );
 }
 
 function hasMatchingSecret(
@@ -341,6 +394,12 @@ http.route({
     }
 
     const { type, data } = event;
+    await logVerifiedWebhookDelivery(ctx, {
+      source: "clerk",
+      eventId: svixId,
+      summary: type,
+      rawPayload: payload,
+    });
 
     try {
       switch (type) {
@@ -385,7 +444,7 @@ http.route({
         summary: type,
         error: err instanceof Error ? err.message : String(err),
       });
-      return new Response(null, { status: 200 });
+      return webhookProcessingFailedResponse();
     }
 
     await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
@@ -459,8 +518,21 @@ http.route({
     }
 
     if (event.type !== "email.received") {
+      await logVerifiedWebhookDelivery(ctx, {
+        source: "resend",
+        eventId: svixId,
+        summary: event.type,
+        rawPayload: payload,
+      });
       return new Response(null, { status: 200 });
     }
+
+    await logVerifiedWebhookDelivery(ctx, {
+      source: "resend",
+      eventId: svixId,
+      summary: event.type,
+      rawPayload: payload,
+    });
 
     try {
       const { email_id, from, to, subject } = event.data;
@@ -496,7 +568,7 @@ http.route({
         summary: event.type,
         error: err instanceof Error ? err.message : String(err),
       });
-      return new Response(null, { status: 200 });
+      return webhookProcessingFailedResponse();
     }
 
     await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
@@ -589,6 +661,17 @@ http.route({
     const entry = recordArray(body?.entry)[0];
     const change = optionalRecord(recordArray(entry?.changes)[0]?.value);
     const message = recordArray(change?.messages)[0];
+    const statusUpdate = recordArray(change?.statuses)[0];
+    const deliveryEventId =
+      optionalMetaId(message?.id) ?? optionalMetaId(statusUpdate?.id);
+    await logVerifiedWebhookDelivery(ctx, {
+      source: "whatsapp",
+      eventId: deliveryEventId,
+      summary: message
+        ? `Message ${deliveryEventId ?? "received"}`
+        : "Status update",
+      rawPayload: rawBody,
+    });
 
     if (!message) {
       // Delivery receipts and status updates — acknowledge silently
@@ -618,7 +701,7 @@ http.route({
         summary: `Message from ${senderPhone}`,
         error: err instanceof Error ? err.message : String(err),
       });
-      return new Response(null, { status: 200 });
+      return webhookProcessingFailedResponse();
     }
 
     await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
@@ -852,7 +935,13 @@ http.route({
     // high. Processing only [0] of each would silently drop the rest of a
     // burst — so we iterate everything in the payload.
     const entries = recordArray(body?.entry);
+    await logVerifiedWebhookDelivery(ctx, {
+      source: "instagram",
+      summary: `Batch with ${entries.length} entries`,
+      rawPayload: rawBody,
+    });
     let anyRateLimited = false;
+    let anyProcessingFailed = false;
 
     for (const entry of entries) {
       const igAccountId = optionalMetaId(entry.id);
@@ -973,6 +1062,7 @@ http.route({
             summary,
           });
         } catch (err) {
+          anyProcessingFailed = true;
           await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
             source: "instagram",
             status: "error",
@@ -1049,6 +1139,7 @@ http.route({
             summary,
           });
         } catch (err) {
+          anyProcessingFailed = true;
           await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
             source: "instagram",
             status: "error",
@@ -1061,6 +1152,9 @@ http.route({
 
     if (anyRateLimited) {
       return new Response("Too many requests", { status: 429 });
+    }
+    if (anyProcessingFailed) {
+      return webhookProcessingFailedResponse();
     }
 
     return new Response(null, { status: 200 });
@@ -1285,7 +1379,13 @@ http.route({
     // burst — so we iterate everything in the payload (mirrors the
     // Instagram handler above).
     const entries = recordArray(body?.entry);
+    await logVerifiedWebhookDelivery(ctx, {
+      source: "facebook",
+      summary: `Batch with ${entries.length} entries`,
+      rawPayload: rawBody,
+    });
     let anyRateLimited = false;
+    let anyProcessingFailed = false;
 
     for (const entry of entries) {
       const pageId = optionalMetaId(entry.id);
@@ -1400,6 +1500,7 @@ http.route({
             summary,
           });
         } catch (err) {
+          anyProcessingFailed = true;
           await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
             source: "facebook",
             status: "error",
@@ -1468,6 +1569,7 @@ http.route({
             summary,
           });
         } catch (err) {
+          anyProcessingFailed = true;
           await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
             source: "facebook",
             status: "error",
@@ -1481,35 +1583,18 @@ http.route({
     if (anyRateLimited) {
       return new Response("Too many requests", { status: 429 });
     }
+    if (anyProcessingFailed) {
+      return webhookProcessingFailedResponse();
+    }
 
     return new Response(null, { status: 200 });
   }),
 });
 
 // ─── Payment provider webhooks ────────────────────────────────────────────────
-// Generic webhook endpoint for payment providers (e.g. Tap, Stripe, Telr).
-// The body is provider-specific JSON. The provider name is in the `provider`
-// query param. Authentication is MANDATORY: a shared secret header
-// (X-Webhook-Secret) is verified against the PAYMENT_WEBHOOK_SECRET Convex env
-// var with a constant-time compare. If the secret is not configured the
-// endpoint refuses all requests (fail closed) so an unsigned deployment can
-// never settle a payment. Only allow-listed provider names are accepted.
-
-const ALLOWED_PAYMENT_PROVIDERS = new Set(["tap", "stripe", "telr", "checkout", "hyperpay"]);
-
-/** Length-independent constant-time string comparison. */
-function timingSafeEqual(a: string, b: string): boolean {
-  const enc = new TextEncoder();
-  const ab = enc.encode(a);
-  const bb = enc.encode(b);
-  // Compare a fixed-length digest of each so length differences don't short-circuit.
-  let mismatch = ab.length === bb.length ? 0 : 1;
-  const len = Math.max(ab.length, bb.length);
-  for (let i = 0; i < len; i++) {
-    mismatch |= (ab[i] ?? 0) ^ (bb[i] ?? 0);
-  }
-  return mismatch === 0;
-}
+// Provider-native settlement endpoint. The `provider` query param selects a
+// verifier; each verifier must authenticate the raw provider payload and return
+// normalized settlement money before any payment intent can be settled.
 
 http.route({
   path: "/api/payment-webhook",
@@ -1519,47 +1604,33 @@ http.route({
       const url = new URL(request.url);
       const provider = (url.searchParams.get("provider") ?? "").toLowerCase();
 
-      // Fail closed when the webhook secret is not configured or too weak.
-      const secret = process.env.PAYMENT_WEBHOOK_SECRET;
-      if (!secret || secret.length < 16) {
-        console.error("[payment-webhook] PAYMENT_WEBHOOK_SECRET missing/invalid — rejecting.");
-        return new Response("Webhook not configured", { status: 503 });
-      }
+      const rawBody = await request.text();
+      const verification = await verifyPaymentWebhook(
+        provider,
+        rawBody,
+        request.headers,
+        getValidatedEnv(),
+      );
 
-      // Mandatory shared-secret authentication (constant-time).
-      const incoming = request.headers.get("x-webhook-secret") ?? "";
-      if (!timingSafeEqual(incoming, secret)) {
-        return new Response("Unauthorized", { status: 401 });
-      }
-
-      // Reject unknown providers.
-      if (!ALLOWED_PAYMENT_PROVIDERS.has(provider)) {
-        return new Response(JSON.stringify({ ok: false, error: "Unknown provider" }), {
-          status: 400,
+      if (!verification.ok) {
+        return new Response(JSON.stringify({ ok: false, error: verification.error }), {
+          status: verification.status,
           headers: { "Content-Type": "application/json" },
         });
       }
 
-      const body = await request.json() as Record<string, unknown>;
-
-      const externalId = (body.id ?? body.transaction_id ?? body.charge_id ?? "") as string;
-      if (!externalId) {
-        return new Response(JSON.stringify({ ok: false, error: "Missing external ID" }), {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-
-      const settledStatuses = new Set(["captured", "paid", "CAPTURED", "successful", "COMPLETED", "settled"]);
-      const bodyAny = body as Record<string, unknown>;
-      const chargeObj = bodyAny.charge as Record<string, unknown> | undefined;
-      const status = ((bodyAny.status ?? chargeObj?.status) ?? "") as string;
-
-      if (settledStatuses.has(status)) {
+      if (verification.value.kind === "settled") {
+        const settlement = verification.value;
         await ctx.runMutation(internal.paymentIntents.settleByExternalId, {
-          provider,
-          externalId,
-          providerPayload: body,
+          provider: settlement.provider,
+          externalId: settlement.externalId,
+          amountMinor: settlement.amountMinor,
+          currency: settlement.currency,
+          providerSignatureVerifiedAt: settlement.signatureVerifiedAt,
+          providerPayload: settlement.providerPayload,
+          ...(settlement.providerEventId ? { providerEventId: settlement.providerEventId } : {}),
+          ...(settlement.providerEventType ? { providerEventType: settlement.providerEventType } : {}),
+          ...(settlement.providerAccountId ? { providerAccountId: settlement.providerAccountId } : {}),
         });
       }
 

@@ -411,6 +411,7 @@ export const sendTeamInvite = internalAction({
   args: {
     toEmail: v.string(),
     orgName: v.string(),
+    inviteToken: v.string(),
   },
   handler: async (ctx, args) => {
     const status = await rateLimiter.limit(ctx, "email");
@@ -422,7 +423,7 @@ export const sendTeamInvite = internalAction({
 
     // Build the invite URL from the environment
     const appUrl = env.NEXT_PUBLIC_APP_URL;
-    const inviteUrl = `${appUrl}/sign-up`;
+    const inviteUrl = `${appUrl}/sign-up?invite=${encodeURIComponent(args.inviteToken)}`;
 
     const safeOrgName = escapeHtml(args.orgName);
     const emailHtml = wrapEmailHtml(

@@ -24,10 +24,10 @@ jobs:
         cache: 'pnpm'
 
     - name: Install dependencies
-      run: pnpm install
+      run: pnpm install --frozen-lockfile
 
     - name: Run unit + integration tests with coverage
-      run: pnpm test --coverage
+      run: pnpm test:coverage
       env:
         NODE_ENV: test
 
@@ -73,10 +73,63 @@ jobs:
         cache: 'pnpm'
 
     - name: Install dependencies
-      run: pnpm install
+      run: pnpm install --frozen-lockfile
 
     - name: TypeScript type check
-      run: pnpm exec tsc --noEmit
+      run: pnpm typecheck
+
+  convex-backend:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: pnpm/action-setup@v4
+      with:
+        version: 10
+
+    - name: Use Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+        cache: 'pnpm'
+
+    - name: Install dependencies
+      run: pnpm install --frozen-lockfile
+
+    - name: Generate Convex bindings and validate backend types
+      run: pnpm convex:codegen
+
+    - name: Verify generated Convex files are committed
+      run: git diff --exit-code convex/_generated
+
+    - name: Convex tsconfig type check
+      run: pnpm typecheck:convex
+
+  dealer-worker:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Use Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20.x'
+        cache: 'npm'
+        cache-dependency-path: dealer-worker/package-lock.json
+
+    - name: Install worker dependencies
+      run: npm ci --prefix dealer-worker
+
+    - name: Worker type check
+      run: npm run --prefix dealer-worker typecheck
+
+    - name: Worker tests
+      run: npm run --prefix dealer-worker test
+
+    - name: Worker dry-run build
+      run: npm run --prefix dealer-worker build
 
   lint:
     runs-on: ubuntu-latest
@@ -95,7 +148,7 @@ jobs:
         cache: 'pnpm'
 
     - name: Install dependencies
-      run: pnpm install
+      run: pnpm install --frozen-lockfile
 
     - name: Lint
       run: pnpm lint
@@ -117,18 +170,35 @@ jobs:
         cache: 'pnpm'
 
     - name: Install dependencies
-      run: pnpm install
+      run: pnpm install --frozen-lockfile
 
-    # Non-blocking for now: there are pre-existing advisories in transitive
-    # deps (vite>esbuild, convex>ws, next>postcss, sentry>opentelemetry) that
-    # need a deliberate upgrade pass, not a CI failure on every push. Once
-    # those are cleared, remove `continue-on-error` to make this a real gate.
-    - name: pnpm audit
+    - name: Root dependency audit
       run: pnpm audit --audit-level high
-      continue-on-error: true
+
+    - name: Install worker dependencies
+      run: npm ci --prefix dealer-worker
+
+    - name: Worker dependency audit
+      run: npm audit --prefix dealer-worker --audit-level high
 
     - name: Audit summary
       if: always()
       run: |
         echo "## Dependency Audit" >> $GITHUB_STEP_SUMMARY
+        echo "### Root" >> $GITHUB_STEP_SUMMARY
         pnpm audit --audit-level high >> $GITHUB_STEP_SUMMARY 2>&1 || true
+        echo "### Dealer worker" >> $GITHUB_STEP_SUMMARY
+        npm audit --prefix dealer-worker --audit-level high >> $GITHUB_STEP_SUMMARY 2>&1 || true
+
+  secret-scan:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Secret scan
+      uses: gitleaks/gitleaks-action@v2
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
