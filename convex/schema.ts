@@ -1825,7 +1825,7 @@ export default defineSchema({
     createdAt: v.number(),
     createdBy: v.optional(v.id("users")),
   })
-    .index("by_kind_and_value", ["kind", "value"])
+    .index("by_kind_and_valueHash", ["kind", "valueHash"])
     .index("by_org", ["orgId"])
     .index("by_host", ["host"]),
 

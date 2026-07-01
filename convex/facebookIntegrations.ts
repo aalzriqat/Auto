@@ -225,16 +225,19 @@ export const disconnectByFacebookConnectedUserId = internalMutation({
       facebookPageName: undefined,
       facebookConnectedByUserId: undefined,
       facebookAutoReplyEnabled: false,
+      facebookAvailablePages: undefined,
+      facebookPendingCredentials: undefined,
     });
   },
 });
 
-/** Disconnects Facebook for the org. Owner-only. */
+/** Disconnects Facebook for the org. Owner-only.
+ *  Intentionally NOT gated behind requireFeature — downgraded orgs must
+ *  still be able to revoke stored credentials. */
 export const disconnect = mutation({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
-    await requireFeature(ctx, args.orgId, "socialInbox");
 
     const settings = await ctx.db
       .query("orgSettings")
@@ -249,6 +252,8 @@ export const disconnect = mutation({
       facebookPageName: undefined,
       facebookConnectedByUserId: undefined,
       facebookAutoReplyEnabled: false,
+      facebookAvailablePages: undefined,
+      facebookPendingCredentials: undefined,
     });
   },
 });

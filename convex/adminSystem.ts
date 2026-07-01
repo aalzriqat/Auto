@@ -194,7 +194,12 @@ export const retryWebhookEvent = mutation({
 });
 
 /** Finds webhook events stuck in "received" status for >2 h and promotes them
- *  to "dead_letter" so the admin panel can surface them clearly. */
+ *  to "dead_letter" so the admin panel can surface them clearly.
+ *
+ *  The "received" status is only set by retryWebhookEvent (admin manually
+ *  requeues a failed event). Normal intake logs directly to "success"/"error"
+ *  in the HTTP handlers, so this scan is a safety net for retried events that
+ *  somehow still haven't processed — not for initial-delivery failures. */
 export const scanDeadLetterWebhooks = internalAction({
   args: {},
   handler: async (ctx: ActionCtx) => {
