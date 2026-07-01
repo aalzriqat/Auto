@@ -1,9 +1,17 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
-import { PERMISSIONS } from "./utils/permissions";
+import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { checkTenantWriteLimit } from "./rateLimit";
 import { notifyUser } from "./utils/notifications";
+import {
+  assertStoredFileAllowed,
+  FINANCE_DOCUMENT_CONTENT_TYPES,
+} from "./utils/storageValidation";
+
+function hasAnyPermission(role: { permissions: string[]; isSystemOwnerRole?: boolean; name: string }, permissions: string[]) {
+  return isSystemOwnerRole(role) || permissions.some((permission) => role.permissions.includes(permission));
+}
 
 // --- Rules ---
 
@@ -16,9 +24,10 @@ export const listRules = query({
     const { role } = await requireTenantAuth(ctx, args.orgId);
     if (
       !role.permissions.includes(PERMISSIONS.VIEW_SETTINGS) &&
-      !role.permissions.includes(PERMISSIONS.VIEW_SALES)
+      !role.permissions.includes(PERMISSIONS.VIEW_FINANCE_APPLICATIONS) &&
+      !isSystemOwnerRole(role)
     ) {
-      throw new ConvexError("Forbidden: Missing required permissions: view:settings or view:sales");
+      throw new ConvexError("Forbidden: Missing required permissions: view:settings or view:finance_applications");
     }
 
     return await ctx.db
@@ -72,7 +81,7 @@ export const getForApplication = query({
     applicationId: v.id("financeApplications"),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE_APPLICATIONS]);
 
     const docs = await ctx.db
       .query("applicationDocuments")
@@ -105,8 +114,10 @@ export const generateUploadUrl = mutation({
     sizeInBytes: v.number(),
   },
   handler: async (ctx, args) => {
-    // Any user who can view sales can upload documents for applications
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    const { role } = await requireTenantAuth(ctx, args.orgId);
+    if (!hasAnyPermission(role, [PERMISSIONS.CREATE_FINANCE_APPLICATION, PERMISSIONS.VERIFY_FINANCE_DOCUMENTS])) {
+      throw new ConvexError("Forbidden: Missing required finance document permissions.");
+    }
 
     const statusLimit = await checkTenantWriteLimit(ctx, "upload", args.orgId);
     if (!statusLimit.ok) {
@@ -118,8 +129,7 @@ export const generateUploadUrl = mutation({
       throw new ConvexError("File size exceeds 10MB limit.");
     }
 
-    const validMimeTypes = ["application/pdf", "image/jpeg", "image/png", "image/webp"];
-    if (!validMimeTypes.includes(args.mimeType)) {
+    if (!FINANCE_DOCUMENT_CONTENT_TYPES.includes(args.mimeType.toLowerCase() as typeof FINANCE_DOCUMENT_CONTENT_TYPES[number])) {
       throw new ConvexError("Invalid file type. Only PDF and images are allowed.");
     }
 
@@ -134,11 +144,21 @@ export const saveDocumentFile = mutation({
     fileId: v.id("_storage"),
   },
   handler: async (ctx, args) => {
-    // Any user who can view sales can attach documents to applications
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+    const { role } = await requireTenantAuth(ctx, args.orgId);
+    if (!hasAnyPermission(role, [PERMISSIONS.CREATE_FINANCE_APPLICATION, PERMISSIONS.VERIFY_FINANCE_DOCUMENTS])) {
+      throw new ConvexError("Forbidden: Missing required finance document permissions.");
+    }
 
     const doc = await ctx.db.get(args.documentId);
     if (!doc || doc.orgId !== args.orgId) throw new ConvexError("Document not found");
+    const application = await ctx.db.get(doc.applicationId);
+    if (!application || application.orgId !== args.orgId) throw new ConvexError("Application not found");
+    await assertStoredFileAllowed(ctx, {
+      storageId: args.fileId,
+      allowedContentTypes: FINANCE_DOCUMENT_CONTENT_TYPES,
+      maxSizeBytes: 10 * 1024 * 1024,
+      label: "Finance document",
+    });
 
     // Remove old file if exists
     if (doc.fileId) {
@@ -150,6 +170,9 @@ export const saveDocumentFile = mutation({
       status: "UPLOADED",
       uploadedAt: Date.now(),
       rejectionReason: undefined,
+      waiverReason: undefined,
+      waivedBy: undefined,
+      waivedAt: undefined,
     });
   },
 });
@@ -158,22 +181,37 @@ export const updateDocumentStatus = mutation({
   args: {
     orgId: v.id("organizations"),
     documentId: v.id("applicationDocuments"),
-    status: v.union(v.literal("VERIFIED"), v.literal("REJECTED"), v.literal("MISSING")),
+    status: v.union(v.literal("VERIFIED"), v.literal("REJECTED"), v.literal("MISSING"), v.literal("WAIVED")),
     rejectionReason: v.optional(v.string()),
+    waiverReason: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    const auth = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VERIFY_FINANCE_DOCUMENTS]);
 
     const doc = await ctx.db.get(args.documentId);
     if (!doc || doc.orgId !== args.orgId) throw new ConvexError("Document not found");
+    const application = await ctx.db.get(doc.applicationId);
+    if (!application || application.orgId !== args.orgId) throw new ConvexError("Application not found");
+
+    if (args.status === "VERIFIED" && !doc.fileId) {
+      throw new ConvexError("A document file must be uploaded before it can be verified.");
+    }
+    if (args.status === "REJECTED" && !args.rejectionReason?.trim()) {
+      throw new ConvexError("A rejection reason is required.");
+    }
+    if (args.status === "WAIVED" && !args.waiverReason?.trim()) {
+      throw new ConvexError("A waiver reason is required.");
+    }
 
     await ctx.db.patch(args.documentId, {
       status: args.status,
-      rejectionReason: args.status === "REJECTED" ? args.rejectionReason : undefined,
+      rejectionReason: args.status === "REJECTED" ? args.rejectionReason?.trim() : undefined,
+      waiverReason: args.status === "WAIVED" ? args.waiverReason?.trim() : undefined,
       verifiedBy: args.status === "VERIFIED" ? auth.user._id : undefined,
+      waivedBy: args.status === "WAIVED" ? auth.user._id : undefined,
+      waivedAt: args.status === "WAIVED" ? Date.now() : undefined,
     });
 
-    const application = await ctx.db.get(doc.applicationId);
     const rule = await ctx.db.get(doc.ruleId);
     if (application) {
       await notifyUser(

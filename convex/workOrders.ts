@@ -172,6 +172,11 @@ export const update = mutation({
 
     const wo = await ctx.db.get(args.workOrderId);
     if (!wo || wo.isDeleted || wo.orgId !== args.orgId) throw new ConvexError("Work Order not found");
+    if (wo.expenseId) {
+      throw new ConvexError(
+        "Completed work orders with posted expenses are locked. Use a correction or reversal workflow before editing."
+      );
+    }
 
     const totalCost = args.tasks.reduce((sum, task) => sum + task.partsCost + task.laborCost, 0);
 
@@ -187,26 +192,6 @@ export const update = mutation({
         notes: args.notes,
         actorId: user._id,
       });
-    }
-    // If expense already exists, update it and sync the linked transaction row
-    else if (expenseId) {
-      await ctx.db.patch(expenseId, {
-        title: `Work Order: ${args.title}`,
-        amount: totalCost,
-        notes: args.notes,
-      });
-      // Sync the amount on the linked legacy transaction row (best-effort)
-      const linkedTx = await ctx.db
-        .query("transactions")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .filter((q) => q.eq(q.field("expenseId"), expenseId))
-        .first();
-      if (linkedTx) {
-        await ctx.db.patch(linkedTx._id, {
-          amount: totalCost,
-          description: `Work Order: ${args.title}`,
-        });
-      }
     }
 
     await ctx.db.patch(args.workOrderId, {
@@ -243,13 +228,7 @@ export const remove = mutation({
     if (!wo || wo.isDeleted || wo.orgId !== args.orgId) throw new ConvexError("Work Order not found");
 
     if (wo.expenseId) {
-      const identity = await ctx.auth.getUserIdentity();
-    if (!identity) throw new ConvexError("Unauthenticated");
-    await ctx.db.patch(wo.expenseId, {
-      isDeleted: true,
-      deletedAt: Date.now(),
-      deletedBy: identity.subject
-    });
+      throw new ConvexError("Completed work orders with posted expenses cannot be deleted. Use a reversal workflow.");
     }
 
     const identity = await ctx.auth.getUserIdentity();

@@ -42,7 +42,7 @@ const globalSearchQuery = (api as unknown as {
   };
 }).search.globalSearch;
 
-async function setup() {
+async function setup(permissions = ["view:vehicles", "view:customers", "view:leads"]) {
   const t = convexTest(schema, modules);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Test Dealer", createdAt: Date.now() })
@@ -51,7 +51,7 @@ async function setup() {
     ctx.db.insert("users", { clerkId: "user_search", email: "search@test.com", name: "Search User" })
   );
   const roleId = await t.run((ctx) =>
-    ctx.db.insert("roles", { orgId, name: "ADMIN", permissions: ["view:vehicles", "view:customers", "view:leads"] })
+    ctx.db.insert("roles", { orgId, name: "ADMIN", permissions })
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
   const asUser = t.withIdentity({ subject: "user_search" });
@@ -70,6 +70,35 @@ const baseVehicle = {
   sellingPrice: 20000,
   status: "AVAILABLE" as const,
 };
+
+async function seedSearchCorpus(t: ReturnType<typeof convexTest>, orgId: Id<"organizations">) {
+  await t.run((ctx) =>
+    ctx.db.insert("vehicles", {
+      orgId,
+      ...baseVehicle,
+      make: "Alpha",
+      model: "Cruiser",
+      vin: "ALPHA00000000001",
+    })
+  );
+  const customerId = await t.run((ctx) =>
+    ctx.db.insert("customers", {
+      orgId,
+      firstName: "Alpha",
+      lastName: "Buyer",
+      phone: "+1234567890",
+      email: "alpha@example.com",
+    })
+  );
+  await t.run((ctx) =>
+    ctx.db.insert("leads", {
+      orgId,
+      customerId,
+      source: "Walk-in",
+      stage: "NEW",
+    })
+  );
+}
 
 describe("search.globalSearch", () => {
   test("returns empty results for blank/short query", async () => {
@@ -139,5 +168,52 @@ describe("search.globalSearch", () => {
 
     expect(results.vehicles).toHaveLength(1);
     expect(results.vehicles[0].vin).toBe("1HGCM82633A100001");
+  });
+
+  test("filters global search result domains by caller permissions", async () => {
+    const vehicleOnly = await setup(["view:vehicles"]);
+    await seedSearchCorpus(vehicleOnly.t, vehicleOnly.orgId);
+
+    const vehicleResults = await vehicleOnly.asUser.query(globalSearchQuery, {
+      orgId: vehicleOnly.orgId,
+      query: "Alpha",
+    });
+    expect(vehicleResults.vehicles).toHaveLength(1);
+    expect(vehicleResults.customers).toHaveLength(0);
+    expect(vehicleResults.leads).toHaveLength(0);
+
+    const customerOnly = await setup(["view:customers"]);
+    await seedSearchCorpus(customerOnly.t, customerOnly.orgId);
+
+    const customerResults = await customerOnly.asUser.query(globalSearchQuery, {
+      orgId: customerOnly.orgId,
+      query: "Alpha",
+    });
+    expect(customerResults.vehicles).toHaveLength(0);
+    expect(customerResults.customers).toHaveLength(1);
+    expect(customerResults.leads).toHaveLength(0);
+  });
+
+  test("does not expose customer-backed lead results without both lead and customer visibility", async () => {
+    const leadOnly = await setup(["view:leads"]);
+    await seedSearchCorpus(leadOnly.t, leadOnly.orgId);
+
+    const leadOnlyResults = await leadOnly.asUser.query(globalSearchQuery, {
+      orgId: leadOnly.orgId,
+      query: "Alpha",
+    });
+    expect(leadOnlyResults).toEqual({ vehicles: [], customers: [], leads: [] });
+
+    const leadAndCustomer = await setup(["view:leads", "view:customers"]);
+    await seedSearchCorpus(leadAndCustomer.t, leadAndCustomer.orgId);
+
+    const allowedResults = await leadAndCustomer.asUser.query(globalSearchQuery, {
+      orgId: leadAndCustomer.orgId,
+      query: "Alpha",
+    });
+    expect(allowedResults.vehicles).toHaveLength(0);
+    expect(allowedResults.customers).toHaveLength(1);
+    expect(allowedResults.leads).toHaveLength(1);
+    expect(allowedResults.leads[0].customerName).toBe("Alpha Buyer");
   });
 });

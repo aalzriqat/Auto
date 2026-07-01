@@ -39,11 +39,22 @@ const backendEnvSchema = z.object({
   INSTAGRAM_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
   // Optional secret used only by the protected Convex load-test health probe.
   LOAD_TEST_SECRET: z.string().min(16).optional(),
-  // Shared secret for the generic payment-provider webhook (X-Webhook-Secret
-  // header). The /api/payment-webhook route fails closed when this is unset, so
-  // it is required before any provider can settle a payment intent. Min length
-  // keeps it from being a trivially guessable value.
+  // Deprecated legacy shared secret for the old generic payment-provider
+  // webhook. Provider-native webhook verifiers below are now used for
+  // settlement instead.
   PAYMENT_WEBHOOK_SECRET: z.string().min(16).optional(),
+  // Provider-native payment webhook secrets. Stripe signs the raw request body
+  // with the endpoint secret. Tap signs a normalized hashstring using the
+  // merchant Secret API Key.
+  STRIPE_WEBHOOK_SECRET: z.string().min(16).optional(),
+  TAP_SECRET_API_KEY: z.string().min(16).optional(),
+  // Cloudflare Turnstile secret for public dealer-site lead forms. The public
+  // action fails closed when this is absent.
+  TURNSTILE_SECRET_KEY: z.string().min(20).optional(),
+  // Domain registrar mode. Defaults to disabled; set to "mock" only for local
+  // development/tests until a real registrar/payment/reconciliation workflow
+  // exists.
+  DOMAIN_REGISTRAR_MODE: z.enum(["disabled", "mock"]).optional(),
   // Auto-injected by Convex at runtime; validated here so a missing value
   // fails loudly instead of producing a broken OAuth redirect URI.
   CONVEX_SITE_URL: z.string().url().optional(),
@@ -91,6 +102,10 @@ export function getValidatedEnv() {
     INSTAGRAM_WEBHOOK_VERIFY_TOKEN: process.env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN,
     LOAD_TEST_SECRET: process.env.LOAD_TEST_SECRET,
     PAYMENT_WEBHOOK_SECRET: process.env.PAYMENT_WEBHOOK_SECRET,
+    STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET,
+    TAP_SECRET_API_KEY: process.env.TAP_SECRET_API_KEY,
+    TURNSTILE_SECRET_KEY: process.env.TURNSTILE_SECRET_KEY,
+    DOMAIN_REGISTRAR_MODE: process.env.DOMAIN_REGISTRAR_MODE,
     CONVEX_SITE_URL: process.env.CONVEX_SITE_URL,
   });
   

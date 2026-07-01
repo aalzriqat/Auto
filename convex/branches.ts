@@ -3,6 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
+import { requireFeature } from "./subscriptions";
 
 export const list = query({
   args: { orgId: v.id("organizations") },
@@ -38,6 +39,7 @@ export const add = mutation({
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
+    await requireFeature(ctx, args.orgId, "multiBranch");
     
     await ctx.db.insert("branches", {
       orgId: args.orgId,
@@ -65,6 +67,7 @@ export const update = mutation({
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
+    await requireFeature(ctx, args.orgId, "multiBranch");
     
     const branch = await ctx.db.get(args.id);
     if (!branch || branch.orgId !== args.orgId) throw new ConvexError("Branch not found.");
@@ -89,6 +92,7 @@ export const migrateToDefaultBranch = mutation({
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
+    await requireFeature(ctx, args.orgId, "multiBranch");
     
     // Check if any branch exists
     const existing = await ctx.db.query("branches").withIndex("by_org", q => q.eq("orgId", args.orgId)).first();
