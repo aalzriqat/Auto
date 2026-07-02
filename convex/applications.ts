@@ -968,7 +968,7 @@ export const confirmDisbursement = mutation({
           receivedAt: now,
         });
         const receivableDoc = await ctx.db.get(receivableDocumentId);
-        if (receivableDoc && receivableDoc.status !== "PAID") {
+        if (receivableDoc) {
           const activeAllocations = await ctx.db
             .query("paymentAllocations")
             .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", receivableDocumentId))

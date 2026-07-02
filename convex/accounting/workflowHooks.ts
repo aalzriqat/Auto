@@ -106,7 +106,7 @@ async function reverseEventIfPosted(
     orgId: Id<"organizations">;
     sourceType: string;
     sourceId: string;
-    eventType: string;
+    eventType: EventType;
     reason: string;
     actorId: Id<"users">;
     reversalDate: number;
@@ -450,7 +450,7 @@ type ReversalHookArgs<TSourceId> = {
  * derived from the source id.
  */
 function makeReversalHook<TSourceId extends Record<string, unknown>>(cfg: {
-  eventType: string;
+  eventType: EventType;
   sourceType: string;
   sourceId: (args: TSourceId) => string;
   reversalKey: (args: TSourceId) => string;

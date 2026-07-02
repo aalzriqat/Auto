@@ -286,9 +286,13 @@ export default function DashboardEntryPage() {
     return <Spinner />;
   }
 
-  // Only redirect support agents once we know for sure they're not a regular
-  // dealer user. While that query loads, fall through to onboarding so a
-  // normal user with no orgs doesn't see a prolonged spinner.
+  // Wait for the support-agent check to settle before showing onboarding.
+  // Without this guard, a support agent (zero org memberships by design) would
+  // briefly see the dealership-onboarding wizard before the /support redirect fires.
+  if (orgs.length === 0 && isSupportAgent === undefined) {
+    return <Spinner />;
+  }
+
   if (orgs.length === 0 && isSupportAgent === true) {
     return <Spinner />;
   }

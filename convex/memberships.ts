@@ -1185,8 +1185,12 @@ export const createAccount = action({
           await deleteCreatedClerkUser(clerkSecret, createdClerkUserId, "direct account finalization failed");
         }
       }
-      // Rollback: Delete the invitation if anything failed
-      await ctx.runMutation(internal.memberships.rollbackDirectAccount, { inviteId });
+      // Only roll back the invitation when finalization has not yet committed.
+      // After finalization the Convex user + membership are already in place, so
+      // revoking the invitation would leave a real account with no invitation record.
+      if (!finalizedDirectAccount) {
+        await ctx.runMutation(internal.memberships.rollbackDirectAccount, { inviteId });
+      }
       throw new ConvexError(
         error instanceof Error
           ? error.message
