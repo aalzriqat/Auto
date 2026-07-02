@@ -1389,6 +1389,12 @@ export default defineSchema({
     ),
     requestedAmount: v.optional(v.number()),
     requestedDueDate: v.optional(v.number()),
+    disbursementMethod: v.optional(v.union(
+      v.literal("CASH"),
+      v.literal("BANK_TRANSFER"),
+      v.literal("CHEQUE"),
+      v.literal("CARD")
+    )),
     reason: v.string(),
     decisionNotes: v.optional(v.string()),
     decidedBy: v.optional(v.id("users")),
@@ -1833,10 +1839,10 @@ export default defineSchema({
     orgId: v.id("organizations"),
     websiteSettingsId: v.id("websiteSettings"),
     domain: v.optional(v.string()),
-    version: v.string(),
+    version: v.optional(v.string()),
     snapshotJson: v.any(),
     createdAt: v.number(),
-    publishedAt: v.number(),
+    publishedAt: v.optional(v.number()),
     publishedByUserId: v.id("users"),
   })
     .index("by_org", ["orgId"])

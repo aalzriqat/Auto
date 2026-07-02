@@ -212,6 +212,7 @@ describe("Collections", () => {
       receivableId,
       requestType: "REFUND",
       requestedAmount: 200,
+      disbursementMethod: "CASH",
       reason: "Customer overpaid",
     });
 
@@ -230,14 +231,14 @@ describe("Collections", () => {
         .query("collectionPayments")
         .withIndex("by_receivable", (q) => q.eq("receivableId", receivableId))
         .collect();
-      expect(payments.some((payment) => payment.direction === "OUT" && payment.method === "REFUND" && payment.amount === 200)).toBe(true);
-      const refund = payments.find((payment) => payment.direction === "OUT" && payment.method === "REFUND");
+      expect(payments.some((payment) => payment.direction === "OUT" && payment.method === "CASH" && payment.amount === 200)).toBe(true);
+      const refund = payments.find((payment) => payment.direction === "OUT" && payment.method === "CASH");
       expect(refund?.canonicalPaymentId).toBeTruthy();
       const canonicalRefund = refund?.canonicalPaymentId
         ? await ctx.db.get(refund.canonicalPaymentId)
         : null;
       expect(canonicalRefund?.direction).toBe("OUT");
-      expect(canonicalRefund?.method).toBe("OTHER");
+      expect(canonicalRefund?.method).toBe("CASH");
 
       const transactions = await ctx.db
         .query("transactions")
@@ -307,6 +308,102 @@ describe("Collections", () => {
         : null;
       expect(canonicalReceivable?.status).toBe("CANCELLED");
     });
+  });
+
+  test("bank_refund_posts_gl_entry_to_bank_account_not_cash_on_hand", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
+
+    const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      orgId,
+      customerId,
+      sourceType: "INTERNAL_INSTALLMENT",
+      title: "Bank transfer installment",
+      amount: 500,
+      dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+    });
+    await asFinance.mutation(api.collections.recordPayment, {
+      orgId,
+      receivableId,
+      amount: 500,
+      method: "BANK_TRANSFER",
+      paymentDate: Date.now(),
+    });
+    const requestId = await asFinance.mutation(api.collections.requestApproval, {
+      orgId,
+      receivableId,
+      requestType: "REFUND",
+      requestedAmount: 500,
+      disbursementMethod: "BANK_TRANSFER",
+      reason: "Customer cancelled after bank payment",
+    });
+
+    await asApprover.mutation(api.collections.respondToApproval, {
+      orgId,
+      requestId,
+      status: "APPROVED",
+    });
+
+    await t.run(async (ctx) => {
+      const payments = await ctx.db
+        .query("collectionPayments")
+        .withIndex("by_receivable", (q) => q.eq("receivableId", receivableId))
+        .collect();
+      const refund = payments.find((p) => p.direction === "OUT");
+      expect(refund?.method).toBe("BANK_TRANSFER");
+
+      // In tests there is no chart of accounts, so the event is durably
+      // enqueued in pendingAccountingEvents (the outbox) rather than posted
+      // directly. Verify the payload carries BANK_TRANSFER so that when the
+      // outbox flushes, postingRules will credit the bank account — not cash.
+      const pending = await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
+        .collect();
+      const refundEvent = pending.find((e) => e.eventType === "COLLECTION_REFUND");
+      expect(refundEvent).toBeTruthy();
+      expect((refundEvent?.payload as { paymentMethod?: string })?.paymentMethod).toBe("BANK_TRANSFER");
+
+      const canonicalRefund = refund?.canonicalPaymentId
+        ? await ctx.db.get(refund.canonicalPaymentId)
+        : null;
+      expect(canonicalRefund?.method).toBe("BANK_TRANSFER");
+    });
+  });
+
+  test("cancel_of_partially_paid_receivable_is_blocked", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
+
+    const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      orgId,
+      customerId,
+      sourceType: "INTERNAL_INSTALLMENT",
+      title: "Paid installment",
+      amount: 1000,
+      dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+    });
+    await asFinance.mutation(api.collections.recordPayment, {
+      orgId,
+      receivableId,
+      amount: 400,
+      method: "CASH",
+      paymentDate: Date.now(),
+    });
+    const requestId = await asFinance.mutation(api.collections.requestApproval, {
+      orgId,
+      receivableId,
+      requestType: "CANCEL_RECEIVABLE",
+      reason: "Deal fell through after partial payment",
+    });
+
+    await expect(
+      asApprover.mutation(api.collections.respondToApproval, {
+        orgId,
+        requestId,
+        status: "APPROVED",
+      })
+    ).rejects.toThrow("Cannot cancel a receivable that has already received payments");
   });
 
   test("approved_reschedule_moves_overdue_receivable_to_new_due_date", async () => {

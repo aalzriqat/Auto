@@ -47,12 +47,12 @@ export function OrgProvider({ children }: { children: ReactNode }) {
   }
 
   const isLoading = orgs === undefined;
-  // Trust the URL orgId optimistically while membership is still being verified.
-  // Once orgs resolve, we fall back to null if the user isn't a member (which
-  // triggers the redirect in the useEffect above).  Every Convex query that
-  // reads org data still validates actual membership via requireTenantAuth, so
-  // optimistic access here doesn't open a security hole.
-  const activeOrgId = isLoading ? urlOrgId : (isMember ? urlOrgId : null);
+  // Do not expose activeOrgId until membership is confirmed. The parent
+  // dashboard layout keeps listMine subscribed so the cache is warm and
+  // isLoading is false before child components mount on normal navigation.
+  // Guarding here prevents Convex queries from firing with an unvalidated
+  // URL org ID, which would produce invalid-ID errors on stale/foreign links.
+  const activeOrgId = (!isLoading && isMember) ? urlOrgId : null;
 
   return (
     <OrgContext.Provider

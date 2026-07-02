@@ -838,12 +838,15 @@ function ChequeDialog({ receivable, onOpenChange }: { receivable: ReceivableRow 
   );
 }
 
+type DisbursementMethod = "CASH" | "BANK_TRANSFER" | "CHEQUE" | "CARD";
+
 function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable: ReceivableRow; type: "REFUND" | "RESCHEDULE" | "CANCEL_RECEIVABLE" } | null; onOpenChange: (open: boolean) => void }) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const requestApproval = useMutation(api.collections.requestApproval);
   const [amount, setAmount] = useState("");
   const [dueDate, setDueDate] = useState(todayInput);
+  const [disbursementMethod, setDisbursementMethod] = useState<DisbursementMethod>("CASH");
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -857,18 +860,27 @@ function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable:
         requestType: target.type,
         requestedAmount: target.type === "REFUND" ? Number(amount) : undefined,
         requestedDueDate: target.type === "RESCHEDULE" ? dateInputToMs(dueDate) : undefined,
+        disbursementMethod: target.type === "REFUND" ? disbursementMethod : undefined,
         reason,
       });
       toast.success(t("CollectionToastApprovalSubmitted" as any));
       onOpenChange(false);
       setAmount("");
       setReason("");
+      setDisbursementMethod("CASH");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     } finally {
       setSubmitting(false);
     }
   }
+
+  const disbursementLabels: Record<DisbursementMethod, string> = {
+    CASH: "Cash",
+    BANK_TRANSFER: "Bank Transfer",
+    CHEQUE: "Cheque",
+    CARD: "Card",
+  };
 
   return (
     <Dialog open={!!target} onOpenChange={onOpenChange}>
@@ -878,7 +890,21 @@ function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable:
           <DialogDescription>{target?.receivable.customerName} · {target?.receivable.title}</DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
-          {target?.type === "REFUND" && <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={t("RefundAmount" as any)} />}
+          {target?.type === "REFUND" && (
+            <>
+              <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={t("RefundAmount" as any)} />
+              <Select value={disbursementMethod} onValueChange={(v) => setDisbursementMethod(v as DisbursementMethod)}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Refund via…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(Object.keys(disbursementLabels) as DisbursementMethod[]).map((method) => (
+                    <SelectItem key={method} value={method}>{disbursementLabels[method]}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </>
+          )}
           {target?.type === "RESCHEDULE" && <Input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />}
           <Textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder={t("Reason" as any)} />
         </div>

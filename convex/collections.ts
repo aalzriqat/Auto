@@ -1260,6 +1260,13 @@ export const returnClearedCheque = mutation({
   },
 });
 
+const disbursementMethodValidator = v.union(
+  v.literal("CASH"),
+  v.literal("BANK_TRANSFER"),
+  v.literal("CHEQUE"),
+  v.literal("CARD")
+);
+
 export const requestApproval = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -1267,6 +1274,7 @@ export const requestApproval = mutation({
     requestType: approvalRequestTypeValidator,
     requestedAmount: v.optional(v.number()),
     requestedDueDate: v.optional(v.number()),
+    disbursementMethod: v.optional(disbursementMethodValidator),
     reason: v.string(),
   },
   handler: async (ctx, args) => {
@@ -1274,7 +1282,10 @@ export const requestApproval = mutation({
     const receivable = await ctx.db.get(args.receivableId);
     if (!receivable || receivable.orgId !== args.orgId) throw new ConvexError("Receivable not found.");
     if (!args.reason.trim()) throw new ConvexError("Reason is required.");
-    if (args.requestType === "REFUND") assertPositiveAmount(args.requestedAmount ?? 0, "Refund amount");
+    if (args.requestType === "REFUND") {
+      assertPositiveAmount(args.requestedAmount ?? 0, "Refund amount");
+      if (!args.disbursementMethod) throw new ConvexError("Disbursement method is required for refund requests.");
+    }
     if (args.requestType === "RESCHEDULE" && !args.requestedDueDate) {
       throw new ConvexError("New due date is required for reschedule requests.");
     }
@@ -1297,6 +1308,7 @@ export const requestApproval = mutation({
       status: "PENDING",
       requestedAmount: args.requestedAmount ? roundMoney(args.requestedAmount) : undefined,
       requestedDueDate: args.requestedDueDate,
+      disbursementMethod: args.requestType === "REFUND" ? args.disbursementMethod : undefined,
       reason: args.reason.trim(),
       createdAt: now,
       updatedAt: now,
@@ -1402,6 +1414,17 @@ export const respondToApproval = mutation({
             );
             await ctx.db.patch(rescheduledDocId, { dueDate: request.requestedDueDate });
           } else if (request.requestType === "CANCEL_RECEIVABLE") {
+            // Block if any payments have already been collected: cancelling a
+            // financially-recognised receivable without a reversal GL event
+            // leaves the subledger in an inconsistent state. Use the Refund
+            // path to return collected funds first, then cancel.
+            const paidAmount = roundMoney(receivable.originalAmount - receivable.outstandingAmount);
+            if (paidAmount > 0) {
+              throw new ConvexError(
+                "Cannot cancel a receivable that has already received payments. " +
+                "Issue a refund for the collected amount first, then cancel."
+              );
+            }
             await ctx.db.patch(receivable._id, {
               outstandingAmount: 0,
               status: "CANCELLED",
@@ -1421,6 +1444,10 @@ export const respondToApproval = mutation({
             const paidAmount = roundMoney(receivable.originalAmount - receivable.outstandingAmount);
             if (refundAmount > paidAmount) throw new ConvexError("Refund amount cannot exceed collected amount.");
 
+            // Use the method captured at request time so the GL entry posts to
+            // the correct cash account (bank vs. cash on hand vs. cheque).
+            const refundDisbursementMethod = request.disbursementMethod ?? "CASH";
+
             const refundPaymentId = await ctx.db.insert("collectionPayments", {
               orgId: args.orgId,
               branchId: membership.branchId,
@@ -1429,7 +1456,7 @@ export const respondToApproval = mutation({
               vehicleId: receivable.vehicleId,
               saleId: receivable.saleId,
               direction: "OUT",
-              method: "REFUND",
+              method: refundDisbursementMethod,
               amount: refundAmount,
               paymentDate: now,
               status: "POSTED",
@@ -1494,7 +1521,7 @@ export const respondToApproval = mutation({
               customerId: receivable.customerId,
               amountMinor: refundAmountMinor,
               currency,
-              paymentMethod: "REFUND",
+              paymentMethod: refundDisbursementMethod,
               actorId: user._id,
               occurredAt: now,
             });
