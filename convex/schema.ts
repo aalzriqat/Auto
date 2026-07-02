@@ -1832,7 +1832,7 @@ export default defineSchema({
   websitePublishSnapshots: defineTable({
     orgId: v.id("organizations"),
     websiteSettingsId: v.id("websiteSettings"),
-    domain: v.string(),
+    domain: v.optional(v.string()),
     version: v.string(),
     snapshotJson: v.any(),
     createdAt: v.number(),
