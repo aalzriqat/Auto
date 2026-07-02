@@ -21,7 +21,9 @@ import { WebsiteOnboarding } from "@/components/website/WebsiteOnboarding";
 import { FeatureSpotlight } from "@/components/layout/FeatureSpotlight";
 
 function DashboardWrapper({ children }: { children: React.ReactNode }) {
-  const { activeOrgId, isLoading } = useOrg();
+  // OrgProvider sets activeOrgId optimistically to the URL orgId while Convex
+  // auth is still establishing, then validates it once listMine resolves.
+  const { activeOrgId } = useOrg();
   const orgSettings = useOrgSettings();
 
   const brandStyle = useMemo(() => {
@@ -32,10 +34,9 @@ function DashboardWrapper({ children }: { children: React.ReactNode }) {
     return { "--primary": `hsl(${hsl})` } as React.CSSProperties;
   }, [orgSettings]);
 
-  // While the orgId from the URL is still being validated against the
-  // user's memberships (or is invalid and OrgProvider is redirecting away),
-  // show a loading state instead of rendering chrome for an unknown org.
-  if (isLoading || !activeOrgId) {
+  // activeOrgId is null only when the URL has no [orgId] segment or after
+  // membership validation fails (redirect already fired in OrgProvider).
+  if (!activeOrgId) {
     return (
       <div className="flex h-screen items-center justify-center bg-muted/30 flex-col gap-4">
         <div className="w-10 h-10 rounded-full border-4 border-primary border-t-transparent animate-spin" />
