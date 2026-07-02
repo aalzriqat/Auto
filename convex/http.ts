@@ -51,6 +51,7 @@ async function sha256Hex(value: string): Promise<string> {
 
 type WebhookClaim = {
   logId: Id<"webhookLogs">;
+  claimedAt?: number;
   disposition: "process" | "skip_processed" | "skip_in_flight";
 };
 
@@ -91,12 +92,16 @@ async function claimWebhookDelivery(
 
 async function completeWebhookDelivery(
   ctx: ActionCtx,
-  logId: Id<"webhookLogs">,
+  claim: WebhookClaim,
   outcome: "success" | "error",
   error?: string,
 ): Promise<void> {
+  if (claim.claimedAt === undefined) {
+    throw new Error("Cannot complete an unclaimed webhook delivery.");
+  }
   await ctx.runMutation(internal.adminSystem.webhookInboxComplete, {
-    logId,
+    logId: claim.logId,
+    claimedAt: claim.claimedAt,
     outcome,
     ...(error !== undefined ? { error } : {}),
   });
@@ -121,7 +126,7 @@ async function completeBatchWebhookDelivery(
   if (outcome.anyRateLimited || outcome.anyProcessingFailed) {
     await completeWebhookDelivery(
       ctx,
-      claim.logId,
+      claim,
       "error",
       outcome.anyRateLimited
         ? "Rate limited — batch partially deferred"
@@ -132,7 +137,7 @@ async function completeBatchWebhookDelivery(
       : webhookProcessingFailedResponse();
   }
 
-  await completeWebhookDelivery(ctx, claim.logId, "success");
+  await completeWebhookDelivery(ctx, claim, "success");
   return new Response(null, { status: 200 });
 }
 
@@ -500,14 +505,14 @@ http.route({
     } catch (err) {
       await completeWebhookDelivery(
         ctx,
-        claim.logId,
+        claim,
         "error",
         err instanceof Error ? err.message : String(err),
       );
       return webhookProcessingFailedResponse();
     }
 
-    await completeWebhookDelivery(ctx, claim.logId, "success");
+    await completeWebhookDelivery(ctx, claim, "success");
 
     return new Response(null, { status: 200 });
   }),
@@ -584,7 +589,7 @@ http.route({
 
     if (event.type !== "email.received") {
       // Nothing to process for other event types — acknowledged as done.
-      await completeWebhookDelivery(ctx, claim.logId, "success");
+      await completeWebhookDelivery(ctx, claim, "success");
       return new Response(null, { status: 200 });
     }
 
@@ -618,14 +623,14 @@ http.route({
     } catch (err) {
       await completeWebhookDelivery(
         ctx,
-        claim.logId,
+        claim,
         "error",
         err instanceof Error ? err.message : String(err),
       );
       return webhookProcessingFailedResponse();
     }
 
-    await completeWebhookDelivery(ctx, claim.logId, "success");
+    await completeWebhookDelivery(ctx, claim, "success");
 
     return new Response(null, { status: 200 });
   }),
@@ -707,60 +712,85 @@ http.route({
       return new Response("Invalid JSON", { status: 400 });
     }
 
-    // Walk the WhatsApp Cloud API payload structure
-    const entry = recordArray(body?.entry)[0];
-    const change = optionalRecord(recordArray(entry?.changes)[0]?.value);
-    const message = recordArray(change?.messages)[0];
-    const statusUpdate = recordArray(change?.statuses)[0];
-    const deliveryEventId =
-      optionalMetaId(message?.id) ?? optionalMetaId(statusUpdate?.id);
+    const whatsappMessages: Array<{
+      messageId?: string;
+      senderPhone?: string;
+      senderName?: string;
+      messageText?: string;
+    }> = [];
+    let statusUpdateCount = 0;
+
+    for (const entry of recordArray(body?.entry)) {
+      for (const changeRecord of recordArray(entry.changes)) {
+        const change = optionalRecord(changeRecord.value);
+        const contacts = recordArray(change?.contacts);
+        statusUpdateCount += recordArray(change?.statuses).length;
+
+        for (const message of recordArray(change?.messages)) {
+          const senderPhone = optionalMetaId(message.from);
+          const contact =
+            contacts.find((candidate) => optionalMetaId(candidate.wa_id) === senderPhone) ??
+            contacts[0];
+          const profile = optionalRecord(contact?.profile);
+          const textPayload = optionalRecord(message.text);
+
+          whatsappMessages.push({
+            messageId: optionalMetaId(message.id),
+            senderPhone,
+            senderName: optionalString(profile?.name),
+            messageText: optionalString(message.type) === "text"
+              ? optionalString(textPayload?.body)
+              : undefined,
+          });
+        }
+      }
+    }
+
+    const messageIds = whatsappMessages
+      .map((message) => message.messageId)
+      .filter((messageId): messageId is string => typeof messageId === "string");
     const claim = await claimWebhookDelivery(ctx, {
       source: "whatsapp",
-      eventId: deliveryEventId,
-      summary: message
-        ? `Message ${deliveryEventId ?? "received"}`
-        : "Status update",
+      eventId: messageIds.length > 0 ? messageIds.join(":") : undefined,
+      summary: whatsappMessages.length > 0
+        ? `Batch with ${whatsappMessages.length} message(s)`
+        : `Status update batch with ${statusUpdateCount} status update(s)`,
       rawPayload: rawBody,
     });
     if (claim.disposition === "skip_processed") return new Response(null, { status: 200 });
     if (claim.disposition === "skip_in_flight") return webhookInFlightResponse();
 
-    if (!message) {
+    if (whatsappMessages.length === 0) {
       // Delivery receipts and status updates — acknowledge silently
-      await completeWebhookDelivery(ctx, claim.logId, "success");
+      await completeWebhookDelivery(ctx, claim, "success");
       return new Response(null, { status: 200 });
     }
 
-    const senderPhone = optionalMetaId(message.from);
-    if (!senderPhone) {
-      await completeWebhookDelivery(ctx, claim.logId, "error", "Message without sender phone");
-      return new Response("Bad request", { status: 400 });
-    }
-    const contact = recordArray(change?.contacts)[0];
-    const profile = optionalRecord(contact?.profile);
-    const senderName = optionalString(profile?.name);
-    const textPayload = optionalRecord(message.text);
-    const messageText: string | undefined =
-      message.type === "text" ? optionalString(textPayload?.body) : undefined;
+    let processingError: string | undefined;
+    for (const message of whatsappMessages) {
+      if (!message.senderPhone) {
+        processingError = "Message without sender phone";
+        continue;
+      }
 
-    try {
-      await ctx.runMutation(internal.whatsapp.handleIncomingMessage, {
-        orgId,
-        senderPhone,
-        senderName,
-        messageText,
-      });
-    } catch (err) {
-      await completeWebhookDelivery(
-        ctx,
-        claim.logId,
-        "error",
-        err instanceof Error ? err.message : String(err),
-      );
+      try {
+        await ctx.runMutation(internal.whatsapp.handleIncomingMessage, {
+          orgId,
+          senderPhone: message.senderPhone,
+          senderName: message.senderName,
+          messageText: message.messageText,
+        });
+      } catch (err) {
+        processingError = err instanceof Error ? err.message : String(err);
+      }
+    }
+
+    if (processingError) {
+      await completeWebhookDelivery(ctx, claim, "error", processingError);
       return webhookProcessingFailedResponse();
     }
 
-    await completeWebhookDelivery(ctx, claim.logId, "success");
+    await completeWebhookDelivery(ctx, claim, "success");
 
     return new Response(null, { status: 200 });
   }),

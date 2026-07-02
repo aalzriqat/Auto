@@ -3,6 +3,8 @@ import { expect, test, describe } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 
+const MODULES = import.meta.glob("./**/*.ts");
+
 const PERMISSIONS = [
   "create:sales",
   "view:sales",
@@ -18,7 +20,7 @@ const PERMISSIONS = [
 ];
 
 async function setup() {
-  const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+  const t = convexTest(schema, MODULES);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: "Test Dealer", createdAt: Date.now() })
   );
@@ -141,6 +143,12 @@ async function setupFinalizedFinancedDeal() {
     totalFinancedAmount: 17000,
   });
 
+  const depositId = await asUser.mutation(api.deposits.create, {
+    orgId,
+    quoteId,
+    amount: 3000,
+  });
+
   const applicationId = await asUser.mutation(api.applications.createFromQuote, {
     orgId,
     quoteId,
@@ -167,12 +175,21 @@ async function setupFinalizedFinancedDeal() {
         .unique()
     );
 
-  return { ...base, companyId, quoteId, applicationId, getFinanceReceivable };
+  const getCustomerReceivable = () =>
+    t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      const sale = app?.finalizedSaleId ? await ctx.db.get(app.finalizedSaleId) : null;
+      return sale?.canonicalReceivableDocumentId
+        ? await ctx.db.get(sale.canonicalReceivableDocumentId)
+        : null;
+    });
+
+  return { ...base, companyId, quoteId, applicationId, depositId, getFinanceReceivable, getCustomerReceivable };
 }
 
 describe("applications finance-company canonical receivable", () => {
   test("finalizeDeal opens a FINANCE_COMPANY receivable and confirmDisbursement settles it by allocation", async () => {
-    const { t, orgId, companyId, applicationId, asUser, getFinanceReceivable } =
+    const { t, orgId, companyId, applicationId, asUser, getFinanceReceivable, getCustomerReceivable } =
       await setupFinalizedFinancedDeal();
 
     // Finalizing must open a canonical receivable owed BY the finance company.
@@ -182,6 +199,27 @@ describe("applications finance-company canonical receivable", () => {
     expect(receivableAfterFinalize?.financeCompanyId).toBe(companyId);
     expect(receivableAfterFinalize?.originalAmountMinor).toBe(17_000_000);
     expect(receivableAfterFinalize?.status).toBe("OPEN");
+
+    const customerReceivableAfterFinalize = await getCustomerReceivable();
+    expect(customerReceivableAfterFinalize?.payerType).toBe("CUSTOMER");
+    expect(customerReceivableAfterFinalize?.originalAmountMinor).toBe(3_000_000);
+    expect(customerReceivableAfterFinalize?.status).toBe("PAID");
+
+    await t.run(async (ctx) => {
+      const customerAllocations = await ctx.db
+        .query("paymentAllocations")
+        .withIndex("by_receivable", (q) =>
+          q.eq("receivableDocumentId", customerReceivableAfterFinalize!._id)
+        )
+        .collect();
+      const customerOutstanding =
+        customerReceivableAfterFinalize!.originalAmountMinor -
+        customerAllocations
+          .filter((allocation) => allocation.status === "ACTIVE")
+          .reduce((sum, allocation) => sum + allocation.amountMinor, 0);
+      const financeOutstanding = receivableAfterFinalize!.originalAmountMinor;
+      expect(customerOutstanding + financeOutstanding).toBe(17_000_000);
+    });
 
     await asUser.mutation(api.applications.confirmDisbursement, {
       orgId,
@@ -215,7 +253,7 @@ describe("applications finance-company canonical receivable", () => {
   });
 
   test("voiding a finalized (undisbursed) deal cancels the finance-company receivable", async () => {
-    const { orgId, applicationId, asUser, getFinanceReceivable } =
+    const { t, orgId, applicationId, depositId, asUser, getFinanceReceivable, getCustomerReceivable } =
       await setupFinalizedFinancedDeal();
 
     await asUser.mutation(api.applications.cancelApplication, {
@@ -226,6 +264,21 @@ describe("applications finance-company canonical receivable", () => {
 
     const receivable = await getFinanceReceivable();
     expect(receivable?.status).toBe("CANCELLED");
+
+    const customerReceivable = await getCustomerReceivable();
+    expect(customerReceivable?.status).toBe("CANCELLED");
+
+    await t.run(async (ctx) => {
+      const deposit = await ctx.db.get(depositId);
+      expect(deposit?.status).toBe("HELD");
+      expect(deposit?.holdActive).toBe(true);
+
+      const allocations = await ctx.db
+        .query("paymentAllocations")
+        .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", customerReceivable!._id))
+        .collect();
+      expect(allocations.every((allocation) => allocation.status === "REVERSED")).toBe(true);
+    });
   });
 });
 

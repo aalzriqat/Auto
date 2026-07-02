@@ -3,7 +3,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { internal } from "./_generated/api";
 
-const MODULES = import.meta.glob("./**/*.*s");
+const MODULES = import.meta.glob("./**/*.ts");
 
 afterEach(() => {
   vi.useRealTimers();
@@ -35,6 +35,7 @@ test("webhook inbox keeps one row per event across claim, duplicate, and complet
 
   await t.mutation(internal.adminSystem.webhookInboxComplete, {
     logId: first.logId,
+    claimedAt: first.claimedAt!,
     outcome: "success",
   });
 
@@ -73,6 +74,7 @@ test("failed webhook deliveries are reclaimed and can complete on redelivery", a
 
   await t.mutation(internal.adminSystem.webhookInboxComplete, {
     logId: first.logId,
+    claimedAt: first.claimedAt!,
     outcome: "error",
     error: "downstream mutation failed",
   });
@@ -89,6 +91,7 @@ test("failed webhook deliveries are reclaimed and can complete on redelivery", a
 
   await t.mutation(internal.adminSystem.webhookInboxComplete, {
     logId: retry.logId,
+    claimedAt: retry.claimedAt!,
     outcome: "success",
   });
 
@@ -136,4 +139,61 @@ test("stale in-flight claims are reclaimed after the lease expires", async () =>
   });
   expect(reclaimed.disposition).toBe("process");
   expect(reclaimed.logId).toEqual(first.logId);
+  expect(reclaimed.claimedAt).not.toEqual(first.claimedAt);
+});
+
+test("stale webhook completion cannot overwrite a reclaimed attempt", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-07-01T10:00:00Z"));
+
+  const t = convexTest(schema, MODULES);
+
+  const first = await t.mutation(internal.adminSystem.webhookInboxIntake, {
+    source: "instagram",
+    summary: "Batch with 1 entry",
+    eventId: "ig_batch",
+  });
+  expect(first.disposition).toBe("process");
+
+  vi.setSystemTime(new Date("2026-07-01T10:06:01Z"));
+  const reclaimed = await t.mutation(internal.adminSystem.webhookInboxIntake, {
+    source: "instagram",
+    summary: "Batch with 1 entry retry",
+    eventId: "ig_batch",
+  });
+  expect(reclaimed.disposition).toBe("process");
+
+  await t.mutation(internal.adminSystem.webhookInboxComplete, {
+    logId: first.logId,
+    claimedAt: first.claimedAt!,
+    outcome: "success",
+  });
+
+  let row = await t.run((ctx) =>
+    ctx.db
+      .query("webhookLogs")
+      .withIndex("by_source_and_eventId", (q) =>
+        q.eq("source", "instagram").eq("eventId", "ig_batch"),
+      )
+      .unique(),
+  );
+  expect(row?.status).toBe("received");
+
+  await t.mutation(internal.adminSystem.webhookInboxComplete, {
+    logId: reclaimed.logId,
+    claimedAt: reclaimed.claimedAt!,
+    outcome: "error",
+    error: "retry failed",
+  });
+
+  row = await t.run((ctx) =>
+    ctx.db
+      .query("webhookLogs")
+      .withIndex("by_source_and_eventId", (q) =>
+        q.eq("source", "instagram").eq("eventId", "ig_batch"),
+      )
+      .unique(),
+  );
+  expect(row?.status).toBe("error");
+  expect(row?.error).toBe("retry failed");
 });

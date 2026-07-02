@@ -166,6 +166,7 @@ export const webhookInboxIntake = internalMutation({
     args
   ): Promise<{
     logId: Id<"webhookLogs">;
+    claimedAt?: number;
     disposition: "process" | "skip_processed" | "skip_in_flight";
   }> => {
     const now = Date.now();
@@ -190,7 +191,7 @@ export const webhookInboxIntake = internalMutation({
         lastReceivedAt: now,
         createdAt: now,
       });
-      return { logId, disposition: "process" };
+      return { logId, claimedAt: now, disposition: "process" };
     }
 
     if (existing.status === "success") {
@@ -223,7 +224,7 @@ export const webhookInboxIntake = internalMutation({
       ...(args.payloadPreview !== undefined ? { payloadPreview: args.payloadPreview } : {}),
       ...(args.payloadTruncated !== undefined ? { payloadTruncated: args.payloadTruncated } : {}),
     });
-    return { logId: existing._id, disposition: "process" };
+    return { logId: existing._id, claimedAt: now, disposition: "process" };
   },
 });
 
@@ -231,13 +232,15 @@ export const webhookInboxIntake = internalMutation({
 export const webhookInboxComplete = internalMutation({
   args: {
     logId: v.id("webhookLogs"),
+    claimedAt: v.number(),
     outcome: v.union(v.literal("success"), v.literal("error")),
     error: v.optional(v.string()),
     summary: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const log = await ctx.db.get(args.logId);
-    if (!log) return;
+    if (!log || log.status !== "received") return;
+    if (log.lastReceivedAt !== args.claimedAt) return;
     await ctx.db.patch(args.logId, {
       status: args.outcome,
       error: args.outcome === "error" ? args.error : undefined,
@@ -247,9 +250,9 @@ export const webhookInboxComplete = internalMutation({
 });
 
 /**
- * Resets a dead-letter or error webhook event back to "received" so it can be
- * re-delivered externally (e.g. Meta's "Resend" button in the Webhooks panel)
- * without the deduplication guard rejecting it as a duplicate.
+ * Marks a dead-letter or error webhook event retryable so the next provider
+ * redelivery can reclaim it immediately. The admin action itself does not
+ * re-dispatch stored payloads; it only clears the terminal state safely.
  * Super-admin only.
  */
 export const retryWebhookEvent = mutation({
@@ -260,9 +263,9 @@ export const retryWebhookEvent = mutation({
     if (!log) throw new Error("Webhook log not found.");
     if (log.status === "success") throw new Error("Cannot retry a successfully-processed event.");
     await ctx.db.patch(args.webhookLogId, {
-      status: "received",
-      error: undefined,
-      lastReceivedAt: Date.now(),
+      status: "error",
+      error: "Manual retry requested. Awaiting provider redelivery.",
+      lastReceivedAt: undefined,
     });
     await ctx.db.insert("adminAuditLog", {
       actorUserId: admin._id,
@@ -278,8 +281,7 @@ export const retryWebhookEvent = mutation({
 /** Finds webhook events stuck in "received" status for >2 h and promotes them
  *  to "dead_letter" so the admin panel can surface them clearly.
  *
- *  "received" marks a claimed inbox delivery (webhookInboxIntake) or an admin
- *  retry (retryWebhookEvent). Handlers complete the same row to
+ *  "received" marks a claimed inbox delivery (webhookInboxIntake). Handlers complete the same row to
  *  "success"/"error" via webhookInboxComplete, so a row still "received" after
  *  2 h means the processing action crashed mid-flight (or a retried event was
  *  never redelivered) — a genuine dead letter. */

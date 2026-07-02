@@ -929,6 +929,58 @@ export const rollbackDirectAccount = internalMutation({
 
 /** How long the emailed one-time account-setup link stays valid. */
 const ACCOUNT_SETUP_TOKEN_TTL_SECONDS = 7 * 24 * 60 * 60;
+const CLERK_REQUEST_TIMEOUT_MS = 10_000;
+
+type ClerkLookupUser = {
+  id?: unknown;
+  password_enabled?: unknown;
+};
+type ClerkApiError = {
+  code?: unknown;
+  long_message?: unknown;
+  message?: unknown;
+  meta?: {
+    param_name?: unknown;
+    param_names?: unknown;
+  };
+};
+type ClerkCreatedUser = {
+  id?: unknown;
+};
+
+function getClerkErrors(value: unknown): ClerkApiError[] {
+  if (!value || typeof value !== "object" || !("errors" in value)) return [];
+  const errors = (value as { errors?: unknown }).errors;
+  return Array.isArray(errors) ? errors as ClerkApiError[] : [];
+}
+
+async function readClerkError(response: Response): Promise<unknown> {
+  return await response.json().catch(async () => await response.text().catch(() => null));
+}
+
+async function deleteCreatedClerkUser(
+  clerkSecret: string,
+  clerkUserId: string,
+  reason: string
+): Promise<void> {
+  try {
+    const response = await fetch(`https://api.clerk.com/v1/users/${clerkUserId}`, {
+      method: "DELETE",
+      headers: { "Authorization": `Bearer ${clerkSecret}` },
+      signal: AbortSignal.timeout(CLERK_REQUEST_TIMEOUT_MS),
+    });
+    if (!response.ok) {
+      console.error("Failed to delete rollback Clerk user", {
+        clerkUserId,
+        reason,
+        status: response.status,
+        error: await readClerkError(response),
+      });
+    }
+  } catch (error) {
+    console.error("Failed to delete rollback Clerk user", { clerkUserId, reason, error });
+  }
+}
 
 /**
  * Mints a one-time Clerk sign-in token for the given user. The token is
@@ -950,13 +1002,16 @@ async function createClerkSignInToken(
       user_id: clerkUserId,
       expires_in_seconds: ACCOUNT_SETUP_TOKEN_TTL_SECONDS,
     }),
+    signal: AbortSignal.timeout(CLERK_REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) {
+    console.error("createClerkSignInToken failed", await readClerkError(response));
     throw new ConvexError("Failed to create the account setup link.");
   }
   const tokenData = await response.json();
   const token = typeof tokenData?.token === "string" ? tokenData.token : null;
   if (!token) {
+    console.error("createClerkSignInToken response did not include a token", tokenData);
     throw new ConvexError("Failed to create the account setup link.");
   }
   return token;
@@ -990,6 +1045,9 @@ export const createAccount = action({
       roleId: args.roleId,
     });
 
+    let createdClerkUserId: string | null = null;
+    let finalizedDirectAccount = false;
+
     try {
       const clerkSecret = process.env.CLERK_SECRET_KEY;
       if (!clerkSecret) throw new ConvexError("CLERK_SECRET_KEY is not set.");
@@ -1005,16 +1063,22 @@ export const createAccount = action({
 
       let clerkId: string | null = null;
       let isNewClerkUser = false;
+      let shouldSendSetupLink = false;
+      let setupToken: string | null = null;
 
       if (lookupResponse.ok) {
-        const existingUsers = await lookupResponse.json();
+        const existingUsers: unknown = await lookupResponse.json();
         if (Array.isArray(existingUsers) && existingUsers.length > 0) {
-          // User already has a Clerk account — reuse it, no need to create
-          clerkId = existingUsers[0].id;
+          const existingUser = existingUsers[0] as ClerkLookupUser;
+          if (typeof existingUser.id === "string") {
+            clerkId = existingUser.id;
+            if (existingUser.password_enabled === false) {
+              setupToken = await createClerkSignInToken(clerkSecret, clerkId);
+              shouldSendSetupLink = true;
+            }
+          }
         }
       }
-
-      let setupToken: string | null = null;
 
       if (!clerkId) {
         // 3a. No existing Clerk account — create one WITHOUT a password. The
@@ -1023,7 +1087,7 @@ export const createAccount = action({
         isNewClerkUser = true;
 
         let response: Response | null = null;
-        let errorData: any = null;
+        let errorData: unknown = null;
 
         // This Clerk instance requires a unique username — retry with a numeric suffix on collision.
         for (let attempt = 0; attempt < 5; attempt++) {
@@ -1047,23 +1111,37 @@ export const createAccount = action({
           if (response.ok) break;
 
           errorData = await response.json();
-          const isUsernameTaken = errorData.errors?.some((e: any) => e.meta?.param_name === "username");
+          const isUsernameTaken = getClerkErrors(errorData).some(
+            (error) => error.meta?.param_name === "username"
+          );
           if (!isUsernameTaken) break;
         }
 
         if (!response!.ok) {
-          const firstError = errorData?.errors?.[0];
+          const firstError = getClerkErrors(errorData)[0];
           if (firstError) {
-            if (firstError.code === "form_data_missing" && firstError.meta?.param_names?.includes("last_name")) {
+            const paramNames = Array.isArray(firstError.meta?.param_names)
+              ? firstError.meta.param_names
+              : [];
+            if (firstError.code === "form_data_missing" && paramNames.includes("last_name")) {
               throw new ConvexError("Family name is required. Please enter both first and last name.");
             }
-            throw new ConvexError(firstError.long_message || firstError.message || "Failed to create user in Clerk");
+            const clerkMessage =
+              typeof firstError.long_message === "string"
+                ? firstError.long_message
+                : typeof firstError.message === "string"
+                  ? firstError.message
+                  : "Failed to create user in Clerk";
+            throw new ConvexError(clerkMessage);
           }
           throw new ConvexError("Failed to create user in Clerk");
         }
 
-        const clerkUser = await response!.json();
+        const clerkUser: ClerkCreatedUser = await response!.json();
+        if (typeof clerkUser.id !== "string") throw new ConvexError("Failed to create user in Clerk");
         clerkId = clerkUser.id;
+        createdClerkUserId = clerkId;
+        shouldSendSetupLink = true;
 
         // Mint the one-time setup token before finalizing. If this fails,
         // delete the passwordless Clerk user we just created so the whole
@@ -1071,10 +1149,8 @@ export const createAccount = action({
         try {
           setupToken = await createClerkSignInToken(clerkSecret, clerkId!);
         } catch (tokenError) {
-          await fetch(`https://api.clerk.com/v1/users/${clerkId}`, {
-            method: "DELETE",
-            headers: { "Authorization": `Bearer ${clerkSecret}` },
-          }).catch(() => undefined);
+          await deleteCreatedClerkUser(clerkSecret, clerkId!, "setup token mint failed");
+          createdClerkUserId = null;
           throw tokenError;
         }
       }
@@ -1088,9 +1164,10 @@ export const createAccount = action({
         roleId: args.roleId,
         inviteId,
       });
+      finalizedDirectAccount = true;
 
-      // 3c. Email the one-time setup link — only for accounts we just created in Clerk
-      if (isNewClerkUser && setupToken) {
+      // 3c. Email the one-time setup link for new or setup-pending passwordless accounts.
+      if ((isNewClerkUser || shouldSendSetupLink) && setupToken) {
         const org = await ctx.runQuery(internal.organizations.getInternal, { orgId: args.orgId });
         await ctx.scheduler.runAfter(0, internal.email.sendAccountSetupLink, {
           toEmail: args.email,
@@ -1101,10 +1178,20 @@ export const createAccount = action({
       }
 
       return { success: true };
-    } catch (error: any) {
+    } catch (error: unknown) {
+      if (createdClerkUserId && !finalizedDirectAccount) {
+        const clerkSecret = process.env.CLERK_SECRET_KEY;
+        if (clerkSecret) {
+          await deleteCreatedClerkUser(clerkSecret, createdClerkUserId, "direct account finalization failed");
+        }
+      }
       // Rollback: Delete the invitation if anything failed
       await ctx.runMutation(internal.memberships.rollbackDirectAccount, { inviteId });
-      throw new ConvexError(error.message || "An unexpected error occurred during user creation.");
+      throw new ConvexError(
+        error instanceof Error
+          ? error.message
+          : "An unexpected error occurred during user creation."
+      );
     }
   }
 });

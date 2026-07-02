@@ -23,6 +23,7 @@ import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
   ensureReceivableDocument,
+  reverseAllocation,
 } from "./subledger";
 
 /** sourceType used for the canonical finance-company receivable opened at finalizeDeal. */
@@ -59,6 +60,86 @@ async function ensureFinanceCompanyReceivable(
     dueDate: args.now,
     actorId: args.actorId,
   });
+}
+
+function receivableStatusForBalance(
+  originalAmountMinor: number,
+  allocatedMinor: number
+): Doc<"receivableDocuments">["status"] {
+  if (originalAmountMinor <= 0 || allocatedMinor >= originalAmountMinor) return "PAID";
+  return allocatedMinor > 0 ? "PARTIALLY_PAID" : "OPEN";
+}
+
+async function getActiveReceivableAllocations(
+  ctx: MutationCtx,
+  receivableDocumentId: Id<"receivableDocuments">
+) {
+  return await ctx.db
+    .query("paymentAllocations")
+    .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", receivableDocumentId))
+    .filter((q) => q.eq(q.field("status"), "ACTIVE"))
+    .collect();
+}
+
+async function transferFinancedAmountFromCustomerReceivable(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    saleId: Id<"sales">;
+    saleAmountMinor: number;
+    financedAmountMinor: number;
+  }
+) {
+  const sale = await ctx.db.get(args.saleId);
+  if (!sale || sale.orgId !== args.orgId) throw new ConvexError("Finalized sale not found.");
+  if (!sale.canonicalReceivableDocumentId) {
+    throw new ConvexError("Finalized sale is missing its canonical customer receivable.");
+  }
+
+  const customerReceivable = await ctx.db.get(sale.canonicalReceivableDocumentId);
+  if (!customerReceivable || customerReceivable.orgId !== args.orgId) {
+    throw new ConvexError("Sale customer receivable not found.");
+  }
+
+  const customerPortionMinor = Math.max(0, args.saleAmountMinor - args.financedAmountMinor);
+  if (customerReceivable.originalAmountMinor === customerPortionMinor) return;
+
+  const activeAllocations = await getActiveReceivableAllocations(ctx, customerReceivable._id);
+  const allocatedMinor = activeAllocations.reduce((sum, allocation) => sum + allocation.amountMinor, 0);
+  if (allocatedMinor > customerPortionMinor) {
+    throw new ConvexError(
+      "Customer receivable allocations exceed the non-financed customer balance. Reconcile the sale before finalizing financing."
+    );
+  }
+
+  await ctx.db.patch(customerReceivable._id, {
+    originalAmountMinor: customerPortionMinor,
+    status: receivableStatusForBalance(customerPortionMinor, allocatedMinor),
+  });
+}
+
+async function cancelSaleCustomerReceivable(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    sale: Doc<"sales">;
+    actorId: Id<"users">;
+  }
+) {
+  if (!args.sale.canonicalReceivableDocumentId) return;
+  const receivable = await ctx.db.get(args.sale.canonicalReceivableDocumentId);
+  if (!receivable || receivable.orgId !== args.orgId || receivable.status === "CANCELLED") return;
+
+  const activeAllocations = await getActiveReceivableAllocations(ctx, receivable._id);
+  for (const allocation of activeAllocations) {
+    await reverseAllocation(ctx, {
+      orgId: args.orgId,
+      allocationId: allocation._id,
+      actorId: args.actorId,
+    });
+  }
+
+  await ctx.db.patch(receivable._id, { status: "CANCELLED" });
 }
 
 type FinanceApplicationStatus =
@@ -524,30 +605,52 @@ export const cancelApplication = mutation({
 
           if (app.finalizedSaleId) {
             const sale = await ctx.db.get(app.finalizedSaleId);
-            if (sale && sale.orgId === args.orgId && sale.status !== "CANCELLED") {
-              await restoreVehicleToAvailable(ctx, sale.vehicleId);
-              await ctx.db.patch(sale._id, { status: "CANCELLED" });
-              await hookSaleCancelled(ctx, {
+            if (sale && sale.orgId === args.orgId) {
+              await cancelSaleCustomerReceivable(ctx, {
                 orgId: args.orgId,
-                saleId: sale._id,
-                reason,
+                sale,
                 actorId: auth.user._id,
-                reversalDate: now,
               });
-              if (sale.commissionAmount != null && sale.commissionAmount > 0) {
-                await hookCommissionReversed(ctx, {
+
+              if (sale.status !== "CANCELLED") {
+                await restoreVehicleToAvailable(ctx, sale.vehicleId);
+                await ctx.db.patch(sale._id, { status: "CANCELLED" });
+                await hookSaleCancelled(ctx, {
                   orgId: args.orgId,
                   saleId: sale._id,
                   reason,
                   actorId: auth.user._id,
                   reversalDate: now,
                 });
+                if (sale.commissionAmount != null && sale.commissionAmount > 0) {
+                  await hookCommissionReversed(ctx, {
+                    orgId: args.orgId,
+                    saleId: sale._id,
+                    reason,
+                    actorId: auth.user._id,
+                    reversalDate: now,
+                  });
+                }
               }
             }
           }
 
           const quote = await ctx.db.get(app.quoteId);
-          if (app.companyId && quote?.totalFinancedAmount && quote.totalFinancedAmount > 0) {
+          const financeReceivable = app.companyId
+            ? await ctx.db
+                .query("receivableDocuments")
+                .withIndex("by_org_source", (q) =>
+                  q
+                    .eq("orgId", args.orgId)
+                    .eq("sourceType", FINANCE_APP_RECEIVABLE_SOURCE)
+                    .eq("sourceId", args.applicationId)
+                )
+                .unique()
+            : null;
+          if (
+            app.companyId &&
+            ((quote?.totalFinancedAmount ?? 0) > 0 || financeReceivable)
+          ) {
             await hookFinanceDisbursementCancelled(ctx, {
               orgId: args.orgId,
               applicationId: args.applicationId,
@@ -559,15 +662,6 @@ export const cancelApplication = mutation({
             // The canonical finance-company receivable opened at finalizeDeal
             // is no longer owed once the deal is voided (this branch already
             // rejects deals whose disbursement was received).
-            const financeReceivable = await ctx.db
-              .query("receivableDocuments")
-              .withIndex("by_org_source", (q) =>
-                q
-                  .eq("orgId", args.orgId)
-                  .eq("sourceType", FINANCE_APP_RECEIVABLE_SOURCE)
-                  .eq("sourceId", args.applicationId)
-              )
-              .unique();
             if (financeReceivable && financeReceivable.status !== "CANCELLED") {
               await ctx.db.patch(financeReceivable._id, { status: "CANCELLED" });
             }
@@ -735,6 +829,7 @@ export const finalizeDeal = mutation({
         if (app.companyId && quote.totalFinancedAmount && quote.totalFinancedAmount > 0) {
           const currency = await getOrgCurrency(ctx, args.orgId);
           const loanAmountMinor = toMinorUnits(quote.totalFinancedAmount, currency);
+          const saleAmountMinor = toMinorUnits(quote.vehiclePrice, currency);
           await hookFinanceDisbursed(ctx, {
             orgId: args.orgId,
             applicationId: args.applicationId,
@@ -745,6 +840,13 @@ export const finalizeDeal = mutation({
             currency,
             actorId: auth.user._id,
             occurredAt: now,
+          });
+
+          await transferFinancedAmountFromCustomerReceivable(ctx, {
+            orgId: args.orgId,
+            saleId,
+            saleAmountMinor,
+            financedAmountMinor: loanAmountMinor,
           });
 
           // Open the canonical finance-company receivable alongside the GL

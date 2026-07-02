@@ -354,8 +354,10 @@ async function reverseAllocationsForRefund(
   ).sort((a, b) => b.createdAt - a.createdAt);
 
   let remainingMinor = args.amountMinor;
+  let coveredMinor = 0;
   for (const allocation of activeAllocations) {
     if (remainingMinor <= 0) break;
+    const reversedMinor = Math.min(allocation.amountMinor, remainingMinor);
     await reverseAllocation(ctx, {
       orgId: args.orgId,
       allocationId: allocation._id,
@@ -373,6 +375,13 @@ async function reverseAllocationsForRefund(
     } else {
       remainingMinor -= allocation.amountMinor;
     }
+    coveredMinor += reversedMinor;
+  }
+
+  if (remainingMinor > 0) {
+    throw new ConvexError(
+      `Canonical allocations cover only ${coveredMinor} of the requested refund ${args.amountMinor}.`
+    );
   }
 }
 

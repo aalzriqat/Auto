@@ -58,24 +58,28 @@ jobs:
     # credentials) — so CI has to synthesize it from secrets before running.
     - name: Prepare TestSprite execution config
       run: |
-        mkdir -p testsprite_tests/tmp
-        cat > testsprite_tests/tmp/config.json << EOF
-        {
-          "status": "commited",
-          "type": "frontend",
-          "scope": "codebase",
-          "localEndpoint": "http://localhost:3000",
-          "loginUser": "${E2E_LOGIN_USER}",
-          "loginPassword": "${E2E_LOGIN_PASSWORD}",
-          "executionArgs": {
-            "projectName": "Auto",
-            "projectPath": "${GITHUB_WORKSPACE}",
-            "testIds": [],
-            "additionalInstruction": "Sign in with the provided login credentials. The QA user is a Clerk test-mode identity: if a verification code is requested at any point during sign-in, enter 424242. The app's authenticated routes live under /{orgId}/... where orgId is taken from the URL after sign-in redirects from /dashboard.",
-            "serverMode": "production",
-            "envs": { "API_KEY": "${TESTSPRITE_API_KEY}" }
-          }
-        }
+        node <<'EOF'
+        const fs = require("node:fs");
+
+        const config = {
+          status: "commited",
+          type: "frontend",
+          scope: "codebase",
+          localEndpoint: "http://localhost:3000",
+          loginUser: process.env.E2E_LOGIN_USER,
+          loginPassword: process.env.E2E_LOGIN_PASSWORD,
+          executionArgs: {
+            projectName: "Auto",
+            projectPath: process.env.GITHUB_WORKSPACE,
+            testIds: [],
+            additionalInstruction: "Sign in with the provided login credentials. The QA user is a Clerk test-mode identity: if a verification code is requested at any point during sign-in, enter 424242. The app's authenticated routes live under /{orgId}/... where orgId is taken from the URL after sign-in redirects from /dashboard.",
+            serverMode: "production",
+            envs: { API_KEY: process.env.TESTSPRITE_API_KEY },
+          },
+        };
+
+        fs.mkdirSync("testsprite_tests/tmp", { recursive: true });
+        fs.writeFileSync("testsprite_tests/tmp/config.json", `${JSON.stringify(config, null, 2)}\n`);
         EOF
       env:
         TESTSPRITE_API_KEY: ${{ secrets.TESTSPRITE_API_KEY }}
@@ -90,10 +94,15 @@ jobs:
         LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
         LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
 
+    - name: Remove TestSprite execution config
+      if: always()
+      run: rm -f testsprite_tests/tmp/config.json
+
     - name: Upload E2E test report
       uses: actions/upload-artifact@v4
       if: always()
       with:
         name: e2e-report
-        path: testsprite_tests/
+        path: testsprite_tests/tmp/raw_report.md
+        if-no-files-found: warn
         retention-days: 14
