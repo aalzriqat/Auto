@@ -1,10 +1,13 @@
 name: E2E Tests (TestSprite)
 
+# Manual-only for now: every TestSprite test performs a real sign-in, and the
+# Clerk development instance emails a sign-in link / verification code for
+# each attempt — running this per push/PR spams the QA account's inbox (and
+# burns TestSprite credits). Re-enable push/pull_request triggers once the QA
+# fixture uses Clerk test-mode credentials (+clerk_test email, fixed 424242
+# code), which never send real email.
 on:
-  push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
   e2e:
