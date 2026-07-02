@@ -342,7 +342,7 @@ describe("deposits.release", () => {
 });
 
 describe("deposits.voidDeposit", () => {
-  test("marks deposit VOIDED, releases vehicle hold, and creates a reversing OUT transaction", async () => {
+  test("marks deposit VOIDED, releases vehicle hold, and soft-deletes the original IN transaction", async () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
     const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1500 });
@@ -363,16 +363,22 @@ describe("deposits.voidDeposit", () => {
       const vehicle = await ctx.db.get(vehicleId);
       expect(vehicle?.status).toBe("AVAILABLE");
 
+      // No OUT transaction — a void erases the original IN rather than
+      // adding an offsetting OUT (which would look like a refund).
       const outTx = await ctx.db
         .query("transactions")
         .withIndex("by_org", (q) => q.eq("orgId", orgId))
         .filter((q) => q.eq(q.field("type"), "OUT"))
         .first();
-      expect(outTx?.amount).toBe(1500);
-      expect(outTx?.category).toBe("DEPOSIT");
-      expect(outTx?.depositId).toBe(depositId);
-      expect(outTx?.description).toContain("voided");
-      expect(outTx?.description).toContain(quoteId.toString());
+      expect(outTx).toBeNull();
+
+      // Original IN transaction is soft-deleted.
+      const inTx = await ctx.db
+        .query("transactions")
+        .withIndex("by_org_vehicle", (q) => q.eq("orgId", orgId).eq("vehicleId", vehicleId))
+        .filter((q) => q.eq(q.field("depositId"), depositId))
+        .first();
+      expect(inTx?.isDeleted).toBe(true);
     });
   });
 

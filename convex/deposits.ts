@@ -339,32 +339,29 @@ export const voidDeposit = mutation({
       reversalDate: now,
     });
 
-    const depositSourceLabel = deposit.quoteId
-      ? `quote ${deposit.quoteId}`
-      : deposit.reservationId
-        ? `reservation ${deposit.reservationId}`
-        : "vehicle hold";
-    const [voidVehicle, voidCustomer] = await Promise.all([
-      ctx.db.get(deposit.vehicleId),
-      ctx.db.get(deposit.customerId),
-    ]);
-    const voidVehicleLabel = voidVehicle
-      ? `${voidVehicle.year} ${voidVehicle.make} ${voidVehicle.model}`.trim()
-      : "Vehicle";
-    const voidCustomerLabel = voidCustomer
-      ? `${voidCustomer.firstName ?? ""} ${voidCustomer.lastName ?? ""}`.trim() || "Customer"
-      : "Customer";
-
-    await ctx.db.insert("transactions", {
-      orgId: args.orgId,
-      type: "OUT",
-      amount: deposit.amount,
-      date: now,
-      category: "DEPOSIT",
-      description: `Deposit voided for ${depositSourceLabel} - ${voidVehicleLabel} - ${voidCustomerLabel}`,
-      vehicleId: deposit.vehicleId,
-      depositId: args.depositId,
-    });
+    // A void means "recorded in error" — no money moved, so the original IN
+    // transaction is erased rather than offset with a new OUT (which would
+    // make the legacy table look like a refund instead of a reversal).
+    const originalInTx = await ctx.db
+      .query("transactions")
+      .withIndex("by_org_vehicle", (q) =>
+        q.eq("orgId", args.orgId).eq("vehicleId", deposit.vehicleId)
+      )
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("depositId"), args.depositId),
+          q.eq(q.field("type"), "IN"),
+          q.neq(q.field("isDeleted"), true)
+        )
+      )
+      .first();
+    if (originalInTx) {
+      await ctx.db.patch(originalInTx._id, {
+        isDeleted: true,
+        deletedAt: now,
+        deletedBy: user._id.toString(),
+      });
+    }
 
     await maybeReleaseVehicleHold(ctx, deposit.vehicleId);
 
