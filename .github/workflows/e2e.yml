@@ -1,12 +1,15 @@
 name: E2E Tests (TestSprite)
 
-# Manual-only for now: every TestSprite test performs a real sign-in, and the
-# Clerk development instance emails a sign-in link / verification code for
-# each attempt — running this per push/PR spams the QA account's inbox (and
-# burns TestSprite credits). Re-enable push/pull_request triggers once the QA
-# fixture uses Clerk test-mode credentials (+clerk_test email, fixed 424242
-# code), which never send real email.
+# The QA fixture uses Clerk test-mode credentials (+clerk_test email with the
+# fixed 424242 verification code), so sign-ins during test runs send no real
+# email. If the E2E login secrets are ever pointed back at a real mailbox,
+# drop the push/pull_request triggers again — every test performs a real
+# sign-in and Clerk's dev instance emails a code per attempt.
 on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
@@ -68,6 +71,7 @@ jobs:
             "projectName": "Auto",
             "projectPath": "${GITHUB_WORKSPACE}",
             "testIds": [],
+            "additionalInstruction": "Sign in with the provided login credentials. The QA user is a Clerk test-mode identity: if a verification code is requested at any point during sign-in, enter 424242. The app's authenticated routes live under /{orgId}/... where orgId is taken from the URL after sign-in redirects from /dashboard.",
             "serverMode": "production",
             "envs": { "API_KEY": "${TESTSPRITE_API_KEY}" }
           }
