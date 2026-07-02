@@ -46,10 +46,40 @@ jobs:
     - name: Wait for server
       run: npx wait-on http://localhost:3000 --timeout 60000
 
+    # The TestSprite CLI reads its execution arguments from
+    # testsprite_tests/tmp/config.json, which is normally produced by the
+    # interactive MCP bootstrap and is gitignored (it embeds machine paths and
+    # credentials) — so CI has to synthesize it from secrets before running.
+    - name: Prepare TestSprite execution config
+      run: |
+        mkdir -p testsprite_tests/tmp
+        cat > testsprite_tests/tmp/config.json << EOF
+        {
+          "status": "commited",
+          "type": "frontend",
+          "scope": "codebase",
+          "localEndpoint": "http://localhost:3000",
+          "loginUser": "${E2E_LOGIN_USER}",
+          "loginPassword": "${E2E_LOGIN_PASSWORD}",
+          "executionArgs": {
+            "projectName": "Auto",
+            "projectPath": "${GITHUB_WORKSPACE}",
+            "testIds": [],
+            "serverMode": "production",
+            "envs": { "API_KEY": "${TESTSPRITE_API_KEY}" }
+          }
+        }
+        EOF
+      env:
+        TESTSPRITE_API_KEY: ${{ secrets.TESTSPRITE_API_KEY }}
+        E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+        E2E_LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
+
     - name: Run TestSprite E2E tests
       run: npx @testsprite/testsprite-mcp generateCodeAndExecute
       env:
         TESTSPRITE_API_KEY: ${{ secrets.TESTSPRITE_API_KEY }}
+        API_KEY: ${{ secrets.TESTSPRITE_API_KEY }}
         LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
         LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
 

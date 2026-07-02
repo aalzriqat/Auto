@@ -107,6 +107,35 @@ function webhookInFlightResponse(): Response {
   return new Response("Duplicate delivery already in flight", { status: 409 });
 }
 
+/**
+ * Shared completion for Meta batch handlers (Instagram/Facebook): on any
+ * rate-limited or failed entry the delivery is left retryable — Meta
+ * redelivers on non-2xx and the reclaim path reprocesses it (per-event dedup
+ * downstream makes the partial work safe to repeat).
+ */
+async function completeBatchWebhookDelivery(
+  ctx: ActionCtx,
+  claim: WebhookClaim,
+  outcome: { anyRateLimited: boolean; anyProcessingFailed: boolean },
+): Promise<Response> {
+  if (outcome.anyRateLimited || outcome.anyProcessingFailed) {
+    await completeWebhookDelivery(
+      ctx,
+      claim.logId,
+      "error",
+      outcome.anyRateLimited
+        ? "Rate limited — batch partially deferred"
+        : "One or more entries failed",
+    );
+    return outcome.anyRateLimited
+      ? new Response("Too many requests", { status: 429 })
+      : webhookProcessingFailedResponse();
+  }
+
+  await completeWebhookDelivery(ctx, claim.logId, "success");
+  return new Response(null, { status: 200 });
+}
+
 function hasMatchingSecret(
   providedSecret: string | null,
   expectedSecret: string,
@@ -1175,24 +1204,7 @@ http.route({
       }
     }
 
-    if (anyRateLimited || anyProcessingFailed) {
-      // Leave the delivery retryable: Meta redelivers on non-2xx, and the
-      // reclaim path reprocesses it (per-event dedup downstream makes the
-      // partial work safe to repeat).
-      await completeWebhookDelivery(
-        ctx,
-        claim.logId,
-        "error",
-        anyRateLimited ? "Rate limited — batch partially deferred" : "One or more entries failed",
-      );
-      return anyRateLimited
-        ? new Response("Too many requests", { status: 429 })
-        : webhookProcessingFailedResponse();
-    }
-
-    await completeWebhookDelivery(ctx, claim.logId, "success");
-
-    return new Response(null, { status: 200 });
+    return await completeBatchWebhookDelivery(ctx, claim, { anyRateLimited, anyProcessingFailed });
   }),
 });
 
@@ -1617,24 +1629,7 @@ http.route({
       }
     }
 
-    if (anyRateLimited || anyProcessingFailed) {
-      // Leave the delivery retryable: Meta redelivers on non-2xx, and the
-      // reclaim path reprocesses it (per-event dedup downstream makes the
-      // partial work safe to repeat).
-      await completeWebhookDelivery(
-        ctx,
-        claim.logId,
-        "error",
-        anyRateLimited ? "Rate limited — batch partially deferred" : "One or more entries failed",
-      );
-      return anyRateLimited
-        ? new Response("Too many requests", { status: 429 })
-        : webhookProcessingFailedResponse();
-    }
-
-    await completeWebhookDelivery(ctx, claim.logId, "success");
-
-    return new Response(null, { status: 200 });
+    return await completeBatchWebhookDelivery(ctx, claim, { anyRateLimited, anyProcessingFailed });
   }),
 });
 

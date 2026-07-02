@@ -1,6 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { MutationCtx, mutation, query } from "./_generated/server";
-import { Doc } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
@@ -27,6 +27,39 @@ import {
 
 /** sourceType used for the canonical finance-company receivable opened at finalizeDeal. */
 const FINANCE_APP_RECEIVABLE_SOURCE = "finance_application";
+
+/**
+ * Opens (or finds) the canonical receivable owed BY the finance company for a
+ * finalized deal. Idempotent per application via the by_org_source index.
+ */
+async function ensureFinanceCompanyReceivable(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    applicationId: Id<"financeApplications">;
+    financeCompanyId: Id<"financeCompanies">;
+    customerId: Id<"customers">;
+    amountMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    now: number;
+  }
+) {
+  return await ensureReceivableDocument(ctx, {
+    orgId: args.orgId,
+    documentType: "INVOICE",
+    payerType: "FINANCE_COMPANY",
+    financeCompanyId: args.financeCompanyId,
+    customerId: args.customerId,
+    sourceType: FINANCE_APP_RECEIVABLE_SOURCE,
+    sourceId: args.applicationId,
+    originalAmountMinor: args.amountMinor,
+    currency: args.currency,
+    issueDate: args.now,
+    dueDate: args.now,
+    actorId: args.actorId,
+  });
+}
 
 type FinanceApplicationStatus =
   | "DRAFT"
@@ -718,19 +751,15 @@ export const finalizeDeal = mutation({
           // transfer, so the amount owed by the finance company is tracked in
           // the subledger and settled by allocation at confirmDisbursement —
           // not just as an untracked GL balance.
-          await ensureReceivableDocument(ctx, {
+          await ensureFinanceCompanyReceivable(ctx, {
             orgId: args.orgId,
-            documentType: "INVOICE",
-            payerType: "FINANCE_COMPANY",
+            applicationId: args.applicationId,
             financeCompanyId: app.companyId,
             customerId: app.customerId,
-            sourceType: FINANCE_APP_RECEIVABLE_SOURCE,
-            sourceId: args.applicationId,
-            originalAmountMinor: loanAmountMinor,
+            amountMinor: loanAmountMinor,
             currency,
-            issueDate: now,
-            dueDate: now,
             actorId: auth.user._id,
+            now,
           });
         }
 
@@ -812,19 +841,15 @@ export const confirmDisbursement = mutation({
         // finance-company receivable opened at finalizeDeal. Deals finalized
         // before that receivable existed get one created here so the
         // settlement always has a document to allocate against.
-        const receivableDocumentId = await ensureReceivableDocument(ctx, {
+        const receivableDocumentId = await ensureFinanceCompanyReceivable(ctx, {
           orgId: args.orgId,
-          documentType: "INVOICE",
-          payerType: "FINANCE_COMPANY",
+          applicationId: args.applicationId,
           financeCompanyId: app.companyId,
           customerId: app.customerId,
-          sourceType: FINANCE_APP_RECEIVABLE_SOURCE,
-          sourceId: args.applicationId,
-          originalAmountMinor: args.disbursedAmountMinor,
+          amountMinor: args.disbursedAmountMinor,
           currency,
-          issueDate: now,
-          dueDate: now,
           actorId: user._id,
+          now,
         });
         const canonicalPaymentId = await createCanonicalPayment(ctx, {
           orgId: args.orgId,

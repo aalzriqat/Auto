@@ -113,51 +113,52 @@ describe("applications.finalizeDeal", () => {
   });
 });
 
-describe("applications finance-company canonical receivable", () => {
-  test("finalizeDeal opens a FINANCE_COMPANY receivable and confirmDisbursement settles it by allocation", async () => {
-    const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
+/** Seeds a finance company, quote, and application, then walks it to a finalized deal. */
+async function setupFinalizedFinancedDeal() {
+  const base = await setup();
+  const { t, orgId, customerId, vehicleId, asUser, asApprover } = base;
 
-    const companyId = await t.run((ctx) =>
-      ctx.db.insert("financeCompanies", {
-        orgId,
-        name: "Jordan Auto Finance",
-        profitRate: 5,
-        maxTermMonths: 60,
-        gracePeriodMonths: 0,
-        isActive: true,
-      })
-    );
+  const companyId = await t.run((ctx) =>
+    ctx.db.insert("financeCompanies", {
+      orgId,
+      name: "Jordan Auto Finance",
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      isActive: true,
+    })
+  );
 
-    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
-      orgId,
-      customerId,
-      vehicleId,
-      vehiclePrice: 20000,
-      downPayment: 3000,
-      termMonths: 48,
-      mode: "CONFIGURED_FINANCE_COMPANY",
-      companyId,
-      totalFinancedAmount: 17000,
-    });
+  const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+    orgId,
+    customerId,
+    vehicleId,
+    vehiclePrice: 20000,
+    downPayment: 3000,
+    termMonths: 48,
+    mode: "CONFIGURED_FINANCE_COMPANY",
+    companyId,
+    totalFinancedAmount: 17000,
+  });
 
-    const applicationId = await asUser.mutation(api.applications.createFromQuote, {
-      orgId,
-      quoteId,
-    });
-    await asUser.mutation(api.applications.updateStatus, {
-      orgId,
-      applicationId,
-      status: "UNDER_REVIEW",
-    });
-    await asApprover.mutation(api.applications.updateStatus, {
-      orgId,
-      applicationId,
-      status: "APPROVED",
-    });
-    await asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId });
+  const applicationId = await asUser.mutation(api.applications.createFromQuote, {
+    orgId,
+    quoteId,
+  });
+  await asUser.mutation(api.applications.updateStatus, {
+    orgId,
+    applicationId,
+    status: "UNDER_REVIEW",
+  });
+  await asApprover.mutation(api.applications.updateStatus, {
+    orgId,
+    applicationId,
+    status: "APPROVED",
+  });
+  await asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId });
 
-    // Finalizing must open a canonical receivable owed BY the finance company.
-    const receivableAfterFinalize = await t.run((ctx) =>
+  const getFinanceReceivable = () =>
+    t.run((ctx) =>
       ctx.db
         .query("receivableDocuments")
         .withIndex("by_org_source", (q) =>
@@ -165,6 +166,17 @@ describe("applications finance-company canonical receivable", () => {
         )
         .unique()
     );
+
+  return { ...base, companyId, quoteId, applicationId, getFinanceReceivable };
+}
+
+describe("applications finance-company canonical receivable", () => {
+  test("finalizeDeal opens a FINANCE_COMPANY receivable and confirmDisbursement settles it by allocation", async () => {
+    const { t, orgId, companyId, applicationId, asUser, getFinanceReceivable } =
+      await setupFinalizedFinancedDeal();
+
+    // Finalizing must open a canonical receivable owed BY the finance company.
+    const receivableAfterFinalize = await getFinanceReceivable();
     expect(receivableAfterFinalize).not.toBeNull();
     expect(receivableAfterFinalize?.payerType).toBe("FINANCE_COMPANY");
     expect(receivableAfterFinalize?.financeCompanyId).toBe(companyId);
@@ -177,15 +189,10 @@ describe("applications finance-company canonical receivable", () => {
       disbursedAmountMinor: 17_000_000,
     });
 
-    await t.run(async (ctx) => {
-      const receivable = await ctx.db
-        .query("receivableDocuments")
-        .withIndex("by_org_source", (q) =>
-          q.eq("orgId", orgId).eq("sourceType", "finance_application").eq("sourceId", applicationId)
-        )
-        .unique();
-      expect(receivable?.status).toBe("PAID");
+    const settledReceivable = await getFinanceReceivable();
+    expect(settledReceivable?.status).toBe("PAID");
 
+    await t.run(async (ctx) => {
       const payment = await ctx.db
         .query("canonicalPayments")
         .withIndex("by_org_idempotency", (q) =>
@@ -208,46 +215,8 @@ describe("applications finance-company canonical receivable", () => {
   });
 
   test("voiding a finalized (undisbursed) deal cancels the finance-company receivable", async () => {
-    const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
-
-    const companyId = await t.run((ctx) =>
-      ctx.db.insert("financeCompanies", {
-        orgId,
-        name: "Jordan Auto Finance",
-        profitRate: 5,
-        maxTermMonths: 60,
-        gracePeriodMonths: 0,
-        isActive: true,
-      })
-    );
-
-    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
-      orgId,
-      customerId,
-      vehicleId,
-      vehiclePrice: 20000,
-      downPayment: 3000,
-      termMonths: 48,
-      mode: "CONFIGURED_FINANCE_COMPANY",
-      companyId,
-      totalFinancedAmount: 17000,
-    });
-
-    const applicationId = await asUser.mutation(api.applications.createFromQuote, {
-      orgId,
-      quoteId,
-    });
-    await asUser.mutation(api.applications.updateStatus, {
-      orgId,
-      applicationId,
-      status: "UNDER_REVIEW",
-    });
-    await asApprover.mutation(api.applications.updateStatus, {
-      orgId,
-      applicationId,
-      status: "APPROVED",
-    });
-    await asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId });
+    const { orgId, applicationId, asUser, getFinanceReceivable } =
+      await setupFinalizedFinancedDeal();
 
     await asUser.mutation(api.applications.cancelApplication, {
       orgId,
@@ -255,14 +224,7 @@ describe("applications finance-company canonical receivable", () => {
       reason: "Deal fell through before disbursement",
     });
 
-    const receivable = await t.run((ctx) =>
-      ctx.db
-        .query("receivableDocuments")
-        .withIndex("by_org_source", (q) =>
-          q.eq("orgId", orgId).eq("sourceType", "finance_application").eq("sourceId", applicationId)
-        )
-        .unique()
-    );
+    const receivable = await getFinanceReceivable();
     expect(receivable?.status).toBe("CANCELLED");
   });
 });
