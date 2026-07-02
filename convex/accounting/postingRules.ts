@@ -58,6 +58,8 @@ function cashAccountKey(
 ): SystemKey {
   if (method === "CHEQUE") return SYSTEM_KEYS.CHEQUES_IN_HAND;
   if (method === "BANK_TRANSFER") return SYSTEM_KEYS.BANK_ACCOUNT;
+  // Card payments settle to the bank account (via payment gateway clearing).
+  if (method === "CARD") return SYSTEM_KEYS.BANK_ACCOUNT;
   return opts?.defaultCash ?? SYSTEM_KEYS.CASH_ON_HAND;
 }
 

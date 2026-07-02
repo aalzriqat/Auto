@@ -406,6 +406,65 @@ describe("Collections", () => {
     ).rejects.toThrow("Cannot cancel a receivable that has already received payments");
   });
 
+  test("card_refund_routes_to_bank_account_not_cash_on_hand", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
+
+    const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      orgId,
+      customerId,
+      sourceType: "INTERNAL_INSTALLMENT",
+      title: "Card payment installment",
+      amount: 300,
+      dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+    });
+    await asFinance.mutation(api.collections.recordPayment, {
+      orgId,
+      receivableId,
+      amount: 300,
+      method: "CARD",
+      paymentDate: Date.now(),
+    });
+    const requestId = await asFinance.mutation(api.collections.requestApproval, {
+      orgId,
+      receivableId,
+      requestType: "REFUND",
+      requestedAmount: 300,
+      disbursementMethod: "CARD",
+      reason: "Customer requested card reversal",
+    });
+
+    await asApprover.mutation(api.collections.respondToApproval, {
+      orgId,
+      requestId,
+      status: "APPROVED",
+    });
+
+    await t.run(async (ctx) => {
+      const payments = await ctx.db
+        .query("collectionPayments")
+        .withIndex("by_receivable", (q) => q.eq("receivableId", receivableId))
+        .collect();
+      const refund = payments.find((p) => p.direction === "OUT");
+      expect(refund?.method).toBe("CARD");
+
+      // CARD settlements clear via the bank account — the outbox event must
+      // carry CARD so cashAccountKey() resolves to BANK_ACCOUNT, not CASH_ON_HAND.
+      const pending = await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
+        .collect();
+      const refundEvent = pending.find((e) => e.eventType === "COLLECTION_REFUND");
+      expect(refundEvent).toBeTruthy();
+      expect((refundEvent?.payload as { paymentMethod?: string })?.paymentMethod).toBe("CARD");
+
+      const canonicalRefund = refund?.canonicalPaymentId
+        ? await ctx.db.get(refund.canonicalPaymentId)
+        : null;
+      expect(canonicalRefund?.method).toBe("CARD");
+    });
+  });
+
   test("approved_reschedule_moves_overdue_receivable_to_new_due_date", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);

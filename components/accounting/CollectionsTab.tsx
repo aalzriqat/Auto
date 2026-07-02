@@ -876,10 +876,10 @@ function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable:
   }
 
   const disbursementLabels: Record<DisbursementMethod, string> = {
-    CASH: "Cash",
-    BANK_TRANSFER: "Bank Transfer",
-    CHEQUE: "Cheque",
-    CARD: "Card",
+    CASH: t("DisbursementCash" as any),
+    BANK_TRANSFER: t("DisbursementBankTransfer" as any),
+    CHEQUE: t("DisbursementCheque" as any),
+    CARD: t("DisbursementCard" as any),
   };
 
   return (
@@ -895,7 +895,7 @@ function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable:
               <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={t("RefundAmount" as any)} />
               <Select value={disbursementMethod} onValueChange={(v) => setDisbursementMethod(v as DisbursementMethod)}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Refund via…" />
+                  <SelectValue placeholder={t("DisbursementSelectPlaceholder" as any)} />
                 </SelectTrigger>
                 <SelectContent>
                   {(Object.keys(disbursementLabels) as DisbursementMethod[]).map((method) => (
