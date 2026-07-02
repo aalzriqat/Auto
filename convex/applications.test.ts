@@ -277,6 +277,7 @@ describe("applications finance-company canonical receivable", () => {
         .query("paymentAllocations")
         .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", customerReceivable!._id))
         .collect();
+      expect(allocations.length).toBeGreaterThan(0);
       expect(allocations.every((allocation) => allocation.status === "REVERSED")).toBe(true);
     });
   });
