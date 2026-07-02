@@ -10,6 +10,12 @@ const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_BUILD_SHA: process.env.VERCEL_GIT_COMMIT_SHA ?? "dev",
   },
+  async redirects() {
+    return [
+      // Some E2E tools (and users) guess /login; send them to the real Clerk page.
+      { source: "/login", destination: "/sign-in", permanent: false },
+    ];
+  },
   async headers() {
     return [
       {

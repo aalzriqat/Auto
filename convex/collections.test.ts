@@ -244,6 +244,68 @@ describe("Collections", () => {
         .withIndex("by_org", (q) => q.eq("orgId", orgId))
         .collect();
       expect(transactions.some((tx) => tx.type === "OUT" && tx.category === "REFUND" && tx.amount === 200)).toBe(true);
+
+      // The canonical receivable must reopen by exactly the refunded amount:
+      // original allocations get reversed (not left ACTIVE), and the status
+      // leaves PAID.
+      expect(receivable?.canonicalReceivableDocumentId).toBeTruthy();
+      const canonicalReceivable = receivable?.canonicalReceivableDocumentId
+        ? await ctx.db.get(receivable.canonicalReceivableDocumentId)
+        : null;
+      expect(canonicalReceivable?.status).toBe("PARTIALLY_PAID");
+
+      const allocations = receivable?.canonicalReceivableDocumentId
+        ? await ctx.db
+            .query("paymentAllocations")
+            .withIndex("by_receivable", (q) =>
+              q.eq("receivableDocumentId", receivable.canonicalReceivableDocumentId!)
+            )
+            .collect()
+        : [];
+      const activeMinor = allocations
+        .filter((allocation) => allocation.status === "ACTIVE")
+        .reduce((sum, allocation) => sum + allocation.amountMinor, 0);
+      // 1000 collected − 200 refunded = 800 still applied
+      expect(activeMinor).toBe(800_000);
+      expect(allocations.some((allocation) => allocation.status === "REVERSED")).toBe(true);
+    });
+  });
+
+  test("approved_cancel_marks_canonical_receivable_cancelled", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
+
+    const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      orgId,
+      customerId,
+      sourceType: "INTERNAL_INSTALLMENT",
+      title: "Cancelled installment",
+      amount: 600,
+      dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+    });
+    const requestId = await asFinance.mutation(api.collections.requestApproval, {
+      orgId,
+      receivableId,
+      requestType: "CANCEL_RECEIVABLE",
+      reason: "Deal fell through",
+    });
+
+    await asApprover.mutation(api.collections.respondToApproval, {
+      orgId,
+      requestId,
+      status: "APPROVED",
+    });
+
+    await t.run(async (ctx) => {
+      const receivable = await ctx.db.get(receivableId);
+      expect(receivable?.status).toBe("CANCELLED");
+      expect(receivable?.outstandingAmount).toBe(0);
+
+      expect(receivable?.canonicalReceivableDocumentId).toBeTruthy();
+      const canonicalReceivable = receivable?.canonicalReceivableDocumentId
+        ? await ctx.db.get(receivable.canonicalReceivableDocumentId)
+        : null;
+      expect(canonicalReceivable?.status).toBe("CANCELLED");
     });
   });
 
@@ -278,6 +340,12 @@ describe("Collections", () => {
       const receivable = await ctx.db.get(receivableId);
       expect(receivable?.dueDate).toBe(tomorrow);
       expect(receivable?.status).toBe("RESCHEDULED");
+
+      expect(receivable?.canonicalReceivableDocumentId).toBeTruthy();
+      const canonicalReceivable = receivable?.canonicalReceivableDocumentId
+        ? await ctx.db.get(receivable.canonicalReceivableDocumentId)
+        : null;
+      expect(canonicalReceivable?.dueDate).toBe(tomorrow);
     });
   });
 });

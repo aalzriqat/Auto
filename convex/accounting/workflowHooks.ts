@@ -12,6 +12,7 @@
 import { Id } from "../_generated/dataModel";
 import { MutationCtx } from "../_generated/server";
 import { postAccountingEvent, PostCommand } from "./postingEngine";
+import { EventType } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate } from "../accountingPeriods";
 import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount } from "../chartOfAccounts";
@@ -58,373 +59,46 @@ async function postOrEnqueue(ctx: MutationCtx, cmd: PostCommand): Promise<void> 
   }
 }
 
-export async function hookDepositReceived(
+/**
+ * Shared shape for every forward-posting domain hook: version-1 event dated at
+ * the operational occurredAt, posted or durably enqueued. Individual hooks
+ * only differ by event type, source, idempotency key, and payload.
+ */
+async function postDomainEvent(
   ctx: MutationCtx,
   args: {
     orgId: Id<"organizations">;
-    depositId: Id<"deposits">;
-    customerId: Id<"customers">;
-    amountMinor: number;
+    eventType: EventType;
+    sourceType: string;
+    sourceId: string;
+    idempotencyKey: string;
     currency: string;
-    paymentMethod: string;
-    actorId: Id<"users">;
     occurredAt: number;
+    actorId: Id<"users">;
+    payload: Record<string, unknown>;
   }
-) {
+): Promise<void> {
   await postOrEnqueue(ctx, {
     orgId: args.orgId,
-    eventType: "DEPOSIT_RECEIVED",
-    sourceType: "deposits",
-    sourceId: args.depositId.toString(),
+    eventType: args.eventType,
+    sourceType: args.sourceType,
+    sourceId: args.sourceId,
     eventVersion: 1,
     accountingDate: args.occurredAt,
     occurredAt: args.occurredAt,
     currency: args.currency,
-    idempotencyKey: `deposit_received_${args.depositId}`,
-    payload: {
-      depositId: args.depositId.toString(),
-      amountMinor: args.amountMinor,
-      currency: args.currency,
-      paymentMethod: args.paymentMethod,
-      customerId: args.customerId.toString(),
-    },
+    idempotencyKey: args.idempotencyKey,
+    payload: args.payload,
     actorId: args.actorId,
   });
-}
-
-export async function hookDepositApplied(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    depositId: Id<"deposits">;
-    customerId: Id<"customers">;
-    amountMinor: number;
-    currency: string;
-    actorId: Id<"users">;
-    occurredAt: number;
-    saleId?: Id<"sales">;
-  }
-) {
-  await postOrEnqueue(ctx, {
-    orgId: args.orgId,
-    eventType: "DEPOSIT_APPLIED",
-    sourceType: "deposits",
-    sourceId: args.depositId.toString(),
-    eventVersion: 1,
-    accountingDate: args.occurredAt,
-    occurredAt: args.occurredAt,
-    currency: args.currency,
-    idempotencyKey: `deposit_applied_${args.depositId}`,
-    payload: {
-      depositId: args.depositId.toString(),
-      amountMinor: args.amountMinor,
-      currency: args.currency,
-      customerId: args.customerId.toString(),
-      saleId: args.saleId?.toString(),
-    },
-    actorId: args.actorId,
-  });
-}
-
-export async function hookDepositRefunded(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    depositId: Id<"deposits">;
-    customerId: Id<"customers">;
-    amountMinor: number;
-    currency: string;
-    actorId: Id<"users">;
-    occurredAt: number;
-  }
-) {
-  await postOrEnqueue(ctx, {
-    orgId: args.orgId,
-    eventType: "DEPOSIT_REFUNDED",
-    sourceType: "deposits",
-    sourceId: args.depositId.toString(),
-    eventVersion: 1,
-    accountingDate: args.occurredAt,
-    occurredAt: args.occurredAt,
-    currency: args.currency,
-    idempotencyKey: `deposit_refunded_${args.depositId}`,
-    payload: {
-      depositId: args.depositId.toString(),
-      amountMinor: args.amountMinor,
-      currency: args.currency,
-      customerId: args.customerId.toString(),
-    },
-    actorId: args.actorId,
-  });
-}
-
-export async function hookDepositForfeited(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    depositId: Id<"deposits">;
-    customerId: Id<"customers">;
-    amountMinor: number;
-    currency: string;
-    actorId: Id<"users">;
-    occurredAt: number;
-  }
-) {
-  await postOrEnqueue(ctx, {
-    orgId: args.orgId,
-    eventType: "DEPOSIT_FORFEITED",
-    sourceType: "deposits",
-    sourceId: args.depositId.toString(),
-    eventVersion: 1,
-    accountingDate: args.occurredAt,
-    occurredAt: args.occurredAt,
-    currency: args.currency,
-    idempotencyKey: `deposit_forfeited_${args.depositId}`,
-    payload: {
-      depositId: args.depositId.toString(),
-      amountMinor: args.amountMinor,
-      currency: args.currency,
-      customerId: args.customerId.toString(),
-    },
-    actorId: args.actorId,
-  });
-}
-
-export async function hookSaleCompleted(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    saleId: Id<"sales">;
-    customerId: Id<"customers">;
-    vehicleId: Id<"vehicles">;
-    salespersonId: Id<"users">;
-    saleAmountMinor: number;
-    costMinor: number | undefined;
-    currency: string;
-    taxMinor: number | undefined;
-    actorId: Id<"users">;
-    occurredAt: number;
-    /** Pass true for drop-shipped vehicles — credits AP-Suppliers instead of Vehicle Inventory for COGS. */
-    isSourced?: boolean;
-  }
-) {
-  await postOrEnqueue(ctx, {
-    orgId: args.orgId,
-    eventType: "SALE_COMPLETED",
-    sourceType: "sales",
-    sourceId: args.saleId.toString(),
-    eventVersion: 1,
-    accountingDate: args.occurredAt,
-    occurredAt: args.occurredAt,
-    currency: args.currency,
-    idempotencyKey: `sale_completed_${args.saleId}`,
-    payload: {
-      saleId: args.saleId.toString(),
-      saleAmountMinor: args.saleAmountMinor,
-      costMinor: args.costMinor,
-      currency: args.currency,
-      customerId: args.customerId.toString(),
-      vehicleId: args.vehicleId.toString(),
-      salespersonId: args.salespersonId.toString(),
-      taxMinor: args.taxMinor,
-      isSourced: args.isSourced ?? false,
-    },
-    actorId: args.actorId,
-  });
-}
-
-export async function hookSupplierPaymentSettled(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    payableId: Id<"vehicleSupplierPayables">;
-    sourcedFromName: string;
-    amountMinor: number;
-    currency: string;
-    paymentMethod?: string;
-    actorId: Id<"users">;
-    occurredAt: number;
-  }
-) {
-  await postOrEnqueue(ctx, {
-    orgId: args.orgId,
-    eventType: "SUPPLIER_PAYMENT_SETTLED",
-    sourceType: "vehicleSupplierPayables",
-    sourceId: args.payableId.toString(),
-    eventVersion: 1,
-    accountingDate: args.occurredAt,
-    occurredAt: args.occurredAt,
-    currency: args.currency,
-    idempotencyKey: `supplier_payment_settled_${args.payableId}`,
-    payload: {
-      payableId: args.payableId.toString(),
-      sourcedFromName: args.sourcedFromName,
-      amountMinor: args.amountMinor,
-      currency: args.currency,
-      paymentMethod: args.paymentMethod,
-    },
-    actorId: args.actorId,
-  });
-}
-
-export async function hookCollectionPayment(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    paymentId: Id<"collectionPayments">;
-    customerId: Id<"customers">;
-    amountMinor: number;
-    currency: string;
-    paymentMethod: string;
-    actorId: Id<"users">;
-    occurredAt: number;
-  }
-) {
-  await postOrEnqueue(ctx, {
-    orgId: args.orgId,
-    eventType: "COLLECTION_PAYMENT",
-    sourceType: "collectionPayments",
-    sourceId: args.paymentId.toString(),
-    eventVersion: 1,
-    accountingDate: args.occurredAt,
-    occurredAt: args.occurredAt,
-    currency: args.currency,
-    idempotencyKey: `collection_payment_${args.paymentId}`,
-    payload: {
-      paymentId: args.paymentId.toString(),
-      amountMinor: args.amountMinor,
-      currency: args.currency,
-      customerId: args.customerId.toString(),
-      paymentMethod: args.paymentMethod,
-    },
-    actorId: args.actorId,
-  });
-}
-
-export async function hookExpensePosted(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    expenseId: Id<"expenses">;
-    amountMinor: number;
-    currency: string;
-    category?: string;
-    paymentMethod?: string;
-    actorId: Id<"users">;
-    occurredAt: number;
-  }
-) {
-  await postOrEnqueue(ctx, {
-    orgId: args.orgId,
-    eventType: "EXPENSE_POSTED",
-    sourceType: "expenses",
-    sourceId: args.expenseId.toString(),
-    eventVersion: 1,
-    accountingDate: args.occurredAt,
-    occurredAt: args.occurredAt,
-    currency: args.currency,
-    idempotencyKey: `expense_posted_${args.expenseId}`,
-    payload: {
-      expenseId: args.expenseId.toString(),
-      amountMinor: args.amountMinor,
-      currency: args.currency,
-      category: args.category,
-      paymentMethod: args.paymentMethod,
-    },
-    actorId: args.actorId,
-  });
-}
-
-export async function hookCommissionAccrued(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    saleId: Id<"sales">;
-    salespersonId: Id<"users">;
-    amountMinor: number;
-    currency: string;
-    actorId: Id<"users">;
-    occurredAt: number;
-  }
-) {
-  await postOrEnqueue(ctx, {
-    orgId: args.orgId,
-    eventType: "COMMISSION_ACCRUED",
-    sourceType: "sales",
-    sourceId: `commission_${args.saleId}`,
-    eventVersion: 1,
-    accountingDate: args.occurredAt,
-    occurredAt: args.occurredAt,
-    currency: args.currency,
-    idempotencyKey: `commission_accrued_${args.saleId}`,
-    payload: {
-      saleId: args.saleId.toString(),
-      amountMinor: args.amountMinor,
-      currency: args.currency,
-      salespersonId: args.salespersonId.toString(),
-    },
-    actorId: args.actorId,
-  });
-}
-
-export async function hookSaleCancelled(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    saleId: Id<"sales">;
-    reason: string;
-    actorId: Id<"users">;
-    reversalDate: number;
-  }
-) {
-  // Find the original SALE_COMPLETED event for this sale
-  const originalEvent = await ctx.db
-    .query("accountingEvents")
-    .withIndex("by_org_source", (q) =>
-      q.eq("orgId", args.orgId).eq("sourceType", "sales").eq("sourceId", args.saleId.toString())
-    )
-    .filter((q) => q.eq(q.field("eventType"), "SALE_COMPLETED"))
-    .filter((q) => q.eq(q.field("status"), "POSTED"))
-    .first();
-
-  if (originalEvent) {
-    const period = await getOpenPeriodForDate(ctx, args.orgId, args.reversalDate);
-    if (period) {
-      await reverseAccountingEvent(ctx, {
-        orgId: args.orgId,
-        originalEventId: originalEvent._id,
-        reversalDate: args.reversalDate,
-        reason: args.reason,
-        actorId: args.actorId,
-        idempotencyKey: `sale_cancelled_${args.saleId}`,
-      });
-    } else {
-      // No open period — defer the reversal to the outbox instead of skipping it.
-      await enqueuePendingReversal(ctx, {
-        orgId: args.orgId,
-        originalEventId: originalEvent._id,
-        reversalDate: args.reversalDate,
-        reason: args.reason,
-        actorId: args.actorId,
-        idempotencyKey: `sale_cancelled_${args.saleId}`,
-        sourceType: "sales",
-        sourceId: args.saleId.toString(),
-      });
-    }
-    return;
-  }
-
-  // No posted GL entry. If the SALE_COMPLETED is still sitting unposted in the
-  // outbox, cancel it so it never posts (net GL effect of the round trip is
-  // zero). If neither exists, there is genuinely nothing to do.
-  await cancelPendingPostByKey(ctx, args.orgId, `sale_completed_${args.saleId}`);
 }
 
 /**
  * Generic "undo this posted event, or drop it if it never posted" used when
- * voiding an entire upstream operation (e.g. a finalized finance deal).
- * Mirrors hookSaleCancelled's reverse-or-drop logic for any
- * (eventType, sourceType, sourceId) triple.
+ * voiding an upstream operation (a cancelled sale, a voided finance deal, a
+ * deposit recorded in error). Reverses the posted journal inside an open
+ * period, defers the reversal to the outbox when no period is open, and
+ * cancels a still-unposted outbox entry so the round trip nets to zero.
  */
 async function reverseEventIfPosted(
   ctx: MutationCtx,
@@ -432,7 +106,7 @@ async function reverseEventIfPosted(
     orgId: Id<"organizations">;
     sourceType: string;
     sourceId: string;
-    eventType: string;
+    eventType: EventType;
     reason: string;
     actorId: Id<"users">;
     reversalDate: number;
@@ -481,77 +155,370 @@ async function reverseEventIfPosted(
   await cancelPendingPostByKey(ctx, args.orgId, args.pendingPostIdempotencyKey);
 }
 
-/** Reverses the FINANCE_DISBURSED entry created at finalizeDeal, when voiding a closed application that was never actually disbursed. */
-export async function hookFinanceDisbursementCancelled(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    applicationId: Id<"financeApplications">;
-    reason: string;
-    actorId: Id<"users">;
-    reversalDate: number;
-  }
-) {
-  await reverseEventIfPosted(ctx, {
-    orgId: args.orgId,
-    sourceType: "financeApplications",
-    sourceId: args.applicationId.toString(),
-    eventType: "FINANCE_DISBURSED",
-    reason: args.reason,
-    actorId: args.actorId,
-    reversalDate: args.reversalDate,
-    reversalIdempotencyKey: `finance_disbursement_cancelled_${args.applicationId}`,
-    pendingPostIdempotencyKey: `finance_disbursed_${args.applicationId}`,
-  });
-}
-
-/** Reverses a COMMISSION_ACCRUED entry when the underlying sale is voided. */
-export async function hookCommissionReversed(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    saleId: Id<"sales">;
-    reason: string;
-    actorId: Id<"users">;
-    reversalDate: number;
-  }
-) {
-  await reverseEventIfPosted(ctx, {
-    orgId: args.orgId,
-    sourceType: "sales",
-    sourceId: `commission_${args.saleId}`,
-    eventType: "COMMISSION_ACCRUED",
-    reason: args.reason,
-    actorId: args.actorId,
-    reversalDate: args.reversalDate,
-    reversalIdempotencyKey: `commission_reversed_${args.saleId}`,
-    pendingPostIdempotencyKey: `commission_accrued_${args.saleId}`,
-  });
-}
-
-/** Reverses a DEPOSIT_APPLIED entry when an applied deposit is reinstated as an active hold (e.g. the sale it was applied to gets voided). */
-export async function hookDepositApplicationReversed(
+export async function hookDepositReceived(
   ctx: MutationCtx,
   args: {
     orgId: Id<"organizations">;
     depositId: Id<"deposits">;
-    reason: string;
+    customerId: Id<"customers">;
+    amountMinor: number;
+    currency: string;
+    paymentMethod: string;
     actorId: Id<"users">;
-    reversalDate: number;
+    occurredAt: number;
   }
 ) {
-  await reverseEventIfPosted(ctx, {
+  await postDomainEvent(ctx, {
     orgId: args.orgId,
+    eventType: "DEPOSIT_RECEIVED",
     sourceType: "deposits",
     sourceId: args.depositId.toString(),
-    eventType: "DEPOSIT_APPLIED",
-    reason: args.reason,
+    idempotencyKey: `deposit_received_${args.depositId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
     actorId: args.actorId,
-    reversalDate: args.reversalDate,
-    reversalIdempotencyKey: `deposit_applied_reversed_${args.depositId}`,
-    pendingPostIdempotencyKey: `deposit_applied_${args.depositId}`,
+    payload: {
+      depositId: args.depositId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      paymentMethod: args.paymentMethod,
+      customerId: args.customerId.toString(),
+    },
   });
 }
+
+export async function hookDepositApplied(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    depositId: Id<"deposits">;
+    customerId: Id<"customers">;
+    amountMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+    saleId?: Id<"sales">;
+  }
+) {
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "DEPOSIT_APPLIED",
+    sourceType: "deposits",
+    sourceId: args.depositId.toString(),
+    idempotencyKey: `deposit_applied_${args.depositId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      depositId: args.depositId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      customerId: args.customerId.toString(),
+      saleId: args.saleId?.toString(),
+    },
+  });
+}
+
+type DepositResolutionHookArgs = {
+  orgId: Id<"organizations">;
+  depositId: Id<"deposits">;
+  customerId: Id<"customers">;
+  amountMinor: number;
+  currency: string;
+  actorId: Id<"users">;
+  occurredAt: number;
+};
+
+/** Refund and forfeiture post identical event shapes — only the event type (and thus the posting rule) differs. */
+function makeDepositResolutionHook(eventType: "DEPOSIT_REFUNDED" | "DEPOSIT_FORFEITED", keyPrefix: string) {
+  return async (ctx: MutationCtx, args: DepositResolutionHookArgs) =>
+    postDomainEvent(ctx, {
+      orgId: args.orgId,
+      eventType,
+      sourceType: "deposits",
+      sourceId: args.depositId.toString(),
+      idempotencyKey: `${keyPrefix}_${args.depositId}`,
+      currency: args.currency,
+      occurredAt: args.occurredAt,
+      actorId: args.actorId,
+      payload: {
+        depositId: args.depositId.toString(),
+        amountMinor: args.amountMinor,
+        currency: args.currency,
+        customerId: args.customerId.toString(),
+      },
+    });
+}
+
+export const hookDepositRefunded = makeDepositResolutionHook("DEPOSIT_REFUNDED", "deposit_refunded");
+export const hookDepositForfeited = makeDepositResolutionHook("DEPOSIT_FORFEITED", "deposit_forfeited");
+
+export async function hookSaleCompleted(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    saleId: Id<"sales">;
+    customerId: Id<"customers">;
+    vehicleId: Id<"vehicles">;
+    salespersonId: Id<"users">;
+    saleAmountMinor: number;
+    costMinor: number | undefined;
+    currency: string;
+    taxMinor: number | undefined;
+    actorId: Id<"users">;
+    occurredAt: number;
+    /** Pass true for drop-shipped vehicles — credits AP-Suppliers instead of Vehicle Inventory for COGS. */
+    isSourced?: boolean;
+  }
+) {
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "SALE_COMPLETED",
+    sourceType: "sales",
+    sourceId: args.saleId.toString(),
+    idempotencyKey: `sale_completed_${args.saleId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      saleId: args.saleId.toString(),
+      saleAmountMinor: args.saleAmountMinor,
+      costMinor: args.costMinor,
+      currency: args.currency,
+      customerId: args.customerId.toString(),
+      vehicleId: args.vehicleId.toString(),
+      salespersonId: args.salespersonId.toString(),
+      taxMinor: args.taxMinor,
+      isSourced: args.isSourced ?? false,
+    },
+  });
+}
+
+export async function hookSupplierPaymentSettled(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    payableId: Id<"vehicleSupplierPayables">;
+    sourcedFromName: string;
+    amountMinor: number;
+    currency: string;
+    paymentMethod?: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "SUPPLIER_PAYMENT_SETTLED",
+    sourceType: "vehicleSupplierPayables",
+    sourceId: args.payableId.toString(),
+    idempotencyKey: `supplier_payment_settled_${args.payableId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      payableId: args.payableId.toString(),
+      sourcedFromName: args.sourcedFromName,
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      paymentMethod: args.paymentMethod,
+    },
+  });
+}
+
+type CollectionHookArgs = {
+  orgId: Id<"organizations">;
+  paymentId: Id<"collectionPayments">;
+  customerId: Id<"customers">;
+  amountMinor: number;
+  currency: string;
+  paymentMethod: string;
+  actorId: Id<"users">;
+  occurredAt: number;
+};
+
+function makeCollectionHook(eventType: "COLLECTION_PAYMENT" | "COLLECTION_REFUND", keyPrefix: string) {
+  return async (ctx: MutationCtx, args: CollectionHookArgs) =>
+    postDomainEvent(ctx, {
+      orgId: args.orgId,
+      eventType,
+      sourceType: "collectionPayments",
+      sourceId: args.paymentId.toString(),
+      idempotencyKey: `${keyPrefix}_${args.paymentId}`,
+      currency: args.currency,
+      occurredAt: args.occurredAt,
+      actorId: args.actorId,
+      payload: {
+        paymentId: args.paymentId.toString(),
+        amountMinor: args.amountMinor,
+        currency: args.currency,
+        customerId: args.customerId.toString(),
+        paymentMethod: args.paymentMethod,
+      },
+    });
+}
+
+export const hookCollectionPayment = makeCollectionHook("COLLECTION_PAYMENT", "collection_payment");
+
+/**
+ * Posts the cash-out + AR-reopening entry for an approved collection refund:
+ * DR Accounts Receivable — Customers / CR Cash. The refund's operational side
+ * (OUT collectionPayment + canonical payment + allocation reversal) is handled
+ * by the caller; this hook only records the GL impact.
+ */
+export const hookCollectionRefund = makeCollectionHook("COLLECTION_REFUND", "collection_refund");
+
+export async function hookExpensePosted(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    expenseId: Id<"expenses">;
+    amountMinor: number;
+    currency: string;
+    category?: string;
+    paymentMethod?: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "EXPENSE_POSTED",
+    sourceType: "expenses",
+    sourceId: args.expenseId.toString(),
+    idempotencyKey: `expense_posted_${args.expenseId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      expenseId: args.expenseId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      category: args.category,
+      paymentMethod: args.paymentMethod,
+    },
+  });
+}
+
+type CommissionHookArgs = {
+  orgId: Id<"organizations">;
+  saleId: Id<"sales">;
+  salespersonId: Id<"users">;
+  amountMinor: number;
+  currency: string;
+  actorId: Id<"users">;
+  occurredAt: number;
+};
+
+function makeCommissionHook(
+  eventType: "COMMISSION_ACCRUED" | "COMMISSION_PAID",
+  sourceIdPrefix: string,
+  keyPrefix: string
+) {
+  return async (ctx: MutationCtx, args: CommissionHookArgs) =>
+    postDomainEvent(ctx, {
+      orgId: args.orgId,
+      eventType,
+      sourceType: "sales",
+      sourceId: `${sourceIdPrefix}_${args.saleId}`,
+      idempotencyKey: `${keyPrefix}_${args.saleId}`,
+      currency: args.currency,
+      occurredAt: args.occurredAt,
+      actorId: args.actorId,
+      payload: {
+        saleId: args.saleId.toString(),
+        amountMinor: args.amountMinor,
+        currency: args.currency,
+        salespersonId: args.salespersonId.toString(),
+      },
+    });
+}
+
+export const hookCommissionAccrued = makeCommissionHook("COMMISSION_ACCRUED", "commission", "commission_accrued");
+export const hookCommissionPaid = makeCommissionHook("COMMISSION_PAID", "commission_paid", "commission_paid");
+
+type ReversalHookArgs<TSourceId> = {
+  orgId: Id<"organizations">;
+  reason: string;
+  actorId: Id<"users">;
+  reversalDate: number;
+} & TSourceId;
+
+/**
+ * All void/cancel hooks share reverseEventIfPosted semantics and differ only
+ * in which original event they target and how their idempotency keys are
+ * derived from the source id.
+ */
+function makeReversalHook<TSourceId extends Record<string, unknown>>(cfg: {
+  eventType: EventType;
+  sourceType: string;
+  sourceId: (args: TSourceId) => string;
+  reversalKey: (args: TSourceId) => string;
+  pendingPostKey: (args: TSourceId) => string;
+}) {
+  return async (ctx: MutationCtx, args: ReversalHookArgs<TSourceId>) =>
+    reverseEventIfPosted(ctx, {
+      orgId: args.orgId,
+      sourceType: cfg.sourceType,
+      sourceId: cfg.sourceId(args),
+      eventType: cfg.eventType,
+      reason: args.reason,
+      actorId: args.actorId,
+      reversalDate: args.reversalDate,
+      reversalIdempotencyKey: cfg.reversalKey(args),
+      pendingPostIdempotencyKey: cfg.pendingPostKey(args),
+    });
+}
+
+/** Reverses the SALE_COMPLETED entry (or cancels its pending post) when a sale is cancelled. */
+export const hookSaleCancelled = makeReversalHook<{ saleId: Id<"sales"> }>({
+  eventType: "SALE_COMPLETED",
+  sourceType: "sales",
+  sourceId: (a) => a.saleId.toString(),
+  reversalKey: (a) => `sale_cancelled_${a.saleId}`,
+  pendingPostKey: (a) => `sale_completed_${a.saleId}`,
+});
+
+/** Reverses the FINANCE_DISBURSED entry created at finalizeDeal, when voiding a closed application that was never actually disbursed. */
+export const hookFinanceDisbursementCancelled = makeReversalHook<{ applicationId: Id<"financeApplications"> }>({
+  eventType: "FINANCE_DISBURSED",
+  sourceType: "financeApplications",
+  sourceId: (a) => a.applicationId.toString(),
+  reversalKey: (a) => `finance_disbursement_cancelled_${a.applicationId}`,
+  pendingPostKey: (a) => `finance_disbursed_${a.applicationId}`,
+});
+
+/** Reverses a COMMISSION_ACCRUED entry when the underlying sale is voided. */
+export const hookCommissionReversed = makeReversalHook<{ saleId: Id<"sales"> }>({
+  eventType: "COMMISSION_ACCRUED",
+  sourceType: "sales",
+  sourceId: (a) => `commission_${a.saleId}`,
+  reversalKey: (a) => `commission_reversed_${a.saleId}`,
+  pendingPostKey: (a) => `commission_accrued_${a.saleId}`,
+});
+
+/** Reverses a DEPOSIT_APPLIED entry when an applied deposit is reinstated as an active hold (e.g. the sale it was applied to gets voided). */
+export const hookDepositApplicationReversed = makeReversalHook<{ depositId: Id<"deposits"> }>({
+  eventType: "DEPOSIT_APPLIED",
+  sourceType: "deposits",
+  sourceId: (a) => a.depositId.toString(),
+  reversalKey: (a) => `deposit_applied_reversed_${a.depositId}`,
+  pendingPostKey: (a) => `deposit_applied_${a.depositId}`,
+});
+
+/**
+ * Reverses the DEPOSIT_RECEIVED entry when a HELD deposit is voided as
+ * recorded-in-error (as opposed to refunded/forfeited, which post their own
+ * dedicated resolution entries). If the original entry never posted (still in
+ * the outbox), it is cancelled so the round trip nets to zero.
+ */
+export const hookDepositVoided = makeReversalHook<{ depositId: Id<"deposits"> }>({
+  eventType: "DEPOSIT_RECEIVED",
+  sourceType: "deposits",
+  sourceId: (a) => a.depositId.toString(),
+  reversalKey: (a) => `deposit_voided_${a.depositId}`,
+  pendingPostKey: (a) => `deposit_received_${a.depositId}`,
+});
 
 export async function hookFinanceDisbursed(
   ctx: MutationCtx,
@@ -567,16 +534,15 @@ export async function hookFinanceDisbursed(
     occurredAt: number;
   }
 ) {
-  await postOrEnqueue(ctx, {
+  await postDomainEvent(ctx, {
     orgId: args.orgId,
     eventType: "FINANCE_DISBURSED",
     sourceType: "financeApplications",
     sourceId: args.applicationId.toString(),
-    eventVersion: 1,
-    accountingDate: args.occurredAt,
-    occurredAt: args.occurredAt,
-    currency: args.currency,
     idempotencyKey: `finance_disbursed_${args.applicationId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
     payload: {
       applicationId: args.applicationId.toString(),
       saleId: args.saleId.toString(),
@@ -585,7 +551,6 @@ export async function hookFinanceDisbursed(
       currency: args.currency,
       customerId: args.customerId.toString(),
     },
-    actorId: args.actorId,
   });
 }
 
@@ -602,16 +567,15 @@ export async function hookFinanceCashReceived(
     occurredAt: number;
   }
 ) {
-  await postOrEnqueue(ctx, {
+  await postDomainEvent(ctx, {
     orgId: args.orgId,
     eventType: "FINANCE_CASH_RECEIVED",
     sourceType: "financeApplications",
     sourceId: `disbursement_${args.applicationId}`,
-    eventVersion: 1,
-    accountingDate: args.occurredAt,
-    occurredAt: args.occurredAt,
-    currency: args.currency,
     idempotencyKey: `finance_cash_received_${args.applicationId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
     payload: {
       applicationId: args.applicationId.toString(),
       financeCompanyId: args.financeCompanyId.toString(),
@@ -619,7 +583,6 @@ export async function hookFinanceCashReceived(
       currency: args.currency,
       customerId: args.customerId?.toString(),
     },
-    actorId: args.actorId,
   });
 }
 
@@ -636,16 +599,15 @@ export async function hookPaymentLinkReceived(
     occurredAt: number;
   }
 ) {
-  await postOrEnqueue(ctx, {
+  await postDomainEvent(ctx, {
     orgId: args.orgId,
     eventType: "PAYMENT_LINK_RECEIVED",
     sourceType: "paymentIntents",
     sourceId: args.intentId.toString(),
-    eventVersion: 1,
-    accountingDate: args.occurredAt,
-    occurredAt: args.occurredAt,
-    currency: args.currency,
     idempotencyKey: `payment_link_received_${args.intentId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
     payload: {
       intentId: args.intentId.toString(),
       amountMinor: args.amountMinor,
@@ -653,38 +615,6 @@ export async function hookPaymentLinkReceived(
       customerId: args.customerId.toString(),
       provider: args.provider,
     },
-    actorId: args.actorId,
   });
 }
 
-export async function hookCommissionPaid(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    saleId: Id<"sales">;
-    salespersonId: Id<"users">;
-    amountMinor: number;
-    currency: string;
-    actorId: Id<"users">;
-    occurredAt: number;
-  }
-) {
-  await postOrEnqueue(ctx, {
-    orgId: args.orgId,
-    eventType: "COMMISSION_PAID",
-    sourceType: "sales",
-    sourceId: `commission_paid_${args.saleId}`,
-    eventVersion: 1,
-    accountingDate: args.occurredAt,
-    occurredAt: args.occurredAt,
-    currency: args.currency,
-    idempotencyKey: `commission_paid_${args.saleId}`,
-    payload: {
-      saleId: args.saleId.toString(),
-      amountMinor: args.amountMinor,
-      currency: args.currency,
-      salespersonId: args.salespersonId.toString(),
-    },
-    actorId: args.actorId,
-  });
-}

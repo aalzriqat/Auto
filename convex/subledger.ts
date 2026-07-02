@@ -226,6 +226,36 @@ export async function allocatePaymentToReceivable(
   return allocationId;
 }
 
+/**
+ * Marks a canonical payment VOIDED (recorded in error — no money actually
+ * moved, unlike a refund which pays money back out). Refuses to void a payment
+ * that still has ACTIVE allocations; callers must reverse those first so
+ * receivable balances stay consistent.
+ */
+export async function voidCanonicalPayment(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    paymentId: Id<"canonicalPayments">;
+    actorId: Id<"users">;
+  }
+): Promise<void> {
+  const payment = await ctx.db.get(args.paymentId);
+  if (!payment || payment.orgId !== args.orgId) throw new ConvexError("Payment not found.");
+  if (payment.status === "VOIDED") return;
+
+  const activeAllocations = await ctx.db
+    .query("paymentAllocations")
+    .withIndex("by_payment", (q) => q.eq("paymentId", args.paymentId))
+    .filter((q) => q.eq(q.field("status"), "ACTIVE"))
+    .collect();
+  if (activeAllocations.length > 0) {
+    throw new ConvexError("Cannot void a payment with active allocations — reverse them first.");
+  }
+
+  await ctx.db.patch(args.paymentId, { status: "VOIDED" });
+}
+
 export async function reverseAllocation(
   ctx: MutationCtx,
   args: {

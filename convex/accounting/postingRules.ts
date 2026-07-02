@@ -9,6 +9,7 @@ export type EventType =
   | "SALE_COMPLETED"
   | "SALE_CANCELLED"
   | "COLLECTION_PAYMENT"
+  | "COLLECTION_REFUND"
   | "EXPENSE_POSTED"
   | "CHEQUE_RECEIVED"
   | "CHEQUE_DEPOSITED"
@@ -24,7 +25,7 @@ export type EventType =
 
 export const ALL_EVENT_TYPES = new Set<string>([
   "DEPOSIT_RECEIVED", "DEPOSIT_APPLIED", "DEPOSIT_REFUNDED", "DEPOSIT_FORFEITED",
-  "SALE_COMPLETED", "SALE_CANCELLED", "COLLECTION_PAYMENT", "EXPENSE_POSTED",
+  "SALE_COMPLETED", "SALE_CANCELLED", "COLLECTION_PAYMENT", "COLLECTION_REFUND", "EXPENSE_POSTED",
   "CHEQUE_RECEIVED", "CHEQUE_DEPOSITED", "CHEQUE_CLEARED", "CHEQUE_RETURNED",
   "COMMISSION_ACCRUED", "COMMISSION_PAID",
   "FINANCE_DISBURSED", "FINANCE_CASH_RECEIVED", "PAYMENT_LINK_RECEIVED",
@@ -124,6 +125,14 @@ export interface SupplierPaymentSettledPayload {
 }
 
 export interface CollectionPaymentPayload {
+  paymentId: string;
+  amountMinor: number;
+  currency: string;
+  customerId: string;
+  paymentMethod?: string;
+}
+
+export interface CollectionRefundPayload {
   paymentId: string;
   amountMinor: number;
   currency: string;
@@ -275,6 +284,20 @@ export function ruleCollectionPayment(p: CollectionPaymentPayload): RuleResult {
       line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, 0, p.amountMinor, "AR settled", { customerId: p.customerId }),
     ],
     memo: "Collection payment received",
+    category: "SYSTEM",
+  };
+}
+
+export function ruleCollectionRefund(p: CollectionRefundPayload): RuleResult {
+  // Mirror image of ruleCollectionPayment: cash goes back out and the
+  // customer's receivable is reopened for the refunded amount.
+  const cashKey = cashAccountKey(p.paymentMethod);
+  return {
+    lines: [
+      line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, p.amountMinor, 0, "AR reopened by refund", { customerId: p.customerId }),
+      line(cashKey, 0, p.amountMinor, "Refund paid out", { customerId: p.customerId }),
+    ],
+    memo: "Collection payment refunded",
     category: "SYSTEM",
   };
 }
@@ -466,6 +489,7 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "SALE_CANCELLED": return ruleSaleCancelled(payload as unknown as SaleCancelledPayload);
     case "CHEQUE_DEPOSITED": return ruleChequeDeposited(payload as unknown as ChequeDepositedPayload);
     case "COLLECTION_PAYMENT": return ruleCollectionPayment(payload as unknown as CollectionPaymentPayload);
+    case "COLLECTION_REFUND": return ruleCollectionRefund(payload as unknown as CollectionRefundPayload);
     case "EXPENSE_POSTED": return ruleExpensePosted(payload as unknown as ExpensePostedPayload);
     case "CHEQUE_RECEIVED": return ruleChequeReceived(payload as unknown as ChequeReceivedPayload);
     case "CHEQUE_CLEARED": return ruleChequeClear(payload as unknown as ChequeClearedPayload);

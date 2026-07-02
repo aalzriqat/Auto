@@ -10,6 +10,7 @@ import { assertDifferentActors } from "./utils/financialGuards";
 import {
   hookDepositForfeited,
   hookDepositRefunded,
+  hookDepositVoided,
   getOrgCurrency,
 } from "./accounting/workflowHooks";
 import {
@@ -19,7 +20,7 @@ import {
   normalizeCurrency,
   recordHeldDeposit,
 } from "./utils/depositRecording";
-import { createCanonicalPayment } from "./subledger";
+import { createCanonicalPayment, voidCanonicalPayment } from "./subledger";
 
 export const create = mutation({
   args: {
@@ -291,32 +292,76 @@ export const voidDeposit = mutation({
       notes: args.reason !== undefined ? args.reason : deposit.notes,
     });
 
-    const depositSourceLabel = deposit.quoteId
-      ? `quote ${deposit.quoteId}`
-      : deposit.reservationId
-        ? `reservation ${deposit.reservationId}`
-        : "vehicle hold";
-    const [voidVehicle, voidCustomer] = await Promise.all([
-      ctx.db.get(deposit.vehicleId),
-      ctx.db.get(deposit.customerId),
-    ]);
-    const voidVehicleLabel = voidVehicle
-      ? `${voidVehicle.year} ${voidVehicle.make} ${voidVehicle.model}`.trim()
-      : "Vehicle";
-    const voidCustomerLabel = voidCustomer
-      ? `${voidCustomer.firstName ?? ""} ${voidCustomer.lastName ?? ""}`.trim() || "Customer"
-      : "Customer";
+    // Voiding means "recorded in error" — every artifact written when the
+    // deposit was recorded must be unwound, not just the operational row:
+    // the canonical payment, the mirror collectionPayment, and the
+    // DEPOSIT_RECEIVED GL posting.
+    const canonicalPaymentId =
+      deposit.canonicalPaymentId ??
+      (
+        await ctx.db
+          .query("canonicalPayments")
+          .withIndex("by_org_idempotency", (q) =>
+            q.eq("orgId", args.orgId).eq("idempotencyKey", `deposit_received_${args.depositId}`)
+          )
+          .unique()
+      )?._id;
+    if (canonicalPaymentId) {
+      await voidCanonicalPayment(ctx, {
+        orgId: args.orgId,
+        paymentId: canonicalPaymentId,
+        actorId: user._id,
+      });
+    }
 
-    await ctx.db.insert("transactions", {
+    const mirrorPayments = await ctx.db
+      .query("collectionPayments")
+      .withIndex("by_org_customer", (q) =>
+        q.eq("orgId", args.orgId).eq("customerId", deposit.customerId)
+      )
+      .filter((q) => q.eq(q.field("reference"), `Deposit ${args.depositId}`))
+      .collect();
+    for (const mirrorPayment of mirrorPayments) {
+      if (mirrorPayment.status !== "VOIDED") {
+        await ctx.db.patch(mirrorPayment._id, {
+          status: "VOIDED",
+          voidedAt: now,
+          voidedBy: user._id,
+        });
+      }
+    }
+
+    await hookDepositVoided(ctx, {
       orgId: args.orgId,
-      type: "OUT",
-      amount: deposit.amount,
-      date: now,
-      category: "DEPOSIT",
-      description: `Deposit voided for ${depositSourceLabel} - ${voidVehicleLabel} - ${voidCustomerLabel}`,
-      vehicleId: deposit.vehicleId,
       depositId: args.depositId,
+      reason: args.reason ?? "Deposit voided",
+      actorId: user._id,
+      reversalDate: now,
     });
+
+    // A void means "recorded in error" — no money moved, so the original IN
+    // transaction is erased rather than offset with a new OUT (which would
+    // make the legacy table look like a refund instead of a reversal).
+    const originalInTx = await ctx.db
+      .query("transactions")
+      .withIndex("by_org_vehicle", (q) =>
+        q.eq("orgId", args.orgId).eq("vehicleId", deposit.vehicleId)
+      )
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("depositId"), args.depositId),
+          q.eq(q.field("type"), "IN"),
+          q.neq(q.field("isDeleted"), true)
+        )
+      )
+      .first();
+    if (originalInTx) {
+      await ctx.db.patch(originalInTx._id, {
+        isDeleted: true,
+        deletedAt: now,
+        deletedBy: user._id.toString(),
+      });
+    }
 
     await maybeReleaseVehicleHold(ctx, deposit.vehicleId);
 

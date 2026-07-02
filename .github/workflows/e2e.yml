@@ -1,15 +1,21 @@
 name: E2E Tests (TestSprite)
 
+# The QA fixture uses Clerk test-mode credentials (+clerk_test email with the
+# fixed 424242 verification code), so sign-ins during test runs send no real
+# email. If the E2E login secrets are ever pointed back at a real mailbox,
+# drop the push/pull_request triggers again — every test performs a real
+# sign-in and Clerk's dev instance emails a code per attempt.
 on:
   push:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
     - uses: actions/checkout@v4
@@ -21,7 +27,7 @@ jobs:
     - name: Use Node.js
       uses: actions/setup-node@v4
       with:
-        node-version: '20.x'
+        node-version: '22.x'
         cache: 'pnpm'
 
     - name: Install dependencies
@@ -46,17 +52,57 @@ jobs:
     - name: Wait for server
       run: npx wait-on http://localhost:3000 --timeout 60000
 
+    # The TestSprite CLI reads its execution arguments from
+    # testsprite_tests/tmp/config.json, which is normally produced by the
+    # interactive MCP bootstrap and is gitignored (it embeds machine paths and
+    # credentials) — so CI has to synthesize it from secrets before running.
+    - name: Prepare TestSprite execution config
+      run: |
+        node <<'EOF'
+        const fs = require("node:fs");
+
+        const config = {
+          status: "commited",
+          type: "frontend",
+          scope: "codebase",
+          localEndpoint: "http://localhost:3000",
+          loginUser: process.env.E2E_LOGIN_USER,
+          loginPassword: process.env.E2E_LOGIN_PASSWORD,
+          executionArgs: {
+            projectName: "Auto",
+            projectPath: process.env.GITHUB_WORKSPACE,
+            testIds: [],
+            additionalInstruction: "Sign in using the provided credentials. Important navigation notes: (1) The sign-in page is at /sign-in — NOT /login (which redirects to /sign-in). (2) If a verification code is requested at any point during sign-in, enter 424242. (3) After a successful sign-in, the app redirects to /dashboard which will either show an onboarding wizard (if the user has no org) or redirect to /{orgId}/dashboard. Wait up to 30 seconds for this redirect to complete — the first Convex connection can take 10-15 seconds in CI. (4) All authenticated pages live under /{orgId}/... — if you need to navigate to a specific section, use the actual orgId from the current URL combined with the section path (e.g. /{orgId}/sales, /{orgId}/vehicles). (5) If you see 'Loading your workspace...' spinner at /dashboard, wait at least 20 seconds before refreshing or concluding the test is blocked.",
+            serverMode: "production",
+            envs: { API_KEY: process.env.TESTSPRITE_API_KEY },
+          },
+        };
+
+        fs.mkdirSync("testsprite_tests/tmp", { recursive: true });
+        fs.writeFileSync("testsprite_tests/tmp/config.json", `${JSON.stringify(config, null, 2)}\n`);
+        EOF
+      env:
+        TESTSPRITE_API_KEY: ${{ secrets.TESTSPRITE_API_KEY }}
+        E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+        E2E_LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
+
     - name: Run TestSprite E2E tests
       run: npx @testsprite/testsprite-mcp generateCodeAndExecute
       env:
         TESTSPRITE_API_KEY: ${{ secrets.TESTSPRITE_API_KEY }}
+        API_KEY: ${{ secrets.TESTSPRITE_API_KEY }}
         LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
         LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
+
+    - name: Remove TestSprite execution config
+      if: always()
+      run: rm -f testsprite_tests/tmp/config.json
 
     - name: Upload E2E test report
       uses: actions/upload-artifact@v4
       if: always()
       with:
         name: e2e-report
-        path: testsprite_tests/
+        path: testsprite_tests/tmp/raw_report.md
+        if-no-files-found: warn
         retention-days: 14

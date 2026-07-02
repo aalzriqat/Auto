@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { useAuth } from "@clerk/nextjs";
 import { useMutation } from "convex/react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -8,7 +8,7 @@ import { api } from "@/convex/_generated/api";
 
 type AcceptState = "loading" | "success" | "error";
 
-export default function AcceptInvitePage() {
+function AcceptInviteContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { isLoaded, isSignedIn } = useAuth();
@@ -74,5 +74,21 @@ export default function AcceptInvitePage() {
         <p className="text-sm text-muted-foreground">{message}</p>
       </div>
     </main>
+  );
+}
+
+export default function AcceptInvitePage() {
+  // useSearchParams() requires a Suspense boundary for static prerendering —
+  // without it `next build` fails on this page.
+  return (
+    <Suspense
+      fallback={
+        <main className="flex min-h-screen items-center justify-center px-6 text-center">
+          <p className="text-sm text-muted-foreground">Loading...</p>
+        </main>
+      }
+    >
+      <AcceptInviteContent />
+    </Suspense>
   );
 }

@@ -8,15 +8,15 @@
  * @module
  */
 
+import type * as accounting_postingEngine from "../accounting/postingEngine.js";
+import type * as accounting_postingRules from "../accounting/postingRules.js";
+import type * as accounting_reversals from "../accounting/reversals.js";
+import type * as accounting_workflowHooks from "../accounting/workflowHooks.js";
 import type * as accountingLedger from "../accountingLedger.js";
 import type * as accountingMigration from "../accountingMigration.js";
 import type * as accountingOutbox from "../accountingOutbox.js";
 import type * as accountingPeriods from "../accountingPeriods.js";
 import type * as accountingReports from "../accountingReports.js";
-import type * as accounting_postingEngine from "../accounting/postingEngine.js";
-import type * as accounting_postingRules from "../accounting/postingRules.js";
-import type * as accounting_reversals from "../accounting/reversals.js";
-import type * as accounting_workflowHooks from "../accounting/workflowHooks.js";
 import type * as adminAudit from "../adminAudit.js";
 import type * as adminAuth from "../adminAuth.js";
 import type * as adminBroadcasts from "../adminBroadcasts.js";
@@ -119,6 +119,7 @@ import type * as utils_smartReplyIntent from "../utils/smartReplyIntent.js";
 import type * as utils_socialAutoPost from "../utils/socialAutoPost.js";
 import type * as utils_socialMobile from "../utils/socialMobile.js";
 import type * as utils_socialMobileReply from "../utils/socialMobileReply.js";
+import type * as utils_storageValidation from "../utils/storageValidation.js";
 import type * as utils_tenancy from "../utils/tenancy.js";
 import type * as utils_validation from "../utils/validation.js";
 import type * as utils_vehicleStatusGuards from "../utils/vehicleStatusGuards.js";
@@ -145,15 +146,15 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  "accounting/postingEngine": typeof accounting_postingEngine;
+  "accounting/postingRules": typeof accounting_postingRules;
+  "accounting/reversals": typeof accounting_reversals;
+  "accounting/workflowHooks": typeof accounting_workflowHooks;
   accountingLedger: typeof accountingLedger;
   accountingMigration: typeof accountingMigration;
   accountingOutbox: typeof accountingOutbox;
   accountingPeriods: typeof accountingPeriods;
   accountingReports: typeof accountingReports;
-  "accounting/postingEngine": typeof accounting_postingEngine;
-  "accounting/postingRules": typeof accounting_postingRules;
-  "accounting/reversals": typeof accounting_reversals;
-  "accounting/workflowHooks": typeof accounting_workflowHooks;
   adminAudit: typeof adminAudit;
   adminAuth: typeof adminAuth;
   adminBroadcasts: typeof adminBroadcasts;
@@ -256,6 +257,7 @@ declare const fullApi: ApiFromModules<{
   "utils/socialAutoPost": typeof utils_socialAutoPost;
   "utils/socialMobile": typeof utils_socialMobile;
   "utils/socialMobileReply": typeof utils_socialMobileReply;
+  "utils/storageValidation": typeof utils_storageValidation;
   "utils/tenancy": typeof utils_tenancy;
   "utils/validation": typeof utils_validation;
   "utils/vehicleStatusGuards": typeof utils_vehicleStatusGuards;

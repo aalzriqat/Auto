@@ -88,7 +88,7 @@ export default function AdminDataPage() {
         </select>
 
         <select className="text-sm border rounded-md px-3 py-2 bg-background" value={table} onChange={(e) => setSelectedTable(e.target.value)}>
-          {tables?.map((t) => (
+          {tables?.map((t: string) => (
             <option key={t} value={t}>{t}</option>
           ))}
         </select>

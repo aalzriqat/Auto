@@ -282,7 +282,14 @@ export default function DashboardEntryPage() {
     }
   }, [orgs, isSupportAgent, router, isOnboarding]);
 
-  if (orgs === undefined || (orgs.length === 0 && isSupportAgent === undefined)) {
+  if (orgs === undefined) {
+    return <Spinner />;
+  }
+
+  // Wait for the support-agent check to settle before showing onboarding.
+  // Without this guard, a support agent (zero org memberships by design) would
+  // briefly see the dealership-onboarding wizard before the /support redirect fires.
+  if (orgs.length === 0 && isSupportAgent === undefined) {
     return <Spinner />;
   }
 
