@@ -282,10 +282,13 @@ export default function DashboardEntryPage() {
     }
   }, [orgs, isSupportAgent, router, isOnboarding]);
 
-  if (orgs === undefined || (orgs.length === 0 && isSupportAgent === undefined)) {
+  if (orgs === undefined) {
     return <Spinner />;
   }
 
+  // Only redirect support agents once we know for sure they're not a regular
+  // dealer user. While that query loads, fall through to onboarding so a
+  // normal user with no orgs doesn't see a prolonged spinner.
   if (orgs.length === 0 && isSupportAgent === true) {
     return <Spinner />;
   }
