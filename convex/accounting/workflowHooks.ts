@@ -219,65 +219,39 @@ export async function hookDepositApplied(
   });
 }
 
-export async function hookDepositRefunded(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    depositId: Id<"deposits">;
-    customerId: Id<"customers">;
-    amountMinor: number;
-    currency: string;
-    actorId: Id<"users">;
-    occurredAt: number;
-  }
-) {
-  await postDomainEvent(ctx, {
-    orgId: args.orgId,
-    eventType: "DEPOSIT_REFUNDED",
-    sourceType: "deposits",
-    sourceId: args.depositId.toString(),
-    idempotencyKey: `deposit_refunded_${args.depositId}`,
-    currency: args.currency,
-    occurredAt: args.occurredAt,
-    actorId: args.actorId,
-    payload: {
-      depositId: args.depositId.toString(),
-      amountMinor: args.amountMinor,
+type DepositResolutionHookArgs = {
+  orgId: Id<"organizations">;
+  depositId: Id<"deposits">;
+  customerId: Id<"customers">;
+  amountMinor: number;
+  currency: string;
+  actorId: Id<"users">;
+  occurredAt: number;
+};
+
+/** Refund and forfeiture post identical event shapes — only the event type (and thus the posting rule) differs. */
+function makeDepositResolutionHook(eventType: "DEPOSIT_REFUNDED" | "DEPOSIT_FORFEITED", keyPrefix: string) {
+  return async (ctx: MutationCtx, args: DepositResolutionHookArgs) =>
+    postDomainEvent(ctx, {
+      orgId: args.orgId,
+      eventType,
+      sourceType: "deposits",
+      sourceId: args.depositId.toString(),
+      idempotencyKey: `${keyPrefix}_${args.depositId}`,
       currency: args.currency,
-      customerId: args.customerId.toString(),
-    },
-  });
+      occurredAt: args.occurredAt,
+      actorId: args.actorId,
+      payload: {
+        depositId: args.depositId.toString(),
+        amountMinor: args.amountMinor,
+        currency: args.currency,
+        customerId: args.customerId.toString(),
+      },
+    });
 }
 
-export async function hookDepositForfeited(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    depositId: Id<"deposits">;
-    customerId: Id<"customers">;
-    amountMinor: number;
-    currency: string;
-    actorId: Id<"users">;
-    occurredAt: number;
-  }
-) {
-  await postDomainEvent(ctx, {
-    orgId: args.orgId,
-    eventType: "DEPOSIT_FORFEITED",
-    sourceType: "deposits",
-    sourceId: args.depositId.toString(),
-    idempotencyKey: `deposit_forfeited_${args.depositId}`,
-    currency: args.currency,
-    occurredAt: args.occurredAt,
-    actorId: args.actorId,
-    payload: {
-      depositId: args.depositId.toString(),
-      amountMinor: args.amountMinor,
-      currency: args.currency,
-      customerId: args.customerId.toString(),
-    },
-  });
-}
+export const hookDepositRefunded = makeDepositResolutionHook("DEPOSIT_REFUNDED", "deposit_refunded");
+export const hookDepositForfeited = makeDepositResolutionHook("DEPOSIT_FORFEITED", "deposit_forfeited");
 
 export async function hookSaleCompleted(
   ctx: MutationCtx,
@@ -352,37 +326,39 @@ export async function hookSupplierPaymentSettled(
   });
 }
 
-export async function hookCollectionPayment(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    paymentId: Id<"collectionPayments">;
-    customerId: Id<"customers">;
-    amountMinor: number;
-    currency: string;
-    paymentMethod: string;
-    actorId: Id<"users">;
-    occurredAt: number;
-  }
-) {
-  await postDomainEvent(ctx, {
-    orgId: args.orgId,
-    eventType: "COLLECTION_PAYMENT",
-    sourceType: "collectionPayments",
-    sourceId: args.paymentId.toString(),
-    idempotencyKey: `collection_payment_${args.paymentId}`,
-    currency: args.currency,
-    occurredAt: args.occurredAt,
-    actorId: args.actorId,
-    payload: {
-      paymentId: args.paymentId.toString(),
-      amountMinor: args.amountMinor,
+type CollectionHookArgs = {
+  orgId: Id<"organizations">;
+  paymentId: Id<"collectionPayments">;
+  customerId: Id<"customers">;
+  amountMinor: number;
+  currency: string;
+  paymentMethod: string;
+  actorId: Id<"users">;
+  occurredAt: number;
+};
+
+function makeCollectionHook(eventType: "COLLECTION_PAYMENT" | "COLLECTION_REFUND", keyPrefix: string) {
+  return async (ctx: MutationCtx, args: CollectionHookArgs) =>
+    postDomainEvent(ctx, {
+      orgId: args.orgId,
+      eventType,
+      sourceType: "collectionPayments",
+      sourceId: args.paymentId.toString(),
+      idempotencyKey: `${keyPrefix}_${args.paymentId}`,
       currency: args.currency,
-      customerId: args.customerId.toString(),
-      paymentMethod: args.paymentMethod,
-    },
-  });
+      occurredAt: args.occurredAt,
+      actorId: args.actorId,
+      payload: {
+        paymentId: args.paymentId.toString(),
+        amountMinor: args.amountMinor,
+        currency: args.currency,
+        customerId: args.customerId.toString(),
+        paymentMethod: args.paymentMethod,
+      },
+    });
 }
+
+export const hookCollectionPayment = makeCollectionHook("COLLECTION_PAYMENT", "collection_payment");
 
 /**
  * Posts the cash-out + AR-reopening entry for an approved collection refund:
@@ -390,37 +366,7 @@ export async function hookCollectionPayment(
  * (OUT collectionPayment + canonical payment + allocation reversal) is handled
  * by the caller; this hook only records the GL impact.
  */
-export async function hookCollectionRefund(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    paymentId: Id<"collectionPayments">;
-    customerId: Id<"customers">;
-    amountMinor: number;
-    currency: string;
-    paymentMethod: string;
-    actorId: Id<"users">;
-    occurredAt: number;
-  }
-) {
-  await postDomainEvent(ctx, {
-    orgId: args.orgId,
-    eventType: "COLLECTION_REFUND",
-    sourceType: "collectionPayments",
-    sourceId: args.paymentId.toString(),
-    idempotencyKey: `collection_refund_${args.paymentId}`,
-    currency: args.currency,
-    occurredAt: args.occurredAt,
-    actorId: args.actorId,
-    payload: {
-      paymentId: args.paymentId.toString(),
-      amountMinor: args.amountMinor,
-      currency: args.currency,
-      customerId: args.customerId.toString(),
-      paymentMethod: args.paymentMethod,
-    },
-  });
-}
+export const hookCollectionRefund = makeCollectionHook("COLLECTION_REFUND", "collection_refund");
 
 export async function hookExpensePosted(
   ctx: MutationCtx,
@@ -454,131 +400,111 @@ export async function hookExpensePosted(
   });
 }
 
-export async function hookCommissionAccrued(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    saleId: Id<"sales">;
-    salespersonId: Id<"users">;
-    amountMinor: number;
-    currency: string;
-    actorId: Id<"users">;
-    occurredAt: number;
-  }
+type CommissionHookArgs = {
+  orgId: Id<"organizations">;
+  saleId: Id<"sales">;
+  salespersonId: Id<"users">;
+  amountMinor: number;
+  currency: string;
+  actorId: Id<"users">;
+  occurredAt: number;
+};
+
+function makeCommissionHook(
+  eventType: "COMMISSION_ACCRUED" | "COMMISSION_PAID",
+  sourceIdPrefix: string,
+  keyPrefix: string
 ) {
-  await postDomainEvent(ctx, {
-    orgId: args.orgId,
-    eventType: "COMMISSION_ACCRUED",
-    sourceType: "sales",
-    sourceId: `commission_${args.saleId}`,
-    idempotencyKey: `commission_accrued_${args.saleId}`,
-    currency: args.currency,
-    occurredAt: args.occurredAt,
-    actorId: args.actorId,
-    payload: {
-      saleId: args.saleId.toString(),
-      amountMinor: args.amountMinor,
+  return async (ctx: MutationCtx, args: CommissionHookArgs) =>
+    postDomainEvent(ctx, {
+      orgId: args.orgId,
+      eventType,
+      sourceType: "sales",
+      sourceId: `${sourceIdPrefix}_${args.saleId}`,
+      idempotencyKey: `${keyPrefix}_${args.saleId}`,
       currency: args.currency,
-      salespersonId: args.salespersonId.toString(),
-    },
-  });
+      occurredAt: args.occurredAt,
+      actorId: args.actorId,
+      payload: {
+        saleId: args.saleId.toString(),
+        amountMinor: args.amountMinor,
+        currency: args.currency,
+        salespersonId: args.salespersonId.toString(),
+      },
+    });
+}
+
+export const hookCommissionAccrued = makeCommissionHook("COMMISSION_ACCRUED", "commission", "commission_accrued");
+export const hookCommissionPaid = makeCommissionHook("COMMISSION_PAID", "commission_paid", "commission_paid");
+
+type ReversalHookArgs<TSourceId> = {
+  orgId: Id<"organizations">;
+  reason: string;
+  actorId: Id<"users">;
+  reversalDate: number;
+} & TSourceId;
+
+/**
+ * All void/cancel hooks share reverseEventIfPosted semantics and differ only
+ * in which original event they target and how their idempotency keys are
+ * derived from the source id.
+ */
+function makeReversalHook<TSourceId extends Record<string, unknown>>(cfg: {
+  eventType: string;
+  sourceType: string;
+  sourceId: (args: TSourceId) => string;
+  reversalKey: (args: TSourceId) => string;
+  pendingPostKey: (args: TSourceId) => string;
+}) {
+  return async (ctx: MutationCtx, args: ReversalHookArgs<TSourceId>) =>
+    reverseEventIfPosted(ctx, {
+      orgId: args.orgId,
+      sourceType: cfg.sourceType,
+      sourceId: cfg.sourceId(args),
+      eventType: cfg.eventType,
+      reason: args.reason,
+      actorId: args.actorId,
+      reversalDate: args.reversalDate,
+      reversalIdempotencyKey: cfg.reversalKey(args),
+      pendingPostIdempotencyKey: cfg.pendingPostKey(args),
+    });
 }
 
 /** Reverses the SALE_COMPLETED entry (or cancels its pending post) when a sale is cancelled. */
-export async function hookSaleCancelled(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    saleId: Id<"sales">;
-    reason: string;
-    actorId: Id<"users">;
-    reversalDate: number;
-  }
-) {
-  await reverseEventIfPosted(ctx, {
-    orgId: args.orgId,
-    sourceType: "sales",
-    sourceId: args.saleId.toString(),
-    eventType: "SALE_COMPLETED",
-    reason: args.reason,
-    actorId: args.actorId,
-    reversalDate: args.reversalDate,
-    reversalIdempotencyKey: `sale_cancelled_${args.saleId}`,
-    pendingPostIdempotencyKey: `sale_completed_${args.saleId}`,
-  });
-}
+export const hookSaleCancelled = makeReversalHook<{ saleId: Id<"sales"> }>({
+  eventType: "SALE_COMPLETED",
+  sourceType: "sales",
+  sourceId: (a) => a.saleId.toString(),
+  reversalKey: (a) => `sale_cancelled_${a.saleId}`,
+  pendingPostKey: (a) => `sale_completed_${a.saleId}`,
+});
 
 /** Reverses the FINANCE_DISBURSED entry created at finalizeDeal, when voiding a closed application that was never actually disbursed. */
-export async function hookFinanceDisbursementCancelled(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    applicationId: Id<"financeApplications">;
-    reason: string;
-    actorId: Id<"users">;
-    reversalDate: number;
-  }
-) {
-  await reverseEventIfPosted(ctx, {
-    orgId: args.orgId,
-    sourceType: "financeApplications",
-    sourceId: args.applicationId.toString(),
-    eventType: "FINANCE_DISBURSED",
-    reason: args.reason,
-    actorId: args.actorId,
-    reversalDate: args.reversalDate,
-    reversalIdempotencyKey: `finance_disbursement_cancelled_${args.applicationId}`,
-    pendingPostIdempotencyKey: `finance_disbursed_${args.applicationId}`,
-  });
-}
+export const hookFinanceDisbursementCancelled = makeReversalHook<{ applicationId: Id<"financeApplications"> }>({
+  eventType: "FINANCE_DISBURSED",
+  sourceType: "financeApplications",
+  sourceId: (a) => a.applicationId.toString(),
+  reversalKey: (a) => `finance_disbursement_cancelled_${a.applicationId}`,
+  pendingPostKey: (a) => `finance_disbursed_${a.applicationId}`,
+});
 
 /** Reverses a COMMISSION_ACCRUED entry when the underlying sale is voided. */
-export async function hookCommissionReversed(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    saleId: Id<"sales">;
-    reason: string;
-    actorId: Id<"users">;
-    reversalDate: number;
-  }
-) {
-  await reverseEventIfPosted(ctx, {
-    orgId: args.orgId,
-    sourceType: "sales",
-    sourceId: `commission_${args.saleId}`,
-    eventType: "COMMISSION_ACCRUED",
-    reason: args.reason,
-    actorId: args.actorId,
-    reversalDate: args.reversalDate,
-    reversalIdempotencyKey: `commission_reversed_${args.saleId}`,
-    pendingPostIdempotencyKey: `commission_accrued_${args.saleId}`,
-  });
-}
+export const hookCommissionReversed = makeReversalHook<{ saleId: Id<"sales"> }>({
+  eventType: "COMMISSION_ACCRUED",
+  sourceType: "sales",
+  sourceId: (a) => `commission_${a.saleId}`,
+  reversalKey: (a) => `commission_reversed_${a.saleId}`,
+  pendingPostKey: (a) => `commission_accrued_${a.saleId}`,
+});
 
 /** Reverses a DEPOSIT_APPLIED entry when an applied deposit is reinstated as an active hold (e.g. the sale it was applied to gets voided). */
-export async function hookDepositApplicationReversed(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    depositId: Id<"deposits">;
-    reason: string;
-    actorId: Id<"users">;
-    reversalDate: number;
-  }
-) {
-  await reverseEventIfPosted(ctx, {
-    orgId: args.orgId,
-    sourceType: "deposits",
-    sourceId: args.depositId.toString(),
-    eventType: "DEPOSIT_APPLIED",
-    reason: args.reason,
-    actorId: args.actorId,
-    reversalDate: args.reversalDate,
-    reversalIdempotencyKey: `deposit_applied_reversed_${args.depositId}`,
-    pendingPostIdempotencyKey: `deposit_applied_${args.depositId}`,
-  });
-}
+export const hookDepositApplicationReversed = makeReversalHook<{ depositId: Id<"deposits"> }>({
+  eventType: "DEPOSIT_APPLIED",
+  sourceType: "deposits",
+  sourceId: (a) => a.depositId.toString(),
+  reversalKey: (a) => `deposit_applied_reversed_${a.depositId}`,
+  pendingPostKey: (a) => `deposit_applied_${a.depositId}`,
+});
 
 /**
  * Reverses the DEPOSIT_RECEIVED entry when a HELD deposit is voided as
@@ -586,28 +512,13 @@ export async function hookDepositApplicationReversed(
  * dedicated resolution entries). If the original entry never posted (still in
  * the outbox), it is cancelled so the round trip nets to zero.
  */
-export async function hookDepositVoided(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    depositId: Id<"deposits">;
-    reason: string;
-    actorId: Id<"users">;
-    reversalDate: number;
-  }
-) {
-  await reverseEventIfPosted(ctx, {
-    orgId: args.orgId,
-    sourceType: "deposits",
-    sourceId: args.depositId.toString(),
-    eventType: "DEPOSIT_RECEIVED",
-    reason: args.reason,
-    actorId: args.actorId,
-    reversalDate: args.reversalDate,
-    reversalIdempotencyKey: `deposit_voided_${args.depositId}`,
-    pendingPostIdempotencyKey: `deposit_received_${args.depositId}`,
-  });
-}
+export const hookDepositVoided = makeReversalHook<{ depositId: Id<"deposits"> }>({
+  eventType: "DEPOSIT_RECEIVED",
+  sourceType: "deposits",
+  sourceId: (a) => a.depositId.toString(),
+  reversalKey: (a) => `deposit_voided_${a.depositId}`,
+  pendingPostKey: (a) => `deposit_received_${a.depositId}`,
+});
 
 export async function hookFinanceDisbursed(
   ctx: MutationCtx,
@@ -707,32 +618,3 @@ export async function hookPaymentLinkReceived(
   });
 }
 
-export async function hookCommissionPaid(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    saleId: Id<"sales">;
-    salespersonId: Id<"users">;
-    amountMinor: number;
-    currency: string;
-    actorId: Id<"users">;
-    occurredAt: number;
-  }
-) {
-  await postDomainEvent(ctx, {
-    orgId: args.orgId,
-    eventType: "COMMISSION_PAID",
-    sourceType: "sales",
-    sourceId: `commission_paid_${args.saleId}`,
-    idempotencyKey: `commission_paid_${args.saleId}`,
-    currency: args.currency,
-    occurredAt: args.occurredAt,
-    actorId: args.actorId,
-    payload: {
-      saleId: args.saleId.toString(),
-      amountMinor: args.amountMinor,
-      currency: args.currency,
-      salespersonId: args.salespersonId.toString(),
-    },
-  });
-}
