@@ -19,6 +19,14 @@ import {
   getOrgCurrency,
 } from "./accounting/workflowHooks";
 import { toMinorUnits } from "./utils/money";
+import {
+  allocatePaymentToReceivable,
+  createCanonicalPayment,
+  ensureReceivableDocument,
+} from "./subledger";
+
+/** sourceType used for the canonical finance-company receivable opened at finalizeDeal. */
+const FINANCE_APP_RECEIVABLE_SOURCE = "finance_application";
 
 type FinanceApplicationStatus =
   | "DRAFT"
@@ -514,6 +522,22 @@ export const cancelApplication = mutation({
               actorId: auth.user._id,
               reversalDate: now,
             });
+
+            // The canonical finance-company receivable opened at finalizeDeal
+            // is no longer owed once the deal is voided (this branch already
+            // rejects deals whose disbursement was received).
+            const financeReceivable = await ctx.db
+              .query("receivableDocuments")
+              .withIndex("by_org_source", (q) =>
+                q
+                  .eq("orgId", args.orgId)
+                  .eq("sourceType", FINANCE_APP_RECEIVABLE_SOURCE)
+                  .eq("sourceId", args.applicationId)
+              )
+              .unique();
+            if (financeReceivable && financeReceivable.status !== "CANCELLED") {
+              await ctx.db.patch(financeReceivable._id, { status: "CANCELLED" });
+            }
           }
 
           // Deposits applied at finalization go back to being an active hold
@@ -677,16 +701,36 @@ export const finalizeDeal = mutation({
         // Post the finance receivable transfer when a finance company is on the deal
         if (app.companyId && quote.totalFinancedAmount && quote.totalFinancedAmount > 0) {
           const currency = await getOrgCurrency(ctx, args.orgId);
+          const loanAmountMinor = toMinorUnits(quote.totalFinancedAmount, currency);
           await hookFinanceDisbursed(ctx, {
             orgId: args.orgId,
             applicationId: args.applicationId,
             saleId,
             financeCompanyId: app.companyId,
             customerId: app.customerId,
-            loanAmountMinor: toMinorUnits(quote.totalFinancedAmount, currency),
+            loanAmountMinor,
             currency,
             actorId: auth.user._id,
             occurredAt: now,
+          });
+
+          // Open the canonical finance-company receivable alongside the GL
+          // transfer, so the amount owed by the finance company is tracked in
+          // the subledger and settled by allocation at confirmDisbursement —
+          // not just as an untracked GL balance.
+          await ensureReceivableDocument(ctx, {
+            orgId: args.orgId,
+            documentType: "INVOICE",
+            payerType: "FINANCE_COMPANY",
+            financeCompanyId: app.companyId,
+            customerId: app.customerId,
+            sourceType: FINANCE_APP_RECEIVABLE_SOURCE,
+            sourceId: args.applicationId,
+            originalAmountMinor: loanAmountMinor,
+            currency,
+            issueDate: now,
+            dueDate: now,
+            actorId: auth.user._id,
           });
         }
 
@@ -763,6 +807,59 @@ export const confirmDisbursement = mutation({
           actorId: user._id,
           occurredAt: now,
         });
+
+        // Record the money in the canonical subledger and settle the
+        // finance-company receivable opened at finalizeDeal. Deals finalized
+        // before that receivable existed get one created here so the
+        // settlement always has a document to allocate against.
+        const receivableDocumentId = await ensureReceivableDocument(ctx, {
+          orgId: args.orgId,
+          documentType: "INVOICE",
+          payerType: "FINANCE_COMPANY",
+          financeCompanyId: app.companyId,
+          customerId: app.customerId,
+          sourceType: FINANCE_APP_RECEIVABLE_SOURCE,
+          sourceId: args.applicationId,
+          originalAmountMinor: args.disbursedAmountMinor,
+          currency,
+          issueDate: now,
+          dueDate: now,
+          actorId: user._id,
+        });
+        const canonicalPaymentId = await createCanonicalPayment(ctx, {
+          orgId: args.orgId,
+          direction: "IN",
+          payerType: "FINANCE_COMPANY",
+          financeCompanyId: app.companyId,
+          method: "BANK_TRANSFER",
+          amountMinor: args.disbursedAmountMinor,
+          currency,
+          idempotencyKey: `finance_disbursement_${args.applicationId}`,
+          actorId: user._id,
+          status: "SETTLED",
+          externalReference: `Finance disbursement for application ${args.applicationId}`,
+          receivedAt: now,
+        });
+        const receivableDoc = await ctx.db.get(receivableDocumentId);
+        if (receivableDoc && receivableDoc.status !== "PAID") {
+          const activeAllocations = await ctx.db
+            .query("paymentAllocations")
+            .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", receivableDocumentId))
+            .filter((q) => q.eq(q.field("status"), "ACTIVE"))
+            .collect();
+          const allocatedMinor = activeAllocations.reduce((sum, a) => sum + a.amountMinor, 0);
+          const outstandingMinor = Math.max(0, receivableDoc.originalAmountMinor - allocatedMinor);
+          const allocationMinor = Math.min(outstandingMinor, args.disbursedAmountMinor);
+          if (allocationMinor > 0) {
+            await allocatePaymentToReceivable(ctx, {
+              orgId: args.orgId,
+              paymentId: canonicalPaymentId,
+              receivableDocumentId,
+              amountMinor: allocationMinor,
+              actorId: user._id,
+            });
+          }
+        }
 
         const actorName = await getActorName(ctx);
         await notifyManagers(ctx, args.orgId, "application.created" as const, {

@@ -10,6 +10,7 @@ import { assertDifferentActors } from "./utils/financialGuards";
 import {
   hookDepositForfeited,
   hookDepositRefunded,
+  hookDepositVoided,
   getOrgCurrency,
 } from "./accounting/workflowHooks";
 import {
@@ -19,7 +20,7 @@ import {
   normalizeCurrency,
   recordHeldDeposit,
 } from "./utils/depositRecording";
-import { createCanonicalPayment } from "./subledger";
+import { createCanonicalPayment, voidCanonicalPayment } from "./subledger";
 
 export const create = mutation({
   args: {
@@ -289,6 +290,53 @@ export const voidDeposit = mutation({
       resolvedBy: user._id,
       resolvedAt: now,
       notes: args.reason !== undefined ? args.reason : deposit.notes,
+    });
+
+    // Voiding means "recorded in error" — every artifact written when the
+    // deposit was recorded must be unwound, not just the operational row:
+    // the canonical payment, the mirror collectionPayment, and the
+    // DEPOSIT_RECEIVED GL posting.
+    const canonicalPaymentId =
+      deposit.canonicalPaymentId ??
+      (
+        await ctx.db
+          .query("canonicalPayments")
+          .withIndex("by_org_idempotency", (q) =>
+            q.eq("orgId", args.orgId).eq("idempotencyKey", `deposit_received_${args.depositId}`)
+          )
+          .unique()
+      )?._id;
+    if (canonicalPaymentId) {
+      await voidCanonicalPayment(ctx, {
+        orgId: args.orgId,
+        paymentId: canonicalPaymentId,
+        actorId: user._id,
+      });
+    }
+
+    const mirrorPayments = await ctx.db
+      .query("collectionPayments")
+      .withIndex("by_org_customer", (q) =>
+        q.eq("orgId", args.orgId).eq("customerId", deposit.customerId)
+      )
+      .filter((q) => q.eq(q.field("reference"), `Deposit ${args.depositId}`))
+      .collect();
+    for (const mirrorPayment of mirrorPayments) {
+      if (mirrorPayment.status !== "VOIDED") {
+        await ctx.db.patch(mirrorPayment._id, {
+          status: "VOIDED",
+          voidedAt: now,
+          voidedBy: user._id,
+        });
+      }
+    }
+
+    await hookDepositVoided(ctx, {
+      orgId: args.orgId,
+      depositId: args.depositId,
+      reason: args.reason ?? "Deposit voided",
+      actorId: user._id,
+      reversalDate: now,
     });
 
     const depositSourceLabel = deposit.quoteId

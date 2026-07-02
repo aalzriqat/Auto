@@ -301,6 +301,46 @@ export async function hookCollectionPayment(
   });
 }
 
+/**
+ * Posts the cash-out + AR-reopening entry for an approved collection refund:
+ * DR Accounts Receivable — Customers / CR Cash. The refund's operational side
+ * (OUT collectionPayment + canonical payment + allocation reversal) is handled
+ * by the caller; this hook only records the GL impact.
+ */
+export async function hookCollectionRefund(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    paymentId: Id<"collectionPayments">;
+    customerId: Id<"customers">;
+    amountMinor: number;
+    currency: string;
+    paymentMethod: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postOrEnqueue(ctx, {
+    orgId: args.orgId,
+    eventType: "COLLECTION_REFUND",
+    sourceType: "collectionPayments",
+    sourceId: args.paymentId.toString(),
+    eventVersion: 1,
+    accountingDate: args.occurredAt,
+    occurredAt: args.occurredAt,
+    currency: args.currency,
+    idempotencyKey: `collection_refund_${args.paymentId}`,
+    payload: {
+      paymentId: args.paymentId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      customerId: args.customerId.toString(),
+      paymentMethod: args.paymentMethod,
+    },
+    actorId: args.actorId,
+  });
+}
+
 export async function hookExpensePosted(
   ctx: MutationCtx,
   args: {
@@ -550,6 +590,35 @@ export async function hookDepositApplicationReversed(
     reversalDate: args.reversalDate,
     reversalIdempotencyKey: `deposit_applied_reversed_${args.depositId}`,
     pendingPostIdempotencyKey: `deposit_applied_${args.depositId}`,
+  });
+}
+
+/**
+ * Reverses the DEPOSIT_RECEIVED entry when a HELD deposit is voided as
+ * recorded-in-error (as opposed to refunded/forfeited, which post their own
+ * dedicated resolution entries). If the original entry never posted (still in
+ * the outbox), it is cancelled so the round trip nets to zero.
+ */
+export async function hookDepositVoided(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    depositId: Id<"deposits">;
+    reason: string;
+    actorId: Id<"users">;
+    reversalDate: number;
+  }
+) {
+  await reverseEventIfPosted(ctx, {
+    orgId: args.orgId,
+    sourceType: "deposits",
+    sourceId: args.depositId.toString(),
+    eventType: "DEPOSIT_RECEIVED",
+    reason: args.reason,
+    actorId: args.actorId,
+    reversalDate: args.reversalDate,
+    reversalIdempotencyKey: `deposit_voided_${args.depositId}`,
+    pendingPostIdempotencyKey: `deposit_received_${args.depositId}`,
   });
 }
 

@@ -49,7 +49,19 @@ async function sha256Hex(value: string): Promise<string> {
     .join("");
 }
 
-async function logVerifiedWebhookDelivery(
+type WebhookClaim = {
+  logId: Id<"webhookLogs">;
+  disposition: "process" | "skip_processed" | "skip_in_flight";
+};
+
+/**
+ * Claims a verified provider delivery in the durable webhook inbox: exactly
+ * one row per (source, eventId). Callers must honor the returned disposition —
+ * skip_processed ⇒ ack with 200 without reprocessing, skip_in_flight ⇒ respond
+ * non-2xx so the provider redelivers later — and, when told to process,
+ * complete the same row via completeWebhookDelivery.
+ */
+async function claimWebhookDelivery(
   ctx: ActionCtx,
   args: {
     source: VerifiedWebhookSource;
@@ -57,12 +69,11 @@ async function logVerifiedWebhookDelivery(
     rawPayload: string;
     eventId?: string;
   },
-): Promise<void> {
+): Promise<WebhookClaim> {
   const payloadSha256 = await sha256Hex(args.rawPayload);
   const payloadTruncated = args.rawPayload.length > WEBHOOK_RAW_PAYLOAD_MAX_CHARS;
   const deliveryLog = {
     source: args.source,
-    status: "received" as const,
     summary: args.summary,
     eventId: args.eventId ?? payloadSha256,
     payloadSha256,
@@ -70,12 +81,30 @@ async function logVerifiedWebhookDelivery(
     payloadTruncated,
   };
 
-  await ctx.runMutation(
-    internal.adminSystem.logWebhookEvent,
+  return await ctx.runMutation(
+    internal.adminSystem.webhookInboxIntake,
     payloadTruncated
       ? deliveryLog
       : { ...deliveryLog, rawPayload: args.rawPayload },
   );
+}
+
+async function completeWebhookDelivery(
+  ctx: ActionCtx,
+  logId: Id<"webhookLogs">,
+  outcome: "success" | "error",
+  error?: string,
+): Promise<void> {
+  await ctx.runMutation(internal.adminSystem.webhookInboxComplete, {
+    logId,
+    outcome,
+    ...(error !== undefined ? { error } : {}),
+  });
+}
+
+/** 409 tells the provider "duplicate delivery is in flight — redeliver later". */
+function webhookInFlightResponse(): Response {
+  return new Response("Duplicate delivery already in flight", { status: 409 });
 }
 
 function hasMatchingSecret(
@@ -394,12 +423,14 @@ http.route({
     }
 
     const { type, data } = event;
-    await logVerifiedWebhookDelivery(ctx, {
+    const claim = await claimWebhookDelivery(ctx, {
       source: "clerk",
       eventId: svixId,
       summary: type,
       rawPayload: payload,
     });
+    if (claim.disposition === "skip_processed") return new Response(null, { status: 200 });
+    if (claim.disposition === "skip_in_flight") return webhookInFlightResponse();
 
     try {
       switch (type) {
@@ -438,20 +469,16 @@ http.route({
           break;
       }
     } catch (err) {
-      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
-        source: "clerk",
-        status: "error",
-        summary: type,
-        error: err instanceof Error ? err.message : String(err),
-      });
+      await completeWebhookDelivery(
+        ctx,
+        claim.logId,
+        "error",
+        err instanceof Error ? err.message : String(err),
+      );
       return webhookProcessingFailedResponse();
     }
 
-    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
-      source: "clerk",
-      status: "success",
-      summary: type,
-    });
+    await completeWebhookDelivery(ctx, claim.logId, "success");
 
     return new Response(null, { status: 200 });
   }),
@@ -517,22 +544,20 @@ http.route({
       return new Response("Invalid signature", { status: 400 });
     }
 
-    if (event.type !== "email.received") {
-      await logVerifiedWebhookDelivery(ctx, {
-        source: "resend",
-        eventId: svixId,
-        summary: event.type,
-        rawPayload: payload,
-      });
-      return new Response(null, { status: 200 });
-    }
-
-    await logVerifiedWebhookDelivery(ctx, {
+    const claim = await claimWebhookDelivery(ctx, {
       source: "resend",
       eventId: svixId,
       summary: event.type,
       rawPayload: payload,
     });
+    if (claim.disposition === "skip_processed") return new Response(null, { status: 200 });
+    if (claim.disposition === "skip_in_flight") return webhookInFlightResponse();
+
+    if (event.type !== "email.received") {
+      // Nothing to process for other event types — acknowledged as done.
+      await completeWebhookDelivery(ctx, claim.logId, "success");
+      return new Response(null, { status: 200 });
+    }
 
     try {
       const { email_id, from, to, subject } = event.data;
@@ -562,20 +587,16 @@ http.route({
         resendEmailId: email_id,
       });
     } catch (err) {
-      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
-        source: "resend",
-        status: "error",
-        summary: event.type,
-        error: err instanceof Error ? err.message : String(err),
-      });
+      await completeWebhookDelivery(
+        ctx,
+        claim.logId,
+        "error",
+        err instanceof Error ? err.message : String(err),
+      );
       return webhookProcessingFailedResponse();
     }
 
-    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
-      source: "resend",
-      status: "success",
-      summary: event.type,
-    });
+    await completeWebhookDelivery(ctx, claim.logId, "success");
 
     return new Response(null, { status: 200 });
   }),
@@ -664,7 +685,7 @@ http.route({
     const statusUpdate = recordArray(change?.statuses)[0];
     const deliveryEventId =
       optionalMetaId(message?.id) ?? optionalMetaId(statusUpdate?.id);
-    await logVerifiedWebhookDelivery(ctx, {
+    const claim = await claimWebhookDelivery(ctx, {
       source: "whatsapp",
       eventId: deliveryEventId,
       summary: message
@@ -672,14 +693,20 @@ http.route({
         : "Status update",
       rawPayload: rawBody,
     });
+    if (claim.disposition === "skip_processed") return new Response(null, { status: 200 });
+    if (claim.disposition === "skip_in_flight") return webhookInFlightResponse();
 
     if (!message) {
       // Delivery receipts and status updates — acknowledge silently
+      await completeWebhookDelivery(ctx, claim.logId, "success");
       return new Response(null, { status: 200 });
     }
 
     const senderPhone = optionalMetaId(message.from);
-    if (!senderPhone) return new Response("Bad request", { status: 400 });
+    if (!senderPhone) {
+      await completeWebhookDelivery(ctx, claim.logId, "error", "Message without sender phone");
+      return new Response("Bad request", { status: 400 });
+    }
     const contact = recordArray(change?.contacts)[0];
     const profile = optionalRecord(contact?.profile);
     const senderName = optionalString(profile?.name);
@@ -695,20 +722,16 @@ http.route({
         messageText,
       });
     } catch (err) {
-      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
-        source: "whatsapp",
-        status: "error",
-        summary: `Message from ${senderPhone}`,
-        error: err instanceof Error ? err.message : String(err),
-      });
+      await completeWebhookDelivery(
+        ctx,
+        claim.logId,
+        "error",
+        err instanceof Error ? err.message : String(err),
+      );
       return webhookProcessingFailedResponse();
     }
 
-    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
-      source: "whatsapp",
-      status: "success",
-      summary: `Message from ${senderPhone}`,
-    });
+    await completeWebhookDelivery(ctx, claim.logId, "success");
 
     return new Response(null, { status: 200 });
   }),
@@ -935,11 +958,13 @@ http.route({
     // high. Processing only [0] of each would silently drop the rest of a
     // burst — so we iterate everything in the payload.
     const entries = recordArray(body?.entry);
-    await logVerifiedWebhookDelivery(ctx, {
+    const claim = await claimWebhookDelivery(ctx, {
       source: "instagram",
       summary: `Batch with ${entries.length} entries`,
       rawPayload: rawBody,
     });
+    if (claim.disposition === "skip_processed") return new Response(null, { status: 200 });
+    if (claim.disposition === "skip_in_flight") return webhookInFlightResponse();
     let anyRateLimited = false;
     let anyProcessingFailed = false;
 
@@ -1150,12 +1175,22 @@ http.route({
       }
     }
 
-    if (anyRateLimited) {
-      return new Response("Too many requests", { status: 429 });
+    if (anyRateLimited || anyProcessingFailed) {
+      // Leave the delivery retryable: Meta redelivers on non-2xx, and the
+      // reclaim path reprocesses it (per-event dedup downstream makes the
+      // partial work safe to repeat).
+      await completeWebhookDelivery(
+        ctx,
+        claim.logId,
+        "error",
+        anyRateLimited ? "Rate limited — batch partially deferred" : "One or more entries failed",
+      );
+      return anyRateLimited
+        ? new Response("Too many requests", { status: 429 })
+        : webhookProcessingFailedResponse();
     }
-    if (anyProcessingFailed) {
-      return webhookProcessingFailedResponse();
-    }
+
+    await completeWebhookDelivery(ctx, claim.logId, "success");
 
     return new Response(null, { status: 200 });
   }),
@@ -1379,11 +1414,13 @@ http.route({
     // burst — so we iterate everything in the payload (mirrors the
     // Instagram handler above).
     const entries = recordArray(body?.entry);
-    await logVerifiedWebhookDelivery(ctx, {
+    const claim = await claimWebhookDelivery(ctx, {
       source: "facebook",
       summary: `Batch with ${entries.length} entries`,
       rawPayload: rawBody,
     });
+    if (claim.disposition === "skip_processed") return new Response(null, { status: 200 });
+    if (claim.disposition === "skip_in_flight") return webhookInFlightResponse();
     let anyRateLimited = false;
     let anyProcessingFailed = false;
 
@@ -1580,12 +1617,22 @@ http.route({
       }
     }
 
-    if (anyRateLimited) {
-      return new Response("Too many requests", { status: 429 });
+    if (anyRateLimited || anyProcessingFailed) {
+      // Leave the delivery retryable: Meta redelivers on non-2xx, and the
+      // reclaim path reprocesses it (per-event dedup downstream makes the
+      // partial work safe to repeat).
+      await completeWebhookDelivery(
+        ctx,
+        claim.logId,
+        "error",
+        anyRateLimited ? "Rate limited — batch partially deferred" : "One or more entries failed",
+      );
+      return anyRateLimited
+        ? new Response("Too many requests", { status: 429 })
+        : webhookProcessingFailedResponse();
     }
-    if (anyProcessingFailed) {
-      return webhookProcessingFailedResponse();
-    }
+
+    await completeWebhookDelivery(ctx, claim.logId, "success");
 
     return new Response(null, { status: 200 });
   }),

@@ -175,12 +175,12 @@ export const sendTaskAlarm = internalAction({
   },
 });
 
-export const sendNewAccountCredentials = internalAction({
+export const sendAccountSetupLink = internalAction({
   args: {
     toEmail: v.string(),
     firstName: v.string(),
     orgName: v.string(),
-    temporaryPassword: v.string(),
+    setupToken: v.string(),
   },
   handler: async (ctx, args) => {
     const status = await rateLimiter.limit(ctx, "email");
@@ -190,26 +190,24 @@ export const sendNewAccountCredentials = internalAction({
     const env = getValidatedEnv();
     const resendApiKey = env.RESEND_API_KEY;
     const appUrl = env.NEXT_PUBLIC_APP_URL;
-    const signInUrl = `${appUrl}/sign-in`;
+    const setupUrl = `${appUrl}/setup-account?ticket=${encodeURIComponent(args.setupToken)}`;
 
     const safeOrgName = escapeHtml(args.orgName);
     const safeFirstName = escapeHtml(args.firstName);
     const safeEmail = escapeHtml(args.toEmail);
-    const safePassword = escapeHtml(args.temporaryPassword);
 
     const emailHtml = wrapEmailHtml(
       `Your AutoFlow account for ${args.orgName} is ready`,
       `
         <h1 style="margin:0 0 16px; font-size:20px; font-weight:700; color:#111827;">Welcome to ${safeOrgName}</h1>
         <p style="margin:0 0 16px;">Hi ${safeFirstName},</p>
-        <p style="margin:0 0 20px;">An account has been created for you on AutoFlow. Use the temporary password below to sign in, then change it from your account settings (click your avatar in the top-right corner once signed in).</p>
+        <p style="margin:0 0 20px;">An account has been created for you on AutoFlow. Click the button below to activate it and choose your own password. The link can be used once and expires in 7 days.</p>
         <div style="background-color:#f9fafb; border-radius:8px; padding:16px; margin:0 0 24px;">
           <p style="margin:0 0 4px; font-size:12px; color:#6b7280; text-transform:uppercase; letter-spacing:0.05em;">Email</p>
-          <p style="margin:0 0 12px; font-size:14px; color:#111827;">${safeEmail}</p>
-          <p style="margin:0 0 4px; font-size:12px; color:#6b7280; text-transform:uppercase; letter-spacing:0.05em;">Temporary Password</p>
-          <p style="margin:0; font-size:18px; font-family:'SFMono-Regular', Consolas, monospace; font-weight:700; color:#111827;">${safePassword}</p>
+          <p style="margin:0; font-size:14px; color:#111827;">${safeEmail}</p>
         </div>
-        ${emailButton(signInUrl, "Sign In to AutoFlow")}
+        ${emailButton(setupUrl, "Set Up Your Account")}
+        <p style="margin:24px 0 0; font-size:12px; color:#6b7280;">If the link has expired, ask your administrator to re-create the invitation, or use "Forgot password" on the sign-in page.</p>
       `
     );
 

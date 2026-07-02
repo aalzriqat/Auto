@@ -376,6 +376,45 @@ describe("deposits.voidDeposit", () => {
     });
   });
 
+  test("void unwinds the canonical payment, mirror collection payment, and GL posting", async () => {
+    const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
+    await openAccountingPeriod(asUser, orgId);
+    const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
+    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1500 });
+
+    await asApprover.mutation(api.deposits.voidDeposit, {
+      orgId,
+      depositId,
+      reason: "Recorded in error",
+    });
+
+    await t.run(async (ctx) => {
+      const deposit = await ctx.db.get(depositId);
+      expect(deposit?.status).toBe("VOIDED");
+
+      const canonicalPayment = deposit?.canonicalPaymentId
+        ? await ctx.db.get(deposit.canonicalPaymentId)
+        : null;
+      expect(canonicalPayment?.status).toBe("VOIDED");
+
+      const mirrorPayment = await ctx.db
+        .query("collectionPayments")
+        .withIndex("by_org_customer", (q) => q.eq("orgId", orgId).eq("customerId", customerId))
+        .filter((q) => q.eq(q.field("reference"), `Deposit ${depositId}`))
+        .unique();
+      expect(mirrorPayment?.status).toBe("VOIDED");
+      expect(mirrorPayment?.voidedBy).toBeTruthy();
+    });
+
+    const events = await asUser.query(api.accountingLedger.listAccountingEvents, {
+      orgId,
+      sourceType: "deposits",
+      sourceId: depositId.toString(),
+    });
+    const received = events.find((event) => event.eventType === "DEPOSIT_RECEIVED");
+    expect(received?.status).toBe("REVERSED");
+  });
+
   test("rejects void on an already-resolved deposit", async () => {
     const { orgId, customerId, vehicleId, asUser, asApprover } = await setup();
     const quoteId = await makeQuote(null, asUser, orgId, customerId, vehicleId);

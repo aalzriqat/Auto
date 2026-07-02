@@ -113,6 +113,160 @@ describe("applications.finalizeDeal", () => {
   });
 });
 
+describe("applications finance-company canonical receivable", () => {
+  test("finalizeDeal opens a FINANCE_COMPANY receivable and confirmDisbursement settles it by allocation", async () => {
+    const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
+
+    const companyId = await t.run((ctx) =>
+      ctx.db.insert("financeCompanies", {
+        orgId,
+        name: "Jordan Auto Finance",
+        profitRate: 5,
+        maxTermMonths: 60,
+        gracePeriodMonths: 0,
+        isActive: true,
+      })
+    );
+
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 20000,
+      downPayment: 3000,
+      termMonths: 48,
+      mode: "CONFIGURED_FINANCE_COMPANY",
+      companyId,
+      totalFinancedAmount: 17000,
+    });
+
+    const applicationId = await asUser.mutation(api.applications.createFromQuote, {
+      orgId,
+      quoteId,
+    });
+    await asUser.mutation(api.applications.updateStatus, {
+      orgId,
+      applicationId,
+      status: "UNDER_REVIEW",
+    });
+    await asApprover.mutation(api.applications.updateStatus, {
+      orgId,
+      applicationId,
+      status: "APPROVED",
+    });
+    await asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId });
+
+    // Finalizing must open a canonical receivable owed BY the finance company.
+    const receivableAfterFinalize = await t.run((ctx) =>
+      ctx.db
+        .query("receivableDocuments")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", "finance_application").eq("sourceId", applicationId)
+        )
+        .unique()
+    );
+    expect(receivableAfterFinalize).not.toBeNull();
+    expect(receivableAfterFinalize?.payerType).toBe("FINANCE_COMPANY");
+    expect(receivableAfterFinalize?.financeCompanyId).toBe(companyId);
+    expect(receivableAfterFinalize?.originalAmountMinor).toBe(17_000_000);
+    expect(receivableAfterFinalize?.status).toBe("OPEN");
+
+    await asUser.mutation(api.applications.confirmDisbursement, {
+      orgId,
+      applicationId,
+      disbursedAmountMinor: 17_000_000,
+    });
+
+    await t.run(async (ctx) => {
+      const receivable = await ctx.db
+        .query("receivableDocuments")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", "finance_application").eq("sourceId", applicationId)
+        )
+        .unique();
+      expect(receivable?.status).toBe("PAID");
+
+      const payment = await ctx.db
+        .query("canonicalPayments")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", orgId).eq("idempotencyKey", `finance_disbursement_${applicationId}`)
+        )
+        .unique();
+      expect(payment?.direction).toBe("IN");
+      expect(payment?.payerType).toBe("FINANCE_COMPANY");
+      expect(payment?.financeCompanyId).toBe(companyId);
+      expect(payment?.amountMinor).toBe(17_000_000);
+
+      const allocations = await ctx.db
+        .query("paymentAllocations")
+        .withIndex("by_payment", (q) => q.eq("paymentId", payment!._id))
+        .collect();
+      expect(allocations).toHaveLength(1);
+      expect(allocations[0].status).toBe("ACTIVE");
+      expect(allocations[0].amountMinor).toBe(17_000_000);
+    });
+  });
+
+  test("voiding a finalized (undisbursed) deal cancels the finance-company receivable", async () => {
+    const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
+
+    const companyId = await t.run((ctx) =>
+      ctx.db.insert("financeCompanies", {
+        orgId,
+        name: "Jordan Auto Finance",
+        profitRate: 5,
+        maxTermMonths: 60,
+        gracePeriodMonths: 0,
+        isActive: true,
+      })
+    );
+
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 20000,
+      downPayment: 3000,
+      termMonths: 48,
+      mode: "CONFIGURED_FINANCE_COMPANY",
+      companyId,
+      totalFinancedAmount: 17000,
+    });
+
+    const applicationId = await asUser.mutation(api.applications.createFromQuote, {
+      orgId,
+      quoteId,
+    });
+    await asUser.mutation(api.applications.updateStatus, {
+      orgId,
+      applicationId,
+      status: "UNDER_REVIEW",
+    });
+    await asApprover.mutation(api.applications.updateStatus, {
+      orgId,
+      applicationId,
+      status: "APPROVED",
+    });
+    await asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId });
+
+    await asUser.mutation(api.applications.cancelApplication, {
+      orgId,
+      applicationId,
+      reason: "Deal fell through before disbursement",
+    });
+
+    const receivable = await t.run((ctx) =>
+      ctx.db
+        .query("receivableDocuments")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", "finance_application").eq("sourceId", applicationId)
+        )
+        .unique()
+    );
+    expect(receivable?.status).toBe("CANCELLED");
+  });
+});
+
 describe("applications required document enforcement", () => {
   test("blocks approval until required finance documents are verified or waived", async () => {
     const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();

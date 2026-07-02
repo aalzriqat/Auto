@@ -1,16 +1,19 @@
 import { convexTest } from "convex-test";
-import { expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { internal } from "./_generated/api";
 
 const MODULES = import.meta.glob("./**/*.*s");
 
-test("webhook received logs are deduplicated by source and event id", async () => {
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+test("webhook inbox keeps one row per event across claim, duplicate, and completion", async () => {
   const t = convexTest(schema, MODULES);
 
-  await t.mutation(internal.adminSystem.logWebhookEvent, {
+  const first = await t.mutation(internal.adminSystem.webhookInboxIntake, {
     source: "clerk",
-    status: "received",
     summary: "user.created",
     eventId: "evt_1",
     payloadSha256: "hash_1",
@@ -18,19 +21,32 @@ test("webhook received logs are deduplicated by source and event id", async () =
     payloadPreview: '{"id":"evt_1"}',
     payloadTruncated: false,
   });
+  expect(first.disposition).toBe("process");
 
-  await t.mutation(internal.adminSystem.logWebhookEvent, {
+  // Concurrent duplicate delivery while the first claim is in flight — must
+  // not be handed out for processing a second time.
+  const duplicate = await t.mutation(internal.adminSystem.webhookInboxIntake, {
     source: "clerk",
-    status: "received",
     summary: "user.created retry",
     eventId: "evt_1",
-    payloadSha256: "hash_2",
-    rawPayload: '{"id":"evt_1","retry":true}',
-    payloadPreview: '{"id":"evt_1","retry":true}',
-    payloadTruncated: false,
+  });
+  expect(duplicate.disposition).toBe("skip_in_flight");
+  expect(duplicate.logId).toEqual(first.logId);
+
+  await t.mutation(internal.adminSystem.webhookInboxComplete, {
+    logId: first.logId,
+    outcome: "success",
   });
 
-  const receivedLogs = await t.run(async (ctx) =>
+  // Redelivery after successful processing — idempotent ack, no reprocessing.
+  const afterSuccess = await t.mutation(internal.adminSystem.webhookInboxIntake, {
+    source: "clerk",
+    summary: "user.created redelivery",
+    eventId: "evt_1",
+  });
+  expect(afterSuccess.disposition).toBe("skip_processed");
+
+  const rows = await t.run(async (ctx) =>
     ctx.db
       .query("webhookLogs")
       .withIndex("by_source_and_eventId", (q) =>
@@ -38,36 +54,86 @@ test("webhook received logs are deduplicated by source and event id", async () =
       )
       .collect(),
   );
-
-  expect(receivedLogs).toHaveLength(1);
-  expect(receivedLogs[0]).toMatchObject({
-    source: "clerk",
-    status: "received",
-    summary: "user.created retry",
-    eventId: "evt_1",
-    payloadSha256: "hash_2",
-    rawPayload: '{"id":"evt_1","retry":true}',
-    receiveCount: 2,
-  });
-
-  await t.mutation(internal.adminSystem.logWebhookEvent, {
-    source: "clerk",
+  expect(rows).toHaveLength(1);
+  expect(rows[0]).toMatchObject({
     status: "success",
-    summary: "user.created",
-    eventId: "evt_1",
+    receiveCount: 3,
+  });
+});
+
+test("failed webhook deliveries are reclaimed and can complete on redelivery", async () => {
+  const t = convexTest(schema, MODULES);
+
+  const first = await t.mutation(internal.adminSystem.webhookInboxIntake, {
+    source: "whatsapp",
+    summary: "Message wamid.1",
+    eventId: "wamid.1",
+  });
+  expect(first.disposition).toBe("process");
+
+  await t.mutation(internal.adminSystem.webhookInboxComplete, {
+    logId: first.logId,
+    outcome: "error",
+    error: "downstream mutation failed",
   });
 
-  const allEventLogs = await t.run(async (ctx) =>
+  // Provider redelivers after our non-2xx response — the same row is
+  // reclaimed for another processing attempt.
+  const retry = await t.mutation(internal.adminSystem.webhookInboxIntake, {
+    source: "whatsapp",
+    summary: "Message wamid.1",
+    eventId: "wamid.1",
+  });
+  expect(retry.disposition).toBe("process");
+  expect(retry.logId).toEqual(first.logId);
+
+  await t.mutation(internal.adminSystem.webhookInboxComplete, {
+    logId: retry.logId,
+    outcome: "success",
+  });
+
+  const rows = await t.run(async (ctx) =>
     ctx.db
       .query("webhookLogs")
       .withIndex("by_source_and_eventId", (q) =>
-        q.eq("source", "clerk").eq("eventId", "evt_1"),
+        q.eq("source", "whatsapp").eq("eventId", "wamid.1"),
       )
       .collect(),
   );
+  expect(rows).toHaveLength(1);
+  expect(rows[0].status).toBe("success");
+  expect(rows[0].error).toBeUndefined();
+});
 
-  expect(allEventLogs.map((log) => log.status).sort()).toEqual([
-    "received",
-    "success",
-  ]);
+test("stale in-flight claims are reclaimed after the lease expires", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-07-01T10:00:00Z"));
+
+  const t = convexTest(schema, MODULES);
+
+  const first = await t.mutation(internal.adminSystem.webhookInboxIntake, {
+    source: "facebook",
+    summary: "Batch with 3 entries",
+    eventId: "sha_abc",
+  });
+  expect(first.disposition).toBe("process");
+
+  // Within the lease window the claim is honored…
+  vi.setSystemTime(new Date("2026-07-01T10:04:00Z"));
+  const early = await t.mutation(internal.adminSystem.webhookInboxIntake, {
+    source: "facebook",
+    summary: "Batch with 3 entries",
+    eventId: "sha_abc",
+  });
+  expect(early.disposition).toBe("skip_in_flight");
+
+  // …after it expires (handler crashed mid-processing), redelivery reclaims.
+  vi.setSystemTime(new Date("2026-07-01T10:06:01Z"));
+  const reclaimed = await t.mutation(internal.adminSystem.webhookInboxIntake, {
+    source: "facebook",
+    summary: "Batch with 3 entries",
+    eventId: "sha_abc",
+  });
+  expect(reclaimed.disposition).toBe("process");
+  expect(reclaimed.logId).toEqual(first.logId);
 });

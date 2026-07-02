@@ -15,7 +15,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { getActorName, notifyManagers, notifyUser } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
-import { hookCollectionPayment, hookExpensePosted, getOrgCurrency } from "./accounting/workflowHooks";
+import { hookCollectionPayment, hookCollectionRefund, hookExpensePosted, getOrgCurrency } from "./accounting/workflowHooks";
 import { reverseAccountingEvent } from "./accounting/reversals";
 import { getOpenPeriodForDate } from "./accountingPeriods";
 import { enqueuePendingReversal, cancelPendingPostByKey } from "./accountingOutbox";
@@ -327,6 +327,53 @@ async function mirrorCollectionPaymentToCanonical(
 
   await ctx.db.patch(args.paymentId, patch);
   return patch;
+}
+
+/**
+ * Unwinds ACTIVE allocations on a canonical receivable to cover a refund,
+ * newest first. If the refund splits an allocation, the un-refunded remainder
+ * is re-allocated from the same payment so the net reversed amount equals the
+ * refund exactly. This is what reopens the canonical receivable's outstanding
+ * balance to match the legacy receivable after a refund.
+ */
+async function reverseAllocationsForRefund(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    receivableDocumentId: Id<"receivableDocuments">;
+    amountMinor: number;
+    actorId: Id<"users">;
+  }
+) {
+  const activeAllocations = (
+    await ctx.db
+      .query("paymentAllocations")
+      .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", args.receivableDocumentId))
+      .filter((q) => q.eq(q.field("status"), "ACTIVE"))
+      .collect()
+  ).sort((a, b) => b.createdAt - a.createdAt);
+
+  let remainingMinor = args.amountMinor;
+  for (const allocation of activeAllocations) {
+    if (remainingMinor <= 0) break;
+    await reverseAllocation(ctx, {
+      orgId: args.orgId,
+      allocationId: allocation._id,
+      actorId: args.actorId,
+    });
+    if (allocation.amountMinor > remainingMinor) {
+      await allocatePaymentToReceivable(ctx, {
+        orgId: args.orgId,
+        paymentId: allocation.paymentId,
+        receivableDocumentId: args.receivableDocumentId,
+        amountMinor: allocation.amountMinor - remainingMinor,
+        actorId: args.actorId,
+      });
+      remainingMinor = 0;
+    } else {
+      remainingMinor -= allocation.amountMinor;
+    }
+  }
 }
 
 async function insertLedgerTransaction(
@@ -1335,12 +1382,30 @@ export const respondToApproval = mutation({
               status: request.requestedDueDate < now ? "OVERDUE" : "RESCHEDULED",
               updatedAt: now,
             });
+            // Keep the canonical receivable document in step with the legacy
+            // row — aging and dunning read the canonical dueDate.
+            const rescheduleCurrency = await getOrgCurrency(ctx, args.orgId);
+            const rescheduledDocId = await ensureCanonicalReceivableForLegacy(
+              ctx,
+              receivable,
+              user._id,
+              rescheduleCurrency
+            );
+            await ctx.db.patch(rescheduledDocId, { dueDate: request.requestedDueDate });
           } else if (request.requestType === "CANCEL_RECEIVABLE") {
             await ctx.db.patch(receivable._id, {
               outstandingAmount: 0,
               status: "CANCELLED",
               updatedAt: now,
             });
+            const cancelCurrency = await getOrgCurrency(ctx, args.orgId);
+            const cancelledDocId = await ensureCanonicalReceivableForLegacy(
+              ctx,
+              receivable,
+              user._id,
+              cancelCurrency
+            );
+            await ctx.db.patch(cancelledDocId, { status: "CANCELLED" });
           } else if (request.requestType === "REFUND") {
             const refundAmount = roundMoney(request.requestedAmount ?? 0);
             assertPositiveAmount(refundAmount, "Refund amount");
@@ -1368,8 +1433,13 @@ export const respondToApproval = mutation({
 
             const currency = await getOrgCurrency(ctx, args.orgId);
             const refundPayment = await ctx.db.get(refundPaymentId);
+            const canonicalReceivableDocumentId = await ensureCanonicalReceivableForLegacy(
+              ctx,
+              receivable,
+              user._id,
+              currency
+            );
             if (refundPayment) {
-              await ensureCanonicalReceivableForLegacy(ctx, receivable, user._id, currency);
               await mirrorCollectionPaymentToCanonical(ctx, {
                 paymentId: refundPaymentId,
                 payment: refundPayment,
@@ -1378,6 +1448,17 @@ export const respondToApproval = mutation({
                 currency,
               });
             }
+
+            // Unwind the original collections so the canonical receivable
+            // reopens by exactly the refunded amount — without this the
+            // canonical doc stays PAID while the legacy row shows a balance.
+            const refundAmountMinor = toMinorUnits(refundAmount, currency);
+            await reverseAllocationsForRefund(ctx, {
+              orgId: args.orgId,
+              receivableDocumentId: canonicalReceivableDocumentId,
+              amountMinor: refundAmountMinor,
+              actorId: user._id,
+            });
 
             const newOutstanding = roundMoney(receivable.outstandingAmount + refundAmount);
             await ctx.db.patch(receivable._id, {
@@ -1396,6 +1477,17 @@ export const respondToApproval = mutation({
               userId: user._id,
               category: "REFUND",
               idempotencyKey: args.idempotencyKey,
+            });
+
+            await hookCollectionRefund(ctx, {
+              orgId: args.orgId,
+              paymentId: refundPaymentId,
+              customerId: receivable.customerId,
+              amountMinor: refundAmountMinor,
+              currency,
+              paymentMethod: "REFUND",
+              actorId: user._id,
+              occurredAt: now,
             });
           }
         }
