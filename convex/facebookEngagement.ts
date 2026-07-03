@@ -66,6 +66,8 @@ export const handleIncomingFacebookEvent = internalMutation({
     leadId?: Id<"leads">;
     customerId?: Id<"customers">;
     vehicleId?: Id<"vehicles">;
+    eventId: Id<"facebookEvents">;
+    replySource?: "smart" | "canned";
   } | null> => {
     const { orgId, kind, externalId, senderFacebookId, senderName, text, mediaId, sourceSurface } = args;
     const sharedMobileNumber = kind === "dm" ? extractSharedMobileNumber(text) : null;
@@ -246,7 +248,7 @@ export const handleIncomingFacebookEvent = internalMutation({
 
       if (mobileReceivedReply) {
         const sentMobileReceivedReplyRecently = recentEvents.some(
-          (e) => e.autoRepliedAt && e.autoRepliedAt > recentAutoReplyCutoff && e.autoReplyText === mobileReceivedReply
+          (e) => e.kind === kind && e.autoRepliedAt && e.autoRepliedAt > recentAutoReplyCutoff && e.autoReplyText === mobileReceivedReply
         );
         if (!sentMobileReceivedReplyRecently) {
           replyText = mobileReceivedReply;
@@ -254,7 +256,7 @@ export const handleIncomingFacebookEvent = internalMutation({
         }
       } else if (messages.length > 0 && settings) {
         const repliedRecently = recentEvents.some(
-          (e) => e.autoRepliedAt && e.autoRepliedAt > recentAutoReplyCutoff
+          (e) => e.kind === kind && e.autoRepliedAt && e.autoRepliedAt > recentAutoReplyCutoff
         );
         if (!repliedRecently) {
           const nextIndex = ((settings.facebookAutoReplyLastIndex ?? -1) + 1) % messages.length;
@@ -265,7 +267,7 @@ export const handleIncomingFacebookEvent = internalMutation({
       }
     }
 
-    await ctx.db.insert("facebookEvents", {
+    const eventId = await ctx.db.insert("facebookEvents", {
       orgId,
       externalId,
       kind,
@@ -277,9 +279,8 @@ export const handleIncomingFacebookEvent = internalMutation({
       text,
       postId: mediaId,
       sourceSurface,
-      autoRepliedAt: shouldAutoReply ? Date.now() : undefined,
-      autoReplyText: shouldAutoReply ? replyText : undefined,
-      autoReplySource: shouldAutoReply ? (smartReplySource ? "smart" : "canned") : undefined,
+      pendingAutoReplyText: shouldAutoReply ? replyText : undefined,
+      pendingAutoReplySource: shouldAutoReply ? (smartReplySource ? "smart" : "canned") : undefined,
     });
 
     // For DMs, also store in facebookMessages for the full-thread view.
@@ -300,7 +301,45 @@ export const handleIncomingFacebookEvent = internalMutation({
       }
     }
 
-    return { shouldAutoReply, replyText, smartReplyVisibility, leadId, customerId: customer._id, vehicleId };
+    return {
+      shouldAutoReply,
+      replyText,
+      smartReplyVisibility,
+      leadId,
+      customerId: customer._id,
+      vehicleId,
+      eventId,
+      replySource: shouldAutoReply ? (smartReplySource ? "smart" as const : "canned" as const) : undefined,
+    };
+  },
+});
+
+export const markEventAutoReplied = internalMutation({
+  args: {
+    eventId: v.id("facebookEvents"),
+    replyText: v.string(),
+    replySource: v.union(v.literal("smart"), v.literal("canned")),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.eventId, {
+      autoRepliedAt: Date.now(),
+      autoReplyText: args.replyText,
+      autoReplySource: args.replySource,
+      pendingAutoReplyText: undefined,
+      pendingAutoReplySource: undefined,
+      autoReplyRetryCount: undefined,
+    });
+  },
+});
+
+export const recordAutoReplyFailure = internalMutation({
+  args: { eventId: v.id("facebookEvents") },
+  handler: async (ctx, args) => {
+    const ev = await ctx.db.get(args.eventId);
+    if (!ev) return;
+    await ctx.db.patch(args.eventId, {
+      autoReplyRetryCount: (ev.autoReplyRetryCount ?? 0) + 1,
+    });
   },
 });
 
@@ -323,7 +362,13 @@ export const getTokenForOrg = internalQuery({
 
 /** Auto-replies to an inbound comment. Same Graph endpoint as the manual reply below. */
 export const sendCommentReply = internalAction({
-  args: { orgId: v.id("organizations"), commentId: v.string(), message: v.string() },
+  args: {
+    orgId: v.id("organizations"),
+    commentId: v.string(),
+    message: v.string(),
+    eventId: v.id("facebookEvents"),
+    replySource: v.union(v.literal("smart"), v.literal("canned")),
+  },
   handler: async (ctx, args): Promise<void> => {
     const token = await ctx.runQuery(internal.facebookEngagement.getTokenForOrg, { orgId: args.orgId });
     if (!token) return;
@@ -336,13 +381,25 @@ export const sendCommentReply = internalAction({
         summary: `Auto-reply to comment ${args.commentId} failed`,
         error: result.error,
       });
+      return;
     }
+    await ctx.runMutation(internal.facebookEngagement.markEventAutoReplied, {
+      eventId: args.eventId,
+      replyText: args.message,
+      replySource: args.replySource,
+    });
   },
 });
 
 /** Auto-replies to an inbound DM via the Messenger API. */
 export const sendDirectMessage = internalAction({
-  args: { orgId: v.id("organizations"), recipientFacebookId: v.string(), message: v.string() },
+  args: {
+    orgId: v.id("organizations"),
+    recipientFacebookId: v.string(),
+    message: v.string(),
+    eventId: v.id("facebookEvents"),
+    replySource: v.union(v.literal("smart"), v.literal("canned")),
+  },
   handler: async (ctx, args): Promise<void> => {
     const token = await ctx.runQuery(internal.facebookEngagement.getTokenForOrg, { orgId: args.orgId });
     if (!token) return;
@@ -360,7 +417,13 @@ export const sendDirectMessage = internalAction({
         summary: `Auto-reply DM to ${args.recipientFacebookId} failed`,
         error: result.error,
       });
+      return;
     }
+    await ctx.runMutation(internal.facebookEngagement.markEventAutoReplied, {
+      eventId: args.eventId,
+      replyText: args.message,
+      replySource: args.replySource,
+    });
   },
 });
 

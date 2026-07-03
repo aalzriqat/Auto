@@ -81,6 +81,8 @@ export const handleIncomingInstagramEvent = internalMutation({
     customerId?: Id<"customers">;
     needsProfileEnrichment: boolean;
     vehicleId?: Id<"vehicles">;
+    eventId: Id<"instagramEvents">;
+    replySource?: "smart" | "canned";
   } | null> => {
     const { orgId, kind, externalId, senderInstagramId, senderUsername, text, mediaId } = args;
     const sharedMobileNumber = kind === "dm" ? extractSharedMobileNumber(text) : null;
@@ -282,7 +284,7 @@ export const handleIncomingInstagramEvent = internalMutation({
       }
     }
 
-    await ctx.db.insert("instagramEvents", {
+    const eventId = await ctx.db.insert("instagramEvents", {
       orgId,
       externalId,
       kind,
@@ -293,12 +295,21 @@ export const handleIncomingInstagramEvent = internalMutation({
       vehicleId,
       text,
       postId: mediaId,
-      autoRepliedAt: shouldAutoReply ? Date.now() : undefined,
-      autoReplyText: shouldAutoReply ? replyText : undefined,
-      autoReplySource: shouldAutoReply ? (smartReplySource ? "smart" : "canned") : undefined,
+      pendingAutoReplyText: shouldAutoReply ? replyText : undefined,
+      pendingAutoReplySource: shouldAutoReply ? (smartReplySource ? "smart" : "canned") : undefined,
     });
 
-    return { shouldAutoReply, replyText, smartReplyVisibility, leadId, customerId: customer._id, needsProfileEnrichment, vehicleId };
+    return {
+      shouldAutoReply,
+      replyText,
+      smartReplyVisibility,
+      leadId,
+      customerId: customer._id,
+      needsProfileEnrichment,
+      vehicleId,
+      eventId,
+      replySource: shouldAutoReply ? (smartReplySource ? "smart" as const : "canned" as const) : undefined,
+    };
   },
 });
 
@@ -357,11 +368,46 @@ export const getTokenForOrg = internalQuery({
   },
 });
 
+export const markEventAutoReplied = internalMutation({
+  args: {
+    eventId: v.id("instagramEvents"),
+    replyText: v.string(),
+    replySource: v.union(v.literal("smart"), v.literal("canned")),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.eventId, {
+      autoRepliedAt: Date.now(),
+      autoReplyText: args.replyText,
+      autoReplySource: args.replySource,
+      pendingAutoReplyText: undefined,
+      pendingAutoReplySource: undefined,
+      autoReplyRetryCount: undefined,
+    });
+  },
+});
+
+export const recordAutoReplyFailure = internalMutation({
+  args: { eventId: v.id("instagramEvents") },
+  handler: async (ctx, args) => {
+    const ev = await ctx.db.get(args.eventId);
+    if (!ev) return;
+    await ctx.db.patch(args.eventId, {
+      autoReplyRetryCount: (ev.autoReplyRetryCount ?? 0) + 1,
+    });
+  },
+});
+
 // ─── Outbound (Graph API calls — actions only, mutations can't fetch) ─────────
 
 /** Auto-replies to an inbound comment. Same Graph endpoint as the manual reply below. */
 export const sendCommentReply = internalAction({
-  args: { orgId: v.id("organizations"), commentId: v.string(), message: v.string() },
+  args: {
+    orgId: v.id("organizations"),
+    commentId: v.string(),
+    message: v.string(),
+    eventId: v.id("instagramEvents"),
+    replySource: v.union(v.literal("smart"), v.literal("canned")),
+  },
   handler: async (ctx, args): Promise<void> => {
     const token = await ctx.runQuery(internal.instagramEngagement.getTokenForOrg, { orgId: args.orgId });
     if (!token) return;
@@ -374,13 +420,25 @@ export const sendCommentReply = internalAction({
         summary: `Auto-reply to comment ${args.commentId} failed`,
         error: result.error,
       });
+      return;
     }
+    await ctx.runMutation(internal.instagramEngagement.markEventAutoReplied, {
+      eventId: args.eventId,
+      replyText: args.message,
+      replySource: args.replySource,
+    });
   },
 });
 
 /** Auto-replies to an inbound DM via the Instagram Messaging API. */
 export const sendDirectMessage = internalAction({
-  args: { orgId: v.id("organizations"), recipientInstagramId: v.string(), message: v.string() },
+  args: {
+    orgId: v.id("organizations"),
+    recipientInstagramId: v.string(),
+    message: v.string(),
+    eventId: v.id("instagramEvents"),
+    replySource: v.union(v.literal("smart"), v.literal("canned")),
+  },
   handler: async (ctx, args): Promise<void> => {
     const token = await ctx.runQuery(internal.instagramEngagement.getTokenForOrg, { orgId: args.orgId });
     if (!token) return;
@@ -398,7 +456,13 @@ export const sendDirectMessage = internalAction({
         summary: `Auto-reply DM to ${args.recipientInstagramId} failed`,
         error: result.error,
       });
+      return;
     }
+    await ctx.runMutation(internal.instagramEngagement.markEventAutoReplied, {
+      eventId: args.eventId,
+      replyText: args.message,
+      replySource: args.replySource,
+    });
   },
 });
 

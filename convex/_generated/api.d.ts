@@ -8,15 +8,15 @@
  * @module
  */
 
-import type * as accounting_postingEngine from "../accounting/postingEngine.js";
-import type * as accounting_postingRules from "../accounting/postingRules.js";
-import type * as accounting_reversals from "../accounting/reversals.js";
-import type * as accounting_workflowHooks from "../accounting/workflowHooks.js";
 import type * as accountingLedger from "../accountingLedger.js";
 import type * as accountingMigration from "../accountingMigration.js";
 import type * as accountingOutbox from "../accountingOutbox.js";
 import type * as accountingPeriods from "../accountingPeriods.js";
 import type * as accountingReports from "../accountingReports.js";
+import type * as accounting_postingEngine from "../accounting/postingEngine.js";
+import type * as accounting_postingRules from "../accounting/postingRules.js";
+import type * as accounting_reversals from "../accounting/reversals.js";
+import type * as accounting_workflowHooks from "../accounting/workflowHooks.js";
 import type * as adminAudit from "../adminAudit.js";
 import type * as adminAuth from "../adminAuth.js";
 import type * as adminBroadcasts from "../adminBroadcasts.js";
@@ -78,6 +78,7 @@ import type * as sales from "../sales.js";
 import type * as search from "../search.js";
 import type * as seedDocuments from "../seedDocuments.js";
 import type * as smartReply from "../smartReply.js";
+import type * as socialAutoReplyRetry from "../socialAutoReplyRetry.js";
 import type * as socialEngagement from "../socialEngagement.js";
 import type * as socialInbox from "../socialInbox.js";
 import type * as socialInboxBackfill from "../socialInboxBackfill.js";
@@ -146,15 +147,15 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
-  "accounting/postingEngine": typeof accounting_postingEngine;
-  "accounting/postingRules": typeof accounting_postingRules;
-  "accounting/reversals": typeof accounting_reversals;
-  "accounting/workflowHooks": typeof accounting_workflowHooks;
   accountingLedger: typeof accountingLedger;
   accountingMigration: typeof accountingMigration;
   accountingOutbox: typeof accountingOutbox;
   accountingPeriods: typeof accountingPeriods;
   accountingReports: typeof accountingReports;
+  "accounting/postingEngine": typeof accounting_postingEngine;
+  "accounting/postingRules": typeof accounting_postingRules;
+  "accounting/reversals": typeof accounting_reversals;
+  "accounting/workflowHooks": typeof accounting_workflowHooks;
   adminAudit: typeof adminAudit;
   adminAuth: typeof adminAuth;
   adminBroadcasts: typeof adminBroadcasts;
@@ -216,6 +217,7 @@ declare const fullApi: ApiFromModules<{
   search: typeof search;
   seedDocuments: typeof seedDocuments;
   smartReply: typeof smartReply;
+  socialAutoReplyRetry: typeof socialAutoReplyRetry;
   socialEngagement: typeof socialEngagement;
   socialInbox: typeof socialInbox;
   socialInboxBackfill: typeof socialInboxBackfill;
