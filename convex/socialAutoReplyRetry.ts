@@ -35,6 +35,17 @@ async function markRepliedWithRetry(markFn: () => Promise<unknown>, attempts = 3
   return false;
 }
 
+// Isolated the same way token lookup is: a transient Convex write failure
+// while recording that an event failed must not abort the rest of the batch.
+async function recordFailureSafely(recordFailure: () => Promise<unknown>): Promise<void> {
+  try {
+    await recordFailure();
+  } catch {
+    // Swallowed — the event keeps its previous retry state and stays
+    // eligible for pickup on the next cron run either way.
+  }
+}
+
 type PendingReplyEvent = {
   _id: unknown;
   orgId: unknown;
@@ -87,11 +98,11 @@ async function retryBatch<TEvent extends PendingReplyEvent, TToken>(
           stats.unconfirmed++;
         }
       } else {
-        await config.recordFailure(ev);
+        await recordFailureSafely(() => config.recordFailure(ev));
         stats.failed++;
       }
     } catch {
-      await config.recordFailure(ev);
+      await recordFailureSafely(() => config.recordFailure(ev));
       stats.failed++;
     }
   }
