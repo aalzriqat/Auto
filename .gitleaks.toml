@@ -1,0 +1,8 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Deterministic dedupe tokens, not secrets. These are client-supplied idempotency keys (e.g. \"mj_selfapprove_001\") used to make Convex mutations safely retriable — never actual credentials."
+regexes = [
+  '''idempotencyKey:\s*[`"'][A-Za-z0-9_.-]+[`"']''',
+]
