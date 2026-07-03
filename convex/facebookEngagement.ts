@@ -289,6 +289,9 @@ export const handleIncomingFacebookEvent = internalMutation({
       pendingAutoReplyText: shouldAutoReply ? replyText : undefined,
       pendingAutoReplySource: shouldAutoReply ? (smartReplySource ? "smart" : "canned") : undefined,
       pendingAutoReply: shouldAutoReply ? true : undefined,
+      pendingAutoReplyChannel: shouldAutoReply
+        ? (smartReplyVisibility === "dm" ? "dm" : kind)
+        : undefined,
     });
 
     // For DMs, also store in facebookMessages for the full-thread view.
@@ -336,6 +339,7 @@ export const markEventAutoReplied = internalMutation({
       pendingAutoReplyText: undefined,
       pendingAutoReplySource: undefined,
       pendingAutoReply: undefined,
+      pendingAutoReplyChannel: undefined,
       autoReplyRetryCount: undefined,
     });
   },
@@ -354,6 +358,7 @@ export const recordAutoReplyFailure = internalMutation({
         pendingAutoReplyText: undefined,
         pendingAutoReplySource: undefined,
         pendingAutoReply: undefined,
+        pendingAutoReplyChannel: undefined,
       });
     } else {
       await ctx.db.patch(args.eventId, { autoReplyRetryCount: newCount });

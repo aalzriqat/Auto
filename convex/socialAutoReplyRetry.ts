@@ -104,8 +104,9 @@ export const retryPendingSocialAutoReplies = internalAction({
 
       retried++;
       try {
+        const channel = ev.pendingAutoReplyChannel ?? ev.kind;
         const result =
-          ev.kind === "comment"
+          channel === "comment"
             ? await facebookPostCommentReply(
                 ev.externalId,
                 replyText,
@@ -154,8 +155,9 @@ export const retryPendingSocialAutoReplies = internalAction({
 
       retried++;
       try {
+        const channel = ev.pendingAutoReplyChannel ?? ev.kind;
         const result =
-          ev.kind === "comment"
+          channel === "comment"
             ? await instagramPostCommentReply(
                 ev.externalId,
                 replyText,
