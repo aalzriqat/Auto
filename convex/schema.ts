@@ -391,6 +391,8 @@ export default defineSchema({
       v.literal("CREATE_PERIOD"),
       v.literal("POST_EVENT"),
       v.literal("POST_MANUAL_JOURNAL"),
+      v.literal("CREATE_MANUAL_JOURNAL_DRAFT"),
+      v.literal("REJECT_MANUAL_JOURNAL"),
       v.literal("REVERSE_EVENT"),
       v.literal("OPEN_PERIOD"),
       v.literal("CLOSE_PERIOD"),
@@ -415,6 +417,34 @@ export default defineSchema({
     .index("by_org_action", ["orgId", "actionType"])
     .index("by_org_action_idempotency", ["orgId", "actionType", "idempotencyKey"])
     .index("by_org_time", ["orgId", "occurredAt"]),
+
+  // ─── Phase 10: True two-person manual-journal approval ────────────────────
+
+  manualJournalDrafts: defineTable({
+    orgId: v.id("organizations"),
+    status: v.union(
+      v.literal("PENDING_APPROVAL"),
+      v.literal("POSTED"),
+      v.literal("REJECTED"),
+    ),
+    memo: v.string(),
+    lines: v.array(v.object({
+      accountId: v.id("chartOfAccounts"),
+      debitMinor: v.number(),
+      creditMinor: v.number(),
+      description: v.optional(v.string()),
+    })),
+    idempotencyKey: v.string(),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    reviewedBy: v.optional(v.id("users")),
+    decidedAt: v.optional(v.number()),
+    rejectionReason: v.optional(v.string()),
+    journalEntryId: v.optional(v.id("journalEntries")),
+  })
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_time", ["orgId", "createdAt"])
+    .index("by_org_idempotency", ["orgId", "idempotencyKey"]),
 
   roles: defineTable({
     orgId: v.id("organizations"), // Roles are scoped to orgs allowing custom roles

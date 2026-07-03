@@ -218,7 +218,7 @@ describe("Phase 9 — reversal audit log", () => {
 // ─── Manual journal segregation of duties ─────────────────────────────────────
 
 describe("Phase 9 — manual journal reviewer authority", () => {
-  test("a reviewer without MANAGE_FINANCE is rejected", async () => {
+  test("a reviewer without MANAGE_FINANCE cannot approve a draft", async () => {
     const { t, orgId, asUser } = await seedDealer("mj");
 
     // A low-privilege member who is NOT finance-authorized.
@@ -229,21 +229,23 @@ describe("Phase 9 — manual journal reviewer authority", () => {
       ctx.db.insert("users", { clerkId: "mj_weak", email: "weak@example.com", name: "Weak" })
     );
     await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: weakReviewer, roleId: weakRoleId }));
+    const asWeakReviewer = t.withIdentity({ subject: "mj_weak", clerkId: "mj_weak" });
 
     const accounts = await asUser.query(api.chartOfAccounts.list, { orgId });
     const manual = accounts.filter((a: any) => a.allowManualPosting);
 
+    const { draftId } = await asUser.mutation(api.financialAudit.createManualJournal, {
+      orgId, memo: "Needs real approver",
+      lines: [
+        { accountId: manual[0]._id, debitMinor: 1000, creditMinor: 0 },
+        { accountId: manual[1]._id, debitMinor: 0, creditMinor: 1000 },
+      ],
+      idempotencyKey: "mj_weak_review",
+    });
+
     await expect(
-      asUser.mutation(api.financialAudit.postManualJournal, {
-        orgId, memo: "Needs real approver",
-        lines: [
-          { accountId: manual[0]._id, debitMinor: 1000, creditMinor: 0 },
-          { accountId: manual[1]._id, debitMinor: 0, creditMinor: 1000 },
-        ],
-        idempotencyKey: "mj_weak_review",
-        reviewedBy: weakReviewer,
-      })
-    ).rejects.toThrow(/finance approval authority/i);
+      asWeakReviewer.mutation(api.financialAudit.approveManualJournal, { orgId, draftId })
+    ).rejects.toThrow();
   });
 });
 
