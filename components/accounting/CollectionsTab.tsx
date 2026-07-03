@@ -488,6 +488,7 @@ export function CollectionsTab() {
                     <TableHead>{t("Customer" as any)}</TableHead>
                     <TableHead>{t("Receivable" as any)}</TableHead>
                     <TableHead>{t("TypeLabel" as any)}</TableHead>
+                    <TableHead>{t("PaymentMethodLabel" as any)}</TableHead>
                     <TableHead>{t("RequestedBy" as any)}</TableHead>
                     <TableHead className="text-right">{t("Amount" as any)}</TableHead>
                     <TableHead className="text-right">{t("Decision" as any)}</TableHead>
@@ -495,13 +496,14 @@ export function CollectionsTab() {
                 </TableHeader>
                 <TableBody>
                   {!approvals || approvals.length === 0 ? (
-                    <EmptyRow colSpan={6} label={t("NoPendingCollectionApprovals" as any)} />
+                    <EmptyRow colSpan={7} label={t("NoPendingCollectionApprovals" as any)} />
                   ) : (
                     approvals.map((row) => (
                       <TableRow key={row._id}>
                         <TableCell className="font-medium">{row.customerName}</TableCell>
                         <TableCell>{row.receivableTitle}</TableCell>
                         <TableCell>{collectionLabel(t, row.requestType)}</TableCell>
+                        <TableCell>{row.disbursementMethod ? collectionLabel(t, row.disbursementMethod) : "-"}</TableCell>
                         <TableCell>{row.requestedByName}</TableCell>
                         <TableCell className="text-right">{row.requestedAmount ? formatCurrency(row.requestedAmount) : "-"}</TableCell>
                         <TableCell className="text-right">
@@ -876,10 +878,10 @@ function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable:
   }
 
   const disbursementLabels: Record<DisbursementMethod, string> = {
-    CASH: t("DisbursementCash" as any),
-    BANK_TRANSFER: t("DisbursementBankTransfer" as any),
-    CHEQUE: t("DisbursementCheque" as any),
-    CARD: t("DisbursementCard" as any),
+    CASH: collectionLabel(t, "CASH"),
+    BANK_TRANSFER: collectionLabel(t, "BANK_TRANSFER"),
+    CHEQUE: collectionLabel(t, "CHEQUE"),
+    CARD: collectionLabel(t, "CARD"),
   };
 
   return (
@@ -895,7 +897,7 @@ function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable:
               <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={t("RefundAmount" as any)} />
               <Select value={disbursementMethod} onValueChange={(v) => setDisbursementMethod(v as DisbursementMethod)}>
                 <SelectTrigger>
-                  <SelectValue placeholder={t("DisbursementSelectPlaceholder" as any)} />
+                  <SelectValue placeholder={t("PaymentMethodLabel" as any)} />
                 </SelectTrigger>
                 <SelectContent>
                   {(Object.keys(disbursementLabels) as DisbursementMethod[]).map((method) => (

@@ -1425,6 +1425,27 @@ export const respondToApproval = mutation({
                 "Issue a refund for the collected amount first, then cancel."
               );
             }
+            // Block if a post-dated cheque in HELD or DEPOSITED state is
+            // linked to this receivable. Cancelling the receivable would leave
+            // an active financial instrument with nowhere to post when cleared.
+            const heldCheque = await ctx.db
+              .query("postDatedCheques")
+              .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "HELD"))
+              .filter((q) => q.eq(q.field("receivableId"), receivable._id))
+              .first();
+            const depositedCheque = !heldCheque
+              ? await ctx.db
+                  .query("postDatedCheques")
+                  .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "DEPOSITED"))
+                  .filter((q) => q.eq(q.field("receivableId"), receivable._id))
+                  .first()
+              : null;
+            if (heldCheque || depositedCheque) {
+              throw new ConvexError(
+                "Cannot cancel a receivable with an active cheque (HELD or DEPOSITED). " +
+                "Return or cancel the cheque first, then cancel the receivable."
+              );
+            }
             await ctx.db.patch(receivable._id, {
               outstandingAmount: 0,
               status: "CANCELLED",
@@ -1446,7 +1467,12 @@ export const respondToApproval = mutation({
 
             // Use the method captured at request time so the GL entry posts to
             // the correct cash account (bank vs. cash on hand vs. cheque).
-            const refundDisbursementMethod = request.disbursementMethod ?? "CASH";
+            if (!request.disbursementMethod) {
+              throw new ConvexError(
+                "This legacy refund request has no disbursement method. Reject it and submit a new request."
+              );
+            }
+            const refundDisbursementMethod = request.disbursementMethod;
 
             const refundPaymentId = await ctx.db.insert("collectionPayments", {
               orgId: args.orgId,

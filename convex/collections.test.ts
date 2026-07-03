@@ -2,6 +2,8 @@ import { convexTest } from "convex-test";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import { ruleCollectionRefund } from "./accounting/postingRules";
+import { SYSTEM_KEYS } from "./utils/defaultChart";
 
 async function seedFinanceMember(t: ReturnType<typeof convexTest>) {
   const orgId = await t.run((ctx) =>
@@ -463,6 +465,112 @@ describe("Collections", () => {
         : null;
       expect(canonicalRefund?.method).toBe("CARD");
     });
+  });
+
+  test("cheque_refund_routes_to_bank_account_not_cheques_in_hand", async () => {
+    // Unit-level assertion: the posting rule must credit BANK_ACCOUNT for
+    // outbound cheque refunds, not CHEQUES_IN_HAND (which is for held customer cheques).
+    const result = ruleCollectionRefund({
+      paymentId: "test-payment",
+      amountMinor: 50000,
+      currency: "JOD",
+      customerId: "cust-1" as any,
+      paymentMethod: "CHEQUE",
+    });
+    const creditLine = result.lines.find((l) => l.creditMinor > 0 && l.debitMinor === 0);
+    expect(creditLine?.accountSystemKey).toBe(SYSTEM_KEYS.BANK_ACCOUNT);
+    expect(creditLine?.accountSystemKey).not.toBe(SYSTEM_KEYS.CHEQUES_IN_HAND);
+  });
+
+  test("cheque_refund_approval_posts_cheque_method_to_event_outbox", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
+
+    const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      orgId,
+      customerId,
+      sourceType: "INTERNAL_INSTALLMENT",
+      title: "Cheque refund installment",
+      amount: 600,
+      dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+    });
+    await asFinance.mutation(api.collections.recordPayment, {
+      orgId,
+      receivableId,
+      amount: 600,
+      method: "CASH",
+      paymentDate: Date.now(),
+    });
+    const requestId = await asFinance.mutation(api.collections.requestApproval, {
+      orgId,
+      receivableId,
+      requestType: "REFUND",
+      requestedAmount: 600,
+      disbursementMethod: "CHEQUE",
+      reason: "Refund by dealership cheque",
+    });
+
+    await asApprover.mutation(api.collections.respondToApproval, {
+      orgId,
+      requestId,
+      status: "APPROVED",
+    });
+
+    await t.run(async (ctx) => {
+      const payments = await ctx.db
+        .query("collectionPayments")
+        .withIndex("by_receivable", (q) => q.eq("receivableId", receivableId))
+        .collect();
+      const refund = payments.find((p) => p.direction === "OUT");
+      expect(refund?.method).toBe("CHEQUE");
+
+      // The outbox event must carry CHEQUE so that when postingRules flush
+      // they call refundDisbursementAccountKey and credit BANK_ACCOUNT.
+      const pending = await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
+        .collect();
+      const refundEvent = pending.find((e) => e.eventType === "COLLECTION_REFUND");
+      expect(refundEvent).toBeTruthy();
+      expect((refundEvent?.payload as { paymentMethod?: string })?.paymentMethod).toBe("CHEQUE");
+    });
+  });
+
+  test("cancel_of_receivable_with_held_cheque_is_blocked", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
+
+    const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      orgId,
+      customerId,
+      sourceType: "INTERNAL_INSTALLMENT",
+      title: "Cheque-linked installment",
+      amount: 1000,
+      dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+    });
+    await asFinance.mutation(api.collections.registerCheque, {
+      orgId,
+      receivableId,
+      customerId,
+      bank: "Test Bank",
+      chequeNumber: "CHQ-999",
+      chequeDate: Date.now() + 86_400_000,
+      amount: 1000,
+    });
+    const requestId = await asFinance.mutation(api.collections.requestApproval, {
+      orgId,
+      receivableId,
+      requestType: "CANCEL_RECEIVABLE",
+      reason: "Customer cancelled but cheque still held",
+    });
+
+    await expect(
+      asApprover.mutation(api.collections.respondToApproval, {
+        orgId,
+        requestId,
+        status: "APPROVED",
+      })
+    ).rejects.toThrow("Cannot cancel a receivable with an active cheque");
   });
 
   test("approved_reschedule_moves_overdue_receivable_to_new_due_date", async () => {
