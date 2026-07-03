@@ -431,6 +431,7 @@ describe("Phase 0 financial safety controls", () => {
       receivableId,
       requestType: "REFUND",
       requestedAmount: 100,
+      disbursementMethod: "CASH",
       reason: "Duplicate customer payment",
     });
 

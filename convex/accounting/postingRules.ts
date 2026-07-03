@@ -58,7 +58,19 @@ function cashAccountKey(
 ): SystemKey {
   if (method === "CHEQUE") return SYSTEM_KEYS.CHEQUES_IN_HAND;
   if (method === "BANK_TRANSFER") return SYSTEM_KEYS.BANK_ACCOUNT;
+  // Card payments settle to the bank account (via payment gateway clearing).
+  if (method === "CARD") return SYSTEM_KEYS.BANK_ACCOUNT;
   return opts?.defaultCash ?? SYSTEM_KEYS.CASH_ON_HAND;
+}
+
+// For outbound refund disbursements, CHEQUE means the dealership issues a
+// cheque to the customer — crediting BANK_ACCOUNT (not CHEQUES_IN_HAND, which
+// is for customer cheques physically held by the dealership).
+function refundDisbursementAccountKey(method: string | undefined): SystemKey {
+  if (method === "CHEQUE") return SYSTEM_KEYS.BANK_ACCOUNT;
+  if (method === "BANK_TRANSFER") return SYSTEM_KEYS.BANK_ACCOUNT;
+  if (method === "CARD") return SYSTEM_KEYS.BANK_ACCOUNT;
+  return SYSTEM_KEYS.CASH_ON_HAND;
 }
 
 function line(
@@ -291,11 +303,13 @@ export function ruleCollectionPayment(p: CollectionPaymentPayload): RuleResult {
 export function ruleCollectionRefund(p: CollectionRefundPayload): RuleResult {
   // Mirror image of ruleCollectionPayment: cash goes back out and the
   // customer's receivable is reopened for the refunded amount.
-  const cashKey = cashAccountKey(p.paymentMethod);
+  // Use the refund-specific mapper so outbound cheques credit BANK_ACCOUNT,
+  // not CHEQUES_IN_HAND (which is reserved for cheques held from customers).
+  const disbursementKey = refundDisbursementAccountKey(p.paymentMethod);
   return {
     lines: [
       line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, p.amountMinor, 0, "AR reopened by refund", { customerId: p.customerId }),
-      line(cashKey, 0, p.amountMinor, "Refund paid out", { customerId: p.customerId }),
+      line(disbursementKey, 0, p.amountMinor, "Refund paid out", { customerId: p.customerId }),
     ],
     memo: "Collection payment refunded",
     category: "SYSTEM",

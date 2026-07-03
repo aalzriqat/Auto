@@ -488,6 +488,7 @@ export function CollectionsTab() {
                     <TableHead>{t("Customer" as any)}</TableHead>
                     <TableHead>{t("Receivable" as any)}</TableHead>
                     <TableHead>{t("TypeLabel" as any)}</TableHead>
+                    <TableHead>{t("PaymentMethodLabel" as any)}</TableHead>
                     <TableHead>{t("RequestedBy" as any)}</TableHead>
                     <TableHead className="text-right">{t("Amount" as any)}</TableHead>
                     <TableHead className="text-right">{t("Decision" as any)}</TableHead>
@@ -495,13 +496,14 @@ export function CollectionsTab() {
                 </TableHeader>
                 <TableBody>
                   {!approvals || approvals.length === 0 ? (
-                    <EmptyRow colSpan={6} label={t("NoPendingCollectionApprovals" as any)} />
+                    <EmptyRow colSpan={7} label={t("NoPendingCollectionApprovals" as any)} />
                   ) : (
                     approvals.map((row) => (
                       <TableRow key={row._id}>
                         <TableCell className="font-medium">{row.customerName}</TableCell>
                         <TableCell>{row.receivableTitle}</TableCell>
                         <TableCell>{collectionLabel(t, row.requestType)}</TableCell>
+                        <TableCell>{row.disbursementMethod ? collectionLabel(t, row.disbursementMethod) : "-"}</TableCell>
                         <TableCell>{row.requestedByName}</TableCell>
                         <TableCell className="text-right">{row.requestedAmount ? formatCurrency(row.requestedAmount) : "-"}</TableCell>
                         <TableCell className="text-right">
@@ -838,12 +840,15 @@ function ChequeDialog({ receivable, onOpenChange }: { receivable: ReceivableRow 
   );
 }
 
+type DisbursementMethod = "CASH" | "BANK_TRANSFER" | "CHEQUE" | "CARD";
+
 function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable: ReceivableRow; type: "REFUND" | "RESCHEDULE" | "CANCEL_RECEIVABLE" } | null; onOpenChange: (open: boolean) => void }) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const requestApproval = useMutation(api.collections.requestApproval);
   const [amount, setAmount] = useState("");
   const [dueDate, setDueDate] = useState(todayInput);
+  const [disbursementMethod, setDisbursementMethod] = useState<DisbursementMethod>("CASH");
   const [reason, setReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -857,18 +862,27 @@ function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable:
         requestType: target.type,
         requestedAmount: target.type === "REFUND" ? Number(amount) : undefined,
         requestedDueDate: target.type === "RESCHEDULE" ? dateInputToMs(dueDate) : undefined,
+        disbursementMethod: target.type === "REFUND" ? disbursementMethod : undefined,
         reason,
       });
       toast.success(t("CollectionToastApprovalSubmitted" as any));
       onOpenChange(false);
       setAmount("");
       setReason("");
+      setDisbursementMethod("CASH");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     } finally {
       setSubmitting(false);
     }
   }
+
+  const disbursementLabels: Record<DisbursementMethod, string> = {
+    CASH: collectionLabel(t, "CASH"),
+    BANK_TRANSFER: collectionLabel(t, "BANK_TRANSFER"),
+    CHEQUE: collectionLabel(t, "CHEQUE"),
+    CARD: collectionLabel(t, "CARD"),
+  };
 
   return (
     <Dialog open={!!target} onOpenChange={onOpenChange}>
@@ -878,7 +892,21 @@ function ApprovalRequestDialog({ target, onOpenChange }: { target: { receivable:
           <DialogDescription>{target?.receivable.customerName} · {target?.receivable.title}</DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
-          {target?.type === "REFUND" && <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={t("RefundAmount" as any)} />}
+          {target?.type === "REFUND" && (
+            <>
+              <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={t("RefundAmount" as any)} />
+              <Select value={disbursementMethod} onValueChange={(v) => setDisbursementMethod(v as DisbursementMethod)}>
+                <SelectTrigger>
+                  <SelectValue placeholder={t("PaymentMethodLabel" as any)} />
+                </SelectTrigger>
+                <SelectContent>
+                  {(Object.keys(disbursementLabels) as DisbursementMethod[]).map((method) => (
+                    <SelectItem key={method} value={method}>{disbursementLabels[method]}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </>
+          )}
           {target?.type === "RESCHEDULE" && <Input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />}
           <Textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder={t("Reason" as any)} />
         </div>
