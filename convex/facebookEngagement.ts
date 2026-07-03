@@ -15,6 +15,7 @@ import { nextGeneratedLeadAssignee } from "./utils/leadAssignment";
 import { mobileReceivedAutoReplyText } from "./utils/socialMobileReply";
 
 const AUTO_REPLY_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 1 reply per sender per 24h
+const MAX_AUTO_REPLY_RETRIES = 3;
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -248,7 +249,10 @@ export const handleIncomingFacebookEvent = internalMutation({
 
       if (mobileReceivedReply) {
         const sentMobileReceivedReplyRecently = recentEvents.some(
-          (e) => e.kind === kind && e.autoRepliedAt && e.autoRepliedAt > recentAutoReplyCutoff && e.autoReplyText === mobileReceivedReply
+          (e) => e.kind === kind && (
+            (e.autoRepliedAt && e.autoRepliedAt > recentAutoReplyCutoff && e.autoReplyText === mobileReceivedReply) ||
+            (e.pendingAutoReplyText === mobileReceivedReply && e._creationTime > recentAutoReplyCutoff)
+          )
         );
         if (!sentMobileReceivedReplyRecently) {
           replyText = mobileReceivedReply;
@@ -256,7 +260,10 @@ export const handleIncomingFacebookEvent = internalMutation({
         }
       } else if (messages.length > 0 && settings) {
         const repliedRecently = recentEvents.some(
-          (e) => e.kind === kind && e.autoRepliedAt && e.autoRepliedAt > recentAutoReplyCutoff
+          (e) => e.kind === kind && (
+            (e.autoRepliedAt && e.autoRepliedAt > recentAutoReplyCutoff) ||
+            (e.pendingAutoReplyText != null && e._creationTime > recentAutoReplyCutoff)
+          )
         );
         if (!repliedRecently) {
           const nextIndex = ((settings.facebookAutoReplyLastIndex ?? -1) + 1) % messages.length;
@@ -281,6 +288,7 @@ export const handleIncomingFacebookEvent = internalMutation({
       sourceSurface,
       pendingAutoReplyText: shouldAutoReply ? replyText : undefined,
       pendingAutoReplySource: shouldAutoReply ? (smartReplySource ? "smart" : "canned") : undefined,
+      pendingAutoReply: shouldAutoReply ? true : undefined,
     });
 
     // For DMs, also store in facebookMessages for the full-thread view.
@@ -327,6 +335,7 @@ export const markEventAutoReplied = internalMutation({
       autoReplySource: args.replySource,
       pendingAutoReplyText: undefined,
       pendingAutoReplySource: undefined,
+      pendingAutoReply: undefined,
       autoReplyRetryCount: undefined,
     });
   },
@@ -337,9 +346,18 @@ export const recordAutoReplyFailure = internalMutation({
   handler: async (ctx, args) => {
     const ev = await ctx.db.get(args.eventId);
     if (!ev) return;
-    await ctx.db.patch(args.eventId, {
-      autoReplyRetryCount: (ev.autoReplyRetryCount ?? 0) + 1,
-    });
+    const newCount = (ev.autoReplyRetryCount ?? 0) + 1;
+    if (newCount >= MAX_AUTO_REPLY_RETRIES) {
+      // Exhausted retries: clear pending fields so this event exits the retry index scan
+      await ctx.db.patch(args.eventId, {
+        autoReplyRetryCount: newCount,
+        pendingAutoReplyText: undefined,
+        pendingAutoReplySource: undefined,
+        pendingAutoReply: undefined,
+      });
+    } else {
+      await ctx.db.patch(args.eventId, { autoReplyRetryCount: newCount });
+    }
   },
 });
 

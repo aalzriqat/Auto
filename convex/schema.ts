@@ -1888,6 +1888,7 @@ export default defineSchema({
     autoReplySource: v.optional(v.union(v.literal("smart"), v.literal("canned"))),
     pendingAutoReplyText: v.optional(v.string()),
     pendingAutoReplySource: v.optional(v.union(v.literal("smart"), v.literal("canned"))),
+    pendingAutoReply: v.optional(v.boolean()),
     autoReplyRetryCount: v.optional(v.number()),
     manualReplyText: v.optional(v.string()),
     manualRepliedAt: v.optional(v.number()),
@@ -1897,7 +1898,8 @@ export default defineSchema({
     .index("by_org_sender", ["orgId", "senderInstagramId"])
     .index("by_org", ["orgId"])
     .index("by_org_lead", ["orgId", "leadId"])
-    .index("by_org_customer", ["orgId", "customerId"]),
+    .index("by_org_customer", ["orgId", "customerId"])
+    .index("by_pending_reply", ["pendingAutoReply"]),
 
   facebookEvents: defineTable({
     orgId: v.id("organizations"),
@@ -1918,6 +1920,7 @@ export default defineSchema({
     autoReplySource: v.optional(v.union(v.literal("smart"), v.literal("canned"))),
     pendingAutoReplyText: v.optional(v.string()),
     pendingAutoReplySource: v.optional(v.union(v.literal("smart"), v.literal("canned"))),
+    pendingAutoReply: v.optional(v.boolean()),
     autoReplyRetryCount: v.optional(v.number()),
     manualReplyText: v.optional(v.string()),
     manualRepliedAt: v.optional(v.number()),
@@ -1927,7 +1930,8 @@ export default defineSchema({
     .index("by_org_sender", ["orgId", "senderFacebookId"])
     .index("by_org", ["orgId"])
     .index("by_org_lead", ["orgId", "leadId"])
-    .index("by_org_customer", ["orgId", "customerId"]),
+    .index("by_org_customer", ["orgId", "customerId"])
+    .index("by_pending_reply", ["pendingAutoReply"]),
 
   // Full Messenger thread: one row per message (in or out), enabling complete
   // conversation history including messages sent before AutoFlow existed.

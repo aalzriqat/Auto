@@ -9,10 +9,6 @@ import {
   postDirectMessage as instagramPostDm,
 } from "./utils/instagramApi";
 
-// Maximum number of cron-driven retries after the initial webhook send.
-// Total attempts = 1 initial + MAX_RETRIES cron retries.
-const MAX_RETRIES = 3;
-
 // Only retry events created within the last 48 hours. Older failures are
 // surfaced as "needs reply" in the inbox for manual follow-up.
 const RETRY_WINDOW_MS = 48 * 60 * 60 * 1000;
@@ -29,19 +25,21 @@ export const getPendingFacebookAutoReplies = internalQuery({
     const cutoff = now - RETRY_WINDOW_MS;
     const minAge = now - MIN_AGE_BEFORE_RETRY_MS;
 
-    const candidates = await ctx.db
+    // Use the index so only genuinely-pending events are scanned.
+    // recordAutoReplyFailure clears pendingAutoReply when retries are exhausted,
+    // so exhausted events fall out of this index naturally.
+    return ctx.db
       .query("facebookEvents")
+      .withIndex("by_pending_reply", (q) =>
+        q.eq("pendingAutoReply", true).gt("_creationTime", cutoff)
+      )
       .filter((q) =>
         q.and(
-          q.neq(q.field("pendingAutoReplyText"), undefined),
           q.eq(q.field("autoRepliedAt"), undefined),
-          q.gt(q.field("_creationTime"), cutoff),
           q.lt(q.field("_creationTime"), minAge)
         )
       )
       .take(50);
-
-    return candidates.filter((ev) => (ev.autoReplyRetryCount ?? 0) < MAX_RETRIES);
   },
 });
 
@@ -52,19 +50,18 @@ export const getPendingInstagramAutoReplies = internalQuery({
     const cutoff = now - RETRY_WINDOW_MS;
     const minAge = now - MIN_AGE_BEFORE_RETRY_MS;
 
-    const candidates = await ctx.db
+    return ctx.db
       .query("instagramEvents")
+      .withIndex("by_pending_reply", (q) =>
+        q.eq("pendingAutoReply", true).gt("_creationTime", cutoff)
+      )
       .filter((q) =>
         q.and(
-          q.neq(q.field("pendingAutoReplyText"), undefined),
           q.eq(q.field("autoRepliedAt"), undefined),
-          q.gt(q.field("_creationTime"), cutoff),
           q.lt(q.field("_creationTime"), minAge)
         )
       )
       .take(50);
-
-    return candidates.filter((ev) => (ev.autoReplyRetryCount ?? 0) < MAX_RETRIES);
   },
 });
 
@@ -95,9 +92,14 @@ export const retryPendingSocialAutoReplies = internalAction({
       const replyText = ev.pendingAutoReplyText!;
       const replySource = ev.pendingAutoReplySource ?? "canned";
 
-      const token = await ctx.runQuery(internal.facebookEngagement.getTokenForOrg, {
-        orgId: ev.orgId,
-      });
+      // Token fetch is isolated: a transient DB/network error for one org must
+      // not abort the rest of the batch. Skip without counting as a retry attempt.
+      let token;
+      try {
+        token = await ctx.runQuery(internal.facebookEngagement.getTokenForOrg, { orgId: ev.orgId });
+      } catch {
+        continue;
+      }
       if (!token) continue;
 
       retried++;
@@ -142,9 +144,12 @@ export const retryPendingSocialAutoReplies = internalAction({
       const replyText = ev.pendingAutoReplyText!;
       const replySource = ev.pendingAutoReplySource ?? "canned";
 
-      const token = await ctx.runQuery(internal.instagramEngagement.getTokenForOrg, {
-        orgId: ev.orgId,
-      });
+      let token;
+      try {
+        token = await ctx.runQuery(internal.instagramEngagement.getTokenForOrg, { orgId: ev.orgId });
+      } catch {
+        continue;
+      }
       if (!token) continue;
 
       retried++;
