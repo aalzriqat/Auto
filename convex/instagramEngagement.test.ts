@@ -689,7 +689,10 @@ describe("instagramEngagement.handleIncomingInstagramEvent — Smart Reply", () 
         .withIndex("by_org_external", (q) => q.eq("orgId", orgId).eq("externalId", "sr_price"))
         .unique()
     );
-    expect(event?.autoReplySource).toBe("smart");
+    // handleIncomingInstagramEvent only queues the reply (autoReplySource is
+    // set later by markEventAutoReplied, once the send action actually
+    // confirms delivery) — so at this point the source lives on the pending field.
+    expect(event?.pendingAutoReplySource).toBe("smart");
   });
 
   test("price match on a sold vehicle falls back to the unavailable template instead of a price", async () => {
@@ -921,7 +924,9 @@ describe("instagramEngagement.handleIncomingInstagramEvent — Smart Reply", () 
         .withIndex("by_org_external", (q) => q.eq("orgId", orgId).eq("externalId", "sr_no_intent"))
         .unique()
     );
-    expect(event?.autoReplySource).toBe("canned");
+    // See the price-match test above: the source is still on the pending
+    // field until markEventAutoReplied confirms delivery.
+    expect(event?.pendingAutoReplySource).toBe("canned");
   });
 
   test("Smart Reply disabled leaves the canned reply path fully unaffected (regression guard)", async () => {
