@@ -309,7 +309,12 @@ export const approveManualJournal = mutation({
       throw new ConvexError("This manual journal has already been resolved.");
     }
     // Segregation of duties: the approver must be a different, finance-authorized
-    // person from whoever created the draft.
+    // person from whoever created the draft. Deliberately hardcoded rather than
+    // routed through checkSegregationOfDuties/orgSettings.allowSoDBypasses — a
+    // manual journal is an arbitrary, unrestricted GL posting (the highest-risk
+    // financial control point), and this is the exact check Phase 10 exists to
+    // make unbypassable, unlike lower-risk SoD checks elsewhere that orgs may
+    // opt out of.
     if (draft.createdBy === user._id) {
       throw new ConvexError("Manual journal reviewer cannot be the same as the poster.");
     }
@@ -413,6 +418,8 @@ export const rejectManualJournal = mutation({
     if (draft.status !== "PENDING_APPROVAL") {
       throw new ConvexError("This manual journal has already been resolved.");
     }
+    // See the matching check in approveManualJournal for why this is hardcoded
+    // rather than routed through checkSegregationOfDuties/allowSoDBypasses.
     if (draft.createdBy === user._id) {
       throw new ConvexError("Manual journal reviewer cannot be the same as the poster.");
     }

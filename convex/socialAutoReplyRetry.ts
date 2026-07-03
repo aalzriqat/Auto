@@ -18,6 +18,87 @@ const RETRY_WINDOW_MS = 48 * 60 * 60 * 1000;
 // resolve in < 10 seconds; 5 minutes is a conservative safety margin.
 const MIN_AGE_BEFORE_RETRY_MS = 5 * 60 * 1000;
 
+// After the external reply send succeeds, persisting that fact via `markFn`
+// is a single-document patch that should essentially never fail — but if a
+// transient Convex error hits it, we must retry the mark itself rather than
+// falling back to recordAutoReplyFailure, which would re-arm the event for
+// pickup and risk posting the same reply to the customer a second time.
+async function markRepliedWithRetry(markFn: () => Promise<unknown>, attempts = 3): Promise<boolean> {
+  for (let i = 0; i < attempts; i++) {
+    try {
+      await markFn();
+      return true;
+    } catch {
+      if (i < attempts - 1) await new Promise((resolve) => setTimeout(resolve, 500 * (i + 1)));
+    }
+  }
+  return false;
+}
+
+type PendingReplyEvent = {
+  _id: unknown;
+  orgId: unknown;
+  pendingAutoReplyText?: string;
+  pendingAutoReplySource?: "smart" | "canned";
+};
+
+type RetryBatchStats = { retried: number; succeeded: number; failed: number; unconfirmed: number };
+
+// Shared per-platform retry flow: token lookup, send, success marking, and
+// failure recording. Facebook and Instagram wire in their own token/send/mark
+// functions below — this only owns the outcome bookkeeping and the
+// send-succeeded-but-not-yet-durably-recorded handling.
+async function retryBatch<TEvent extends PendingReplyEvent, TToken>(
+  events: TEvent[],
+  config: {
+    getToken: (orgId: TEvent["orgId"]) => Promise<TToken | null>;
+    send: (ev: TEvent, token: TToken) => Promise<{ ok: boolean }>;
+    markReplied: (ev: TEvent, replyText: string, replySource: "smart" | "canned") => Promise<unknown>;
+    recordFailure: (ev: TEvent) => Promise<unknown>;
+  }
+): Promise<RetryBatchStats> {
+  const stats: RetryBatchStats = { retried: 0, succeeded: 0, failed: 0, unconfirmed: 0 };
+
+  for (const ev of events) {
+    const replyText = ev.pendingAutoReplyText!;
+    const replySource = ev.pendingAutoReplySource ?? "canned";
+
+    // Token fetch is isolated: a transient DB/network error for one org must
+    // not abort the rest of the batch. Skip without counting as a retry attempt.
+    let token: TToken | null;
+    try {
+      token = await config.getToken(ev.orgId);
+    } catch {
+      continue;
+    }
+    if (!token) continue;
+
+    stats.retried++;
+    try {
+      const result = await config.send(ev, token);
+      if (result.ok) {
+        const marked = await markRepliedWithRetry(() => config.markReplied(ev, replyText, replySource));
+        if (marked) {
+          stats.succeeded++;
+        } else {
+          // Reply was sent but we could not durably record it after retries.
+          // Do NOT call recordFailure: that would re-arm the event for pickup
+          // and risk sending this exact reply again.
+          stats.unconfirmed++;
+        }
+      } else {
+        await config.recordFailure(ev);
+        stats.failed++;
+      }
+    } catch {
+      await config.recordFailure(ev);
+      stats.failed++;
+    }
+  }
+
+  return stats;
+}
+
 export const getPendingFacebookAutoReplies = internalQuery({
   args: {},
   handler: async (ctx) => {
@@ -83,114 +164,49 @@ export const retryPendingSocialAutoReplies = internalAction({
       ctx.runQuery(internal.socialAutoReplyRetry.getPendingInstagramAutoReplies),
     ]);
 
-    let retried = 0;
-    let succeeded = 0;
-    let failed = 0;
-
-    // ─── Facebook ────────────────────────────────────────────────────────────
-    for (const ev of fbEvents) {
-      const replyText = ev.pendingAutoReplyText!;
-      const replySource = ev.pendingAutoReplySource ?? "canned";
-
-      // Token fetch is isolated: a transient DB/network error for one org must
-      // not abort the rest of the batch. Skip without counting as a retry attempt.
-      let token;
-      try {
-        token = await ctx.runQuery(internal.facebookEngagement.getTokenForOrg, { orgId: ev.orgId });
-      } catch {
-        continue;
-      }
-      if (!token) continue;
-
-      retried++;
-      try {
+    const fb = await retryBatch(fbEvents, {
+      getToken: (orgId) => ctx.runQuery(internal.facebookEngagement.getTokenForOrg, { orgId }),
+      send: (ev, token) => {
         const channel = ev.pendingAutoReplyChannel ?? ev.kind;
-        const result =
-          channel === "comment"
-            ? await facebookPostCommentReply(
-                ev.externalId,
-                replyText,
-                token.facebookPageAccessToken
-              )
-            : await facebookPostDm(
-                ev.senderFacebookId,
-                replyText,
-                token.facebookPageId,
-                token.facebookPageAccessToken
-              );
+        return channel === "comment"
+          ? facebookPostCommentReply(ev.externalId, ev.pendingAutoReplyText!, token.facebookPageAccessToken)
+          : facebookPostDm(
+              ev.senderFacebookId,
+              ev.pendingAutoReplyText!,
+              token.facebookPageId,
+              token.facebookPageAccessToken
+            );
+      },
+      markReplied: (ev, replyText, replySource) =>
+        ctx.runMutation(internal.facebookEngagement.markEventAutoReplied, { eventId: ev._id, replyText, replySource }),
+      recordFailure: (ev) =>
+        ctx.runMutation(internal.facebookEngagement.recordAutoReplyFailure, { eventId: ev._id }),
+    });
 
-        if (result.ok) {
-          await ctx.runMutation(internal.facebookEngagement.markEventAutoReplied, {
-            eventId: ev._id,
-            replyText,
-            replySource,
-          });
-          succeeded++;
-        } else {
-          await ctx.runMutation(internal.facebookEngagement.recordAutoReplyFailure, {
-            eventId: ev._id,
-          });
-          failed++;
-        }
-      } catch {
-        await ctx.runMutation(internal.facebookEngagement.recordAutoReplyFailure, {
-          eventId: ev._id,
-        });
-        failed++;
-      }
-    }
-
-    // ─── Instagram ───────────────────────────────────────────────────────────
-    for (const ev of igEvents) {
-      const replyText = ev.pendingAutoReplyText!;
-      const replySource = ev.pendingAutoReplySource ?? "canned";
-
-      let token;
-      try {
-        token = await ctx.runQuery(internal.instagramEngagement.getTokenForOrg, { orgId: ev.orgId });
-      } catch {
-        continue;
-      }
-      if (!token) continue;
-
-      retried++;
-      try {
+    const ig = await retryBatch(igEvents, {
+      getToken: (orgId) => ctx.runQuery(internal.instagramEngagement.getTokenForOrg, { orgId }),
+      send: (ev, token) => {
         const channel = ev.pendingAutoReplyChannel ?? ev.kind;
-        const result =
-          channel === "comment"
-            ? await instagramPostCommentReply(
-                ev.externalId,
-                replyText,
-                token.instagramAccessToken
-              )
-            : await instagramPostDm(
-                ev.senderInstagramId,
-                replyText,
-                token.instagramBusinessAccountId,
-                token.instagramAccessToken
-              );
+        return channel === "comment"
+          ? instagramPostCommentReply(ev.externalId, ev.pendingAutoReplyText!, token.instagramAccessToken)
+          : instagramPostDm(
+              ev.senderInstagramId,
+              ev.pendingAutoReplyText!,
+              token.instagramBusinessAccountId,
+              token.instagramAccessToken
+            );
+      },
+      markReplied: (ev, replyText, replySource) =>
+        ctx.runMutation(internal.instagramEngagement.markEventAutoReplied, { eventId: ev._id, replyText, replySource }),
+      recordFailure: (ev) =>
+        ctx.runMutation(internal.instagramEngagement.recordAutoReplyFailure, { eventId: ev._id }),
+    });
 
-        if (result.ok) {
-          await ctx.runMutation(internal.instagramEngagement.markEventAutoReplied, {
-            eventId: ev._id,
-            replyText,
-            replySource,
-          });
-          succeeded++;
-        } else {
-          await ctx.runMutation(internal.instagramEngagement.recordAutoReplyFailure, {
-            eventId: ev._id,
-          });
-          failed++;
-        }
-      } catch {
-        await ctx.runMutation(internal.instagramEngagement.recordAutoReplyFailure, {
-          eventId: ev._id,
-        });
-        failed++;
-      }
-    }
+    const retried = fb.retried + ig.retried;
+    const succeeded = fb.succeeded + ig.succeeded;
+    const failed = fb.failed + ig.failed;
+    const unconfirmed = fb.unconfirmed + ig.unconfirmed;
 
-    return `Retried ${retried} pending auto-replies: ${succeeded} succeeded, ${failed} failed.`;
+    return `Retried ${retried} pending auto-replies: ${succeeded} succeeded, ${failed} failed${unconfirmed > 0 ? `, ${unconfirmed} sent but unconfirmed (check audit log)` : ""}.`;
   },
 });

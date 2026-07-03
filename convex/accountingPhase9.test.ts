@@ -245,7 +245,7 @@ describe("Phase 9 — manual journal reviewer authority", () => {
 
     await expect(
       asWeakReviewer.mutation(api.financialAudit.approveManualJournal, { orgId, draftId })
-    ).rejects.toThrow();
+    ).rejects.toThrow(/missing required permissions/i);
   });
 });
 

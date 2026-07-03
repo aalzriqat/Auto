@@ -60,7 +60,7 @@ known gap using the existing engine (highest value, lowest risk). 14 and 16 are
 contained correctness fixes. 15 is a new subsystem. 17 and 18 are heavy,
 cross-cutting tracks that depend on 11–13 defining target shapes, so they come last.
 
-```
+```text
 10  Two-step manual-journal approval
 11  Fixed-asset lifecycle
 12  Partner-equity transactions
@@ -93,7 +93,7 @@ authenticates and acts themselves.
 
 ## Schema Changes
 
-- New `manualJournalDrafts` table: `orgId`, `status` (DRAFT / PENDING_APPROVAL /
+- New `manualJournalDrafts` table: `orgId`, `status` (PENDING_APPROVAL /
   POSTED / REJECTED), `memo`, `lines` (array of {accountId, debitMinor, creditMinor,
   currency}), `currency`, `createdBy`, `createdAt`, `reviewedBy?`, `decidedAt?`,
   `rejectionReason?`, `journalEntryId?`. Indexes `by_org_status`, `by_org_time`.
@@ -106,7 +106,7 @@ authenticates and acts themselves.
 - `financialAudit.approveManualJournal` — authenticated as the reviewer's own
   Clerk identity via `requireTenantAuth(ctx, orgId, [MANAGE_FINANCE])`; asserts
   `reviewer !== createdBy`; posts via the engine; sets draft `POSTED`; writes
-  `MANUAL_JOURNAL_POSTED` audit entry.
+  `POST_MANUAL_JOURNAL` audit entry.
 - `financialAudit.rejectManualJournal` — reviewer-authenticated; requires reason;
   sets `REJECTED`; posts nothing.
 - UI: pending manual-journal queue in the accounting section, reusing the existing
