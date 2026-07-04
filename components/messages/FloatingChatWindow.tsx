@@ -148,6 +148,16 @@ export function FloatingChatWindow({ conversationId, currentUserId, index }: Pro
           "bg-gradient-to-r from-blue-600 to-blue-500 text-white"
         )}
         onClick={() => toggleMinimize(conversationId)}
+        onKeyDown={(e) => {
+          if (e.currentTarget !== e.target) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            toggleMinimize(conversationId);
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        aria-label={isMinimized ? t("MessagesExpand") : t("MessagesMinimize")}
       >
         <div className="relative shrink-0">
           <Avatar className="h-8 w-8 border-2 border-white/30">

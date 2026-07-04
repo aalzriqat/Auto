@@ -78,7 +78,12 @@ export function WebsiteOnboarding() {
 
   return createPortal(
     <>
-      <div className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm" onClick={dismissOnboarding} />
+      <button
+        type="button"
+        className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm"
+        onClick={dismissOnboarding}
+        aria-label="Dismiss dealer website onboarding"
+      />
       <div
         className={cn(
           "fixed z-[61] top-24 w-[340px] overflow-hidden rounded-xl bg-white shadow-2xl",

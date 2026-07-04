@@ -57,6 +57,16 @@ export function ManualFinanceCard({
   return (
     <div
       onClick={onSelect}
+      onKeyDown={(e) => {
+        if (e.currentTarget !== e.target) return;
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
+      role="button"
+      tabIndex={0}
+      aria-pressed={selected}
       className={cn(
         "text-start rounded-xl border transition-all duration-200 overflow-hidden cursor-pointer",
         selected
@@ -92,6 +102,7 @@ export function ManualFinanceCard({
       <div
         className="px-4 pt-3 grid grid-cols-2 gap-2"
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
       >
         <div className="grid gap-1">
           <label className="text-[11px] text-muted-foreground">{t("Profit Rate" as any)}</label>
@@ -154,6 +165,7 @@ export function ManualFinanceCard({
       <div
         className="px-4 pt-3"
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2">
           <input

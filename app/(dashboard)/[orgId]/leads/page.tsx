@@ -190,6 +190,15 @@ export default function LeadsPage() {
                 ref={(el) => { rowRefs.current[lead._id] = el; }}
                 className={`rounded-xl border bg-card p-4 space-y-3 cursor-pointer active:bg-muted/30 transition-shadow ${highlightedLeadId === lead._id ? "ring-2 ring-amber-400" : ""}`}
                 onClick={() => handleEdit(lead)}
+                onKeyDown={(e) => {
+                  if (e.currentTarget !== e.target) return;
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    handleEdit(lead);
+                  }
+                }}
+                role="button"
+                tabIndex={0}
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-3 min-w-0">
@@ -390,6 +399,15 @@ export default function LeadsPage() {
                           <div
                             key={lead._id}
                             onClick={() => handleEdit(lead)}
+                            onKeyDown={(e) => {
+                              if (e.currentTarget !== e.target) return;
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                handleEdit(lead);
+                              }
+                            }}
+                            role="button"
+                            tabIndex={0}
                             className="bg-white dark:bg-zinc-800 rounded-lg p-3 shadow-sm border border-slate-100 dark:border-zinc-700 cursor-pointer hover:shadow-md transition-shadow group"
                           >
                             <div className="flex items-center gap-2 mb-2">

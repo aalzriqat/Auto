@@ -322,6 +322,15 @@ export default function SocialInboxPage() {
                   key={`${conversation.platform}:${conversation.customerId}:${conversation.conversationKind}:${conversation.conversationPostId ?? ""}`}
                   className="rounded-xl border bg-card p-4 space-y-2 cursor-pointer active:bg-muted/30"
                   onClick={() => setActiveConversation(ck)}
+                  onKeyDown={(e) => {
+                    if (e.currentTarget !== e.target) return;
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setActiveConversation(ck);
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <p className="font-semibold text-sm truncate flex items-center gap-1.5">

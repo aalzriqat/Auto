@@ -76,7 +76,12 @@ export function FeedbackWidget() {
       {open && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:justify-end p-4 sm:pe-6 sm:pb-20">
           {/* Backdrop */}
-          <div className="absolute inset-0 bg-black/20" onClick={handleClose} />
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/20"
+            onClick={handleClose}
+            aria-label={t("Close" as any) || "Close feedback"}
+          />
 
           {/* Panel */}
           <div className="relative w-full sm:w-96 bg-background rounded-xl border shadow-xl flex flex-col max-h-[90vh]">

@@ -18,20 +18,20 @@ jobs:
     timeout-minutes: 60
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-    - uses: pnpm/action-setup@v4
+    - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
       with:
-        version: 10
+        version: 10.28.1
 
     - name: Use Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
       with:
-        node-version: '22.x'
+        node-version: '22.21.1'
         cache: 'pnpm'
 
     - name: Install dependencies
-      run: pnpm install
+      run: pnpm install --frozen-lockfile --ignore-scripts
 
     - name: Build production bundle
       run: pnpm build
@@ -50,7 +50,15 @@ jobs:
         NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
 
     - name: Wait for server
-      run: npx wait-on http://localhost:3000 --timeout 60000
+      run: |
+        for attempt in {1..60}; do
+          if curl --silent --fail http://localhost:3000 > /dev/null; then
+            exit 0
+          fi
+          sleep 1
+        done
+        echo "Server did not become ready within 60 seconds." >&2
+        exit 1
 
     # The TestSprite CLI reads its execution arguments from
     # testsprite_tests/tmp/config.json, which is normally produced by the
@@ -87,7 +95,7 @@ jobs:
         E2E_LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
 
     - name: Run TestSprite E2E tests
-      run: npx @testsprite/testsprite-mcp generateCodeAndExecute
+      run: pnpm exec testsprite-mcp-plugin generateCodeAndExecute
       env:
         TESTSPRITE_API_KEY: ${{ secrets.TESTSPRITE_API_KEY }}
         API_KEY: ${{ secrets.TESTSPRITE_API_KEY }}
@@ -99,7 +107,7 @@ jobs:
       run: rm -f testsprite_tests/tmp/config.json
 
     - name: Upload E2E test report
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       if: always()
       with:
         name: e2e-report

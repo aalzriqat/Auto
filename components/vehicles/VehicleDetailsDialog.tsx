@@ -662,7 +662,12 @@ export function VehicleDetailsDialog({
               ) : (
                 <div className="space-y-3">
                   {relations.workOrders.map((wo: any) => (
-                    <div key={wo._id} className="bg-muted/30 p-4 rounded-lg border text-sm hover:bg-muted/50 transition-colors cursor-pointer" onClick={() => { setSelectedWorkOrder(wo); setWorkOrderOpen(true); }}>
+                    <button
+                      key={wo._id}
+                      type="button"
+                      className="w-full text-start bg-muted/30 p-4 rounded-lg border text-sm hover:bg-muted/50 transition-colors cursor-pointer"
+                      onClick={() => { setSelectedWorkOrder(wo); setWorkOrderOpen(true); }}
+                    >
                       <div className="flex justify-between items-start mb-2">
                         <span className="font-semibold">{wo.title}</span>
                         <span className={`text-xs px-2 py-0.5 rounded font-medium ${wo.status === 'COMPLETED' ? 'bg-green-100 text-green-800' :
@@ -677,7 +682,7 @@ export function VehicleDetailsDialog({
                         <span className="text-muted-foreground text-xs">{wo.tasks.length} task{wo.tasks.length !== 1 && 's'}</span>
                         <span className="font-semibold text-primary">{t("Total" as any)}: {wo.totalCost.toLocaleString(undefined, { minimumFractionDigits: 2 })} JOD</span>
                       </div>
-                    </div>
+                    </button>
                   ))}
                 </div>
               )}

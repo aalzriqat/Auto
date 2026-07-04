@@ -143,6 +143,15 @@ export default function CustomersPage() {
             id={`row-${customer._id}`}
             className={`rounded-xl border bg-card p-4 space-y-2 cursor-pointer active:bg-muted/50 ${highlightId === customer._id ? "ring-2 ring-primary" : ""}`}
             onClick={() => handleRowClick(customer._id)}
+            onKeyDown={(e) => {
+              if (e.currentTarget !== e.target) return;
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                handleRowClick(customer._id);
+              }
+            }}
+            role="button"
+            tabIndex={0}
           >
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-3 min-w-0">
@@ -151,7 +160,7 @@ export default function CustomersPage() {
                 </div>
                 <p className="font-semibold text-sm truncate">{customer.firstName} {customer.lastName}</p>
               </div>
-              <div className="flex gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+              <div className="flex gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
                 <Button variant="ghost" size="icon" className="h-10 w-10" onClick={(e) => handleEdit(customer, e)}>
                   <Pencil className="h-4 w-4 text-muted-foreground" />
                 </Button>

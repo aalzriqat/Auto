@@ -245,6 +245,14 @@ export function ImportWizard(props: ImportWizardProps) {
                 onDrop={handleDrop}
                 onDragOver={(e) => e.preventDefault()}
                 onClick={() => fileInputRef.current?.click()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    fileInputRef.current?.click();
+                  }
+                }}
+                role="button"
+                tabIndex={0}
               >
                 <Upload className="h-8 w-8 mx-auto mb-3 text-muted-foreground" />
                 <p className="text-sm font-medium">{fileName || t("DropFileHere" as any)}</p>
