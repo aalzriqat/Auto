@@ -835,6 +835,41 @@ export async function hookClaimWrittenOff(ctx: MutationCtx, args: ClaimHookArgs)
   await postClaimEvent(ctx, "CLAIM_WRITTEN_OFF", args);
 }
 
+// ─── GL Phase 15: cash-drawer bank deposit ────────────────────────────────────
+
+/**
+ * No scoped self-heal here: unlike the fixed-asset/partner-equity/claim
+ * accounts, BANK_ACCOUNT and CASH_ON_HAND are foundational accounts already
+ * ensured by chartOfAccounts.initialize for every org.
+ */
+export async function hookCashDrawerDeposited(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    sessionId: Id<"cashDrawerSessions">;
+    amountMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "CASH_DRAWER_DEPOSITED",
+    sourceType: "cashDrawerSessions",
+    sourceId: args.sessionId.toString(),
+    idempotencyKey: `cash_drawer_deposited_${args.sessionId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      sessionId: args.sessionId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+    },
+  });
+}
+
 export async function hookPartnerDrew(ctx: MutationCtx, args: PartnerEquityHookArgs) {
   await postPartnerEquityEvent(ctx, "PARTNER_DREW", args);
 }

@@ -30,6 +30,7 @@ export type EventType =
   | "PROFIT_DISTRIBUTED"
   | "CLAIM_SETTLED"
   | "CLAIM_WRITTEN_OFF"
+  | "CASH_DRAWER_DEPOSITED"
   | "JOURNAL_REVERSAL";
 
 export const ALL_EVENT_TYPES = new Set<string>([
@@ -42,6 +43,7 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "ASSET_CAPITALIZED", "DEPRECIATION_POSTED", "ASSET_IMPAIRED", "ASSET_DISPOSED",
   "CAPITAL_CONTRIBUTED", "PARTNER_DREW", "PROFIT_DISTRIBUTED",
   "CLAIM_SETTLED", "CLAIM_WRITTEN_OFF",
+  "CASH_DRAWER_DEPOSITED",
   // JOURNAL_REVERSAL is intentionally excluded: it is written directly by
   // reverseAccountingEvent() in reversals.ts and never goes through postAccountingEvent().
 ]);
@@ -702,6 +704,25 @@ export function ruleClaimWrittenOff(p: ClaimWrittenOffPayload): RuleResult {
   };
 }
 
+// ─── GL Phase 15: cash-drawer bank deposit ────────────────────────────────────
+
+export interface CashDrawerDepositedPayload {
+  sessionId: string;
+  amountMinor: number;
+  currency: string;
+}
+
+export function ruleCashDrawerDeposited(p: CashDrawerDepositedPayload): RuleResult {
+  return {
+    lines: [
+      line(SYSTEM_KEYS.BANK_ACCOUNT, p.amountMinor, 0, "Cash drawer deposited to bank"),
+      line(SYSTEM_KEYS.CASH_ON_HAND, 0, p.amountMinor, "Drawer cash removed"),
+    ],
+    memo: "Cash drawer session deposited",
+    category: "SYSTEM",
+  };
+}
+
 // ─── Dispatch ─────────────────────────────────────────────────────────────────
 
 export function applyPostingRule(eventType: string, payload: Record<string, unknown>): RuleResult {
@@ -734,6 +755,7 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "PROFIT_DISTRIBUTED": return ruleProfitDistributed(payload as unknown as PartnerEquityMovementPayload);
     case "CLAIM_SETTLED": return ruleClaimSettled(payload as unknown as ClaimSettledPayload);
     case "CLAIM_WRITTEN_OFF": return ruleClaimWrittenOff(payload as unknown as ClaimWrittenOffPayload);
+    case "CASH_DRAWER_DEPOSITED": return ruleCashDrawerDeposited(payload as unknown as CashDrawerDepositedPayload);
     default:
       throw new Error(`No posting rule defined for event type: ${eventType}`);
   }

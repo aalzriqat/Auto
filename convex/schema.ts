@@ -1618,6 +1618,54 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"]),
 
+  // GL Phase 15: full cash-drawer lifecycle. Distinct from the simpler,
+  // pre-existing cashierReconciliations (open-float-free count-vs-expected
+  // snapshot with no movement ledger) — this is the fuller open→count→
+  // close→approve lifecycle with its own movement log, per the phase spec.
+  cashDrawerSessions: defineTable({
+    orgId: v.id("organizations"),
+    branchId: v.optional(v.id("branches")),
+    openingFloatMinor: v.number(),
+    currency: v.string(),
+    openedBy: v.id("users"),
+    openedAt: v.number(),
+    status: v.union(
+      v.literal("OPEN"),
+      v.literal("COUNTING"),
+      v.literal("CLOSED"),
+      v.literal("APPROVED"),
+    ),
+    closingCountMinor: v.optional(v.number()),
+    varianceMinor: v.optional(v.number()),
+    closedBy: v.optional(v.id("users")),
+    closedAt: v.optional(v.number()),
+    approvedBy: v.optional(v.id("users")),
+    approvedAt: v.optional(v.number()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_branch_status", ["orgId", "branchId", "status"]),
+
+  // Append-only activity log behind a session's expected-cash computation.
+  cashMovements: defineTable({
+    orgId: v.id("organizations"),
+    sessionId: v.id("cashDrawerSessions"),
+    type: v.union(
+      v.literal("SALE"),
+      v.literal("PAYOUT"),
+      v.literal("HANDOVER"),
+      v.literal("BANK_DEPOSIT"),
+    ),
+    amountMinor: v.number(),
+    occurredAt: v.number(),
+    notes: v.optional(v.string()),
+    accountingEventId: v.optional(v.id("accountingEvents")),
+    actorId: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_session", ["orgId", "sessionId"]),
+
   // GL Phase 14: org-defined exchange rates for optional reporting-currency
   // translation. Books always stay per-currency; these rates only produce
   // display-level translated figures in reports, never postings.
