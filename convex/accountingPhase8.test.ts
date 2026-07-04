@@ -40,6 +40,7 @@ async function seedDealer(tag = "p8") {
         "view:sales", "create:sales", "edit:sales", "delete:sales",
         "view:expenses", "create:expenses", "edit:expenses", "delete:expenses",
         "manage:finance", "view:finance",
+        "view:commissions", "manage:commissions",
         "view:customers", "create:customers",
         "view:vehicles", "create:vehicles", "edit:vehicles",
         "manage:collection", "view:collection",
@@ -78,6 +79,27 @@ async function seedDealer(tag = "p8") {
   return { t, orgId, userId, period, asUser, customerId };
 }
 
+async function addCancellationApprover(t: any, orgId: string, tag: string) {
+  const approverId = await t.run((ctx: any) =>
+    ctx.db.insert("users", {
+      clerkId: `${tag}_approver`,
+      email: `${tag}.approver@example.com`,
+      name: `${tag} Approver`,
+    })
+  );
+  const approverRoleId = await t.run((ctx: any) =>
+    ctx.db.insert("roles", {
+      orgId,
+      name: `${tag} Manager`,
+      permissions: ["view:sales", "edit:sales", "approve:requests"],
+    })
+  );
+  await t.run((ctx: any) =>
+    ctx.db.insert("memberships", { orgId, userId: approverId, roleId: approverRoleId })
+  );
+  return t.withIdentity({ subject: `${tag}_approver`, clerkId: `${tag}_approver` });
+}
+
 // ─── Sale cancellation reversal ───────────────────────────────────────────────
 
 describe("Phase 8 — sale cancellation reversal", () => {
@@ -109,21 +131,7 @@ describe("Phase 8 — sale cancellation reversal", () => {
     expect(beforeEvents[0].status).toBe("POSTED");
 
     // Approver must be a different user
-    const approverId = await t.run((ctx) =>
-      ctx.db.insert("users", {
-        clerkId: "cancel_approver", email: "approver@cancel.com", name: "Approver",
-      })
-    );
-    const approverRoleId = await t.run((ctx) =>
-      ctx.db.insert("roles", {
-        orgId, name: "Manager",
-        permissions: ["view:sales", "edit:sales", "approve:requests"],
-      })
-    );
-    await t.run((ctx) =>
-      ctx.db.insert("memberships", { orgId, userId: approverId, roleId: approverRoleId })
-    );
-    const asApprover = t.withIdentity({ subject: "cancel_approver", clerkId: "cancel_approver" });
+    const asApprover = await addCancellationApprover(t, orgId, "cancel");
 
     await asApprover.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
 
@@ -137,6 +145,162 @@ describe("Phase 8 — sale cancellation reversal", () => {
 
     const originalEvent = await t.run((ctx) => ctx.db.get(beforeEvents[0]._id));
     expect(originalEvent?.status).toBe("REVERSED");
+  });
+
+  test("cancelling a sale closes its receivable and reverses unpaid commission accrual", async () => {
+    const { t, orgId, asUser, userId, customerId } = await seedDealer("cancel_commission");
+    await t.run(async (ctx) => {
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
+        .unique();
+      await ctx.db.patch(membership!._id, { commissionRate: 10 });
+    });
+
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, vin: "VIN_CANCEL_COMMISSION", make: "Toyota", model: "Rav4", year: 2022,
+        mileage: 0, color: "Blue", fuelType: "Petrol", transmission: "Automatic",
+        purchasePrice: 10_000, sellingPrice: 15_000, status: "AVAILABLE",
+      })
+    );
+    const saleId = await asUser.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 15_000, saleDate: Date.now(),
+      status: "COMPLETED", financingType: "CASH",
+      idempotencyKey: "cancel_commission_sale",
+    });
+
+    const commissionEvent = await asUser.query(api.accountingLedger.listAccountingEvents, {
+      orgId,
+      sourceType: "sales",
+      sourceId: `commission_${saleId}`,
+    });
+    expect(commissionEvent.find((event: any) => event.eventType === "COMMISSION_ACCRUED")).toBeTruthy();
+
+    const asApprover = await addCancellationApprover(t, orgId, "cancel_commission");
+    await asApprover.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
+
+    await t.run(async (ctx) => {
+      const sale = await ctx.db.get(saleId);
+      expect(sale?.status).toBe("CANCELLED");
+      const receivable = sale?.canonicalReceivableDocumentId
+        ? await ctx.db.get(sale.canonicalReceivableDocumentId)
+        : null;
+      expect(receivable?.status).toBe("CANCELLED");
+    });
+
+    const eventsAfterCancel = await asUser.query(api.accountingLedger.listAccountingEvents, {
+      orgId,
+      sourceType: "sales",
+      sourceId: `commission_${saleId}`,
+    });
+    const originalCommissionEvent = eventsAfterCancel.find((event: any) => event.eventType === "COMMISSION_ACCRUED");
+    const commissionReversal = eventsAfterCancel.find((event: any) => event.eventType === "JOURNAL_REVERSAL");
+    expect(originalCommissionEvent?.status).toBe("REVERSED");
+    expect(commissionReversal).toBeTruthy();
+  });
+
+  test("cancelling a sourced sale cancels its pending supplier payable", async () => {
+    const { t, orgId, asUser, userId, customerId } = await seedDealer("cancel_supplier");
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, vin: "VIN_CANCEL_SUPPLIER", make: "Nissan", model: "Patrol", year: 2023,
+        mileage: 0, color: "White", fuelType: "Petrol", transmission: "Automatic",
+        sellingPrice: 24_000, sourceType: "SOURCED", sourcedFromName: "Partner Dealer",
+        sourceCost: 19_000, status: "AVAILABLE",
+      })
+    );
+    const saleId = await asUser.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 24_000, saleDate: Date.now(),
+      status: "COMPLETED", financingType: "CASH",
+      idempotencyKey: "cancel_supplier_sale",
+    });
+
+    const payableBefore = await t.run((ctx) =>
+      ctx.db
+        .query("vehicleSupplierPayables")
+        .withIndex("by_sale", (q) => q.eq("saleId", saleId))
+        .unique()
+    );
+    expect(payableBefore?.status).toBe("PENDING");
+
+    const asApprover = await addCancellationApprover(t, orgId, "cancel_supplier");
+    await asApprover.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
+
+    const payableAfter = await t.run((ctx) => ctx.db.get(payableBefore!._id));
+    expect(payableAfter?.status).toBe("CANCELLED");
+    expect(payableAfter?.cancelledBy).toBeTruthy();
+  });
+
+  test("cancelling a sale is blocked after commission has been paid", async () => {
+    const { t, orgId, asUser, userId, customerId } = await seedDealer("cancel_paid_commission");
+    await t.run(async (ctx) => {
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
+        .unique();
+      await ctx.db.patch(membership!._id, { commissionRate: 10 });
+    });
+
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, vin: "VIN_CANCEL_PAID_COMM", make: "Hyundai", model: "Tucson", year: 2021,
+        mileage: 0, color: "Grey", fuelType: "Petrol", transmission: "Automatic",
+        purchasePrice: 10_000, sellingPrice: 16_000, status: "AVAILABLE",
+      })
+    );
+    const saleId = await asUser.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 16_000, saleDate: Date.now(),
+      status: "COMPLETED", financingType: "CASH",
+      idempotencyKey: "cancel_paid_commission_sale",
+    });
+    await asUser.mutation(api.sales.markCommissionPaid, {
+      orgId,
+      saleId,
+      idempotencyKey: "cancel_paid_commission_paid",
+    });
+
+    const asApprover = await addCancellationApprover(t, orgId, "cancel_paid_commission");
+    await expect(
+      asApprover.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" })
+    ).rejects.toThrow(/commission has been paid/i);
+  });
+
+  test("cancelling a sourced sale is blocked after the supplier payable is paid", async () => {
+    const { t, orgId, asUser, userId, customerId } = await seedDealer("cancel_paid_supplier");
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, vin: "VIN_CANCEL_PAID_SUPPLIER", make: "Kia", model: "Sorento", year: 2023,
+        mileage: 0, color: "Black", fuelType: "Petrol", transmission: "Automatic",
+        sellingPrice: 22_000, sourceType: "SOURCED", sourcedFromName: "Paid Supplier Dealer",
+        sourceCost: 18_000, status: "AVAILABLE",
+      })
+    );
+    const saleId = await asUser.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 22_000, saleDate: Date.now(),
+      status: "COMPLETED", financingType: "CASH",
+      idempotencyKey: "cancel_paid_supplier_sale",
+    });
+    const payable = await t.run((ctx) =>
+      ctx.db
+        .query("vehicleSupplierPayables")
+        .withIndex("by_sale", (q) => q.eq("saleId", saleId))
+        .unique()
+    );
+    await asUser.mutation(api.sourcingPayables.markPaid, {
+      orgId,
+      payableId: payable!._id,
+      idempotencyKey: "cancel_paid_supplier_payment",
+    });
+
+    const asApprover = await addCancellationApprover(t, orgId, "cancel_paid_supplier");
+    await expect(
+      asApprover.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" })
+    ).rejects.toThrow(/supplier payable has been paid/i);
   });
 });
 
@@ -318,6 +482,80 @@ describe("Phase 8 — payment intent settlement", () => {
       receivableDocumentId,
     });
     expect(balance?.outstandingMinor).toBe(600_000);
+  });
+
+  test("settling an intent linked to a legacy collection receivable updates collections balance", async () => {
+    const { t, orgId, asUser, customerId } = await seedDealer("pi_legacy");
+
+    const receivableId = await asUser.mutation(api.collections.createReceivable, {
+      orgId,
+      customerId,
+      sourceType: "PAYMENT_LINK",
+      title: "Payment-link receivable",
+      amount: 1_000,
+      dueDate: Date.now() + 86_400_000,
+    });
+
+    const intentId = await asUser.mutation(api.paymentIntents.create, {
+      orgId,
+      customerId,
+      receivableId,
+      amountMinor: 400_000,
+      currency: "JOD",
+      provider: "tap",
+      idempotencyKey: "pi_legacy_001",
+    });
+
+    await asUser.mutation(api.paymentIntents.markSettled, {
+      orgId,
+      intentId,
+      externalId: "tap_legacy_001",
+      idempotencyKey: "settle_tap_legacy_001",
+    });
+
+    await t.run(async (ctx) => {
+      const receivable = await ctx.db.get(receivableId);
+      expect(receivable?.outstandingAmount).toBe(600);
+      expect(receivable?.status).toBe("PARTIALLY_PAID");
+
+      const intent = await ctx.db.get(intentId);
+      expect(intent?.collectionPaymentId).toBeTruthy();
+      expect(intent?.canonicalPaymentId).toBeTruthy();
+      expect(intent?.paymentAllocationId).toBeTruthy();
+
+      const collectionPayment = intent?.collectionPaymentId
+        ? await ctx.db.get(intent.collectionPaymentId)
+        : null;
+      expect(collectionPayment?.method).toBe("PAYMENT_LINK");
+      expect(collectionPayment?.amount).toBe(400);
+      expect(collectionPayment?.canonicalPaymentId).toBe(intent?.canonicalPaymentId);
+      expect(collectionPayment?.paymentAllocationId).toBe(intent?.paymentAllocationId);
+    });
+  });
+
+  test("payment link amount cannot exceed legacy receivable outstanding balance", async () => {
+    const { orgId, asUser, customerId } = await seedDealer("pi_overpay");
+
+    const receivableId = await asUser.mutation(api.collections.createReceivable, {
+      orgId,
+      customerId,
+      sourceType: "PAYMENT_LINK",
+      title: "Overpay blocked",
+      amount: 300,
+      dueDate: Date.now() + 86_400_000,
+    });
+
+    await expect(
+      asUser.mutation(api.paymentIntents.create, {
+        orgId,
+        customerId,
+        receivableId,
+        amountMinor: 301_000,
+        currency: "JOD",
+        provider: "tap",
+        idempotencyKey: "pi_overpay_001",
+      })
+    ).rejects.toThrow(/cannot exceed/i);
   });
 
   test("expiring a pending intent marks it EXPIRED without posting GL", async () => {

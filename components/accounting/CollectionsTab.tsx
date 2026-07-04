@@ -43,6 +43,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { toast } from "@/components/ui/sonner";
+import { CashDrawerPanel } from "./collections/CashDrawerPanel";
+import { PaymentLinksPanel } from "./collections/PaymentLinksPanel";
 
 type ReceivableRow = Doc<"receivables"> & {
   customerName: string;
@@ -220,6 +222,8 @@ export function CollectionsTab() {
         <TabsList className="bg-slate-50 border border-slate-200">
           <TabsTrigger value="receivables">{t("Receivables" as any)}</TabsTrigger>
           <TabsTrigger value="cheques">{t("Cheques" as any)}</TabsTrigger>
+          <TabsTrigger value="paymentLinks">{t("PaymentLinks" as any)}</TabsTrigger>
+          <TabsTrigger value="cashDrawer">{t("CashDrawer" as any)}</TabsTrigger>
           <TabsTrigger value="payments">{t("Payments" as any)}</TabsTrigger>
           <TabsTrigger value="reports">{t("Reports" as any)}</TabsTrigger>
           {canApprove && <TabsTrigger value="approvals">{t("Approvals" as any)}</TabsTrigger>}
@@ -337,7 +341,7 @@ export function CollectionsTab() {
                         <div className="flex justify-end gap-1">
                           <Button size="sm" variant="outline" disabled={cheque.status !== "HELD"} onClick={() => runChequeAction("deposit", cheque)}>{t("Deposit" as any)}</Button>
                           <Button size="sm" variant="outline" disabled={cheque.status !== "HELD" && cheque.status !== "DEPOSITED"} onClick={() => runChequeAction("clear", cheque)}>{t("Clear" as any)}</Button>
-                          <Button size="sm" variant="outline" disabled={["CLEARED", "REPLACED", "CANCELLED"].includes(cheque.status)} onClick={() => setReturnTarget(cheque)}>{t("Return" as any)}</Button>
+                          <Button size="sm" variant="outline" disabled={["REPLACED", "CANCELLED"].includes(cheque.status)} onClick={() => setReturnTarget(cheque)}>{t("Return" as any)}</Button>
                           <Button size="sm" variant="outline" disabled={["CLEARED", "CANCELLED"].includes(cheque.status)} onClick={() => setReplaceTarget(cheque)}>{t("Replace" as any)}</Button>
                         </div>
                       </TableCell>
@@ -348,6 +352,14 @@ export function CollectionsTab() {
             </Table>
           </div>
           {chequeLoadStatus === "CanLoadMore" && <Button variant="outline" onClick={() => loadMoreCheques(75)}>{t("LoadMore" as any)}</Button>}
+        </TabsContent>
+
+        <TabsContent value="paymentLinks">
+          <PaymentLinksPanel />
+        </TabsContent>
+
+        <TabsContent value="cashDrawer">
+          <CashDrawerPanel />
         </TabsContent>
 
         <TabsContent value="payments" className="space-y-3">
@@ -923,17 +935,33 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const returnCheque = useMutation(api.collections.returnCheque);
+  const returnClearedCheque = useMutation(api.collections.returnClearedCheque);
   const [reason, setReason] = useState("");
+  const [bankFeeMinor, setBankFeeMinor] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const idempotencyKeyRef = useRef<string | null>(null);
 
   async function submit() {
     if (!activeOrgId || !cheque) return;
     setSubmitting(true);
     try {
-      await returnCheque({ orgId: activeOrgId, chequeId: cheque._id, returnReason: reason || undefined });
+      if (cheque.status === "CLEARED") {
+        idempotencyKeyRef.current ??= `return-cleared-cheque:${crypto.randomUUID()}`;
+        await returnClearedCheque({
+          orgId: activeOrgId,
+          chequeId: cheque._id,
+          returnReason: reason || undefined,
+          bankFeeMinor: bankFeeMinor ? Number(bankFeeMinor) : undefined,
+          idempotencyKey: idempotencyKeyRef.current,
+        });
+        idempotencyKeyRef.current = null;
+      } else {
+        await returnCheque({ orgId: activeOrgId, chequeId: cheque._id, returnReason: reason || undefined });
+      }
       toast.success(t("CollectionToastChequeReturned" as any));
       onOpenChange(false);
       setReason("");
+      setBankFeeMinor("");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     } finally {
@@ -948,9 +976,32 @@ function ReturnChequeDialog({ cheque, onOpenChange }: { cheque: ChequeRow | null
           <DialogTitle>{t("ReturnCheque" as any)}</DialogTitle>
           <DialogDescription>{cheque?.bank} #{cheque?.chequeNumber}</DialogDescription>
         </DialogHeader>
+        {cheque?.status === "CLEARED" && (
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            {t("ReturnClearedChequeWarning" as any)}
+          </div>
+        )}
         <Textarea value={reason} onChange={(event) => setReason(event.target.value)} placeholder={t("ReturnReason" as any)} />
+        {cheque?.status === "CLEARED" && (
+          <Input
+            type="number"
+            min="0"
+            step="1"
+            value={bankFeeMinor}
+            onChange={(event) => setBankFeeMinor(event.target.value)}
+            placeholder={t("BankFeeMinorOptional" as any)}
+          />
+        )}
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
+          <Button
+            variant="outline"
+            onClick={() => {
+              idempotencyKeyRef.current = null;
+              onOpenChange(false);
+            }}
+          >
+            {t("Cancel" as any)}
+          </Button>
           <Button onClick={submit} disabled={submitting}>{submitting ? t("Saving" as any) : t("Return" as any)}</Button>
         </DialogFooter>
       </DialogContent>

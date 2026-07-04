@@ -17,6 +17,7 @@ type FinanceApplicationStatus =
 const FINANCE_LIFECYCLE_PERMISSIONS = {
   VIEW: "view:finance_applications",
   CREATE: "create:finance_application",
+  REVIEW: "review:finance_application",
   APPROVE: "approve:finance_application",
   FINALIZE: "finalize:financed_deal",
   CONFIRM_DISBURSEMENT: "confirm:finance_disbursement",
@@ -73,6 +74,7 @@ async function seedFinanceLifecycleDealer(tag = "fl4") {
       permissions: [
         FINANCE_LIFECYCLE_PERMISSIONS.VIEW,
         FINANCE_LIFECYCLE_PERMISSIONS.CREATE,
+        FINANCE_LIFECYCLE_PERMISSIONS.REVIEW,
         FINANCE_LIFECYCLE_PERMISSIONS.APPROVE,
       ],
     })
@@ -83,6 +85,7 @@ async function seedFinanceLifecycleDealer(tag = "fl4") {
       name: "Approver",
       permissions: [
         FINANCE_LIFECYCLE_PERMISSIONS.VIEW,
+        FINANCE_LIFECYCLE_PERMISSIONS.REVIEW,
         FINANCE_LIFECYCLE_PERMISSIONS.APPROVE,
       ],
     })

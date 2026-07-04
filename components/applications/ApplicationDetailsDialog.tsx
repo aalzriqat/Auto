@@ -16,6 +16,9 @@ import { Separator } from "@/components/ui/separator";
 import { Upload, CheckCircle, XCircle, Clock, Eye, X, Download, History, Ban } from "lucide-react";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
+import { useCurrency } from "@/hooks/useCurrency";
+import { scaleForCurrency } from "@/components/accounting/AccountingTabShared";
+import { DisbursementConfirmationDialog } from "./DisbursementConfirmationDialog";
 
 export function ApplicationDetailsDialog({
   applicationId,
@@ -29,15 +32,21 @@ export function ApplicationDetailsDialog({
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const { hasPermission } = usePermissions();
-  const isManager = hasPermission(PERMISSIONS.MANAGE_SETTINGS);
+  const currency = useCurrency();
   const canCreateApplication = hasPermission(PERMISSIONS.CREATE_FINANCE_APPLICATION);
+  const canReviewApplication = hasPermission(PERMISSIONS.REVIEW_FINANCE_APPLICATION);
   const canApproveApplication = hasPermission(PERMISSIONS.APPROVE_FINANCE_APPLICATION);
   const canFinalizeApplication = hasPermission(PERMISSIONS.FINALIZE_FINANCED_DEAL);
+  const canVerifyDocuments = hasPermission(PERMISSIONS.VERIFY_FINANCE_DOCUMENTS);
+  const canConfirmFinanceDisbursement = hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
   const [previewFile, setPreviewFile] = useState<{ url: string; name: string } | null>(null);
   const [isCancelDialogOpen, setIsCancelDialogOpen] = useState(false);
+  const [isDisbursementDialogOpen, setIsDisbursementDialogOpen] = useState(false);
+  const [isConfirmingDisbursement, setIsConfirmingDisbursement] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
   const finalizeDealIdempotencyKeyRef = useRef<string | null>(null);
   const cancelApplicationIdempotencyKeyRef = useRef<string | null>(null);
+  const confirmDisbursementIdempotencyKeyRef = useRef<string | null>(null);
 
   const app = useQuery(api.applications.get, activeOrgId ? { orgId: activeOrgId, applicationId } : "skip");
   const documents = useQuery(api.documents.getForApplication, activeOrgId ? { orgId: activeOrgId, applicationId } : "skip");
@@ -46,6 +55,7 @@ export function ApplicationDetailsDialog({
   const updateStatus = useMutation(api.applications.updateStatus);
   const cancelApplication = useMutation(api.applications.cancelApplication);
   const finalizeDeal = useMutation(api.applications.finalizeDeal);
+  const confirmDisbursement = useMutation(api.applications.confirmDisbursement);
   const updateDocStatus = useMutation(api.documents.updateDocumentStatus);
   const generateUploadUrl = useMutation(api.documents.generateUploadUrl);
   const saveDocumentFile = useMutation(api.documents.saveDocumentFile);
@@ -71,8 +81,8 @@ export function ApplicationDetailsDialog({
         fileId: storageId,
       });
       toast.success(t("UploadSuccess" as any));
-    } catch (err: any) {
-      toast.error(err);
+    } catch {
+      toast.error(t("UnexpectedError" as any));
     }
   };
 
@@ -81,8 +91,8 @@ export function ApplicationDetailsDialog({
     try {
       await updateStatus({ orgId: activeOrgId, applicationId, status: "APPROVED" });
       toast.success(t("AppApprovedSuccess" as any));
-    } catch (err: any) {
-      toast.error(err);
+    } catch {
+      toast.error(t("UnexpectedError" as any));
     }
   };
 
@@ -101,8 +111,8 @@ export function ApplicationDetailsDialog({
       setIsCancelDialogOpen(false);
       setCancelReason("");
       onOpenChange(false);
-    } catch (err: any) {
-      toast.error(err);
+    } catch {
+      toast.error(t("UnexpectedError" as any));
     }
   };
 
@@ -118,12 +128,48 @@ export function ApplicationDetailsDialog({
       finalizeDealIdempotencyKeyRef.current = null;
       toast.success(t("DealFinalizedSuccess" as any));
       onOpenChange(false);
-    } catch (err: any) {
-      toast.error(err);
+    } catch {
+      toast.error(t("UnexpectedError" as any));
     }
   };
 
   if (!app) return null;
+  const currencyScale = scaleForCurrency(currency.code);
+  const currencyFactor = Math.pow(10, currencyScale);
+  const expectedDisbursementAmount = app.quote?.totalFinancedAmount ?? 0;
+  const expectedDisbursementMinor = Math.round(expectedDisbursementAmount * currencyFactor);
+  const expectsFinanceCompanyDisbursement = Boolean(app.companyId && expectedDisbursementMinor > 0);
+  const confirmedDisbursementLabel = app.disbursedAmountMinor !== undefined
+    ? currency.format(app.disbursedAmountMinor / currencyFactor)
+    : null;
+  const expectedDisbursementLabel = currency.format(expectedDisbursementMinor / currencyFactor);
+  const canConfirmDisbursement =
+    canConfirmFinanceDisbursement &&
+    app.status === "CLOSED" &&
+    expectsFinanceCompanyDisbursement &&
+    !app.disbursedAt;
+
+  const handleConfirmDisbursement = async () => {
+    if (!activeOrgId || !expectedDisbursementMinor) return;
+    setIsConfirmingDisbursement(true);
+    try {
+      confirmDisbursementIdempotencyKeyRef.current ??= `confirm-disbursement:${crypto.randomUUID()}`;
+      const idempotencyKey = confirmDisbursementIdempotencyKeyRef.current;
+      await confirmDisbursement({
+        orgId: activeOrgId,
+        applicationId,
+        disbursedAmountMinor: expectedDisbursementMinor,
+        idempotencyKey,
+      });
+      confirmDisbursementIdempotencyKeyRef.current = null;
+      toast.success(t("DisbursementConfirmedSuccess" as any));
+      setIsDisbursementDialogOpen(false);
+    } catch {
+      toast.error(t("UnexpectedError" as any));
+    } finally {
+      setIsConfirmingDisbursement(false);
+    }
+  };
   const appStatusLabel =
     app.status === "PENDING_DOCS" ? t("PendingDocs" as any) :
       app.status === "UNDER_REVIEW" ? t("UnderReview" as any) :
@@ -191,6 +237,14 @@ export function ApplicationDetailsDialog({
                     <p><strong>{t("DownPayment" as any)}:</strong> {app.quote?.downPayment?.toLocaleString()} {t("JOD" as any)}</p>
                     <p><strong>{t("TermMonths" as any)}:</strong> {app.quote?.termMonths} {t("Months" as any)}</p>
                     <p><strong>{t("MonthlyInstallment" as any)}:</strong> <span className="font-semibold text-primary">{app.quote?.monthlyInstallment?.toLocaleString(undefined, { minimumFractionDigits: 2 })} {t("JOD" as any)}</span></p>
+                    {expectsFinanceCompanyDisbursement && (
+                      <p>
+                        <strong>{t("DisbursementStatus" as any)}:</strong>{" "}
+                        {app.disbursedAt
+                          ? `${t("DisbursementReceived" as any)} - ${confirmedDisbursementLabel}`
+                          : t("AwaitingDisbursement" as any)}
+                      </p>
+                    )}
                   </>
                 ) : (
                   <>
@@ -207,13 +261,12 @@ export function ApplicationDetailsDialog({
                 <Button
                   onClick={() => updateStatus({ orgId: activeOrgId!, applicationId, status: "UNDER_REVIEW" })}
                   variant="outline"
-                  disabled={app.status !== "PENDING_DOCS"}
+                  disabled={!canReviewApplication || app.status !== "PENDING_DOCS"}
                 >
                   {t("MarkUnderReview" as any)}
                 </Button>
 
-                {isManager && (
-                  <>
+                {canApproveApplication && (
                     <Button
                       onClick={handleApproveApp}
                       className="bg-green-600 hover:bg-green-700 text-white"
@@ -221,6 +274,9 @@ export function ApplicationDetailsDialog({
                     >
                       {t("ApproveApplication" as any)}
                     </Button>
+                )}
+
+                {canReviewApplication && (
                     <Button
                       onClick={() => updateStatus({ orgId: activeOrgId!, applicationId, status: "REJECTED" })}
                       variant="destructive"
@@ -228,16 +284,33 @@ export function ApplicationDetailsDialog({
                     >
                       {t("RejectApplication" as any)}
                     </Button>
-                  </>
                 )}
 
-                {app.status === "APPROVED" && (
+                {app.status === "APPROVED" && canFinalizeApplication && (
                   <Button
                     onClick={handleFinalizeDeal}
                     className="bg-blue-600 hover:bg-blue-700 text-white mt-2"
                   >
                     {t("FinalizeDealClose" as any)}
                   </Button>
+                )}
+
+                {expectsFinanceCompanyDisbursement && app.status === "CLOSED" && app.disbursedAt && (
+                  <Badge variant="outline" className="justify-center py-2">
+                    {t("DisbursementReceived" as any)}: {confirmedDisbursementLabel}
+                  </Badge>
+                )}
+
+                {canConfirmDisbursement && (
+                  <DisbursementConfirmationDialog
+                    open={isDisbursementDialogOpen}
+                    disabled={isConfirmingDisbursement}
+                    submitting={isConfirmingDisbursement}
+                    amountLabel={expectedDisbursementLabel}
+                    t={(key) => t(key as any)}
+                    onOpenChange={setIsDisbursementDialogOpen}
+                    onConfirm={handleConfirmDisbursement}
+                  />
                 )}
 
                 {canCancel && (
@@ -296,7 +369,7 @@ export function ApplicationDetailsDialog({
                               <Eye className="h-4 w-4 me-1" />
                               {t("ViewFile" as any)}
                             </Button>
-                            {isManager && (
+                            {canVerifyDocuments && (
                               <Button
                                 size="sm"
                                 variant="default"

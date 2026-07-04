@@ -406,6 +406,7 @@ type CommissionHookArgs = {
   salespersonId: Id<"users">;
   amountMinor: number;
   currency: string;
+  paymentMethod?: string;
   actorId: Id<"users">;
   occurredAt: number;
 };
@@ -415,8 +416,15 @@ function makeCommissionHook(
   sourceIdPrefix: string,
   keyPrefix: string
 ) {
-  return async (ctx: MutationCtx, args: CommissionHookArgs) =>
-    postDomainEvent(ctx, {
+  return async (ctx: MutationCtx, args: CommissionHookArgs) => {
+    const payload: Record<string, unknown> = {
+      saleId: args.saleId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      salespersonId: args.salespersonId.toString(),
+    };
+    if (args.paymentMethod) payload.paymentMethod = args.paymentMethod;
+    await postDomainEvent(ctx, {
       orgId: args.orgId,
       eventType,
       sourceType: "sales",
@@ -425,13 +433,9 @@ function makeCommissionHook(
       currency: args.currency,
       occurredAt: args.occurredAt,
       actorId: args.actorId,
-      payload: {
-        saleId: args.saleId.toString(),
-        amountMinor: args.amountMinor,
-        currency: args.currency,
-        salespersonId: args.salespersonId.toString(),
-      },
+      payload,
     });
+  };
 }
 
 export const hookCommissionAccrued = makeCommissionHook("COMMISSION_ACCRUED", "commission", "commission_accrued");

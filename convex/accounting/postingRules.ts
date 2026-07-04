@@ -197,6 +197,7 @@ export interface CommissionPaidPayload {
   amountMinor: number;
   currency: string;
   salespersonId: string;
+  paymentMethod?: string;
 }
 
 export interface ChequeReceivedPayload {
@@ -291,7 +292,9 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
 }
 
 export function ruleSupplierPaymentSettled(p: SupplierPaymentSettledPayload): RuleResult {
-  const cashKey = cashAccountKey(p.paymentMethod);
+  const cashKey = p.paymentMethod === "CHEQUE"
+    ? SYSTEM_KEYS.BANK_ACCOUNT
+    : cashAccountKey(p.paymentMethod);
   return {
     lines: [
       line(SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, p.amountMinor, 0, `AP settled — ${p.sourcedFromName}`),
@@ -390,10 +393,13 @@ export function ruleCommissionAccrued(p: CommissionAccruedPayload): RuleResult {
 }
 
 export function ruleCommissionPaid(p: CommissionPaidPayload): RuleResult {
+  const cashKey = p.paymentMethod === "CHEQUE"
+    ? SYSTEM_KEYS.BANK_ACCOUNT
+    : cashAccountKey(p.paymentMethod);
   return {
     lines: [
       line(SYSTEM_KEYS.COMMISSION_PAYABLE, p.amountMinor, 0, "Commission settled", { salespersonId: p.salespersonId }),
-      line(SYSTEM_KEYS.CASH_ON_HAND, 0, p.amountMinor, "Cash paid", { salespersonId: p.salespersonId }),
+      line(cashKey, 0, p.amountMinor, "Commission paid", { salespersonId: p.salespersonId }),
     ],
     memo: "Commission paid",
     category: "SYSTEM",

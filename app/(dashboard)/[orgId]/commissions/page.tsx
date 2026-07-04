@@ -30,6 +30,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { toast } from "@/components/ui/sonner";
 import { TrendingUp, CheckCircle2, Clock, DollarSign, Check, Undo2, Pencil, X } from "lucide-react";
 import { Doc, Id } from "@/convex/_generated/dataModel";
+import { CommissionPaymentDialog } from "@/components/commissions/CommissionPaymentDialog";
+import { type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 
 type CommissionSale = Doc<"sales"> & {
   vehicleSummary: string;
@@ -72,6 +74,9 @@ export default function CommissionsPage() {
 
   const [editingId, setEditingId] = useState<Id<"sales"> | null>(null);
   const [editingAmount, setEditingAmount] = useState("");
+  const [commissionToPay, setCommissionToPay] = useState<CommissionSale | null>(null);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
+  const [isPayingCommission, setIsPayingCommission] = useState(false);
 
   const filtered = useMemo(() => {
     if (!commissions) return [];
@@ -101,13 +106,18 @@ export default function CommissionsPage() {
     return Array.from(map.entries()).map(([id, v]) => ({ id, ...v }));
   }, [filtered]);
 
-  async function handleMarkPaid(saleId: Id<"sales">) {
-    if (!activeOrgId) return;
+  async function handleConfirmMarkPaid() {
+    if (!activeOrgId || !commissionToPay) return;
+    setIsPayingCommission(true);
     try {
-      await markPaid({ orgId: activeOrgId, saleId });
-      toast.success("Commission marked as paid.");
-    } catch (e: any) {
-      toast.error(e);
+      await markPaid({ orgId: activeOrgId, saleId: commissionToPay._id, paymentMethod });
+      toast.success(t("CommissionPaidSuccess" as any));
+      setCommissionToPay(null);
+      setPaymentMethod("CASH");
+    } catch {
+      toast.error(t("CommissionPaymentFailed" as any));
+    } finally {
+      setIsPayingCommission(false);
     }
   }
 
@@ -115,9 +125,9 @@ export default function CommissionsPage() {
     if (!activeOrgId) return;
     try {
       await markUnpaid({ orgId: activeOrgId, saleId });
-      toast.success("Commission marked as unpaid.");
-    } catch (e: any) {
-      toast.error(e);
+      toast.success(t("CommissionUnpaidSuccess" as any));
+    } catch {
+      toast.error(t("CommissionPaymentFailed" as any));
     }
   }
 
@@ -130,8 +140,8 @@ export default function CommissionsPage() {
       toast.success(t("CommissionUpdated" as any));
       setEditingId(null);
       setEditingAmount("");
-    } catch (e: any) {
-      toast.error(e);
+    } catch {
+      toast.error(t("CommissionUpdateFailed" as any));
     }
   }
 
@@ -317,6 +327,9 @@ export default function CommissionsPage() {
                         <Badge variant="outline" className="text-green-600 border-green-600 text-xs">
                           <CheckCircle2 className="h-3 w-3 me-1" />
                           {t("Paid" as any)} {new Date(c.commissionPaidAt).toLocaleDateString()}
+                          <span className="ms-1 text-muted-foreground">
+                            {t(`PaymentMethod_${c.commissionPaymentMethod ?? "CASH"}` as any)}
+                          </span>
                         </Badge>
                       ) : (
                         <Badge variant="outline" className="text-orange-600 border-orange-300 text-xs">
@@ -341,7 +354,7 @@ export default function CommissionsPage() {
                             variant="outline"
                             size="sm"
                             className="text-green-600 border-green-600 hover:bg-green-50"
-                            onClick={() => handleMarkPaid(c._id)}
+                            onClick={() => { setCommissionToPay(c); setPaymentMethod("CASH"); }}
                           >
                             <Check className="h-3.5 w-3.5 me-1" /> {t("MarkPaid" as any)}
                           </Button>
@@ -354,6 +367,25 @@ export default function CommissionsPage() {
             </TableBody>
           </Table>
         </div>
+        <CommissionPaymentDialog
+          commission={commissionToPay ? {
+            salespersonName: commissionToPay.salespersonName,
+            vehicleSummary: commissionToPay.vehicleSummary,
+            amountLabel: formatCurrency(commissionToPay.commissionAmount ?? 0),
+          } : null}
+          open={commissionToPay !== null}
+          isPaying={isPayingCommission}
+          paymentMethod={paymentMethod}
+          t={t as any}
+          onPaymentMethodChange={setPaymentMethod}
+          onConfirm={handleConfirmMarkPaid}
+          onOpenChange={(open) => {
+            if (!open) {
+              setCommissionToPay(null);
+              setPaymentMethod("CASH");
+            }
+          }}
+        />
       </div>
     </RoleGuard>
   );

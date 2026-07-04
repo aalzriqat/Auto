@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { paymentMethodValidator } from "./utils/paymentMethods";
 
 const organizationDeletionRequestStatus = v.union(
   v.literal("PENDING_REVIEW"),
@@ -613,10 +614,13 @@ export default defineSchema({
     sourcedFromName: v.string(),
     amountDue: v.number(),
     currency: v.string(),
-    status: v.union(v.literal("PENDING"), v.literal("PAID")),
+    status: v.union(v.literal("PENDING"), v.literal("PAID"), v.literal("CANCELLED")),
     paidAt: v.optional(v.number()),
     paidBy: v.optional(v.id("users")),
+    paymentMethod: v.optional(paymentMethodValidator),
     paymentNotes: v.optional(v.string()),
+    cancelledAt: v.optional(v.number()),
+    cancelledBy: v.optional(v.id("users")),
     createdBy: v.id("users"),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -825,6 +829,7 @@ export default defineSchema({
     commissionAmount: v.optional(v.number()), // Calculated at sale time
     commissionPaidAt: v.optional(v.number()),
     commissionPaidBy: v.optional(v.id("users")),
+    commissionPaymentMethod: v.optional(paymentMethodValidator),
     commissionPaymentIdempotencyKey: v.optional(v.string()),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
@@ -862,6 +867,7 @@ export default defineSchema({
     amortizationMonths: v.optional(v.number()),
     status: v.optional(v.union(v.literal("PENDING"), v.literal("PAID"))),
     idempotencyKey: v.optional(v.string()),
+    paymentMethod: v.optional(paymentMethodValidator),
     vendor: v.optional(v.string()),
     payerId: v.optional(v.id("users")),
     notes: v.optional(v.string()),
@@ -2606,6 +2612,7 @@ export default defineSchema({
   paymentIntents: defineTable({
     orgId: v.id("organizations"),
     customerId: v.id("customers"),
+    receivableId: v.optional(v.id("receivables")),
     receivableDocumentId: v.optional(v.id("receivableDocuments")),
     saleId: v.optional(v.id("sales")),
     amountMinor: v.number(),
@@ -2614,6 +2621,7 @@ export default defineSchema({
     externalId: v.optional(v.string()),
     checkoutUrl: v.optional(v.string()),
     providerAccountId: v.optional(v.string()),
+    collectionPaymentId: v.optional(v.id("collectionPayments")),
     canonicalPaymentId: v.optional(v.id("canonicalPayments")),
     paymentAllocationId: v.optional(v.id("paymentAllocations")),
     status: v.union(
@@ -2640,5 +2648,6 @@ export default defineSchema({
     .index("by_org_status", ["orgId", "status"])
     .index("by_external_id", ["provider", "externalId"])
     .index("by_org_idempotency", ["orgId", "idempotencyKey"])
-    .index("by_org_customer", ["orgId", "customerId"]),
+    .index("by_org_customer", ["orgId", "customerId"])
+    .index("by_receivable", ["receivableId"]),
 });

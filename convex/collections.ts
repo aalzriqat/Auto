@@ -1103,6 +1103,12 @@ export const returnClearedCheque = mutation({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    if (
+      args.bankFeeMinor !== undefined &&
+      (!Number.isSafeInteger(args.bankFeeMinor) || args.bankFeeMinor < 0)
+    ) {
+      throw new ConvexError("Bank fee must be a non-negative integer minor-unit amount.");
+    }
 
     return await runWithIdempotency(
       ctx,

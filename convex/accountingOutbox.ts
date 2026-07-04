@@ -21,6 +21,7 @@ import { PostCommand, postAccountingEvent } from "./accounting/postingEngine";
 import { reverseAccountingEvent } from "./accounting/reversals";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { requireFeature } from "./subscriptions";
 
 // ─── Enqueue helpers (called from workflow hooks) ─────────────────────────────
 
@@ -208,6 +209,7 @@ export const listPending = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
     const limit = Math.min(args.limit ?? 50, 200);
     if (args.status) {
       return ctx.db
@@ -229,6 +231,7 @@ export const redrive = mutation({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
     return drainPendingForOrg(ctx, args.orgId);
   },
 });

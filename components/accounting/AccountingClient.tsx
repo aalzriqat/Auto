@@ -3,7 +3,9 @@
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { BookOpen, Briefcase, Landmark, HandCoins, WalletCards, ScrollText } from "lucide-react";
+import { BarChart3, BookOpen, Briefcase, Landmark, HandCoins, WalletCards, ScrollText, Settings } from "lucide-react";
+import { AccountingSetupTab } from "./AccountingSetupTab";
+import { FinancialReportsTab } from "./FinancialReportsTab";
 import { GeneralLedgerTab } from "./GeneralLedgerTab";
 import { FixedAssetsTab } from "./FixedAssetsTab";
 import { PartnerEquityTab } from "./PartnerEquityTab";
@@ -31,12 +33,20 @@ export function AccountingClient() {
         </div>
       </div>
 
-      <Tabs defaultValue="ledger" className="flex-1 flex flex-col md:h-full md:overflow-hidden">
+      <Tabs defaultValue="setup" className="flex-1 flex flex-col md:h-full md:overflow-hidden">
         <div className="overflow-x-auto self-start mb-4 w-full sm:w-auto">
           <TabsList className="w-max bg-white border border-slate-200/60 p-1">
+            <TabsTrigger value="setup" className="gap-2 data-[state=active]:bg-primary/5 data-[state=active]:text-primary data-[state=active]:shadow-none px-4">
+              <Settings className="w-4 h-4" />
+              {t("AccountingSetup" as any)}
+            </TabsTrigger>
             <TabsTrigger value="ledger" className="gap-2 data-[state=active]:bg-primary/5 data-[state=active]:text-primary data-[state=active]:shadow-none px-4">
               <BookOpen className="w-4 h-4" />
-              {t("GeneralLedger" as any)}
+              {t("TransactionRegister" as any)}
+            </TabsTrigger>
+            <TabsTrigger value="glReports" className="gap-2 data-[state=active]:bg-primary/5 data-[state=active]:text-primary data-[state=active]:shadow-none px-4">
+              <BarChart3 className="w-4 h-4" />
+              {t("GLReports" as any)}
             </TabsTrigger>
             <TabsTrigger value="assets" className="gap-2 data-[state=active]:bg-primary/5 data-[state=active]:text-primary data-[state=active]:shadow-none px-4">
               <Briefcase className="w-4 h-4" />
@@ -62,8 +72,14 @@ export function AccountingClient() {
         </div>
 
         <div className="md:flex-1 md:overflow-y-auto md:min-h-0 bg-white rounded-xl border border-slate-200/60 shadow-sm">
+          <TabsContent value="setup" className="h-full m-0 data-[state=inactive]:hidden">
+            <AccountingSetupTab />
+          </TabsContent>
           <TabsContent value="ledger" className="h-full m-0 data-[state=inactive]:hidden">
             <GeneralLedgerTab />
+          </TabsContent>
+          <TabsContent value="glReports" className="h-full m-0 data-[state=inactive]:hidden">
+            <FinancialReportsTab />
           </TabsContent>
           <TabsContent value="assets" className="h-full m-0 data-[state=inactive]:hidden">
             <FixedAssetsTab />

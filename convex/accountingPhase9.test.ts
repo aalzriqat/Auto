@@ -122,6 +122,90 @@ describe("Phase 9 — expense account mapping", () => {
     expect(byCode["6300"]?.debit).toBe(120000); // General Expenses, JOD scale 3
     expect(byCode["6100"]).toBeUndefined();      // NOT Commission Expense
   });
+
+  test("bank-transfer expense stores method and credits Bank", async () => {
+    const { t, orgId, asUser } = await seedDealer("exp_method");
+
+    const expenseId = await asUser.mutation(api.expenses.create, {
+      orgId,
+      title: "Bank paid repair",
+      amount: 80,
+      date: Date.now(),
+      category: "REPAIR",
+      status: "PAID",
+      paymentMethod: "BANK_TRANSFER",
+    });
+
+    const event = await eventForSource(asUser, orgId, "expenses", expenseId.toString());
+    expect((event.payload as { paymentMethod?: string }).paymentMethod).toBe("BANK_TRANSFER");
+    const byCode = await journalByCode(asUser, orgId, event.journalEntryId);
+    expect(byCode["6300"]?.debit).toBe(80_000);
+    expect(byCode["1110"]?.credit).toBe(80_000);
+    expect(byCode["1100"]).toBeUndefined();
+
+    await t.run(async (ctx) => {
+      const expense = await ctx.db.get(expenseId);
+      expect(expense?.paymentMethod).toBe("BANK_TRANSFER");
+    });
+  });
+});
+
+// ─── Supplier payable settlement method ──────────────────────────────────────
+
+describe("Phase 9 — supplier payable payment method", () => {
+  test("markPaid stores bank-transfer method and credits Bank", async () => {
+    const { t, orgId, userId, asUser } = await seedDealer("supplier_method");
+    const now = Date.now();
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "VIN_SUPPLIER_METHOD",
+        make: "Toyota",
+        model: "Corolla",
+        year: 2024,
+        mileage: 0,
+        color: "Silver",
+        fuelType: "Petrol",
+        transmission: "Automatic",
+        sellingPrice: 16_000,
+        sourceType: "SOURCED",
+        sourceCost: 12_000,
+        status: "SOLD",
+      })
+    );
+    const payableId = await t.run((ctx) =>
+      ctx.db.insert("vehicleSupplierPayables", {
+        orgId,
+        vehicleId,
+        sourcedFromName: "Partner Dealer",
+        amountDue: 12_000,
+        currency: "JOD",
+        status: "PENDING",
+        createdBy: userId,
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
+
+    await asUser.mutation(api.sourcingPayables.markPaid, {
+      orgId,
+      payableId,
+      paymentMethod: "BANK_TRANSFER",
+      idempotencyKey: "supplier_bank_transfer_1",
+    });
+
+    const event = await eventForSource(asUser, orgId, "vehicleSupplierPayables", payableId.toString());
+    expect((event.payload as { paymentMethod?: string }).paymentMethod).toBe("BANK_TRANSFER");
+    const byCode = await journalByCode(asUser, orgId, event.journalEntryId);
+    expect(byCode["2400"]?.debit).toBe(12_000_000);
+    expect(byCode["1110"]?.credit).toBe(12_000_000);
+    expect(byCode["1100"]).toBeUndefined();
+
+    await t.run(async (ctx) => {
+      const payable = await ctx.db.get(payableId);
+      expect(payable?.paymentMethod).toBe("BANK_TRANSFER");
+    });
+  });
 });
 
 // ─── Accounting outbox (no silent skips) ──────────────────────────────────────
@@ -396,5 +480,58 @@ describe("Phase 9 — commission payment GL posting", () => {
       sourceId: `commission_paid_${saleId}`,
     });
     expect(events.filter((row) => row.eventType === "COMMISSION_PAID")).toHaveLength(1);
+  });
+
+  test("markCommissionPaid stores bank-transfer method and credits Bank", async () => {
+    const { t, orgId, asUser, customerId, userId } = await seedDealer("comm_method");
+
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "VIN_COMM_METHOD_9",
+        make: "Toyota",
+        model: "Camry",
+        year: 2023,
+        mileage: 0,
+        color: "White",
+        fuelType: "Petrol",
+        transmission: "Automatic",
+        purchasePrice: 12_000,
+        sellingPrice: 18_000,
+        status: "AVAILABLE",
+      })
+    );
+
+    const saleId = await asUser.mutation(api.sales.create, {
+      orgId,
+      vehicleId,
+      customerId,
+      salespersonId: userId,
+      salePrice: 18_000,
+      saleDate: Date.now(),
+      status: "COMPLETED",
+      financingType: "CASH",
+      idempotencyKey: "comm_method_sale_1",
+    });
+    await t.run((ctx) => ctx.db.patch(saleId, { commissionAmount: 700 }));
+
+    await asUser.mutation(api.sales.markCommissionPaid, {
+      orgId,
+      saleId,
+      paymentMethod: "BANK_TRANSFER",
+      idempotencyKey: "comm_method_paid_1",
+    });
+
+    const event = await eventForSource(asUser, orgId, "sales", `commission_paid_${saleId}`);
+    expect((event.payload as { paymentMethod?: string }).paymentMethod).toBe("BANK_TRANSFER");
+    const byCode = await journalByCode(asUser, orgId, event.journalEntryId);
+    expect(byCode["2300"]?.debit).toBe(700_000);
+    expect(byCode["1110"]?.credit).toBe(700_000);
+    expect(byCode["1100"]).toBeUndefined();
+
+    await t.run(async (ctx) => {
+      const sale = await ctx.db.get(saleId);
+      expect(sale?.commissionPaymentMethod).toBe("BANK_TRANSFER");
+    });
   });
 });

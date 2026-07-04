@@ -7,9 +7,9 @@ import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import { toast } from "@/components/ui/sonner";
+export { PaymentMethodSelect, type PaymentMethod, type Translate } from "@/components/payments/PaymentMethodSelect";
 
 const CURRENCY_SCALES: Record<string, number> = {
   JOD: 3,
@@ -29,12 +29,8 @@ const CURRENCY_SCALES: Record<string, number> = {
 export const todayInput = new Date().toISOString().slice(0, 10);
 
 export type CurrencyFormatter = (amount: number, fractionDigits?: number) => string;
-export type PaymentMethod = "CASH" | "BANK_TRANSFER" | "CHEQUE" | "CARD";
-export type Translate = (key: any) => string;
 
 type ButtonVariant = ComponentProps<typeof Button>["variant"];
-
-const DEFAULT_PAYMENT_METHODS: PaymentMethod[] = ["CASH", "BANK_TRANSFER", "CHEQUE", "CARD"];
 
 export function scaleForCurrency(currency: string): number {
   return CURRENCY_SCALES[currency.toUpperCase()] ?? 2;
@@ -121,33 +117,6 @@ export function CurrencyAmountInput({
         onChange={(event) => onChange(event.target.value)}
       />
     </div>
-  );
-}
-
-export function PaymentMethodSelect({
-  t,
-  value,
-  onValueChange,
-  methods = DEFAULT_PAYMENT_METHODS,
-}: Readonly<{
-  t: Translate;
-  value: PaymentMethod;
-  onValueChange: (method: PaymentMethod) => void;
-  methods?: readonly PaymentMethod[];
-}>) {
-  return (
-    <Select value={value} onValueChange={(method) => onValueChange(method as PaymentMethod)}>
-      <SelectTrigger>
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {methods.map((method) => (
-          <SelectItem key={method} value={method}>
-            {t(`PaymentMethod_${method}` as any)}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
   );
 }
 

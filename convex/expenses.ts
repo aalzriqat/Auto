@@ -11,6 +11,7 @@ import { checkTenantWriteLimit } from "./rateLimit";
 import { runWithIdempotency } from "./utils/idempotency";
 import { hookExpensePosted, getOrgCurrency } from "./accounting/workflowHooks";
 import { toMinorUnits } from "./utils/money";
+import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -87,6 +88,7 @@ async function recordPaidExpenseSideEffects(
     amountMinor: toMinorUnits(args.expense.amount, currency),
     currency,
     category: args.expense.category,
+    paymentMethod: normalizePaymentMethod(args.expense.paymentMethod),
     actorId: args.actorId,
     occurredAt: args.expense.date,
   });
@@ -189,12 +191,14 @@ export const create = mutation({
     status: v.optional(v.union(v.literal("PENDING"), v.literal("PAID"))),
     vendor: v.optional(v.string()),
     payerId: v.optional(v.id("users")),
+    paymentMethod: v.optional(paymentMethodValidator),
     notes: v.optional(v.string()),
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_EXPENSES]);
     const status = args.status ?? "PAID";
+    const paymentMethod = status === "PAID" ? normalizePaymentMethod(args.paymentMethod) : args.paymentMethod;
 
     return await runWithIdempotency(
       ctx,
@@ -212,6 +216,7 @@ export const create = mutation({
           status,
           vendor: args.vendor ?? null,
           payerId: args.payerId ?? null,
+          paymentMethod: paymentMethod ?? null,
           notes: args.notes ?? null,
         }),
       },
@@ -234,6 +239,7 @@ export const create = mutation({
           category: args.category,
           status,
           idempotencyKey: args.idempotencyKey,
+          paymentMethod,
           vendor: args.vendor,
           payerId: args.payerId,
           notes: args.notes,
@@ -279,6 +285,7 @@ export const update = mutation({
     status: v.optional(v.union(v.literal("PENDING"), v.literal("PAID"))),
     vendor: v.optional(v.string()),
     payerId: v.optional(v.union(v.id("users"), v.null())),
+    paymentMethod: v.optional(paymentMethodValidator),
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -316,7 +323,8 @@ export const update = mutation({
       (args.amount !== undefined && args.amount !== expense.amount) ||
       (args.date !== undefined && args.date !== expense.date) ||
       (args.category !== undefined && args.category !== expense.category) ||
-      (args.status !== undefined && args.status !== currentStatus);
+      (args.status !== undefined && args.status !== currentStatus) ||
+      (args.paymentMethod !== undefined && args.paymentMethod !== expense.paymentMethod);
     if (hasAccountingExposure && hasMaterialAccountingChange) {
       throw new ConvexError(
         "Posted expenses are locked. Use a correction or reversal workflow before changing accounting fields."
@@ -341,6 +349,7 @@ export const update = mutation({
     if (args.category !== undefined) patch.category = args.category;
     if (args.status !== undefined) patch.status = args.status;
     if (args.vendor !== undefined) patch.vendor = args.vendor;
+    if (args.paymentMethod !== undefined) patch.paymentMethod = args.paymentMethod;
     if (args.payerId !== undefined) {
       patch.payerId = args.payerId === null ? undefined : args.payerId;
     }
