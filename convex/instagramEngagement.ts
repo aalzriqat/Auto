@@ -291,6 +291,9 @@ export const handleIncomingInstagramEvent = internalMutation({
       }
     }
 
+    const autoReplySource = smartReplySource ? ("smart" as const) : ("canned" as const);
+    const autoReplyChannel = smartReplyVisibility === "dm" ? "dm" : kind;
+
     const eventId = await ctx.db.insert("instagramEvents", {
       orgId,
       externalId,
@@ -303,11 +306,9 @@ export const handleIncomingInstagramEvent = internalMutation({
       text,
       postId: mediaId,
       pendingAutoReplyText: shouldAutoReply ? replyText : undefined,
-      pendingAutoReplySource: shouldAutoReply ? (smartReplySource ? "smart" : "canned") : undefined,
+      pendingAutoReplySource: shouldAutoReply ? autoReplySource : undefined,
       pendingAutoReply: shouldAutoReply ? true : undefined,
-      pendingAutoReplyChannel: shouldAutoReply
-        ? (smartReplyVisibility === "dm" ? "dm" : kind)
-        : undefined,
+      pendingAutoReplyChannel: shouldAutoReply ? autoReplyChannel : undefined,
     });
 
     return {
@@ -319,7 +320,7 @@ export const handleIncomingInstagramEvent = internalMutation({
       needsProfileEnrichment,
       vehicleId,
       eventId,
-      replySource: shouldAutoReply ? (smartReplySource ? "smart" as const : "canned" as const) : undefined,
+      replySource: shouldAutoReply ? autoReplySource : undefined,
     };
   },
 });

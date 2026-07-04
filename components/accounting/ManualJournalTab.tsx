@@ -159,6 +159,96 @@ export function ManualJournalTab() {
 
   if (!activeOrgId) return null;
 
+  let pendingSection;
+  if (pending === undefined) {
+    pendingSection = (
+      <div className="flex justify-center p-8">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  } else if (pending.length === 0) {
+    pendingSection = (
+      <div className="flex flex-col items-center justify-center p-12 text-center border rounded-xl border-dashed bg-muted/20">
+        <ScrollText className="h-10 w-10 text-slate-400 mb-4 opacity-50" />
+        <p className="text-slate-500">{t("NoPendingManualJournals")}</p>
+      </div>
+    );
+  } else {
+    pendingSection = (
+      <div className="grid gap-4 md:grid-cols-2">
+        {pending.map((draft) => {
+          const isOwnDraft = me?._id === draft.createdBy;
+          const busy = actingOnId === draft._id;
+          return (
+            <Card key={draft._id} className="relative overflow-hidden">
+              <div className="absolute top-0 left-0 w-1 h-full bg-yellow-500" />
+              <CardHeader className="pb-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <CardTitle className="text-base">{draft.memo}</CardTitle>
+                    <CardDescription>
+                      {t("SubmittedBy")}: {draft.creatorName}
+                    </CardDescription>
+                  </div>
+                  <Badge variant="outline" className="bg-yellow-500/10 text-yellow-600 border-yellow-500/20 shrink-0">
+                    {t("Pending")}
+                  </Badge>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <Table>
+                  <TableBody>
+                    {draft.lines.map((line) => (
+                      <TableRow key={`${line.accountId}-${line.debitMinor}-${line.creditMinor}-${line.description ?? ""}`}>
+                        <TableCell className="py-1.5 text-sm">
+                          {accountsById.get(line.accountId as string)?.name ?? line.accountId}
+                        </TableCell>
+                        <TableCell className="py-1.5 text-sm text-right">
+                          {line.debitMinor > 0 ? formatCurrency(line.debitMinor / factor, scale) : ""}
+                        </TableCell>
+                        <TableCell className="py-1.5 text-sm text-right">
+                          {line.creditMinor > 0 ? formatCurrency(line.creditMinor / factor, scale) : ""}
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+
+                {isOwnDraft && (
+                  <p className="text-xs text-amber-600 mt-3">{t("SegregationOfDutiesNotice")}</p>
+                )}
+
+                <div className="flex gap-2 w-full pt-4 mt-2 border-t">
+                  <Button
+                    variant="outline"
+                    className="flex-1 bg-red-50 hover:bg-red-100 hover:text-red-600 border-red-200 text-red-600"
+                    disabled={isOwnDraft || busy}
+                    onClick={() => setRejecting({ id: draft._id, reason: "" })}
+                  >
+                    <XCircle className="w-4 h-4 me-2" />
+                    {t("Reject")}
+                  </Button>
+                  <Button
+                    className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"
+                    disabled={isOwnDraft || busy}
+                    onClick={() => handleApprove(draft._id)}
+                  >
+                    {busy ? (
+                      <Loader2 className="w-4 h-4 animate-spin me-2" />
+                    ) : (
+                      <CheckCircle2 className="w-4 h-4 me-2" />
+                    )}
+                    {t("Approve")}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+    );
+  }
+
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -314,89 +404,7 @@ export function ManualJournalTab() {
         </Dialog>
       </div>
 
-      {pending === undefined ? (
-        <div className="flex justify-center p-8">
-          <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-        </div>
-      ) : pending.length === 0 ? (
-        <div className="flex flex-col items-center justify-center p-12 text-center border rounded-xl border-dashed bg-muted/20">
-          <ScrollText className="h-10 w-10 text-slate-400 mb-4 opacity-50" />
-          <p className="text-slate-500">{t("NoPendingManualJournals")}</p>
-        </div>
-      ) : (
-        <div className="grid gap-4 md:grid-cols-2">
-          {pending.map((draft) => {
-            const isOwnDraft = me?._id === draft.createdBy;
-            const busy = actingOnId === draft._id;
-            return (
-              <Card key={draft._id} className="relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-1 h-full bg-yellow-500" />
-                <CardHeader className="pb-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <CardTitle className="text-base">{draft.memo}</CardTitle>
-                      <CardDescription>
-                        {t("SubmittedBy")}: {draft.creatorName}
-                      </CardDescription>
-                    </div>
-                    <Badge variant="outline" className="bg-yellow-500/10 text-yellow-600 border-yellow-500/20 shrink-0">
-                      {t("Pending")}
-                    </Badge>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <Table>
-                    <TableBody>
-                      {draft.lines.map((line, i) => {
-                        const account = accountsById.get(line.accountId as string);
-                        return (
-                          <TableRow key={i}>
-                            <TableCell className="py-1.5 text-sm">{account?.name ?? line.accountId}</TableCell>
-                            <TableCell className="py-1.5 text-sm text-right">
-                              {line.debitMinor > 0 ? formatCurrency(line.debitMinor / factor, scale) : ""}
-                            </TableCell>
-                            <TableCell className="py-1.5 text-sm text-right">
-                              {line.creditMinor > 0 ? formatCurrency(line.creditMinor / factor, scale) : ""}
-                            </TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-
-                  {isOwnDraft && (
-                    <p className="text-xs text-amber-600 mt-3">{t("SegregationOfDutiesNotice")}</p>
-                  )}
-
-                  <div className="flex gap-2 w-full pt-4 mt-2 border-t">
-                    <Button
-                      variant="outline"
-                      className="flex-1 bg-red-50 hover:bg-red-100 hover:text-red-600 border-red-200 text-red-600"
-                      disabled={isOwnDraft || busy}
-                      onClick={() => setRejecting({ id: draft._id, reason: "" })}
-                    >
-                      <XCircle className="w-4 h-4 me-2" />
-                      {t("Reject")}
-                    </Button>
-                    <Button
-                      className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white"
-                      disabled={isOwnDraft || busy}
-                      onClick={() => handleApprove(draft._id)}
-                    >
-                      {busy ? (
-                        <Loader2 className="w-4 h-4 animate-spin me-2" />
-                      ) : (
-                        <CheckCircle2 className="w-4 h-4 me-2" />
-                      )}
-                      {t("Approve")}
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
-      )}
+      {pendingSection}
 
       <Dialog open={!!rejecting} onOpenChange={(open) => !open && setRejecting(null)}>
         <DialogContent>

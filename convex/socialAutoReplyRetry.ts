@@ -217,7 +217,8 @@ export const retryPendingSocialAutoReplies = internalAction({
     const succeeded = fb.succeeded + ig.succeeded;
     const failed = fb.failed + ig.failed;
     const unconfirmed = fb.unconfirmed + ig.unconfirmed;
+    const unconfirmedSuffix = unconfirmed > 0 ? `, ${unconfirmed} sent but unconfirmed (check audit log)` : "";
 
-    return `Retried ${retried} pending auto-replies: ${succeeded} succeeded, ${failed} failed${unconfirmed > 0 ? `, ${unconfirmed} sent but unconfirmed (check audit log)` : ""}.`;
+    return `Retried ${retried} pending auto-replies: ${succeeded} succeeded, ${failed} failed${unconfirmedSuffix}.`;
   },
 });

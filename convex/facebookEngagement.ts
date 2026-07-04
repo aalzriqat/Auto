@@ -274,6 +274,9 @@ export const handleIncomingFacebookEvent = internalMutation({
       }
     }
 
+    const autoReplySource = smartReplySource ? ("smart" as const) : ("canned" as const);
+    const autoReplyChannel = smartReplyVisibility === "dm" ? "dm" : kind;
+
     const eventId = await ctx.db.insert("facebookEvents", {
       orgId,
       externalId,
@@ -287,11 +290,9 @@ export const handleIncomingFacebookEvent = internalMutation({
       postId: mediaId,
       sourceSurface,
       pendingAutoReplyText: shouldAutoReply ? replyText : undefined,
-      pendingAutoReplySource: shouldAutoReply ? (smartReplySource ? "smart" : "canned") : undefined,
+      pendingAutoReplySource: shouldAutoReply ? autoReplySource : undefined,
       pendingAutoReply: shouldAutoReply ? true : undefined,
-      pendingAutoReplyChannel: shouldAutoReply
-        ? (smartReplyVisibility === "dm" ? "dm" : kind)
-        : undefined,
+      pendingAutoReplyChannel: shouldAutoReply ? autoReplyChannel : undefined,
     });
 
     // For DMs, also store in facebookMessages for the full-thread view.
@@ -320,7 +321,7 @@ export const handleIncomingFacebookEvent = internalMutation({
       customerId: customer._id,
       vehicleId,
       eventId,
-      replySource: shouldAutoReply ? (smartReplySource ? "smart" as const : "canned" as const) : undefined,
+      replySource: shouldAutoReply ? autoReplySource : undefined,
     };
   },
 });
