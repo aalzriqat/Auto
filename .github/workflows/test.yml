@@ -11,28 +11,30 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-    - uses: pnpm/action-setup@v4
+    - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
       with:
-        version: 10
+        version: 10.28.1
 
     - name: Use Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
       with:
-        node-version: '22.x'
+        node-version: '22.21.1'
         cache: 'pnpm'
 
     - name: Install dependencies
-      run: pnpm install --frozen-lockfile
+      run: pnpm install --frozen-lockfile --ignore-scripts
 
     - name: Run unit + integration tests with coverage
-      run: pnpm test:coverage
+      run: |
+        pnpm test:coverage
+        pnpm test:coverage:sonar
       env:
         NODE_ENV: test
 
     - name: Upload coverage report
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       if: always()
       with:
         name: coverage-report
@@ -60,20 +62,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-    - uses: pnpm/action-setup@v4
+    - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
       with:
-        version: 10
+        version: 10.28.1
 
     - name: Use Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
       with:
-        node-version: '22.x'
+        node-version: '22.21.1'
         cache: 'pnpm'
 
     - name: Install dependencies
-      run: pnpm install --frozen-lockfile
+      run: pnpm install --frozen-lockfile --ignore-scripts
 
     - name: TypeScript type check
       run: pnpm typecheck
@@ -82,20 +84,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-    - uses: pnpm/action-setup@v4
+    - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
       with:
-        version: 10
+        version: 10.28.1
 
     - name: Use Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
       with:
-        node-version: '22.x'
+        node-version: '22.21.1'
         cache: 'pnpm'
 
     - name: Install dependencies
-      run: pnpm install --frozen-lockfile
+      run: pnpm install --frozen-lockfile --ignore-scripts
 
     # `convex codegen` requires a configured deployment since Convex 1.42;
     # CONVEX_AGENT_MODE=anonymous runs a throwaway local backend so CI needs
@@ -108,9 +110,9 @@ jobs:
     # real validation pass runs.
     - name: Generate Convex bindings and validate backend types
       run: |
-        npx convex dev --once --typecheck disable || true
-        npx convex env set CLERK_JWT_ISSUER_DOMAIN https://ci-placeholder.clerk.accounts.dev
-        npx convex dev --once --typecheck enable
+        pnpm exec convex dev --once --typecheck disable || true
+        pnpm exec convex env set CLERK_JWT_ISSUER_DOMAIN https://ci-placeholder.clerk.accounts.dev
+        pnpm exec convex dev --once --typecheck enable
       env:
         CONVEX_AGENT_MODE: anonymous
 
@@ -124,17 +126,17 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
     - name: Use Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
       with:
-        node-version: '22.x'
+        node-version: '22.21.1'
         cache: 'npm'
         cache-dependency-path: dealer-worker/package-lock.json
 
     - name: Install worker dependencies
-      run: npm ci --prefix dealer-worker
+      run: npm ci --prefix dealer-worker --ignore-scripts
 
     - name: Worker type check
       run: npm run --prefix dealer-worker typecheck
@@ -149,20 +151,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-    - uses: pnpm/action-setup@v4
+    - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
       with:
-        version: 10
+        version: 10.28.1
 
     - name: Use Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
       with:
-        node-version: '22.x'
+        node-version: '22.21.1'
         cache: 'pnpm'
 
     - name: Install dependencies
-      run: pnpm install --frozen-lockfile
+      run: pnpm install --frozen-lockfile --ignore-scripts
 
     - name: Lint
       run: pnpm lint
@@ -171,26 +173,26 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-    - uses: pnpm/action-setup@v4
+    - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
       with:
-        version: 10
+        version: 10.28.1
 
     - name: Use Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
       with:
-        node-version: '22.x'
+        node-version: '22.21.1'
         cache: 'pnpm'
 
     - name: Install dependencies
-      run: pnpm install --frozen-lockfile
+      run: pnpm install --frozen-lockfile --ignore-scripts
 
     - name: Root dependency audit
       run: pnpm audit --audit-level high
 
     - name: Install worker dependencies
-      run: npm ci --prefix dealer-worker
+      run: npm ci --prefix dealer-worker --ignore-scripts
 
     - name: Worker dependency audit
       run: npm audit --prefix dealer-worker --audit-level high
@@ -208,11 +210,11 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       with:
         fetch-depth: 0
 
     - name: Secret scan
-      uses: gitleaks/gitleaks-action@v2
+      uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc # v2
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

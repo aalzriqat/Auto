@@ -10,6 +10,7 @@ export const expenseSchema = z.object({
   status: z.enum(["PENDING", "PAID"]),
   vendor: z.string().optional(),
   payerId: z.string().optional(),
+  paymentMethod: z.enum(["CASH", "BANK_TRANSFER", "CHEQUE", "CARD"]),
   notes: z.string().optional(),
 });
 

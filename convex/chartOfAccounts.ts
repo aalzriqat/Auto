@@ -166,6 +166,95 @@ export async function ensureSupplierAPAccount(
   });
 }
 
+/**
+ * Generic version of the ensureGeneralExpenseAccount/ensureSupplierAPAccount
+ * pattern: insert the DEFAULT_CHART account for `code` if this org has none
+ * mapped to `systemKey` yet. Unlike those two (which had to re-map an
+ * existing pre-systemKey account by code), every GL Phase 11 fixed-asset
+ * code is brand new, so there's never a pre-existing account to re-map —
+ * plain insert-if-missing is sufficient.
+ */
+async function ensureSystemAccount(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">,
+  systemKey: SystemKey,
+  code: string
+): Promise<void> {
+  const mapped = await ctx.db
+    .query("chartOfAccounts")
+    .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", systemKey))
+    .unique();
+  if (mapped) return;
+
+  const now = Date.now();
+  const def = DEFAULT_CHART.find((d) => d.code === code)!;
+  await ctx.db.insert("chartOfAccounts", {
+    orgId,
+    code: def.code,
+    name: def.name,
+    nameAr: def.nameAr,
+    type: def.type,
+    normalBalance: def.normalBalance,
+    isControlAccount: def.isControlAccount,
+    allowManualPosting: def.allowManualPosting,
+    active: true,
+    systemKey,
+    subtype: def.subtype,
+    createdAt: now,
+    createdBy: actorId,
+    updatedAt: now,
+    updatedBy: actorId,
+  });
+}
+
+/**
+ * Self-heal for the 6 GL Phase 11 fixed-asset accounts (capitalization,
+ * accumulated depreciation, depreciation expense, impairment loss, and
+ * gain/loss on disposal). Scoped to be called only from the fixed-asset
+ * lifecycle hooks — unlike ensureGeneralExpenseAccount/ensureSupplierAPAccount
+ * these accounts are never needed by any other event type, so running this on
+ * every unrelated posting event (as postOrEnqueue does for those two) would be
+ * wasted work.
+ */
+export async function ensureFixedAssetAccounts(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.FIXED_ASSETS, "1500");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.ACCUMULATED_DEPRECIATION, "1510");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.GAIN_ON_DISPOSAL, "4300");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.DEPRECIATION_EXPENSE, "6400");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.IMPAIRMENT_LOSS, "6500");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.LOSS_ON_DISPOSAL, "6600");
+}
+
+/**
+ * GL Phase 12 self-heal, scoped to the partner-equity hooks and the legacy
+ * migration. Includes RETAINED_EARNINGS since profit distributions debit it
+ * and very old charts might predate its arrival in DEFAULT_CHART.
+ */
+export async function ensurePartnerEquityAccounts(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.RETAINED_EARNINGS, "3100");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.PARTNER_CAPITAL, "3200");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.PARTNER_DRAWINGS, "3300");
+}
+
+/** GL Phase 13 self-heal: finance-company AR (very old charts may predate it) plus the claim write-off expense account. */
+export async function ensureClaimAccounts(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES, "1210");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.CLAIM_WRITE_OFF_EXPENSE, "6700");
+}
+
 // ─── Queries ──────────────────────────────────────────────────────────────────
 
 export const list = query({

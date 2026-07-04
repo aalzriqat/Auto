@@ -152,7 +152,7 @@ const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
 function publicLeadFingerprint() {
   let visitorId = window.localStorage.getItem(PUBLIC_LEAD_FINGERPRINT_KEY);
   if (!visitorId) {
-    visitorId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    visitorId = crypto.randomUUID();
     window.localStorage.setItem(PUBLIC_LEAD_FINGERPRINT_KEY, visitorId);
   }
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone ?? "unknown";

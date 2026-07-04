@@ -122,27 +122,27 @@ export function QuotePrintTemplate({
             <table className="w-full text-xs border-collapse border border-[#e5e7eb]">
               <tbody>
                 <tr className="border-b border-[#e5e7eb]">
-                  <td className="py-2.5 font-semibold text-[#374151] w-1/3 bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("VehicleType" as any)}:</td>
+                  <th scope="row" className="py-2.5 font-semibold text-[#374151] text-start w-1/3 bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("VehicleType" as any)}:</th>
                   <td className="py-2.5 px-3 font-medium text-[#111827]">{selectedVehicle?.make ?? t("NotSpecified" as any)} {selectedVehicle?.model}</td>
                 </tr>
                 <tr className="border-b border-[#e5e7eb]">
-                  <td className="py-2.5 font-semibold text-[#374151] bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("ManufactureYear" as any)}</td>
+                  <th scope="row" className="py-2.5 font-semibold text-[#374151] text-start bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("ManufactureYear" as any)}</th>
                   <td className="py-2.5 px-3 font-medium text-[#111827]">{selectedVehicle?.year}</td>
                 </tr>
                 <tr className="border-b border-[#e5e7eb]">
-                  <td className="py-2.5 font-semibold text-[#374151] bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("BatteryFuelType" as any)}</td>
+                  <th scope="row" className="py-2.5 font-semibold text-[#374151] text-start bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("BatteryFuelType" as any)}</th>
                   <td className="py-2.5 px-3 font-medium text-[#111827]">{selectedVehicle?.fuelType ?? t("NotSpecified" as any)} {selectedVehicle?.trim ? `(${selectedVehicle.trim})` : ""}</td>
                 </tr>
                 <tr className="border-b border-[#e5e7eb]">
-                  <td className="py-2.5 font-semibold text-[#374151] bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("ConditionNewUsed" as any)}</td>
+                  <th scope="row" className="py-2.5 font-semibold text-[#374151] text-start bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("ConditionNewUsed" as any)}</th>
                   <td className="py-2.5 px-3 font-medium text-[#111827]">{condition}</td>
                 </tr>
                 <tr className="border-b border-[#e5e7eb]">
-                  <td className="py-2.5 font-semibold text-[#374151] bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("ChassisNumberVIN" as any)}</td>
+                  <th scope="row" className="py-2.5 font-semibold text-[#374151] text-start bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("ChassisNumberVIN" as any)}</th>
                   <td className="py-2.5 px-3 font-mono text-xs text-[#111827]">{selectedVehicle?.vin ?? t("PendingQuoteVIN" as any)}</td>
                 </tr>
                 <tr className="border-b border-[#e5e7eb]">
-                  <td className="py-2.5 font-semibold text-[#374151] bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("AdditionsSpecs" as any)}</td>
+                  <th scope="row" className="py-2.5 font-semibold text-[#374151] text-start bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("AdditionsSpecs" as any)}</th>
                   <td className="py-2.5 px-3 text-[#374151] leading-relaxed">{additions}</td>
                 </tr>
               </tbody>
@@ -160,7 +160,7 @@ export function QuotePrintTemplate({
             <table className="w-full text-xs border-collapse border border-[#e5e7eb]">
               <tbody>
                 <tr>
-                  <td className="py-3 font-semibold text-[#374151] w-1/3 bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("TotalVehiclePrice" as any)}</td>
+                  <th scope="row" className="py-3 font-semibold text-[#374151] text-start w-1/3 bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("TotalVehiclePrice" as any)}</th>
                   <td className="py-3 px-3 font-bold text-base text-[#dc2626]">
                     {selectedResult?.totalFinancedAmount?.toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencyLabel}
                   </td>

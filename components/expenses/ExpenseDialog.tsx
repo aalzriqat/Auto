@@ -35,9 +35,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 
 import { expenseSchema, ExpenseFormValues, ExpenseDialogProps } from "./expense.schema";
-
 
 export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProps) {
   const { activeOrgId } = useOrg();
@@ -68,9 +68,11 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
       status: "PAID",
       vendor: "",
       payerId: "none",
+      paymentMethod: "CASH",
       notes: "",
     },
   });
+  const paymentStatus = form.watch("status");
 
   useEffect(() => {
     if (expense && open) {
@@ -84,6 +86,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
         status: expense.status || "PAID",
         vendor: expense.vendor || "",
         payerId: expense.payerId || "none",
+        paymentMethod: (expense.paymentMethod || "CASH") as PaymentMethod,
         notes: expense.notes || "",
       });
     } else if (open && !expense) {
@@ -96,6 +99,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
         status: "PAID",
         vendor: "",
         payerId: "none",
+        paymentMethod: "CASH",
         notes: "",
       });
     }
@@ -110,6 +114,8 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
       const parsedPayerId = values.payerId === "none" ? undefined : (values.payerId as Id<"users">);
 
       if (expense) {
+        const shouldSendPaymentMethod =
+          values.status === "PAID" && ((expense.status ?? "PAID") === "PENDING" || expense.paymentMethod !== undefined);
         await updateExpense({
           orgId: activeOrgId,
           expenseId: expense._id,
@@ -121,6 +127,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
           status: values.status,
           vendor: values.vendor,
           payerId: parsedPayerId === undefined ? null : parsedPayerId,
+          paymentMethod: shouldSendPaymentMethod ? values.paymentMethod : undefined,
           notes: values.notes,
         });
         toast.success(t("ExpenseUpdatedSuccess" as any));
@@ -135,13 +142,14 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
           status: values.status,
           vendor: values.vendor,
           payerId: parsedPayerId,
+          paymentMethod: values.status === "PAID" ? values.paymentMethod : undefined,
           notes: values.notes,
         });
         toast.success(t("ExpenseRecordedSuccess" as any));
       }
       onOpenChange(false);
-    } catch (error: any) {
-      toast.error(error);
+    } catch {
+      toast.error(t("ExpenseSaveFail" as any));
     } finally {
       setIsSubmitting(false);
     }
@@ -290,6 +298,26 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                   </FormItem>
                 )}
               />
+
+              {paymentStatus === "PAID" && (
+                <FormField
+                  control={form.control}
+                  name="paymentMethod"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("PaymentMethodLabel" as any)}</FormLabel>
+                      <FormControl>
+                        <PaymentMethodSelect
+                          t={t as any}
+                          value={field.value as PaymentMethod}
+                          onValueChange={field.onChange}
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
 
               <FormField
                 control={form.control}

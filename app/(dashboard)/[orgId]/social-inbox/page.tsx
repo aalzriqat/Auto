@@ -320,14 +320,17 @@ export default function SocialInboxPage() {
               return (
                 <div
                   key={`${conversation.platform}:${conversation.customerId}:${conversation.conversationKind}:${conversation.conversationPostId ?? ""}`}
-                  className="rounded-xl border bg-card p-4 space-y-2 cursor-pointer active:bg-muted/30"
-                  onClick={() => setActiveConversation(ck)}
+                  className="rounded-xl border bg-card p-4 space-y-2 active:bg-muted/30"
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <p className="font-semibold text-sm truncate flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setActiveConversation(ck)}
+                      className="min-w-0 font-semibold text-sm truncate flex items-center gap-1.5 text-start"
+                    >
                       <PlatformIcon platform={conversation.platform} />
                       {conversation.senderDisplayName}
-                    </p>
+                    </button>
                     <div className="flex items-center gap-1.5 shrink-0">
                       {rowLink && (
                         <a
@@ -347,15 +350,29 @@ export default function SocialInboxPage() {
                     </div>
                   </div>
                   {vehicleLabel(conversation) && (
-                    <p className="text-xs text-muted-foreground flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setActiveConversation(ck)}
+                      className="w-full text-xs text-muted-foreground flex items-center gap-1 text-start"
+                    >
                       <Car className="h-3 w-3 shrink-0" />{vehicleLabel(conversation)}
-                    </p>
+                    </button>
                   )}
-                  <p className="text-sm truncate">{conversation.latestText}</p>
+                  <button
+                    type="button"
+                    onClick={() => setActiveConversation(ck)}
+                    className="w-full text-sm truncate text-start"
+                  >
+                    {conversation.latestText}
+                  </button>
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] text-muted-foreground">
+                    <button
+                      type="button"
+                      onClick={() => setActiveConversation(ck)}
+                      className="text-[10px] text-muted-foreground text-start"
+                    >
                       {new Date(conversation.latestCreationTime).toLocaleString()}
-                    </span>
+                    </button>
                     {statusBadge(conversation)}
                   </div>
                 </div>

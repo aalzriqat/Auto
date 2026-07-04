@@ -5,6 +5,7 @@ import { assertPostingAllowed } from "../accountingPeriods";
 import { scaleForCurrency } from "../utils/money";
 import { simplePayloadHash, validateBalance, LineSpec } from "./postingRules";
 import { auditLog } from "../financialAudit";
+import { incrementAccountSnapshot } from "./accountSnapshots";
 
 export interface ReversalCommand {
   orgId: Id<"organizations">;
@@ -146,7 +147,10 @@ export async function reverseAccountingEvent(
   const journalNumber = `JE-${reversalJournalEntryId.toString().replace(/[^a-z0-9]/gi, "").slice(-10).toUpperCase()}`;
   await ctx.db.patch(reversalJournalEntryId, { journalNumber });
 
-  // Write inverted journal lines
+  // Write inverted journal lines, incrementing the same running snapshots
+  // (GL Phase 18) the original posting incremented — since debit/credit are
+  // already swapped here, this naturally nets the reversed entry's effect
+  // back out of the running balance.
   for (let i = 0; i < invertedLines.length; i++) {
     const l = invertedLines[i];
     await ctx.db.insert("journalLines", {
@@ -166,6 +170,14 @@ export async function reverseAccountingEvent(
       cashierId: l.cashierId,
       financeCompanyId: l.financeCompanyId,
       description: l.description ? `[REVERSAL] ${l.description}` : "[REVERSAL]",
+    });
+    await incrementAccountSnapshot(ctx, {
+      orgId: cmd.orgId,
+      accountId: l.accountId,
+      currency,
+      periodId,
+      debitMinor: l.debitMinor,
+      creditMinor: l.creditMinor,
     });
   }
 

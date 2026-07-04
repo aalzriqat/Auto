@@ -1,10 +1,10 @@
 import { cronJobs } from "convex/server";
 import { v } from "convex/values";
-import { internalMutation, internalQuery, internalAction, MutationCtx, ActionCtx } from "./_generated/server";
+import { internalMutation, internalQuery, internalAction, MutationCtx, ActionCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { notifyManagers, notifyUser } from "./utils/notifications";
 import { PLANS, PlanId } from "./subscriptions";
-import { Doc } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { isSystemOwnerRole } from "./utils/permissions";
 
 const crons = cronJobs();
@@ -74,6 +74,16 @@ crons.interval(
   "social-auto-reply-retries",
   { minutes: 15 },
   internal.crons.triggerSocialAutoReplyRetries,
+  {}
+);
+
+// GL Phase 11: post one month of straight-line depreciation for every ACTIVE
+// fixed asset, across every org. Runs once a month; depreciateAssetForMonth
+// is idempotent per (assetId, yearMonth) so a redrive/redeploy can't double-post.
+crons.cron(
+  "fixed-asset-depreciation",
+  "0 3 1 * *",
+  internal.crons.triggerFixedAssetDepreciation,
   {}
 );
 
@@ -274,25 +284,159 @@ export const triggerSocialAutoReplyRetries = internalAction({
   },
 });
 
+// ─── GL Phase 11: monthly fixed-asset depreciation cron ──────────────────────
+
+type DepreciationOutcome = "posted" | "skippedNoOwner" | "skippedOther";
+
+type DepreciationRunStats = {
+  total: number;
+  posted: number;
+  skippedNoOwner: number;
+  skippedOther: number;
+};
+
+async function getCachedOrgOwnerUserId(
+  ctx: ActionCtx,
+  ownerByOrg: Map<string, Id<"users"> | null>,
+  orgId: Id<"organizations">
+): Promise<Id<"users"> | null> {
+  const orgKey = orgId.toString();
+  if (!ownerByOrg.has(orgKey)) {
+    const ownerUserId = await ctx.runQuery(internal.crons.getOrgOwnerUserId, { orgId });
+    ownerByOrg.set(orgKey, ownerUserId);
+  }
+  return ownerByOrg.get(orgKey) ?? null;
+}
+
+async function depreciateCronAsset(
+  ctx: ActionCtx,
+  asset: Doc<"fixedAssets">,
+  args: {
+    ownerByOrg: Map<string, Id<"users"> | null>;
+    yearMonth: string;
+    occurredAt: number;
+  }
+): Promise<DepreciationOutcome> {
+  const systemActorId = await getCachedOrgOwnerUserId(ctx, args.ownerByOrg, asset.orgId);
+  if (!systemActorId) {
+    return "skippedNoOwner";
+  }
+
+  const result = await ctx.runMutation(internal.fixedAssets.depreciateAssetForMonth, {
+    orgId: asset.orgId,
+    assetId: asset._id,
+    yearMonth: args.yearMonth,
+    occurredAt: args.occurredAt,
+    systemActorId,
+  });
+  return result.posted ? "posted" : "skippedOther";
+}
+
+function recordDepreciationOutcome(stats: DepreciationRunStats, outcome: DepreciationOutcome): void {
+  stats.total++;
+  stats[outcome]++;
+}
+
+async function runFixedAssetDepreciation(
+  ctx: ActionCtx,
+  args: { yearMonth: string; occurredAt: number }
+): Promise<DepreciationRunStats> {
+  const ownerByOrg = new Map<string, Id<"users"> | null>();
+  const stats: DepreciationRunStats = {
+    total: 0,
+    posted: 0,
+    skippedNoOwner: 0,
+    skippedOther: 0,
+  };
+
+  // Drain every page so assets past the page cap are not silently skipped.
+  let cursor: string | undefined;
+  do {
+    const page = await ctx.runQuery(internal.fixedAssets.listActiveAssetsForDepreciation, { cursor });
+    for (const asset of page.page) {
+      const outcome = await depreciateCronAsset(ctx, asset, {
+        ownerByOrg,
+        yearMonth: args.yearMonth,
+        occurredAt: args.occurredAt,
+      });
+      recordDepreciationOutcome(stats, outcome);
+    }
+    cursor = page.isDone ? undefined : page.continueCursor;
+  } while (cursor);
+
+  return stats;
+}
+
+function depreciationSummary(yearMonth: string, stats: DepreciationRunStats): string {
+  return `Depreciation ${yearMonth}: posted ${stats.posted}/${stats.total} asset(s), ${stats.skippedNoOwner} skipped (no org owner), ${stats.skippedOther} skipped (already run / not yet started / inactive / fully depreciated).`;
+}
+
+export const triggerFixedAssetDepreciation = internalAction({
+  args: {},
+  handler: async (ctx: ActionCtx): Promise<string> => {
+    try {
+      const now = Date.now();
+      const d = new Date(now);
+      const yearMonth = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+      const stats = await runFixedAssetDepreciation(ctx, { yearMonth, occurredAt: now });
+      const summary = depreciationSummary(yearMonth, stats);
+      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+        source: "fixed-asset-depreciation",
+        status: "success",
+        summary,
+      });
+      return summary;
+    } catch (err) {
+      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+        source: "fixed-asset-depreciation",
+        status: "error",
+        summary: "fixed-asset-depreciation cron failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+  },
+});
+
+/** Shared by getOrgOwnerEmail/getOrgOwnerUserId: finds the org's OWNER-role member's user doc. */
+async function findOrgOwnerUser(ctx: QueryCtx, orgId: Id<"organizations">): Promise<Doc<"users"> | null> {
+  // Role *definitions* per org are inherently few (the role list, not member
+  // assignments), so collect() is safe here — while a .take(N) cap could
+  // silently miss the owner role in an org with many custom roles.
+  const roles = await ctx.db
+    .query("roles")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+  const ownerRole = roles.find((r) => isSystemOwnerRole(r));
+  if (!ownerRole) return null;
+
+  // Filter by roleId inside the query rather than slicing N memberships
+  // client-side — an org with more members than any cap would otherwise
+  // "lose" its owner and silently skip automated postings.
+  const ownerMembership = await ctx.db
+    .query("memberships")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .filter((q) => q.eq(q.field("roleId"), ownerRole._id))
+    .first();
+  if (!ownerMembership) return null;
+
+  return await ctx.db.get(ownerMembership.userId);
+}
+
 /** Returns the email address of the org's OWNER-role member. */
 export const getOrgOwnerEmail = internalQuery({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
-    const roles = await ctx.db
-      .query("roles")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .take(20);
-    const ownerRole = roles.find((r) => isSystemOwnerRole(r));
-    if (!ownerRole) return null;
+    const owner = await findOrgOwnerUser(ctx, args.orgId);
+    return owner?.email ?? null;
+  },
+});
 
-    const memberships = await ctx.db
-      .query("memberships")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .take(50);
-    const ownerMembership = memberships.find((m) => m.roleId === ownerRole._id);
-    if (!ownerMembership) return null;
-
-    const user = await ctx.db.get(ownerMembership.userId);
-    return user?.email ?? null;
+/** Returns the user _id of the org's OWNER-role member — used to attribute automated/system postings (e.g. the depreciation cron) to a real user, since accounting records require a real actorId. */
+export const getOrgOwnerUserId = internalQuery({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const owner = await findOrgOwnerUser(ctx, args.orgId);
+    return owner?._id ?? null;
   },
 });

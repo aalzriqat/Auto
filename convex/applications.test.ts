@@ -115,6 +115,60 @@ describe("applications.finalizeDeal", () => {
   });
 });
 
+describe("applications.updateStatus permissions", () => {
+  test("review and rejection require review finance application permission", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const viewerId = await t.run((ctx) =>
+      ctx.db.insert("users", {
+        clerkId: "user_app_viewer",
+        email: "app.viewer@test.com",
+        name: "App Viewer",
+      })
+    );
+    const viewerRoleId = await t.run((ctx) =>
+      ctx.db.insert("roles", {
+        orgId,
+        name: "Application Viewer",
+        permissions: ["view:finance_applications"],
+      })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: viewerId, roleId: viewerRoleId }));
+    const asViewer = t.withIdentity({ subject: "user_app_viewer", clerkId: "user_app_viewer" });
+
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 20000,
+      downPayment: 3000,
+      termMonths: 48,
+    });
+    const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
+
+    await expect(
+      asViewer.mutation(api.applications.updateStatus, {
+        orgId,
+        applicationId,
+        status: "UNDER_REVIEW",
+      })
+    ).rejects.toThrow(/missing required permissions/i);
+
+    await asUser.mutation(api.applications.updateStatus, {
+      orgId,
+      applicationId,
+      status: "UNDER_REVIEW",
+    });
+
+    await expect(
+      asViewer.mutation(api.applications.updateStatus, {
+        orgId,
+        applicationId,
+        status: "REJECTED",
+      })
+    ).rejects.toThrow(/missing required permissions/i);
+  });
+});
+
 /** Seeds a finance company, quote, and application, then walks it to a finalized deal. */
 async function setupFinalizedFinancedDeal() {
   const base = await setup();

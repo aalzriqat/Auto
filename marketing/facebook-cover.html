@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<title>AutoFlow Facebook Cover</title>
+<style>
+  @font-face {
+    font-family: "Cairo";
+    src: local("Cairo");
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    width: 1640px;
+    height: 624px;
+    overflow: hidden;
+    background: #030014;
+    font-family: "Cairo", "Segoe UI", Tahoma, sans-serif;
+  }
+  .canvas {
+    position: relative;
+    width: 1640px;
+    height: 624px;
+    background:
+      radial-gradient(ellipse 900px 500px at 80% 30%, rgba(59,130,246,0.28), transparent 65%),
+      radial-gradient(ellipse 700px 500px at 15% 90%, rgba(245,158,11,0.12), transparent 60%),
+      linear-gradient(180deg, #030014 0%, #07051a 60%, #030014 100%);
+    overflow: hidden;
+  }
+  .grid {
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(to right, rgba(255,255,255,0.04) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(255,255,255,0.04) 1px, transparent 1px);
+    background-size: 64px 64px;
+    -webkit-mask-image: radial-gradient(ellipse 70% 70% at 50% 40%, #000 60%, transparent 100%);
+    mask-image: radial-gradient(ellipse 70% 70% at 50% 40%, #000 60%, transparent 100%);
+  }
+  .content {
+    position: relative;
+    z-index: 2;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 90px;
+  }
+  .text-block {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 18px;
+    max-width: 980px;
+  }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 22px;
+    border-radius: 999px;
+    border: 1px solid rgba(245,158,11,0.35);
+    background: rgba(245,158,11,0.1);
+    color: #fff7ed;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+  }
+  .badge::before {
+    content: "";
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #fbbf24;
+    box-shadow: 0 0 12px 3px rgba(251,191,36,0.7);
+  }
+  h1 {
+    font-size: 84px;
+    font-weight: 800;
+    line-height: 1.15;
+    background: linear-gradient(90deg, #ffffff 30%, #93c5fd 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .tagline {
+    font-size: 34px;
+    font-weight: 600;
+    color: rgba(255,255,255,0.82);
+    line-height: 1.5;
+  }
+  .url {
+    margin-top: 6px;
+    font-size: 26px;
+    font-weight: 700;
+    color: #60a5fa;
+    direction: ltr;
+    display: inline-block;
+  }
+  .logo-wrap {
+    position: relative;
+    width: 380px;
+    height: 380px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .logo-glow {
+    position: absolute;
+    width: 420px;
+    height: 420px;
+    border-radius: 50%;
+    background: radial-gradient(circle, rgba(59,130,246,0.35), transparent 70%);
+    filter: blur(10px);
+  }
+  .logo-wrap img {
+    position: relative;
+    width: 300px;
+    height: 300px;
+    object-fit: contain;
+    filter: drop-shadow(0 0 40px rgba(59,130,246,0.35));
+  }
+</style>
+</head>
+<body>
+  <div class="canvas">
+    <div class="grid"></div>
+    <div class="content">
+      <div class="text-block">
+        <div class="badge">نسخة بيتا مبكرة — مقاعد محدودة</div>
+        <h1>أوتوفلو لإدارة معارض السيارات</h1>
+        <div class="tagline">المخزون، العملاء، المبيعات، والتمويل — في منصة واحدة لمعارض السيارات في الأردن</div>
+        <div class="url">autoflowdealer.com</div>
+      </div>
+      <div class="logo-wrap">
+        <div class="logo-glow"></div>
+        <img src="../public/logo.png" alt="AutoFlow logo" />
+      </div>
+    </div>
+  </div>
+</body>
+</html>

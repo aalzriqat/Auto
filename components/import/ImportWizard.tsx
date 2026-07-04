@@ -240,7 +240,8 @@ export function ImportWizard(props: ImportWizardProps) {
         <div className="flex-1 overflow-y-auto space-y-4">
           {headers.length === 0 && (
             <>
-              <div
+              <button
+                type="button"
                 className="border-2 border-dashed border-muted-foreground/30 rounded-lg p-8 text-center cursor-pointer hover:border-primary/50 hover:bg-muted/30 transition-colors"
                 onDrop={handleDrop}
                 onDragOver={(e) => e.preventDefault()}
@@ -249,14 +250,14 @@ export function ImportWizard(props: ImportWizardProps) {
                 <Upload className="h-8 w-8 mx-auto mb-3 text-muted-foreground" />
                 <p className="text-sm font-medium">{fileName || t("DropFileHere" as any)}</p>
                 <p className="text-xs text-muted-foreground mt-1">{t("FileTypesAccepted" as any)}</p>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".xlsx,.csv"
-                  className="hidden"
-                  onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
-                />
-              </div>
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx,.csv"
+                className="hidden"
+                onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
+              />
               <Button variant="outline" size="sm" onClick={() => { void templateBuilder(); }}>
                 <Download className="h-4 w-4 me-2" />
                 {t("DownloadTemplate" as any)}

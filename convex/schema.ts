@@ -1,5 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
+import { paymentMethodValidator } from "./utils/paymentMethods";
 
 const organizationDeletionRequestStatus = v.union(
   v.literal("PENDING_REVIEW"),
@@ -219,6 +220,7 @@ export default defineSchema({
       v.literal("MANUAL"),
       v.literal("REVERSAL"),
       v.literal("ADJUSTMENT"),
+      v.literal("OPENING_BALANCE"),
     ),
     memo: v.string(),
     status: v.union(
@@ -612,10 +614,13 @@ export default defineSchema({
     sourcedFromName: v.string(),
     amountDue: v.number(),
     currency: v.string(),
-    status: v.union(v.literal("PENDING"), v.literal("PAID")),
+    status: v.union(v.literal("PENDING"), v.literal("PAID"), v.literal("CANCELLED")),
     paidAt: v.optional(v.number()),
     paidBy: v.optional(v.id("users")),
+    paymentMethod: v.optional(paymentMethodValidator),
     paymentNotes: v.optional(v.string()),
+    cancelledAt: v.optional(v.number()),
+    cancelledBy: v.optional(v.id("users")),
     createdBy: v.id("users"),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -824,6 +829,7 @@ export default defineSchema({
     commissionAmount: v.optional(v.number()), // Calculated at sale time
     commissionPaidAt: v.optional(v.number()),
     commissionPaidBy: v.optional(v.id("users")),
+    commissionPaymentMethod: v.optional(paymentMethodValidator),
     commissionPaymentIdempotencyKey: v.optional(v.string()),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
@@ -861,6 +867,7 @@ export default defineSchema({
     amortizationMonths: v.optional(v.number()),
     status: v.optional(v.union(v.literal("PENDING"), v.literal("PAID"))),
     idempotencyKey: v.optional(v.string()),
+    paymentMethod: v.optional(paymentMethodValidator),
     vendor: v.optional(v.string()),
     payerId: v.optional(v.id("users")),
     notes: v.optional(v.string()),
@@ -1567,8 +1574,73 @@ export default defineSchema({
   fixedAssets: defineTable({
     orgId: v.id("organizations"),
     name: v.string(), // e.g., "أثاث مكتب"
-    purchaseValue: v.number(),
+    // Legacy field, kept optional through the widen-migrate-narrow transition —
+    // GL Phase 11 replaces it with costMinor/currency. New rows leave it unset.
+    purchaseValue: v.optional(v.number()),
     purchaseDate: v.number(), // Timestamp
+    notes: v.optional(v.string()),
+    isDeleted: v.optional(v.boolean()),
+    deletedAt: v.optional(v.number()),
+    deletedBy: v.optional(v.string()),
+    // ─── GL Phase 11: capitalization + depreciation lifecycle ────────────────
+    costMinor: v.optional(v.number()),
+    currency: v.optional(v.string()),
+    salvageValueMinor: v.optional(v.number()),
+    usefulLifeMonths: v.optional(v.number()),
+    method: v.optional(v.literal("STRAIGHT_LINE")),
+    depreciationStartDate: v.optional(v.number()),
+    status: v.optional(v.union(
+      v.literal("ACTIVE"),
+      v.literal("IMPAIRED"),
+      v.literal("DISPOSED"),
+    )),
+    // Derived cache, kept in sync by the lifecycle mutations below — always
+    // recomputable from fixedAssetEvents, never the source of truth.
+    accumulatedDepreciationMinor: v.optional(v.number()),
+    lastDepreciatedYearMonth: v.optional(v.string()), // "YYYY-MM" of the last posted depreciation run
+    disposedAt: v.optional(v.number()),
+    disposalProceedsMinor: v.optional(v.number()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_status", ["status"]),
+
+  // Immutable, append-only log of every capitalization/depreciation/impairment/
+  // disposal event posted for a fixed asset — the audit trail behind the
+  // derived accumulatedDepreciationMinor cache on fixedAssets.
+  fixedAssetEvents: defineTable({
+    orgId: v.id("organizations"),
+    assetId: v.id("fixedAssets"),
+    type: v.union(
+      v.literal("CAPITALIZE"),
+      v.literal("DEPRECIATE"),
+      v.literal("IMPAIR"),
+      v.literal("DISPOSE"),
+    ),
+    amountMinor: v.number(),
+    currency: v.string(),
+    occurredAt: v.number(),
+    accountingEventId: v.optional(v.id("accountingEvents")),
+    actorId: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_asset", ["assetId"])
+    .index("by_org_asset_time", ["orgId", "assetId", "occurredAt"]),
+
+  partnerEquity: defineTable({
+    orgId: v.id("organizations"),
+    partnerName: v.string(), // e.g., "علاء جراد"
+    userId: v.optional(v.id("users")),
+    // Legacy major-unit fields, frozen as of GL Phase 12 — no mutation writes
+    // them anymore. Superseded by openingBalanceMinor (GL Phase 17); kept
+    // only until that backfill has run and been verified in production, per
+    // the widen-migrate-narrow discipline this whole track follows.
+    initialCapital: v.optional(v.number()),
+    currentBalance: v.optional(v.number()),
+    // GL Phase 17: minor-unit backfill of currentBalance. Once set, this is
+    // what derivePartnerBalanceMinor reads as the opening base instead of
+    // converting currentBalance live.
+    openingBalanceMinor: v.optional(v.number()),
     notes: v.optional(v.string()),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
@@ -1576,18 +1648,132 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"]),
 
-  partnerEquity: defineTable({
+  // GL Phase 18: running per-(account, currency, period) totals, incremented
+  // synchronously by postAccountingEvent/reverseAccountingEvent every time a
+  // journal line posts. Lets trial balance / balance sheet sum O(periods)
+  // snapshot rows for closed periods instead of collecting every journal
+  // line ever posted; only the still-open containing period needs a bounded
+  // scan of its own lines. Currency is part of the key (not in the phase
+  // spec's original field list) because GL Phase 14 made a single account
+  // able to carry lines in more than one currency — a snapshot without a
+  // currency dimension would silently re-introduce that exact bug.
+  accountBalanceSnapshots: defineTable({
     orgId: v.id("organizations"),
-    partnerName: v.string(), // e.g., "علاء جراد"
-    userId: v.optional(v.id("users")),
-    initialCapital: v.number(),
-    currentBalance: v.number(), // Automatically calculated: Capital - Draws + Profit Share
+    accountId: v.id("chartOfAccounts"),
+    currency: v.string(),
+    periodId: v.id("accountingPeriods"),
+    runningDebitMinor: v.number(),
+    runningCreditMinor: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org_account_currency_period", ["orgId", "accountId", "currency", "periodId"])
+    .index("by_org_period", ["orgId", "periodId"]),
+
+  // GL Phase 15: full cash-drawer lifecycle. Distinct from the simpler,
+  // pre-existing cashierReconciliations (open-float-free count-vs-expected
+  // snapshot with no movement ledger) — this is the fuller open→count→
+  // close→approve lifecycle with its own movement log, per the phase spec.
+  cashDrawerSessions: defineTable({
+    orgId: v.id("organizations"),
+    branchId: v.optional(v.id("branches")),
+    openingFloatMinor: v.number(),
+    currency: v.string(),
+    openedBy: v.id("users"),
+    openedAt: v.number(),
+    status: v.union(
+      v.literal("OPEN"),
+      v.literal("COUNTING"),
+      v.literal("CLOSED"),
+      v.literal("APPROVED"),
+    ),
+    closingCountMinor: v.optional(v.number()),
+    varianceMinor: v.optional(v.number()),
+    closedBy: v.optional(v.id("users")),
+    closedAt: v.optional(v.number()),
+    approvedBy: v.optional(v.id("users")),
+    approvedAt: v.optional(v.number()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_org_branch_status", ["orgId", "branchId", "status"]),
+
+  // Append-only activity log behind a session's expected-cash computation.
+  cashMovements: defineTable({
+    orgId: v.id("organizations"),
+    sessionId: v.id("cashDrawerSessions"),
+    type: v.union(
+      v.literal("SALE"),
+      v.literal("PAYOUT"),
+      v.literal("HANDOVER"),
+      v.literal("BANK_DEPOSIT"),
+    ),
+    amountMinor: v.number(),
+    occurredAt: v.number(),
     notes: v.optional(v.string()),
-    isDeleted: v.optional(v.boolean()),
-    deletedAt: v.optional(v.number()),
-    deletedBy: v.optional(v.string()),
+    accountingEventId: v.optional(v.id("accountingEvents")),
+    actorId: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_session", ["orgId", "sessionId"]),
+
+  // GL Phase 17: a one-time accountant attestation that the legacy-to-GL
+  // cutover for this org has been reviewed and is correct, carrying a
+  // point-in-time snapshot of the numbers that were reviewed (not a live
+  // computation) so the sign-off remains meaningful even as later activity
+  // changes current totals.
+  accountingCutoverSignOffs: defineTable({
+    orgId: v.id("organizations"),
+    snapshot: v.object({
+      legacyTransactionCount: v.number(),
+      migratedTransactionCount: v.number(),
+      unmigratedTransactionCount: v.number(),
+      trialBalanceTotalDebitsMinor: v.number(),
+      trialBalanceTotalCreditsMinor: v.number(),
+      isBalanced: v.boolean(),
+    }),
+    notes: v.optional(v.string()),
+    signedOffBy: v.id("users"),
+    signedOffAt: v.number(),
   })
     .index("by_org", ["orgId"]),
+
+  // GL Phase 14: org-defined exchange rates for optional reporting-currency
+  // translation. Books always stay per-currency; these rates only produce
+  // display-level translated figures in reports, never postings.
+  exchangeRates: defineTable({
+    orgId: v.id("organizations"),
+    fromCurrency: v.string(),
+    toCurrency: v.string(),
+    rate: v.number(),
+    asOfDate: v.number(),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_pair", ["orgId", "fromCurrency", "toCurrency", "asOfDate"]),
+
+  // GL Phase 12: immutable equity movements — the source of truth behind each
+  // partner's balance. Append-only; corrections are new offsetting entries,
+  // never edits.
+  partnerEquityTransactions: defineTable({
+    orgId: v.id("organizations"),
+    partnerId: v.id("partnerEquity"),
+    type: v.union(
+      v.literal("CONTRIBUTION"),
+      v.literal("DRAW"),
+      v.literal("PROFIT_DISTRIBUTION"),
+    ),
+    amountMinor: v.number(),
+    currency: v.string(),
+    occurredAt: v.number(),
+    notes: v.optional(v.string()),
+    accountingEventId: v.optional(v.id("accountingEvents")),
+    actorId: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_partner_time", ["orgId", "partnerId", "occurredAt"]),
 
   claims: defineTable({
     orgId: v.id("organizations"),
@@ -1595,10 +1781,20 @@ export default defineSchema({
     saleId: v.optional(v.id("sales")),
     financingEntity: v.string(), // "جهة التمويل"
     buyerName: v.string(), // "اسم المشتري"
-    claimAmount: v.number(), // "المطالبة"
+    // Legacy major-unit amount, frozen as of GL Phase 13 — new claims store
+    // claimAmountMinor/currency instead. Narrowed in GL Phase 17.
+    claimAmount: v.optional(v.number()),
     status: v.union(v.literal("PENDING"), v.literal("PAID"), v.literal("REJECTED"), v.literal("CANCELLED")),
     claimDate: v.number(),
     notes: v.optional(v.string()),
+    // ─── GL Phase 13: subledger-backed claim lifecycle ────────────────────
+    claimAmountMinor: v.optional(v.number()),
+    currency: v.optional(v.string()),
+    receivableDocumentId: v.optional(v.id("receivableDocuments")),
+    settledAt: v.optional(v.number()),
+    settledBy: v.optional(v.id("users")),
+    rejectedAt: v.optional(v.number()),
+    rejectedBy: v.optional(v.id("users")),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
     deletedBy: v.optional(v.string()),
@@ -2201,7 +2397,8 @@ export default defineSchema({
       v.literal("subscription-reminder"),
       v.literal("support-inbox-notification"),
       v.literal("upgrade-request"),
-      v.literal("social-auto-reply-retry")
+      v.literal("social-auto-reply-retry"),
+      v.literal("fixed-asset-depreciation")
     ),
     status: v.union(v.literal("received"), v.literal("success"), v.literal("error"), v.literal("dead_letter")),
     summary: v.string(),
@@ -2434,6 +2631,7 @@ export default defineSchema({
   paymentIntents: defineTable({
     orgId: v.id("organizations"),
     customerId: v.id("customers"),
+    receivableId: v.optional(v.id("receivables")),
     receivableDocumentId: v.optional(v.id("receivableDocuments")),
     saleId: v.optional(v.id("sales")),
     amountMinor: v.number(),
@@ -2442,6 +2640,7 @@ export default defineSchema({
     externalId: v.optional(v.string()),
     checkoutUrl: v.optional(v.string()),
     providerAccountId: v.optional(v.string()),
+    collectionPaymentId: v.optional(v.id("collectionPayments")),
     canonicalPaymentId: v.optional(v.id("canonicalPayments")),
     paymentAllocationId: v.optional(v.id("paymentAllocations")),
     status: v.union(
@@ -2468,5 +2667,6 @@ export default defineSchema({
     .index("by_org_status", ["orgId", "status"])
     .index("by_external_id", ["provider", "externalId"])
     .index("by_org_idempotency", ["orgId", "idempotencyKey"])
-    .index("by_org_customer", ["orgId", "customerId"]),
+    .index("by_org_customer", ["orgId", "customerId"])
+    .index("by_receivable", ["receivableId"]),
 });

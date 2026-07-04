@@ -21,6 +21,16 @@ export type EventType =
   | "FINANCE_CASH_RECEIVED"
   | "PAYMENT_LINK_RECEIVED"
   | "SUPPLIER_PAYMENT_SETTLED"
+  | "ASSET_CAPITALIZED"
+  | "DEPRECIATION_POSTED"
+  | "ASSET_IMPAIRED"
+  | "ASSET_DISPOSED"
+  | "CAPITAL_CONTRIBUTED"
+  | "PARTNER_DREW"
+  | "PROFIT_DISTRIBUTED"
+  | "CLAIM_SETTLED"
+  | "CLAIM_WRITTEN_OFF"
+  | "CASH_DRAWER_DEPOSITED"
   | "JOURNAL_REVERSAL";
 
 export const ALL_EVENT_TYPES = new Set<string>([
@@ -30,6 +40,10 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "COMMISSION_ACCRUED", "COMMISSION_PAID",
   "FINANCE_DISBURSED", "FINANCE_CASH_RECEIVED", "PAYMENT_LINK_RECEIVED",
   "SUPPLIER_PAYMENT_SETTLED",
+  "ASSET_CAPITALIZED", "DEPRECIATION_POSTED", "ASSET_IMPAIRED", "ASSET_DISPOSED",
+  "CAPITAL_CONTRIBUTED", "PARTNER_DREW", "PROFIT_DISTRIBUTED",
+  "CLAIM_SETTLED", "CLAIM_WRITTEN_OFF",
+  "CASH_DRAWER_DEPOSITED",
   // JOURNAL_REVERSAL is intentionally excluded: it is written directly by
   // reverseAccountingEvent() in reversals.ts and never goes through postAccountingEvent().
 ]);
@@ -183,6 +197,7 @@ export interface CommissionPaidPayload {
   amountMinor: number;
   currency: string;
   salespersonId: string;
+  paymentMethod?: string;
 }
 
 export interface ChequeReceivedPayload {
@@ -277,7 +292,9 @@ export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
 }
 
 export function ruleSupplierPaymentSettled(p: SupplierPaymentSettledPayload): RuleResult {
-  const cashKey = cashAccountKey(p.paymentMethod);
+  const cashKey = p.paymentMethod === "CHEQUE"
+    ? SYSTEM_KEYS.BANK_ACCOUNT
+    : cashAccountKey(p.paymentMethod);
   return {
     lines: [
       line(SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, p.amountMinor, 0, `AP settled — ${p.sourcedFromName}`),
@@ -376,10 +393,13 @@ export function ruleCommissionAccrued(p: CommissionAccruedPayload): RuleResult {
 }
 
 export function ruleCommissionPaid(p: CommissionPaidPayload): RuleResult {
+  const cashKey = p.paymentMethod === "CHEQUE"
+    ? SYSTEM_KEYS.BANK_ACCOUNT
+    : cashAccountKey(p.paymentMethod);
   return {
     lines: [
       line(SYSTEM_KEYS.COMMISSION_PAYABLE, p.amountMinor, 0, "Commission settled", { salespersonId: p.salespersonId }),
-      line(SYSTEM_KEYS.CASH_ON_HAND, 0, p.amountMinor, "Cash paid", { salespersonId: p.salespersonId }),
+      line(cashKey, 0, p.amountMinor, "Commission paid", { salespersonId: p.salespersonId }),
     ],
     memo: "Commission paid",
     category: "SYSTEM",
@@ -491,6 +511,224 @@ export function ruleChequeDeposited(p: ChequeDepositedPayload): RuleResult {
   };
 }
 
+// ─── GL Phase 11: fixed-asset lifecycle ───────────────────────────────────────
+
+export interface AssetCapitalizedPayload {
+  assetId: string;
+  costMinor: number;
+  currency: string;
+  paymentMethod?: string;
+}
+
+export interface DepreciationPostedPayload {
+  assetId: string;
+  amountMinor: number;
+  currency: string;
+}
+
+export interface AssetImpairedPayload {
+  assetId: string;
+  amountMinor: number;
+  currency: string;
+}
+
+export interface AssetDisposedPayload {
+  assetId: string;
+  costMinor: number;
+  accumulatedDepreciationMinor: number;
+  proceedsMinor: number;
+  currency: string;
+}
+
+export function ruleAssetCapitalized(p: AssetCapitalizedPayload): RuleResult {
+  // Outbound payment: cashAccountKey's CHEQUE branch maps to CHEQUES_IN_HAND,
+  // which holds customer cheques we've *received* — wrong side for paying a
+  // supplier by our own cheque, which ultimately clears from our bank.
+  const cashKey = p.paymentMethod === "CHEQUE"
+    ? SYSTEM_KEYS.BANK_ACCOUNT
+    : cashAccountKey(p.paymentMethod);
+  return {
+    lines: [
+      line(SYSTEM_KEYS.FIXED_ASSETS, p.costMinor, 0, "Asset capitalized"),
+      line(cashKey, 0, p.costMinor, "Payment for asset"),
+    ],
+    memo: "Fixed asset capitalized",
+    category: "SYSTEM",
+  };
+}
+
+export function ruleDepreciationPosted(p: DepreciationPostedPayload): RuleResult {
+  return {
+    lines: [
+      line(SYSTEM_KEYS.DEPRECIATION_EXPENSE, p.amountMinor, 0, "Depreciation expense"),
+      line(SYSTEM_KEYS.ACCUMULATED_DEPRECIATION, 0, p.amountMinor, "Accumulated depreciation"),
+    ],
+    memo: "Monthly depreciation posted",
+    category: "SYSTEM",
+  };
+}
+
+export function ruleAssetImpaired(p: AssetImpairedPayload): RuleResult {
+  return {
+    lines: [
+      line(SYSTEM_KEYS.IMPAIRMENT_LOSS, p.amountMinor, 0, "Impairment loss"),
+      line(SYSTEM_KEYS.ACCUMULATED_DEPRECIATION, 0, p.amountMinor, "Impairment recorded as additional accumulated depreciation"),
+    ],
+    memo: "Fixed asset impaired",
+    category: "SYSTEM",
+  };
+}
+
+/**
+ * Derecognizes the asset's full cost and its accumulated depreciation, records
+ * any cash proceeds, and books the balancing gain or loss (proceeds vs. net
+ * book value). Zero-amount lines are omitted since a manual/system journal
+ * line can't have both a zero debit and a zero credit (validateBalance would
+ * reject it) — omitting a genuinely-zero line never affects balance, since a
+ * zero contribution can't unbalance the entry either way.
+ */
+export function ruleAssetDisposed(p: AssetDisposedPayload): RuleResult {
+  const netBookValue = p.costMinor - p.accumulatedDepreciationMinor;
+  const gainOrLoss = p.proceedsMinor - netBookValue;
+
+  const lines: LineSpec[] = [];
+  if (p.accumulatedDepreciationMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.ACCUMULATED_DEPRECIATION, p.accumulatedDepreciationMinor, 0, "Remove accumulated depreciation"));
+  }
+  if (p.proceedsMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.BANK_ACCOUNT, p.proceedsMinor, 0, "Disposal proceeds"));
+  }
+  lines.push(line(SYSTEM_KEYS.FIXED_ASSETS, 0, p.costMinor, "Remove asset cost"));
+  if (gainOrLoss > 0) {
+    lines.push(line(SYSTEM_KEYS.GAIN_ON_DISPOSAL, 0, gainOrLoss, "Gain on disposal"));
+  } else if (gainOrLoss < 0) {
+    lines.push(line(SYSTEM_KEYS.LOSS_ON_DISPOSAL, -gainOrLoss, 0, "Loss on disposal"));
+  }
+
+  return { lines, memo: "Fixed asset disposed", category: "SYSTEM" };
+}
+
+// ─── GL Phase 12: partner equity movements ────────────────────────────────────
+
+/**
+ * partnerId is optional metadata: journal lines carry no partner dimension,
+ * and Phase 6 legacy-transaction migration posts these events for old
+ * PARTNER_DRAW/CAPITAL_INJECTION rows that never recorded which partner.
+ */
+export interface PartnerEquityMovementPayload {
+  partnerId?: string;
+  amountMinor: number;
+  currency: string;
+  paymentMethod?: string;
+}
+
+export function ruleCapitalContributed(p: PartnerEquityMovementPayload): RuleResult {
+  // Inbound money: a cheque handed over by the partner genuinely sits in
+  // CHEQUES_IN_HAND, so the shared inbound mapper applies as-is.
+  const cashKey = cashAccountKey(p.paymentMethod);
+  return {
+    lines: [
+      line(cashKey, p.amountMinor, 0, "Capital contribution received"),
+      line(SYSTEM_KEYS.PARTNER_CAPITAL, 0, p.amountMinor, "Partner capital"),
+    ],
+    memo: "Partner capital contributed",
+    category: "SYSTEM",
+  };
+}
+
+export function rulePartnerDrew(p: PartnerEquityMovementPayload): RuleResult {
+  // Outbound payment — same reasoning as refundDisbursementAccountKey and
+  // ruleAssetCapitalized: our own cheque clears from the bank.
+  const cashKey = p.paymentMethod === "CHEQUE"
+    ? SYSTEM_KEYS.BANK_ACCOUNT
+    : cashAccountKey(p.paymentMethod);
+  return {
+    lines: [
+      line(SYSTEM_KEYS.PARTNER_DRAWINGS, p.amountMinor, 0, "Partner draw"),
+      line(cashKey, 0, p.amountMinor, "Draw paid out"),
+    ],
+    memo: "Partner draw",
+    category: "SYSTEM",
+  };
+}
+
+export function ruleProfitDistributed(p: PartnerEquityMovementPayload): RuleResult {
+  // Pure equity reclassification — accumulated profit becomes partner
+  // capital; no cash moves until the partner later draws it.
+  return {
+    lines: [
+      line(SYSTEM_KEYS.RETAINED_EARNINGS, p.amountMinor, 0, "Profit distributed to partner"),
+      line(SYSTEM_KEYS.PARTNER_CAPITAL, 0, p.amountMinor, "Partner capital increased"),
+    ],
+    memo: "Profit distributed to partner capital",
+    category: "SYSTEM",
+  };
+}
+
+// ─── GL Phase 13: claim receivables ───────────────────────────────────────────
+
+export interface ClaimSettledPayload {
+  claimId: string;
+  amountMinor: number;
+  currency: string;
+  paymentMethod?: string;
+}
+
+export interface ClaimWrittenOffPayload {
+  claimId: string;
+  amountMinor: number;
+  currency: string;
+}
+
+export function ruleClaimSettled(p: ClaimSettledPayload): RuleResult {
+  // Finance companies settle by transfer unless told otherwise, so the
+  // no-method default is the bank, not the cash drawer. An explicit CASH
+  // still hits the drawer (cashAccountKey's defaultCash option can't express
+  // that — it also swallows explicit CASH, which falls through to the
+  // default), and an inbound cheque genuinely lands in CHEQUES_IN_HAND.
+  const cashKey = p.paymentMethod === undefined
+    ? SYSTEM_KEYS.BANK_ACCOUNT
+    : cashAccountKey(p.paymentMethod);
+  return {
+    lines: [
+      line(cashKey, p.amountMinor, 0, "Claim settlement received"),
+      line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES, 0, p.amountMinor, "Finance-company AR settled"),
+    ],
+    memo: "Finance-company claim settled",
+    category: "SYSTEM",
+  };
+}
+
+export function ruleClaimWrittenOff(p: ClaimWrittenOffPayload): RuleResult {
+  return {
+    lines: [
+      line(SYSTEM_KEYS.CLAIM_WRITE_OFF_EXPENSE, p.amountMinor, 0, "Rejected claim written off"),
+      line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES, 0, p.amountMinor, "Finance-company AR written off"),
+    ],
+    memo: "Rejected claim written off",
+    category: "SYSTEM",
+  };
+}
+
+// ─── GL Phase 15: cash-drawer bank deposit ────────────────────────────────────
+
+export interface CashDrawerDepositedPayload {
+  sessionId: string;
+  amountMinor: number;
+  currency: string;
+}
+
+export function ruleCashDrawerDeposited(p: CashDrawerDepositedPayload): RuleResult {
+  return {
+    lines: [
+      line(SYSTEM_KEYS.BANK_ACCOUNT, p.amountMinor, 0, "Cash drawer deposited to bank"),
+      line(SYSTEM_KEYS.CASH_ON_HAND, 0, p.amountMinor, "Drawer cash removed"),
+    ],
+    memo: "Cash drawer session deposited",
+    category: "SYSTEM",
+  };
+}
+
 // ─── Dispatch ─────────────────────────────────────────────────────────────────
 
 export function applyPostingRule(eventType: string, payload: Record<string, unknown>): RuleResult {
@@ -514,6 +752,16 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "FINANCE_CASH_RECEIVED": return ruleFinanceCashReceived(payload as unknown as FinanceCashReceivedPayload);
     case "PAYMENT_LINK_RECEIVED": return rulePaymentLinkReceived(payload as unknown as PaymentLinkReceivedPayload);
     case "SUPPLIER_PAYMENT_SETTLED": return ruleSupplierPaymentSettled(payload as unknown as SupplierPaymentSettledPayload);
+    case "ASSET_CAPITALIZED": return ruleAssetCapitalized(payload as unknown as AssetCapitalizedPayload);
+    case "DEPRECIATION_POSTED": return ruleDepreciationPosted(payload as unknown as DepreciationPostedPayload);
+    case "ASSET_IMPAIRED": return ruleAssetImpaired(payload as unknown as AssetImpairedPayload);
+    case "ASSET_DISPOSED": return ruleAssetDisposed(payload as unknown as AssetDisposedPayload);
+    case "CAPITAL_CONTRIBUTED": return ruleCapitalContributed(payload as unknown as PartnerEquityMovementPayload);
+    case "PARTNER_DREW": return rulePartnerDrew(payload as unknown as PartnerEquityMovementPayload);
+    case "PROFIT_DISTRIBUTED": return ruleProfitDistributed(payload as unknown as PartnerEquityMovementPayload);
+    case "CLAIM_SETTLED": return ruleClaimSettled(payload as unknown as ClaimSettledPayload);
+    case "CLAIM_WRITTEN_OFF": return ruleClaimWrittenOff(payload as unknown as ClaimWrittenOffPayload);
+    case "CASH_DRAWER_DEPOSITED": return ruleCashDrawerDeposited(payload as unknown as CashDrawerDepositedPayload);
     default:
       throw new Error(`No posting rule defined for event type: ${eventType}`);
   }
@@ -548,7 +796,7 @@ function canonicalize(value: unknown): unknown {
   if (value && typeof value === "object") {
     const obj = value as Record<string, unknown>;
     return Object.keys(obj)
-      .sort()
+      .sort((a, b) => a.localeCompare(b))
       .reduce<Record<string, unknown>>((acc, k) => {
         acc[k] = canonicalize(obj[k]);
         return acc;

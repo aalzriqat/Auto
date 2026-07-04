@@ -76,9 +76,11 @@ export function GlobalSearchOnboarding() {
   return createPortal(
     <>
       {/* Backdrop */}
-      <div
+      <button
+        type="button"
         className="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm"
         onClick={dismiss}
+        aria-label={isRtl ? "إغلاق جولة البحث" : "Dismiss search onboarding"}
       />
 
       {/* Card — anchored top-center, pointing up at the search bar */}

@@ -190,6 +190,39 @@ describe("Collections", () => {
     });
   });
 
+  test("return_cleared_cheque_rejects_invalid_bank_fee_minor_units", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, asFinance } = await seedFinanceMember(t);
+
+    const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      orgId,
+      customerId,
+      sourceType: "CHEQUE",
+      title: "Cheque with invalid return fee",
+      amount: 500,
+      dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+    });
+    const chequeId = await asFinance.mutation(api.collections.registerCheque, {
+      orgId,
+      receivableId,
+      customerId,
+      bank: "Arab Bank",
+      chequeNumber: "BAD-FEE-1",
+      chequeDate: Date.now() + 3 * 24 * 60 * 60 * 1000,
+      amount: 500,
+    });
+    await asFinance.mutation(api.collections.clearCheque, { orgId, chequeId });
+
+    await expect(
+      asFinance.mutation(api.collections.returnClearedCheque, {
+        orgId,
+        chequeId,
+        bankFeeMinor: -1,
+        idempotencyKey: "return-cleared-bad-fee",
+      })
+    ).rejects.toThrow(/non-negative integer/i);
+  });
+
   test("approved_refund_posts_outbound_payment_and_reopens_balance", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);

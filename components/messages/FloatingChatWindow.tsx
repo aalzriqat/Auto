@@ -144,35 +144,41 @@ export function FloatingChatWindow({ conversationId, currentUserId, index }: Pro
       {/* Header — always visible */}
       <div
         className={cn(
-          "flex items-center gap-2 px-3 py-2.5 cursor-pointer select-none",
+          "flex items-center gap-2 px-3 py-2.5 select-none",
           "bg-gradient-to-r from-blue-600 to-blue-500 text-white"
         )}
-        onClick={() => toggleMinimize(conversationId)}
       >
-        <div className="relative shrink-0">
-          <Avatar className="h-8 w-8 border-2 border-white/30">
-            {displayImage && <AvatarImage src={displayImage} />}
-            <AvatarFallback className="text-xs bg-blue-400 text-white">
-              {displayName.slice(0, 2).toUpperCase()}
-            </AvatarFallback>
-          </Avatar>
-          {hasUnread && (
-            <span className="absolute -top-0.5 -end-0.5 w-3 h-3 rounded-full bg-red-500 border-2 border-blue-600" />
-          )}
-        </div>
+        <button
+          type="button"
+          onClick={() => toggleMinimize(conversationId)}
+          className="min-w-0 flex flex-1 items-center gap-2 text-start"
+          aria-label={isMinimized ? t("MessagesExpand") : t("MessagesMinimize")}
+        >
+          <span className="relative shrink-0">
+            <Avatar className="h-8 w-8 border-2 border-white/30">
+              {displayImage && <AvatarImage src={displayImage} />}
+              <AvatarFallback className="text-xs bg-blue-400 text-white">
+                {displayName.slice(0, 2).toUpperCase()}
+              </AvatarFallback>
+            </Avatar>
+            {hasUnread && (
+              <span className="absolute -top-0.5 -end-0.5 w-3 h-3 rounded-full bg-red-500 border-2 border-blue-600" />
+            )}
+          </span>
 
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold truncate leading-tight">{displayName}</p>
-          {typingText && !isMinimized && (
-            <p className="text-[10px] text-blue-100 truncate">{typingText}</p>
-          )}
-        </div>
+          <span className="flex-1 min-w-0">
+            <span className="text-sm font-semibold truncate leading-tight block">{displayName}</span>
+            {typingText && !isMinimized && (
+              <span className="text-[10px] text-blue-100 truncate block">{typingText}</span>
+            )}
+          </span>
+        </button>
 
         <div className="flex items-center gap-0.5">
           {!isMinimized && (
             <button
-              onClick={(e) => {
-                e.stopPropagation();
+              type="button"
+              onClick={() => {
                 setMuted({ conversationId, isMuted: !conversation.isMuted });
               }}
               className="p-1.5 rounded-full hover:bg-white/20 transition-colors"
@@ -184,13 +190,15 @@ export function FloatingChatWindow({ conversationId, currentUserId, index }: Pro
             </button>
           )}
           <button
-            onClick={(e) => { e.stopPropagation(); toggleMinimize(conversationId); }}
+            type="button"
+            onClick={() => { toggleMinimize(conversationId); }}
             className="p-1.5 rounded-full hover:bg-white/20 transition-colors"
           >
             <Minus className="h-3.5 w-3.5" />
           </button>
           <button
-            onClick={(e) => { e.stopPropagation(); closeChat(conversationId); }}
+            type="button"
+            onClick={() => { closeChat(conversationId); }}
             className="p-1.5 rounded-full hover:bg-white/20 transition-colors"
           >
             <X className="h-3.5 w-3.5" />

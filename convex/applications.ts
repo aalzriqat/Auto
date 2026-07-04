@@ -5,9 +5,9 @@ import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
-import { releaseHoldForApplicationQuote, holdVehicleForDeposit } from "./utils/depositHelpers";
+import { releaseHoldForApplicationQuote } from "./utils/depositHelpers";
 import { completeSale } from "./utils/saleCompletion";
-import { restoreVehicleToAvailable } from "./utils/saleHelpers";
+import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { runWithIdempotency } from "./utils/idempotency";
 import {
   hookFinanceDisbursed,
@@ -15,7 +15,6 @@ import {
   hookFinanceDisbursementCancelled,
   hookSaleCancelled,
   hookCommissionReversed,
-  hookDepositApplicationReversed,
   getOrgCurrency,
 } from "./accounting/workflowHooks";
 import { toMinorUnits } from "./utils/money";
@@ -23,7 +22,6 @@ import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
   ensureReceivableDocument,
-  reverseAllocation,
 } from "./subledger";
 
 /** sourceType used for the canonical finance-company receivable opened at finalizeDeal. */
@@ -116,30 +114,6 @@ async function transferFinancedAmountFromCustomerReceivable(
     originalAmountMinor: customerPortionMinor,
     status: receivableStatusForBalance(customerPortionMinor, allocatedMinor),
   });
-}
-
-async function cancelSaleCustomerReceivable(
-  ctx: MutationCtx,
-  args: {
-    orgId: Id<"organizations">;
-    sale: Doc<"sales">;
-    actorId: Id<"users">;
-  }
-) {
-  if (!args.sale.canonicalReceivableDocumentId) return;
-  const receivable = await ctx.db.get(args.sale.canonicalReceivableDocumentId);
-  if (!receivable || receivable.orgId !== args.orgId || receivable.status === "CANCELLED") return;
-
-  const activeAllocations = await getActiveReceivableAllocations(ctx, receivable._id);
-  for (const allocation of activeAllocations) {
-    await reverseAllocation(ctx, {
-      orgId: args.orgId,
-      allocationId: allocation._id,
-      actorId: args.actorId,
-    });
-  }
-
-  await ctx.db.patch(receivable._id, { status: "CANCELLED" });
 }
 
 type FinanceApplicationStatus =
@@ -500,6 +474,10 @@ export const updateStatus = mutation({
       );
     }
 
+    if (args.status === "UNDER_REVIEW" || args.status === "REJECTED") {
+      await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.REVIEW_FINANCE_APPLICATION]);
+    }
+
     let approvedBy = app.approvedBy;
     let approvedAt = app.approvedAt;
 
@@ -606,14 +584,15 @@ export const cancelApplication = mutation({
           if (app.finalizedSaleId) {
             const sale = await ctx.db.get(app.finalizedSaleId);
             if (sale && sale.orgId === args.orgId) {
-              await cancelSaleCustomerReceivable(ctx, {
+              await cancelCompletedSaleOperationalRecords(ctx, {
                 orgId: args.orgId,
                 sale,
                 actorId: auth.user._id,
+                reason,
+                reversalDate: now,
               });
 
               if (sale.status !== "CANCELLED") {
-                await restoreVehicleToAvailable(ctx, sale.vehicleId);
                 await ctx.db.patch(sale._id, { status: "CANCELLED" });
                 await hookSaleCancelled(ctx, {
                   orgId: args.orgId,
@@ -665,31 +644,6 @@ export const cancelApplication = mutation({
             if (financeReceivable && financeReceivable.status !== "CANCELLED") {
               await ctx.db.patch(financeReceivable._id, { status: "CANCELLED" });
             }
-          }
-
-          // Deposits applied at finalization go back to being an active hold
-          // (re-reserving the vehicle) rather than vanishing, so the same
-          // customer money can be carried over to a corrected quote.
-          const appliedDeposits = await ctx.db
-            .query("deposits")
-            .withIndex("by_quote", (q) => q.eq("quoteId", app.quoteId))
-            .filter((q) => q.eq(q.field("status"), "APPLIED"))
-            .collect();
-          for (const deposit of appliedDeposits) {
-            await ctx.db.patch(deposit._id, {
-              status: "HELD",
-              holdActive: true,
-              resolvedBy: undefined,
-              resolvedAt: undefined,
-            });
-            await hookDepositApplicationReversed(ctx, {
-              orgId: args.orgId,
-              depositId: deposit._id,
-              reason,
-              actorId: auth.user._id,
-              reversalDate: now,
-            });
-            await holdVehicleForDeposit(ctx, deposit.vehicleId);
           }
         } else {
           await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId });

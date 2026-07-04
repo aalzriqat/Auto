@@ -218,7 +218,12 @@ function LiveChatWidgetImpl() {
 
       {open && (
         <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:justify-end p-4 sm:pe-6 sm:pb-32">
-          <div className="absolute inset-0 bg-black/20" onClick={() => setOpen(false)} />
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/20"
+            onClick={() => setOpen(false)}
+            aria-label={t("Close")}
+          />
 
           <div className="relative w-full sm:w-96 bg-background rounded-xl border shadow-xl flex flex-col max-h-[70vh]">
             <div className="flex items-center justify-between px-4 py-3 border-b">

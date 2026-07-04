@@ -150,7 +150,11 @@ export function GeneralLedgerTab() {
 
   return (
     <div className="p-6 space-y-4">
-      {/* Date filter bar */}
+      <div>
+        <h2 className="text-lg font-semibold text-slate-900">{t("TransactionRegister" as any)}</h2>
+        <p className="text-sm text-slate-500">{t("TransactionRegisterDesc" as any)}</p>
+      </div>
+
       <div className="flex flex-wrap items-end gap-3">
         <div className="space-y-1">
           <label className="text-xs font-medium text-slate-500">{t("StartDate" as any)}</label>
@@ -165,7 +169,6 @@ export function GeneralLedgerTab() {
         </Button>
       </div>
 
-      {/* Summary row */}
       <div className="flex gap-4 text-sm">
         <span className="text-emerald-600 font-semibold">{t("TxIn" as any)}: {formatCurrency(totalIn)}</span>
         <span className="text-rose-600 font-semibold">{t("TxOut" as any)}: {formatCurrency(totalOut)}</span>

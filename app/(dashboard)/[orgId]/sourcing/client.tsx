@@ -9,14 +9,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Truck, CheckCircle2, Clock, AlertCircle } from "lucide-react";
+import { Truck, CheckCircle2, Clock, XCircle } from "lucide-react";
 import { format } from "date-fns";
 import { toast } from "@/components/ui/sonner";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Doc } from "@/convex/_generated/dataModel";
-import { Textarea } from "@/components/ui/textarea";
+import { type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
+import { SupplierPaymentDialog } from "@/components/sourcing/SupplierPaymentDialog";
 
-type StatusFilter = "PENDING" | "PAID" | "ALL";
+type StatusFilter = "PENDING" | "PAID" | "CANCELLED" | "ALL";
 
 type SourcingPayable = Doc<"vehicleSupplierPayables"> & {
   vehicleDesc: string;
@@ -26,12 +26,17 @@ type SourcingPayable = Doc<"vehicleSupplierPayables"> & {
   daysOutstanding: number;
 };
 
+function payableMethodLabel(t: (key: any) => string, method?: PaymentMethod) {
+  return t(`PaymentMethod_${method ?? "CASH"}` as any);
+}
+
 export function SourcingClient() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("PENDING");
-  const [payDialogPayable, setPayDialogPayable] = useState<any>(null);
+  const [payDialogPayable, setPayDialogPayable] = useState<SourcingPayable | null>(null);
   const [paymentNotes, setPaymentNotes] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
   const [isPaying, setIsPaying] = useState(false);
   const markPaidIdempotencyKeyRef = useRef<string | null>(null);
 
@@ -56,6 +61,7 @@ export function SourcingClient() {
         orgId: activeOrgId,
         payableId: payDialogPayable._id,
         paymentNotes: paymentNotes.trim() || undefined,
+        paymentMethod,
         idempotencyKey: markPaidIdempotencyKeyRef.current,
       });
       markPaidIdempotencyKeyRef.current = null;
@@ -63,8 +69,9 @@ export function SourcingClient() {
       markPaidIdempotencyKeyRef.current = null;
       setPayDialogPayable(null);
       setPaymentNotes("");
-    } catch (err: any) {
-      toast.error(err?.message || "Failed to mark as paid");
+      setPaymentMethod("CASH");
+    } catch {
+      toast.error(t("UnexpectedError" as any));
     } finally {
       setIsPaying(false);
     }
@@ -111,14 +118,14 @@ export function SourcingClient() {
 
       {/* Status filter tabs */}
       <div className="flex gap-2">
-        {(["PENDING", "PAID", "ALL"] as StatusFilter[]).map((s) => (
+        {(["PENDING", "PAID", "CANCELLED", "ALL"] as StatusFilter[]).map((s) => (
           <Button
             key={s}
             variant={statusFilter === s ? "default" : "outline"}
             size="sm"
             onClick={() => setStatusFilter(s)}
           >
-            {s === "PENDING" ? t("Pending" as any) : s === "PAID" ? t("Paid" as any) : t("All" as any)}
+            {s === "PENDING" ? t("Pending" as any) : s === "PAID" ? t("Paid" as any) : s === "CANCELLED" ? t("Cancelled" as any) : t("All" as any)}
           </Button>
         ))}
       </div>
@@ -137,6 +144,7 @@ export function SourcingClient() {
                 <TableHead>{t("AmountOwed" as any)}</TableHead>
                 <TableHead>{t("DaysOutstanding" as any)}</TableHead>
                 <TableHead>{t("Status" as any)}</TableHead>
+                <TableHead>{t("PaymentMethodLabel" as any)}</TableHead>
                 <TableHead>{t("Date" as any)}</TableHead>
                 <TableHead className="text-right">{t("Actions" as any)}</TableHead>
               </TableRow>
@@ -144,13 +152,13 @@ export function SourcingClient() {
             <TableBody>
               {!payables ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
                     {t("Loading" as any)}…
                   </TableCell>
                 </TableRow>
               ) : payables.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
+                  <TableCell colSpan={9} className="text-center text-muted-foreground py-8">
                     {t("NoSourcingPayables" as any)}
                   </TableCell>
                 </TableRow>
@@ -171,11 +179,18 @@ export function SourcingClient() {
                         <Badge variant="outline" className="text-orange-600 border-orange-400">
                           <Clock className="h-3 w-3 me-1" />{t("Pending" as any)}
                         </Badge>
-                      ) : (
+                      ) : p.status === "PAID" ? (
                         <Badge variant="outline" className="text-green-600 border-green-400">
                           <CheckCircle2 className="h-3 w-3 me-1" />{t("Paid" as any)}
                         </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-slate-600 border-slate-300">
+                          <XCircle className="h-3 w-3 me-1" />{t("Cancelled" as any)}
+                        </Badge>
                       )}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-sm">
+                      {p.status === "PAID" ? payableMethodLabel(t as any, p.paymentMethod) : "—"}
                     </TableCell>
                     <TableCell className="text-muted-foreground text-sm">{format(p.createdAt, "PP")}</TableCell>
                     <TableCell className="text-right">
@@ -184,7 +199,7 @@ export function SourcingClient() {
                           size="sm"
                           variant="outline"
                           className="text-green-600"
-                          onClick={() => { setPayDialogPayable(p); setPaymentNotes(""); }}
+                          onClick={() => { setPayDialogPayable(p); setPaymentNotes(""); setPaymentMethod("CASH"); }}
                         >
                           {t("MarkPaid" as any)}
                         </Button>
@@ -203,36 +218,25 @@ export function SourcingClient() {
         </CardContent>
       </Card>
 
-      {/* Mark Paid Dialog */}
-      <Dialog open={!!payDialogPayable} onOpenChange={(o) => { if (!o) { markPaidIdempotencyKeyRef.current = null; setPayDialogPayable(null); setPaymentNotes(""); } }}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>{t("ConfirmSupplierPayment" as any)}</DialogTitle>
-          </DialogHeader>
-          {payDialogPayable && (
-            <div className="space-y-4">
-              <div className="rounded-lg bg-muted/50 p-3 text-sm space-y-1">
-                <p><strong>{t("Vehicle" as any)}:</strong> {payDialogPayable.vehicleDesc}</p>
-                <p><strong>{t("SourceDealer" as any)}:</strong> {payDialogPayable.sourcedFromName}</p>
-                <p><strong>{t("Amount" as any)}:</strong> <span className="font-semibold text-orange-600">{payDialogPayable.amountDue.toLocaleString()} JOD</span></p>
-              </div>
-              <p className="text-sm text-muted-foreground">{t("MarkPaidWarning" as any)}</p>
-              <div className="space-y-1">
-                <label className="text-sm font-medium">{t("PaymentNotes" as any)} ({t("Optional" as any)})</label>
-                <Textarea value={paymentNotes} onChange={(e) => setPaymentNotes(e.target.value)} placeholder={t("PaymentNotesPlaceholder" as any)} rows={2} />
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={() => { setPayDialogPayable(null); setPaymentNotes(""); }}>
-                  {t("Cancel" as any)}
-                </Button>
-                <Button className="bg-green-600 hover:bg-green-700 text-white" onClick={handleMarkPaid} disabled={isPaying}>
-                  {isPaying ? t("Processing" as any) + "…" : t("ConfirmPayment" as any)}
-                </Button>
-              </div>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
+      <SupplierPaymentDialog
+        payable={payDialogPayable}
+        open={!!payDialogPayable}
+        isPaying={isPaying}
+        notes={paymentNotes}
+        paymentMethod={paymentMethod}
+        t={t as any}
+        onNotesChange={setPaymentNotes}
+        onPaymentMethodChange={setPaymentMethod}
+        onConfirm={handleMarkPaid}
+        onOpenChange={(open) => {
+          if (!open) {
+            markPaidIdempotencyKeyRef.current = null;
+            setPayDialogPayable(null);
+            setPaymentNotes("");
+            setPaymentMethod("CASH");
+          }
+        }}
+      />
     </div>
   );
 }

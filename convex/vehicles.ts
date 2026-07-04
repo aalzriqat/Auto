@@ -56,6 +56,16 @@ function getAgeBucket(days: number): "0-30" | "31-60" | "61-90" | "90+" {
   return "90+";
 }
 
+function randomHex(bytesLength: number): string {
+  const bytes = new Uint8Array(bytesLength);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function generateImportVinPlaceholder(): string {
+  return `IMPORT-${Date.now()}-${randomHex(3)}`;
+}
+
 async function insertPriceHistory(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
@@ -1306,7 +1316,7 @@ export const importBulk = mutation({
 
         vehicleId = await ctx.db.insert("vehicles", {
           orgId: args.orgId,
-          vin: normalizedVin || `IMPORT-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          vin: normalizedVin || generateImportVinPlaceholder(),
           make: row.make.trim(),
           model: row.model.trim(),
           year: row.year,

@@ -10,19 +10,19 @@
  * re-driven idempotently when a chart is initialized or a period is opened.
  */
 import { Id } from "../_generated/dataModel";
-import { MutationCtx } from "../_generated/server";
+import { MutationCtx, QueryCtx } from "../_generated/server";
 import { postAccountingEvent, PostCommand } from "./postingEngine";
 import { EventType } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate } from "../accountingPeriods";
-import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount } from "../chartOfAccounts";
+import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts } from "../chartOfAccounts";
 import {
   enqueuePendingPost,
   enqueuePendingReversal,
   cancelPendingPostByKey,
 } from "../accountingOutbox";
 
-export async function getOrgCurrency(ctx: MutationCtx, orgId: Id<"organizations">): Promise<string> {
+export async function getOrgCurrency(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">): Promise<string> {
   const settings = await ctx.db
     .query("orgSettings")
     .withIndex("by_org", (q) => q.eq("orgId", orgId))
@@ -406,6 +406,7 @@ type CommissionHookArgs = {
   salespersonId: Id<"users">;
   amountMinor: number;
   currency: string;
+  paymentMethod?: string;
   actorId: Id<"users">;
   occurredAt: number;
 };
@@ -415,8 +416,15 @@ function makeCommissionHook(
   sourceIdPrefix: string,
   keyPrefix: string
 ) {
-  return async (ctx: MutationCtx, args: CommissionHookArgs) =>
-    postDomainEvent(ctx, {
+  return async (ctx: MutationCtx, args: CommissionHookArgs) => {
+    const payload: Record<string, unknown> = {
+      saleId: args.saleId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      salespersonId: args.salespersonId.toString(),
+    };
+    if (args.paymentMethod) payload.paymentMethod = args.paymentMethod;
+    await postDomainEvent(ctx, {
       orgId: args.orgId,
       eventType,
       sourceType: "sales",
@@ -425,13 +433,9 @@ function makeCommissionHook(
       currency: args.currency,
       occurredAt: args.occurredAt,
       actorId: args.actorId,
-      payload: {
-        saleId: args.saleId.toString(),
-        amountMinor: args.amountMinor,
-        currency: args.currency,
-        salespersonId: args.salespersonId.toString(),
-      },
+      payload,
     });
+  };
 }
 
 export const hookCommissionAccrued = makeCommissionHook("COMMISSION_ACCRUED", "commission", "commission_accrued");
@@ -614,6 +618,289 @@ export async function hookPaymentLinkReceived(
       currency: args.currency,
       customerId: args.customerId.toString(),
       provider: args.provider,
+    },
+  });
+}
+
+// ─── GL Phase 11: fixed-asset lifecycle ───────────────────────────────────────
+
+/**
+ * Unlike GENERAL_EXPENSE/AP-Suppliers (self-healed unconditionally in
+ * postOrEnqueue since many event types can resolve them), the 6 fixed-asset
+ * accounts are only ever needed by these 4 hooks — so the self-heal is scoped
+ * here instead of added to the shared choke point, to avoid the extra lookup
+ * on every unrelated posting event.
+ */
+async function ensureFixedAssetAccountsIfChartReady(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  if (await isChartInitialized(ctx, orgId)) {
+    await ensureFixedAssetAccounts(ctx, orgId, actorId);
+  }
+}
+
+interface FixedAssetHookBaseArgs {
+  orgId: Id<"organizations">;
+  assetId: Id<"fixedAssets">;
+  currency: string;
+  actorId: Id<"users">;
+  occurredAt: number;
+}
+
+async function postFixedAssetEvent(
+  ctx: MutationCtx,
+  eventType: Extract<
+    EventType,
+    "ASSET_CAPITALIZED" | "DEPRECIATION_POSTED" | "ASSET_IMPAIRED" | "ASSET_DISPOSED"
+  >,
+  args: FixedAssetHookBaseArgs,
+  details: {
+    sourceId?: string;
+    idempotencyKey: string;
+    payload: Record<string, unknown>;
+  }
+) {
+  await ensureFixedAssetAccountsIfChartReady(ctx, args.orgId, args.actorId);
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType,
+    sourceType: "fixedAssets",
+    sourceId: details.sourceId ?? args.assetId.toString(),
+    idempotencyKey: details.idempotencyKey,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      assetId: args.assetId.toString(),
+      ...details.payload,
+      currency: args.currency,
+    },
+  });
+}
+
+export async function hookAssetCapitalized(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    assetId: Id<"fixedAssets">;
+    costMinor: number;
+    currency: string;
+    paymentMethod?: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postFixedAssetEvent(ctx, "ASSET_CAPITALIZED", args, {
+    idempotencyKey: `asset_capitalized_${args.assetId}`,
+    payload: {
+      costMinor: args.costMinor,
+      paymentMethod: args.paymentMethod,
+    },
+  });
+}
+
+export async function hookDepreciationPosted(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    assetId: Id<"fixedAssets">;
+    yearMonth: string; // "YYYY-MM", used only for the idempotency key
+    amountMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postFixedAssetEvent(ctx, "DEPRECIATION_POSTED", args, {
+    sourceId: `depr_${args.assetId}_${args.yearMonth}`,
+    idempotencyKey: `depr_${args.assetId}_${args.yearMonth}`,
+    payload: {
+      amountMinor: args.amountMinor,
+    },
+  });
+}
+
+export async function hookAssetImpaired(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    assetId: Id<"fixedAssets">;
+    amountMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postFixedAssetEvent(ctx, "ASSET_IMPAIRED", args, {
+    idempotencyKey: `asset_impaired_${args.assetId}_${args.occurredAt}`,
+    payload: {
+      amountMinor: args.amountMinor,
+    },
+  });
+}
+
+// ─── GL Phase 12: partner equity movements ────────────────────────────────────
+
+/** Same scoped-self-heal reasoning as ensureFixedAssetAccountsIfChartReady: only these three hooks ever resolve the partner-equity accounts. */
+async function ensurePartnerEquityAccountsIfChartReady(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  if (await isChartInitialized(ctx, orgId)) {
+    await ensurePartnerEquityAccounts(ctx, orgId, actorId);
+  }
+}
+
+export interface PartnerEquityHookArgs {
+  orgId: Id<"organizations">;
+  transactionId: Id<"partnerEquityTransactions">;
+  partnerId: Id<"partnerEquity">;
+  amountMinor: number;
+  currency: string;
+  paymentMethod?: string;
+  actorId: Id<"users">;
+  occurredAt: number;
+}
+
+async function postPartnerEquityEvent(
+  ctx: MutationCtx,
+  eventType: Extract<EventType, "CAPITAL_CONTRIBUTED" | "PARTNER_DREW" | "PROFIT_DISTRIBUTED">,
+  args: PartnerEquityHookArgs
+) {
+  await ensurePartnerEquityAccountsIfChartReady(ctx, args.orgId, args.actorId);
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType,
+    sourceType: "partnerEquityTransactions",
+    sourceId: args.transactionId.toString(),
+    idempotencyKey: `${eventType.toLowerCase()}_${args.transactionId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      partnerId: args.partnerId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      paymentMethod: args.paymentMethod,
+    },
+  });
+}
+
+export async function hookCapitalContributed(ctx: MutationCtx, args: PartnerEquityHookArgs) {
+  await postPartnerEquityEvent(ctx, "CAPITAL_CONTRIBUTED", args);
+}
+
+// ─── GL Phase 13: claim receivables ───────────────────────────────────────────
+
+export interface ClaimHookArgs {
+  orgId: Id<"organizations">;
+  claimId: Id<"claims">;
+  amountMinor: number;
+  currency: string;
+  paymentMethod?: string;
+  actorId: Id<"users">;
+  occurredAt: number;
+}
+
+async function postClaimEvent(
+  ctx: MutationCtx,
+  eventType: Extract<EventType, "CLAIM_SETTLED" | "CLAIM_WRITTEN_OFF">,
+  args: ClaimHookArgs
+) {
+  if (await isChartInitialized(ctx, args.orgId)) {
+    await ensureClaimAccounts(ctx, args.orgId, args.actorId);
+  }
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType,
+    sourceType: "claims",
+    sourceId: args.claimId.toString(),
+    idempotencyKey: `${eventType.toLowerCase()}_${args.claimId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      claimId: args.claimId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      paymentMethod: args.paymentMethod,
+    },
+  });
+}
+
+export async function hookClaimSettled(ctx: MutationCtx, args: ClaimHookArgs) {
+  await postClaimEvent(ctx, "CLAIM_SETTLED", args);
+}
+
+export async function hookClaimWrittenOff(ctx: MutationCtx, args: ClaimHookArgs) {
+  await postClaimEvent(ctx, "CLAIM_WRITTEN_OFF", args);
+}
+
+// ─── GL Phase 15: cash-drawer bank deposit ────────────────────────────────────
+
+/**
+ * No scoped self-heal here: unlike the fixed-asset/partner-equity/claim
+ * accounts, BANK_ACCOUNT and CASH_ON_HAND are foundational accounts already
+ * ensured by chartOfAccounts.initialize for every org.
+ */
+export async function hookCashDrawerDeposited(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    sessionId: Id<"cashDrawerSessions">;
+    amountMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "CASH_DRAWER_DEPOSITED",
+    sourceType: "cashDrawerSessions",
+    sourceId: args.sessionId.toString(),
+    idempotencyKey: `cash_drawer_deposited_${args.sessionId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      sessionId: args.sessionId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+    },
+  });
+}
+
+export async function hookPartnerDrew(ctx: MutationCtx, args: PartnerEquityHookArgs) {
+  await postPartnerEquityEvent(ctx, "PARTNER_DREW", args);
+}
+
+export async function hookProfitDistributed(ctx: MutationCtx, args: PartnerEquityHookArgs) {
+  await postPartnerEquityEvent(ctx, "PROFIT_DISTRIBUTED", args);
+}
+
+export async function hookAssetDisposed(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    assetId: Id<"fixedAssets">;
+    costMinor: number;
+    accumulatedDepreciationMinor: number;
+    proceedsMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postFixedAssetEvent(ctx, "ASSET_DISPOSED", args, {
+    idempotencyKey: `asset_disposed_${args.assetId}`,
+    payload: {
+      costMinor: args.costMinor,
+      accumulatedDepreciationMinor: args.accumulatedDepreciationMinor,
+      proceedsMinor: args.proceedsMinor,
     },
   });
 }

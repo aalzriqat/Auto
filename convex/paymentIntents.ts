@@ -7,6 +7,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { runWithIdempotency } from "./utils/idempotency";
 import { hookPaymentLinkReceived } from "./accounting/workflowHooks";
 import { allocatePaymentToReceivable, createCanonicalPayment } from "./subledger";
+import { fromMinorUnits, toMinorUnits } from "./utils/money";
 
 const statusValidator = v.union(
   v.literal("PENDING"),
@@ -23,6 +24,16 @@ function optionalTrimmed(value?: string): string | undefined {
 
 function normalizeCurrency(currency: string): string {
   return currency.trim().toUpperCase();
+}
+
+function roundMoney(amount: number) {
+  return Math.round(amount * 100) / 100;
+}
+
+function nextLegacyReceivableStatus(outstandingAmount: number, dueDate: number, now: number) {
+  if (outstandingAmount <= 0) return "PAID";
+  if (dueDate < now) return "OVERDUE";
+  return "PARTIALLY_PAID";
 }
 
 function validateCheckoutUrl(checkoutUrl: string | undefined): string | undefined {
@@ -86,7 +97,7 @@ async function createCanonicalIntentSettlement(
     receivedAt: occurredAt,
   });
 
-  const links: Partial<Pick<Doc<"paymentIntents">, "canonicalPaymentId" | "paymentAllocationId">> = {
+  const links: Partial<Pick<Doc<"paymentIntents">, "collectionPaymentId" | "canonicalPaymentId" | "paymentAllocationId">> = {
     canonicalPaymentId,
   };
 
@@ -100,6 +111,39 @@ async function createCanonicalIntentSettlement(
     });
   } else if (intent.paymentAllocationId) {
     links.paymentAllocationId = intent.paymentAllocationId;
+  }
+
+  if (intent.receivableId && !intent.collectionPaymentId) {
+    const receivable = await ctx.db.get(intent.receivableId);
+    if (receivable && receivable.orgId === intent.orgId) {
+      const amount = roundMoney(fromMinorUnits(intent.amountMinor, intent.currency));
+      const collectionPaymentId = await ctx.db.insert("collectionPayments", {
+        orgId: intent.orgId,
+        receivableId: receivable._id,
+        customerId: intent.customerId,
+        vehicleId: receivable.vehicleId,
+        saleId: receivable.saleId,
+        direction: "IN",
+        method: "PAYMENT_LINK",
+        amount,
+        paymentDate: occurredAt,
+        status: "POSTED",
+        idempotencyKey: `payment_intent_${intent._id}`,
+        reference: externalId ?? intent.externalId ?? `Payment intent ${intent._id}`,
+        cashierId: actorId,
+        canonicalPaymentId,
+        paymentAllocationId: links.paymentAllocationId,
+        createdAt: occurredAt,
+      });
+      const outstandingAmount = roundMoney(Math.max(0, receivable.outstandingAmount - amount));
+      await ctx.db.patch(receivable._id, {
+        outstandingAmount,
+        status: nextLegacyReceivableStatus(outstandingAmount, receivable.dueDate, occurredAt),
+        lastPaymentAt: occurredAt,
+        updatedAt: occurredAt,
+      });
+      links.collectionPaymentId = collectionPaymentId;
+    }
   }
 
   return links;
@@ -168,6 +212,7 @@ export const create = mutation({
   args: {
     orgId: v.id("organizations"),
     customerId: v.id("customers"),
+    receivableId: v.optional(v.id("receivables")),
     receivableDocumentId: v.optional(v.id("receivableDocuments")),
     saleId: v.optional(v.id("sales")),
     amountMinor: v.number(),
@@ -211,12 +256,31 @@ export const create = mutation({
           checkoutUrl: checkoutUrl ?? null,
           providerAccountId: providerAccountId ?? null,
           saleId: args.saleId ?? null,
+          receivableId: args.receivableId ?? null,
           receivableDocumentId: args.receivableDocumentId ?? null,
         }),
       },
       async () => {
         const customer = await ctx.db.get(args.customerId);
         if (!customer || customer.orgId !== args.orgId) throw new ConvexError("Customer not found.");
+
+        let receivableDocumentId = args.receivableDocumentId;
+        if (args.receivableId) {
+          const receivable = await ctx.db.get(args.receivableId);
+          if (!receivable || receivable.orgId !== args.orgId) throw new ConvexError("Receivable not found.");
+          if (receivable.customerId !== args.customerId) throw new ConvexError("Receivable customer does not match.");
+          if (!receivable.canonicalReceivableDocumentId) {
+            throw new ConvexError("Receivable is missing its canonical accounting document.");
+          }
+          if (receivableDocumentId && receivableDocumentId !== receivable.canonicalReceivableDocumentId) {
+            throw new ConvexError("Payment intent receivable document does not match the selected receivable.");
+          }
+          receivableDocumentId = receivable.canonicalReceivableDocumentId;
+          const outstandingMinor = toMinorUnits(receivable.outstandingAmount, currency);
+          if (args.amountMinor > outstandingMinor) {
+            throw new ConvexError("Payment link amount cannot exceed the receivable outstanding amount.");
+          }
+        }
 
         if (externalId) {
           const existing = await ctx.db
@@ -232,7 +296,8 @@ export const create = mutation({
         return await ctx.db.insert("paymentIntents", {
           orgId: args.orgId,
           customerId: args.customerId,
-          receivableDocumentId: args.receivableDocumentId,
+          receivableId: args.receivableId,
+          receivableDocumentId,
           saleId: args.saleId,
           amountMinor: args.amountMinor,
           currency,

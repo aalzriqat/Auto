@@ -200,7 +200,7 @@ export const listConversations = query({
     }
 
     let conversations = Array.from(grouped.values()).map((g) => {
-      const latest = g.events.reduce((a, b) => (b._creationTime > a._creationTime ? b : a));
+      const latest = g.events.reduce((a, b) => (b._creationTime > a._creationTime ? b : a), g.events[0]);
       const vehicleIds = new Set(g.events.filter((e) => e.vehicleId).map((e) => e.vehicleId as Id<"vehicles">));
       const leadId = [...g.events].reverse().find((e) => e.leadId)?.leadId;
       return {

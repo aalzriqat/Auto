@@ -5,11 +5,12 @@ import { PERMISSIONS } from "./utils/permissions";
 import { runWithIdempotency } from "./utils/idempotency";
 import { hookSupplierPaymentSettled } from "./accounting/workflowHooks";
 import { toMinorUnits } from "./utils/money";
+import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
 
 export const list = query({
   args: {
     orgId: v.id("organizations"),
-    status: v.optional(v.union(v.literal("PENDING"), v.literal("PAID"))),
+    status: v.optional(v.union(v.literal("PENDING"), v.literal("PAID"), v.literal("CANCELLED"))),
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
@@ -94,11 +95,12 @@ export const markPaid = mutation({
     orgId: v.id("organizations"),
     payableId: v.id("vehicleSupplierPayables"),
     paymentNotes: v.optional(v.string()),
-    paymentMethod: v.optional(v.string()),
+    paymentMethod: v.optional(paymentMethodValidator),
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const paymentMethod = normalizePaymentMethod(args.paymentMethod);
 
     return await runWithIdempotency(
       ctx,
@@ -107,7 +109,7 @@ export const markPaid = mutation({
         operation: "sourcingPayables.markPaid",
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
-        fingerprint: JSON.stringify({ payableId: args.payableId, paymentMethod: args.paymentMethod }),
+        fingerprint: JSON.stringify({ payableId: args.payableId, paymentMethod }),
       },
       async () => {
         const payable = await ctx.db.get(args.payableId);
@@ -117,12 +119,16 @@ export const markPaid = mutation({
         if (payable.status === "PAID") {
           throw new ConvexError("This payable has already been marked as paid.");
         }
+        if (payable.status === "CANCELLED") {
+          throw new ConvexError("This payable was cancelled with its sale.");
+        }
 
         const now = Date.now();
         await ctx.db.patch(args.payableId, {
           status: "PAID",
           paidAt: now,
           paidBy: user._id,
+          paymentMethod,
           paymentNotes: args.paymentNotes,
           updatedAt: now,
         });
@@ -136,7 +142,7 @@ export const markPaid = mutation({
           sourcedFromName: payable.sourcedFromName,
           amountMinor: toMinorUnits(payable.amountDue, currency),
           currency,
-          paymentMethod: args.paymentMethod,
+          paymentMethod,
           actorId: user._id,
           occurredAt: now,
         });

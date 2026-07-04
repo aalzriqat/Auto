@@ -20,6 +20,15 @@ export const SYSTEM_KEYS = {
   RETAINED_EARNINGS: "RETAINED_EARNINGS",
   DEPOSIT_FORFEITURE_INCOME: "DEPOSIT_FORFEITURE_INCOME",
   ACCOUNTS_PAYABLE_SUPPLIERS: "ACCOUNTS_PAYABLE_SUPPLIERS",
+  FIXED_ASSETS: "FIXED_ASSETS",
+  ACCUMULATED_DEPRECIATION: "ACCUMULATED_DEPRECIATION",
+  DEPRECIATION_EXPENSE: "DEPRECIATION_EXPENSE",
+  GAIN_ON_DISPOSAL: "GAIN_ON_DISPOSAL",
+  LOSS_ON_DISPOSAL: "LOSS_ON_DISPOSAL",
+  IMPAIRMENT_LOSS: "IMPAIRMENT_LOSS",
+  PARTNER_CAPITAL: "PARTNER_CAPITAL",
+  PARTNER_DRAWINGS: "PARTNER_DRAWINGS",
+  CLAIM_WRITE_OFF_EXPENSE: "CLAIM_WRITE_OFF_EXPENSE",
 } as const;
 
 export type SystemKey = typeof SYSTEM_KEYS[keyof typeof SYSTEM_KEYS];
@@ -140,6 +149,28 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     allowManualPosting: false,
     systemKey: SYSTEM_KEYS.VEHICLE_INVENTORY,
   },
+  {
+    code: "1500",
+    name: "Fixed Assets",
+    nameAr: "الأصول الثابتة",
+    type: "ASSET",
+    normalBalance: "DEBIT",
+    isControlAccount: true,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.FIXED_ASSETS,
+  },
+  {
+    // Contra-asset: carries a CREDIT balance even though it rolls up under
+    // Assets on the balance sheet, per standard accounting treatment.
+    code: "1510",
+    name: "Accumulated Depreciation",
+    nameAr: "مجمع الإهلاك",
+    type: "ASSET",
+    normalBalance: "CREDIT",
+    isControlAccount: true,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.ACCUMULATED_DEPRECIATION,
+  },
 
   // ── Liabilities ──────────────────────────────────────────────────────────
   {
@@ -205,6 +236,28 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     allowManualPosting: false,
     systemKey: SYSTEM_KEYS.RETAINED_EARNINGS,
   },
+  {
+    code: "3200",
+    name: "Partner Capital",
+    nameAr: "رأس مال الشركاء",
+    type: "EQUITY",
+    normalBalance: "CREDIT",
+    isControlAccount: true,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.PARTNER_CAPITAL,
+  },
+  {
+    // Contra-equity: a partner draw reduces equity, so this account carries a
+    // DEBIT normal balance against the CREDIT-normal Partner Capital above.
+    code: "3300",
+    name: "Partner Drawings",
+    nameAr: "مسحوبات الشركاء",
+    type: "EQUITY",
+    normalBalance: "DEBIT",
+    isControlAccount: true,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.PARTNER_DRAWINGS,
+  },
 
   // ── Revenue ──────────────────────────────────────────────────────────────
   {
@@ -226,6 +279,16 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     isControlAccount: false,
     allowManualPosting: false,
     systemKey: SYSTEM_KEYS.DEPOSIT_FORFEITURE_INCOME,
+  },
+  {
+    code: "4300",
+    name: "Gain on Disposal of Fixed Assets",
+    nameAr: "أرباح استبعاد أصول ثابتة",
+    type: "OTHER_INCOME",
+    normalBalance: "CREDIT",
+    isControlAccount: false,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.GAIN_ON_DISPOSAL,
   },
 
   // ── COGS ─────────────────────────────────────────────────────────────────
@@ -270,6 +333,46 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     isControlAccount: false,
     allowManualPosting: true,
     systemKey: SYSTEM_KEYS.GENERAL_EXPENSE,
+  },
+  {
+    code: "6400",
+    name: "Depreciation Expense",
+    nameAr: "مصروف الإهلاك",
+    type: "EXPENSE",
+    normalBalance: "DEBIT",
+    isControlAccount: false,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.DEPRECIATION_EXPENSE,
+  },
+  {
+    code: "6500",
+    name: "Impairment Loss",
+    nameAr: "خسارة انخفاض القيمة",
+    type: "OTHER_EXPENSE",
+    normalBalance: "DEBIT",
+    isControlAccount: false,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.IMPAIRMENT_LOSS,
+  },
+  {
+    code: "6600",
+    name: "Loss on Disposal of Fixed Assets",
+    nameAr: "خسارة استبعاد أصول ثابتة",
+    type: "OTHER_EXPENSE",
+    normalBalance: "DEBIT",
+    isControlAccount: false,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.LOSS_ON_DISPOSAL,
+  },
+  {
+    code: "6700",
+    name: "Claim Write-off Expense",
+    nameAr: "مصروف شطب مطالبات",
+    type: "OTHER_EXPENSE",
+    normalBalance: "DEBIT",
+    isControlAccount: false,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.CLAIM_WRITE_OFF_EXPENSE,
   },
 ];
 

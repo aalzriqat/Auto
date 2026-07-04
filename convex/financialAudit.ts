@@ -12,6 +12,7 @@ import { MutationCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { scaleForCurrency } from "./utils/money";
+import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
 
 type AuditActionType =
   | "CREATE_PERIOD"
@@ -157,7 +158,7 @@ const manualJournalLineValidator = v.object({
   description: v.optional(v.string()),
 });
 
-type ManualJournalLine = {
+export type ManualJournalLine = {
   accountId: Id<"chartOfAccounts">;
   debitMinor: number;
   creditMinor: number;
@@ -167,7 +168,7 @@ type ManualJournalLine = {
 // Per-line validation (safe integers, non-negative, exactly one side non-zero)
 // plus the overall balance check. Shared by draft creation and approval, since
 // approval must not trust that nothing changed since the draft was created.
-function validateManualJournalLines(lines: ManualJournalLine[]): number {
+export function validateManualJournalLines(lines: ManualJournalLine[]): number {
   for (const [idx, line] of lines.entries()) {
     const n = idx + 1;
     if (!Number.isSafeInteger(line.debitMinor) || !Number.isSafeInteger(line.creditMinor)) {
@@ -374,6 +375,18 @@ export const approveManualJournal = mutation({
         scale: journalScale,
         accountingDate: now,
         description: line.description,
+      });
+      // GL Phase 18: a direct journalLines insert (not routed through
+      // postAccountingEvent), so the running snapshot needs its own update
+      // here too — same as postingEngine.ts, reversals.ts, and
+      // accountingCutover.ts's postOpeningBalance.
+      await incrementAccountSnapshot(ctx, {
+        orgId: args.orgId,
+        accountId: line.accountId,
+        currency: effectiveCurrency,
+        periodId: period._id,
+        debitMinor: line.debitMinor,
+        creditMinor: line.creditMinor,
       });
     }
 

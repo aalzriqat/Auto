@@ -9,11 +9,13 @@ import { validateInput } from "./utils/validation";
 import { CreateDraftSaleSchema, CreateSaleSchema, UpdateSaleSchema } from "./validations/sales";
 import { restoreVehicleToAvailable } from "./utils/saleHelpers";
 import { completeExistingSale, completeSale, createDraftSale } from "./utils/saleCompletion";
+import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { throwAppError, AppErrorCode } from "./utils/errors";
-import { getOrgCurrency, hookCommissionPaid, hookSaleCancelled } from "./accounting/workflowHooks";
+import { getOrgCurrency, hookCommissionPaid, hookCommissionReversed, hookSaleCancelled } from "./accounting/workflowHooks";
 import { toMinorUnits } from "./utils/money";
+import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -337,10 +339,6 @@ export const update = mutation({
     if (args.warrantySold !== undefined) patch.warrantySold = args.warrantySold;
     if (args.gapSold !== undefined) patch.gapSold = args.gapSold;
 
-    if (Object.keys(patch).length > 0) {
-      await ctx.db.patch(args.saleId, patch);
-    }
-
     if (args.status === "CANCELLED" && sale.status !== "CANCELLED") {
       await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
       assertDifferentActors(
@@ -348,15 +346,35 @@ export const update = mutation({
         sale.salespersonId,
         "Salesperson cannot approve cancellation of their own sale."
       );
-      await restoreVehicleToAvailable(ctx, sale.vehicleId);
+      const cancellationDate = Date.now();
+      await cancelCompletedSaleOperationalRecords(ctx, {
+        orgId: args.orgId,
+        sale,
+        actorId: user._id,
+        reason: "Sale cancelled",
+        reversalDate: cancellationDate,
+      });
       // Post reversal journal entry for the original SALE_COMPLETED GL event
       await hookSaleCancelled(ctx, {
         orgId: args.orgId,
         saleId: args.saleId,
         reason: "Sale cancelled",
         actorId: user._id,
-        reversalDate: Date.now(),
+        reversalDate: cancellationDate,
       });
+      if (sale.commissionAmount != null && sale.commissionAmount > 0) {
+        await hookCommissionReversed(ctx, {
+          orgId: args.orgId,
+          saleId: args.saleId,
+          reason: "Sale cancelled",
+          actorId: user._id,
+          reversalDate: cancellationDate,
+        });
+      }
+    }
+
+    if (Object.keys(patch).length > 0) {
+      await ctx.db.patch(args.saleId, patch);
     }
 
     if (Object.keys(patch).length > 0) {
@@ -485,10 +503,12 @@ export const markCommissionPaid = mutation({
   args: {
     orgId: v.id("organizations"),
     saleId: v.id("sales"),
+    paymentMethod: v.optional(paymentMethodValidator),
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_COMMISSIONS]);
+    const paymentMethod = normalizePaymentMethod(args.paymentMethod);
 
     return await runWithIdempotency(
       ctx,
@@ -497,7 +517,7 @@ export const markCommissionPaid = mutation({
         operation: "sales.markCommissionPaid",
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
-        fingerprint: JSON.stringify({ saleId: args.saleId }),
+        fingerprint: JSON.stringify({ saleId: args.saleId, paymentMethod }),
       },
       async () => {
         const sale = await ctx.db.get(args.saleId);
@@ -518,6 +538,7 @@ export const markCommissionPaid = mutation({
         await ctx.db.patch(args.saleId, {
           commissionPaidAt: now,
           commissionPaidBy: user._id,
+          commissionPaymentMethod: paymentMethod,
           commissionPaymentIdempotencyKey: args.idempotencyKey,
         });
         const currency = await getOrgCurrency(ctx, args.orgId);
@@ -527,6 +548,7 @@ export const markCommissionPaid = mutation({
           salespersonId: sale.salespersonId,
           amountMinor: toMinorUnits(sale.commissionAmount, currency),
           currency,
+          paymentMethod,
           actorId: user._id,
           occurredAt: now,
         });

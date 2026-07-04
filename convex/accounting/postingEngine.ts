@@ -13,6 +13,7 @@ import {
   LineSpec,
 } from "./postingRules";
 import { auditLog } from "../financialAudit";
+import { incrementAccountSnapshot } from "./accountSnapshots";
 
 export interface PostCommand {
   orgId: Id<"organizations">;
@@ -154,7 +155,9 @@ export async function postAccountingEvent(
   const journalNumber = `JE-${journalEntryId.toString().replace(/[^a-z0-9]/gi, "").slice(-10).toUpperCase()}`;
   await ctx.db.patch(journalEntryId, { journalNumber });
 
-  // 11. Create journal lines atomically
+  // 11. Create journal lines atomically, keeping each account's running
+  // balance snapshot (GL Phase 18) synchronously up to date so reports never
+  // need to re-scan this org's full posting history.
   for (const l of resolvedLines) {
     await ctx.db.insert("journalLines", {
       orgId: cmd.orgId,
@@ -171,6 +174,14 @@ export async function postAccountingEvent(
       customerId: (l.customerId || undefined) as Id<"customers"> | undefined,
       salespersonId: (l.salespersonId || undefined) as Id<"users"> | undefined,
       description: l.description,
+    });
+    await incrementAccountSnapshot(ctx, {
+      orgId: cmd.orgId,
+      accountId: l.accountId,
+      currency,
+      periodId,
+      debitMinor: l.debitMinor,
+      creditMinor: l.creditMinor,
     });
   }
 

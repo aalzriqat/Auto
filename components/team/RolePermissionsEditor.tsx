@@ -185,6 +185,7 @@ export function RolePermissionsEditor({
                 <div
                   className="flex items-center space-x-2"
                   onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => e.stopPropagation()}
                 >
                   <Label htmlFor={`base-${group.id}`} className="text-xs font-normal cursor-pointer">
                     {hasBaseAccess ? t("Enabled" as any) : t("Disabled" as any)}
