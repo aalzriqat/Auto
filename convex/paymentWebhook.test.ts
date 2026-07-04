@@ -124,4 +124,102 @@ describe("payment webhook verification", () => {
     if (result.ok) throw new Error("Expected invalid hashstring rejection");
     expect(result.status).toBe(401);
   });
+
+  // GL Phase 16 acceptance gate: a provider without a verifier must be
+  // rejected, not silently accepted. Covers both a name that sounds
+  // plausible (an unonboarded real gateway) and an arbitrary string.
+  test.each(["telr", "hyperpay", "checkout", "totally-made-up"])(
+    "rejects an unsupported provider (%s) rather than accepting it",
+    async (provider) => {
+      const result = await verifyPaymentWebhook(
+        provider,
+        JSON.stringify({ id: "evt_1" }),
+        new Headers(),
+        {},
+      );
+
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("Expected unsupported-provider rejection");
+      expect(result.status).toBe(400);
+      expect(result.error).toMatch(/unsupported payment provider/i);
+    },
+  );
+
+  // Stripe staleness is already covered above; Tap's replay window needs the
+  // same coverage to satisfy "each supported provider validates its ...
+  // timestamp and replay window" for both providers, not just one.
+  test("rejects a stale Tap webhook even with a correct hashstring", async () => {
+    const secret = "sk_test_secret_123456789";
+    const nowMs = Date.UTC(2026, 6, 1, 12, 0, 0);
+    const staleCreated = String(nowMs - 4 * 24 * 60 * 60 * 1000); // 4 days old
+    const rawBody = JSON.stringify({
+      id: "chg_tap_stale",
+      object: "charge",
+      status: "CAPTURED",
+      amount: 1,
+      currency: "JOD",
+      transaction: { created: staleCreated },
+      reference: { gateway: "gw_1", payment: "pay_1" },
+    });
+    const hashString =
+      "x_idchg_tap_stalex_amount1.000x_currencyJODx_gateway_referencegw_1" +
+      "x_payment_referencepay_1x_statusCAPTUREDx_created" +
+      staleCreated;
+    const signature = await hmacSha256Hex(secret, hashString);
+
+    const result = await verifyPaymentWebhook(
+      "tap",
+      rawBody,
+      new Headers({ hashstring: signature }),
+      { TAP_SECRET_API_KEY: secret },
+      nowMs,
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected stale Tap webhook rejection");
+    expect(result.status).toBe(401);
+    expect(result.error).toMatch(/stale tap webhook/i);
+  });
+
+  test("rejects a Stripe webhook with no signature header at all", async () => {
+    const result = await verifyPaymentWebhook(
+      "stripe",
+      JSON.stringify({ id: "evt_1", type: "checkout.session.completed" }),
+      new Headers(),
+      { STRIPE_WEBHOOK_SECRET: "whsec_test_secret_123456789" },
+      Date.UTC(2026, 6, 1, 12, 0, 0),
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected missing-signature rejection");
+    expect(result.status).toBe(401);
+  });
+
+  test("rejects a Tap webhook with no hashstring header at all", async () => {
+    const result = await verifyPaymentWebhook(
+      "tap",
+      JSON.stringify({ id: "chg_1", status: "CAPTURED" }),
+      new Headers(),
+      { TAP_SECRET_API_KEY: "sk_test_secret_123456789" },
+      Date.UTC(2026, 6, 1, 12, 0, 0),
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected missing-hashstring rejection");
+    expect(result.status).toBe(401);
+  });
+
+  test("fails closed (503) for a supported provider whose secret isn't configured", async () => {
+    const result = await verifyPaymentWebhook(
+      "stripe",
+      JSON.stringify({ id: "evt_1" }),
+      new Headers({ "stripe-signature": "t=1,v1=whatever" }),
+      {}, // no STRIPE_WEBHOOK_SECRET
+      Date.UTC(2026, 6, 1, 12, 0, 0),
+    );
+
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("Expected not-configured rejection");
+    expect(result.status).toBe(503);
+  });
 });
