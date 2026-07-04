@@ -2,8 +2,9 @@
 useDefault = true
 
 [allowlist]
-description = "Deterministic dedupe tokens, not secrets. These are client-supplied idempotency keys (e.g. \"mj_selfapprove_001\") used to make Convex mutations safely retriable — never actual credentials."
+description = "Deterministic dedupe tokens and hardcoded test-fixture secrets, not real credentials. Idempotency keys (e.g. \"mj_selfapprove_001\") are client-supplied dedupe tokens for safely-retriable Convex mutations. The whsec_test_secret_*/sk_test_secret_* literals are fixed dummy values used only to compute HMAC signatures in payment-webhook unit tests — never actual Stripe/Tap credentials."
 regexTarget = "line"
 regexes = [
   '''idempotencyKey:\s*[`"'][A-Za-z0-9_.-]+[`"']''',
+  '''[`"'](?:whsec|sk)_test_secret_\d+[`"']''',
 ]
