@@ -972,6 +972,25 @@ export default defineSchema({
     .index("by_createdAt", ["createdAt"])
     .index("by_org", ["orgId"]),
 
+  // Product-wide "What's New" log — every tenant sees the same entries.
+  // Super-admin authored (see convex/changelog.ts); creating an entry can
+  // optionally also fire a notificationBroadcast so users get an in-app
+  // ping, not just a page to check. Bilingual per-entry (not routed through
+  // lib/i18n, since content is free-form copy, not a fixed set of keys).
+  changelogEntries: defineTable({
+    type: v.union(v.literal("FEATURE"), v.literal("FIX"), v.literal("IMPROVEMENT")),
+    titleEn: v.string(),
+    titleAr: v.string(),
+    descriptionEn: v.string(),
+    descriptionAr: v.string(),
+    publishedAt: v.number(),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.optional(v.number()),
+    updatedBy: v.optional(v.id("users")),
+  })
+    .index("by_publishedAt", ["publishedAt"]),
+
   test_drives: defineTable({
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
