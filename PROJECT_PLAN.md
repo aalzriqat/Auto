@@ -1125,7 +1125,7 @@ New "Analytics" tab in Reports (or a dedicated `/analytics` route):
 
 ---
 
-## Accounting GL Track — Final Phases 10–18 (planned)
+## Accounting GL Track — Final Phases 10–18 (done, pending merge)
 
 **Reference:** [`docs/architecture/accounting-final-phase-plan.md`](docs/architecture/accounting-final-phase-plan.md)
 · continues [`docs/architecture/accounting-implementation-progress.md`](docs/architecture/accounting-implementation-progress.md) (Phases 0–9 ✅)
@@ -1133,18 +1133,23 @@ New "Analytics" tab in Reports (or a dedicated `/analytics` route):
 **Goal:** Move accounting from "strong operational / management-accounting" (core ~85%)
 to a complete, audit-ready product (~65–75% → done). Validated against source on 2026-07-03;
 9 of 10 gaps confirmed (provider-verification finding was largely outdated — per-provider HMAC already ships).
+All 9 phases (10–18) built and committed on `feature/gl-phase-11-fixed-assets` (PR #23) as of
+2026-07-04; awaiting Codex/CodeRabbit review and merge go-ahead. Two narrow items deliberately
+deferred beyond this batch: legacy-field schema narrowing (Phase 17 — needs the backfill migration
+run and verified against live production data first) and full arbitrary-range trial-balance snapshot
+support (Phase 18 — the `fromDate`-provided path still does a full scan).
 
 | GL Phase | Description | Status |
 |---|---|---|
 | 10 | True two-person manual-journal approval (create → authenticated approve/reject) | ✅ Done (2026-07-03) |
 | 11 | Fixed-asset lifecycle: capitalize, depreciate, impair, dispose (GL-posted) | ✅ Done (2026-07-04) |
-| 12 | Partner equity as immutable contribution/draw/distribution transactions | ⬜ Planned |
-| 13 | Claim receivables + settlement postings | ⬜ Planned |
-| 14 | Multi-currency reporting correctness (group by accountId + currency) | ⬜ Planned |
-| 15 | Full cash-drawer session lifecycle (float → count → variance → deposit → close) | ⬜ Planned |
-| 16 | Provider verification breadth (more providers; fail-closed allowlist) | ⬜ Planned |
-| 17 | Legacy money → minor-unit migration + accountant sign-off | ⬜ Planned (needs 11–13) |
-| 18 | Report scalability (balance snapshots, remove full scans / N+1) | ⬜ Planned |
+| 12 | Partner equity as immutable contribution/draw/distribution transactions | ✅ Done (2026-07-04) |
+| 13 | Claim receivables + settlement postings | ✅ Done (2026-07-04) |
+| 14 | Multi-currency reporting correctness (group by accountId + currency) | ✅ Done (2026-07-04) |
+| 15 | Full cash-drawer session lifecycle (float → count → variance → deposit → close) | ✅ Done (2026-07-04) |
+| 16 | Provider verification breadth (more providers; fail-closed allowlist) | ✅ Done (2026-07-04) |
+| 17 | Legacy money → minor-unit migration + accountant sign-off | ✅ Done (2026-07-04; narrowing deferred to prod verification) |
+| 18 | Report scalability (balance snapshots, remove full scans / N+1) | ✅ Done (2026-07-04) |
 
 Each phase reuses the established pattern: immutable event table → posting rule in
 `postingRules.ts` → `postOrEnqueue` hook → replace direct-edit CRUD → self-heal chart keys → phase test.
@@ -1211,5 +1216,5 @@ Each phase reuses the established pattern: immutable event table → posting rul
 | GL 0–9 | Double-Entry Accounting Foundation | Accounting GL Track | ✅ Done |
 | GL 10 | True two-person manual-journal approval | Accounting GL Track | ✅ Done |
 | GL 11 | Fixed-asset lifecycle and depreciation (GL-posted) | Accounting GL Track | ✅ Done |
-| GL 12–18 | Accounting Final Phases (equity, claims, cash-drawer, multi-currency, migration, scale) | Accounting GL Track | ⬜ Planned |
+| GL 12–18 | Accounting Final Phases (equity, claims, cash-drawer, multi-currency, migration, scale) | Accounting GL Track | ✅ Done |
 | 50–55 | AI / LLM Features | Backlog — No Budget | 🔒 Deferred |
