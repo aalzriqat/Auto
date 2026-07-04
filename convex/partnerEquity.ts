@@ -20,10 +20,14 @@ const movementTypeValidator = v.union(
 );
 
 /**
- * GL Phase 12 balance model: the stored legacy currentBalance (major units)
- * is frozen as the partner's pre-Phase-12 opening base, and every movement
+ * GL Phase 12 balance model: the partner's opening base plus every movement
  * since is an immutable partnerEquityTransactions row. The live balance is
  * always base + Σtransactions — never a directly-patched number.
+ *
+ * GL Phase 17: the base itself prefers openingBalanceMinor (the backfilled
+ * minor-unit value) when present, falling back to converting the legacy
+ * major-unit currentBalance live for rows the backfill migration hasn't
+ * reached yet — see accountingMigration.backfillPartnerEquityMinorUnits.
  */
 async function derivePartnerBalanceMinor(
   ctx: QueryCtx,
@@ -41,7 +45,7 @@ async function derivePartnerBalanceMinor(
   for (const tx of transactions) {
     delta += tx.type === "DRAW" ? -tx.amountMinor : tx.amountMinor;
   }
-  const legacyBaseMinor = toMinorUnits(partner.currentBalance ?? 0, orgCurrency);
+  const legacyBaseMinor = partner.openingBalanceMinor ?? toMinorUnits(partner.currentBalance ?? 0, orgCurrency);
   return { balanceMinor: legacyBaseMinor + delta, transactionCount: transactions.length };
 }
 

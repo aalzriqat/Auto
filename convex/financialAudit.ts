@@ -157,7 +157,7 @@ const manualJournalLineValidator = v.object({
   description: v.optional(v.string()),
 });
 
-type ManualJournalLine = {
+export type ManualJournalLine = {
   accountId: Id<"chartOfAccounts">;
   debitMinor: number;
   creditMinor: number;
@@ -167,7 +167,7 @@ type ManualJournalLine = {
 // Per-line validation (safe integers, non-negative, exactly one side non-zero)
 // plus the overall balance check. Shared by draft creation and approval, since
 // approval must not trust that nothing changed since the draft was created.
-function validateManualJournalLines(lines: ManualJournalLine[]): number {
+export function validateManualJournalLines(lines: ManualJournalLine[]): number {
   for (const [idx, line] of lines.entries()) {
     const n = idx + 1;
     if (!Number.isSafeInteger(line.debitMinor) || !Number.isSafeInteger(line.creditMinor)) {

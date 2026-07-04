@@ -17,6 +17,7 @@ import { getOrgCurrency } from "./accounting/workflowHooks";
 import { ensurePartnerEquityAccounts, ensureClaimAccounts } from "./chartOfAccounts";
 import { toMinorUnits } from "./utils/money";
 import { requireFeature } from "./subscriptions";
+import { auditLog } from "./financialAudit";
 
 // ─── Snapshot / classification helpers ───────────────────────────────────────
 
@@ -347,3 +348,120 @@ export const migrateUnpostedTransactions = mutation({
     return { dryRun, posted, wouldPost, skipped, failed, results };
   },
 });
+
+// ─── GL Phase 17: legacy money widen-migrate-narrow backfills ────────────────
+//
+// Each backfill is additive-only (writes the new minor-unit field, never
+// touches the legacy major-unit field) and idempotent (already-migrated rows
+// are skipped by checking the target field is still unset), matching the
+// "Cross-Phase Risks" note in the phase plan: these tables must migrate
+// additively first and narrow only after the backfill is verified against
+// production. Narrowing (removing purchaseValue/initialCapital/currentBalance/
+// claimAmount from the schema) is deliberately NOT done in this phase — it
+// requires this migration to have actually run and been verified against
+// live org data, which is a deploy-time operation, not something to do
+// blind in code.
+
+export const backfillFixedAssetMinorUnits = mutation({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const currency = await getOrgCurrency(ctx, args.orgId);
+
+    const assets = await ctx.db
+      .query("fixedAssets")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+
+    let migrated = 0;
+    for (const asset of assets) {
+      if (asset.costMinor != null) continue; // already on minor units
+      if (asset.purchaseValue == null) continue; // nothing to backfill from
+      // Cost/currency only — deliberately NOT setting usefulLifeMonths/status
+      // here. We don't have real historical depreciation data for these
+      // rows, so they stay "known cost, no schedule" (disposable, but not
+      // eligible for the depreciation cron) until someone sets up a real
+      // schedule. See fixedAssets.dispose/impair status guards.
+      await ctx.db.patch(asset._id, {
+        costMinor: toMinorUnits(asset.purchaseValue, currency),
+        currency,
+      });
+      migrated++;
+    }
+
+    await auditLogForMigration(ctx, args.orgId, user._id, "fixedAssets", assets.length, migrated);
+    return { scanned: assets.length, migrated };
+  },
+});
+
+export const backfillPartnerEquityMinorUnits = mutation({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const currency = await getOrgCurrency(ctx, args.orgId);
+
+    const partners = await ctx.db
+      .query("partnerEquity")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+
+    let migrated = 0;
+    for (const partner of partners) {
+      if (partner.openingBalanceMinor != null) continue;
+      if (partner.currentBalance == null) continue;
+      await ctx.db.patch(partner._id, {
+        openingBalanceMinor: toMinorUnits(partner.currentBalance, currency),
+      });
+      migrated++;
+    }
+
+    await auditLogForMigration(ctx, args.orgId, user._id, "partnerEquity", partners.length, migrated);
+    return { scanned: partners.length, migrated };
+  },
+});
+
+export const backfillClaimMinorUnits = mutation({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const currency = await getOrgCurrency(ctx, args.orgId);
+
+    const claims = await ctx.db
+      .query("claims")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+
+    let migrated = 0;
+    for (const claim of claims) {
+      if (claim.claimAmountMinor != null) continue;
+      if (claim.claimAmount == null) continue;
+      await ctx.db.patch(claim._id, {
+        claimAmountMinor: toMinorUnits(claim.claimAmount, currency),
+        currency,
+      });
+      migrated++;
+    }
+
+    await auditLogForMigration(ctx, args.orgId, user._id, "claims", claims.length, migrated);
+    return { scanned: claims.length, migrated };
+  },
+});
+
+async function auditLogForMigration(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">,
+  tableName: string,
+  scanned: number,
+  migrated: number
+): Promise<void> {
+  await auditLog(ctx, {
+    orgId,
+    actorId,
+    actionType: "MIGRATE_TRANSACTION",
+    resourceType: tableName,
+    resourceId: tableName,
+    description: `Backfilled minor-unit amounts on ${tableName}: ${migrated}/${scanned} rows.`,
+    after: { scanned, migrated },
+  });
+}

@@ -219,6 +219,7 @@ export default defineSchema({
       v.literal("MANUAL"),
       v.literal("REVERSAL"),
       v.literal("ADJUSTMENT"),
+      v.literal("OPENING_BALANCE"),
     ),
     memo: v.string(),
     status: v.union(
@@ -1606,11 +1607,15 @@ export default defineSchema({
     partnerName: v.string(), // e.g., "علاء جراد"
     userId: v.optional(v.id("users")),
     // Legacy major-unit fields, frozen as of GL Phase 12 — no mutation writes
-    // them anymore. currentBalance acts as the partner's pre-Phase-12 opening
-    // base; live balances derive from partnerEquityTransactions on top of it.
-    // Narrowing/backfill happens in GL Phase 17.
+    // them anymore. Superseded by openingBalanceMinor (GL Phase 17); kept
+    // only until that backfill has run and been verified in production, per
+    // the widen-migrate-narrow discipline this whole track follows.
     initialCapital: v.optional(v.number()),
     currentBalance: v.optional(v.number()),
+    // GL Phase 17: minor-unit backfill of currentBalance. Once set, this is
+    // what derivePartnerBalanceMinor reads as the opening base instead of
+    // converting currentBalance live.
+    openingBalanceMinor: v.optional(v.number()),
     notes: v.optional(v.string()),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
@@ -1665,6 +1670,27 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_org_session", ["orgId", "sessionId"]),
+
+  // GL Phase 17: a one-time accountant attestation that the legacy-to-GL
+  // cutover for this org has been reviewed and is correct, carrying a
+  // point-in-time snapshot of the numbers that were reviewed (not a live
+  // computation) so the sign-off remains meaningful even as later activity
+  // changes current totals.
+  accountingCutoverSignOffs: defineTable({
+    orgId: v.id("organizations"),
+    snapshot: v.object({
+      legacyTransactionCount: v.number(),
+      migratedTransactionCount: v.number(),
+      unmigratedTransactionCount: v.number(),
+      trialBalanceTotalDebitsMinor: v.number(),
+      trialBalanceTotalCreditsMinor: v.number(),
+      isBalanced: v.boolean(),
+    }),
+    notes: v.optional(v.string()),
+    signedOffBy: v.id("users"),
+    signedOffAt: v.number(),
+  })
+    .index("by_org", ["orgId"]),
 
   // GL Phase 14: org-defined exchange rates for optional reporting-currency
   // translation. Books always stay per-currency; these rates only produce
