@@ -31,18 +31,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { manualJournalSchema, ManualJournalFormValues } from "./manualJournal.schema";
-
-// Mirrors convex/utils/money.ts CURRENCY_SCALES — duplicated here because that
-// module lives under convex/ and this is display-only decimal-place formatting,
-// not a business rule (the backend independently re-derives and validates scale).
-const CURRENCY_SCALES: Record<string, number> = {
-  JOD: 3, KWD: 3, BHD: 3, OMR: 3,
-  USD: 2, EUR: 2, GBP: 2, SAR: 2, AED: 2, QAR: 2, EGP: 2,
-  JPY: 0,
-};
-function scaleForCurrency(currency: string): number {
-  return CURRENCY_SCALES[currency.toUpperCase()] ?? 2;
-}
+import { scaleForCurrency } from "./AccountingTabShared";
 
 function emptyLine() {
   return { id: crypto.randomUUID(), accountId: "", side: "DEBIT" as const, amount: 0 };
