@@ -1,6 +1,7 @@
 import { v, ConvexError } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
+import { internal } from "./_generated/api";
 import { requireAuth, requireSuperAdmin } from "./utils/tenancy";
 import { notifyAllMembers } from "./utils/notifications";
 import { logAdminAction } from "./adminAudit";
@@ -33,13 +34,13 @@ export const create = mutation({
     });
 
     if (args.notifyUsers) {
-      const orgIds = (await ctx.db.query("organizations").collect()).map((o) => o._id);
-      for (const orgId of orgIds) {
-        await notifyAllMembers(ctx, orgId, "system.announcement", {
-          title: args.titleEn,
-          message: args.descriptionEn,
-        }, { link: "/whats-new" });
-      }
+      // Fanning out to every org/member can be a lot of work — hand it to a
+      // self-paginating scheduled mutation so this insert never blocks on (or
+      // fails because of) the size of that fan-out.
+      await ctx.scheduler.runAfter(0, internal.changelog.broadcastNewEntry, {
+        titleEn: args.titleEn,
+        descriptionEn: args.descriptionEn,
+      });
     }
 
     await logAdminAction(ctx, admin, {
@@ -53,6 +54,43 @@ export const create = mutation({
   },
 });
 
+const BROADCAST_BATCH_SIZE = 50;
+
+/**
+ * Notifies every org's members about a new changelog entry, one page of orgs
+ * at a time, self-rescheduling until done. This is the same "notify every
+ * org" shape as adminBroadcasts.create, just paginated instead of a single
+ * unbounded loop, since this mutation runs on its own schedule rather than
+ * inline with a super-admin's create-entry click.
+ */
+export const broadcastNewEntry = internalMutation({
+  args: {
+    titleEn: v.string(),
+    descriptionEn: v.string(),
+    cursor: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const page = await ctx.db
+      .query("organizations")
+      .paginate({ cursor: args.cursor ?? null, numItems: BROADCAST_BATCH_SIZE });
+
+    for (const org of page.page) {
+      await notifyAllMembers(ctx, org._id, "system.announcement", {
+        title: args.titleEn,
+        message: args.descriptionEn,
+      }, { link: "/whats-new" });
+    }
+
+    if (!page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.changelog.broadcastNewEntry, {
+        titleEn: args.titleEn,
+        descriptionEn: args.descriptionEn,
+        cursor: page.continueCursor,
+      });
+    }
+  },
+});
+
 export const update = mutation({
   args: {
     entryId: v.id("changelogEntries"),
@@ -61,7 +99,11 @@ export const update = mutation({
     titleAr: v.string(),
     descriptionEn: v.string(),
     descriptionAr: v.string(),
-    publishedAt: v.number(),
+    // Optional and left untouched unless explicitly provided — publishedAt
+    // drives both display ordering and the unread-dot indicator, so a plain
+    // typo fix must not silently re-publish (and re-notify-as-unread) an old
+    // entry. Pass this only for a deliberate republish/backdate.
+    publishedAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const admin = await requireSuperAdmin(ctx);
@@ -72,6 +114,7 @@ export const update = mutation({
 
     await ctx.db.patch(entryId, {
       ...updates,
+      publishedAt: updates.publishedAt ?? existing.publishedAt,
       updatedAt: Date.now(),
       updatedBy: admin._id,
     });

@@ -84,7 +84,6 @@ export default function AdminChangelogPage() {
           titleAr: form.titleAr.trim(),
           descriptionEn: form.descriptionEn.trim(),
           descriptionAr: form.descriptionAr.trim(),
-          publishedAt: Date.now(),
         });
         toast.success("Entry updated.");
       } else {
@@ -99,20 +98,21 @@ export default function AdminChangelogPage() {
         toast.success("Entry published.");
       }
       resetForm();
-    } catch (e: any) {
-      toast.error(e);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
     } finally {
       setSaving(false);
     }
   }
 
   async function handleDelete(entryId: Id<"changelogEntries">) {
+    if (!window.confirm("Delete this changelog entry? This cannot be undone.")) return;
     try {
       await removeEntry({ entryId });
       toast.success("Entry deleted.");
       if (editingId === entryId) resetForm();
-    } catch (e: any) {
-      toast.error(e);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
     }
   }
 
