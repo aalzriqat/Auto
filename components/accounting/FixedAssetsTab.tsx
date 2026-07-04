@@ -69,7 +69,7 @@ export function FixedAssetsTab() {
   const scale = scaleForCurrency(currencyCode);
   const factor = Math.pow(10, scale);
 
-  const { results: assets } = usePaginatedQuery(
+  const { results: assets, status: assetsStatus } = usePaginatedQuery(
     api.fixedAssets.list,
     activeOrgId ? { orgId: activeOrgId } : "skip",
     { initialNumItems: 100 }
@@ -80,7 +80,7 @@ export function FixedAssetsTab() {
   const [impairAsset, setImpairAsset] = useState<FixedAsset | null>(null);
   const [disposeAsset, setDisposeAsset] = useState<FixedAsset | null>(null);
 
-  if (!assets) {
+  if (assetsStatus === "LoadingFirstPage") {
     return <LoadingAccountingState label={t("LoadingAssets" as any)} />;
   }
 
@@ -118,7 +118,8 @@ export function FixedAssetsTab() {
                 const costMinor = asset.costMinor ?? Math.round((asset.purchaseValue ?? 0) * factor);
                 const accumMinor = asset.accumulatedDepreciationMinor ?? 0;
                 const netBookMinor = costMinor - accumMinor;
-                const canOperate = canManage && !isLegacy && asset.status === "ACTIVE";
+                const canImpair = canManage && !isLegacy && asset.status === "ACTIVE";
+                const canDispose = canManage && !isLegacy && asset.status !== "DISPOSED";
                 return (
                   <TableRow key={asset._id}>
                     <TableCell className="font-medium">{asset.name}</TableCell>
@@ -145,25 +146,25 @@ export function FixedAssetsTab() {
                         >
                           <History className="w-4 h-4 text-slate-500" />
                         </Button>
-                        {canOperate && (
-                          <>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              title={t("ImpairAsset" as any)}
-                              onClick={() => setImpairAsset(asset)}
-                            >
-                              <TrendingDown className="w-4 h-4 text-amber-600" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              title={t("DisposeAsset" as any)}
-                              onClick={() => setDisposeAsset(asset)}
-                            >
-                              <XCircle className="w-4 h-4 text-rose-600" />
-                            </Button>
-                          </>
+                        {canImpair && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title={t("ImpairAsset" as any)}
+                            onClick={() => setImpairAsset(asset)}
+                          >
+                            <TrendingDown className="w-4 h-4 text-amber-600" />
+                          </Button>
+                        )}
+                        {canDispose && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            title={t("DisposeAsset" as any)}
+                            onClick={() => setDisposeAsset(asset)}
+                          >
+                            <XCircle className="w-4 h-4 text-rose-600" />
+                          </Button>
                         )}
                       </div>
                     </TableCell>
@@ -540,7 +541,7 @@ function DisposeAssetDialog({
               factor={factor}
             />
             <div className="space-y-1.5">
-              <Label>{t("PurchaseDateLabel" as any)}</Label>
+              <Label>{t("DisposalDateLabel" as any)}</Label>
               <Input type="date" value={occurredAt} onChange={(e) => setOccurredAt(e.target.value)} />
             </div>
           </div>

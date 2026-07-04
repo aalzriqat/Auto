@@ -11,7 +11,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 
-const MODULE_GLOB = import.meta.glob("./**/*.*s");
+const MODULE_GLOB = import.meta.glob("./**/*.ts");
 
 async function seedDrawerDealer() {
   const t = convexTest(schema, MODULE_GLOB);
@@ -117,7 +117,7 @@ describe("Phase 15 — opening and movements", () => {
     await asCashier.mutation(api.cashDrawer.beginCount, { orgId, sessionId });
 
     await expect(
-      asCashier.mutation(api.cashDrawer.recordMovement, { orgId, sessionId, type: "SALE", amountMinor: 10_000 })
+      asCashier.mutation(api.cashDrawer.recordMovement, { orgId, sessionId, type: "SALE", amountMinor: 10_000, idempotencyKey: crypto.randomUUID() })
     ).rejects.toThrow(/only be recorded while.*OPEN/i);
   });
 
@@ -126,7 +126,7 @@ describe("Phase 15 — opening and movements", () => {
     const sessionId = await asCashier.mutation(api.cashDrawer.open, { orgId, openingFloatMinor: 0 });
 
     await expect(
-      asCashier.mutation(api.cashDrawer.recordMovement, { orgId, sessionId, type: "SALE", amountMinor: 0 })
+      asCashier.mutation(api.cashDrawer.recordMovement, { orgId, sessionId, type: "SALE", amountMinor: 0, idempotencyKey: crypto.randomUUID() })
     ).rejects.toThrow(/must be a positive/i);
   });
 });
@@ -135,8 +135,8 @@ describe("Phase 15 — count and close", () => {
   test("an exact count yields zero variance", async () => {
     const { t, orgId, asCashier } = await seedDrawerDealer();
     const sessionId = await asCashier.mutation(api.cashDrawer.open, { orgId, openingFloatMinor: 50_000 });
-    await asCashier.mutation(api.cashDrawer.recordMovement, { orgId, sessionId, type: "SALE", amountMinor: 200_000 });
-    await asCashier.mutation(api.cashDrawer.recordMovement, { orgId, sessionId, type: "PAYOUT", amountMinor: 15_000 });
+    await asCashier.mutation(api.cashDrawer.recordMovement, { orgId, sessionId, type: "SALE", amountMinor: 200_000, idempotencyKey: crypto.randomUUID() });
+    await asCashier.mutation(api.cashDrawer.recordMovement, { orgId, sessionId, type: "PAYOUT", amountMinor: 15_000, idempotencyKey: crypto.randomUUID() });
     await asCashier.mutation(api.cashDrawer.beginCount, { orgId, sessionId });
 
     // Expected = 50_000 + 200_000 - 15_000 = 235_000
@@ -154,7 +154,7 @@ describe("Phase 15 — count and close", () => {
   test("a shortfall computes a negative variance", async () => {
     const { orgId, asCashier } = await seedDrawerDealer();
     const sessionId = await asCashier.mutation(api.cashDrawer.open, { orgId, openingFloatMinor: 100_000 });
-    await asCashier.mutation(api.cashDrawer.recordMovement, { orgId, sessionId, type: "SALE", amountMinor: 50_000 });
+    await asCashier.mutation(api.cashDrawer.recordMovement, { orgId, sessionId, type: "SALE", amountMinor: 50_000, idempotencyKey: crypto.randomUUID() });
     await asCashier.mutation(api.cashDrawer.beginCount, { orgId, sessionId });
 
     // Expected 150_000, counted 145_000 -> shortage of 5_000.
@@ -165,7 +165,7 @@ describe("Phase 15 — count and close", () => {
   test("an overage computes a positive variance", async () => {
     const { orgId, asCashier } = await seedDrawerDealer();
     const sessionId = await asCashier.mutation(api.cashDrawer.open, { orgId, openingFloatMinor: 100_000 });
-    await asCashier.mutation(api.cashDrawer.recordMovement, { orgId, sessionId, type: "SALE", amountMinor: 50_000 });
+    await asCashier.mutation(api.cashDrawer.recordMovement, { orgId, sessionId, type: "SALE", amountMinor: 50_000, idempotencyKey: crypto.randomUUID() });
     await asCashier.mutation(api.cashDrawer.beginCount, { orgId, sessionId });
 
     // Expected 150_000, counted 156_000 -> overage of 6_000.
@@ -176,7 +176,7 @@ describe("Phase 15 — count and close", () => {
   test("HANDOVER increases expected cash the same way a sale does", async () => {
     const { orgId, asCashier } = await seedDrawerDealer();
     const sessionId = await asCashier.mutation(api.cashDrawer.open, { orgId, openingFloatMinor: 0 });
-    await asCashier.mutation(api.cashDrawer.recordMovement, { orgId, sessionId, type: "HANDOVER", amountMinor: 30_000 });
+    await asCashier.mutation(api.cashDrawer.recordMovement, { orgId, sessionId, type: "HANDOVER", amountMinor: 30_000, idempotencyKey: crypto.randomUUID() });
     await asCashier.mutation(api.cashDrawer.beginCount, { orgId, sessionId });
 
     const result = await asCashier.mutation(api.cashDrawer.close, { orgId, sessionId, closingCountMinor: 30_000 });
@@ -204,7 +204,7 @@ describe("Phase 15 — variance approval and bank deposit", () => {
     const sessionId = await ctx.asCashier.mutation(api.cashDrawer.open, { orgId: ctx.orgId, openingFloatMinor });
     if (saleMinor > 0) {
       await ctx.asCashier.mutation(api.cashDrawer.recordMovement, {
-        orgId: ctx.orgId, sessionId, type: "SALE", amountMinor: saleMinor,
+        orgId: ctx.orgId, sessionId, type: "SALE", amountMinor: saleMinor, idempotencyKey: crypto.randomUUID(),
       });
     }
     await ctx.asCashier.mutation(api.cashDrawer.beginCount, { orgId: ctx.orgId, sessionId });

@@ -61,12 +61,25 @@ export function BalanceSheetReport({
 
       <div className="grid gap-3 md:grid-cols-4">
         {report.totalsByCurrency.map((total) => (
-          <ReportMetric
-            key={total.currency}
-            label={`${t("Assets")} (${total.currency})`}
-            value={formatMoney(total.totalAssets, total.currency)}
-            tone={total.isBalanced ? "success" : "danger"}
-          />
+          <div key={total.currency} className="contents">
+            <ReportMetric
+              label={`${t("Assets")} (${total.currency})`}
+              value={formatMoney(total.totalAssets, total.currency)}
+            />
+            <ReportMetric
+              label={`${t("Liabilities")} (${total.currency})`}
+              value={formatMoney(total.totalLiabilities, total.currency)}
+            />
+            <ReportMetric
+              label={`${t("Equity")} (${total.currency})`}
+              value={formatMoney(total.totalEquity, total.currency)}
+            />
+            <ReportMetric
+              label={`${t("NetIncome")} (${total.currency})`}
+              value={formatMoney(total.netIncomeMinor, total.currency)}
+              tone={total.isBalanced ? "success" : "danger"}
+            />
+          </div>
         ))}
       </div>
 

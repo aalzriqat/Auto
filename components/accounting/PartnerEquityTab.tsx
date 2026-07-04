@@ -63,7 +63,7 @@ export function PartnerEquityTab() {
   const scale = scaleForCurrency(currencyCode);
   const factor = Math.pow(10, scale);
 
-  const { results: partners } = usePaginatedQuery(
+  const { results: partners, status: partnersStatus, loadMore: loadMorePartners } = usePaginatedQuery(
     api.partnerEquity.list,
     activeOrgId ? { orgId: activeOrgId } : "skip",
     { initialNumItems: 100 }
@@ -73,7 +73,7 @@ export function PartnerEquityTab() {
   const [movement, setMovement] = useState<{ partner: PartnerRow; type: MovementType } | null>(null);
   const [historyPartner, setHistoryPartner] = useState<PartnerRow | null>(null);
 
-  if (!partners) {
+  if (partnersStatus === "LoadingFirstPage") {
     return <LoadingAccountingState label={t("LoadingEquity" as any)} />;
   }
 
@@ -167,6 +167,14 @@ export function PartnerEquityTab() {
         </Table>
       </AccountingTableFrame>
 
+      {partnersStatus === "CanLoadMore" && (
+        <div className="flex justify-center">
+          <Button variant="outline" onClick={() => loadMorePartners(75)}>
+            {t("LoadMore" as any)}
+          </Button>
+        </div>
+      )}
+
       {activeOrgId && canManage && (
         <AddPartnerDialog open={addOpen} onOpenChange={setAddOpen} orgId={activeOrgId} factor={factor} />
       )}
@@ -224,14 +232,19 @@ function AddPartnerDialog({
     setNotes("");
   }
 
+  function handleOpenChange(nextOpen: boolean) {
+    onOpenChange(nextOpen);
+    if (!nextOpen) reset();
+  }
+
   async function submit() {
     if (!name.trim()) {
-      toast.error(t("PartnerName" as any));
+      toast.error(t("PartnerNameRequired" as any));
       return;
     }
     const openingMinor = Math.round(Number(openingContribution || "0") * factor);
     if (!Number.isFinite(openingMinor) || openingMinor < 0) {
-      toast.error(t("OpeningContributionLabel" as any));
+      toast.error(t("OpeningContributionInvalid" as any));
       return;
     }
     await submitWithFeedback(async () => {
@@ -243,13 +256,12 @@ function AddPartnerDialog({
         paymentMethod: openingMinor > 0 ? paymentMethod : undefined,
       });
       toast.success(t("PartnerAdded" as any));
-      onOpenChange(false);
-      reset();
+      handleOpenChange(false);
     });
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) reset(); }}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>{t("AddPartner" as any)}</DialogTitle>
@@ -285,7 +297,7 @@ function AddPartnerDialog({
           <DialogFooterActions
             cancelLabel={t("Cancel" as any)}
             confirmLabel={t("AddPartner" as any)}
-            onCancel={() => onOpenChange(false)}
+            onCancel={() => handleOpenChange(false)}
             onConfirm={submit}
             submitting={submitting}
           />
@@ -324,7 +336,7 @@ function MovementDialog({
   async function submit() {
     const amountMinor = Math.round(Number(amount) * factor);
     if (!Number.isFinite(amountMinor) || amountMinor <= 0) {
-      toast.error(t("AmountLabel" as any));
+      toast.error(t("MovementAmountInvalid" as any));
       return;
     }
     await submitWithFeedback(async () => {

@@ -96,6 +96,26 @@ export function ApplicationDetailsDialog({
     }
   };
 
+  const handleMarkUnderReview = async () => {
+    if (!activeOrgId) return;
+    try {
+      await updateStatus({ orgId: activeOrgId, applicationId, status: "UNDER_REVIEW" });
+      toast.success(t("AppUnderReviewSuccess" as any));
+    } catch {
+      toast.error(t("UnexpectedError" as any));
+    }
+  };
+
+  const handleRejectApp = async () => {
+    if (!activeOrgId) return;
+    try {
+      await updateStatus({ orgId: activeOrgId, applicationId, status: "REJECTED" });
+      toast.success(t("AppRejectedSuccess" as any));
+    } catch {
+      toast.error(t("UnexpectedError" as any));
+    }
+  };
+
   const handleCancelApplication = async () => {
     if (!activeOrgId) return;
     try {
@@ -259,7 +279,7 @@ export function ApplicationDetailsDialog({
               <h4 className="font-semibold text-sm mb-2">{t("AppActions" as any)}</h4>
               <div className="flex flex-col gap-2">
                 <Button
-                  onClick={() => updateStatus({ orgId: activeOrgId!, applicationId, status: "UNDER_REVIEW" })}
+                  onClick={handleMarkUnderReview}
                   variant="outline"
                   disabled={!canReviewApplication || app.status !== "PENDING_DOCS"}
                 >
@@ -278,7 +298,7 @@ export function ApplicationDetailsDialog({
 
                 {canReviewApplication && (
                     <Button
-                      onClick={() => updateStatus({ orgId: activeOrgId!, applicationId, status: "REJECTED" })}
+                      onClick={handleRejectApp}
                       variant="destructive"
                       disabled={app.status === "REJECTED" || app.status === "CLOSED" || app.status === "CANCELLED"}
                     >

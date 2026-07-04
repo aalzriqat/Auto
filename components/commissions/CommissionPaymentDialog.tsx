@@ -31,7 +31,7 @@ export function CommissionPaymentDialog({
   onConfirm: () => void;
 }>) {
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={(next) => { if (!isPaying) onOpenChange(next); }}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>{t("ConfirmCommissionPayment" as any)}</DialogTitle>
@@ -48,7 +48,7 @@ export function CommissionPaymentDialog({
               <PaymentMethodSelect t={t} value={paymentMethod} onValueChange={onPaymentMethodChange} />
             </div>
             <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => onOpenChange(false)}>
+              <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isPaying}>
                 {t("Cancel" as any)}
               </Button>
               <Button className="bg-green-600 hover:bg-green-700 text-white" onClick={onConfirm} disabled={isPaying}>

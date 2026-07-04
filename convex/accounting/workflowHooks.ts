@@ -734,7 +734,10 @@ export async function hookAssetImpaired(
   }
 ) {
   await postFixedAssetEvent(ctx, "ASSET_IMPAIRED", args, {
-    idempotencyKey: `asset_impaired_${args.assetId}_${args.occurredAt}`,
+    // No timestamp suffix: an asset can only transition ACTIVE -> IMPAIRED
+    // once (impair() gates on status === "ACTIVE"), so the key must stay
+    // stable across retries rather than vary with wall-clock occurredAt.
+    idempotencyKey: `asset_impaired_${args.assetId}`,
     payload: {
       amountMinor: args.amountMinor,
     },

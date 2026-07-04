@@ -1713,9 +1713,11 @@ export default defineSchema({
     accountingEventId: v.optional(v.id("accountingEvents")),
     actorId: v.id("users"),
     createdAt: v.number(),
+    idempotencyKey: v.string(),
   })
     .index("by_org", ["orgId"])
-    .index("by_org_session", ["orgId", "sessionId"]),
+    .index("by_org_session", ["orgId", "sessionId"])
+    .index("by_org_idempotency", ["orgId", "idempotencyKey"]),
 
   // GL Phase 17: a one-time accountant attestation that the legacy-to-GL
   // cutover for this org has been reviewed and is correct, carrying a
@@ -1728,8 +1730,15 @@ export default defineSchema({
       legacyTransactionCount: v.number(),
       migratedTransactionCount: v.number(),
       unmigratedTransactionCount: v.number(),
-      trialBalanceTotalDebitsMinor: v.number(),
-      trialBalanceTotalCreditsMinor: v.number(),
+      // Per-currency breakdown, not a single mixed-currency total: an org's
+      // currency can change over time (GL Phase 14), leaving historical
+      // journal lines in more than one currency.
+      trialBalanceByCurrency: v.array(v.object({
+        currency: v.string(),
+        totalDebitsMinor: v.number(),
+        totalCreditsMinor: v.number(),
+        isBalanced: v.boolean(),
+      })),
       isBalanced: v.boolean(),
     }),
     notes: v.optional(v.string()),

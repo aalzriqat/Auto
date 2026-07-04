@@ -12,7 +12,7 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 
-const MODULE_GLOB = import.meta.glob("./**/*.*s");
+const MODULE_GLOB = import.meta.glob("./**/*.ts");
 
 // Tests that depreciate hardcoded "2026-XX" months need a purchase date at or
 // before those months, or the schedule-start guard (correctly) skips them.

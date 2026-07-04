@@ -114,8 +114,11 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
       const parsedPayerId = values.payerId === "none" ? undefined : (values.payerId as Id<"users">);
 
       if (expense) {
-        const shouldSendPaymentMethod =
-          values.status === "PAID" && ((expense.status ?? "PAID") === "PENDING" || expense.paymentMethod !== undefined);
+        // The server is the authority on whether this is actually allowed:
+        // convex/expenses.ts's update() rejects any paymentMethod change once
+        // the expense has real accounting exposure ("Posted expenses are
+        // locked..."). Gating it here too just silently dropped a
+        // user-entered value instead of surfacing that error.
         await updateExpense({
           orgId: activeOrgId,
           expenseId: expense._id,
@@ -127,7 +130,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
           status: values.status,
           vendor: values.vendor,
           payerId: parsedPayerId === undefined ? null : parsedPayerId,
-          paymentMethod: shouldSendPaymentMethod ? values.paymentMethod : undefined,
+          paymentMethod: values.status === "PAID" ? values.paymentMethod : undefined,
           notes: values.notes,
         });
         toast.success(t("ExpenseUpdatedSuccess" as any));
@@ -148,8 +151,8 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
         toast.success(t("ExpenseRecordedSuccess" as any));
       }
       onOpenChange(false);
-    } catch {
-      toast.error(t("ExpenseSaveFail" as any));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("ExpenseSaveFail" as any));
     } finally {
       setIsSubmitting(false);
     }

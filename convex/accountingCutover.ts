@@ -31,11 +31,16 @@ import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
  * trial balance report). Convex query/mutation handlers aren't plain
  * callable functions, so this is a small self-contained sum rather than
  * cross-calling that query's handler.
+ *
+ * Bucketed by currency rather than a single mixed total: an org's currency
+ * can change over time (GL Phase 14), leaving historical journal lines in
+ * more than one currency, and summing minor units across currencies would
+ * produce a number with no meaning (e.g. JOD fils + USD cents).
  */
-async function sumAllPostedJournalLines(
+async function sumAllPostedJournalLinesByCurrency(
   ctx: QueryCtx,
   orgId: Id<"organizations">
-): Promise<{ totalDebits: number; totalCredits: number; isBalanced: boolean }> {
+): Promise<Array<{ currency: string; totalDebitsMinor: number; totalCreditsMinor: number; isBalanced: boolean }>> {
   // Include REVERSED entries too — same reasoning as accountingReports.ts's
   // getPostedLines: a reversed entry's own lines are real historical
   // postings that a separately-posted reversal entry cancels out, not lines
@@ -49,19 +54,24 @@ async function sumAllPostedJournalLines(
       .collect()
   ).filter((e) => e.status === "POSTED" || e.status === "REVERSED");
 
-  let totalDebits = 0;
-  let totalCredits = 0;
+  const byCurrency = new Map<string, { totalDebitsMinor: number; totalCreditsMinor: number }>();
   for (const entry of entries) {
     const lines = await ctx.db
       .query("journalLines")
       .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", entry._id))
       .collect();
     for (const line of lines) {
-      totalDebits += line.debitMinor;
-      totalCredits += line.creditMinor;
+      const bucket = byCurrency.get(line.currency) ?? { totalDebitsMinor: 0, totalCreditsMinor: 0 };
+      bucket.totalDebitsMinor += line.debitMinor;
+      bucket.totalCreditsMinor += line.creditMinor;
+      byCurrency.set(line.currency, bucket);
     }
   }
-  return { totalDebits, totalCredits, isBalanced: totalDebits === totalCredits };
+  return Array.from(byCurrency.entries()).map(([currency, totals]) => ({
+    currency,
+    ...totals,
+    isBalanced: totals.totalDebitsMinor === totals.totalCreditsMinor,
+  }));
 }
 
 export const postOpeningBalance = mutation({
@@ -227,6 +237,7 @@ export const compareLegacyToGL = query({
     const postedEvents = glEvents.filter((e) => e.status === "POSTED");
     let glTotalDebitMinor = 0;
     let glTotalCreditMinor = 0;
+    const glCurrencies = new Set<string>();
     for (const event of postedEvents) {
       if (!event.journalEntryId) continue;
       const lines = await ctx.db
@@ -236,14 +247,28 @@ export const compareLegacyToGL = query({
       for (const line of lines) {
         glTotalDebitMinor += line.debitMinor;
         glTotalCreditMinor += line.creditMinor;
+        glCurrencies.add(line.currency);
       }
     }
 
     const migratedTransactionIds = new Set(postedEvents.map((e) => e.sourceId));
     const unmigrated = legacyTxns.filter((tx) => !migratedTransactionIds.has(tx._id.toString()));
 
+    // The legacy `transactions` table never recorded a per-row currency, so
+    // legacyInMinor/legacyOutMinor above assume every row used the org's
+    // CURRENT currency setting. That assumption breaks if the org changed
+    // currency (GL Phase 14) partway through this date range — there is no
+    // way to recover which currency an old row was actually in, so instead
+    // of silently producing a wrong-looking-right number, flag it: if the
+    // GL side (which does record currency per line) shows more than one
+    // currency, or a currency other than the org's current one, this
+    // comparison isn't trustworthy for this range.
+    const multiCurrencyWarning =
+      glCurrencies.size > 1 || (glCurrencies.size === 1 && !glCurrencies.has(currency));
+
     return {
       currency,
+      multiCurrencyWarning,
       legacy: {
         transactionCount: legacyTxns.length,
         totalInMinor: legacyInMinor,
@@ -254,6 +279,7 @@ export const compareLegacyToGL = query({
         totalDebitMinor: glTotalDebitMinor,
         totalCreditMinor: glTotalCreditMinor,
         isBalanced: glTotalDebitMinor === glTotalCreditMinor,
+        currencies: Array.from(glCurrencies),
       },
       unmigratedCount: unmigrated.length,
       unmigratedTransactionIds: unmigrated.map((tx) => tx._id.toString()),
@@ -284,15 +310,14 @@ export const signOffCutover = mutation({
     );
     const migratedCount = activeLegacy.filter((t) => migratedIds.has(t._id.toString())).length;
 
-    const tb = await sumAllPostedJournalLines(ctx, args.orgId);
+    const trialBalanceByCurrency = await sumAllPostedJournalLinesByCurrency(ctx, args.orgId);
 
     const snapshot = {
       legacyTransactionCount: activeLegacy.length,
       migratedTransactionCount: migratedCount,
       unmigratedTransactionCount: activeLegacy.length - migratedCount,
-      trialBalanceTotalDebitsMinor: tb.totalDebits,
-      trialBalanceTotalCreditsMinor: tb.totalCredits,
-      isBalanced: tb.isBalanced,
+      trialBalanceByCurrency,
+      isBalanced: trialBalanceByCurrency.every((b) => b.isBalanced),
     };
 
     const signOffId = await ctx.db.insert("accountingCutoverSignOffs", {

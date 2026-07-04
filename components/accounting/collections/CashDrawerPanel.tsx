@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { Plus } from "lucide-react";
 import { api } from "@/convex/_generated/api";
@@ -224,20 +224,29 @@ function RecordMovementDialog({ session, onOpenChange, factor }: Readonly<{ sess
   const [amount, setAmount] = useState("");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const idempotencyKeyRef = useRef<string | null>(null);
+
+  function handleOpenChange(nextOpen: boolean) {
+    if (!nextOpen) idempotencyKeyRef.current = null;
+    onOpenChange(nextOpen);
+  }
 
   async function submit() {
     if (!activeOrgId || !session) return;
     setSubmitting(true);
     try {
+      idempotencyKeyRef.current ??= `cash-movement:${crypto.randomUUID()}`;
       await recordMovement({
         orgId: activeOrgId,
         sessionId: session._id,
         type,
         amountMinor: Math.round(Number(amount) * factor),
         notes: notes.trim() || undefined,
+        idempotencyKey: idempotencyKeyRef.current,
       });
+      idempotencyKeyRef.current = null;
       toast.success(t("CashMovementRecorded" as any));
-      onOpenChange(false);
+      handleOpenChange(false);
       setAmount("");
       setNotes("");
     } catch {
@@ -248,7 +257,7 @@ function RecordMovementDialog({ session, onOpenChange, factor }: Readonly<{ sess
   }
 
   return (
-    <Dialog open={session !== null} onOpenChange={onOpenChange}>
+    <Dialog open={session !== null} onOpenChange={handleOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{t("RecordCashMovement" as any)}</DialogTitle>
@@ -265,7 +274,7 @@ function RecordMovementDialog({ session, onOpenChange, factor }: Readonly<{ sess
         <Input type="number" min="0" step={1 / factor} value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={t("Amount" as any)} />
         <Textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder={t("NotesLabel" as any)} />
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
+          <Button variant="outline" onClick={() => handleOpenChange(false)}>{t("Cancel" as any)}</Button>
           <Button onClick={submit} disabled={submitting || !amount}>{submitting ? t("Saving" as any) : t("Record" as any)}</Button>
         </DialogFooter>
       </DialogContent>

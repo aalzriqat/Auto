@@ -70,8 +70,8 @@ export function SourcingClient() {
       setPayDialogPayable(null);
       setPaymentNotes("");
       setPaymentMethod("CASH");
-    } catch {
-      toast.error(t("UnexpectedError" as any));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("UnexpectedError" as any));
     } finally {
       setIsPaying(false);
     }

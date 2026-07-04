@@ -62,7 +62,7 @@ export function ClaimsTab() {
   const scale = scaleForCurrency(currencyCode);
   const factor = Math.pow(10, scale);
 
-  const { results: claims } = usePaginatedQuery(
+  const { results: claims, status: claimsStatus } = usePaginatedQuery(
     api.claims.list,
     activeOrgId ? { orgId: activeOrgId } : "skip",
     { initialNumItems: 100 }
@@ -72,7 +72,7 @@ export function ClaimsTab() {
   const [settleClaim, setSettleClaim] = useState<Claim | null>(null);
   const [rejectClaim, setRejectClaim] = useState<Claim | null>(null);
 
-  if (!claims) {
+  if (claimsStatus === "LoadingFirstPage") {
     return <LoadingAccountingState label={t("LoadingClaims" as any)} />;
   }
 

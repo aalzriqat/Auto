@@ -34,7 +34,7 @@ export const listEvents = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     const asset = await ctx.db.get(args.assetId);
-    if (!asset || asset.orgId !== args.orgId) {
+    if (!asset || asset.orgId !== args.orgId || asset.isDeleted) {
       throw new ConvexError("Fixed asset not found in this organization.");
     }
     return await ctx.db

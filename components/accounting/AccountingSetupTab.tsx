@@ -127,7 +127,10 @@ export function AccountingSetupTab() {
           void runSetupAction(
             "redrive",
             () => redriveOutbox({ orgId: activeOrgId }),
-            (outcome) => `${t("AccountingOutboxRedriven")} ${t("PostedCount")}: ${outcome.posted}, ${t("FailedCount")}: ${outcome.failed}`
+            (outcome) =>
+              t("AccountingOutboxRedrivenResult" as any)
+                .replace("{posted}", String(outcome.posted))
+                .replace("{failed}", String(outcome.failed))
           );
         }}
         periodDialog={

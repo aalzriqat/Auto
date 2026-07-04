@@ -7,7 +7,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { runWithIdempotency } from "./utils/idempotency";
 import { hookPaymentLinkReceived } from "./accounting/workflowHooks";
 import { allocatePaymentToReceivable, createCanonicalPayment } from "./subledger";
-import { fromMinorUnits, toMinorUnits } from "./utils/money";
+import { fromMinorUnits, toMinorUnits, scaleForCurrency } from "./utils/money";
 
 const statusValidator = v.union(
   v.literal("PENDING"),
@@ -26,8 +26,9 @@ function normalizeCurrency(currency: string): string {
   return currency.trim().toUpperCase();
 }
 
-function roundMoney(amount: number) {
-  return Math.round(amount * 100) / 100;
+function roundMoney(amount: number, currency: string) {
+  const factor = Math.pow(10, scaleForCurrency(currency));
+  return Math.round(amount * factor) / factor;
 }
 
 function nextLegacyReceivableStatus(outstandingAmount: number, dueDate: number, now: number) {
@@ -116,7 +117,13 @@ async function createCanonicalIntentSettlement(
   if (intent.receivableId && !intent.collectionPaymentId) {
     const receivable = await ctx.db.get(intent.receivableId);
     if (receivable && receivable.orgId === intent.orgId) {
-      const amount = roundMoney(fromMinorUnits(intent.amountMinor, intent.currency));
+      const amount = roundMoney(fromMinorUnits(intent.amountMinor, intent.currency), intent.currency);
+      // The receivable may have been partially paid through another channel
+      // since this intent was created, so the full intent amount can now
+      // exceed what's actually still owed. Clamp what's recorded as applied
+      // to this receivable to its current outstanding balance rather than
+      // posting more than it was ever owed.
+      const appliedAmount = Math.min(amount, receivable.outstandingAmount);
       const collectionPaymentId = await ctx.db.insert("collectionPayments", {
         orgId: intent.orgId,
         receivableId: receivable._id,
@@ -125,7 +132,7 @@ async function createCanonicalIntentSettlement(
         saleId: receivable.saleId,
         direction: "IN",
         method: "PAYMENT_LINK",
-        amount,
+        amount: appliedAmount,
         paymentDate: occurredAt,
         status: "POSTED",
         idempotencyKey: `payment_intent_${intent._id}`,
@@ -135,7 +142,7 @@ async function createCanonicalIntentSettlement(
         paymentAllocationId: links.paymentAllocationId,
         createdAt: occurredAt,
       });
-      const outstandingAmount = roundMoney(Math.max(0, receivable.outstandingAmount - amount));
+      const outstandingAmount = roundMoney(Math.max(0, receivable.outstandingAmount - appliedAmount), intent.currency);
       await ctx.db.patch(receivable._id, {
         outstandingAmount,
         status: nextLegacyReceivableStatus(outstandingAmount, receivable.dueDate, occurredAt),

@@ -149,10 +149,22 @@ type TurnstileWindow = Window & {
 const PUBLIC_LEAD_FINGERPRINT_KEY = "autoflow_public_lead_fingerprint";
 const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
 
+// crypto.randomUUID() only exists in secure contexts (HTTPS/localhost). A
+// dealer's custom domain can be reached over plain HTTP before its
+// certificate is provisioned, so fall back to crypto.getRandomValues (which
+// remains available) instead of letting lead capture throw.
+function randomId() {
+  if (typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 function publicLeadFingerprint() {
   let visitorId = window.localStorage.getItem(PUBLIC_LEAD_FINGERPRINT_KEY);
   if (!visitorId) {
-    visitorId = crypto.randomUUID();
+    visitorId = randomId();
     window.localStorage.setItem(PUBLIC_LEAD_FINGERPRINT_KEY, visitorId);
   }
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone ?? "unknown";

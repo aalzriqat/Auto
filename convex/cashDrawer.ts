@@ -89,9 +89,16 @@ export const recordMovement = mutation({
     amountMinor: v.number(),
     occurredAt: v.optional(v.number()),
     notes: v.optional(v.string()),
+    idempotencyKey: v.string(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+
+    const existing = await ctx.db
+      .query("cashMovements")
+      .withIndex("by_org_idempotency", (q) => q.eq("orgId", args.orgId).eq("idempotencyKey", args.idempotencyKey))
+      .unique();
+    if (existing) return existing._id;
 
     const session = await ctx.db.get(args.sessionId);
     if (!session || session.orgId !== args.orgId) {
@@ -113,6 +120,7 @@ export const recordMovement = mutation({
       notes: args.notes,
       actorId: user._id,
       createdAt: Date.now(),
+      idempotencyKey: args.idempotencyKey,
     });
   },
 });
@@ -223,6 +231,9 @@ export const approveVariance = mutation({
         occurredAt: now,
         actorId: user._id,
         createdAt: now,
+        // Stable, not client-supplied: a session can only be approved once
+        // (status gate above), so this can never legitimately fire twice.
+        idempotencyKey: `bank_deposit_${args.sessionId}`,
       });
     }
 

@@ -274,6 +274,8 @@ export const salesEn = {
   MonthlyInstallment: "Monthly Installment",
   DealFinalizedSuccess: "Deal Finalized successfully! Sale record created.",
   AppApprovedSuccess: "Application Approved!",
+  AppUnderReviewSuccess: "Application marked as under review.",
+  AppRejectedSuccess: "Application rejected.",
   UploadSuccess: "Document uploaded successfully",
   UploadFail: "Upload failed",
   PendingDocs: "Pending Documents",
@@ -668,6 +670,8 @@ export const salesAr = {
   MonthlyInstallment: "القسط الشهري",
   DealFinalizedSuccess: "تم إنهاء الصفقة بنجاح! تم إنشاء سجل البيع.",
   AppApprovedSuccess: "تمت الموافقة على الطلب بنجاح!",
+  AppUnderReviewSuccess: "تم وضع علامة قيد المراجعة على الطلب.",
+  AppRejectedSuccess: "تم رفض الطلب.",
   UploadSuccess: "تم رفع المستند بنجاح",
   UploadFail: "فشل رفع المستند",
 

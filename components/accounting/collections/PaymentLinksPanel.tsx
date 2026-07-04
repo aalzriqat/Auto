@@ -186,8 +186,7 @@ function CreatePaymentLinkDialog({ open, onOpenChange }: Readonly<{ open: boolea
         idempotencyKey: idempotencyKeyRef.current,
       });
       toast.success(t("PaymentLinkCreated" as any));
-      onOpenChange(false);
-      reset();
+      handleOpenChange(false);
     } catch {
       toast.error(t("UnexpectedError" as any));
     } finally {
@@ -195,8 +194,13 @@ function CreatePaymentLinkDialog({ open, onOpenChange }: Readonly<{ open: boolea
     }
   }
 
+  function handleOpenChange(nextOpen: boolean) {
+    if (!nextOpen) reset();
+    onOpenChange(nextOpen);
+  }
+
   return (
-    <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen) reset(); onOpenChange(nextOpen); }}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-xl">
         <DialogHeader>
           <DialogTitle>{t("NewPaymentLink" as any)}</DialogTitle>
@@ -221,7 +225,7 @@ function CreatePaymentLinkDialog({ open, onOpenChange }: Readonly<{ open: boolea
           <Input value={providerAccountId} onChange={(event) => setProviderAccountId(event.target.value)} placeholder={t("ProviderAccountIdOptional" as any)} />
         </div>
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
+          <Button variant="outline" onClick={() => handleOpenChange(false)}>{t("Cancel" as any)}</Button>
           <Button onClick={submit} disabled={submitting || !selectedReceivable || !amount || !provider || (Boolean(checkoutUrl.trim()) && !externalId.trim())}>
             {submitting ? t("Saving" as any) : t("Create" as any)}
           </Button>
@@ -241,7 +245,13 @@ function SettlePaymentLinkDialog({ intent, onOpenChange }: Readonly<{ intent: Pa
 
   useEffect(() => {
     setExternalId(intent?.externalId ?? "");
+    idempotencyKeyRef.current = null;
   }, [intent]);
+
+  function handleOpenChange(nextOpen: boolean) {
+    if (!nextOpen) idempotencyKeyRef.current = null;
+    onOpenChange(nextOpen);
+  }
 
   async function submit() {
     if (!activeOrgId || !intent) return;
@@ -256,7 +266,7 @@ function SettlePaymentLinkDialog({ intent, onOpenChange }: Readonly<{ intent: Pa
       });
       idempotencyKeyRef.current = null;
       toast.success(t("PaymentLinkSettled" as any));
-      onOpenChange(false);
+      handleOpenChange(false);
     } catch {
       toast.error(t("UnexpectedError" as any));
     } finally {
@@ -265,7 +275,7 @@ function SettlePaymentLinkDialog({ intent, onOpenChange }: Readonly<{ intent: Pa
   }
 
   return (
-    <Dialog open={intent !== null} onOpenChange={onOpenChange}>
+    <Dialog open={intent !== null} onOpenChange={handleOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{t("SettlePaymentLink" as any)}</DialogTitle>
@@ -273,7 +283,7 @@ function SettlePaymentLinkDialog({ intent, onOpenChange }: Readonly<{ intent: Pa
         </DialogHeader>
         <Input value={externalId} onChange={(event) => setExternalId(event.target.value)} placeholder={t("ExternalSettlementId" as any)} />
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
+          <Button variant="outline" onClick={() => handleOpenChange(false)}>{t("Cancel" as any)}</Button>
           <Button onClick={submit} disabled={submitting}>{submitting ? t("Saving" as any) : t("MarkSettled" as any)}</Button>
         </DialogFooter>
       </DialogContent>
