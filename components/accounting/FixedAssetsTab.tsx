@@ -27,34 +27,26 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-
-// Mirrors convex/utils/money.ts CURRENCY_SCALES — duplicated here because that
-// module lives under convex/ and this is display-only decimal-place formatting,
-// not a business rule (the backend independently re-derives and validates scale).
-// Same convention as ManualJournalTab.tsx.
-const CURRENCY_SCALES: Record<string, number> = {
-  JOD: 3, KWD: 3, BHD: 3, OMR: 3,
-  USD: 2, EUR: 2, GBP: 2, SAR: 2, AED: 2, QAR: 2, EGP: 2,
-  JPY: 0,
-};
-function scaleForCurrency(currency: string): number {
-  return CURRENCY_SCALES[currency.toUpperCase()] ?? 2;
-}
-
-const todayInput = new Date().toISOString().slice(0, 10);
-function dateInputToMs(value: string): number {
-  return new Date(`${value}T00:00:00`).getTime();
-}
+import {
+  AccountingEmptyRow,
+  AccountingHistoryTable,
+  AccountingTableFrame,
+  AmountSummary,
+  CurrencyAmountInput,
+  DialogFooterActions,
+  LoadingAccountingState,
+  PaymentMethodSelect,
+  dateInputToMs,
+  errorMessage,
+  scaleForCurrency,
+  todayInput,
+  type CurrencyFormatter,
+  type PaymentMethod,
+} from "./AccountingTabShared";
 
 type FixedAsset = Doc<"fixedAssets">;
-type PaymentMethod = "CASH" | "BANK_TRANSFER" | "CHEQUE" | "CARD";
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function AssetStatusBadge({ t, asset }: { t: (key: any) => string; asset: FixedAsset }) {
+function AssetStatusBadge({ t, asset }: Readonly<{ t: (key: any) => string; asset: FixedAsset }>) {
   if (asset.costMinor == null) {
     return <Badge variant="outline" className="text-slate-500">{t("AssetStatusLegacy")}</Badge>;
   }
@@ -89,7 +81,7 @@ export function FixedAssetsTab() {
   const [disposeAsset, setDisposeAsset] = useState<FixedAsset | null>(null);
 
   if (!assets) {
-    return <div className="p-8 text-center text-slate-500">{t("LoadingAssets" as any)}</div>;
+    return <LoadingAccountingState label={t("LoadingAssets" as any)} />;
   }
 
   return (
@@ -104,7 +96,7 @@ export function FixedAssetsTab() {
         )}
       </div>
 
-      <div className="rounded-md border border-slate-200 overflow-x-auto">
+      <AccountingTableFrame>
         <Table>
           <TableHeader className="bg-slate-50">
             <TableRow>
@@ -119,11 +111,7 @@ export function FixedAssetsTab() {
           </TableHeader>
           <TableBody>
             {assets.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={7} className="text-center text-slate-500 py-8">
-                  {t("NoAssetsFound" as any)}
-                </TableCell>
-              </TableRow>
+              <AccountingEmptyRow colSpan={7} label={t("NoAssetsFound" as any)} />
             ) : (
               assets.map((asset) => {
                 const isLegacy = asset.costMinor == null;
@@ -185,7 +173,7 @@ export function FixedAssetsTab() {
             )}
           </TableBody>
         </Table>
-      </div>
+      </AccountingTableFrame>
 
       {activeOrgId && canManage && (
         <CapitalizeAssetDialog
@@ -237,12 +225,12 @@ function CapitalizeAssetDialog({
   onOpenChange,
   orgId,
   factor,
-}: {
+}: Readonly<{
   open: boolean;
   onOpenChange: (open: boolean) => void;
   orgId: Id<"organizations">;
   factor: number;
-}) {
+}>) {
   const { t } = useLanguage();
   const capitalize = useMutation(api.fixedAssets.capitalize);
 
@@ -328,16 +316,22 @@ function CapitalizeAssetDialog({
               <Label>{t("PurchaseDateLabel" as any)}</Label>
               <Input type="date" value={purchaseDate} onChange={(e) => setPurchaseDate(e.target.value)} />
             </div>
-            <div className="space-y-1.5">
-              <Label>{t("PurchaseValue" as any)}</Label>
-              <Input type="number" min={0} step={1 / factor} value={cost} onChange={(e) => setCost(e.target.value)} />
-            </div>
+            <CurrencyAmountInput
+              label={t("PurchaseValue" as any)}
+              value={cost}
+              onChange={setCost}
+              factor={factor}
+            />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label>{t("SalvageValueLabel" as any)}</Label>
-              <Input type="number" min={0} step={1 / factor} value={salvageValue} onChange={(e) => setSalvageValue(e.target.value)} />
+              <CurrencyAmountInput
+                label={t("SalvageValueLabel" as any)}
+                value={salvageValue}
+                onChange={setSalvageValue}
+                factor={factor}
+              />
               <p className="text-xs text-slate-500">{t("SalvageValueHint" as any)}</p>
             </div>
             <div className="space-y-1.5">
@@ -349,17 +343,7 @@ function CapitalizeAssetDialog({
 
           <div className="space-y-1.5">
             <Label>{t("PaymentMethodLabel" as any)}</Label>
-            <Select value={paymentMethod} onValueChange={(v) => setPaymentMethod(v as PaymentMethod)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="CASH">{t("PaymentMethod_CASH" as any)}</SelectItem>
-                <SelectItem value="BANK_TRANSFER">{t("PaymentMethod_BANK_TRANSFER" as any)}</SelectItem>
-                <SelectItem value="CHEQUE">{t("PaymentMethod_CHEQUE" as any)}</SelectItem>
-                <SelectItem value="CARD">{t("PaymentMethod_CARD" as any)}</SelectItem>
-              </SelectContent>
-            </Select>
+            <PaymentMethodSelect t={t as any} value={paymentMethod} onValueChange={setPaymentMethod} />
           </div>
 
           <div className="space-y-1.5">
@@ -369,11 +353,13 @@ function CapitalizeAssetDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
-          <Button onClick={submit} disabled={submitting} className="gap-2">
-            {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-            {t("CapitalizeNewAsset" as any)}
-          </Button>
+          <DialogFooterActions
+            cancelLabel={t("Cancel" as any)}
+            confirmLabel={t("CapitalizeNewAsset" as any)}
+            onCancel={() => onOpenChange(false)}
+            onConfirm={submit}
+            submitting={submitting}
+          />
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -387,18 +373,34 @@ function AssetEventsDialog({
   factor,
   scale,
   formatCurrency,
-}: {
+}: Readonly<{
   asset: FixedAsset | null;
   onOpenChange: (open: boolean) => void;
   orgId: Id<"organizations">;
   factor: number;
   scale: number;
-  formatCurrency: (amount: number, fractionDigits?: number) => string;
-}) {
+  formatCurrency: CurrencyFormatter;
+}>) {
   const { t } = useLanguage();
   const events = useQuery(
     api.fixedAssets.listEvents,
     asset ? { orgId, assetId: asset._id } : "skip"
+  );
+  const body = events === undefined ? (
+    <div className="flex justify-center p-8">
+      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+    </div>
+  ) : (
+    <AccountingHistoryTable
+      rows={events}
+      emptyLabel={t("NoAssetEventsFound" as any)}
+      getLabel={(event) => t(`AssetEventType_${event.type}` as any)}
+      getDate={(event) => event.occurredAt}
+      getAmountMinor={(event) => event.amountMinor}
+      factor={factor}
+      scale={scale}
+      formatCurrency={formatCurrency}
+    />
   );
 
   return (
@@ -409,27 +411,7 @@ function AssetEventsDialog({
           <DialogDescription>{asset?.name}</DialogDescription>
         </DialogHeader>
 
-        {events === undefined ? (
-          <div className="flex justify-center p-8">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-          </div>
-        ) : events.length === 0 ? (
-          <p className="text-sm text-slate-500 text-center py-8">{t("NoAssetEventsFound" as any)}</p>
-        ) : (
-          <Table>
-            <TableBody>
-              {events.map((event) => (
-                <TableRow key={event._id}>
-                  <TableCell className="text-sm">{t(`AssetEventType_${event.type}` as any)}</TableCell>
-                  <TableCell className="text-sm text-slate-500">{format(new Date(event.occurredAt), "MMM d, yyyy")}</TableCell>
-                  <TableCell className="text-sm text-right font-medium">
-                    {formatCurrency(event.amountMinor / factor, scale)}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
+        {body}
       </DialogContent>
     </Dialog>
   );
@@ -442,14 +424,14 @@ function ImpairAssetDialog({
   factor,
   scale,
   formatCurrency,
-}: {
+}: Readonly<{
   asset: FixedAsset;
   onOpenChange: (open: boolean) => void;
   orgId: Id<"organizations">;
   factor: number;
   scale: number;
-  formatCurrency: (amount: number, fractionDigits?: number) => string;
-}) {
+  formatCurrency: CurrencyFormatter;
+}>) {
   const { t } = useLanguage();
   const impair = useMutation(api.fixedAssets.impair);
   const [amount, setAmount] = useState("");
@@ -484,25 +466,27 @@ function ImpairAssetDialog({
         </DialogHeader>
 
         <div className="space-y-3">
-          <p className="text-sm text-slate-500">
-            {t("CurrentNetBookValue" as any)}: <strong>{formatCurrency(netBookMinor / factor, scale)}</strong>
-          </p>
-          <div className="space-y-1.5">
-            <Label>{t("ImpairmentAmountLabel" as any)}</Label>
-            <Input type="number" min={0} step={1 / factor} value={amount} onChange={(e) => setAmount(e.target.value)} />
-          </div>
+          <AmountSummary
+            label={t("CurrentNetBookValue" as any)}
+            value={formatCurrency(netBookMinor / factor, scale)}
+          />
+          <CurrencyAmountInput
+            label={t("ImpairmentAmountLabel" as any)}
+            value={amount}
+            onChange={setAmount}
+            factor={factor}
+          />
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
-          <Button
-            onClick={submit}
-            disabled={submitting}
-            className="gap-2 bg-amber-600 hover:bg-amber-700 text-white"
-          >
-            {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-            {t("ConfirmImpair" as any)}
-          </Button>
+          <DialogFooterActions
+            cancelLabel={t("Cancel" as any)}
+            confirmLabel={t("ConfirmImpair" as any)}
+            onCancel={() => onOpenChange(false)}
+            onConfirm={submit}
+            submitting={submitting}
+            confirmClassName="bg-amber-600 hover:bg-amber-700 text-white"
+          />
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -516,14 +500,14 @@ function DisposeAssetDialog({
   factor,
   scale,
   formatCurrency,
-}: {
+}: Readonly<{
   asset: FixedAsset;
   onOpenChange: (open: boolean) => void;
   orgId: Id<"organizations">;
   factor: number;
   scale: number;
-  formatCurrency: (amount: number, fractionDigits?: number) => string;
-}) {
+  formatCurrency: CurrencyFormatter;
+}>) {
   const { t } = useLanguage();
   const dispose = useMutation(api.fixedAssets.dispose);
   const [proceeds, setProceeds] = useState("0");
@@ -559,14 +543,17 @@ function DisposeAssetDialog({
         </DialogHeader>
 
         <div className="space-y-3">
-          <p className="text-sm text-slate-500">
-            {t("CurrentNetBookValue" as any)}: <strong>{formatCurrency(netBookMinor / factor, scale)}</strong>
-          </p>
+          <AmountSummary
+            label={t("CurrentNetBookValue" as any)}
+            value={formatCurrency(netBookMinor / factor, scale)}
+          />
           <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>{t("DisposalProceedsLabel" as any)}</Label>
-              <Input type="number" min={0} step={1 / factor} value={proceeds} onChange={(e) => setProceeds(e.target.value)} />
-            </div>
+            <CurrencyAmountInput
+              label={t("DisposalProceedsLabel" as any)}
+              value={proceeds}
+              onChange={setProceeds}
+              factor={factor}
+            />
             <div className="space-y-1.5">
               <Label>{t("PurchaseDateLabel" as any)}</Label>
               <Input type="date" value={occurredAt} onChange={(e) => setOccurredAt(e.target.value)} />
@@ -575,15 +562,14 @@ function DisposeAssetDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
-          <Button
-            onClick={submit}
-            disabled={submitting}
-            className="gap-2 bg-rose-600 hover:bg-rose-700 text-white"
-          >
-            {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-            {t("ConfirmDispose" as any)}
-          </Button>
+          <DialogFooterActions
+            cancelLabel={t("Cancel" as any)}
+            confirmLabel={t("ConfirmDispose" as any)}
+            onCancel={() => onOpenChange(false)}
+            onConfirm={submit}
+            submitting={submitting}
+            confirmClassName="bg-rose-600 hover:bg-rose-700 text-white"
+          />
         </DialogFooter>
       </DialogContent>
     </Dialog>

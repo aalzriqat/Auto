@@ -286,6 +286,91 @@ export const triggerSocialAutoReplyRetries = internalAction({
 
 // ─── GL Phase 11: monthly fixed-asset depreciation cron ──────────────────────
 
+type DepreciationOutcome = "posted" | "skippedNoOwner" | "skippedOther";
+
+type DepreciationRunStats = {
+  total: number;
+  posted: number;
+  skippedNoOwner: number;
+  skippedOther: number;
+};
+
+async function getCachedOrgOwnerUserId(
+  ctx: ActionCtx,
+  ownerByOrg: Map<string, Id<"users"> | null>,
+  orgId: Id<"organizations">
+): Promise<Id<"users"> | null> {
+  const orgKey = orgId.toString();
+  if (!ownerByOrg.has(orgKey)) {
+    const ownerUserId = await ctx.runQuery(internal.crons.getOrgOwnerUserId, { orgId });
+    ownerByOrg.set(orgKey, ownerUserId);
+  }
+  return ownerByOrg.get(orgKey) ?? null;
+}
+
+async function depreciateCronAsset(
+  ctx: ActionCtx,
+  asset: Doc<"fixedAssets">,
+  args: {
+    ownerByOrg: Map<string, Id<"users"> | null>;
+    yearMonth: string;
+    occurredAt: number;
+  }
+): Promise<DepreciationOutcome> {
+  const systemActorId = await getCachedOrgOwnerUserId(ctx, args.ownerByOrg, asset.orgId);
+  if (!systemActorId) {
+    return "skippedNoOwner";
+  }
+
+  const result = await ctx.runMutation(internal.fixedAssets.depreciateAssetForMonth, {
+    orgId: asset.orgId,
+    assetId: asset._id,
+    yearMonth: args.yearMonth,
+    occurredAt: args.occurredAt,
+    systemActorId,
+  });
+  return result.posted ? "posted" : "skippedOther";
+}
+
+function recordDepreciationOutcome(stats: DepreciationRunStats, outcome: DepreciationOutcome): void {
+  stats.total++;
+  stats[outcome]++;
+}
+
+async function runFixedAssetDepreciation(
+  ctx: ActionCtx,
+  args: { yearMonth: string; occurredAt: number }
+): Promise<DepreciationRunStats> {
+  const ownerByOrg = new Map<string, Id<"users"> | null>();
+  const stats: DepreciationRunStats = {
+    total: 0,
+    posted: 0,
+    skippedNoOwner: 0,
+    skippedOther: 0,
+  };
+
+  // Drain every page so assets past the page cap are not silently skipped.
+  let cursor: string | undefined;
+  do {
+    const page = await ctx.runQuery(internal.fixedAssets.listActiveAssetsForDepreciation, { cursor });
+    for (const asset of page.page) {
+      const outcome = await depreciateCronAsset(ctx, asset, {
+        ownerByOrg,
+        yearMonth: args.yearMonth,
+        occurredAt: args.occurredAt,
+      });
+      recordDepreciationOutcome(stats, outcome);
+    }
+    cursor = page.isDone ? undefined : page.continueCursor;
+  } while (cursor);
+
+  return stats;
+}
+
+function depreciationSummary(yearMonth: string, stats: DepreciationRunStats): string {
+  return `Depreciation ${yearMonth}: posted ${stats.posted}/${stats.total} asset(s), ${stats.skippedNoOwner} skipped (no org owner), ${stats.skippedOther} skipped (already run / not yet started / inactive / fully depreciated).`;
+}
+
 export const triggerFixedAssetDepreciation = internalAction({
   args: {},
   handler: async (ctx: ActionCtx): Promise<string> => {
@@ -293,46 +378,8 @@ export const triggerFixedAssetDepreciation = internalAction({
       const now = Date.now();
       const d = new Date(now);
       const yearMonth = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-
-      // Cache owner lookups per org — many assets typically belong to the same org.
-      const ownerByOrg = new Map<string, Id<"users"> | null>();
-      let total = 0;
-      let posted = 0;
-      let skippedNoOwner = 0;
-      let skippedOther = 0;
-
-      // Drain every page — a single capped fetch would silently skip all
-      // assets past the cap while still logging a success heartbeat.
-      let cursor: string | undefined;
-      do {
-        const page = await ctx.runQuery(internal.fixedAssets.listActiveAssetsForDepreciation, { cursor });
-        for (const asset of page.page) {
-          total++;
-          const orgKey = asset.orgId.toString();
-          if (!ownerByOrg.has(orgKey)) {
-            const ownerUserId = await ctx.runQuery(internal.crons.getOrgOwnerUserId, { orgId: asset.orgId });
-            ownerByOrg.set(orgKey, ownerUserId);
-          }
-          const systemActorId = ownerByOrg.get(orgKey);
-          if (!systemActorId) {
-            skippedNoOwner++;
-            continue;
-          }
-
-          const result = await ctx.runMutation(internal.fixedAssets.depreciateAssetForMonth, {
-            orgId: asset.orgId,
-            assetId: asset._id,
-            yearMonth,
-            occurredAt: now,
-            systemActorId,
-          });
-          if (result.posted) posted++;
-          else skippedOther++;
-        }
-        cursor = page.isDone ? undefined : page.continueCursor;
-      } while (cursor);
-
-      const summary = `Depreciation ${yearMonth}: posted ${posted}/${total} asset(s), ${skippedNoOwner} skipped (no org owner), ${skippedOther} skipped (already run / not yet started / inactive / fully depreciated).`;
+      const stats = await runFixedAssetDepreciation(ctx, { yearMonth, occurredAt: now });
+      const summary = depreciationSummary(yearMonth, stats);
       await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
         source: "fixed-asset-depreciation",
         status: "success",

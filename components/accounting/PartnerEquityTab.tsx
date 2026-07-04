@@ -11,7 +11,6 @@ import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { toast } from "@/components/ui/sonner";
-import { format } from "date-fns";
 import { Plus, History, ArrowDownToLine, ArrowUpFromLine, PieChart, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -27,29 +26,26 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-
-// Mirrors convex/utils/money.ts CURRENCY_SCALES — display-only formatting,
-// same convention as FixedAssetsTab.tsx / ManualJournalTab.tsx.
-const CURRENCY_SCALES: Record<string, number> = {
-  JOD: 3, KWD: 3, BHD: 3, OMR: 3,
-  USD: 2, EUR: 2, GBP: 2, SAR: 2, AED: 2, QAR: 2, EGP: 2,
-  JPY: 0,
-};
-function scaleForCurrency(currency: string): number {
-  return CURRENCY_SCALES[currency.toUpperCase()] ?? 2;
-}
+import {
+  AccountingEmptyRow,
+  AccountingHistoryTable,
+  AccountingTableFrame,
+  AmountSummary,
+  CurrencyAmountInput,
+  DialogFooterActions,
+  LoadingAccountingState,
+  PaymentMethodSelect,
+  errorMessage,
+  scaleForCurrency,
+  type CurrencyFormatter,
+  type PaymentMethod,
+} from "./AccountingTabShared";
 
 type MovementType = "CONTRIBUTION" | "DRAW" | "PROFIT_DISTRIBUTION";
-type PaymentMethod = "CASH" | "BANK_TRANSFER" | "CHEQUE" | "CARD";
 
 type PartnerRow = NonNullable<
   ReturnType<typeof usePaginatedQuery<typeof api.partnerEquity.list>>["results"]
 >[number];
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 const MOVEMENT_META: Record<MovementType, { titleKey: string; descKey: string; needsPayment: boolean }> = {
   CONTRIBUTION: { titleKey: "RecordContribution", descKey: "RecordContributionDesc", needsPayment: true },
@@ -78,7 +74,7 @@ export function PartnerEquityTab() {
   const [historyPartner, setHistoryPartner] = useState<PartnerRow | null>(null);
 
   if (!partners) {
-    return <div className="p-8 text-center text-slate-500">{t("LoadingEquity" as any)}</div>;
+    return <LoadingAccountingState label={t("LoadingEquity" as any)} />;
   }
 
   return (
@@ -93,7 +89,7 @@ export function PartnerEquityTab() {
         )}
       </div>
 
-      <div className="rounded-md border border-slate-200 overflow-x-auto">
+      <AccountingTableFrame>
         <Table>
           <TableHeader className="bg-slate-50">
             <TableRow>
@@ -105,11 +101,7 @@ export function PartnerEquityTab() {
           </TableHeader>
           <TableBody>
             {partners.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={4} className="text-center text-slate-500 py-8">
-                  {t("NoEquityFound" as any)}
-                </TableCell>
-              </TableRow>
+              <AccountingEmptyRow colSpan={4} label={t("NoEquityFound" as any)} />
             ) : (
               partners.map((partner) => {
                 const hasLegacyBase = (partner.currentBalance ?? 0) !== 0 || (partner.initialCapital ?? 0) !== 0;
@@ -173,7 +165,7 @@ export function PartnerEquityTab() {
             )}
           </TableBody>
         </Table>
-      </div>
+      </AccountingTableFrame>
 
       {activeOrgId && canManage && (
         <AddPartnerDialog open={addOpen} onOpenChange={setAddOpen} orgId={activeOrgId} factor={factor} />
@@ -210,12 +202,12 @@ function AddPartnerDialog({
   onOpenChange,
   orgId,
   factor,
-}: {
+}: Readonly<{
   open: boolean;
   onOpenChange: (open: boolean) => void;
   orgId: Id<"organizations">;
   factor: number;
-}) {
+}>) {
   const { t } = useLanguage();
   const addPartner = useMutation(api.partnerEquity.add);
 
@@ -276,23 +268,15 @@ function AddPartnerDialog({
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>{t("OpeningContributionLabel" as any)}</Label>
-              <Input type="number" min={0} step={1 / factor} value={openingContribution} onChange={(e) => setOpeningContribution(e.target.value)} />
-            </div>
+            <CurrencyAmountInput
+              label={t("OpeningContributionLabel" as any)}
+              value={openingContribution}
+              onChange={setOpeningContribution}
+              factor={factor}
+            />
             <div className="space-y-1.5">
               <Label>{t("PaymentMethodLabel" as any)}</Label>
-              <Select value={paymentMethod} onValueChange={(v) => setPaymentMethod(v as PaymentMethod)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="CASH">{t("PaymentMethod_CASH" as any)}</SelectItem>
-                  <SelectItem value="BANK_TRANSFER">{t("PaymentMethod_BANK_TRANSFER" as any)}</SelectItem>
-                  <SelectItem value="CHEQUE">{t("PaymentMethod_CHEQUE" as any)}</SelectItem>
-                  <SelectItem value="CARD">{t("PaymentMethod_CARD" as any)}</SelectItem>
-                </SelectContent>
-              </Select>
+              <PaymentMethodSelect t={t as any} value={paymentMethod} onValueChange={setPaymentMethod} />
             </div>
           </div>
 
@@ -303,11 +287,13 @@ function AddPartnerDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
-          <Button onClick={submit} disabled={submitting} className="gap-2">
-            {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-            {t("AddPartner" as any)}
-          </Button>
+          <DialogFooterActions
+            cancelLabel={t("Cancel" as any)}
+            confirmLabel={t("AddPartner" as any)}
+            onCancel={() => onOpenChange(false)}
+            onConfirm={submit}
+            submitting={submitting}
+          />
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -322,15 +308,15 @@ function MovementDialog({
   factor,
   scale,
   formatCurrency,
-}: {
+}: Readonly<{
   partner: PartnerRow;
   type: MovementType;
   onOpenChange: (open: boolean) => void;
   orgId: Id<"organizations">;
   factor: number;
   scale: number;
-  formatCurrency: (amount: number, fractionDigits?: number) => string;
-}) {
+  formatCurrency: CurrencyFormatter;
+}>) {
   const { t } = useLanguage();
   const recordMovement = useMutation(api.partnerEquity.recordEquityMovement);
   const [amount, setAmount] = useState("");
@@ -374,29 +360,22 @@ function MovementDialog({
         </DialogHeader>
 
         <div className="space-y-4">
-          <p className="text-sm text-slate-500">
-            {t("CurrentBalance" as any)}: <strong>{formatCurrency(partner.balanceMinor / factor, scale)}</strong>
-          </p>
+          <AmountSummary
+            label={t("CurrentBalance" as any)}
+            value={formatCurrency(partner.balanceMinor / factor, scale)}
+          />
 
-          <div className="space-y-1.5">
-            <Label>{t("AmountLabel" as any)}</Label>
-            <Input type="number" min={0} step={1 / factor} value={amount} onChange={(e) => setAmount(e.target.value)} />
-          </div>
+          <CurrencyAmountInput
+            label={t("AmountLabel" as any)}
+            value={amount}
+            onChange={setAmount}
+            factor={factor}
+          />
 
           {meta.needsPayment && (
             <div className="space-y-1.5">
               <Label>{t("PaymentMethodLabel" as any)}</Label>
-              <Select value={paymentMethod} onValueChange={(v) => setPaymentMethod(v as PaymentMethod)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="CASH">{t("PaymentMethod_CASH" as any)}</SelectItem>
-                  <SelectItem value="BANK_TRANSFER">{t("PaymentMethod_BANK_TRANSFER" as any)}</SelectItem>
-                  <SelectItem value="CHEQUE">{t("PaymentMethod_CHEQUE" as any)}</SelectItem>
-                  <SelectItem value="CARD">{t("PaymentMethod_CARD" as any)}</SelectItem>
-                </SelectContent>
-              </Select>
+              <PaymentMethodSelect t={t as any} value={paymentMethod} onValueChange={setPaymentMethod} />
             </div>
           )}
 
@@ -407,11 +386,13 @@ function MovementDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
-          <Button onClick={submit} disabled={submitting} className="gap-2">
-            {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-            {t(meta.titleKey as any)}
-          </Button>
+          <DialogFooterActions
+            cancelLabel={t("Cancel" as any)}
+            confirmLabel={t(meta.titleKey as any)}
+            onCancel={() => onOpenChange(false)}
+            onConfirm={submit}
+            submitting={submitting}
+          />
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -425,18 +406,36 @@ function PartnerHistoryDialog({
   factor,
   scale,
   formatCurrency,
-}: {
+}: Readonly<{
   partner: PartnerRow | null;
   onOpenChange: (open: boolean) => void;
   orgId: Id<"organizations">;
   factor: number;
   scale: number;
-  formatCurrency: (amount: number, fractionDigits?: number) => string;
-}) {
+  formatCurrency: CurrencyFormatter;
+}>) {
   const { t } = useLanguage();
   const transactions = useQuery(
     api.partnerEquity.listTransactions,
     partner ? { orgId, partnerId: partner._id } : "skip"
+  );
+  const body = transactions === undefined ? (
+    <div className="flex justify-center p-8">
+      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+    </div>
+  ) : (
+    <AccountingHistoryTable
+      rows={transactions}
+      emptyLabel={t("NoEquityMovements" as any)}
+      getLabel={(tx) => t(`EquityMovement_${tx.type}` as any)}
+      getDate={(tx) => tx.occurredAt}
+      getAmountMinor={(tx) => tx.amountMinor}
+      getAmountPrefix={(tx) => (tx.type === "DRAW" ? "-" : "+")}
+      getAmountClassName={(tx) => (tx.type === "DRAW" ? "text-rose-600" : "text-emerald-700")}
+      factor={factor}
+      scale={scale}
+      formatCurrency={formatCurrency}
+    />
   );
 
   return (
@@ -447,27 +446,7 @@ function PartnerHistoryDialog({
           <DialogDescription>{partner?.partnerName}</DialogDescription>
         </DialogHeader>
 
-        {transactions === undefined ? (
-          <div className="flex justify-center p-8">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-          </div>
-        ) : transactions.length === 0 ? (
-          <p className="text-sm text-slate-500 text-center py-8">{t("NoEquityMovements" as any)}</p>
-        ) : (
-          <Table>
-            <TableBody>
-              {transactions.map((tx) => (
-                <TableRow key={tx._id}>
-                  <TableCell className="text-sm">{t(`EquityMovement_${tx.type}` as any)}</TableCell>
-                  <TableCell className="text-sm text-slate-500">{format(new Date(tx.occurredAt), "MMM d, yyyy")}</TableCell>
-                  <TableCell className={`text-sm text-right font-medium ${tx.type === "DRAW" ? "text-rose-600" : "text-emerald-700"}`}>
-                    {tx.type === "DRAW" ? "-" : "+"}{formatCurrency(tx.amountMinor / factor, scale)}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        )}
+        {body}
       </DialogContent>
     </Dialog>
   );

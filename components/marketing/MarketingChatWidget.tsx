@@ -90,7 +90,7 @@ type BotStep =
 function getOrCreateLeadId(): string {
   let id = window.localStorage.getItem(LEAD_ID_STORAGE_KEY);
   if (!id) {
-    id = `lead_${window.crypto.randomUUID()}`;
+    id = `lead_${globalThis.crypto.randomUUID()}`;
     window.localStorage.setItem(LEAD_ID_STORAGE_KEY, id);
   }
   return id;
@@ -151,7 +151,7 @@ function MarketingChatWidgetImpl() {
   function pushTranscript(entries: Omit<TranscriptEntry, "id">[]) {
     setTranscript((prev) => [
       ...prev,
-      ...entries.map((entry) => ({ ...entry, id: window.crypto.randomUUID() })),
+      ...entries.map((entry) => ({ ...entry, id: globalThis.crypto.randomUUID() })),
     ]);
   }
 

@@ -56,28 +56,20 @@ export function ManualFinanceCard({
 
   return (
     <div
-      onClick={onSelect}
-      onKeyDown={(e) => {
-        if (e.currentTarget !== e.target) return;
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          onSelect();
-        }
-      }}
-      role="button"
-      tabIndex={0}
-      aria-pressed={selected}
       className={cn(
-        "text-start rounded-xl border transition-all duration-200 overflow-hidden cursor-pointer",
+        "text-start rounded-xl border transition-all duration-200 overflow-hidden",
         selected
           ? "border-indigo-500 ring-2 ring-indigo-500/30 shadow-lg shadow-indigo-500/10"
           : "border-border hover:border-indigo-500/50 hover:shadow-md"
       )}
     >
       {/* Header */}
-      <div
+      <button
+        type="button"
+        onClick={onSelect}
+        aria-pressed={selected}
         className={cn(
-          "px-4 py-3 border-b flex items-center justify-between",
+          "w-full px-4 py-3 border-b flex items-center justify-between text-start",
           selected
             ? "bg-indigo-500/10 border-indigo-500/30"
             : "bg-muted/30 border-border"
@@ -96,7 +88,7 @@ export function ManualFinanceCard({
             <Check className="w-3 h-3 text-white" />
           </div>
         )}
-      </div>
+      </button>
 
       {/* Rate inputs */}
       <div
@@ -191,16 +183,20 @@ export function ManualFinanceCard({
       </div>
 
       {/* Monthly installment */}
-      <div className="px-4 pt-3 pb-2 text-center bg-gradient-to-b from-background to-muted/10">
+      <button
+        type="button"
+        onClick={onSelect}
+        className="w-full px-4 pt-3 pb-2 text-center bg-gradient-to-b from-background to-muted/10"
+      >
         <p className="text-xs text-muted-foreground mb-0.5">{t("MonthlyInstallment" as any)}</p>
         <p className={cn("text-2xl font-bold", selected ? "text-indigo-400" : "text-foreground")}>
           {result.monthlyInstallment.toLocaleString(undefined, { minimumFractionDigits: 2 })}
           <span className="text-sm font-normal text-muted-foreground ms-1">{t("JOD" as any)}</span>
         </p>
-      </div>
+      </button>
 
       {/* Details */}
-      <div className="px-4 pb-3 space-y-1.5 text-xs">
+      <button type="button" onClick={onSelect} className="w-full px-4 pb-3 space-y-1.5 text-xs text-start">
         <div className="flex justify-between text-muted-foreground">
           <span>{t("FinancedAmount" as any)}</span>
           <span className="font-medium text-foreground">
@@ -223,7 +219,7 @@ export function ManualFinanceCard({
             </span>
           </div>
         )}
-      </div>
+      </button>
     </div>
   );
 }

@@ -141,26 +141,37 @@ export default function CustomersPage() {
           <div
             key={customer._id}
             id={`row-${customer._id}`}
-            className={`rounded-xl border bg-card p-4 space-y-2 cursor-pointer active:bg-muted/50 ${highlightId === customer._id ? "ring-2 ring-primary" : ""}`}
-            onClick={() => handleRowClick(customer._id)}
-            onKeyDown={(e) => {
-              if (e.currentTarget !== e.target) return;
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                handleRowClick(customer._id);
-              }
-            }}
-            role="button"
-            tabIndex={0}
+            className={`rounded-xl border bg-card p-4 space-y-2 active:bg-muted/50 ${highlightId === customer._id ? "ring-2 ring-primary" : ""}`}
           >
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-sm shrink-0">
-                  {customer.firstName.charAt(0).toUpperCase()}
-                </div>
-                <p className="font-semibold text-sm truncate">{customer.firstName} {customer.lastName}</p>
-              </div>
-              <div className="flex gap-0.5 shrink-0" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-2">
+              <button
+                type="button"
+                className="min-w-0 flex-1 text-start"
+                onClick={() => handleRowClick(customer._id)}
+              >
+                <span className="flex items-center gap-3 min-w-0">
+                  <span className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-sm shrink-0">
+                    {customer.firstName.charAt(0).toUpperCase()}
+                  </span>
+                  <span className="font-semibold text-sm truncate">{customer.firstName} {customer.lastName}</span>
+                </span>
+                <span className="mt-2 flex flex-col gap-1 text-xs text-muted-foreground ps-12">
+                  {customer.email && (
+                    <span className="flex items-center gap-1">
+                      <Mail className="h-3 w-3 shrink-0" />
+                      <span className="truncate">{customer.email}</span>
+                    </span>
+                  )}
+                  {(customer.phone || customer.whatsapp) && (
+                    <span className="flex items-center gap-1">
+                      <Phone className="h-3 w-3 shrink-0" />
+                      <span>{customer.phone || customer.whatsapp}</span>
+                    </span>
+                  )}
+                  {customer.nationalId && <span>{t("NationalID" as any)}: {customer.nationalId}</span>}
+                </span>
+              </button>
+              <div className="flex gap-0.5 shrink-0">
                 <Button variant="ghost" size="icon" className="h-10 w-10" onClick={(e) => handleEdit(customer, e)}>
                   <Pencil className="h-4 w-4 text-muted-foreground" />
                 </Button>
@@ -168,11 +179,6 @@ export default function CustomersPage() {
                   <Trash2 className="h-4 w-4 text-red-500" />
                 </Button>
               </div>
-            </div>
-            <div className="flex flex-col gap-1 text-xs text-muted-foreground ps-12">
-              {customer.email && <div className="flex items-center gap-1"><Mail className="h-3 w-3 shrink-0" /><span className="truncate">{customer.email}</span></div>}
-              {(customer.phone || customer.whatsapp) && <div className="flex items-center gap-1"><Phone className="h-3 w-3 shrink-0" /><span>{customer.phone || customer.whatsapp}</span></div>}
-              {customer.nationalId && <span>{t("NationalID" as any)}: {customer.nationalId}</span>}
             </div>
           </div>
         ))}

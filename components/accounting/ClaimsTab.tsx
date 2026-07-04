@@ -12,7 +12,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { toast } from "@/components/ui/sonner";
 import { format } from "date-fns";
-import { Plus, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { Plus, CheckCircle2, XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -27,30 +27,23 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-
-// Mirrors convex/utils/money.ts CURRENCY_SCALES — display-only formatting,
-// same convention as the other accounting tabs.
-const CURRENCY_SCALES: Record<string, number> = {
-  JOD: 3, KWD: 3, BHD: 3, OMR: 3,
-  USD: 2, EUR: 2, GBP: 2, SAR: 2, AED: 2, QAR: 2, EGP: 2,
-  JPY: 0,
-};
-function scaleForCurrency(currency: string): number {
-  return CURRENCY_SCALES[currency.toUpperCase()] ?? 2;
-}
-
-const todayInput = new Date().toISOString().slice(0, 10);
-function dateInputToMs(value: string): number {
-  return new Date(`${value}T00:00:00`).getTime();
-}
+import {
+  AccountingEmptyRow,
+  AccountingTableFrame,
+  AmountSummary,
+  CurrencyAmountInput,
+  DialogFooterActions,
+  LoadingAccountingState,
+  PaymentMethodSelect,
+  dateInputToMs,
+  errorMessage,
+  scaleForCurrency,
+  todayInput,
+  type CurrencyFormatter,
+  type PaymentMethod,
+} from "./AccountingTabShared";
 
 type Claim = Doc<"claims">;
-type PaymentMethod = "CASH" | "BANK_TRANSFER" | "CHEQUE" | "CARD";
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
 
 const STATUS_BADGE_CLASS: Record<Claim["status"], string> = {
   PENDING: "bg-yellow-500/10 text-yellow-600 border-yellow-500/20",
@@ -80,7 +73,7 @@ export function ClaimsTab() {
   const [rejectClaim, setRejectClaim] = useState<Claim | null>(null);
 
   if (!claims) {
-    return <div className="p-8 text-center text-slate-500">{t("LoadingClaims" as any)}</div>;
+    return <LoadingAccountingState label={t("LoadingClaims" as any)} />;
   }
 
   return (
@@ -95,7 +88,7 @@ export function ClaimsTab() {
         )}
       </div>
 
-      <div className="rounded-md border border-slate-200 overflow-x-auto">
+      <AccountingTableFrame>
         <Table>
           <TableHeader className="bg-slate-50">
             <TableRow>
@@ -109,11 +102,7 @@ export function ClaimsTab() {
           </TableHeader>
           <TableBody>
             {claims.length === 0 ? (
-              <TableRow>
-                <TableCell colSpan={6} className="text-center text-slate-500 py-8">
-                  {t("NoClaimsFound" as any)}
-                </TableCell>
-              </TableRow>
+              <AccountingEmptyRow colSpan={6} label={t("NoClaimsFound" as any)} />
             ) : (
               claims.map((claim) => {
                 const isLegacy = claim.claimAmountMinor == null;
@@ -164,7 +153,7 @@ export function ClaimsTab() {
             )}
           </TableBody>
         </Table>
-      </div>
+      </AccountingTableFrame>
 
       {activeOrgId && canManage && (
         <NewClaimDialog open={newOpen} onOpenChange={setNewOpen} orgId={activeOrgId} factor={factor} />
@@ -200,12 +189,12 @@ function NewClaimDialog({
   onOpenChange,
   orgId,
   factor,
-}: {
+}: Readonly<{
   open: boolean;
   onOpenChange: (open: boolean) => void;
   orgId: Id<"organizations">;
   factor: number;
-}) {
+}>) {
   const { t } = useLanguage();
   const addClaim = useMutation(api.claims.add);
 
@@ -275,10 +264,12 @@ function NewClaimDialog({
           </div>
 
           <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>{t("ClaimAmount" as any)}</Label>
-              <Input type="number" min={0} step={1 / factor} value={amount} onChange={(e) => setAmount(e.target.value)} />
-            </div>
+            <CurrencyAmountInput
+              label={t("ClaimAmount" as any)}
+              value={amount}
+              onChange={setAmount}
+              factor={factor}
+            />
             <div className="space-y-1.5">
               <Label>{t("ClaimDateLabel" as any)}</Label>
               <Input type="date" value={claimDate} onChange={(e) => setClaimDate(e.target.value)} />
@@ -292,11 +283,13 @@ function NewClaimDialog({
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
-          <Button onClick={submit} disabled={submitting} className="gap-2">
-            {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-            {t("NewClaim" as any)}
-          </Button>
+          <DialogFooterActions
+            cancelLabel={t("Cancel" as any)}
+            confirmLabel={t("NewClaim" as any)}
+            onCancel={() => onOpenChange(false)}
+            onConfirm={submit}
+            submitting={submitting}
+          />
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -310,14 +303,14 @@ function SettleClaimDialog({
   factor,
   scale,
   formatCurrency,
-}: {
+}: Readonly<{
   claim: Claim;
   onOpenChange: (open: boolean) => void;
   orgId: Id<"organizations">;
   factor: number;
   scale: number;
-  formatCurrency: (amount: number, fractionDigits?: number) => string;
-}) {
+  formatCurrency: CurrencyFormatter;
+}>) {
   const { t } = useLanguage();
   const settle = useMutation(api.claims.settle);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("BANK_TRANSFER");
@@ -347,36 +340,31 @@ function SettleClaimDialog({
         </DialogHeader>
 
         <div className="space-y-4">
-          <p className="text-sm text-slate-500">
-            {t("ClaimAmount" as any)}: <strong>{formatCurrency((claim.claimAmountMinor ?? 0) / factor, scale)}</strong>
-          </p>
+          <AmountSummary
+            label={t("ClaimAmount" as any)}
+            value={formatCurrency((claim.claimAmountMinor ?? 0) / factor, scale)}
+          />
 
           <div className="space-y-1.5">
             <Label>{t("PaymentMethodLabel" as any)}</Label>
-            <Select value={paymentMethod} onValueChange={(v) => setPaymentMethod(v as PaymentMethod)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="BANK_TRANSFER">{t("PaymentMethod_BANK_TRANSFER" as any)}</SelectItem>
-                <SelectItem value="CASH">{t("PaymentMethod_CASH" as any)}</SelectItem>
-                <SelectItem value="CHEQUE">{t("PaymentMethod_CHEQUE" as any)}</SelectItem>
-                <SelectItem value="CARD">{t("PaymentMethod_CARD" as any)}</SelectItem>
-              </SelectContent>
-            </Select>
+            <PaymentMethodSelect
+              t={t as any}
+              value={paymentMethod}
+              onValueChange={setPaymentMethod}
+              methods={["BANK_TRANSFER", "CASH", "CHEQUE", "CARD"]}
+            />
           </div>
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
-          <Button
-            onClick={submit}
-            disabled={submitting}
-            className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white"
-          >
-            {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-            {t("ConfirmSettle" as any)}
-          </Button>
+          <DialogFooterActions
+            cancelLabel={t("Cancel" as any)}
+            confirmLabel={t("ConfirmSettle" as any)}
+            onCancel={() => onOpenChange(false)}
+            onConfirm={submit}
+            submitting={submitting}
+            confirmClassName="bg-emerald-600 hover:bg-emerald-700 text-white"
+          />
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -390,14 +378,14 @@ function RejectClaimDialog({
   factor,
   scale,
   formatCurrency,
-}: {
+}: Readonly<{
   claim: Claim;
   onOpenChange: (open: boolean) => void;
   orgId: Id<"organizations">;
   factor: number;
   scale: number;
-  formatCurrency: (amount: number, fractionDigits?: number) => string;
-}) {
+  formatCurrency: CurrencyFormatter;
+}>) {
   const { t } = useLanguage();
   const reject = useMutation(api.claims.reject);
   const [submitting, setSubmitting] = useState(false);
@@ -425,21 +413,20 @@ function RejectClaimDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <p className="text-sm text-slate-500">
-          {t("ClaimAmount" as any)}: <strong>{formatCurrency((claim.claimAmountMinor ?? 0) / factor, scale)}</strong>
-        </p>
+        <AmountSummary
+          label={t("ClaimAmount" as any)}
+          value={formatCurrency((claim.claimAmountMinor ?? 0) / factor, scale)}
+        />
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
-          <Button
-            onClick={submit}
-            disabled={submitting}
-            variant="destructive"
-            className="gap-2"
-          >
-            {submitting && <Loader2 className="w-4 h-4 animate-spin" />}
-            {t("ConfirmReject" as any)}
-          </Button>
+          <DialogFooterActions
+            cancelLabel={t("Cancel" as any)}
+            confirmLabel={t("ConfirmReject" as any)}
+            onCancel={() => onOpenChange(false)}
+            onConfirm={submit}
+            submitting={submitting}
+            confirmVariant="destructive"
+          />
         </DialogFooter>
       </DialogContent>
     </Dialog>
