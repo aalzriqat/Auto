@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import {
@@ -293,7 +294,7 @@ export function ManualJournalTab() {
 
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <FormLabel>{t("JournalLines")}</FormLabel>
+                    <Label>{t("JournalLines")}</Label>
                     <Button
                       type="button"
                       variant="outline"
