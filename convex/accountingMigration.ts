@@ -14,6 +14,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { postAccountingEvent } from "./accounting/postingEngine";
 import { getOrgCurrency } from "./accounting/workflowHooks";
+import { ensurePartnerEquityAccounts } from "./chartOfAccounts";
 import { toMinorUnits } from "./utils/money";
 import { requireFeature } from "./subscriptions";
 
@@ -36,6 +37,11 @@ function mapCategoryToEventType(category: string, type: string): string | null {
   if (category === "DEPOSIT") return type === "IN" ? "DEPOSIT_RECEIVED" : "DEPOSIT_REFUNDED";
   if (category === "COLLECTION_PAYMENT") return "COLLECTION_PAYMENT";
   if (category === "EXPENSE") return "EXPENSE_POSTED";
+  // GL Phase 12 closed the equity skip gap: these post through the partner
+  // equity rules without a partnerId (legacy rows never recorded which
+  // partner — the rules treat it as optional metadata).
+  if (category === "PARTNER_DRAW") return "PARTNER_DREW";
+  if (category === "CAPITAL_INJECTION") return "CAPITAL_CONTRIBUTED";
   return null;
 }
 
@@ -241,6 +247,13 @@ export const migrateUnpostedTransactions = mutation({
       .take(limit * 10);
 
     const currency = await getOrgCurrency(ctx, args.orgId);
+    // Migration posts directly through postAccountingEvent (not the domain
+    // hooks), so the Phase 12 equity accounts must be self-healed here —
+    // otherwise migrating PARTNER_DRAW/CAPITAL_INJECTION rows on an older
+    // chart fails to resolve PARTNER_CAPITAL/PARTNER_DRAWINGS.
+    if (!dryRun) {
+      await ensurePartnerEquityAccounts(ctx, args.orgId, user._id);
+    }
     const results: Array<{ transactionId: string; action: string; eventType: string | null; reason?: string }> = [];
 
     for (const tx of txns) {
@@ -296,11 +309,13 @@ export const migrateUnpostedTransactions = mutation({
         } else if (eventType === "SALE_COMPLETED") {
           payload.saleId = tx._id.toString();
           payload.saleAmountMinor = amountMinor;
+        } else if (eventType === "PARTNER_DREW" || eventType === "CAPITAL_CONTRIBUTED") {
+          payload.paymentMethod = "CASH";
         }
 
         await postAccountingEvent(ctx, {
           orgId: args.orgId,
-          eventType: eventType as "EXPENSE_POSTED" | "COLLECTION_PAYMENT" | "DEPOSIT_RECEIVED" | "DEPOSIT_REFUNDED" | "SALE_COMPLETED",
+          eventType: eventType as "EXPENSE_POSTED" | "COLLECTION_PAYMENT" | "DEPOSIT_RECEIVED" | "DEPOSIT_REFUNDED" | "SALE_COMPLETED" | "PARTNER_DREW" | "CAPITAL_CONTRIBUTED",
           sourceType: "transactions",
           sourceId: tx._id.toString(),
           eventVersion: 1,

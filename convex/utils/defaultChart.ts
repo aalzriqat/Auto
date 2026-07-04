@@ -26,6 +26,8 @@ export const SYSTEM_KEYS = {
   GAIN_ON_DISPOSAL: "GAIN_ON_DISPOSAL",
   LOSS_ON_DISPOSAL: "LOSS_ON_DISPOSAL",
   IMPAIRMENT_LOSS: "IMPAIRMENT_LOSS",
+  PARTNER_CAPITAL: "PARTNER_CAPITAL",
+  PARTNER_DRAWINGS: "PARTNER_DRAWINGS",
 } as const;
 
 export type SystemKey = typeof SYSTEM_KEYS[keyof typeof SYSTEM_KEYS];
@@ -232,6 +234,28 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     isControlAccount: false,
     allowManualPosting: false,
     systemKey: SYSTEM_KEYS.RETAINED_EARNINGS,
+  },
+  {
+    code: "3200",
+    name: "Partner Capital",
+    nameAr: "رأس مال الشركاء",
+    type: "EQUITY",
+    normalBalance: "CREDIT",
+    isControlAccount: true,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.PARTNER_CAPITAL,
+  },
+  {
+    // Contra-equity: a partner draw reduces equity, so this account carries a
+    // DEBIT normal balance against the CREDIT-normal Partner Capital above.
+    code: "3300",
+    name: "Partner Drawings",
+    nameAr: "مسحوبات الشركاء",
+    type: "EQUITY",
+    normalBalance: "DEBIT",
+    isControlAccount: true,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.PARTNER_DRAWINGS,
   },
 
   // ── Revenue ──────────────────────────────────────────────────────────────

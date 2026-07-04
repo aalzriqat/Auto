@@ -25,6 +25,9 @@ export type EventType =
   | "DEPRECIATION_POSTED"
   | "ASSET_IMPAIRED"
   | "ASSET_DISPOSED"
+  | "CAPITAL_CONTRIBUTED"
+  | "PARTNER_DREW"
+  | "PROFIT_DISTRIBUTED"
   | "JOURNAL_REVERSAL";
 
 export const ALL_EVENT_TYPES = new Set<string>([
@@ -35,6 +38,7 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "FINANCE_DISBURSED", "FINANCE_CASH_RECEIVED", "PAYMENT_LINK_RECEIVED",
   "SUPPLIER_PAYMENT_SETTLED",
   "ASSET_CAPITALIZED", "DEPRECIATION_POSTED", "ASSET_IMPAIRED", "ASSET_DISPOSED",
+  "CAPITAL_CONTRIBUTED", "PARTNER_DREW", "PROFIT_DISTRIBUTED",
   // JOURNAL_REVERSAL is intentionally excluded: it is written directly by
   // reverseAccountingEvent() in reversals.ts and never goes through postAccountingEvent().
 ]);
@@ -593,6 +597,63 @@ export function ruleAssetDisposed(p: AssetDisposedPayload): RuleResult {
   return { lines, memo: "Fixed asset disposed", category: "SYSTEM" };
 }
 
+// ─── GL Phase 12: partner equity movements ────────────────────────────────────
+
+/**
+ * partnerId is optional metadata: journal lines carry no partner dimension,
+ * and Phase 6 legacy-transaction migration posts these events for old
+ * PARTNER_DRAW/CAPITAL_INJECTION rows that never recorded which partner.
+ */
+export interface PartnerEquityMovementPayload {
+  partnerId?: string;
+  amountMinor: number;
+  currency: string;
+  paymentMethod?: string;
+}
+
+export function ruleCapitalContributed(p: PartnerEquityMovementPayload): RuleResult {
+  // Inbound money: a cheque handed over by the partner genuinely sits in
+  // CHEQUES_IN_HAND, so the shared inbound mapper applies as-is.
+  const cashKey = cashAccountKey(p.paymentMethod);
+  return {
+    lines: [
+      line(cashKey, p.amountMinor, 0, "Capital contribution received"),
+      line(SYSTEM_KEYS.PARTNER_CAPITAL, 0, p.amountMinor, "Partner capital"),
+    ],
+    memo: "Partner capital contributed",
+    category: "SYSTEM",
+  };
+}
+
+export function rulePartnerDrew(p: PartnerEquityMovementPayload): RuleResult {
+  // Outbound payment — same reasoning as refundDisbursementAccountKey and
+  // ruleAssetCapitalized: our own cheque clears from the bank.
+  const cashKey = p.paymentMethod === "CHEQUE"
+    ? SYSTEM_KEYS.BANK_ACCOUNT
+    : cashAccountKey(p.paymentMethod);
+  return {
+    lines: [
+      line(SYSTEM_KEYS.PARTNER_DRAWINGS, p.amountMinor, 0, "Partner draw"),
+      line(cashKey, 0, p.amountMinor, "Draw paid out"),
+    ],
+    memo: "Partner draw",
+    category: "SYSTEM",
+  };
+}
+
+export function ruleProfitDistributed(p: PartnerEquityMovementPayload): RuleResult {
+  // Pure equity reclassification — accumulated profit becomes partner
+  // capital; no cash moves until the partner later draws it.
+  return {
+    lines: [
+      line(SYSTEM_KEYS.RETAINED_EARNINGS, p.amountMinor, 0, "Profit distributed to partner"),
+      line(SYSTEM_KEYS.PARTNER_CAPITAL, 0, p.amountMinor, "Partner capital increased"),
+    ],
+    memo: "Profit distributed to partner capital",
+    category: "SYSTEM",
+  };
+}
+
 // ─── Dispatch ─────────────────────────────────────────────────────────────────
 
 export function applyPostingRule(eventType: string, payload: Record<string, unknown>): RuleResult {
@@ -620,6 +681,9 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "DEPRECIATION_POSTED": return ruleDepreciationPosted(payload as unknown as DepreciationPostedPayload);
     case "ASSET_IMPAIRED": return ruleAssetImpaired(payload as unknown as AssetImpairedPayload);
     case "ASSET_DISPOSED": return ruleAssetDisposed(payload as unknown as AssetDisposedPayload);
+    case "CAPITAL_CONTRIBUTED": return ruleCapitalContributed(payload as unknown as PartnerEquityMovementPayload);
+    case "PARTNER_DREW": return rulePartnerDrew(payload as unknown as PartnerEquityMovementPayload);
+    case "PROFIT_DISTRIBUTED": return ruleProfitDistributed(payload as unknown as PartnerEquityMovementPayload);
     default:
       throw new Error(`No posting rule defined for event type: ${eventType}`);
   }

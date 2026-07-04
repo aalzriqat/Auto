@@ -1605,14 +1605,40 @@ export default defineSchema({
     orgId: v.id("organizations"),
     partnerName: v.string(), // e.g., "علاء جراد"
     userId: v.optional(v.id("users")),
-    initialCapital: v.number(),
-    currentBalance: v.number(), // Automatically calculated: Capital - Draws + Profit Share
+    // Legacy major-unit fields, frozen as of GL Phase 12 — no mutation writes
+    // them anymore. currentBalance acts as the partner's pre-Phase-12 opening
+    // base; live balances derive from partnerEquityTransactions on top of it.
+    // Narrowing/backfill happens in GL Phase 17.
+    initialCapital: v.optional(v.number()),
+    currentBalance: v.optional(v.number()),
     notes: v.optional(v.string()),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
     deletedBy: v.optional(v.string()),
   })
     .index("by_org", ["orgId"]),
+
+  // GL Phase 12: immutable equity movements — the source of truth behind each
+  // partner's balance. Append-only; corrections are new offsetting entries,
+  // never edits.
+  partnerEquityTransactions: defineTable({
+    orgId: v.id("organizations"),
+    partnerId: v.id("partnerEquity"),
+    type: v.union(
+      v.literal("CONTRIBUTION"),
+      v.literal("DRAW"),
+      v.literal("PROFIT_DISTRIBUTION"),
+    ),
+    amountMinor: v.number(),
+    currency: v.string(),
+    occurredAt: v.number(),
+    notes: v.optional(v.string()),
+    accountingEventId: v.optional(v.id("accountingEvents")),
+    actorId: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_partner_time", ["orgId", "partnerId", "occurredAt"]),
 
   claims: defineTable({
     orgId: v.id("organizations"),

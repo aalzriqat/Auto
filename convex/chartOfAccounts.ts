@@ -230,6 +230,21 @@ export async function ensureFixedAssetAccounts(
   await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.LOSS_ON_DISPOSAL, "6600");
 }
 
+/**
+ * GL Phase 12 self-heal, scoped to the partner-equity hooks and the legacy
+ * migration. Includes RETAINED_EARNINGS since profit distributions debit it
+ * and very old charts might predate its arrival in DEFAULT_CHART.
+ */
+export async function ensurePartnerEquityAccounts(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.RETAINED_EARNINGS, "3100");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.PARTNER_CAPITAL, "3200");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.PARTNER_DRAWINGS, "3300");
+}
+
 // ─── Queries ──────────────────────────────────────────────────────────────────
 
 export const list = query({

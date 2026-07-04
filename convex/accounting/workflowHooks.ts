@@ -10,19 +10,19 @@
  * re-driven idempotently when a chart is initialized or a period is opened.
  */
 import { Id } from "../_generated/dataModel";
-import { MutationCtx } from "../_generated/server";
+import { MutationCtx, QueryCtx } from "../_generated/server";
 import { postAccountingEvent, PostCommand } from "./postingEngine";
 import { EventType } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate } from "../accountingPeriods";
-import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts } from "../chartOfAccounts";
+import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts } from "../chartOfAccounts";
 import {
   enqueuePendingPost,
   enqueuePendingReversal,
   cancelPendingPostByKey,
 } from "../accountingOutbox";
 
-export async function getOrgCurrency(ctx: MutationCtx, orgId: Id<"organizations">): Promise<string> {
+export async function getOrgCurrency(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">): Promise<string> {
   const settings = await ctx.db
     .query("orgSettings")
     .withIndex("by_org", (q) => q.eq("orgId", orgId))
@@ -725,6 +725,66 @@ export async function hookAssetImpaired(
       currency: args.currency,
     },
   });
+}
+
+// ─── GL Phase 12: partner equity movements ────────────────────────────────────
+
+/** Same scoped-self-heal reasoning as ensureFixedAssetAccountsIfChartReady: only these three hooks ever resolve the partner-equity accounts. */
+async function ensurePartnerEquityAccountsIfChartReady(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  if (await isChartInitialized(ctx, orgId)) {
+    await ensurePartnerEquityAccounts(ctx, orgId, actorId);
+  }
+}
+
+export interface PartnerEquityHookArgs {
+  orgId: Id<"organizations">;
+  transactionId: Id<"partnerEquityTransactions">;
+  partnerId: Id<"partnerEquity">;
+  amountMinor: number;
+  currency: string;
+  paymentMethod?: string;
+  actorId: Id<"users">;
+  occurredAt: number;
+}
+
+async function postPartnerEquityEvent(
+  ctx: MutationCtx,
+  eventType: Extract<EventType, "CAPITAL_CONTRIBUTED" | "PARTNER_DREW" | "PROFIT_DISTRIBUTED">,
+  args: PartnerEquityHookArgs
+) {
+  await ensurePartnerEquityAccountsIfChartReady(ctx, args.orgId, args.actorId);
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType,
+    sourceType: "partnerEquityTransactions",
+    sourceId: args.transactionId.toString(),
+    idempotencyKey: `${eventType.toLowerCase()}_${args.transactionId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      partnerId: args.partnerId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      paymentMethod: args.paymentMethod,
+    },
+  });
+}
+
+export async function hookCapitalContributed(ctx: MutationCtx, args: PartnerEquityHookArgs) {
+  await postPartnerEquityEvent(ctx, "CAPITAL_CONTRIBUTED", args);
+}
+
+export async function hookPartnerDrew(ctx: MutationCtx, args: PartnerEquityHookArgs) {
+  await postPartnerEquityEvent(ctx, "PARTNER_DREW", args);
+}
+
+export async function hookProfitDistributed(ctx: MutationCtx, args: PartnerEquityHookArgs) {
+  await postPartnerEquityEvent(ctx, "PROFIT_DISTRIBUTED", args);
 }
 
 export async function hookAssetDisposed(
