@@ -17,6 +17,8 @@ type AuditActionType =
   | "CREATE_PERIOD"
   | "POST_EVENT"
   | "POST_MANUAL_JOURNAL"
+  | "CREATE_MANUAL_JOURNAL_DRAFT"
+  | "REJECT_MANUAL_JOURNAL"
   | "REVERSE_EVENT"
   | "OPEN_PERIOD"
   | "CLOSE_PERIOD"
@@ -146,120 +148,180 @@ export const listAuditLog = query({
   },
 });
 
-// ─── Manual journal (phase 7 gate) ───────────────────────────────────────────
+// ─── Manual journal — true two-person approval (phase 10) ───────────────────
 
-export const postManualJournal = mutation({
+const manualJournalLineValidator = v.object({
+  accountId: v.id("chartOfAccounts"),
+  debitMinor: v.number(),
+  creditMinor: v.number(),
+  description: v.optional(v.string()),
+});
+
+type ManualJournalLine = {
+  accountId: Id<"chartOfAccounts">;
+  debitMinor: number;
+  creditMinor: number;
+  description?: string;
+};
+
+// Per-line validation (safe integers, non-negative, exactly one side non-zero)
+// plus the overall balance check. Shared by draft creation and approval, since
+// approval must not trust that nothing changed since the draft was created.
+function validateManualJournalLines(lines: ManualJournalLine[]): number {
+  for (const [idx, line] of lines.entries()) {
+    const n = idx + 1;
+    if (!Number.isSafeInteger(line.debitMinor) || !Number.isSafeInteger(line.creditMinor)) {
+      throw new ConvexError(`Line ${n}: amounts must be integer minor-unit values.`);
+    }
+    if (line.debitMinor < 0 || line.creditMinor < 0) {
+      throw new ConvexError(`Line ${n}: amounts cannot be negative.`);
+    }
+    if (line.debitMinor > 0 && line.creditMinor > 0) {
+      throw new ConvexError(`Line ${n}: a single line cannot have both debit and credit amounts.`);
+    }
+    if (line.debitMinor === 0 && line.creditMinor === 0) {
+      throw new ConvexError(`Line ${n}: must have a non-zero debit or credit amount.`);
+    }
+  }
+
+  const totalDebits = lines.reduce((s, l) => s + l.debitMinor, 0);
+  const totalCredits = lines.reduce((s, l) => s + l.creditMinor, 0);
+  if (totalDebits !== totalCredits) {
+    throw new ConvexError(`Manual journal is unbalanced: debits=${totalDebits} credits=${totalCredits}.`);
+  }
+  if (totalDebits === 0) {
+    throw new ConvexError("Manual journal must have at least one non-zero line.");
+  }
+  return totalDebits;
+}
+
+// Validates every account exists, belongs to the org, and allows manual
+// posting, and resolves the single currency + minor-unit scale for the
+// journal. Re-run at approval time in case an account changed between draft
+// creation and approval.
+async function resolveManualJournalCurrency(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  lines: ManualJournalLine[]
+): Promise<{ currency: string; scale: number }> {
+  let journalCurrency: string | null = null;
+  for (const line of lines) {
+    const account = await ctx.db.get(line.accountId);
+    if (!account || account.orgId !== orgId) {
+      throw new ConvexError(`Account ${line.accountId} not found in this org.`);
+    }
+    if (!account.allowManualPosting) {
+      throw new ConvexError(`Account "${account.name}" does not allow manual posting.`);
+    }
+    const lineCurrency = account.currencyRestriction ?? null;
+    if (journalCurrency === null) {
+      journalCurrency = lineCurrency;
+    } else if (lineCurrency !== null && lineCurrency !== journalCurrency) {
+      throw new ConvexError("All manual journal lines must use the same currency.");
+    }
+  }
+
+  let effectiveCurrency = journalCurrency;
+  if (!effectiveCurrency) {
+    const settings = await ctx.db
+      .query("orgSettings")
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
+      .unique();
+    effectiveCurrency = settings?.currency ?? "JOD";
+  }
+  return { currency: effectiveCurrency, scale: scaleForCurrency(effectiveCurrency) };
+}
+
+function manualJournalFingerprint(memo: string, lines: ManualJournalLine[]): string {
+  return JSON.stringify({
+    memo,
+    lines: lines.map((l) => ({ a: l.accountId, d: l.debitMinor, c: l.creditMinor })),
+  });
+}
+
+export const createManualJournal = mutation({
   args: {
     orgId: v.id("organizations"),
     memo: v.string(),
-    lines: v.array(v.object({
-      accountId: v.id("chartOfAccounts"),
-      debitMinor: v.number(),
-      creditMinor: v.number(),
-      description: v.optional(v.string()),
-    })),
+    lines: v.array(manualJournalLineValidator),
     idempotencyKey: v.string(),
-    reviewedBy: v.id("users"),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
-    // Segregation of duties: a manual journal MUST be approved by a second,
-    // finance-authorized person who is not the poster.
-    if (args.reviewedBy === user._id) {
-      throw new ConvexError("Manual journal reviewer cannot be the same as the poster.");
-    }
-    const reviewerMembership = await ctx.db
-      .query("memberships")
-      .withIndex("by_org_user", (q) =>
-        q.eq("orgId", args.orgId).eq("userId", args.reviewedBy)
-      )
-      .first();
-    if (!reviewerMembership) {
-      throw new ConvexError("Reviewer is not a member of this organization.");
-    }
-    const reviewerRole = await ctx.db.get(reviewerMembership.roleId);
-    if (!reviewerRole || !reviewerRole.permissions.includes(PERMISSIONS.MANAGE_FINANCE)) {
-      throw new ConvexError("Reviewer must hold finance approval authority (MANAGE_FINANCE).");
-    }
+    validateManualJournalLines(args.lines);
+    await resolveManualJournalCurrency(ctx, args.orgId, args.lines);
 
-    // Per-line validation: safe integers, non-negative, exactly one side non-zero
-    for (const [idx, line] of args.lines.entries()) {
-      const n = idx + 1;
-      if (!Number.isSafeInteger(line.debitMinor) || !Number.isSafeInteger(line.creditMinor)) {
-        throw new ConvexError(`Line ${n}: amounts must be integer minor-unit values.`);
-      }
-      if (line.debitMinor < 0 || line.creditMinor < 0) {
-        throw new ConvexError(`Line ${n}: amounts cannot be negative.`);
-      }
-      if (line.debitMinor > 0 && line.creditMinor > 0) {
-        throw new ConvexError(`Line ${n}: a single line cannot have both debit and credit amounts.`);
-      }
-      if (line.debitMinor === 0 && line.creditMinor === 0) {
-        throw new ConvexError(`Line ${n}: must have a non-zero debit or credit amount.`);
-      }
-    }
-
-    // Balance validation
-    const totalDebits = args.lines.reduce((s, l) => s + l.debitMinor, 0);
-    const totalCredits = args.lines.reduce((s, l) => s + l.creditMinor, 0);
-    if (totalDebits !== totalCredits) {
-      throw new ConvexError(`Manual journal is unbalanced: debits=${totalDebits} credits=${totalCredits}.`);
-    }
-    if (totalDebits === 0) {
-      throw new ConvexError("Manual journal must have at least one non-zero line.");
-    }
-
-    // Validate all accounts exist, belong to this org, allow manual posting, and use consistent currency
-    let journalCurrency: string | null = null;
-    for (const line of args.lines) {
-      const account = await ctx.db.get(line.accountId);
-      if (!account || account.orgId !== args.orgId) {
-        throw new ConvexError(`Account ${line.accountId} not found in this org.`);
-      }
-      if (!account.allowManualPosting) {
-        throw new ConvexError(`Account "${account.name}" does not allow manual posting.`);
-      }
-      const lineCurrency = account.currencyRestriction ?? null;
-      if (journalCurrency === null) {
-        journalCurrency = lineCurrency;
-      } else if (lineCurrency !== null && lineCurrency !== journalCurrency) {
-        throw new ConvexError("All manual journal lines must use the same currency.");
-      }
-    }
-
-    // Resolve the journal currency (shared line restriction, else org default)
-    // and derive the correct minor-unit scale — never hardcode JOD/scale 3.
-    let effectiveCurrency = journalCurrency;
-    if (!effectiveCurrency) {
-      const settings = await ctx.db
-        .query("orgSettings")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .unique();
-      effectiveCurrency = settings?.currency ?? "JOD";
-    }
-    const journalScale = scaleForCurrency(effectiveCurrency);
-
-    // Idempotency: namespaced under POST_MANUAL_JOURNAL; also compare request fingerprint
-    // to catch same-key reuse with different content.
-    const fingerprint = JSON.stringify({
-      memo: args.memo,
-      lines: args.lines.map((l) => ({ a: l.accountId, d: l.debitMinor, c: l.creditMinor })),
-      reviewedBy: args.reviewedBy ?? null,
-    });
+    const fingerprint = manualJournalFingerprint(args.memo, args.lines);
     const existing = await ctx.db
-      .query("financialAuditLog")
-      .withIndex("by_org_action_idempotency", (q) =>
-        q.eq("orgId", args.orgId).eq("actionType", "POST_MANUAL_JOURNAL").eq("idempotencyKey", args.idempotencyKey)
+      .query("manualJournalDrafts")
+      .withIndex("by_org_idempotency", (q) =>
+        q.eq("orgId", args.orgId).eq("idempotencyKey", args.idempotencyKey)
       )
       .first();
     if (existing) {
-      const priorFingerprint = (existing.after as { fingerprint?: string } | undefined)?.fingerprint;
-      if (priorFingerprint && priorFingerprint !== fingerprint) {
+      const priorFingerprint = manualJournalFingerprint(existing.memo, existing.lines);
+      if (priorFingerprint !== fingerprint) {
         throw new ConvexError("Idempotency key reused with different journal content.");
       }
-      return { alreadyPosted: true, resourceId: existing.resourceId };
+      return { alreadyCreated: true, draftId: existing._id };
     }
+
+    const now = Date.now();
+    const draftId = await ctx.db.insert("manualJournalDrafts", {
+      orgId: args.orgId,
+      status: "PENDING_APPROVAL",
+      memo: args.memo,
+      lines: args.lines,
+      idempotencyKey: args.idempotencyKey,
+      createdBy: user._id,
+      createdAt: now,
+    });
+
+    await auditLog(ctx, {
+      orgId: args.orgId,
+      actorId: user._id,
+      actionType: "CREATE_MANUAL_JOURNAL_DRAFT",
+      resourceType: "manualJournalDrafts",
+      resourceId: draftId.toString(),
+      description: `Manual journal draft submitted for approval: ${args.memo}`,
+      after: { lines: args.lines.length },
+      idempotencyKey: args.idempotencyKey,
+    });
+
+    return { alreadyCreated: false, draftId };
+  },
+});
+
+export const approveManualJournal = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    draftId: v.id("manualJournalDrafts"),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+
+    const draft = await ctx.db.get(args.draftId);
+    if (!draft || draft.orgId !== args.orgId) {
+      throw new ConvexError("Manual journal draft not found.");
+    }
+    if (draft.status !== "PENDING_APPROVAL") {
+      throw new ConvexError("This manual journal has already been resolved.");
+    }
+    // Segregation of duties: the approver must be a different, finance-authorized
+    // person from whoever created the draft. Deliberately hardcoded rather than
+    // routed through checkSegregationOfDuties/orgSettings.allowSoDBypasses — a
+    // manual journal is an arbitrary, unrestricted GL posting (the highest-risk
+    // financial control point), and this is the exact check Phase 10 exists to
+    // make unbypassable, unlike lower-risk SoD checks elsewhere that orgs may
+    // opt out of.
+    if (draft.createdBy === user._id) {
+      throw new ConvexError("Manual journal reviewer cannot be the same as the poster.");
+    }
+
+    const totalDebits = validateManualJournalLines(draft.lines);
+    const { currency: effectiveCurrency, scale: journalScale } =
+      await resolveManualJournalCurrency(ctx, args.orgId, draft.lines);
 
     const now = Date.now();
 
@@ -287,9 +349,9 @@ export const postManualJournal = mutation({
       journalNumber: "MJ-pending",
       accountingDate: now,
       sourceType: "manual",
-      sourceId: user._id.toString(),
+      sourceId: draft.createdBy.toString(),
       category: "MANUAL",
-      memo: args.memo,
+      memo: draft.memo,
       status: "POSTED",
       postedBy: user._id,
       postedAt: now,
@@ -299,8 +361,8 @@ export const postManualJournal = mutation({
     const journalNumber = `MJ-${journalId.toString().replace(/[^a-z0-9]/gi, "").slice(-10).toUpperCase()}`;
     await ctx.db.patch(journalId, { journalNumber });
 
-    for (let i = 0; i < args.lines.length; i++) {
-      const line = args.lines[i];
+    for (let i = 0; i < draft.lines.length; i++) {
+      const line = draft.lines[i];
       await ctx.db.insert("journalLines", {
         orgId: args.orgId,
         journalEntryId: journalId,
@@ -315,17 +377,92 @@ export const postManualJournal = mutation({
       });
     }
 
+    await ctx.db.patch(draft._id, {
+      status: "POSTED",
+      reviewedBy: user._id,
+      decidedAt: now,
+      journalEntryId: journalId,
+    });
+
     await auditLog(ctx, {
       orgId: args.orgId,
       actorId: user._id,
       actionType: "POST_MANUAL_JOURNAL",
       resourceType: "journalEntries",
       resourceId: journalId.toString(),
-      description: `Manual journal posted: ${args.memo}`,
-      after: { lines: args.lines.length, totalDebits, reviewedBy: args.reviewedBy, fingerprint },
-      idempotencyKey: args.idempotencyKey,
+      description: `Manual journal posted: ${draft.memo}`,
+      after: { lines: draft.lines.length, totalDebits, createdBy: draft.createdBy, draftId: draft._id },
     });
 
-    return { alreadyPosted: false, resourceId: journalId.toString(), journalId };
+    return { resourceId: journalId.toString(), journalId };
+  },
+});
+
+export const rejectManualJournal = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    draftId: v.id("manualJournalDrafts"),
+    rejectionReason: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+
+    if (!args.rejectionReason.trim()) {
+      throw new ConvexError("A rejection reason is required.");
+    }
+
+    const draft = await ctx.db.get(args.draftId);
+    if (!draft || draft.orgId !== args.orgId) {
+      throw new ConvexError("Manual journal draft not found.");
+    }
+    if (draft.status !== "PENDING_APPROVAL") {
+      throw new ConvexError("This manual journal has already been resolved.");
+    }
+    // See the matching check in approveManualJournal for why this is hardcoded
+    // rather than routed through checkSegregationOfDuties/allowSoDBypasses.
+    if (draft.createdBy === user._id) {
+      throw new ConvexError("Manual journal reviewer cannot be the same as the poster.");
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(draft._id, {
+      status: "REJECTED",
+      reviewedBy: user._id,
+      decidedAt: now,
+      rejectionReason: args.rejectionReason,
+    });
+
+    await auditLog(ctx, {
+      orgId: args.orgId,
+      actorId: user._id,
+      actionType: "REJECT_MANUAL_JOURNAL",
+      resourceType: "manualJournalDrafts",
+      resourceId: draft._id.toString(),
+      description: `Manual journal rejected: ${draft.memo} — ${args.rejectionReason}`,
+      after: { createdBy: draft.createdBy, rejectionReason: args.rejectionReason },
+    });
+  },
+});
+
+export const listPendingManualJournals = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+
+    const drafts = await ctx.db
+      .query("manualJournalDrafts")
+      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING_APPROVAL"))
+      .order("desc")
+      .collect();
+
+    return Promise.all(
+      drafts.map(async (draft) => {
+        const creator = await ctx.db.get(draft.createdBy);
+        return {
+          ...draft,
+          creatorName: creator?.name || creator?.email || "Unknown",
+        };
+      })
+    );
   },
 });

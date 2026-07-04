@@ -66,6 +66,17 @@ crons.interval(
   {}
 );
 
+// Retry Facebook/Instagram auto-replies that failed on the initial webhook
+// send. Picks up events where pendingAutoReplyText is set but autoRepliedAt
+// is not, retries up to 3 times, then leaves the conversation as
+// "needs reply" in the Social Inbox for manual follow-up.
+crons.interval(
+  "social-auto-reply-retries",
+  { minutes: 15 },
+  internal.crons.triggerSocialAutoReplyRetries,
+  {}
+);
+
 export default crons;
 
 export const triggerAlarms = internalMutation({
@@ -234,6 +245,32 @@ export const triggerInstagramTokenRefresh = internalAction({
     });
 
     return `Refreshed ${refreshed}/${orgs.length} Instagram token(s).`;
+  },
+});
+
+export const triggerSocialAutoReplyRetries = internalAction({
+  args: {},
+  handler: async (ctx: ActionCtx): Promise<string> => {
+    try {
+      const result: string = await ctx.runAction(
+        internal.socialAutoReplyRetry.retryPendingSocialAutoReplies,
+        {}
+      );
+      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+        source: "social-auto-reply-retry",
+        status: "success",
+        summary: result,
+      });
+      return result;
+    } catch (err) {
+      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+        source: "social-auto-reply-retry",
+        status: "error",
+        summary: "social-auto-reply-retries cron failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
   },
 });
 

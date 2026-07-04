@@ -1073,6 +1073,7 @@ http.route({
         const summary = `Comment from ${optionalString(from?.username) ?? optionalMetaId(from?.id)}`;
         try {
           const fromId = optionalMetaId(from?.id) ?? "";
+          if (!fromId) continue;
           const isOwnAccount =
             fromId !== "" &&
             (fromId === settings.instagramBusinessAccountId ||
@@ -1103,6 +1104,8 @@ http.route({
                   orgId,
                   recipientInstagramId: fromId,
                   message: result.replyText,
+                  eventId: result.eventId,
+                  replySource: result.replySource ?? "canned",
                 },
               );
             } else {
@@ -1112,6 +1115,8 @@ http.route({
                   orgId,
                   commentId: String(value.id),
                   message: result.replyText,
+                  eventId: result.eventId,
+                  replySource: result.replySource ?? "canned",
                 },
               );
             }
@@ -1189,6 +1194,8 @@ http.route({
                 orgId,
                 recipientInstagramId: senderId,
                 message: result.replyText,
+                eventId: result.eventId,
+                replySource: result.replySource ?? "canned",
               },
             );
           }
@@ -1545,6 +1552,8 @@ http.route({
                   orgId,
                   recipientFacebookId: fromId,
                   message: result.replyText,
+                  eventId: result.eventId,
+                  replySource: result.replySource ?? "canned",
                 },
               );
             } else {
@@ -1554,6 +1563,8 @@ http.route({
                   orgId,
                   commentId: String(value.comment_id),
                   message: result.replyText,
+                  eventId: result.eventId,
+                  replySource: result.replySource ?? "canned",
                 },
               );
             }
@@ -1624,6 +1635,8 @@ http.route({
               orgId,
               recipientFacebookId: senderId,
               message: result.replyText,
+              eventId: result.eventId,
+              replySource: result.replySource ?? "canned",
             });
           }
           // Try to match a vehicle from the DM text (customer often mentions

@@ -107,7 +107,8 @@ const webhookSourceValidator = v.union(
   v.literal("notification-whatsapp"),
   v.literal("subscription-reminder"),
   v.literal("support-inbox-notification"),
-  v.literal("upgrade-request")
+  v.literal("upgrade-request"),
+  v.literal("social-auto-reply-retry")
 );
 
 /**

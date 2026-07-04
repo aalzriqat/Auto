@@ -78,6 +78,7 @@ import type * as sales from "../sales.js";
 import type * as search from "../search.js";
 import type * as seedDocuments from "../seedDocuments.js";
 import type * as smartReply from "../smartReply.js";
+import type * as socialAutoReplyRetry from "../socialAutoReplyRetry.js";
 import type * as socialEngagement from "../socialEngagement.js";
 import type * as socialInbox from "../socialInbox.js";
 import type * as socialInboxBackfill from "../socialInboxBackfill.js";
@@ -216,6 +217,7 @@ declare const fullApi: ApiFromModules<{
   search: typeof search;
   seedDocuments: typeof seedDocuments;
   smartReply: typeof smartReply;
+  socialAutoReplyRetry: typeof socialAutoReplyRetry;
   socialEngagement: typeof socialEngagement;
   socialInbox: typeof socialInbox;
   socialInboxBackfill: typeof socialInboxBackfill;

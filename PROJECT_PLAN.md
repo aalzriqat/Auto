@@ -1097,25 +1097,57 @@ New "Analytics" tab in Reports (or a dedicated `/analytics` route):
 ## Phase 41 — Accounting Depth
 
 **Branch:** `feature/phase-41-accounting`
-**Goal:** Bring accounting from 6.5/10 to production-grade for dealership operations.
+**Goal:** Dealership-facing accounting UX that sits on top of the double-entry GL track.
 
-### Scope
+> **Pruned (2026-07-03):** This phase was scoped before the double-entry GL track existed.
+> **Cash Register** is superseded by GL Phase 15 (full cash-drawer sessions) and
+> **Cheque Management** already shipped (post-dated cheques, clearing, return-after-clearing,
+> GL posting) in Accounting Phases 8–9 — both removed from scope here. Bank-account
+> linkage should target the GL `BANK_ACCOUNT` system key, not the legacy `transactions` table.
+> See [`docs/architecture/accounting-implementation-progress.md`](docs/architecture/accounting-implementation-progress.md)
+> and [`docs/architecture/accounting-final-phase-plan.md`](docs/architecture/accounting-final-phase-plan.md).
 
-- **Bank Accounts** — track multiple bank accounts per org (name, IBAN, currency, opening balance). All transactions linked to a bank account.
-- **Cash Register** — daily cash-in/cash-out log per branch. End-of-day reconciliation (expected vs. actual).
-- **Payment Reconciliation** — match sales payments against bank statement lines (manual upload of CSV statement → auto-suggest matches → confirm).
+### Scope (remaining unique items)
+
+- **Bank Accounts** — track multiple bank accounts per org (name, IBAN, currency, opening balance); map each to a GL `BANK_ACCOUNT` account so postings and statements reconcile.
+- **Payment Reconciliation** — match sales payments against bank statement lines (manual upload of CSV statement → auto-suggest matches → confirm) against the GL bank balance.
 - **Installment Collections Calendar** — all upcoming installment due dates on a calendar view with overdue highlighting.
 - **VAT Return Export** — generate a VAT summary for a period (total sales VAT collected, total purchase VAT paid, net due) exportable as PDF/CSV.
-- **Cheque Management** — track post-dated cheques received from customers (date, amount, status: PENDING/DEPOSITED/BOUNCED).
 
 ### Tasks
-- [ ] `convex/schema.ts` — `bankAccounts`, `cashRegisterEntries`, `cheques` tables; link `transactions` table to `bankAccountId`
-- [ ] `convex/bankAccounts.ts`, `convex/cashRegister.ts`, `convex/cheques.ts` (new) — CRUD + reconciliation helpers
+- [ ] `convex/schema.ts` — `bankAccounts` table; map each bank account to its GL `chartOfAccounts` id
+- [ ] `convex/bankAccounts.ts` (new) — CRUD + statement-reconciliation helpers against posted GL bank lines
 - [ ] `convex/vatReport.ts` (new) — `generateVatSummary` query
-- [ ] `app/(dashboard)/[orgId]/accounting/` — new Bank Accounts tab, Cash Register tab, Cheques tab, VAT Export button
+- [ ] `app/(dashboard)/[orgId]/accounting/` — new Bank Accounts tab, VAT Export button
 - [ ] `app/(dashboard)/[orgId]/collections/` — installment calendar view
 - [ ] i18n EN + AR
-- [ ] Tests for reconciliation matching, VAT calculation, cheque state machine
+- [ ] Tests for reconciliation matching and VAT calculation
+
+---
+
+## Accounting GL Track — Final Phases 10–18 (planned)
+
+**Reference:** [`docs/architecture/accounting-final-phase-plan.md`](docs/architecture/accounting-final-phase-plan.md)
+· continues [`docs/architecture/accounting-implementation-progress.md`](docs/architecture/accounting-implementation-progress.md) (Phases 0–9 ✅)
+
+**Goal:** Move accounting from "strong operational / management-accounting" (core ~85%)
+to a complete, audit-ready product (~65–75% → done). Validated against source on 2026-07-03;
+9 of 10 gaps confirmed (provider-verification finding was largely outdated — per-provider HMAC already ships).
+
+| GL Phase | Description | Status |
+|---|---|---|
+| 10 | True two-person manual-journal approval (create → authenticated approve/reject) | ✅ Done (2026-07-03) |
+| 11 | Fixed-asset lifecycle: capitalize, depreciate, impair, dispose (GL-posted) | ⬜ Planned |
+| 12 | Partner equity as immutable contribution/draw/distribution transactions | ⬜ Planned |
+| 13 | Claim receivables + settlement postings | ⬜ Planned |
+| 14 | Multi-currency reporting correctness (group by accountId + currency) | ⬜ Planned |
+| 15 | Full cash-drawer session lifecycle (float → count → variance → deposit → close) | ⬜ Planned |
+| 16 | Provider verification breadth (more providers; fail-closed allowlist) | ⬜ Planned |
+| 17 | Legacy money → minor-unit migration + accountant sign-off | ⬜ Planned (needs 11–13) |
+| 18 | Report scalability (balance snapshots, remove full scans / N+1) | ⬜ Planned |
+
+Each phase reuses the established pattern: immutable event table → posting rule in
+`postingRules.ts` → `postOrEnqueue` hook → replace direct-edit CRUD → self-heal chart keys → phase test.
 
 ---
 
@@ -1176,4 +1208,7 @@ New "Analytics" tab in Reports (or a dedicated `/analytics` route):
 | 40 | Mobile PWA | 3 — Enterprise & Scale | ⬜ Not started |
 | 41 | Accounting Depth | 3 — Enterprise & Scale | ⬜ Not started |
 | 42 | Open API & Integration Hub | 3 — Enterprise & Scale | ⬜ Not started |
+| GL 0–9 | Double-Entry Accounting Foundation | Accounting GL Track | ✅ Done |
+| GL 10 | True two-person manual-journal approval | Accounting GL Track | ✅ Done |
+| GL 11–18 | Accounting Final Phases (assets, equity, claims, cash-drawer, multi-currency, migration, scale) | Accounting GL Track | ⬜ Planned |
 | 50–55 | AI / LLM Features | Backlog — No Budget | 🔒 Deferred |

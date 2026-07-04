@@ -16,6 +16,7 @@ import { nextGeneratedLeadAssignee } from "./utils/leadAssignment";
 import { mobileReceivedAutoReplyText } from "./utils/socialMobileReply";
 
 const AUTO_REPLY_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 1 reply per sender per 24h
+const MAX_AUTO_REPLY_RETRIES = 3;
 // Placeholder name assigned when a customer is created without a username —
 // DM webhook payloads never include one (only comments do). Checked against
 // later to know whether a profile-enrichment fetch is still needed, and to
@@ -81,6 +82,8 @@ export const handleIncomingInstagramEvent = internalMutation({
     customerId?: Id<"customers">;
     needsProfileEnrichment: boolean;
     vehicleId?: Id<"vehicles">;
+    eventId: Id<"instagramEvents">;
+    replySource?: "smart" | "canned";
   } | null> => {
     const { orgId, kind, externalId, senderInstagramId, senderUsername, text, mediaId } = args;
     const sharedMobileNumber = kind === "dm" ? extractSharedMobileNumber(text) : null;
@@ -263,7 +266,10 @@ export const handleIncomingInstagramEvent = internalMutation({
 
       if (mobileReceivedReply) {
         const sentMobileReceivedReplyRecently = recentEvents.some(
-          (e) => e.kind === kind && e.autoRepliedAt && e.autoRepliedAt > recentAutoReplyCutoff && e.autoReplyText === mobileReceivedReply
+          (e) => e.kind === kind && (
+            (e.autoRepliedAt && e.autoRepliedAt > recentAutoReplyCutoff && e.autoReplyText === mobileReceivedReply) ||
+            (e.pendingAutoReplyText === mobileReceivedReply && e._creationTime > recentAutoReplyCutoff)
+          )
         );
         if (!sentMobileReceivedReplyRecently) {
           replyText = mobileReceivedReply;
@@ -271,7 +277,10 @@ export const handleIncomingInstagramEvent = internalMutation({
         }
       } else if (messages.length > 0 && settings) {
         const repliedRecently = recentEvents.some(
-          (e) => e.kind === kind && e.autoRepliedAt && e.autoRepliedAt > recentAutoReplyCutoff
+          (e) => e.kind === kind && (
+            (e.autoRepliedAt && e.autoRepliedAt > recentAutoReplyCutoff) ||
+            (e.pendingAutoReplyText != null && e._creationTime > recentAutoReplyCutoff)
+          )
         );
         if (!repliedRecently) {
           const nextIndex = ((settings.instagramAutoReplyLastIndex ?? -1) + 1) % messages.length;
@@ -282,7 +291,10 @@ export const handleIncomingInstagramEvent = internalMutation({
       }
     }
 
-    await ctx.db.insert("instagramEvents", {
+    const autoReplySource = smartReplySource ? ("smart" as const) : ("canned" as const);
+    const autoReplyChannel = smartReplyVisibility === "dm" ? "dm" : kind;
+
+    const eventId = await ctx.db.insert("instagramEvents", {
       orgId,
       externalId,
       kind,
@@ -293,12 +305,23 @@ export const handleIncomingInstagramEvent = internalMutation({
       vehicleId,
       text,
       postId: mediaId,
-      autoRepliedAt: shouldAutoReply ? Date.now() : undefined,
-      autoReplyText: shouldAutoReply ? replyText : undefined,
-      autoReplySource: shouldAutoReply ? (smartReplySource ? "smart" : "canned") : undefined,
+      pendingAutoReplyText: shouldAutoReply ? replyText : undefined,
+      pendingAutoReplySource: shouldAutoReply ? autoReplySource : undefined,
+      pendingAutoReply: shouldAutoReply ? true : undefined,
+      pendingAutoReplyChannel: shouldAutoReply ? autoReplyChannel : undefined,
     });
 
-    return { shouldAutoReply, replyText, smartReplyVisibility, leadId, customerId: customer._id, needsProfileEnrichment, vehicleId };
+    return {
+      shouldAutoReply,
+      replyText,
+      smartReplyVisibility,
+      leadId,
+      customerId: customer._id,
+      needsProfileEnrichment,
+      vehicleId,
+      eventId,
+      replySource: shouldAutoReply ? autoReplySource : undefined,
+    };
   },
 });
 
@@ -357,11 +380,58 @@ export const getTokenForOrg = internalQuery({
   },
 });
 
+export const markEventAutoReplied = internalMutation({
+  args: {
+    eventId: v.id("instagramEvents"),
+    replyText: v.string(),
+    replySource: v.union(v.literal("smart"), v.literal("canned")),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.eventId, {
+      autoRepliedAt: Date.now(),
+      autoReplyText: args.replyText,
+      autoReplySource: args.replySource,
+      pendingAutoReplyText: undefined,
+      pendingAutoReplySource: undefined,
+      pendingAutoReply: undefined,
+      pendingAutoReplyChannel: undefined,
+      autoReplyRetryCount: undefined,
+    });
+  },
+});
+
+export const recordAutoReplyFailure = internalMutation({
+  args: { eventId: v.id("instagramEvents") },
+  handler: async (ctx, args) => {
+    const ev = await ctx.db.get(args.eventId);
+    if (!ev) return;
+    const newCount = (ev.autoReplyRetryCount ?? 0) + 1;
+    if (newCount >= MAX_AUTO_REPLY_RETRIES) {
+      // Exhausted retries: clear pending fields so this event exits the retry index scan
+      await ctx.db.patch(args.eventId, {
+        autoReplyRetryCount: newCount,
+        pendingAutoReplyText: undefined,
+        pendingAutoReplySource: undefined,
+        pendingAutoReply: undefined,
+        pendingAutoReplyChannel: undefined,
+      });
+    } else {
+      await ctx.db.patch(args.eventId, { autoReplyRetryCount: newCount });
+    }
+  },
+});
+
 // ─── Outbound (Graph API calls — actions only, mutations can't fetch) ─────────
 
 /** Auto-replies to an inbound comment. Same Graph endpoint as the manual reply below. */
 export const sendCommentReply = internalAction({
-  args: { orgId: v.id("organizations"), commentId: v.string(), message: v.string() },
+  args: {
+    orgId: v.id("organizations"),
+    commentId: v.string(),
+    message: v.string(),
+    eventId: v.id("instagramEvents"),
+    replySource: v.union(v.literal("smart"), v.literal("canned")),
+  },
   handler: async (ctx, args): Promise<void> => {
     const token = await ctx.runQuery(internal.instagramEngagement.getTokenForOrg, { orgId: args.orgId });
     if (!token) return;
@@ -374,13 +444,25 @@ export const sendCommentReply = internalAction({
         summary: `Auto-reply to comment ${args.commentId} failed`,
         error: result.error,
       });
+      return;
     }
+    await ctx.runMutation(internal.instagramEngagement.markEventAutoReplied, {
+      eventId: args.eventId,
+      replyText: args.message,
+      replySource: args.replySource,
+    });
   },
 });
 
 /** Auto-replies to an inbound DM via the Instagram Messaging API. */
 export const sendDirectMessage = internalAction({
-  args: { orgId: v.id("organizations"), recipientInstagramId: v.string(), message: v.string() },
+  args: {
+    orgId: v.id("organizations"),
+    recipientInstagramId: v.string(),
+    message: v.string(),
+    eventId: v.id("instagramEvents"),
+    replySource: v.union(v.literal("smart"), v.literal("canned")),
+  },
   handler: async (ctx, args): Promise<void> => {
     const token = await ctx.runQuery(internal.instagramEngagement.getTokenForOrg, { orgId: args.orgId });
     if (!token) return;
@@ -398,7 +480,13 @@ export const sendDirectMessage = internalAction({
         summary: `Auto-reply DM to ${args.recipientInstagramId} failed`,
         error: result.error,
       });
+      return;
     }
+    await ctx.runMutation(internal.instagramEngagement.markEventAutoReplied, {
+      eventId: args.eventId,
+      replyText: args.message,
+      replySource: args.replySource,
+    });
   },
 });
 

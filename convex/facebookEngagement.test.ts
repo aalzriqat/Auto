@@ -184,7 +184,7 @@ describe("facebookEngagement.handleIncomingFacebookEvent", () => {
     expect(leads.length).toBe(1);
   });
 
-  test("auto-replies round-robin and respects the 24h per-sender cooldown", async () => {
+  test("auto-replies round-robin and respect the 24h per-sender-per-channel cooldown", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
     await seedSettings(t, orgId, {
@@ -204,16 +204,33 @@ describe("facebookEngagement.handleIncomingFacebookEvent", () => {
     expect(first?.shouldAutoReply).toBe(true);
     expect(first?.replyText).toBe("Thanks!");
 
+    // Same sender, same channel (comment): still within the 24h cooldown for
+    // this channel, so no second auto-reply.
     const second = await t.run((ctx) =>
       ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
         orgId,
-        kind: "dm",
+        kind: "comment",
         externalId: "fb_auto_2",
         senderFacebookId: "fb_user_auto",
         text: "hi again",
       })
     );
     expect(second?.shouldAutoReply).toBe(false);
+
+    // Same sender, different channel (dm): cooldown is tracked per channel
+    // (see commit 42307a8), so a DM from the same sender still gets the next
+    // round-robin message.
+    const third = await t.run((ctx) =>
+      ctx.runMutation(internal.facebookEngagement.handleIncomingFacebookEvent, {
+        orgId,
+        kind: "dm",
+        externalId: "fb_auto_3",
+        senderFacebookId: "fb_user_auto",
+        text: "hi via dm",
+      })
+    );
+    expect(third?.shouldAutoReply).toBe(true);
+    expect(third?.replyText).toBe("We'll be in touch.");
   });
 
   test("lead creation toggle off for comments: still captures the event, no lead, no notification", async () => {
@@ -489,7 +506,10 @@ describe("facebookEngagement.handleIncomingFacebookEvent — Smart Reply", () =>
         .withIndex("by_org_external", (q) => q.eq("orgId", orgId).eq("externalId", "fb_sr_price"))
         .unique()
     );
-    expect(event?.autoReplySource).toBe("smart");
+    // handleIncomingFacebookEvent only queues the reply (autoReplySource is set
+    // later by markEventAutoReplied, once the send action actually confirms
+    // delivery) — so at this point the source lives on the pending field.
+    expect(event?.pendingAutoReplySource).toBe("smart");
   });
 
   test("price match on a sold vehicle falls back to the unavailable template instead of a price", async () => {

@@ -3,12 +3,13 @@
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { BookOpen, Briefcase, Landmark, HandCoins, WalletCards } from "lucide-react";
+import { BookOpen, Briefcase, Landmark, HandCoins, WalletCards, ScrollText } from "lucide-react";
 import { GeneralLedgerTab } from "./GeneralLedgerTab";
 import { FixedAssetsTab } from "./FixedAssetsTab";
 import { PartnerEquityTab } from "./PartnerEquityTab";
 import { ClaimsTab } from "./ClaimsTab";
 import { CollectionsTab } from "./CollectionsTab";
+import { ManualJournalTab } from "./ManualJournalTab";
 
 export function AccountingClient() {
   const { t } = useLanguage();
@@ -53,6 +54,10 @@ export function AccountingClient() {
               <WalletCards className="w-4 h-4" />
               {t("Collections" as any)}
             </TabsTrigger>
+            <TabsTrigger value="manualJournal" className="gap-2 data-[state=active]:bg-primary/5 data-[state=active]:text-primary data-[state=active]:shadow-none px-4">
+              <ScrollText className="w-4 h-4" />
+              {t("ManualJournal" as any)}
+            </TabsTrigger>
           </TabsList>
         </div>
 
@@ -71,6 +76,9 @@ export function AccountingClient() {
           </TabsContent>
           <TabsContent value="collections" className="h-full m-0 data-[state=inactive]:hidden">
             <CollectionsTab />
+          </TabsContent>
+          <TabsContent value="manualJournal" className="h-full m-0 data-[state=inactive]:hidden">
+            <ManualJournalTab />
           </TabsContent>
         </div>
       </Tabs>
