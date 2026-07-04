@@ -637,6 +637,45 @@ async function ensureFixedAssetAccountsIfChartReady(
   }
 }
 
+interface FixedAssetHookBaseArgs {
+  orgId: Id<"organizations">;
+  assetId: Id<"fixedAssets">;
+  currency: string;
+  actorId: Id<"users">;
+  occurredAt: number;
+}
+
+async function postFixedAssetEvent(
+  ctx: MutationCtx,
+  eventType: Extract<
+    EventType,
+    "ASSET_CAPITALIZED" | "DEPRECIATION_POSTED" | "ASSET_IMPAIRED" | "ASSET_DISPOSED"
+  >,
+  args: FixedAssetHookBaseArgs,
+  details: {
+    sourceId?: string;
+    idempotencyKey: string;
+    payload: Record<string, unknown>;
+  }
+) {
+  await ensureFixedAssetAccountsIfChartReady(ctx, args.orgId, args.actorId);
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType,
+    sourceType: "fixedAssets",
+    sourceId: details.sourceId ?? args.assetId.toString(),
+    idempotencyKey: details.idempotencyKey,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      assetId: args.assetId.toString(),
+      ...details.payload,
+      currency: args.currency,
+    },
+  });
+}
+
 export async function hookAssetCapitalized(
   ctx: MutationCtx,
   args: {
@@ -649,20 +688,10 @@ export async function hookAssetCapitalized(
     occurredAt: number;
   }
 ) {
-  await ensureFixedAssetAccountsIfChartReady(ctx, args.orgId, args.actorId);
-  await postDomainEvent(ctx, {
-    orgId: args.orgId,
-    eventType: "ASSET_CAPITALIZED",
-    sourceType: "fixedAssets",
-    sourceId: args.assetId.toString(),
+  await postFixedAssetEvent(ctx, "ASSET_CAPITALIZED", args, {
     idempotencyKey: `asset_capitalized_${args.assetId}`,
-    currency: args.currency,
-    occurredAt: args.occurredAt,
-    actorId: args.actorId,
     payload: {
-      assetId: args.assetId.toString(),
       costMinor: args.costMinor,
-      currency: args.currency,
       paymentMethod: args.paymentMethod,
     },
   });
@@ -680,20 +709,11 @@ export async function hookDepreciationPosted(
     occurredAt: number;
   }
 ) {
-  await ensureFixedAssetAccountsIfChartReady(ctx, args.orgId, args.actorId);
-  await postDomainEvent(ctx, {
-    orgId: args.orgId,
-    eventType: "DEPRECIATION_POSTED",
-    sourceType: "fixedAssets",
+  await postFixedAssetEvent(ctx, "DEPRECIATION_POSTED", args, {
     sourceId: `depr_${args.assetId}_${args.yearMonth}`,
     idempotencyKey: `depr_${args.assetId}_${args.yearMonth}`,
-    currency: args.currency,
-    occurredAt: args.occurredAt,
-    actorId: args.actorId,
     payload: {
-      assetId: args.assetId.toString(),
       amountMinor: args.amountMinor,
-      currency: args.currency,
     },
   });
 }
@@ -709,20 +729,10 @@ export async function hookAssetImpaired(
     occurredAt: number;
   }
 ) {
-  await ensureFixedAssetAccountsIfChartReady(ctx, args.orgId, args.actorId);
-  await postDomainEvent(ctx, {
-    orgId: args.orgId,
-    eventType: "ASSET_IMPAIRED",
-    sourceType: "fixedAssets",
-    sourceId: args.assetId.toString(),
+  await postFixedAssetEvent(ctx, "ASSET_IMPAIRED", args, {
     idempotencyKey: `asset_impaired_${args.assetId}_${args.occurredAt}`,
-    currency: args.currency,
-    occurredAt: args.occurredAt,
-    actorId: args.actorId,
     payload: {
-      assetId: args.assetId.toString(),
       amountMinor: args.amountMinor,
-      currency: args.currency,
     },
   });
 }
@@ -846,22 +856,12 @@ export async function hookAssetDisposed(
     occurredAt: number;
   }
 ) {
-  await ensureFixedAssetAccountsIfChartReady(ctx, args.orgId, args.actorId);
-  await postDomainEvent(ctx, {
-    orgId: args.orgId,
-    eventType: "ASSET_DISPOSED",
-    sourceType: "fixedAssets",
-    sourceId: args.assetId.toString(),
+  await postFixedAssetEvent(ctx, "ASSET_DISPOSED", args, {
     idempotencyKey: `asset_disposed_${args.assetId}`,
-    currency: args.currency,
-    occurredAt: args.occurredAt,
-    actorId: args.actorId,
     payload: {
-      assetId: args.assetId.toString(),
       costMinor: args.costMinor,
       accumulatedDepreciationMinor: args.accumulatedDepreciationMinor,
       proceedsMinor: args.proceedsMinor,
-      currency: args.currency,
     },
   });
 }

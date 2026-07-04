@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import type { ComponentProps, ReactNode } from "react";
 import { format } from "date-fns";
 import { Loader2 } from "lucide-react";
@@ -8,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
+import { toast } from "@/components/ui/sonner";
 
 const CURRENCY_SCALES: Record<string, number> = {
   JOD: 3,
@@ -44,6 +46,23 @@ export function dateInputToMs(value: string): number {
 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+export function useAccountingSubmit() {
+  const [submitting, setSubmitting] = useState(false);
+
+  async function submitWithFeedback(action: () => Promise<void>): Promise<void> {
+    setSubmitting(true);
+    try {
+      await action();
+    } catch (error) {
+      toast.error(errorMessage(error));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return { submitting, submitWithFeedback };
 }
 
 export function LoadingAccountingState({ label }: Readonly<{ label: string }>) {

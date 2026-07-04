@@ -37,9 +37,9 @@ import {
   LoadingAccountingState,
   PaymentMethodSelect,
   dateInputToMs,
-  errorMessage,
   scaleForCurrency,
   todayInput,
+  useAccountingSubmit,
   type CurrencyFormatter,
   type PaymentMethod,
 } from "./AccountingTabShared";
@@ -241,7 +241,7 @@ function CapitalizeAssetDialog({
   const [usefulLifeMonths, setUsefulLifeMonths] = useState("60");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
   const [notes, setNotes] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const { submitting, submitWithFeedback } = useAccountingSubmit();
 
   function reset() {
     setName("");
@@ -275,8 +275,7 @@ function CapitalizeAssetDialog({
       return;
     }
 
-    setSubmitting(true);
-    try {
+    await submitWithFeedback(async () => {
       await capitalize({
         orgId,
         name: name.trim(),
@@ -290,11 +289,7 @@ function CapitalizeAssetDialog({
       toast.success(t("AssetCapitalized" as any));
       onOpenChange(false);
       reset();
-    } catch (error) {
-      toast.error(errorMessage(error));
-    } finally {
-      setSubmitting(false);
-    }
+    });
   }
 
   return (
@@ -435,7 +430,7 @@ function ImpairAssetDialog({
   const { t } = useLanguage();
   const impair = useMutation(api.fixedAssets.impair);
   const [amount, setAmount] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const { submitting, submitWithFeedback } = useAccountingSubmit();
 
   const netBookMinor = (asset.costMinor ?? 0) - (asset.accumulatedDepreciationMinor ?? 0);
 
@@ -445,16 +440,11 @@ function ImpairAssetDialog({
       toast.error(t("ImpairmentAmountLabel" as any));
       return;
     }
-    setSubmitting(true);
-    try {
+    await submitWithFeedback(async () => {
       await impair({ orgId, assetId: asset._id, amountMinor });
       toast.success(t("AssetImpaired" as any));
       onOpenChange(false);
-    } catch (error) {
-      toast.error(errorMessage(error));
-    } finally {
-      setSubmitting(false);
-    }
+    });
   }
 
   return (
@@ -512,7 +502,7 @@ function DisposeAssetDialog({
   const dispose = useMutation(api.fixedAssets.dispose);
   const [proceeds, setProceeds] = useState("0");
   const [occurredAt, setOccurredAt] = useState(todayInput);
-  const [submitting, setSubmitting] = useState(false);
+  const { submitting, submitWithFeedback } = useAccountingSubmit();
 
   const netBookMinor = (asset.costMinor ?? 0) - (asset.accumulatedDepreciationMinor ?? 0);
 
@@ -522,16 +512,11 @@ function DisposeAssetDialog({
       toast.error(t("DisposalProceedsLabel" as any));
       return;
     }
-    setSubmitting(true);
-    try {
+    await submitWithFeedback(async () => {
       await dispose({ orgId, assetId: asset._id, proceedsMinor, occurredAt: dateInputToMs(occurredAt) });
       toast.success(t("AssetDisposed" as any));
       onOpenChange(false);
-    } catch (error) {
-      toast.error(errorMessage(error));
-    } finally {
-      setSubmitting(false);
-    }
+    });
   }
 
   return (

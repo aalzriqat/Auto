@@ -36,9 +36,9 @@ import {
   LoadingAccountingState,
   PaymentMethodSelect,
   dateInputToMs,
-  errorMessage,
   scaleForCurrency,
   todayInput,
+  useAccountingSubmit,
   type CurrencyFormatter,
   type PaymentMethod,
 } from "./AccountingTabShared";
@@ -203,7 +203,7 @@ function NewClaimDialog({
   const [amount, setAmount] = useState("");
   const [claimDate, setClaimDate] = useState(todayInput);
   const [notes, setNotes] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const { submitting, submitWithFeedback } = useAccountingSubmit();
 
   function reset() {
     setFinancingEntity("");
@@ -223,8 +223,7 @@ function NewClaimDialog({
       toast.error(t("ClaimAmount" as any));
       return;
     }
-    setSubmitting(true);
-    try {
+    await submitWithFeedback(async () => {
       await addClaim({
         orgId,
         claimDate: dateInputToMs(claimDate),
@@ -236,11 +235,7 @@ function NewClaimDialog({
       toast.success(t("ClaimCreated" as any));
       onOpenChange(false);
       reset();
-    } catch (error) {
-      toast.error(errorMessage(error));
-    } finally {
-      setSubmitting(false);
-    }
+    });
   }
 
   return (
@@ -314,19 +309,14 @@ function SettleClaimDialog({
   const { t } = useLanguage();
   const settle = useMutation(api.claims.settle);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("BANK_TRANSFER");
-  const [submitting, setSubmitting] = useState(false);
+  const { submitting, submitWithFeedback } = useAccountingSubmit();
 
   async function submit() {
-    setSubmitting(true);
-    try {
+    await submitWithFeedback(async () => {
       await settle({ orgId, claimId: claim._id, paymentMethod });
       toast.success(t("ClaimSettledToast" as any));
       onOpenChange(false);
-    } catch (error) {
-      toast.error(errorMessage(error));
-    } finally {
-      setSubmitting(false);
-    }
+    });
   }
 
   return (
@@ -388,19 +378,14 @@ function RejectClaimDialog({
 }>) {
   const { t } = useLanguage();
   const reject = useMutation(api.claims.reject);
-  const [submitting, setSubmitting] = useState(false);
+  const { submitting, submitWithFeedback } = useAccountingSubmit();
 
   async function submit() {
-    setSubmitting(true);
-    try {
+    await submitWithFeedback(async () => {
       await reject({ orgId, claimId: claim._id });
       toast.success(t("ClaimRejectedToast" as any));
       onOpenChange(false);
-    } catch (error) {
-      toast.error(errorMessage(error));
-    } finally {
-      setSubmitting(false);
-    }
+    });
   }
 
   return (

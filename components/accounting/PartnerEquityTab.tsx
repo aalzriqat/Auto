@@ -35,8 +35,8 @@ import {
   DialogFooterActions,
   LoadingAccountingState,
   PaymentMethodSelect,
-  errorMessage,
   scaleForCurrency,
+  useAccountingSubmit,
   type CurrencyFormatter,
   type PaymentMethod,
 } from "./AccountingTabShared";
@@ -215,7 +215,7 @@ function AddPartnerDialog({
   const [openingContribution, setOpeningContribution] = useState("0");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
   const [notes, setNotes] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const { submitting, submitWithFeedback } = useAccountingSubmit();
 
   function reset() {
     setName("");
@@ -234,8 +234,7 @@ function AddPartnerDialog({
       toast.error(t("OpeningContributionLabel" as any));
       return;
     }
-    setSubmitting(true);
-    try {
+    await submitWithFeedback(async () => {
       await addPartner({
         orgId,
         partnerName: name.trim(),
@@ -246,11 +245,7 @@ function AddPartnerDialog({
       toast.success(t("PartnerAdded" as any));
       onOpenChange(false);
       reset();
-    } catch (error) {
-      toast.error(errorMessage(error));
-    } finally {
-      setSubmitting(false);
-    }
+    });
   }
 
   return (
@@ -322,7 +317,7 @@ function MovementDialog({
   const [amount, setAmount] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
   const [notes, setNotes] = useState("");
-  const [submitting, setSubmitting] = useState(false);
+  const { submitting, submitWithFeedback } = useAccountingSubmit();
 
   const meta = MOVEMENT_META[type];
 
@@ -332,8 +327,7 @@ function MovementDialog({
       toast.error(t("AmountLabel" as any));
       return;
     }
-    setSubmitting(true);
-    try {
+    await submitWithFeedback(async () => {
       await recordMovement({
         orgId,
         partnerId: partner._id,
@@ -344,11 +338,7 @@ function MovementDialog({
       });
       toast.success(t("EquityMovementRecorded" as any));
       onOpenChange(false);
-    } catch (error) {
-      toast.error(errorMessage(error));
-    } finally {
-      setSubmitting(false);
-    }
+    });
   }
 
   return (
