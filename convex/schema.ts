@@ -1618,6 +1618,21 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"]),
 
+  // GL Phase 14: org-defined exchange rates for optional reporting-currency
+  // translation. Books always stay per-currency; these rates only produce
+  // display-level translated figures in reports, never postings.
+  exchangeRates: defineTable({
+    orgId: v.id("organizations"),
+    fromCurrency: v.string(),
+    toCurrency: v.string(),
+    rate: v.number(),
+    asOfDate: v.number(),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_pair", ["orgId", "fromCurrency", "toCurrency", "asOfDate"]),
+
   // GL Phase 12: immutable equity movements — the source of truth behind each
   // partner's balance. Append-only; corrections are new offsetting entries,
   // never edits.

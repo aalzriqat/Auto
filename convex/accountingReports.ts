@@ -10,9 +10,47 @@ import { Id } from "./_generated/dataModel";
 import { QueryCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
-import { fromMinorUnits } from "./utils/money";
+import { fromMinorUnits, scaleForCurrency } from "./utils/money";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { requireFeature } from "./subscriptions";
+
+/**
+ * GL Phase 14 note on aggregation: every aggregate below keys on
+ * (accountId, line.currency), never accountId alone — minor units in
+ * different currencies are different units and must not be summed. For a
+ * single-currency org this collapses to exactly the pre-Phase-14 output.
+ * The legacy top-level totals are kept as the org-currency subtotal, with
+ * the full picture in totalsByCurrency.
+ */
+function currencyKey(accountId: string, currency: string): string {
+  return `${accountId}__${currency}`;
+}
+
+/**
+ * Latest defined rate for from→to at or before asOf. Direction is explicit:
+ * a JOD→USD rate does not imply USD→JOD.
+ */
+async function getLatestRate(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  fromCurrency: string,
+  toCurrency: string,
+  asOf: number
+): Promise<number | null> {
+  const rate = await ctx.db
+    .query("exchangeRates")
+    .withIndex("by_org_pair", (q) =>
+      q.eq("orgId", orgId).eq("fromCurrency", fromCurrency).eq("toCurrency", toCurrency).lte("asOfDate", asOf)
+    )
+    .order("desc")
+    .first();
+  return rate?.rate ?? null;
+}
+
+/** Display-only translation — books never convert. Scale shift keeps the result in the target currency's minor units. */
+function translateMinor(amountMinor: number, rate: number, fromCurrency: string, toCurrency: string): number {
+  return Math.round(amountMinor * rate * Math.pow(10, scaleForCurrency(toCurrency) - scaleForCurrency(fromCurrency)));
+}
 
 /** Resolve the organization's display currency (defaults to JOD). */
 async function getOrgCurrencyForReports(ctx: QueryCtx, orgId: Id<"organizations">): Promise<string> {
@@ -59,6 +97,8 @@ export const trialBalance = query({
     orgId: v.id("organizations"),
     fromDate: v.optional(v.number()),
     toDate: v.optional(v.number()),
+    // Optional display translation through org-defined exchange rates.
+    reportingCurrency: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
@@ -70,28 +110,45 @@ export const trialBalance = query({
       .query("chartOfAccounts")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .collect();
+    const accountMap = new Map(accounts.map((a) => [a._id as string, a]));
 
     const lines = await getPostedLines(ctx, args.orgId, args.fromDate, args.toDate);
     const orgCurrency = await getOrgCurrencyForReports(ctx, args.orgId);
 
-    const totals = new Map<string, { debitMinor: number; creditMinor: number }>();
-
+    const totals = new Map<string, { accountId: string; currency: string; debitMinor: number; creditMinor: number }>();
     for (const line of lines) {
-      const key = line.accountId;
-      const existing = totals.get(key) ?? { debitMinor: 0, creditMinor: 0 };
+      const key = currencyKey(line.accountId, line.currency);
+      const existing = totals.get(key) ?? { accountId: line.accountId as string, currency: line.currency, debitMinor: 0, creditMinor: 0 };
       existing.debitMinor += line.debitMinor;
       existing.creditMinor += line.creditMinor;
       totals.set(key, existing);
     }
 
-    const rows = accounts.map((account) => {
-      const t = totals.get(account._id) ?? { debitMinor: 0, creditMinor: 0 };
+    const reportingCurrency = args.reportingCurrency?.toUpperCase();
+    const rateAsOf = args.toDate ?? Date.now();
+    const missingRates = new Set<string>();
+
+    const rows = [];
+    for (const t of totals.values()) {
+      const account = accountMap.get(t.accountId);
+      if (!account) continue;
+      if (t.debitMinor === 0 && t.creditMinor === 0) continue;
       const netMinor = account.normalBalance === "DEBIT"
         ? t.debitMinor - t.creditMinor
         : t.creditMinor - t.debitMinor;
-      // Display in the account's own currency where restricted, else the org currency.
-      const displayCurrency = account.currencyRestriction ?? orgCurrency;
-      return {
+
+      let translatedNetMinor: number | undefined;
+      if (reportingCurrency) {
+        if (t.currency === reportingCurrency) {
+          translatedNetMinor = netMinor;
+        } else {
+          const rate = await getLatestRate(ctx, args.orgId, t.currency, reportingCurrency, rateAsOf);
+          if (rate === null) missingRates.add(t.currency);
+          else translatedNetMinor = translateMinor(netMinor, rate, t.currency, reportingCurrency);
+        }
+      }
+
+      rows.push({
         accountId: account._id,
         code: account.code,
         name: account.name,
@@ -101,16 +158,40 @@ export const trialBalance = query({
         debitMinor: t.debitMinor,
         creditMinor: t.creditMinor,
         netMinor,
-        currency: displayCurrency,
-        netDisplay: fromMinorUnits(netMinor, displayCurrency),
-      };
-    }).filter((r) => r.debitMinor > 0 || r.creditMinor > 0);
+        currency: t.currency,
+        netDisplay: fromMinorUnits(netMinor, t.currency),
+        translatedNetMinor,
+      });
+    }
+    rows.sort((a, b) => a.code.localeCompare(b.code) || a.currency.localeCompare(b.currency));
 
-    const totalDebits = rows.reduce((s, r) => s + r.debitMinor, 0);
-    const totalCredits = rows.reduce((s, r) => s + r.creditMinor, 0);
-    const isBalanced = totalDebits === totalCredits;
+    const byCurrency = new Map<string, { totalDebits: number; totalCredits: number }>();
+    for (const r of rows) {
+      const c = byCurrency.get(r.currency) ?? { totalDebits: 0, totalCredits: 0 };
+      c.totalDebits += r.debitMinor;
+      c.totalCredits += r.creditMinor;
+      byCurrency.set(r.currency, c);
+    }
+    const totalsByCurrency = Array.from(byCurrency.entries()).map(([currency, c]) => ({
+      currency,
+      totalDebits: c.totalDebits,
+      totalCredits: c.totalCredits,
+      isBalanced: c.totalDebits === c.totalCredits,
+    }));
 
-    return { rows, totalDebits, totalCredits, isBalanced, currency: orgCurrency };
+    // Legacy top-level totals = the org-currency subtotal (identical output
+    // for single-currency orgs); isBalanced demands EVERY currency balances.
+    const orgTotals = byCurrency.get(orgCurrency) ?? { totalDebits: 0, totalCredits: 0 };
+    return {
+      rows,
+      totalDebits: orgTotals.totalDebits,
+      totalCredits: orgTotals.totalCredits,
+      isBalanced: totalsByCurrency.every((c) => c.isBalanced),
+      currency: orgCurrency,
+      totalsByCurrency,
+      reportingCurrency: reportingCurrency ?? null,
+      missingRates: Array.from(missingRates),
+    };
   },
 });
 
@@ -132,9 +213,10 @@ export const incomeStatement = query({
       .collect();
 
     const lines = await getPostedLines(ctx, args.orgId, args.fromDate, args.toDate);
+    const orgCurrency = await getOrgCurrencyForReports(ctx, args.orgId);
 
-    const accountMap = new Map(accounts.map((a) => [a._id, a]));
-    const totals = new Map<string, number>();
+    const accountMap = new Map(accounts.map((a) => [a._id as string, a]));
+    const totals = new Map<string, { accountId: string; currency: string; netMinor: number }>();
 
     for (const line of lines) {
       const account = accountMap.get(line.accountId);
@@ -142,45 +224,72 @@ export const incomeStatement = query({
       const type = account.type;
       if (!["REVENUE", "COGS", "EXPENSE", "OTHER_INCOME", "OTHER_EXPENSE"].includes(type)) continue;
 
-      const existing = totals.get(line.accountId) ?? 0;
-      const net = account.normalBalance === "CREDIT"
+      const key = currencyKey(line.accountId, line.currency);
+      const existing = totals.get(key) ?? { accountId: line.accountId as string, currency: line.currency, netMinor: 0 };
+      existing.netMinor += account.normalBalance === "CREDIT"
         ? line.creditMinor - line.debitMinor
         : line.debitMinor - line.creditMinor;
-      totals.set(line.accountId, existing + net);
+      totals.set(key, existing);
     }
 
-    const revenueAccounts = accounts.filter((a) => a.type === "REVENUE");
-    const cogsAccounts = accounts.filter((a) => a.type === "COGS");
-    const expenseAccounts = accounts.filter((a) => a.type === "EXPENSE");
-    const otherIncomeAccounts = accounts.filter((a) => a.type === "OTHER_INCOME");
-    const otherExpenseAccounts = accounts.filter((a) => a.type === "OTHER_EXPENSE");
+    const rowsFor = (type: string) => {
+      const rows = [];
+      for (const t of totals.values()) {
+        const account = accountMap.get(t.accountId);
+        if (!account || account.type !== type || t.netMinor === 0) continue;
+        rows.push({
+          accountId: account._id, code: account.code, name: account.name, nameAr: account.nameAr,
+          type: account.type, netMinor: t.netMinor, currency: t.currency,
+        });
+      }
+      rows.sort((a, b) => a.code.localeCompare(b.code) || a.currency.localeCompare(b.currency));
+      return rows;
+    };
 
-    const toRows = (accts: typeof accounts) =>
-      accts
-        .map((a) => ({ accountId: a._id, code: a.code, name: a.name, nameAr: a.nameAr, type: a.type, netMinor: totals.get(a._id) ?? 0 }))
-        .filter((r) => r.netMinor !== 0);
+    const sumFor = (type: string, currency: string) => {
+      let sum = 0;
+      for (const t of totals.values()) {
+        const account = accountMap.get(t.accountId);
+        if (account && account.type === type && t.currency === currency) sum += t.netMinor;
+      }
+      return sum;
+    };
 
-    const totalRevenue = revenueAccounts.reduce((s, a) => s + (totals.get(a._id) ?? 0), 0);
-    const totalCogs = cogsAccounts.reduce((s, a) => s + (totals.get(a._id) ?? 0), 0);
-    const grossProfit = totalRevenue - totalCogs;
-    const totalExpenses = expenseAccounts.reduce((s, a) => s + (totals.get(a._id) ?? 0), 0);
-    const totalOtherIncome = otherIncomeAccounts.reduce((s, a) => s + (totals.get(a._id) ?? 0), 0);
-    const totalOtherExpenses = otherExpenseAccounts.reduce((s, a) => s + (totals.get(a._id) ?? 0), 0);
-    const netIncome = grossProfit - totalExpenses + totalOtherIncome - totalOtherExpenses;
+    const currencies = Array.from(new Set(Array.from(totals.values()).map((t) => t.currency)));
+    if (!currencies.includes(orgCurrency)) currencies.push(orgCurrency);
+
+    const totalsByCurrency = currencies.map((currency) => {
+      const totalRevenue = sumFor("REVENUE", currency);
+      const totalCogs = sumFor("COGS", currency);
+      const grossProfit = totalRevenue - totalCogs;
+      const totalExpenses = sumFor("EXPENSE", currency);
+      const totalOtherIncome = sumFor("OTHER_INCOME", currency);
+      const totalOtherExpenses = sumFor("OTHER_EXPENSE", currency);
+      return {
+        currency, totalRevenue, totalCogs, grossProfit, totalExpenses, totalOtherIncome, totalOtherExpenses,
+        netIncome: grossProfit - totalExpenses + totalOtherIncome - totalOtherExpenses,
+      };
+    });
+
+    // Legacy top-level figures = org-currency subtotal (unchanged for
+    // single-currency orgs); other currencies live in totalsByCurrency.
+    const org = totalsByCurrency.find((c) => c.currency === orgCurrency)!;
 
     return {
-      revenueRows: toRows(revenueAccounts),
-      cogsRows: toRows(cogsAccounts),
-      expenseRows: toRows(expenseAccounts),
-      otherIncomeRows: toRows(otherIncomeAccounts),
-      otherExpenseRows: toRows(otherExpenseAccounts),
-      totalRevenue,
-      totalCogs,
-      grossProfit,
-      totalExpenses,
-      totalOtherIncome,
-      totalOtherExpenses,
-      netIncome,
+      revenueRows: rowsFor("REVENUE"),
+      cogsRows: rowsFor("COGS"),
+      expenseRows: rowsFor("EXPENSE"),
+      otherIncomeRows: rowsFor("OTHER_INCOME"),
+      otherExpenseRows: rowsFor("OTHER_EXPENSE"),
+      totalRevenue: org.totalRevenue,
+      totalCogs: org.totalCogs,
+      grossProfit: org.grossProfit,
+      totalExpenses: org.totalExpenses,
+      totalOtherIncome: org.totalOtherIncome,
+      totalOtherExpenses: org.totalOtherExpenses,
+      netIncome: org.netIncome,
+      currency: orgCurrency,
+      totalsByCurrency,
     };
   },
 });
@@ -202,51 +311,76 @@ export const balanceSheet = query({
       .collect();
 
     const lines = await getPostedLines(ctx, args.orgId, undefined, args.asOfDate);
+    const orgCurrency = await getOrgCurrencyForReports(ctx, args.orgId);
 
-    const accountMap = new Map(accounts.map((a) => [a._id, a]));
-    const totals = new Map<string, number>();
+    const accountMap = new Map(accounts.map((a) => [a._id as string, a]));
+    const totals = new Map<string, { accountId: string; currency: string; netMinor: number }>();
 
-    // Compute net balance per account (all types including P&L for net income)
+    // Net balance per (account, currency) — all types, P&L included for net income.
     for (const line of lines) {
       const account = accountMap.get(line.accountId);
       if (!account) continue;
-      const existing = totals.get(line.accountId) ?? 0;
-      const net = account.normalBalance === "DEBIT"
+      const key = currencyKey(line.accountId, line.currency);
+      const existing = totals.get(key) ?? { accountId: line.accountId as string, currency: line.currency, netMinor: 0 };
+      existing.netMinor += account.normalBalance === "DEBIT"
         ? line.debitMinor - line.creditMinor
         : line.creditMinor - line.debitMinor;
-      totals.set(line.accountId, existing + net);
+      totals.set(key, existing);
     }
 
-    const toRows = (accts: typeof accounts) =>
-      accts
-        .map((a) => ({ accountId: a._id, code: a.code, name: a.name, nameAr: a.nameAr, type: a.type, netMinor: totals.get(a._id) ?? 0 }))
-        .filter((r) => r.netMinor !== 0);
-
-    const assetRows = toRows(accounts.filter((a) => a.type === "ASSET"));
-    const liabilityRows = toRows(accounts.filter((a) => a.type === "LIABILITY"));
-    const equityRows = toRows(accounts.filter((a) => a.type === "EQUITY"));
-
-    const totalAssets = assetRows.reduce((s, r) => s + r.netMinor, 0);
-    const totalLiabilities = liabilityRows.reduce((s, r) => s + r.netMinor, 0);
-    const totalEquity = equityRows.reduce((s, r) => s + r.netMinor, 0);
-
-    // Current-period net income: Revenue + OtherIncome - COGS - Expense - OtherExpense
-    // Folded into equity for the balance-sheet equation before period closing.
-    let netIncomeMinor = 0;
-    for (const account of accounts) {
-      const net = totals.get(account._id) ?? 0;
-      if (account.type === "REVENUE" || account.type === "OTHER_INCOME") {
-        netIncomeMinor += net;
-      } else if (account.type === "COGS" || account.type === "EXPENSE" || account.type === "OTHER_EXPENSE") {
-        netIncomeMinor -= net;
+    const rowsFor = (type: string) => {
+      const rows = [];
+      for (const t of totals.values()) {
+        const account = accountMap.get(t.accountId);
+        if (!account || account.type !== type || t.netMinor === 0) continue;
+        rows.push({
+          accountId: account._id, code: account.code, name: account.name, nameAr: account.nameAr,
+          type: account.type, netMinor: t.netMinor, currency: t.currency,
+        });
       }
-    }
+      rows.sort((a, b) => a.code.localeCompare(b.code) || a.currency.localeCompare(b.currency));
+      return rows;
+    };
+
+    const assetRows = rowsFor("ASSET");
+    const liabilityRows = rowsFor("LIABILITY");
+    const equityRows = rowsFor("EQUITY");
+
+    const currencies = Array.from(new Set(Array.from(totals.values()).map((t) => t.currency)));
+    if (!currencies.includes(orgCurrency)) currencies.push(orgCurrency);
+
+    const totalsByCurrency = currencies.map((currency) => {
+      let totalAssets = 0, totalLiabilities = 0, totalEquity = 0, netIncomeMinor = 0;
+      for (const t of totals.values()) {
+        if (t.currency !== currency) continue;
+        const account = accountMap.get(t.accountId);
+        if (!account) continue;
+        if (account.type === "ASSET") totalAssets += t.netMinor;
+        else if (account.type === "LIABILITY") totalLiabilities += t.netMinor;
+        else if (account.type === "EQUITY") totalEquity += t.netMinor;
+        else if (account.type === "REVENUE" || account.type === "OTHER_INCOME") netIncomeMinor += t.netMinor;
+        else if (account.type === "COGS" || account.type === "EXPENSE" || account.type === "OTHER_EXPENSE") netIncomeMinor -= t.netMinor;
+      }
+      return {
+        currency, totalAssets, totalLiabilities, totalEquity, netIncomeMinor,
+        // Assets = Liabilities + Equity + Current-period Net Income (pre-close)
+        isBalanced: totalAssets === totalLiabilities + totalEquity + netIncomeMinor,
+      };
+    });
+
+    // Legacy top-level figures = org-currency subtotal; the equation must
+    // hold in EVERY currency for the sheet to count as balanced.
+    const org = totalsByCurrency.find((c) => c.currency === orgCurrency)!;
 
     return {
       assetRows, liabilityRows, equityRows,
-      totalAssets, totalLiabilities, totalEquity, netIncomeMinor,
-      // Assets = Liabilities + Equity + Current-period Net Income (pre-close)
-      isBalanced: totalAssets === totalLiabilities + totalEquity + netIncomeMinor,
+      totalAssets: org.totalAssets,
+      totalLiabilities: org.totalLiabilities,
+      totalEquity: org.totalEquity,
+      netIncomeMinor: org.netIncomeMinor,
+      isBalanced: totalsByCurrency.every((c) => c.isBalanced),
+      currency: orgCurrency,
+      totalsByCurrency,
     };
   },
 });
