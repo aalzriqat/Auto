@@ -266,3 +266,42 @@ describe("Phase 17 — parallel reporting and sign-off", () => {
     expect(signOffs[0].signedOffBy).toBe(ctx.userId);
   });
 });
+
+describe("Phase 17 — settling a legacy claim backfilled by the minor-unit migration", () => {
+  test("settle() self-heals a missing receivable instead of posting to the GL with no subledger record", async () => {
+    const { t, orgId, asOwner } = await seedCutoverDealer();
+
+    // A pre-Phase-13 claim: only the legacy major-unit field, no
+    // claimAmountMinor and (crucially) no receivableDocumentId, since add()
+    // is the only place that ever creates one and this row predates it.
+    const legacyClaimId = await t.run((ctx) =>
+      ctx.db.insert("claims", {
+        orgId, claimDate: Date.now(), financingEntity: "Legacy FC", buyerName: "Legacy Buyer",
+        claimAmount: 500, status: "PENDING",
+      })
+    );
+
+    await asOwner.mutation(api.accountingMigration.backfillClaimMinorUnits, { orgId });
+
+    const claimBeforeSettle = await t.run((ctx) => ctx.db.get(legacyClaimId));
+    expect(claimBeforeSettle?.claimAmountMinor).toBe(500_000);
+    expect(claimBeforeSettle?.receivableDocumentId).toBeUndefined();
+
+    await asOwner.mutation(api.claims.settle, { orgId, claimId: legacyClaimId, paymentMethod: "BANK_TRANSFER" });
+
+    const claimAfterSettle = await t.run((ctx) => ctx.db.get(legacyClaimId));
+    expect(claimAfterSettle?.status).toBe("PAID");
+    expect(claimAfterSettle?.receivableDocumentId).toBeTruthy();
+
+    const receivable = await t.run((ctx) => ctx.db.get(claimAfterSettle!.receivableDocumentId!));
+    expect(receivable?.status).toBe("PAID");
+    expect(receivable?.originalAmountMinor).toBe(500_000);
+
+    const allocations = await t.run((ctx) =>
+      ctx.db.query("paymentAllocations").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(allocations).toHaveLength(1);
+    expect(allocations[0].receivableDocumentId).toBe(claimAfterSettle!.receivableDocumentId);
+    expect(allocations[0].amountMinor).toBe(500_000);
+  });
+});

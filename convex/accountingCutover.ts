@@ -21,8 +21,9 @@ import { getOpenPeriodForDate } from "./accountingPeriods";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { validateManualJournalLines, auditLog, type ManualJournalLine } from "./financialAudit";
 import { toMinorUnits, scaleForCurrency } from "./utils/money";
-import { QueryCtx } from "./_generated/server";
+import { QueryCtx, MutationCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
+import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
 
 /**
  * A deliberately minimal, sign-off-scoped total — not a substitute for
@@ -35,12 +36,18 @@ async function sumAllPostedJournalLines(
   ctx: QueryCtx,
   orgId: Id<"organizations">
 ): Promise<{ totalDebits: number; totalCredits: number; isBalanced: boolean }> {
+  // Include REVERSED entries too — same reasoning as accountingReports.ts's
+  // getPostedLines: a reversed entry's own lines are real historical
+  // postings that a separately-posted reversal entry cancels out, not lines
+  // that stopped existing. Excluding them here would keep a reversal's
+  // inverted lines while dropping the original, skewing this sign-off
+  // snapshot's totals away from a true net position.
   const entries = (
     await ctx.db
       .query("journalEntries")
       .withIndex("by_org", (q) => q.eq("orgId", orgId))
       .collect()
-  ).filter((e) => e.status === "POSTED");
+  ).filter((e) => e.status === "POSTED" || e.status === "REVERSED");
 
   let totalDebits = 0;
   let totalCredits = 0;
@@ -83,6 +90,20 @@ export const postOpeningBalance = mutation({
 
     const totalDebits = validateManualJournalLines(args.lines as ManualJournalLine[]);
 
+    // Every account must belong to this org — an opening balance is a
+    // direct-lines insert (no applyPostingRule resolution in between), so
+    // nothing else would catch a cross-tenant account id otherwise.
+    // Deliberately not checking allowManualPosting here (unlike manual
+    // journals): the whole point of an opening balance is to seed starting
+    // values for system-controlled accounts (Cash, Fixed Assets, etc.) that
+    // normally block manual posting.
+    for (const line of args.lines) {
+      const account = await ctx.db.get(line.accountId);
+      if (!account || account.orgId !== args.orgId) {
+        throw new ConvexError(`Account ${line.accountId} not found in this organization.`);
+      }
+    }
+
     const period = await getOpenPeriodForDate(ctx, args.orgId, args.asOfDate);
     if (!period) {
       throw new ConvexError("No open accounting period covers the opening-balance date. Create and open a period first.");
@@ -123,6 +144,17 @@ export const postOpeningBalance = mutation({
         scale,
         accountingDate: args.asOfDate,
         description: line.description,
+      });
+      // GL Phase 18: this is a direct journalLines insert (not routed through
+      // postAccountingEvent), so it must keep the running snapshot in sync
+      // itself, exactly like postingEngine.ts and reversals.ts do.
+      await incrementAccountSnapshot(ctx, {
+        orgId: args.orgId,
+        accountId: line.accountId,
+        currency,
+        periodId: period._id,
+        debitMinor: line.debitMinor,
+        creditMinor: line.creditMinor,
       });
     }
 

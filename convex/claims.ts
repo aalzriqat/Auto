@@ -144,15 +144,35 @@ export const settle = mutation({
       receivedAt: occurredAt,
     });
 
-    if (claim.receivableDocumentId) {
-      await allocatePaymentToReceivable(ctx, {
+    // A claim backfilled by GL Phase 17's minor-unit migration has an amount
+    // but never had a receivable opened (that only happens in add(), and the
+    // backfill only touches claimAmountMinor/currency). Self-heal one here
+    // rather than silently skipping the allocation — otherwise this claim
+    // settles and posts to the GL with no subledger record at all.
+    let receivableDocumentId = claim.receivableDocumentId;
+    if (!receivableDocumentId) {
+      receivableDocumentId = await ensureReceivableDocument(ctx, {
         orgId: args.orgId,
-        paymentId,
-        receivableDocumentId: claim.receivableDocumentId,
-        amountMinor: claim.claimAmountMinor,
+        documentType: "INVOICE",
+        payerType: "FINANCE_COMPANY",
+        sourceType: "claims",
+        sourceId: args.claimId.toString(),
+        originalAmountMinor: claim.claimAmountMinor,
+        currency,
+        issueDate: claim.claimDate,
+        dueDate: claim.claimDate + CLAIM_DUE_DAYS_MS,
         actorId: user._id,
       });
+      await ctx.db.patch(args.claimId, { receivableDocumentId });
     }
+
+    await allocatePaymentToReceivable(ctx, {
+      orgId: args.orgId,
+      paymentId,
+      receivableDocumentId,
+      amountMinor: claim.claimAmountMinor,
+      actorId: user._id,
+    });
 
     await hookClaimSettled(ctx, {
       orgId: args.orgId,

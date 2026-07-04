@@ -12,6 +12,7 @@ import { MutationCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { scaleForCurrency } from "./utils/money";
+import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
 
 type AuditActionType =
   | "CREATE_PERIOD"
@@ -374,6 +375,18 @@ export const approveManualJournal = mutation({
         scale: journalScale,
         accountingDate: now,
         description: line.description,
+      });
+      // GL Phase 18: a direct journalLines insert (not routed through
+      // postAccountingEvent), so the running snapshot needs its own update
+      // here too — same as postingEngine.ts, reversals.ts, and
+      // accountingCutover.ts's postOpeningBalance.
+      await incrementAccountSnapshot(ctx, {
+        orgId: args.orgId,
+        accountId: line.accountId,
+        currency: effectiveCurrency,
+        periodId: period._id,
+        debitMinor: line.debitMinor,
+        creditMinor: line.creditMinor,
       });
     }
 
