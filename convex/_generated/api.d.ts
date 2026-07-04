@@ -29,6 +29,7 @@ import type * as adminUsers from "../adminUsers.js";
 import type * as applications from "../applications.js";
 import type * as approvals from "../approvals.js";
 import type * as branches from "../branches.js";
+import type * as changelog from "../changelog.js";
 import type * as chartOfAccounts from "../chartOfAccounts.js";
 import type * as claims from "../claims.js";
 import type * as collectionReminderActions from "../collectionReminderActions.js";
@@ -168,6 +169,7 @@ declare const fullApi: ApiFromModules<{
   applications: typeof applications;
   approvals: typeof approvals;
   branches: typeof branches;
+  changelog: typeof changelog;
   chartOfAccounts: typeof chartOfAccounts;
   claims: typeof claims;
   collectionReminderActions: typeof collectionReminderActions;

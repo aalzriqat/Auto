@@ -7,6 +7,7 @@ import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { OrgSwitcher } from "@/components/layout/OrgSwitcher";
 import { NotificationsBell } from "@/components/layout/NotificationsBell";
+import { WhatsNewButton } from "@/components/layout/WhatsNewButton";
 import { useMessenger } from "@/components/messages/MessengerContext";
 import { LanguageSwitcher } from "@/components/layout/LanguageSwitcher";
 import GlobalSearchModal from "@/components/search/GlobalSearchModal";
@@ -188,6 +189,7 @@ export function TopNav() {
               </span>
             )}
           </button>
+          <WhatsNewButton />
           <NotificationsBell />
           <div className="flex items-center justify-center">
             <UserButton />
