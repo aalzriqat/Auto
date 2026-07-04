@@ -1623,6 +1623,27 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"]),
 
+  // GL Phase 18: running per-(account, currency, period) totals, incremented
+  // synchronously by postAccountingEvent/reverseAccountingEvent every time a
+  // journal line posts. Lets trial balance / balance sheet sum O(periods)
+  // snapshot rows for closed periods instead of collecting every journal
+  // line ever posted; only the still-open containing period needs a bounded
+  // scan of its own lines. Currency is part of the key (not in the phase
+  // spec's original field list) because GL Phase 14 made a single account
+  // able to carry lines in more than one currency — a snapshot without a
+  // currency dimension would silently re-introduce that exact bug.
+  accountBalanceSnapshots: defineTable({
+    orgId: v.id("organizations"),
+    accountId: v.id("chartOfAccounts"),
+    currency: v.string(),
+    periodId: v.id("accountingPeriods"),
+    runningDebitMinor: v.number(),
+    runningCreditMinor: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org_account_currency_period", ["orgId", "accountId", "currency", "periodId"])
+    .index("by_org_period", ["orgId", "periodId"]),
+
   // GL Phase 15: full cash-drawer lifecycle. Distinct from the simpler,
   // pre-existing cashierReconciliations (open-float-free count-vs-expected
   // snapshot with no movement ledger) — this is the fuller open→count→

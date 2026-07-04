@@ -13,6 +13,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { fromMinorUnits, scaleForCurrency } from "./utils/money";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { requireFeature } from "./subscriptions";
+import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 
 /**
  * GL Phase 14 note on aggregation: every aggregate below keys on
@@ -69,10 +70,16 @@ async function getPostedLines(
   fromDate?: number,
   toDate?: number
 ) {
+  // Include REVERSED entries too, not just POSTED ones: a reversed entry's
+  // own lines are still real, immutable historical postings — its status
+  // just means a *separate*, independently-posted reversal entry later
+  // cancelled it out. Excluding it here would keep the reversal's inverted
+  // lines while silently dropping the original half of the pair, turning a
+  // net-zero cancellation into a one-sided, wrong balance.
   const entries = await ctx.db
     .query("journalEntries")
     .withIndex("by_org_date", (q) => q.eq("orgId", orgId))
-    .filter((q) => q.eq(q.field("status"), "POSTED"))
+    .filter((q) => q.or(q.eq(q.field("status"), "POSTED"), q.eq(q.field("status"), "REVERSED")))
     .collect();
 
   const entryIds = new Set(entries.map((e) => e._id));
@@ -112,16 +119,31 @@ export const trialBalance = query({
       .collect();
     const accountMap = new Map(accounts.map((a) => [a._id as string, a]));
 
-    const lines = await getPostedLines(ctx, args.orgId, args.fromDate, args.toDate);
     const orgCurrency = await getOrgCurrencyForReports(ctx, args.orgId);
 
     const totals = new Map<string, { accountId: string; currency: string; debitMinor: number; creditMinor: number }>();
-    for (const line of lines) {
-      const key = currencyKey(line.accountId, line.currency);
-      const existing = totals.get(key) ?? { accountId: line.accountId as string, currency: line.currency, debitMinor: 0, creditMinor: 0 };
-      existing.debitMinor += line.debitMinor;
-      existing.creditMinor += line.creditMinor;
-      totals.set(key, existing);
+    if (args.fromDate === undefined) {
+      // GL Phase 18: the common case (cumulative since inception through
+      // toDate, which is what "trial balance" conventionally means) reads
+      // running snapshots instead of collecting every journal line ever
+      // posted.
+      const balances = await getCumulativeBalancesAsOf(ctx, args.orgId, args.toDate ?? Date.now());
+      for (const b of balances) {
+        totals.set(currencyKey(b.accountId, b.currency), { accountId: b.accountId, currency: b.currency, debitMinor: b.debitMinor, creditMinor: b.creditMinor });
+      }
+    } else {
+      // A two-sided bounded range isn't a snapshot-as-of computation (it
+      // would need snapshot(toDate) − snapshot(justBeforeFromDate)); kept as
+      // the original full scan since this is a non-standard trial-balance
+      // shape, not the path the acceptance gate targets.
+      const lines = await getPostedLines(ctx, args.orgId, args.fromDate, args.toDate);
+      for (const line of lines) {
+        const key = currencyKey(line.accountId, line.currency);
+        const existing = totals.get(key) ?? { accountId: line.accountId as string, currency: line.currency, debitMinor: 0, creditMinor: 0 };
+        existing.debitMinor += line.debitMinor;
+        existing.creditMinor += line.creditMinor;
+        totals.set(key, existing);
+      }
     }
 
     const reportingCurrency = args.reportingCurrency?.toUpperCase();
@@ -310,22 +332,25 @@ export const balanceSheet = query({
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .collect();
 
-    const lines = await getPostedLines(ctx, args.orgId, undefined, args.asOfDate);
+    // GL Phase 18: sums running snapshots for every fully-elapsed period plus
+    // a bounded scan of just the containing period's own entries, instead of
+    // collecting every journal line the org has ever posted.
+    const balances = await getCumulativeBalancesAsOf(ctx, args.orgId, args.asOfDate);
     const orgCurrency = await getOrgCurrencyForReports(ctx, args.orgId);
 
     const accountMap = new Map(accounts.map((a) => [a._id as string, a]));
     const totals = new Map<string, { accountId: string; currency: string; netMinor: number }>();
 
     // Net balance per (account, currency) — all types, P&L included for net income.
-    for (const line of lines) {
-      const account = accountMap.get(line.accountId);
+    for (const balance of balances) {
+      const account = accountMap.get(balance.accountId);
       if (!account) continue;
-      const key = currencyKey(line.accountId, line.currency);
-      const existing = totals.get(key) ?? { accountId: line.accountId as string, currency: line.currency, netMinor: 0 };
-      existing.netMinor += account.normalBalance === "DEBIT"
-        ? line.debitMinor - line.creditMinor
-        : line.creditMinor - line.debitMinor;
-      totals.set(key, existing);
+      if (balance.debitMinor === 0 && balance.creditMinor === 0) continue;
+      const key = currencyKey(balance.accountId, balance.currency);
+      const netMinor = account.normalBalance === "DEBIT"
+        ? balance.debitMinor - balance.creditMinor
+        : balance.creditMinor - balance.debitMinor;
+      totals.set(key, { accountId: balance.accountId, currency: balance.currency, netMinor });
     }
 
     const rowsFor = (type: string) => {
