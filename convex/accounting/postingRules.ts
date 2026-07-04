@@ -21,6 +21,10 @@ export type EventType =
   | "FINANCE_CASH_RECEIVED"
   | "PAYMENT_LINK_RECEIVED"
   | "SUPPLIER_PAYMENT_SETTLED"
+  | "ASSET_CAPITALIZED"
+  | "DEPRECIATION_POSTED"
+  | "ASSET_IMPAIRED"
+  | "ASSET_DISPOSED"
   | "JOURNAL_REVERSAL";
 
 export const ALL_EVENT_TYPES = new Set<string>([
@@ -30,6 +34,7 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "COMMISSION_ACCRUED", "COMMISSION_PAID",
   "FINANCE_DISBURSED", "FINANCE_CASH_RECEIVED", "PAYMENT_LINK_RECEIVED",
   "SUPPLIER_PAYMENT_SETTLED",
+  "ASSET_CAPITALIZED", "DEPRECIATION_POSTED", "ASSET_IMPAIRED", "ASSET_DISPOSED",
   // JOURNAL_REVERSAL is intentionally excluded: it is written directly by
   // reverseAccountingEvent() in reversals.ts and never goes through postAccountingEvent().
 ]);
@@ -491,6 +496,103 @@ export function ruleChequeDeposited(p: ChequeDepositedPayload): RuleResult {
   };
 }
 
+// ─── GL Phase 11: fixed-asset lifecycle ───────────────────────────────────────
+
+export interface AssetCapitalizedPayload {
+  assetId: string;
+  costMinor: number;
+  currency: string;
+  paymentMethod?: string;
+}
+
+export interface DepreciationPostedPayload {
+  assetId: string;
+  amountMinor: number;
+  currency: string;
+}
+
+export interface AssetImpairedPayload {
+  assetId: string;
+  amountMinor: number;
+  currency: string;
+}
+
+export interface AssetDisposedPayload {
+  assetId: string;
+  costMinor: number;
+  accumulatedDepreciationMinor: number;
+  proceedsMinor: number;
+  currency: string;
+}
+
+export function ruleAssetCapitalized(p: AssetCapitalizedPayload): RuleResult {
+  // Outbound payment: cashAccountKey's CHEQUE branch maps to CHEQUES_IN_HAND,
+  // which holds customer cheques we've *received* — wrong side for paying a
+  // supplier by our own cheque, which ultimately clears from our bank.
+  const cashKey = p.paymentMethod === "CHEQUE"
+    ? SYSTEM_KEYS.BANK_ACCOUNT
+    : cashAccountKey(p.paymentMethod);
+  return {
+    lines: [
+      line(SYSTEM_KEYS.FIXED_ASSETS, p.costMinor, 0, "Asset capitalized"),
+      line(cashKey, 0, p.costMinor, "Payment for asset"),
+    ],
+    memo: "Fixed asset capitalized",
+    category: "SYSTEM",
+  };
+}
+
+export function ruleDepreciationPosted(p: DepreciationPostedPayload): RuleResult {
+  return {
+    lines: [
+      line(SYSTEM_KEYS.DEPRECIATION_EXPENSE, p.amountMinor, 0, "Depreciation expense"),
+      line(SYSTEM_KEYS.ACCUMULATED_DEPRECIATION, 0, p.amountMinor, "Accumulated depreciation"),
+    ],
+    memo: "Monthly depreciation posted",
+    category: "SYSTEM",
+  };
+}
+
+export function ruleAssetImpaired(p: AssetImpairedPayload): RuleResult {
+  return {
+    lines: [
+      line(SYSTEM_KEYS.IMPAIRMENT_LOSS, p.amountMinor, 0, "Impairment loss"),
+      line(SYSTEM_KEYS.ACCUMULATED_DEPRECIATION, 0, p.amountMinor, "Impairment recorded as additional accumulated depreciation"),
+    ],
+    memo: "Fixed asset impaired",
+    category: "SYSTEM",
+  };
+}
+
+/**
+ * Derecognizes the asset's full cost and its accumulated depreciation, records
+ * any cash proceeds, and books the balancing gain or loss (proceeds vs. net
+ * book value). Zero-amount lines are omitted since a manual/system journal
+ * line can't have both a zero debit and a zero credit (validateBalance would
+ * reject it) — omitting a genuinely-zero line never affects balance, since a
+ * zero contribution can't unbalance the entry either way.
+ */
+export function ruleAssetDisposed(p: AssetDisposedPayload): RuleResult {
+  const netBookValue = p.costMinor - p.accumulatedDepreciationMinor;
+  const gainOrLoss = p.proceedsMinor - netBookValue;
+
+  const lines: LineSpec[] = [];
+  if (p.accumulatedDepreciationMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.ACCUMULATED_DEPRECIATION, p.accumulatedDepreciationMinor, 0, "Remove accumulated depreciation"));
+  }
+  if (p.proceedsMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.BANK_ACCOUNT, p.proceedsMinor, 0, "Disposal proceeds"));
+  }
+  lines.push(line(SYSTEM_KEYS.FIXED_ASSETS, 0, p.costMinor, "Remove asset cost"));
+  if (gainOrLoss > 0) {
+    lines.push(line(SYSTEM_KEYS.GAIN_ON_DISPOSAL, 0, gainOrLoss, "Gain on disposal"));
+  } else if (gainOrLoss < 0) {
+    lines.push(line(SYSTEM_KEYS.LOSS_ON_DISPOSAL, -gainOrLoss, 0, "Loss on disposal"));
+  }
+
+  return { lines, memo: "Fixed asset disposed", category: "SYSTEM" };
+}
+
 // ─── Dispatch ─────────────────────────────────────────────────────────────────
 
 export function applyPostingRule(eventType: string, payload: Record<string, unknown>): RuleResult {
@@ -514,6 +616,10 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "FINANCE_CASH_RECEIVED": return ruleFinanceCashReceived(payload as unknown as FinanceCashReceivedPayload);
     case "PAYMENT_LINK_RECEIVED": return rulePaymentLinkReceived(payload as unknown as PaymentLinkReceivedPayload);
     case "SUPPLIER_PAYMENT_SETTLED": return ruleSupplierPaymentSettled(payload as unknown as SupplierPaymentSettledPayload);
+    case "ASSET_CAPITALIZED": return ruleAssetCapitalized(payload as unknown as AssetCapitalizedPayload);
+    case "DEPRECIATION_POSTED": return ruleDepreciationPosted(payload as unknown as DepreciationPostedPayload);
+    case "ASSET_IMPAIRED": return ruleAssetImpaired(payload as unknown as AssetImpairedPayload);
+    case "ASSET_DISPOSED": return ruleAssetDisposed(payload as unknown as AssetDisposedPayload);
     default:
       throw new Error(`No posting rule defined for event type: ${eventType}`);
   }

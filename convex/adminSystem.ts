@@ -108,7 +108,8 @@ const webhookSourceValidator = v.union(
   v.literal("subscription-reminder"),
   v.literal("support-inbox-notification"),
   v.literal("upgrade-request"),
-  v.literal("social-auto-reply-retry")
+  v.literal("social-auto-reply-retry"),
+  v.literal("fixed-asset-depreciation")
 );
 
 /**

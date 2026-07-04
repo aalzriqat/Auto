@@ -1548,14 +1548,58 @@ export default defineSchema({
   fixedAssets: defineTable({
     orgId: v.id("organizations"),
     name: v.string(), // e.g., "أثاث مكتب"
-    purchaseValue: v.number(),
+    // Legacy field, kept optional through the widen-migrate-narrow transition —
+    // GL Phase 11 replaces it with costMinor/currency. New rows leave it unset.
+    purchaseValue: v.optional(v.number()),
     purchaseDate: v.number(), // Timestamp
     notes: v.optional(v.string()),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
     deletedBy: v.optional(v.string()),
+    // ─── GL Phase 11: capitalization + depreciation lifecycle ────────────────
+    costMinor: v.optional(v.number()),
+    currency: v.optional(v.string()),
+    salvageValueMinor: v.optional(v.number()),
+    usefulLifeMonths: v.optional(v.number()),
+    method: v.optional(v.literal("STRAIGHT_LINE")),
+    depreciationStartDate: v.optional(v.number()),
+    status: v.optional(v.union(
+      v.literal("ACTIVE"),
+      v.literal("IMPAIRED"),
+      v.literal("DISPOSED"),
+    )),
+    // Derived cache, kept in sync by the lifecycle mutations below — always
+    // recomputable from fixedAssetEvents, never the source of truth.
+    accumulatedDepreciationMinor: v.optional(v.number()),
+    lastDepreciatedYearMonth: v.optional(v.string()), // "YYYY-MM" of the last posted depreciation run
+    disposedAt: v.optional(v.number()),
+    disposalProceedsMinor: v.optional(v.number()),
   })
-    .index("by_org", ["orgId"]),
+    .index("by_org", ["orgId"])
+    .index("by_status", ["status"]),
+
+  // Immutable, append-only log of every capitalization/depreciation/impairment/
+  // disposal event posted for a fixed asset — the audit trail behind the
+  // derived accumulatedDepreciationMinor cache on fixedAssets.
+  fixedAssetEvents: defineTable({
+    orgId: v.id("organizations"),
+    assetId: v.id("fixedAssets"),
+    type: v.union(
+      v.literal("CAPITALIZE"),
+      v.literal("DEPRECIATE"),
+      v.literal("IMPAIR"),
+      v.literal("DISPOSE"),
+    ),
+    amountMinor: v.number(),
+    currency: v.string(),
+    occurredAt: v.number(),
+    accountingEventId: v.optional(v.id("accountingEvents")),
+    actorId: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_asset", ["assetId"])
+    .index("by_org_asset_time", ["orgId", "assetId", "occurredAt"]),
 
   partnerEquity: defineTable({
     orgId: v.id("organizations"),
@@ -2182,7 +2226,8 @@ export default defineSchema({
       v.literal("subscription-reminder"),
       v.literal("support-inbox-notification"),
       v.literal("upgrade-request"),
-      v.literal("social-auto-reply-retry")
+      v.literal("social-auto-reply-retry"),
+      v.literal("fixed-asset-depreciation")
     ),
     status: v.union(v.literal("received"), v.literal("success"), v.literal("error"), v.literal("dead_letter")),
     summary: v.string(),

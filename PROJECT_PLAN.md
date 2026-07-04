@@ -1137,7 +1137,7 @@ to a complete, audit-ready product (~65–75% → done). Validated against sourc
 | GL Phase | Description | Status |
 |---|---|---|
 | 10 | True two-person manual-journal approval (create → authenticated approve/reject) | ✅ Done (2026-07-03) |
-| 11 | Fixed-asset lifecycle: capitalize, depreciate, impair, dispose (GL-posted) | ⬜ Planned |
+| 11 | Fixed-asset lifecycle: capitalize, depreciate, impair, dispose (GL-posted) | ✅ Done (2026-07-04) |
 | 12 | Partner equity as immutable contribution/draw/distribution transactions | ⬜ Planned |
 | 13 | Claim receivables + settlement postings | ⬜ Planned |
 | 14 | Multi-currency reporting correctness (group by accountId + currency) | ⬜ Planned |
@@ -1210,5 +1210,6 @@ Each phase reuses the established pattern: immutable event table → posting rul
 | 42 | Open API & Integration Hub | 3 — Enterprise & Scale | ⬜ Not started |
 | GL 0–9 | Double-Entry Accounting Foundation | Accounting GL Track | ✅ Done |
 | GL 10 | True two-person manual-journal approval | Accounting GL Track | ✅ Done |
-| GL 11–18 | Accounting Final Phases (assets, equity, claims, cash-drawer, multi-currency, migration, scale) | Accounting GL Track | ⬜ Planned |
+| GL 11 | Fixed-asset lifecycle and depreciation (GL-posted) | Accounting GL Track | ✅ Done |
+| GL 12–18 | Accounting Final Phases (equity, claims, cash-drawer, multi-currency, migration, scale) | Accounting GL Track | ⬜ Planned |
 | 50–55 | AI / LLM Features | Backlog — No Budget | 🔒 Deferred |

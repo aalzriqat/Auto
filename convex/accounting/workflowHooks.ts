@@ -15,7 +15,7 @@ import { postAccountingEvent, PostCommand } from "./postingEngine";
 import { EventType } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate } from "../accountingPeriods";
-import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount } from "../chartOfAccounts";
+import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts } from "../chartOfAccounts";
 import {
   enqueuePendingPost,
   enqueuePendingReversal,
@@ -614,6 +614,148 @@ export async function hookPaymentLinkReceived(
       currency: args.currency,
       customerId: args.customerId.toString(),
       provider: args.provider,
+    },
+  });
+}
+
+// ─── GL Phase 11: fixed-asset lifecycle ───────────────────────────────────────
+
+/**
+ * Unlike GENERAL_EXPENSE/AP-Suppliers (self-healed unconditionally in
+ * postOrEnqueue since many event types can resolve them), the 6 fixed-asset
+ * accounts are only ever needed by these 4 hooks — so the self-heal is scoped
+ * here instead of added to the shared choke point, to avoid the extra lookup
+ * on every unrelated posting event.
+ */
+async function ensureFixedAssetAccountsIfChartReady(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  if (await isChartInitialized(ctx, orgId)) {
+    await ensureFixedAssetAccounts(ctx, orgId, actorId);
+  }
+}
+
+export async function hookAssetCapitalized(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    assetId: Id<"fixedAssets">;
+    costMinor: number;
+    currency: string;
+    paymentMethod?: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await ensureFixedAssetAccountsIfChartReady(ctx, args.orgId, args.actorId);
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "ASSET_CAPITALIZED",
+    sourceType: "fixedAssets",
+    sourceId: args.assetId.toString(),
+    idempotencyKey: `asset_capitalized_${args.assetId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      assetId: args.assetId.toString(),
+      costMinor: args.costMinor,
+      currency: args.currency,
+      paymentMethod: args.paymentMethod,
+    },
+  });
+}
+
+export async function hookDepreciationPosted(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    assetId: Id<"fixedAssets">;
+    yearMonth: string; // "YYYY-MM", used only for the idempotency key
+    amountMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await ensureFixedAssetAccountsIfChartReady(ctx, args.orgId, args.actorId);
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "DEPRECIATION_POSTED",
+    sourceType: "fixedAssets",
+    sourceId: `depr_${args.assetId}_${args.yearMonth}`,
+    idempotencyKey: `depr_${args.assetId}_${args.yearMonth}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      assetId: args.assetId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+    },
+  });
+}
+
+export async function hookAssetImpaired(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    assetId: Id<"fixedAssets">;
+    amountMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await ensureFixedAssetAccountsIfChartReady(ctx, args.orgId, args.actorId);
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "ASSET_IMPAIRED",
+    sourceType: "fixedAssets",
+    sourceId: args.assetId.toString(),
+    idempotencyKey: `asset_impaired_${args.assetId}_${args.occurredAt}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      assetId: args.assetId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+    },
+  });
+}
+
+export async function hookAssetDisposed(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    assetId: Id<"fixedAssets">;
+    costMinor: number;
+    accumulatedDepreciationMinor: number;
+    proceedsMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await ensureFixedAssetAccountsIfChartReady(ctx, args.orgId, args.actorId);
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "ASSET_DISPOSED",
+    sourceType: "fixedAssets",
+    sourceId: args.assetId.toString(),
+    idempotencyKey: `asset_disposed_${args.assetId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      assetId: args.assetId.toString(),
+      costMinor: args.costMinor,
+      accumulatedDepreciationMinor: args.accumulatedDepreciationMinor,
+      proceedsMinor: args.proceedsMinor,
+      currency: args.currency,
     },
   });
 }
