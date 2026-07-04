@@ -14,7 +14,7 @@ import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { postAccountingEvent } from "./accounting/postingEngine";
 import { getOrgCurrency } from "./accounting/workflowHooks";
-import { ensurePartnerEquityAccounts } from "./chartOfAccounts";
+import { ensurePartnerEquityAccounts, ensureClaimAccounts } from "./chartOfAccounts";
 import { toMinorUnits } from "./utils/money";
 import { requireFeature } from "./subscriptions";
 
@@ -42,6 +42,8 @@ function mapCategoryToEventType(category: string, type: string): string | null {
   // partner — the rules treat it as optional metadata).
   if (category === "PARTNER_DRAW") return "PARTNER_DREW";
   if (category === "CAPITAL_INJECTION") return "CAPITAL_CONTRIBUTED";
+  // GL Phase 13 closed the claim skip gap the same way.
+  if (category === "CLAIM_PAYMENT") return "CLAIM_SETTLED";
   return null;
 }
 
@@ -253,6 +255,7 @@ export const migrateUnpostedTransactions = mutation({
     // chart fails to resolve PARTNER_CAPITAL/PARTNER_DRAWINGS.
     if (!dryRun) {
       await ensurePartnerEquityAccounts(ctx, args.orgId, user._id);
+      await ensureClaimAccounts(ctx, args.orgId, user._id);
     }
     const results: Array<{ transactionId: string; action: string; eventType: string | null; reason?: string }> = [];
 
@@ -311,11 +314,14 @@ export const migrateUnpostedTransactions = mutation({
           payload.saleAmountMinor = amountMinor;
         } else if (eventType === "PARTNER_DREW" || eventType === "CAPITAL_CONTRIBUTED") {
           payload.paymentMethod = "CASH";
+        } else if (eventType === "CLAIM_SETTLED") {
+          payload.claimId = tx._id.toString();
+          payload.paymentMethod = "CASH";
         }
 
         await postAccountingEvent(ctx, {
           orgId: args.orgId,
-          eventType: eventType as "EXPENSE_POSTED" | "COLLECTION_PAYMENT" | "DEPOSIT_RECEIVED" | "DEPOSIT_REFUNDED" | "SALE_COMPLETED" | "PARTNER_DREW" | "CAPITAL_CONTRIBUTED",
+          eventType: eventType as "EXPENSE_POSTED" | "COLLECTION_PAYMENT" | "DEPOSIT_RECEIVED" | "DEPOSIT_REFUNDED" | "SALE_COMPLETED" | "PARTNER_DREW" | "CAPITAL_CONTRIBUTED" | "CLAIM_SETTLED",
           sourceType: "transactions",
           sourceId: tx._id.toString(),
           eventVersion: 1,

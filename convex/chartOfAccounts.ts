@@ -245,6 +245,16 @@ export async function ensurePartnerEquityAccounts(
   await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.PARTNER_DRAWINGS, "3300");
 }
 
+/** GL Phase 13 self-heal: finance-company AR (very old charts may predate it) plus the claim write-off expense account. */
+export async function ensureClaimAccounts(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES, "1210");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.CLAIM_WRITE_OFF_EXPENSE, "6700");
+}
+
 // ─── Queries ──────────────────────────────────────────────────────────────────
 
 export const list = query({

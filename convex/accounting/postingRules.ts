@@ -28,6 +28,8 @@ export type EventType =
   | "CAPITAL_CONTRIBUTED"
   | "PARTNER_DREW"
   | "PROFIT_DISTRIBUTED"
+  | "CLAIM_SETTLED"
+  | "CLAIM_WRITTEN_OFF"
   | "JOURNAL_REVERSAL";
 
 export const ALL_EVENT_TYPES = new Set<string>([
@@ -39,6 +41,7 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "SUPPLIER_PAYMENT_SETTLED",
   "ASSET_CAPITALIZED", "DEPRECIATION_POSTED", "ASSET_IMPAIRED", "ASSET_DISPOSED",
   "CAPITAL_CONTRIBUTED", "PARTNER_DREW", "PROFIT_DISTRIBUTED",
+  "CLAIM_SETTLED", "CLAIM_WRITTEN_OFF",
   // JOURNAL_REVERSAL is intentionally excluded: it is written directly by
   // reverseAccountingEvent() in reversals.ts and never goes through postAccountingEvent().
 ]);
@@ -654,6 +657,51 @@ export function ruleProfitDistributed(p: PartnerEquityMovementPayload): RuleResu
   };
 }
 
+// ─── GL Phase 13: claim receivables ───────────────────────────────────────────
+
+export interface ClaimSettledPayload {
+  claimId: string;
+  amountMinor: number;
+  currency: string;
+  paymentMethod?: string;
+}
+
+export interface ClaimWrittenOffPayload {
+  claimId: string;
+  amountMinor: number;
+  currency: string;
+}
+
+export function ruleClaimSettled(p: ClaimSettledPayload): RuleResult {
+  // Finance companies settle by transfer unless told otherwise, so the
+  // no-method default is the bank, not the cash drawer. An explicit CASH
+  // still hits the drawer (cashAccountKey's defaultCash option can't express
+  // that — it also swallows explicit CASH, which falls through to the
+  // default), and an inbound cheque genuinely lands in CHEQUES_IN_HAND.
+  const cashKey = p.paymentMethod === undefined
+    ? SYSTEM_KEYS.BANK_ACCOUNT
+    : cashAccountKey(p.paymentMethod);
+  return {
+    lines: [
+      line(cashKey, p.amountMinor, 0, "Claim settlement received"),
+      line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES, 0, p.amountMinor, "Finance-company AR settled"),
+    ],
+    memo: "Finance-company claim settled",
+    category: "SYSTEM",
+  };
+}
+
+export function ruleClaimWrittenOff(p: ClaimWrittenOffPayload): RuleResult {
+  return {
+    lines: [
+      line(SYSTEM_KEYS.CLAIM_WRITE_OFF_EXPENSE, p.amountMinor, 0, "Rejected claim written off"),
+      line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES, 0, p.amountMinor, "Finance-company AR written off"),
+    ],
+    memo: "Rejected claim written off",
+    category: "SYSTEM",
+  };
+}
+
 // ─── Dispatch ─────────────────────────────────────────────────────────────────
 
 export function applyPostingRule(eventType: string, payload: Record<string, unknown>): RuleResult {
@@ -684,6 +732,8 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "CAPITAL_CONTRIBUTED": return ruleCapitalContributed(payload as unknown as PartnerEquityMovementPayload);
     case "PARTNER_DREW": return rulePartnerDrew(payload as unknown as PartnerEquityMovementPayload);
     case "PROFIT_DISTRIBUTED": return ruleProfitDistributed(payload as unknown as PartnerEquityMovementPayload);
+    case "CLAIM_SETTLED": return ruleClaimSettled(payload as unknown as ClaimSettledPayload);
+    case "CLAIM_WRITTEN_OFF": return ruleClaimWrittenOff(payload as unknown as ClaimWrittenOffPayload);
     default:
       throw new Error(`No posting rule defined for event type: ${eventType}`);
   }

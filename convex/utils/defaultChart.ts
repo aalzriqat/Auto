@@ -28,6 +28,7 @@ export const SYSTEM_KEYS = {
   IMPAIRMENT_LOSS: "IMPAIRMENT_LOSS",
   PARTNER_CAPITAL: "PARTNER_CAPITAL",
   PARTNER_DRAWINGS: "PARTNER_DRAWINGS",
+  CLAIM_WRITE_OFF_EXPENSE: "CLAIM_WRITE_OFF_EXPENSE",
 } as const;
 
 export type SystemKey = typeof SYSTEM_KEYS[keyof typeof SYSTEM_KEYS];
@@ -362,6 +363,16 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     isControlAccount: false,
     allowManualPosting: false,
     systemKey: SYSTEM_KEYS.LOSS_ON_DISPOSAL,
+  },
+  {
+    code: "6700",
+    name: "Claim Write-off Expense",
+    nameAr: "مصروف شطب مطالبات",
+    type: "OTHER_EXPENSE",
+    normalBalance: "DEBIT",
+    isControlAccount: false,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.CLAIM_WRITE_OFF_EXPENSE,
   },
 ];
 

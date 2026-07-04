@@ -1646,10 +1646,20 @@ export default defineSchema({
     saleId: v.optional(v.id("sales")),
     financingEntity: v.string(), // "جهة التمويل"
     buyerName: v.string(), // "اسم المشتري"
-    claimAmount: v.number(), // "المطالبة"
+    // Legacy major-unit amount, frozen as of GL Phase 13 — new claims store
+    // claimAmountMinor/currency instead. Narrowed in GL Phase 17.
+    claimAmount: v.optional(v.number()),
     status: v.union(v.literal("PENDING"), v.literal("PAID"), v.literal("REJECTED"), v.literal("CANCELLED")),
     claimDate: v.number(),
     notes: v.optional(v.string()),
+    // ─── GL Phase 13: subledger-backed claim lifecycle ────────────────────
+    claimAmountMinor: v.optional(v.number()),
+    currency: v.optional(v.string()),
+    receivableDocumentId: v.optional(v.id("receivableDocuments")),
+    settledAt: v.optional(v.number()),
+    settledBy: v.optional(v.id("users")),
+    rejectedAt: v.optional(v.number()),
+    rejectedBy: v.optional(v.id("users")),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
     deletedBy: v.optional(v.string()),
