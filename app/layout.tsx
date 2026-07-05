@@ -19,8 +19,11 @@ export const metadata: Metadata = {
   title: "AutoFlow | The Modern Dealership OS",
   description: "Ditch the spreadsheets. Manage your vehicle inventory, track sales pipelines, and generate professional PDF quotes instantly. Built for modern showrooms.",
   icons: {
-    icon: "/logo.png",
-    apple: "/logo.png",
+    // Icon-only crop of the brand mark on a solid background — logo.png (the
+    // full wordmark banner used elsewhere in the UI) reads as a blurry
+    // gradient blob at favicon/home-screen sizes.
+    icon: "/icon.png",
+    apple: "/apple-touch-icon.png",
   },
   // iOS/iPadOS only supports Web Push (and standalone "app" chrome) for a
   // site added to the Home Screen — this is what makes that installable.
