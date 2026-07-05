@@ -68,7 +68,7 @@ export default function TeamPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
 
-  const { results: memberships } = usePaginatedQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
+  const { results: memberships, status: membershipsStatus, loadMore: loadMoreMemberships } = usePaginatedQuery(api.memberships.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
   const myMembership = useQuery(api.memberships.getMyMembership, activeOrgId ? { orgId: activeOrgId } : "skip");
   const orgSettings = useQuery(api.orgSettings.get, activeOrgId ? { orgId: activeOrgId } : "skip");
   const roles = useQuery(api.roles.list, activeOrgId ? { orgId: activeOrgId } : "skip");
@@ -103,6 +103,7 @@ export default function TeamPage() {
       role: (m) => m.roleName,
       lastSeen: (m) => (m as any).lastSeenAt ?? 0,
     },
+    pagination: { status: membershipsStatus, loadMore: loadMoreMemberships, batchSize: 100 },
   });
 
   const roleOptions = Array.from(new Set((memberships ?? []).map((m) => m.roleName)));

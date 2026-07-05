@@ -77,6 +77,7 @@ export default function SalesPage() {
       price: (s) => s.salePrice,
       status: (s) => s.status,
     },
+    pagination: { status: salesStatus, loadMore: loadMoreSales, batchSize: 25 },
   });
 
   const filteredSales = sortedSales?.filter((s) => statusFilter === "ALL" || s.status === statusFilter);

@@ -27,7 +27,7 @@ export function ApplicationClient() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
 
-  const { results: applications } = usePaginatedQuery(api.applications.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
+  const { results: applications, status: applicationsStatus, loadMore: loadMoreApplications } = usePaginatedQuery(api.applications.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
 
   const [selectedAppId, setSelectedAppId] = useState<any>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -48,6 +48,7 @@ export function ApplicationClient() {
       date: (app) => app.createdAt,
       status: (app) => app.status,
     },
+    pagination: { status: applicationsStatus, loadMore: loadMoreApplications, batchSize: 100 },
   });
 
   const statusOptions = Array.from(new Set((applications ?? []).map((app) => app.status)));

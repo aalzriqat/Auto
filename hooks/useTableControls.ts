@@ -1,7 +1,15 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { PaginationStatus } from "convex/react";
 
 export type SortDir = "asc" | "desc";
+
+interface UseTableControlsPagination {
+  status: PaginationStatus;
+  loadMore: (numItems: number) => void;
+  /** Page size for each auto-load-more call while searching. Defaults to 200. */
+  batchSize?: number;
+}
 
 interface UseTableControlsOptions<T> {
   data: T[] | undefined;
@@ -11,6 +19,13 @@ interface UseTableControlsOptions<T> {
   sortAccessors?: Record<string, (item: T) => string | number | null | undefined>;
   defaultSortKey?: string;
   defaultSortDir?: SortDir;
+  /**
+   * For usePaginatedQuery-backed tables: while `search` is non-empty, keeps
+   * calling `loadMore` until the query is exhausted, so results aren't
+   * silently limited to whichever page happens to be loaded already. Omit
+   * for tables that load their full dataset up front.
+   */
+  pagination?: UseTableControlsPagination;
 }
 
 /**
@@ -23,10 +38,22 @@ export function useTableControls<T>({
   sortAccessors,
   defaultSortKey,
   defaultSortDir = "asc",
+  pagination,
 }: UseTableControlsOptions<T>) {
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<string | undefined>(defaultSortKey);
   const [sortDir, setSortDir] = useState<SortDir>(defaultSortDir);
+
+  const isSearching = search.trim().length > 0;
+  const paginationStatus = pagination?.status;
+  useEffect(() => {
+    if (isSearching && paginationStatus === "CanLoadMore") {
+      pagination?.loadMore(pagination.batchSize ?? 200);
+    }
+    // Only re-run when search starts or a page finishes loading — not on
+    // every render, since `pagination` is a fresh object each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSearching, paginationStatus]);
 
   function toggleSort(key: string) {
     if (sortKey !== key) {

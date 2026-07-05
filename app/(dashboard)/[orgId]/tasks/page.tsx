@@ -47,7 +47,7 @@ const PRIORITY_RANK: Record<string, number> = { HIGH: 3, MEDIUM: 2, LOW: 1 };
 export default function TasksPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const { results: tasks } = usePaginatedQuery(api.tasks.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
+  const { results: tasks, status: tasksStatus, loadMore: loadMoreTasks } = usePaginatedQuery(api.tasks.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
   const updateTask = useMutation(api.tasks.update);
 
   const [priorityFilter, setPriorityFilter] = useState<"all" | "HIGH" | "MEDIUM" | "LOW">("all");
@@ -74,6 +74,7 @@ export default function TasksPage() {
       dueDate: (task) => task.dueDate,
       priority: (task) => PRIORITY_RANK[(task as any).priority] ?? 0,
     },
+    pagination: { status: tasksStatus, loadMore: loadMoreTasks, batchSize: 100 },
   });
 
   const filteredTasks = sortedTasks?.filter((t) =>

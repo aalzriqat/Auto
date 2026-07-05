@@ -96,6 +96,7 @@ export default function VehiclesPage() {
       year: (v) => v.year,
       addedDate: (v) => v.createdAt ?? v._creationTime,
     },
+    pagination: { status: vehiclesStatus, loadMore: loadMoreVehicles, batchSize: 20 },
   });
   const [agingFilter, setAgingFilter] = useState<AgingFilter>("ALL");
   const [isVehicleDialogOpen, setIsVehicleDialogOpen] = useState(false);

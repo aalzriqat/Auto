@@ -82,6 +82,7 @@ export default function CustomersPage() {
       name: (c) => `${c.firstName} ${c.lastName}`.toLowerCase(),
       addedDate: (c) => c.createdAt ?? c._creationTime,
     },
+    pagination: { status: customersStatus, loadMore: loadMoreCustomers, batchSize: 25 },
   });
 
   const sourceOptions = Array.from(

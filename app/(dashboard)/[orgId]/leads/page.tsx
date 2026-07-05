@@ -84,6 +84,7 @@ export default function LeadsPage() {
       createdAt: (l) => l._creationTime,
       updatedAt: (l) => l.updatedAt ?? l._creationTime,
     },
+    pagination: { status: leadsStatus, loadMore: loadMoreLeads, batchSize: 25 },
   });
 
   useEffect(() => {

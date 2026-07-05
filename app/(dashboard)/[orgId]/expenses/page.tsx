@@ -43,7 +43,7 @@ export default function ExpensesPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const { format } = useCurrency();
-  const { results: expenses } = usePaginatedQuery(api.expenses.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
+  const { results: expenses, status: expensesStatus, loadMore: loadMoreExpenses } = usePaginatedQuery(api.expenses.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
   const removeExpense = useMutation(api.expenses.remove);
 
   const [isExpenseDialogOpen, setIsExpenseDialogOpen] = useState(false);
@@ -65,6 +65,7 @@ export default function ExpensesPage() {
       date: (e) => e.date,
       amount: (e) => e.amount,
     },
+    pagination: { status: expensesStatus, loadMore: loadMoreExpenses, batchSize: 100 },
   });
 
   const categoryOptions = Array.from(new Set((expenses ?? []).map((e) => e.category)));
