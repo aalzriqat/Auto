@@ -19,8 +19,19 @@ import { MutationCtx, QueryCtx } from "../_generated/server";
 // it, every posting to e.g. CASH_ON_HAND across the whole org contends on
 // a single row. The read side (getCumulativeBalancesAsOf) already sums
 // every matching row regardless of how many there are, so this is the only
-// place that needs to know shards exist.
+// place that needs to know shards exist. Kept a power of 2 so a single
+// random byte maps onto it with no modulo bias.
 const SHARD_COUNT = 8;
+
+// Not a security decision (which shard a counter increment lands in has no
+// security implication) — using the Web Crypto RNG instead of Math.random
+// just avoids relying on a PRNG that static analysis (correctly, in
+// general) treats as unsafe by default, at zero cost here. Same API this
+// codebase already uses elsewhere for real security-sensitive tokens
+// (convex/memberships.ts, convex/vehicles.ts).
+function randomShard(): number {
+  return crypto.getRandomValues(new Uint8Array(1))[0] % SHARD_COUNT;
+}
 
 export async function incrementAccountSnapshot(
   ctx: MutationCtx,
@@ -33,7 +44,7 @@ export async function incrementAccountSnapshot(
     creditMinor: number;
   }
 ): Promise<void> {
-  const shard = Math.floor(Math.random() * SHARD_COUNT);
+  const shard = randomShard();
   const existing = await ctx.db
     .query("accountBalanceSnapshots")
     .withIndex("by_org_account_currency_period_shard", (q) =>
