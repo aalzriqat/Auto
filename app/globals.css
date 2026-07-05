@@ -131,3 +131,40 @@
     @apply bg-background text-foreground;
   }
 }
+
+@keyframes autoflow-chat-attention {
+  0%, 100% {
+    box-shadow: 0 0 0 0 hsl(236 82% 58% / 0.38), 0 18px 36px hsl(220 30% 20% / 0.22);
+    filter: saturate(1);
+  }
+  50% {
+    box-shadow: 0 0 0 8px hsl(236 82% 58% / 0.14), 0 18px 36px hsl(220 30% 20% / 0.28);
+    filter: saturate(1.2);
+  }
+}
+
+@keyframes autoflow-chat-attention-soft {
+  0%, 100% {
+    background-color: hsl(217 91% 60% / 0.08);
+  }
+  50% {
+    background-color: hsl(217 91% 60% / 0.18);
+  }
+}
+
+.autoflow-chat-attention {
+  animation: autoflow-chat-attention 1.15s ease-in-out infinite;
+}
+
+.autoflow-chat-attention-soft {
+  animation: autoflow-chat-attention-soft 1.15s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .autoflow-chat-attention,
+  .autoflow-chat-attention-soft {
+    animation: none;
+    outline: 2px solid hsl(236 82% 58% / 0.55);
+    outline-offset: 2px;
+  }
+}

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useQuery } from "convex/react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -14,7 +14,7 @@ import { playSound } from "@/lib/messageSounds";
 import { cn } from "@/lib/utils";
 import { MessagesSquare, MessageSquarePlus, Users, BellOff, Search, X } from "lucide-react";
 import { NewConversationDialog } from "./NewConversationDialog";
-import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
+import { Sheet, SheetContent } from "@/components/ui/sheet";
 import { ChatThread } from "./ChatThread";
 
 interface Props {
@@ -46,24 +46,33 @@ function FloatingMessengerInner({ orgId }: Props) {
   const me = useQuery(api.users.getMe);
   const conversations = useQuery(api.directMessages.listConversations, { orgId });
   const unreadCount = useQuery(api.directMessages.getUnreadCount, { orgId });
+  const markDelivered = useMutation(api.directMessages.markDelivered);
+  const currentUserId = me?._id;
 
   // ── Global sound notifications ──────────────────────────────────────────────
   const prevTimestampsRef = useRef<Record<string, number>>({});
   useEffect(() => {
-    if (!conversations || !me) return;
+    if (!conversations || !currentUserId) return;
     for (const conv of conversations) {
+      const isIncoming =
+        conv.lastMessageSenderId !== undefined &&
+        conv.lastMessageSenderId !== currentUserId;
+      if (isIncoming && (conv.lastDeliveredAt ?? 0) < conv.lastMessageAt) {
+        markDelivered({ conversationId: conv._id }).catch(() => null);
+      }
+
       const prev = prevTimestampsRef.current[conv._id] ?? 0;
       if (
         conv.lastMessageAt > prev &&
         prev > 0 &&
-        conv.lastMessageSenderId !== me._id &&
+        isIncoming &&
         !conv.isMuted
       ) {
         playSound("received");
       }
       prevTimestampsRef.current[conv._id] = conv.lastMessageAt;
     }
-  }, [conversations]);
+  }, [conversations, currentUserId, markDelivered]);
 
   // Close list panel when clicking outside
   useEffect(() => {
@@ -85,6 +94,8 @@ function FloatingMessengerInner({ orgId }: Props) {
     if (c.name?.toLowerCase().includes(q)) return true;
     return c.members?.some((m: ConvMember) => m?.name?.toLowerCase().includes(q));
   });
+  const displayUnreadCount = unreadCount ?? 0;
+  const hasUnreadMessages = displayUnreadCount > 0;
 
   // FAB position
   const fabPosition = isRtl
@@ -117,7 +128,8 @@ function FloatingMessengerInner({ orgId }: Props) {
           fabPosition,
           "h-14 w-14 rounded-full shadow-xl flex items-center justify-center transition-all duration-200",
           "bg-gradient-to-br from-blue-600 to-blue-500 text-white hover:scale-105 active:scale-95",
-          isListOpen && "rotate-0"
+          isListOpen && "rotate-0",
+          hasUnreadMessages && !isListOpen && "autoflow-chat-attention"
         )}
         aria-label={t("Messages")}
       >
@@ -127,9 +139,9 @@ function FloatingMessengerInner({ orgId }: Props) {
           <MessagesSquare className="h-6 w-6" />
         )}
         {/* Unread badge */}
-        {!isListOpen && unreadCount != null && unreadCount > 0 && (
+        {!isListOpen && hasUnreadMessages && (
           <span className="absolute -top-1 -end-1 min-w-[20px] h-5 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center px-1 border-2 border-white">
-            {unreadCount > 9 ? "9+" : unreadCount}
+            {displayUnreadCount > 9 ? "9+" : displayUnreadCount}
           </span>
         )}
       </button>
@@ -201,7 +213,8 @@ function FloatingMessengerInner({ orgId }: Props) {
                   onClick={() => handleSelectConversation(conv._id)}
                   className={cn(
                     "w-full flex items-center gap-3 px-4 py-2.5 hover:bg-slate-50 transition-colors text-start",
-                    isCurrentlyOpen && "bg-blue-50"
+                    isCurrentlyOpen && "bg-blue-50",
+                    conv.hasUnread && "autoflow-chat-attention-soft"
                   )}
                 >
                   <div className="relative shrink-0">
@@ -301,8 +314,6 @@ function FloatingMessengerInner({ orgId }: Props) {
 }
 
 export function FloatingMessenger({ orgId }: Props) {
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
-  if (!mounted) return null;
+  if (typeof document === "undefined") return null;
   return createPortal(<FloatingMessengerInner orgId={orgId} />, document.body);
 }

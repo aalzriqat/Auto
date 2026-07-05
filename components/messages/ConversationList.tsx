@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useQuery } from "convex/react";
+import { useEffect, useState } from "react";
+import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -32,14 +32,28 @@ function formatRelativeTime(ts: number): string {
 }
 
 export function ConversationList({ orgId, currentUserId, activeId, onSelect }: Props) {
-  const { t, isRtl } = useLanguage();
+  const { t } = useLanguage();
   const [search, setSearch] = useState("");
   const [dialogMode, setDialogMode] = useState<"dm" | "group" | null>(null);
 
   const conversations = useQuery(api.directMessages.listConversations, { orgId });
+  const markDelivered = useMutation(api.directMessages.markDelivered);
+
+  useEffect(() => {
+    if (!conversations) return;
+    for (const conv of conversations) {
+      if (
+        conv.lastMessageSenderId !== undefined &&
+        conv.lastMessageSenderId !== currentUserId &&
+        (conv.lastDeliveredAt ?? 0) < conv.lastMessageAt
+      ) {
+        markDelivered({ conversationId: conv._id }).catch(() => null);
+      }
+    }
+  }, [conversations, currentUserId, markDelivered]);
 
   type ConvMember = { _id: string; name?: string; imageUrl?: string } | null;
-  type ConvItem = { _id: Id<"dmConversations">; type: string; name?: string; members?: ConvMember[]; isMuted?: boolean; hasUnread?: boolean; lastMessageAt: number; lastMessageSenderId?: string; lastMessageBody?: string };
+  type ConvItem = { _id: Id<"dmConversations">; type: string; name?: string; members?: ConvMember[]; isMuted?: boolean; hasUnread?: boolean; lastDeliveredAt?: number; lastMessageAt: number; lastMessageSenderId?: string; lastMessageBody?: string };
   const filtered = (conversations ?? [] as ConvItem[]).filter((c: ConvItem) => {
     if (!search.trim()) return true;
     const q = search.toLowerCase();
@@ -112,7 +126,8 @@ export function ConversationList({ orgId, currentUserId, activeId, onSelect }: P
                 "w-full flex items-center gap-3 px-3 py-2.5 transition-colors text-start",
                 isActive
                   ? "bg-primary/10"
-                  : "hover:bg-slate-50"
+                  : "hover:bg-slate-50",
+                conv.hasUnread && "autoflow-chat-attention-soft"
               )}
             >
               <div className="relative shrink-0">

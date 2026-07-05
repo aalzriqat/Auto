@@ -48,7 +48,7 @@ export function FloatingChatWindow({ conversationId, currentUserId, index }: Pro
     if (!isMinimized) {
       markRead({ conversationId }).catch(() => null);
     }
-  }, [conversationId, isMinimized, messages?.length]);
+  }, [conversationId, isMinimized, markRead, messages?.length]);
 
   // Play sound when new messages arrive from others
   useEffect(() => {
@@ -61,7 +61,7 @@ export function FloatingChatWindow({ conversationId, currentUserId, index }: Pro
       }
     }
     prevMsgCountRef.current = count;
-  }, [messages?.length]);
+  }, [conversation?.isMuted, currentUserId, messages]);
 
   // Scroll to bottom on new messages
   useEffect(() => {
@@ -114,8 +114,7 @@ export function FloatingChatWindow({ conversationId, currentUserId, index }: Pro
 
   // Unread count for minimized badge
   const hasUnread =
-    conversation.lastMessageAt > 0 &&
-    conversation.lastMessageSenderId !== currentUserId &&
+    Boolean(conversation.hasUnread) &&
     isMinimized;
 
   const chronological = [...(messages ?? [])].reverse();
@@ -137,7 +136,8 @@ export function FloatingChatWindow({ conversationId, currentUserId, index }: Pro
     <div
       className={cn(
         "fixed bottom-0 z-50 flex flex-col shadow-2xl rounded-t-2xl overflow-hidden transition-all duration-200",
-        "w-[336px]"
+        "w-[336px]",
+        hasUnread && "autoflow-chat-attention"
       )}
       style={positionStyle}
     >
@@ -145,7 +145,8 @@ export function FloatingChatWindow({ conversationId, currentUserId, index }: Pro
       <div
         className={cn(
           "flex items-center gap-2 px-3 py-2.5 select-none",
-          "bg-gradient-to-r from-blue-600 to-blue-500 text-white"
+          "bg-gradient-to-r from-blue-600 to-blue-500 text-white",
+          hasUnread && "autoflow-chat-attention-soft"
         )}
       >
         <button
