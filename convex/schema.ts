@@ -1666,8 +1666,14 @@ export default defineSchema({
     // SHARD_COUNT independent documents so concurrent postings to the same
     // hot account only ever OCC-conflict within a shard, not across the
     // whole account. The read path sums across shards, so this is
-    // transparent to every caller of getCumulativeBalancesAsOf.
-    shard: v.number(),
+    // transparent to every caller of getCumulativeBalancesAsOf. Optional,
+    // not required: rows written before sharding was added have no shard
+    // field, and that's fine as-is — incrementAccountSnapshot's write
+    // lookup always queries a concrete shard number, so it can never match
+    // one of these old rows again; a fresh shard-tagged row just takes
+    // over accumulating from here. The read path never filters on shard,
+    // so the old row's already-accumulated total keeps counting correctly.
+    shard: v.optional(v.number()),
     runningDebitMinor: v.number(),
     runningCreditMinor: v.number(),
     updatedAt: v.number(),
