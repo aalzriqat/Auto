@@ -495,6 +495,32 @@ export const listReceivables = query({
   },
 });
 
+/**
+ * Phase 41 — Installment Collections Calendar. Unlike listReceivables (load-
+ * more pagination for a list view), this pulls every open receivable due
+ * within a bounded date range (a visible calendar month) so the UI can group
+ * them by day. Excludes settled statuses so cleared installments don't
+ * clutter the calendar.
+ */
+export const listReceivablesDueBetween = query({
+  args: {
+    orgId: v.id("organizations"),
+    startDate: v.number(),
+    endDate: v.number(),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    const rows = await ctx.db
+      .query("receivables")
+      .withIndex("by_org_dueDate", (q) =>
+        q.eq("orgId", args.orgId).gte("dueDate", args.startDate).lte("dueDate", args.endDate)
+      )
+      .collect();
+    const openRows = rows.filter((row) => !["PAID", "CANCELLED", "REFUNDED"].includes(row.status));
+    return Promise.all(openRows.map((row) => hydrateReceivable(ctx, row)));
+  },
+});
+
 export const listCheques = query({
   args: {
     orgId: v.id("organizations"),

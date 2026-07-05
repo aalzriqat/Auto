@@ -37,6 +37,7 @@ export function SourcingClient() {
   const [payDialogPayable, setPayDialogPayable] = useState<SourcingPayable | null>(null);
   const [paymentNotes, setPaymentNotes] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
+  const [taxAmount, setTaxAmount] = useState("");
   const [isPaying, setIsPaying] = useState(false);
   const markPaidIdempotencyKeyRef = useRef<string | null>(null);
 
@@ -57,11 +58,13 @@ export function SourcingClient() {
     setIsPaying(true);
     try {
       markPaidIdempotencyKeyRef.current ??= `mark-paid:${crypto.randomUUID()}`;
+      const parsedTaxAmount = taxAmount.trim() ? Number(taxAmount) : undefined;
       await markPaid({
         orgId: activeOrgId,
         payableId: payDialogPayable._id,
         paymentNotes: paymentNotes.trim() || undefined,
         paymentMethod,
+        taxAmount: parsedTaxAmount,
         idempotencyKey: markPaidIdempotencyKeyRef.current,
       });
       markPaidIdempotencyKeyRef.current = null;
@@ -70,6 +73,7 @@ export function SourcingClient() {
       setPayDialogPayable(null);
       setPaymentNotes("");
       setPaymentMethod("CASH");
+      setTaxAmount("");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : t("UnexpectedError" as any));
     } finally {
@@ -224,9 +228,11 @@ export function SourcingClient() {
         isPaying={isPaying}
         notes={paymentNotes}
         paymentMethod={paymentMethod}
+        taxAmount={taxAmount}
         t={t as any}
         onNotesChange={setPaymentNotes}
         onPaymentMethodChange={setPaymentMethod}
+        onTaxAmountChange={setTaxAmount}
         onConfirm={handleMarkPaid}
         onOpenChange={(open) => {
           if (!open) {
@@ -234,6 +240,7 @@ export function SourcingClient() {
             setPayDialogPayable(null);
             setPaymentNotes("");
             setPaymentMethod("CASH");
+            setTaxAmount("");
           }
         }}
       />

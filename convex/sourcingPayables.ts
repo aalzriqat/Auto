@@ -96,6 +96,7 @@ export const markPaid = mutation({
     payableId: v.id("vehicleSupplierPayables"),
     paymentNotes: v.optional(v.string()),
     paymentMethod: v.optional(paymentMethodValidator),
+    taxAmount: v.optional(v.number()),
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -109,7 +110,7 @@ export const markPaid = mutation({
         operation: "sourcingPayables.markPaid",
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
-        fingerprint: JSON.stringify({ payableId: args.payableId, paymentMethod }),
+        fingerprint: JSON.stringify({ payableId: args.payableId, paymentMethod, taxAmount: args.taxAmount ?? null }),
       },
       async () => {
         const payable = await ctx.db.get(args.payableId);
@@ -122,6 +123,9 @@ export const markPaid = mutation({
         if (payable.status === "CANCELLED") {
           throw new ConvexError("This payable was cancelled with its sale.");
         }
+        if (args.taxAmount !== undefined && args.taxAmount > payable.amountDue) {
+          throw new ConvexError("VAT amount cannot exceed the amount due.");
+        }
 
         const now = Date.now();
         await ctx.db.patch(args.payableId, {
@@ -130,6 +134,7 @@ export const markPaid = mutation({
           paidBy: user._id,
           paymentMethod,
           paymentNotes: args.paymentNotes,
+          taxAmount: args.taxAmount,
           updatedAt: now,
         });
 
@@ -141,6 +146,7 @@ export const markPaid = mutation({
           payableId: args.payableId,
           sourcedFromName: payable.sourcedFromName,
           amountMinor: toMinorUnits(payable.amountDue, currency),
+          taxMinor: args.taxAmount ? toMinorUnits(args.taxAmount, currency) : undefined,
           currency,
           paymentMethod,
           actorId: user._id,

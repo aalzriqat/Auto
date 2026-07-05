@@ -2,6 +2,7 @@
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { PaymentMethodSelect, type PaymentMethod, type Translate } from "@/components/payments/PaymentMethodSelect";
@@ -18,10 +19,12 @@ export function SupplierPaymentDialog({
   isPaying,
   notes,
   paymentMethod,
+  taxAmount,
   t,
   onOpenChange,
   onNotesChange,
   onPaymentMethodChange,
+  onTaxAmountChange,
   onConfirm,
 }: Readonly<{
   payable: SupplierPaymentDetails | null;
@@ -29,10 +32,12 @@ export function SupplierPaymentDialog({
   isPaying: boolean;
   notes: string;
   paymentMethod: PaymentMethod;
+  taxAmount: string;
   t: Translate;
   onOpenChange: (open: boolean) => void;
   onNotesChange: (notes: string) => void;
   onPaymentMethodChange: (method: PaymentMethod) => void;
+  onTaxAmountChange: (taxAmount: string) => void;
   onConfirm: () => void;
 }>) {
   return (
@@ -55,6 +60,17 @@ export function SupplierPaymentDialog({
             <div className="space-y-1.5">
               <Label>{t("PaymentMethodLabel" as any)}</Label>
               <PaymentMethodSelect t={t} value={paymentMethod} onValueChange={onPaymentMethodChange} />
+            </div>
+            <div className="space-y-1.5">
+              <Label>{t("VatAmount" as any)} ({t("Optional" as any)})</Label>
+              <Input
+                type="number"
+                step="0.01"
+                min="0"
+                placeholder="0"
+                value={taxAmount}
+                onChange={(event) => onTaxAmountChange(event.target.value)}
+              />
             </div>
             <div className="space-y-1.5">
               <Label>{t("PaymentNotes" as any)} ({t("Optional" as any)})</Label>

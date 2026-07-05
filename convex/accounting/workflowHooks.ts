@@ -15,7 +15,7 @@ import { postAccountingEvent, PostCommand } from "./postingEngine";
 import { EventType } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate } from "../accountingPeriods";
-import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts } from "../chartOfAccounts";
+import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount } from "../chartOfAccounts";
 import {
   enqueuePendingPost,
   enqueuePendingReversal,
@@ -294,6 +294,21 @@ export async function hookSaleCompleted(
   });
 }
 
+/**
+ * Phase 41 self-heal, scoped like ensureFixedAssetAccountsIfChartReady: only
+ * expense-posting and supplier-payment-settling ever debit VAT_RECEIVABLE, so
+ * this isn't added to the shared postOrEnqueue choke point.
+ */
+async function ensureVatReceivableAccountIfChartReady(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  if (await isChartInitialized(ctx, orgId)) {
+    await ensureVatReceivableAccount(ctx, orgId, actorId);
+  }
+}
+
 export async function hookSupplierPaymentSettled(
   ctx: MutationCtx,
   args: {
@@ -301,12 +316,16 @@ export async function hookSupplierPaymentSettled(
     payableId: Id<"vehicleSupplierPayables">;
     sourcedFromName: string;
     amountMinor: number;
+    taxMinor?: number;
     currency: string;
     paymentMethod?: string;
     actorId: Id<"users">;
     occurredAt: number;
   }
 ) {
+  if (args.taxMinor && args.taxMinor > 0) {
+    await ensureVatReceivableAccountIfChartReady(ctx, args.orgId, args.actorId);
+  }
   await postDomainEvent(ctx, {
     orgId: args.orgId,
     eventType: "SUPPLIER_PAYMENT_SETTLED",
@@ -320,6 +339,7 @@ export async function hookSupplierPaymentSettled(
       payableId: args.payableId.toString(),
       sourcedFromName: args.sourcedFromName,
       amountMinor: args.amountMinor,
+      taxMinor: args.taxMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
     },
@@ -374,6 +394,7 @@ export async function hookExpensePosted(
     orgId: Id<"organizations">;
     expenseId: Id<"expenses">;
     amountMinor: number;
+    taxMinor?: number;
     currency: string;
     category?: string;
     paymentMethod?: string;
@@ -381,6 +402,9 @@ export async function hookExpensePosted(
     occurredAt: number;
   }
 ) {
+  if (args.taxMinor && args.taxMinor > 0) {
+    await ensureVatReceivableAccountIfChartReady(ctx, args.orgId, args.actorId);
+  }
   await postDomainEvent(ctx, {
     orgId: args.orgId,
     eventType: "EXPENSE_POSTED",
@@ -393,6 +417,7 @@ export async function hookExpensePosted(
     payload: {
       expenseId: args.expenseId.toString(),
       amountMinor: args.amountMinor,
+      taxMinor: args.taxMinor,
       currency: args.currency,
       category: args.category,
       paymentMethod: args.paymentMethod,

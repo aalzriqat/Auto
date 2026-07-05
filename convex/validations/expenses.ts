@@ -6,6 +6,7 @@ export const CreateExpenseSchema = z.object({
   vehicleId: z.string().optional(),
   title: z.string().min(1, "Title is required").max(100, "Title is too long"),
   amount: z.number().positive("Amount must be greater than zero"),
+  taxAmount: z.number().min(0, "VAT amount cannot be negative").optional(),
   date: z.number(),
   category: z.enum([
     "REPAIR",

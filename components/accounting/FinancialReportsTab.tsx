@@ -13,6 +13,7 @@ import { formatMinorAmount } from "./reports/FinancialReportShared";
 import { BalanceSheetReport } from "./reports/BalanceSheetReport";
 import { IncomeStatementReport } from "./reports/IncomeStatementReport";
 import { TrialBalanceReport } from "./reports/TrialBalanceReport";
+import { VatReturnReport } from "./reports/VatReturnReport";
 
 function dateInputValue(date: Date): string {
   const year = date.getFullYear();
@@ -54,6 +55,10 @@ export function FinancialReportsTab() {
     api.accountingReports.balanceSheet,
     activeOrgId ? { orgId: activeOrgId, asOfDate: toDateMs } : "skip"
   );
+  const vatReturn = useQuery(
+    api.vatReport.generateVatSummary,
+    activeOrgId ? { orgId: activeOrgId, fromDate: fromDateMs, toDate: toDateMs } : "skip"
+  );
 
   if (!activeOrgId) return null;
 
@@ -75,6 +80,7 @@ export function FinancialReportsTab() {
           <TabsTrigger value="trialBalance">{t("TrialBalance")}</TabsTrigger>
           <TabsTrigger value="incomeStatement">{t("IncomeStatement")}</TabsTrigger>
           <TabsTrigger value="balanceSheet">{t("BalanceSheet")}</TabsTrigger>
+          <TabsTrigger value="vatReturn">{t("VatReturn")}</TabsTrigger>
         </TabsList>
         <TabsContent value="trialBalance" className="m-0">
           <TrialBalanceReport report={trialBalance} locale={locale} t={t} formatMoney={formatMoney} />
@@ -84,6 +90,9 @@ export function FinancialReportsTab() {
         </TabsContent>
         <TabsContent value="balanceSheet" className="m-0">
           <BalanceSheetReport report={balanceSheet} locale={locale} t={t} formatMoney={formatMoney} />
+        </TabsContent>
+        <TabsContent value="vatReturn" className="m-0">
+          <VatReturnReport report={vatReturn} locale={locale} t={t} formatMoney={formatMoney} />
         </TabsContent>
       </Tabs>
     </div>

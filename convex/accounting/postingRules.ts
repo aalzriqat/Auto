@@ -146,6 +146,8 @@ export interface SupplierPaymentSettledPayload {
   payableId: string;
   sourcedFromName: string;
   amountMinor: number;
+  /** Portion of amountMinor that is input VAT paid to the supplier (tax-inclusive, not additive). */
+  taxMinor?: number;
   currency: string;
   paymentMethod?: string;
 }
@@ -169,6 +171,8 @@ export interface CollectionRefundPayload {
 export interface ExpensePostedPayload {
   expenseId: string;
   amountMinor: number;
+  /** Portion of amountMinor that is input VAT paid (tax-inclusive, not additive). */
+  taxMinor?: number;
   currency: string;
   paymentMethod?: string;
   category?: string;
@@ -295,11 +299,23 @@ export function ruleSupplierPaymentSettled(p: SupplierPaymentSettledPayload): Ru
   const cashKey = p.paymentMethod === "CHEQUE"
     ? SYSTEM_KEYS.BANK_ACCOUNT
     : cashAccountKey(p.paymentMethod);
+  // AP-Suppliers was originally credited for the full gross amountMinor back
+  // at SALE_COMPLETED (ruleSaleCompleted's isSourced branch), so it must be
+  // debited in full here too — netting it would leave a permanent residual
+  // balance. If the actual supplier invoice reveals a VAT portion at
+  // settlement time, reclassify it out of the previously-booked COGS into
+  // VAT_RECEIVABLE as a separate, self-balancing pair rather than touching
+  // the AP/cash settlement lines.
+  const lines: LineSpec[] = [
+    line(SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, p.amountMinor, 0, `AP settled — ${p.sourcedFromName}`),
+    line(cashKey, 0, p.amountMinor, "Cash paid to supplier"),
+  ];
+  if (p.taxMinor && p.taxMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.VAT_RECEIVABLE, p.taxMinor, 0, "Input VAT reclassified from cost"));
+    lines.push(line(SYSTEM_KEYS.COST_OF_VEHICLES_SOLD, 0, p.taxMinor, "Cost reduced by reclaimable VAT"));
+  }
   return {
-    lines: [
-      line(SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, p.amountMinor, 0, `AP settled — ${p.sourcedFromName}`),
-      line(cashKey, 0, p.amountMinor, "Cash paid to supplier"),
-    ],
+    lines,
     memo: `Supplier payment — ${p.sourcedFromName}`,
     category: "SYSTEM",
   };
@@ -337,11 +353,21 @@ export function ruleExpensePosted(p: ExpensePostedPayload): RuleResult {
   const cashKey = cashAccountKey(p.paymentMethod);
   const expenseKey = expenseAccountKeyForCategory(p.category);
   const label = p.category ? `Expense (${p.category})` : "General expense";
+  // No prior liability exists for a plain expense (unlike the supplier-payable
+  // settlement flow), so the net/tax split can happen directly here. A line
+  // with a zero debit/credit is rejected by validateBalance, so only emit the
+  // net-expense line when there's a non-zero net (i.e. not a 100%-VAT expense).
+  const netMinor = p.taxMinor ? p.amountMinor - p.taxMinor : p.amountMinor;
+  const lines: LineSpec[] = [];
+  if (netMinor > 0) {
+    lines.push(line(expenseKey, netMinor, 0, label));
+  }
+  if (p.taxMinor && p.taxMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.VAT_RECEIVABLE, p.taxMinor, 0, "Input VAT paid"));
+  }
+  lines.push(line(cashKey, 0, p.amountMinor, "Cash payment"));
   return {
-    lines: [
-      line(expenseKey, p.amountMinor, 0, label),
-      line(cashKey, 0, p.amountMinor, "Cash payment"),
-    ],
+    lines,
     memo: "Expense posted",
     category: "SYSTEM",
   };

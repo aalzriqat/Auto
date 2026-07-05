@@ -3,8 +3,9 @@
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { BarChart3, BookOpen, Briefcase, Landmark, HandCoins, WalletCards, ScrollText, Settings } from "lucide-react";
+import { BarChart3, BookOpen, Briefcase, Landmark, HandCoins, WalletCards, ScrollText, Settings, Building2 } from "lucide-react";
 import { AccountingSetupTab } from "./AccountingSetupTab";
+import { BankAccountsTab } from "./BankAccountsTab";
 import { FinancialReportsTab } from "./FinancialReportsTab";
 import { GeneralLedgerTab } from "./GeneralLedgerTab";
 import { FixedAssetsTab } from "./FixedAssetsTab";
@@ -68,6 +69,10 @@ export function AccountingClient() {
               <ScrollText className="w-4 h-4" />
               {t("ManualJournal" as any)}
             </TabsTrigger>
+            <TabsTrigger value="bankAccounts" className="gap-2 data-[state=active]:bg-primary/5 data-[state=active]:text-primary data-[state=active]:shadow-none px-4">
+              <Building2 className="w-4 h-4" />
+              {t("BankAccounts" as any)}
+            </TabsTrigger>
           </TabsList>
         </div>
 
@@ -95,6 +100,9 @@ export function AccountingClient() {
           </TabsContent>
           <TabsContent value="manualJournal" className="h-full m-0 data-[state=inactive]:hidden">
             <ManualJournalTab />
+          </TabsContent>
+          <TabsContent value="bankAccounts" className="h-full m-0 data-[state=inactive]:hidden">
+            <BankAccountsTab />
           </TabsContent>
         </div>
       </Tabs>
