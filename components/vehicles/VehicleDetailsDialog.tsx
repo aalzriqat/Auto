@@ -17,6 +17,7 @@ import { toast } from "@/components/ui/sonner";
 import { api } from "@/convex/_generated/api";
 import { Doc } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
+import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { format } from "date-fns";
 import {
@@ -69,6 +70,7 @@ export function VehicleDetailsDialog({
 }: VehicleDetailsDialogProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  const orgSettings = useOrgSettings();
   const { hasPermission, isLoading: permissionsLoading } = usePermissions();
   const canEditVehicles = !permissionsLoading && hasPermission(PERMISSIONS.EDIT_VEHICLES);
   const canViewCustomers = !permissionsLoading && hasPermission(PERMISSIONS.VIEW_CUSTOMERS);
@@ -111,6 +113,15 @@ export function VehicleDetailsDialog({
   const [reservationDeposit, setReservationDeposit] = useState("");
   const [reservationExpiresAt, setReservationExpiresAt] = useState("");
   const [savingReservation, setSavingReservation] = useState(false);
+
+  // Prefill the expiry field from the org's configured hold period (falls
+  // back to 3 days) — still editable, so a specific reservation can override it.
+  useEffect(() => {
+    if (!open || !vehicle || reservationExpiresAt) return;
+    const holdDays = orgSettings?.reservationHoldDays ?? 3;
+    const defaultExpiry = new Date(Date.now() + holdDays * 24 * 60 * 60 * 1000);
+    setReservationExpiresAt(format(defaultExpiry, "yyyy-MM-dd'T'HH:mm"));
+  }, [open, vehicle?._id, orgSettings, reservationExpiresAt]);
 
   useEffect(() => {
     if (landedCosts) {

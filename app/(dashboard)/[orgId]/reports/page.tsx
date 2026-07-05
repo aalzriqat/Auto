@@ -368,9 +368,19 @@ export default function ReportsPage() {
                     <TableRow key={exp._id}>
                       <TableCell>{new Date(exp.date).toLocaleDateString()}</TableCell>
                       <TableCell>{exp.category}</TableCell>
-                      <TableCell>{exp.notes || "-"}</TableCell>
+                      <TableCell>
+                        {exp.notes || "-"}
+                        {exp.amortization && (
+                          <div className="text-xs text-muted-foreground">
+                            {t("PrepaidAmortizedNote")
+                              .replace("{monthsElapsed}", String(exp.amortization.monthsElapsed))
+                              .replace("{amortizationMonths}", String(exp.amortization.amortizationMonths))
+                              .replace("{totalAmount}", format(exp.amount))}
+                          </div>
+                        )}
+                      </TableCell>
                       <TableCell>{exp.vehicleDesc}</TableCell>
-                      <TableCell className="text-right font-medium">{format(exp.amount)}</TableCell>
+                      <TableCell className="text-right font-medium">{format(exp.recognizedAmount ?? exp.amount)}</TableCell>
                     </TableRow>
                   ))}
                   {!expensesReport?.expenses?.length && (

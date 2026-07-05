@@ -70,6 +70,19 @@ describe("orgSettings", () => {
     expect(settings?.generatedLeadAutoAssignmentEnabled).toBe(false);
   });
 
+  test("upsert stores and rejects invalid reservationHoldDays", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asOwner } = await seedOwner(t);
+
+    await asOwner.mutation(api.orgSettings.upsert, { orgId, reservationHoldDays: 7 });
+    const settings = await asOwner.query(api.orgSettings.get, { orgId });
+    expect(settings?.reservationHoldDays).toBe(7);
+
+    await expect(
+      asOwner.mutation(api.orgSettings.upsert, { orgId, reservationHoldDays: 0 })
+    ).rejects.toThrow(/greater than zero/i);
+  });
+
   test("upsert is owner-only", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOwner(t);

@@ -71,6 +71,7 @@ export const NOTIFICATION_TYPES = {
   "transaction.removed": { category: "finance", priority: "normal", criticalDefault: false },
   "deposit.created": { category: "finance", priority: "normal", criticalDefault: false },
   "deposit.released": { category: "finance", priority: "normal", criticalDefault: false },
+  "deposit.expired": { category: "finance", priority: "urgent", criticalDefault: true },
   "claim.updated": { category: "finance", priority: "normal", criticalDefault: false },
   "fixedAsset.changed": { category: "finance", priority: "normal", criticalDefault: false },
   "partnerEquity.changed": { category: "finance", priority: "normal", criticalDefault: false },

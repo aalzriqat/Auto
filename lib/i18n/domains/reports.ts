@@ -38,6 +38,7 @@ export const reportsEn = {
   Description: "Description",
   RelatedVehicle: "Related Vehicle",
   Amount: "Amount",
+  PrepaidAmortizedNote: "Prepaid — {monthsElapsed}/{amortizationMonths} months recognized of {totalAmount} total",
 
   // Empty states
   NoSalesFoundPeriod: "No sales found in this period.",
@@ -86,6 +87,7 @@ export const reportsAr = {
   Description: "الوصف",
   RelatedVehicle: "المركبة ذات الصلة",
   Amount: "المبلغ",
+  PrepaidAmortizedNote: "مصروف مدفوع مقدماً — تم احتساب {monthsElapsed}/{amortizationMonths} أشهر من إجمالي {totalAmount}",
 
   // Empty states
   NoSalesFoundPeriod: "لم يتم العثور على مبيعات في هذه الفترة.",

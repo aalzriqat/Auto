@@ -10,7 +10,7 @@ import { CreateVehicleSchema, UpdateVehicleSchema } from "./validations/vehicles
 import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socialAutoPost";
 import { internal } from "./_generated/api";
 import { getOrgCurrency } from "./accounting/workflowHooks";
-import { syncVehicleHoldStatus } from "./utils/depositHelpers";
+import { syncVehicleHoldStatus, getDefaultReservationExpiry } from "./utils/depositHelpers";
 import {
   amountToMinorOrThrow,
   depositMethodValidator,
@@ -738,6 +738,7 @@ export const createReservation = mutation({
     if (args.expiresAt !== undefined && args.expiresAt <= now) {
       throw new ConvexError("Reservation expiry must be in the future.");
     }
+    const resolvedExpiresAt = args.expiresAt ?? (await getDefaultReservationExpiry(ctx, args.orgId, now));
 
     const hasDeposit = args.depositAmount !== undefined;
     if (
@@ -794,7 +795,7 @@ export const createReservation = mutation({
       depositAmountMinor: amountMinor,
       depositCurrency: currency,
       depositMethod: hasDeposit ? method : undefined,
-      expiresAt: args.expiresAt,
+      expiresAt: resolvedExpiresAt,
       status: "ACTIVE",
       reservedBy: user._id,
       reservedAt: now,
@@ -880,6 +881,27 @@ export const expireReservations = internalMutation({
         const deposit = await ctx.db.get(reservation.depositId);
         if (deposit && deposit.orgId === reservation.orgId && deposit.status === "HELD" && deposit.holdActive) {
           await ctx.db.patch(reservation.depositId, { holdActive: false });
+          // Money already changed hands (عربون) — expiry only lifts the vehicle
+          // hold. A manager still has to decide REFUNDED vs. FORFEITED via
+          // deposits.release, same human-in-the-loop as every other deposit
+          // resolution (see deposits.ts release/void).
+          const [vehicle, customer] = await Promise.all([
+            ctx.db.get(reservation.vehicleId),
+            ctx.db.get(reservation.customerId),
+          ]);
+          const vehicleLabel = vehicle
+            ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`.trim()
+            : "Vehicle";
+          const customerLabel = customer
+            ? `${customer.firstName ?? ""} ${customer.lastName ?? ""}`.trim() || "Customer"
+            : "Customer";
+          await notifyManagers(
+            ctx,
+            reservation.orgId,
+            "deposit.expired",
+            { vehicleLabel, customerLabel, amount: String(deposit.amount) },
+            { link: `/${reservation.orgId}/sales?highlightId=${reservation.vehicleId}` }
+          );
         }
       }
       await ctx.db.patch(reservation._id, {

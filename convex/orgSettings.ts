@@ -68,9 +68,13 @@ export const upsert = mutation({
     ),
     commissionMode: v.optional(v.union(v.literal("AUTO_TIERS"), v.literal("AUTO_MEMBER"), v.literal("MANUAL"))),
     generatedLeadAutoAssignmentEnabled: v.optional(v.boolean()),
+    reservationHoldDays: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
+    if (args.reservationHoldDays !== undefined && args.reservationHoldDays <= 0) {
+      throw new Error("Reservation hold days must be greater than zero.");
+    }
     const touchesWhatsApp =
       args.whatsappPhoneNumberId !== undefined ||
       args.whatsappApiToken !== undefined ||
@@ -120,6 +124,7 @@ export const upsert = mutation({
         commissionTiers: fields.commissionTiers,
         commissionMode: fields.commissionMode,
         generatedLeadAutoAssignmentEnabled: fields.generatedLeadAutoAssignmentEnabled,
+        reservationHoldDays: fields.reservationHoldDays,
       });
       return newId;
     }

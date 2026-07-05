@@ -2,6 +2,28 @@ import { MutationCtx } from "../_generated/server";
 import { Id } from "../_generated/dataModel";
 import { throwAppError, AppErrorCode } from "./errors";
 
+/** Used when an org hasn't configured a reservationHoldDays setting. */
+export const DEFAULT_RESERVATION_HOLD_DAYS = 3;
+
+/**
+ * Resolves how long (in ms from `now`) a new reservation/deposit hold should
+ * last when the caller doesn't pass an explicit expiresAt — the org's
+ * configured reservationHoldDays (Settings > General), or
+ * DEFAULT_RESERVATION_HOLD_DAYS if unset.
+ */
+export async function getDefaultReservationExpiry(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  now: number
+): Promise<number> {
+  const settings = await ctx.db
+    .query("orgSettings")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .unique();
+  const holdDays = settings?.reservationHoldDays ?? DEFAULT_RESERVATION_HOLD_DAYS;
+  return now + holdDays * 24 * 60 * 60 * 1000;
+}
+
 type ResolvedDepositsForQuoteResult = {
   total: number;
   appliedDeposits: Array<{

@@ -71,6 +71,7 @@ export default function GeneralSettingsPage() {
   // Approvals tab state
   const [approvalThresholdEnabled, setApprovalThresholdEnabled] = useState(false);
   const [approvalMinProfitPercent, setApprovalMinProfitPercent] = useState("");
+  const [reservationHoldDays, setReservationHoldDays] = useState("");
 
   const [isSaving, setIsSaving] = useState(false);
   const [isUploadingLogo, setIsUploadingLogo] = useState(false);
@@ -94,6 +95,9 @@ export default function GeneralSettingsPage() {
         settings.approvalMinProfitPercent !== undefined
           ? String(settings.approvalMinProfitPercent)
           : ""
+      );
+      setReservationHoldDays(
+        settings.reservationHoldDays !== undefined ? String(settings.reservationHoldDays) : ""
       );
     }
   }, [settings]);
@@ -148,6 +152,7 @@ export default function GeneralSettingsPage() {
         approvalMinProfitPercent: approvalMinProfitPercent
           ? parseFloat(approvalMinProfitPercent)
           : undefined,
+        reservationHoldDays: reservationHoldDays ? parseFloat(reservationHoldDays) : undefined,
       });
       toast.success(t("ApprovalSettingsSaved"));
     } catch (error: any) {
@@ -464,6 +469,23 @@ export default function GeneralSettingsPage() {
                   <p className="text-xs text-muted-foreground">{t("MinimumProfitPercentageDesc")}</p>
                 </div>
               )}
+
+              <div className="border-t pt-4">
+                <p className="text-sm font-semibold mb-1">{t("ReservationHoldSectionTitle")}</p>
+                <p className="text-xs text-muted-foreground mb-4">{t("ReservationHoldSectionDesc")}</p>
+                <div className="space-y-2 max-w-xs">
+                  <Label>{t("DefaultReservationHoldDays")}</Label>
+                  <Input
+                    type="number"
+                    min="1"
+                    step="1"
+                    placeholder="3"
+                    value={reservationHoldDays}
+                    onChange={(e) => setReservationHoldDays(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">{t("DefaultReservationHoldDaysDesc")}</p>
+                </div>
+              </div>
 
               <div className="flex justify-end">
                 <Button onClick={handleSaveApprovals} disabled={isSaving}>

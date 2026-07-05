@@ -1870,6 +1870,10 @@ export default defineSchema({
       v.array(v.object({ minProfitAmount: v.number(), commissionPct: v.number() }))
     ),
     commissionMode: v.optional(v.union(v.literal("AUTO_TIERS"), v.literal("AUTO_MEMBER"), v.literal("MANUAL"))),
+    // Default number of days a vehicle reservation/deposit hold (عربون) lasts
+    // before it auto-expires. Falls back to DEFAULT_RESERVATION_HOLD_DAYS
+    // (convex/utils/depositHelpers.ts) when unset.
+    reservationHoldDays: v.optional(v.number()),
     instagramBusinessAccountId: v.optional(v.string()),
     // The IG profile's "user_id" field — distinct from instagramBusinessAccountId
     // (the OAuth-returned "id"). Meta uses *this* ID in webhook entry[].id;

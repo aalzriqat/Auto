@@ -1,9 +1,14 @@
 import { v, ConvexError } from "convex/values";
 import { query } from "./_generated/server";
-import { Id } from "./_generated/dataModel";
+import { Id, Doc } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { rateLimiter } from "./rateLimit";
+import {
+  computeAmortizationInfo,
+  recognizedAmountInRange,
+  PREPAID_LOOKBACK_MS,
+} from "./utils/expenseAmortization";
 
 export const getSalesAndProfitReport = query({
   args: {
@@ -188,21 +193,47 @@ export const getExpensesReport = query({
       .withIndex("by_org_date", (q) =>
         q.eq("orgId", args.orgId).gte("date", args.startDate)
       )
-      .filter((q) => q.lte(q.field("date"), args.endDate))
+      .filter((q) => q.and(q.lte(q.field("date"), args.endDate), q.neq(q.field("isDeleted"), true)))
       .collect();
+
+    // A PREPAID expense (e.g. 6 months of rent paid up front) recognizes only
+    // 1/6th per month, so its `date` — the day it was paid — can fall well
+    // before this report's startDate while it's still amortizing into this
+    // window. Pull those separately (bounded lookback, not a full table scan)
+    // since the range query above only sees expenses dated inside the window.
+    const priorPrepaidExpenses = await ctx.db
+      .query("expenses")
+      .withIndex("by_org_date", (q) =>
+        q.eq("orgId", args.orgId).gte("date", args.startDate - PREPAID_LOOKBACK_MS)
+      )
+      .filter((q) =>
+        q.and(
+          q.lt(q.field("date"), args.startDate),
+          q.eq(q.field("isPrepaid"), true),
+          q.neq(q.field("isDeleted"), true)
+        )
+      )
+      .collect();
+
+    const stillAmortizing = priorPrepaidExpenses.filter(
+      (exp) => recognizedAmountInRange(exp, args.startDate, args.endDate) > 0
+    );
+
+    const allExpenses: Doc<"expenses">[] = [...expensesInDateRange, ...stillAmortizing];
 
     let totalExpenses = 0;
 
     const vehicleIds = Array.from(
-      new Set(expensesInDateRange.map(e => e.vehicleId).filter(Boolean))
+      new Set(allExpenses.map(e => e.vehicleId).filter(Boolean))
     ) as Id<"vehicles">[];
     const vehicles = await Promise.all(vehicleIds.map(id => ctx.db.get(id)));
     const vehicleMap = new Map(
       vehicles.filter((v): v is NonNullable<typeof v> => v !== null).map(v => [v._id, v])
     );
 
-    const enrichedExpenses = expensesInDateRange.map((exp) => {
-      totalExpenses += exp.amount;
+    const enrichedExpenses = allExpenses.map((exp) => {
+      const recognizedAmount = recognizedAmountInRange(exp, args.startDate, args.endDate);
+      totalExpenses += recognizedAmount;
       let vehicleDesc = "General";
 
       if (exp.vehicleId) {
@@ -212,7 +243,12 @@ export const getExpensesReport = query({
         }
       }
 
-      return { ...exp, vehicleDesc };
+      return {
+        ...exp,
+        vehicleDesc,
+        recognizedAmount,
+        amortization: computeAmortizationInfo(exp, args.endDate),
+      };
     });
 
     enrichedExpenses.sort((a, b) => b.date - a.date);

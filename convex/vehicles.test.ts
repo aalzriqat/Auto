@@ -709,6 +709,118 @@ describe("inventory intelligence", () => {
     });
   });
 
+  test("createReservation defaults expiresAt to 3 days when no org setting or explicit expiry is given", async () => {
+    const { t, orgId, asUser } = await setup();
+    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Default", lastName: "Hold" })
+    );
+
+    const before = Date.now();
+    const reservationId = await asUser.mutation(api.vehicles.createReservation, {
+      orgId,
+      vehicleId,
+      customerId,
+    });
+
+    await t.run(async (ctx) => {
+      const reservation = await ctx.db.get(reservationId);
+      expect(reservation?.expiresAt).toBeDefined();
+      const expectedExpiry = before + 3 * 24 * 60 * 60 * 1000;
+      expect(reservation!.expiresAt!).toBeGreaterThanOrEqual(expectedExpiry - 5_000);
+      expect(reservation!.expiresAt!).toBeLessThanOrEqual(expectedExpiry + 5_000);
+    });
+  });
+
+  test("createReservation uses the org's configured reservationHoldDays", async () => {
+    const { t, orgId, asUser } = await setup();
+    await t.run((ctx) =>
+      ctx.db.insert("orgSettings", {
+        orgId,
+        currency: "JOD",
+        currencySymbol: "د.أ",
+        enabledPaymentTypes: ["CASH"],
+        reservationHoldDays: 7,
+      })
+    );
+    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Configured", lastName: "Hold" })
+    );
+
+    const before = Date.now();
+    const reservationId = await asUser.mutation(api.vehicles.createReservation, {
+      orgId,
+      vehicleId,
+      customerId,
+    });
+
+    await t.run(async (ctx) => {
+      const reservation = await ctx.db.get(reservationId);
+      const expectedExpiry = before + 7 * 24 * 60 * 60 * 1000;
+      expect(reservation!.expiresAt!).toBeGreaterThanOrEqual(expectedExpiry - 5_000);
+      expect(reservation!.expiresAt!).toBeLessThanOrEqual(expectedExpiry + 5_000);
+    });
+  });
+
+  test("expireReservations notifies managers to resolve the deposit instead of auto-forfeiting it", async () => {
+    const { t, orgId, userId, asUser } = await setup();
+    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Notify", lastName: "Customer" })
+    );
+    const reservationId = await t.run(async (ctx) => {
+      const insertedReservationId = await ctx.db.insert("vehicleReservations", {
+        orgId,
+        vehicleId,
+        customerId,
+        depositAmount: 250,
+        depositAmountMinor: 250_000,
+        depositCurrency: "JOD",
+        depositMethod: "CASH",
+        expiresAt: Date.now() - 1_000,
+        status: "ACTIVE",
+        reservedBy: userId,
+        reservedAt: Date.now() - 10_000,
+      });
+      const depositId = await ctx.db.insert("deposits", {
+        orgId,
+        vehicleId,
+        customerId,
+        reservationId: insertedReservationId,
+        amount: 250,
+        amountMinor: 250_000,
+        currency: "JOD",
+        method: "CASH",
+        status: "HELD",
+        holdActive: true,
+        createdBy: userId,
+        createdAt: Date.now() - 10_000,
+      });
+      await ctx.db.patch(insertedReservationId, { depositId });
+      await ctx.db.patch(vehicleId, { status: "RESERVED" });
+      return insertedReservationId;
+    });
+
+    await t.mutation(internal.vehicles.expireReservations, {});
+
+    await t.run(async (ctx) => {
+      const reservation = await ctx.db.get(reservationId);
+      const deposit = reservation?.depositId ? await ctx.db.get(reservation.depositId) : null;
+      // Expiry only lifts the vehicle hold — it must NOT auto-forfeit the
+      // deposit to income; a manager still confirms REFUNDED vs FORFEITED.
+      expect(deposit?.status).toBe("HELD");
+
+      const notifications = await ctx.db
+        .query("notifications")
+        .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
+        .collect();
+      const expiryNotification = notifications.find((n) => n.type === "deposit.expired");
+      expect(expiryNotification).toBeTruthy();
+      expect(expiryNotification?.data?.amount).toBe("250");
+    });
+  });
+
   test("expireReservations expires stale reservations and releases linked deposit holds", async () => {
     const { t, orgId, userId, asUser } = await setup();
     const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
