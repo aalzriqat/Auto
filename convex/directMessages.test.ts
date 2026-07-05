@@ -75,6 +75,18 @@ describe("directMessages receipts", () => {
 
     expect(await latestStatus(asAlice, conversationId)).toBe("sent");
   });
+
+  test("empty conversations are not unread or delivered", async () => {
+    const { orgId, conversationId, asBob } = await setupDm();
+
+    expect(await asBob.query(api.directMessages.getUnreadCount, { orgId })).toBe(0);
+
+    await asBob.mutation(api.directMessages.markDelivered, { conversationId });
+
+    const conversations = await asBob.query(api.directMessages.listConversations, { orgId });
+    expect(conversations[0]?.hasUnread).toBe(false);
+    expect(conversations[0]?.lastDeliveredAt).toBe(0);
+  });
 });
 
 describe("directMessages notifications", () => {

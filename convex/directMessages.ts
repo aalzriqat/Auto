@@ -43,6 +43,7 @@ export const listConversations = query({
           .unique();
 
         const hasUnread =
+          conv.lastMessageSenderId !== undefined &&
           conv.lastMessageAt > (state?.lastReadAt ?? 0) &&
           conv.lastMessageSenderId !== user._id;
 
@@ -93,6 +94,7 @@ export const getUnreadCount = query({
         .unique();
 
       if (
+        conv.lastMessageSenderId !== undefined &&
         conv.lastMessageAt > (state?.lastReadAt ?? 0) &&
         conv.lastMessageSenderId !== user._id
       ) {
@@ -214,6 +216,7 @@ export const getConversation = query({
       )
       .unique();
     const hasUnread =
+      conv.lastMessageSenderId !== undefined &&
       conv.lastMessageAt > (myState?.lastReadAt ?? 0) &&
       conv.lastMessageSenderId !== user._id;
 
@@ -477,6 +480,7 @@ export const markDelivered = mutation({
     const conv = await ctx.db.get(args.conversationId);
     if (!conv) return;
     if (!conv.memberIds.includes(user._id)) return;
+    if (conv.lastMessageSenderId === undefined) return;
     if (conv.lastMessageSenderId === user._id) return;
 
     const state = await ctx.db
