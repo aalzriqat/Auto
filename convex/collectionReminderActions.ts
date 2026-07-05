@@ -4,6 +4,7 @@ import { internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import { renderNotification } from "../lib/notifications/render";
+import { scaleForCurrency } from "./utils/money";
 
 type ReminderMessageType = "DUE_SOON" | "OVERDUE" | "CHEQUE_UPCOMING" | "CHEQUE_RETURNED";
 
@@ -20,8 +21,9 @@ function reminderNotificationType(messageType: ReminderMessageType) {
   }
 }
 
-function roundMoney(amount: number) {
-  return Math.round(amount * 100) / 100;
+function roundMoney(amount: number, currency: string) {
+  const factor = Math.pow(10, scaleForCurrency(currency));
+  return Math.round(amount * factor) / factor;
 }
 
 function safeCustomerName(customer: { firstName?: string; lastName?: string } | null) {
@@ -33,12 +35,13 @@ function reminderData(payload: {
   customer: { firstName?: string; lastName?: string } | null;
   receivable: { outstandingAmount: number; dueDate: number } | null;
   cheque: { amount: number; chequeDate: number } | null;
+  currency: string;
 }) {
   const amount = payload.receivable?.outstandingAmount ?? payload.cheque?.amount ?? 0;
   const dueDate = payload.receivable?.dueDate ?? payload.cheque?.chequeDate ?? Date.now();
   return {
     customerName: safeCustomerName(payload.customer),
-    amount: String(roundMoney(amount)),
+    amount: String(roundMoney(amount, payload.currency)),
     dueDate: new Date(dueDate).toLocaleDateString("ar-JO"),
   };
 }

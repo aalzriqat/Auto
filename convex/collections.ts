@@ -19,7 +19,7 @@ import { hookCollectionPayment, hookCollectionRefund, hookExpensePosted, getOrgC
 import { reverseAccountingEvent } from "./accounting/reversals";
 import { getOpenPeriodForDate } from "./accountingPeriods";
 import { enqueuePendingReversal, cancelPendingPostByKey } from "./accountingOutbox";
-import { toMinorUnits, fromMinorUnits } from "./utils/money";
+import { toMinorUnits, fromMinorUnits, scaleForCurrency } from "./utils/money";
 import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
@@ -90,8 +90,9 @@ function assertPositiveAmount(amount: number, label = "Amount") {
   }
 }
 
-function roundMoney(amount: number) {
-  return Math.round(amount * 100) / 100;
+function roundMoney(amount: number, currency: string) {
+  const factor = Math.pow(10, scaleForCurrency(currency));
+  return Math.round(amount * factor) / factor;
 }
 
 function dayRange(timestamp: number) {
@@ -236,9 +237,10 @@ async function applyPostedPayment(
   ctx: MutationCtx,
   receivable: Doc<"receivables">,
   amount: number,
-  paymentDate: number
+  paymentDate: number,
+  currency: string
 ) {
-  const outstandingAmount = roundMoney(Math.max(0, receivable.outstandingAmount - amount));
+  const outstandingAmount = roundMoney(Math.max(0, receivable.outstandingAmount - amount), currency);
   const patch: ReceivablePatch = {
     outstandingAmount,
     status: nextStatus(outstandingAmount, receivable.dueDate),
@@ -416,6 +418,7 @@ export const summary = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    const currency = await getOrgCurrency(ctx, args.orgId);
 
     const now = Date.now();
     const today = dayRange(now);
@@ -453,11 +456,11 @@ export const summary = query({
     const upcomingChequeTotal = upcomingChequesThisWeek.reduce((sum, cheque) => sum + cheque.amount, 0);
 
     return {
-      totalOutstanding: roundMoney(totalOutstanding),
-      overdueOutstanding: roundMoney(overdueOutstanding),
-      dueToday: roundMoney(dueToday),
-      collectedToday: roundMoney(collectedToday),
-      upcomingChequeTotal: roundMoney(upcomingChequeTotal),
+      totalOutstanding: roundMoney(totalOutstanding, currency),
+      overdueOutstanding: roundMoney(overdueOutstanding, currency),
+      dueToday: roundMoney(dueToday, currency),
+      collectedToday: roundMoney(collectedToday, currency),
+      upcomingChequeTotal: roundMoney(upcomingChequeTotal, currency),
       upcomingChequeCount: upcomingChequesThisWeek.length,
     };
   },
@@ -564,6 +567,7 @@ export const createReceivable = mutation({
     await validateOrgCustomer(ctx, args.orgId, args.customerId);
     await validateOptionalLinks(ctx, args.orgId, args);
 
+    const currency = await getOrgCurrency(ctx, args.orgId);
     const now = Date.now();
     const receivableId = await ctx.db.insert("receivables", {
       orgId: args.orgId,
@@ -576,8 +580,8 @@ export const createReceivable = mutation({
       assignedTo: args.assignedTo,
       sourceType: args.sourceType,
       title: args.title.trim(),
-      originalAmount: roundMoney(args.amount),
-      outstandingAmount: roundMoney(args.amount),
+      originalAmount: roundMoney(args.amount, currency),
+      outstandingAmount: roundMoney(args.amount, currency),
       dueDate: args.dueDate,
       status: args.dueDate < now ? "OVERDUE" : "OPEN",
       notes: args.notes,
@@ -586,7 +590,6 @@ export const createReceivable = mutation({
       updatedAt: now,
     });
 
-    const currency = await getOrgCurrency(ctx, args.orgId);
     const receivable = await ctx.db.get(receivableId);
     if (receivable) {
       await ensureCanonicalReceivableForLegacy(ctx, receivable, user._id, currency);
@@ -595,7 +598,7 @@ export const createReceivable = mutation({
     const actorName = await getActorName(ctx);
     await notifyManagers(ctx, args.orgId, "collection.receivable_created", {
       actorName,
-      amount: String(roundMoney(args.amount)),
+      amount: String(roundMoney(args.amount, currency)),
     }, { link: `/${args.orgId}/accounting` });
 
     return receivableId;
@@ -634,17 +637,17 @@ export const createInstallmentPlan = mutation({
     await validateOrgCustomer(ctx, args.orgId, args.customerId);
     await validateOptionalLinks(ctx, args.orgId, args);
 
+    const currency = await getOrgCurrency(ctx, args.orgId);
     const now = Date.now();
-    const baseAmount = roundMoney(args.totalAmount / args.installmentCount);
+    const baseAmount = roundMoney(args.totalAmount / args.installmentCount, currency);
     let allocated = 0;
     const ids: Id<"receivables">[] = [];
-    const currency = await getOrgCurrency(ctx, args.orgId);
 
     for (let i = 1; i <= args.installmentCount; i++) {
       const amount = i === args.installmentCount
-        ? roundMoney(args.totalAmount - allocated)
+        ? roundMoney(args.totalAmount - allocated, currency)
         : baseAmount;
-      allocated = roundMoney(allocated + amount);
+      allocated = roundMoney(allocated + amount, currency);
       const dueDate = addMonths(args.firstDueDate, (i - 1) * intervalMonths);
       const id = await ctx.db.insert("receivables", {
         orgId: args.orgId,
@@ -679,7 +682,7 @@ export const createInstallmentPlan = mutation({
     const actorName = await getActorName(ctx);
     await notifyManagers(ctx, args.orgId, "collection.plan_created", {
       actorName,
-      amount: String(roundMoney(args.totalAmount)),
+      amount: String(roundMoney(args.totalAmount, currency)),
     }, { link: `/${args.orgId}/accounting` });
 
     return ids;
@@ -734,6 +737,7 @@ export const recordPayment = mutation({
         const saleId = receivable?.saleId ?? args.saleId;
         await validateOptionalLinks(ctx, args.orgId, { vehicleId, saleId });
 
+        const currency = await getOrgCurrency(ctx, args.orgId);
         const now = Date.now();
         const paymentId = await ctx.db.insert("collectionPayments", {
           orgId: args.orgId,
@@ -744,7 +748,7 @@ export const recordPayment = mutation({
           saleId,
           direction: "IN",
           method: args.method,
-          amount: roundMoney(args.amount),
+          amount: roundMoney(args.amount, currency),
           paymentDate: args.paymentDate,
           status: "POSTED",
           idempotencyKey: args.idempotencyKey,
@@ -755,13 +759,13 @@ export const recordPayment = mutation({
         });
 
         if (receivable) {
-          await applyPostedPayment(ctx, receivable, args.amount, args.paymentDate);
+          await applyPostedPayment(ctx, receivable, args.amount, args.paymentDate, currency);
         }
 
         await insertLedgerTransaction(ctx, {
           orgId: args.orgId,
           direction: "IN",
-          amount: roundMoney(args.amount),
+          amount: roundMoney(args.amount, currency),
           date: args.paymentDate,
           description: `Collection payment${receivable ? ` for ${receivable.title}` : ""}`,
           vehicleId,
@@ -770,7 +774,6 @@ export const recordPayment = mutation({
           idempotencyKey: args.idempotencyKey,
         });
 
-        const currency = await getOrgCurrency(ctx, args.orgId);
         const payment = await ctx.db.get(paymentId);
         if (payment) {
           await mirrorCollectionPaymentToCanonical(ctx, {
@@ -786,7 +789,7 @@ export const recordPayment = mutation({
           orgId: args.orgId,
           paymentId,
           customerId,
-          amountMinor: toMinorUnits(roundMoney(args.amount), currency),
+          amountMinor: toMinorUnits(roundMoney(args.amount, currency), currency),
           currency,
           paymentMethod: args.method,
           actorId: user._id,
@@ -796,7 +799,7 @@ export const recordPayment = mutation({
         const actorName = await getActorName(ctx);
         await notifyManagers(ctx, args.orgId, "collection.payment_recorded", {
           actorName,
-          amount: String(roundMoney(args.amount)),
+          amount: String(roundMoney(args.amount, currency)),
         }, { link: `/${args.orgId}/accounting` });
 
         return paymentId;
@@ -845,6 +848,7 @@ export const registerCheque = mutation({
       throw new ConvexError("A cheque with this bank and number already exists.");
     }
 
+    const currency = await getOrgCurrency(ctx, args.orgId);
     const now = Date.now();
     return await ctx.db.insert("postDatedCheques", {
       orgId: args.orgId,
@@ -856,7 +860,7 @@ export const registerCheque = mutation({
       bank: args.bank.trim(),
       chequeNumber: args.chequeNumber.trim(),
       chequeDate: args.chequeDate,
-      amount: roundMoney(args.amount),
+      amount: roundMoney(args.amount, currency),
       status: "HELD",
       notes: args.notes,
       createdBy: user._id,
@@ -904,6 +908,7 @@ export const clearCheque = mutation({
         fingerprint: JSON.stringify({ chequeId: args.chequeId, clearedAt: args.clearedAt ?? null }),
       },
       async () => {
+        const currency = await getOrgCurrency(ctx, args.orgId);
         const cheque = await ctx.db.get(args.chequeId);
         if (!cheque || cheque.orgId !== args.orgId) throw new ConvexError("Cheque not found.");
         if (cheque.status !== "HELD" && cheque.status !== "DEPOSITED") {
@@ -947,7 +952,7 @@ export const clearCheque = mutation({
         });
 
         if (receivable) {
-          await applyPostedPayment(ctx, receivable, cheque.amount, clearedAt);
+          await applyPostedPayment(ctx, receivable, cheque.amount, clearedAt, currency);
         }
 
         await insertLedgerTransaction(ctx, {
@@ -967,7 +972,6 @@ export const clearCheque = mutation({
         // COLLECTION_PAYMENT so the return-after-clearing flow can reverse it by
         // its source event. Posts now, or enqueues to the outbox if the chart /
         // period is not yet set up.
-        const currency = await getOrgCurrency(ctx, args.orgId);
         const payment = await ctx.db.get(paymentId);
         if (payment) {
           await mirrorCollectionPaymentToCanonical(ctx, {
@@ -1059,6 +1063,7 @@ export const replaceCheque = mutation({
       throw new ConvexError("Cleared or cancelled cheques cannot be replaced.");
     }
 
+    const currency = await getOrgCurrency(ctx, args.orgId);
     const now = Date.now();
     const newChequeId = await ctx.db.insert("postDatedCheques", {
       orgId: args.orgId,
@@ -1070,7 +1075,7 @@ export const replaceCheque = mutation({
       bank: args.bank.trim(),
       chequeNumber: args.chequeNumber.trim(),
       chequeDate: args.chequeDate,
-      amount: roundMoney(args.amount),
+      amount: roundMoney(args.amount, currency),
       status: "HELD",
       notes: args.notes,
       createdBy: user._id,
@@ -1304,6 +1309,7 @@ export const requestApproval = mutation({
       throw new ConvexError("A pending request of this type already exists.");
     }
 
+    const currency = await getOrgCurrency(ctx, args.orgId);
     const now = Date.now();
     const requestId = await ctx.db.insert("collectionApprovalRequests", {
       orgId: args.orgId,
@@ -1312,7 +1318,7 @@ export const requestApproval = mutation({
       requestedBy: user._id,
       requestType: args.requestType,
       status: "PENDING",
-      requestedAmount: args.requestedAmount ? roundMoney(args.requestedAmount) : undefined,
+      requestedAmount: args.requestedAmount ? roundMoney(args.requestedAmount, currency) : undefined,
       requestedDueDate: args.requestedDueDate,
       disbursementMethod: args.requestType === "REFUND" ? args.disbursementMethod : undefined,
       reason: args.reason.trim(),
@@ -1391,6 +1397,7 @@ export const respondToApproval = mutation({
         const receivable = await ctx.db.get(request.receivableId);
         if (!receivable || receivable.orgId !== args.orgId) throw new ConvexError("Receivable not found.");
 
+        const currency = await getOrgCurrency(ctx, args.orgId);
         const now = Date.now();
         await ctx.db.patch(args.requestId, {
           status: args.status,
@@ -1411,12 +1418,11 @@ export const respondToApproval = mutation({
             });
             // Keep the canonical receivable document in step with the legacy
             // row — aging and dunning read the canonical dueDate.
-            const rescheduleCurrency = await getOrgCurrency(ctx, args.orgId);
             const rescheduledDocId = await ensureCanonicalReceivableForLegacy(
               ctx,
               receivable,
               user._id,
-              rescheduleCurrency
+              currency
             );
             await ctx.db.patch(rescheduledDocId, { dueDate: request.requestedDueDate });
           } else if (request.requestType === "CANCEL_RECEIVABLE") {
@@ -1424,7 +1430,7 @@ export const respondToApproval = mutation({
             // financially-recognised receivable without a reversal GL event
             // leaves the subledger in an inconsistent state. Use the Refund
             // path to return collected funds first, then cancel.
-            const paidAmount = roundMoney(receivable.originalAmount - receivable.outstandingAmount);
+            const paidAmount = roundMoney(receivable.originalAmount - receivable.outstandingAmount, currency);
             if (paidAmount > 0) {
               throw new ConvexError(
                 "Cannot cancel a receivable that has already received payments. " +
@@ -1457,18 +1463,17 @@ export const respondToApproval = mutation({
               status: "CANCELLED",
               updatedAt: now,
             });
-            const cancelCurrency = await getOrgCurrency(ctx, args.orgId);
             const cancelledDocId = await ensureCanonicalReceivableForLegacy(
               ctx,
               receivable,
               user._id,
-              cancelCurrency
+              currency
             );
             await ctx.db.patch(cancelledDocId, { status: "CANCELLED" });
           } else if (request.requestType === "REFUND") {
-            const refundAmount = roundMoney(request.requestedAmount ?? 0);
+            const refundAmount = roundMoney(request.requestedAmount ?? 0, currency);
             assertPositiveAmount(refundAmount, "Refund amount");
-            const paidAmount = roundMoney(receivable.originalAmount - receivable.outstandingAmount);
+            const paidAmount = roundMoney(receivable.originalAmount - receivable.outstandingAmount, currency);
             if (refundAmount > paidAmount) throw new ConvexError("Refund amount cannot exceed collected amount.");
 
             // Use the method captured at request time so the GL entry posts to
@@ -1499,7 +1504,6 @@ export const respondToApproval = mutation({
               createdAt: now,
             });
 
-            const currency = await getOrgCurrency(ctx, args.orgId);
             const refundPayment = await ctx.db.get(refundPaymentId);
             const canonicalReceivableDocumentId = await ensureCanonicalReceivableForLegacy(
               ctx,
@@ -1528,7 +1532,7 @@ export const respondToApproval = mutation({
               actorId: user._id,
             });
 
-            const newOutstanding = roundMoney(receivable.outstandingAmount + refundAmount);
+            const newOutstanding = roundMoney(receivable.outstandingAmount + refundAmount, currency);
             await ctx.db.patch(receivable._id, {
               outstandingAmount: newOutstanding,
               status: refundAmount >= paidAmount ? "REFUNDED" : nextStatus(newOutstanding, receivable.dueDate),
@@ -1578,6 +1582,7 @@ export const getReconciliationDraft = query({
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const currency = await getOrgCurrency(ctx, args.orgId);
     const { start, end } = dayRange(args.businessDate);
     const payments = await ctx.db
       .query("collectionPayments")
@@ -1597,7 +1602,7 @@ export const getReconciliationDraft = query({
     );
     return {
       businessDate: start,
-      expectedCash: roundMoney(expectedCash),
+      expectedCash: roundMoney(expectedCash, currency),
       paymentCount: cashPayments.length,
     };
   },
@@ -1625,6 +1630,7 @@ export const submitCashierReconciliation = mutation({
         if (!Number.isFinite(args.countedCash) || args.countedCash < 0) {
           throw new ConvexError("Counted cash must be zero or greater.");
         }
+        const currency = await getOrgCurrency(ctx, args.orgId);
         const { start, end } = dayRange(args.businessDate);
         const payments = await ctx.db
           .query("collectionPayments")
@@ -1641,8 +1647,8 @@ export const submitCashierReconciliation = mutation({
         const expectedCash = roundMoney(cashPayments.reduce(
           (sum, payment) => sum + (payment.direction === "IN" ? payment.amount : -payment.amount),
           0
-        ));
-        const countedCash = roundMoney(args.countedCash);
+        ), currency);
+        const countedCash = roundMoney(args.countedCash, currency);
         const now = Date.now();
         const reconciliationId = await ctx.db.insert("cashierReconciliations", {
           orgId: args.orgId,
@@ -1651,7 +1657,7 @@ export const submitCashierReconciliation = mutation({
           businessDate: start,
           expectedCash,
           countedCash,
-          difference: roundMoney(countedCash - expectedCash),
+          difference: roundMoney(countedCash - expectedCash, currency),
           status: "SUBMITTED",
           idempotencyKey: args.idempotencyKey,
           notes: args.notes,
@@ -1728,6 +1734,7 @@ export const dailyCollectionList = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    const currency = await getOrgCurrency(ctx, args.orgId);
     const { start, end } = dayRange(args.businessDate);
     const payments = await ctx.db
       .query("collectionPayments")
@@ -1737,12 +1744,13 @@ export const dailyCollectionList = query({
     const totalsByMethod: Record<string, number> = {};
     for (const payment of rows) {
       totalsByMethod[payment.method] = roundMoney(
-        (totalsByMethod[payment.method] ?? 0) + (payment.direction === "IN" ? payment.amount : -payment.amount)
+        (totalsByMethod[payment.method] ?? 0) + (payment.direction === "IN" ? payment.amount : -payment.amount),
+        currency
       );
     }
     return {
       totalsByMethod,
-      total: roundMoney(Object.values(totalsByMethod).reduce((sum, amount) => sum + amount, 0)),
+      total: roundMoney(Object.values(totalsByMethod).reduce((sum, amount) => sum + amount, 0), currency),
       rows: await Promise.all(rows.map((payment) => hydratePayment(ctx, payment))),
     };
   },
@@ -1756,6 +1764,7 @@ export const upcomingChequeReport = query({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    const currency = await getOrgCurrency(ctx, args.orgId);
     const cheques = await ctx.db
       .query("postDatedCheques")
       .withIndex("by_org_chequeDate", (q) => q.eq("orgId", args.orgId).gte("chequeDate", args.startDate))
@@ -1766,7 +1775,7 @@ export const upcomingChequeReport = query({
         (cheque.status === "HELD" || cheque.status === "DEPOSITED")
     );
     return {
-      total: roundMoney(rows.reduce((sum, cheque) => sum + cheque.amount, 0)),
+      total: roundMoney(rows.reduce((sum, cheque) => sum + cheque.amount, 0), currency),
       rows: await Promise.all(rows.map((cheque) => hydrateCheque(ctx, cheque))),
     };
   },
@@ -1776,6 +1785,7 @@ export const agingReport = query({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    const currency = await getOrgCurrency(ctx, args.orgId);
     const now = Date.now();
     const statuses: ReceivableStatus[] = ["OPEN", "PARTIALLY_PAID", "OVERDUE", "RESCHEDULED"];
     const buckets = {
@@ -1803,7 +1813,7 @@ export const agingReport = query({
                 ? buckets.days61To90
                 : buckets.over90;
         bucket.count += 1;
-        bucket.amount = roundMoney(bucket.amount + row.outstandingAmount);
+        bucket.amount = roundMoney(bucket.amount + row.outstandingAmount, currency);
       }
     }
 
@@ -1948,12 +1958,13 @@ export const getReminderPayload = internalQuery({
   handler: async (ctx, args) => {
     const reminder = await ctx.db.get(args.reminderId);
     if (!reminder) return null;
-    const [customer, receivable, cheque] = await Promise.all([
+    const [customer, receivable, cheque, currency] = await Promise.all([
       ctx.db.get(reminder.customerId),
       reminder.receivableId ? ctx.db.get(reminder.receivableId) : null,
       reminder.chequeId ? ctx.db.get(reminder.chequeId) : null,
+      getOrgCurrency(ctx, reminder.orgId),
     ]);
-    return { reminder, customer, receivable, cheque };
+    return { reminder, customer, receivable, cheque, currency };
   },
 });
 
