@@ -10,6 +10,9 @@ import { CreateExpenseSchema, UpdateExpenseSchema } from "./validations/expenses
 import { checkTenantWriteLimit } from "./rateLimit";
 import { runWithIdempotency } from "./utils/idempotency";
 import { hookExpensePosted, getOrgCurrency } from "./accounting/workflowHooks";
+import { reverseAccountingEvent } from "./accounting/reversals";
+import { cancelPendingPostByKey } from "./accountingOutbox";
+import { requireFeature } from "./subscriptions";
 import { toMinorUnits } from "./utils/money";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
 
@@ -395,9 +398,48 @@ export const update = mutation({
 });
 
 /**
+ * Soft-deletes the expense row and its linked legacy transaction, then
+ * notifies managers. Shared by remove() (never-posted expenses) and
+ * reverseExpense() (posted expenses, called only after their accounting
+ * effect has been reversed) — from the user's perspective both end the same
+ * way: the expense disappears from the active list.
+ */
+async function softDeleteExpenseRecord(
+  ctx: MutationCtx,
+  args: { orgId: Id<"organizations">; expenseId: Id<"expenses">; expense: Doc<"expenses">; deletedBy: string; now: number }
+) {
+  await ctx.db.patch(args.expenseId, {
+    isDeleted: true,
+    deletedAt: args.now,
+    deletedBy: args.deletedBy,
+  });
+
+  // Also soft-delete the linked legacy transaction row so reports stay consistent
+  const linkedTx = await ctx.db
+    .query("transactions")
+    .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+    .filter((q) => q.eq(q.field("expenseId"), args.expenseId))
+    .first();
+  if (linkedTx && !linkedTx.isDeleted) {
+    await ctx.db.patch(linkedTx._id, {
+      isDeleted: true,
+      deletedAt: args.now,
+      deletedBy: args.deletedBy,
+    });
+  }
+
+  const actorName = await getActorName(ctx);
+  await notifyManagers(
+    ctx,
+    args.orgId,
+    "expense.deleted",
+    { actorName, expenseTitle: args.expense.title }
+  );
+}
+
+/**
  * Deletes an expense.
  */
-// TODO: Add admin recovery endpoint if needed
 export const remove = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -421,33 +463,85 @@ export const remove = mutation({
 
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new ConvexError("Unauthenticated");
-    const now = Date.now();
-    await ctx.db.patch(args.expenseId, {
-      isDeleted: true,
-      deletedAt: now,
-      deletedBy: identity.subject
-    });
 
-    // Also soft-delete the linked legacy transaction row so reports stay consistent
-    const linkedTx = await ctx.db
-      .query("transactions")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.eq(q.field("expenseId"), args.expenseId))
-      .first();
-    if (linkedTx && !linkedTx.isDeleted) {
-      await ctx.db.patch(linkedTx._id, {
-        isDeleted: true,
-        deletedAt: now,
-        deletedBy: identity.subject,
-      });
+    await softDeleteExpenseRecord(ctx, {
+      orgId: args.orgId,
+      expenseId: args.expenseId,
+      expense,
+      deletedBy: identity.subject,
+      now: Date.now(),
+    });
+  },
+});
+
+/**
+ * Reverses a posted expense's accounting effect (a new offsetting journal
+ * entry — the original stays in the ledger, marked REVERSED, for audit
+ * purposes) and then soft-deletes the expense the same way remove() does.
+ * This is the "reversal workflow" remove() points users at once an expense
+ * has been posted to accounting and can no longer be deleted directly.
+ */
+export const reverseExpense = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    expenseId: v.id("expenses"),
+    reason: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+
+    const statusLimit = await checkTenantWriteLimit(ctx, "standardApi", args.orgId);
+    if (!statusLimit.ok) {
+      throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
     }
 
-    const actorName = await getActorName(ctx);
-    await notifyManagers(
-      ctx,
-      args.orgId,
-      "expense.deleted",
-      { actorName, expenseTitle: expense.title }
-    );
+    const reason = args.reason.trim();
+    if (!reason) throw new ConvexError("A reason is required to reverse a posted expense.");
+
+    const expense = await ctx.db.get(args.expenseId);
+    if (!expense || expense.isDeleted || expense.orgId !== args.orgId) {
+      throw new ConvexError("Expense not found.");
+    }
+
+    const now = Date.now();
+    const postedEvent = await ctx.db
+      .query("accountingEvents")
+      .withIndex("by_org_source", (q) =>
+        q.eq("orgId", args.orgId).eq("sourceType", "expenses").eq("sourceId", args.expenseId.toString())
+      )
+      .filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED"))
+      .first();
+
+    if (postedEvent) {
+      // Actually posted to the ledger — create a real offsetting journal entry.
+      await reverseAccountingEvent(ctx, {
+        orgId: args.orgId,
+        originalEventId: postedEvent._id,
+        reversalDate: now,
+        reason,
+        actorId: user._id,
+        idempotencyKey: `expense_reversed_${args.expenseId}`,
+      });
+    } else {
+      // No chart of accounts / open period existed when this expense was
+      // marked paid, so it never actually posted — it's just queued. Nothing
+      // was posted, so there's nothing to reverse; drop the queued post.
+      const cancelled = await cancelPendingPostByKey(ctx, args.orgId, `expense_posted_${args.expenseId}`);
+      if (!cancelled) {
+        throw new ConvexError("This expense hasn't been posted to accounting — delete it directly instead.");
+      }
+    }
+
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new ConvexError("Unauthenticated");
+
+    await softDeleteExpenseRecord(ctx, {
+      orgId: args.orgId,
+      expenseId: args.expenseId,
+      expense,
+      deletedBy: identity.subject,
+      now,
+    });
   },
 });

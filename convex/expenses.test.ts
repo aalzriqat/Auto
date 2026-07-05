@@ -310,3 +310,154 @@ describe("expenses.remove", () => {
     });
   });
 });
+
+describe("expenses.reverseExpense", () => {
+  // No chart of accounts initialized — a "PAID" expense's posting is queued
+  // in pendingAccountingEvents rather than actually landing in the ledger.
+  async function setupPendingOnly() {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Pending Dealer", createdAt: Date.now() })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("subscriptions", {
+        orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now(),
+      })
+    );
+    const userId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "rev_user", email: "rev@test.com", name: "Finance User" })
+    );
+    const roleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "Finance", permissions: [...PERMISSIONS, "manage:finance"] })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+    const asUser = t.withIdentity({ subject: "rev_user" });
+    return { t, orgId, asUser };
+  }
+
+  // Full chart of accounts + open period — a "PAID" expense actually posts
+  // a real journal entry.
+  async function setupFullyPosted() {
+    const { t, orgId, asUser } = await setupPendingOnly();
+    await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
+    const now = Date.now();
+    const monthStart = new Date(new Date(now).getFullYear(), new Date(now).getMonth(), 1).getTime();
+    const monthEnd = new Date(new Date(now).getFullYear(), new Date(now).getMonth() + 1, 0, 23, 59, 59, 999).getTime();
+    await asUser.mutation(api.accountingPeriods.create, {
+      orgId,
+      fiscalYear: new Date(now).getFullYear(),
+      periodNumber: new Date(now).getMonth() + 1,
+      startDate: monthStart,
+      endDate: monthEnd,
+      openImmediately: true,
+    });
+    return { t, orgId, asUser };
+  }
+
+  test("cancels a queued (not yet actually posted) expense post and removes the expense", async () => {
+    const { t, orgId, asUser } = await setupPendingOnly();
+
+    const expenseId = await asUser.mutation(api.expenses.create, {
+      orgId,
+      title: "No chart yet",
+      amount: 50,
+      date: Date.now(),
+      category: "OTHER",
+    });
+
+    await asUser.mutation(api.expenses.reverseExpense, { orgId, expenseId, reason: "Test cleanup" });
+
+    await t.run(async (ctx) => {
+      const expense = await ctx.db.get(expenseId);
+      expect(expense?.isDeleted).toBe(true);
+
+      const pendingPost = await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", orgId).eq("idempotencyKey", `expense_posted_${expenseId}`)
+        )
+        .first();
+      expect(pendingPost).toBeNull();
+    });
+  });
+
+  test("reverses a fully posted expense with a real offsetting journal entry", async () => {
+    const { t, orgId, asUser } = await setupFullyPosted();
+
+    const expenseId = await asUser.mutation(api.expenses.create, {
+      orgId,
+      title: "Fully posted",
+      amount: 75,
+      date: Date.now(),
+      category: "OTHER",
+    });
+
+    await asUser.mutation(api.expenses.reverseExpense, { orgId, expenseId, reason: "Test cleanup" });
+
+    await t.run(async (ctx) => {
+      const expense = await ctx.db.get(expenseId);
+      expect(expense?.isDeleted).toBe(true);
+
+      const originalEvent = await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", "expenses").eq("sourceId", expenseId.toString())
+        )
+        .filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED"))
+        .first();
+      expect(originalEvent?.status).toBe("REVERSED");
+
+      const reversalEvent = await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", "expenses").eq("sourceId", expenseId.toString())
+        )
+        .filter((q) => q.eq(q.field("eventType"), "JOURNAL_REVERSAL"))
+        .first();
+      expect(reversalEvent?.status).toBe("POSTED");
+      expect(reversalEvent?.journalEntryId).toBeDefined();
+    });
+  });
+
+  test("requires a non-empty reason", async () => {
+    const { orgId, asUser } = await setupPendingOnly();
+
+    const expenseId = await asUser.mutation(api.expenses.create, {
+      orgId,
+      title: "No reason given",
+      amount: 20,
+      date: Date.now(),
+      category: "OTHER",
+    });
+
+    await expect(
+      asUser.mutation(api.expenses.reverseExpense, { orgId, expenseId, reason: "   " })
+    ).rejects.toThrow(/reason is required/i);
+  });
+
+  test("a user without manage:finance cannot reverse an expense", async () => {
+    const { t, orgId, asUser: asFinanceUser } = await setupPendingOnly();
+
+    const expenseId = await asFinanceUser.mutation(api.expenses.create, {
+      orgId,
+      title: "Restricted",
+      amount: 20,
+      date: Date.now(),
+      category: "OTHER",
+    });
+
+    // A second member of the same org with only base expense permissions, no manage:finance.
+    const salesUserId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "sales_no_finance", email: "sales@test.com", name: "Sales User" })
+    );
+    const salesRoleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "Sales", permissions: PERMISSIONS })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: salesUserId, roleId: salesRoleId }));
+    const asSales = t.withIdentity({ subject: "sales_no_finance" });
+
+    await expect(
+      asSales.mutation(api.expenses.reverseExpense, { orgId, expenseId, reason: "Trying anyway" })
+    ).rejects.toThrow();
+  });
+});

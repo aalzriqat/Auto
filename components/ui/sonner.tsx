@@ -315,6 +315,15 @@ function formatFriendlyError(error: unknown, locale: string): string {
     "failed to upload document": "Failed to upload document file.",
     "failed to create org": "Failed to create the new organization.",
     "failed to rename org": "Failed to rename the organization.",
+
+    // Posted/locked accounting records — the "completed work orders..." keys
+    // must come before the shorter "posted expenses..." keys since the latter
+    // is a substring of the former and the lookup below returns on first match.
+    "completed work orders with posted expenses cannot be deleted": "This work order has posted accounting entries and can't be deleted directly. Use a reversal instead.",
+    "completed work orders with posted expenses are locked": "This work order has posted accounting entries and is locked. Use a correction or reversal instead of editing directly.",
+    "posted expenses cannot be deleted": "This expense has already been posted to accounting and can't be deleted directly. Use a reversal instead.",
+    "posted expenses are locked": "This expense has been posted to accounting, so its accounting fields are locked. Use a correction or reversal instead of editing directly.",
+    "paid commissions are locked": "This commission has already been paid and is locked. Use a reversal instead of marking it unpaid directly.",
   };
 
   const arTranslations: Record<string, string> = {
@@ -401,6 +410,13 @@ function formatFriendlyError(error: unknown, locale: string): string {
     "failed to upload document": "فشل رفع مستند الملف.",
     "failed to create org": "فشل إنشاء المعرض الجديد.",
     "failed to rename org": "فشل إعادة تسمية المعرض.",
+
+    // Posted/locked accounting records — order matches enTranslations above.
+    "completed work orders with posted expenses cannot be deleted": "يحتوي أمر العمل هذا على قيود محاسبية مرحّلة ولا يمكن حذفه مباشرة. استخدم إجراء العكس (Reversal) بدلاً من ذلك.",
+    "completed work orders with posted expenses are locked": "يحتوي أمر العمل هذا على قيود محاسبية مرحّلة وهو مقفل. استخدم تصحيحاً أو إجراء عكسياً بدلاً من التعديل المباشر.",
+    "posted expenses cannot be deleted": "تم ترحيل هذا المصروف إلى الحسابات ولا يمكن حذفه مباشرة. استخدم إجراء العكس (Reversal) بدلاً من ذلك.",
+    "posted expenses are locked": "تم ترحيل هذا المصروف إلى الحسابات، لذا حقوله المحاسبية مقفلة. استخدم تصحيحاً أو إجراء عكسياً بدلاً من التعديل المباشر.",
+    "paid commissions are locked": "تم دفع هذه العمولة بالفعل وهي مقفلة. استخدم إجراء العكس بدلاً من تعليمها كغير مدفوعة مباشرة.",
   };
 
   const lowerMessage = rawMessage.toLowerCase();

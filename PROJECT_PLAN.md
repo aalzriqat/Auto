@@ -1072,7 +1072,10 @@ New "Analytics" tab in Reports (or a dedicated `/analytics` route):
 
 ## Phase 40 — Mobile PWA
 
-**Branch:** `feature/phase-40-pwa` (Push/PWA slice built on `feature/phase-40a-push-notifications`)
+**Push/PWA slice: MERGED to main (PR #26, 2026-07-05) and DEPLOYED to production** — VAPID keys
+generated and set on Convex prod (`kindly-hound-172`) + Vercel; `npx convex deploy` and a fresh
+Vercel production deploy both completed same day. Push notifications are live.
+**Branch:** `feature/phase-40-pwa` (Push/PWA slice was built on `feature/phase-40a-push-notifications`)
 **Goal:** Installable app, offline inventory/customer lookup, camera VIN scanner, push notifications.
 
 ### Scope
@@ -1218,7 +1221,7 @@ Each phase reuses the established pattern: immutable event table → posting rul
 | 37 | Document Management | 3 — Enterprise & Scale | ⬜ Not started |
 | 38 | Multi-Branch Operations | 3 — Enterprise & Scale | ⬜ Not started |
 | 39 | Sales Funnel Analytics | 3 — Enterprise & Scale | ⬜ Not started |
-| 40 | Mobile PWA | 3 — Enterprise & Scale | 🟨 Push/PWA slice built (2026-07-05), pending merge + VAPID setup; VIN scanner/GPS check-in not started |
+| 40 | Mobile PWA | 3 — Enterprise & Scale | 🟨 Push/PWA slice MERGED + DEPLOYED to prod (2026-07-05); VIN scanner/GPS check-in not started |
 | 41 | Accounting Depth | 3 — Enterprise & Scale | ⬜ Not started |
 | 42 | Open API & Integration Hub | 3 — Enterprise & Scale | ⬜ Not started |
 | GL 0–9 | Double-Entry Accounting Foundation | Accounting GL Track | ✅ Done |
