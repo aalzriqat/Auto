@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
 import { usePaginatedQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
@@ -19,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import {
   Dialog,
   DialogContent,
@@ -31,7 +34,6 @@ import {
   AccountingEmptyRow,
   AccountingTableFrame,
   AmountSummary,
-  CurrencyAmountInput,
   DialogFooterActions,
   LoadingAccountingState,
   PaymentMethodSelect,
@@ -42,6 +44,7 @@ import {
   type CurrencyFormatter,
   type PaymentMethod,
 } from "./AccountingTabShared";
+import { newClaimSchema, type NewClaimFormValues } from "./claim.schema";
 
 type Claim = Doc<"claims">;
 
@@ -197,95 +200,132 @@ function NewClaimDialog({
 }>) {
   const { t } = useLanguage();
   const addClaim = useMutation(api.claims.add);
-
-  const [financingEntity, setFinancingEntity] = useState("");
-  const [buyerName, setBuyerName] = useState("");
-  const [amount, setAmount] = useState("");
-  const [claimDate, setClaimDate] = useState(todayInput);
-  const [notes, setNotes] = useState("");
   const { submitting, submitWithFeedback } = useAccountingSubmit();
 
-  function reset() {
-    setFinancingEntity("");
-    setBuyerName("");
-    setAmount("");
-    setClaimDate(todayInput);
-    setNotes("");
+  const form = useForm<NewClaimFormValues>({
+    resolver: zodResolver(newClaimSchema),
+    defaultValues: {
+      financingEntity: "",
+      buyerName: "",
+      amount: 0,
+      claimDate: todayInput,
+      notes: "",
+    },
+  });
+
+  function handleOpenChange(nextOpen: boolean) {
+    onOpenChange(nextOpen);
+    if (!nextOpen) form.reset();
   }
 
-  async function submit() {
-    if (!financingEntity.trim() || !buyerName.trim()) {
-      toast.error(t("FinancingEntity" as any));
-      return;
-    }
-    const amountMinor = Math.round(Number(amount) * factor);
-    if (!Number.isFinite(amountMinor) || amountMinor <= 0) {
-      toast.error(t("ClaimAmount" as any));
-      return;
-    }
+  async function onSubmit(values: NewClaimFormValues) {
     await submitWithFeedback(async () => {
       await addClaim({
         orgId,
-        claimDate: dateInputToMs(claimDate),
-        financingEntity: financingEntity.trim(),
-        buyerName: buyerName.trim(),
-        claimAmountMinor: amountMinor,
-        notes: notes.trim() || undefined,
+        claimDate: dateInputToMs(values.claimDate),
+        financingEntity: values.financingEntity.trim(),
+        buyerName: values.buyerName.trim(),
+        claimAmountMinor: Math.round(values.amount * factor),
+        notes: values.notes?.trim() || undefined,
       });
       toast.success(t("ClaimCreated" as any));
-      onOpenChange(false);
-      reset();
+      handleOpenChange(false);
     });
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) reset(); }}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>{t("NewClaim" as any)}</DialogTitle>
           <DialogDescription>{t("NewClaimDesc" as any)}</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>{t("FinancingEntity" as any)}</Label>
-              <Input value={financingEntity} onChange={(e) => setFinancingEntity(e.target.value)} />
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <FormField
+                control={form.control}
+                name="financingEntity"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("FinancingEntity" as any)}</FormLabel>
+                    <FormControl>
+                      <Input {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="buyerName"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("BuyerName" as any)}</FormLabel>
+                    <FormControl>
+                      <Input {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
             </div>
-            <div className="space-y-1.5">
-              <Label>{t("BuyerName" as any)}</Label>
-              <Input value={buyerName} onChange={(e) => setBuyerName(e.target.value)} />
-            </div>
-          </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <CurrencyAmountInput
-              label={t("ClaimAmount" as any)}
-              value={amount}
-              onChange={setAmount}
-              factor={factor}
+            <div className="grid grid-cols-2 gap-3">
+              <FormField
+                control={form.control}
+                name="amount"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("ClaimAmount" as any)}</FormLabel>
+                    <FormControl>
+                      <Input type="number" min={0} step={1 / factor} {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="claimDate"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("ClaimDateLabel" as any)}</FormLabel>
+                    <FormControl>
+                      <Input type="date" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            </div>
+
+            <FormField
+              control={form.control}
+              name="notes"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t("NotesLabel" as any)}</FormLabel>
+                  <FormControl>
+                    <Textarea {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
             />
-            <div className="space-y-1.5">
-              <Label>{t("ClaimDateLabel" as any)}</Label>
-              <Input type="date" value={claimDate} onChange={(e) => setClaimDate(e.target.value)} />
-            </div>
-          </div>
 
-          <div className="space-y-1.5">
-            <Label>{t("NotesLabel" as any)}</Label>
-            <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} />
-          </div>
-        </div>
-
-        <DialogFooter>
-          <DialogFooterActions
-            cancelLabel={t("Cancel" as any)}
-            confirmLabel={t("NewClaim" as any)}
-            onCancel={() => onOpenChange(false)}
-            onConfirm={submit}
-            submitting={submitting}
-          />
-        </DialogFooter>
+            <DialogFooter>
+              <DialogFooterActions
+                cancelLabel={t("Cancel" as any)}
+                confirmLabel={t("NewClaim" as any)}
+                onCancel={() => handleOpenChange(false)}
+                onConfirm={form.handleSubmit(onSubmit)}
+                submitting={submitting}
+              />
+            </DialogFooter>
+          </form>
+        </Form>
       </DialogContent>
     </Dialog>
   );

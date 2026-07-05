@@ -12,10 +12,10 @@ import { convexTest } from "convex-test";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { reverseAccountingEvent } from "./accounting/reversals";
 
-const MODULE_GLOB = import.meta.glob("./**/*.*s");
+const MODULE_GLOB = import.meta.glob("./**/*.ts");
 
 async function seedSnapshotDealer() {
   const t = convexTest(schema, MODULE_GLOB);
@@ -82,6 +82,24 @@ async function accountBySystemKey(t: Ctx["t"], orgId: Id<"organizations">, syste
   );
 }
 
+// A single account's snapshot can now be split across multiple shard rows
+// (see accounting/accountSnapshots.ts), so tests must sum every matching
+// row instead of assuming exactly one exists per account.
+function sumSnapshots(
+  snapshots: Doc<"accountBalanceSnapshots">[],
+  accountId: Id<"chartOfAccounts">
+) {
+  return snapshots
+    .filter((s) => s.accountId === accountId)
+    .reduce(
+      (sum, s) => ({
+        debitMinor: sum.debitMinor + s.runningDebitMinor,
+        creditMinor: sum.creditMinor + s.runningCreditMinor,
+      }),
+      { debitMinor: 0, creditMinor: 0 }
+    );
+}
+
 describe("Phase 18 — snapshot correctness across a period boundary", () => {
   test("snapshots accumulate per (account, currency, period) and reports sum them correctly", async () => {
     const ctx = await seedSnapshotDealer();
@@ -106,20 +124,17 @@ describe("Phase 18 — snapshot correctness across a period boundary", () => {
     const snapshots = await ctx.t.run((c) =>
       c.db.query("accountBalanceSnapshots").withIndex("by_org_period", (q) => q.eq("orgId", ctx.orgId).eq("periodId", ctx.periodA._id)).collect()
     );
-    const cashSnapshotA = snapshots.find((s) => s.accountId === cash?._id);
-    const expenseSnapshotA = snapshots.find((s) => s.accountId === expenseAccount?._id);
-    expect(cashSnapshotA?.runningCreditMinor).toBe(100_000);
-    expect(expenseSnapshotA?.runningDebitMinor).toBe(100_000);
+    expect(sumSnapshots(snapshots, cash!._id).creditMinor).toBe(100_000);
+    expect(sumSnapshots(snapshots, expenseAccount!._id).debitMinor).toBe(100_000);
 
     const snapshotsB = await ctx.t.run((c) =>
       c.db.query("accountBalanceSnapshots").withIndex("by_org_period", (q) => q.eq("orgId", ctx.orgId).eq("periodId", ctx.periodB._id)).collect()
     );
-    const cashSnapshotB = snapshotsB.find((s) => s.accountId === cash?._id);
     // Period B's snapshot accumulates BOTH postings within it regardless of
     // date — the as-of-date boundary only matters for the bounded re-derive
     // of the containing period at report time, not for what the snapshot
     // itself stores.
-    expect(cashSnapshotB?.runningCreditMinor).toBe(80_000);
+    expect(sumSnapshots(snapshotsB, cash!._id).creditMinor).toBe(80_000);
 
     // As of a date inside period B (Sep 15) — period A is fully elapsed
     // (safe to sum from its snapshot in full); period B is the containing
@@ -175,9 +190,9 @@ describe("Phase 18 — snapshot correctness across a period boundary", () => {
     const snapshotsA = await ctx.t.run((c) =>
       c.db.query("accountBalanceSnapshots").withIndex("by_org_period", (q) => q.eq("orgId", ctx.orgId).eq("periodId", ctx.periodA._id)).collect()
     );
-    const cashSnapshot = snapshotsA.find((s) => s.accountId === cash?._id);
+    const cashSnapshot = sumSnapshots(snapshotsA, cash!._id);
     // Original credited 75_000; reversal (swapped) debits 75_000 back — net zero.
-    expect((cashSnapshot?.runningDebitMinor ?? 0) - (cashSnapshot?.runningCreditMinor ?? 0)).toBe(-75_000 + 75_000);
+    expect(cashSnapshot.debitMinor - cashSnapshot.creditMinor).toBe(-75_000 + 75_000);
 
     const bsAfter = await ctx.asOwner.query(api.accountingReports.balanceSheet, { orgId: ctx.orgId, asOfDate: Date.UTC(2025, 5, 30) });
     const cashRowAfter = bsAfter.assetRows.find((r) => r.code === cash?.code);
@@ -240,8 +255,8 @@ describe("Phase 18 — every direct journalLines inserter keeps snapshots in syn
     const snapshots = await ctx.t.run((c) =>
       c.db.query("accountBalanceSnapshots").withIndex("by_org_period", (q) => q.eq("orgId", ctx.orgId).eq("periodId", currentPeriod._id)).collect()
     );
-    expect(snapshots.find((s) => s.accountId === expenseAccount!._id)?.runningDebitMinor).toBe(40_000);
-    expect(snapshots.find((s) => s.accountId === cashOverShort!._id)?.runningCreditMinor).toBe(40_000);
+    expect(sumSnapshots(snapshots, expenseAccount!._id).debitMinor).toBe(40_000);
+    expect(sumSnapshots(snapshots, cashOverShort!._id).creditMinor).toBe(40_000);
 
     // Query strictly after the posting's own accountingDate (approveManualJournal
     // stamps its own later Date.now(), not the `now` captured above) so the
@@ -267,8 +282,8 @@ describe("Phase 18 — every direct journalLines inserter keeps snapshots in syn
     const snapshots = await ctx.t.run((c) =>
       c.db.query("accountBalanceSnapshots").withIndex("by_org_period", (q) => q.eq("orgId", ctx.orgId).eq("periodId", ctx.periodA._id)).collect()
     );
-    expect(snapshots.find((s) => s.accountId === cash!._id)?.runningDebitMinor).toBe(500_000);
-    expect(snapshots.find((s) => s.accountId === capital!._id)?.runningCreditMinor).toBe(500_000);
+    expect(sumSnapshots(snapshots, cash!._id).debitMinor).toBe(500_000);
+    expect(sumSnapshots(snapshots, capital!._id).creditMinor).toBe(500_000);
 
     const bs = await ctx.asOwner.query(api.accountingReports.balanceSheet, { orgId: ctx.orgId, asOfDate: Date.UTC(2025, 5, 30) });
     expect(bs.assetRows.find((r) => r.code === cash!.code)?.netMinor).toBe(500_000);

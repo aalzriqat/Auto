@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
 import { usePaginatedQuery, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
@@ -16,9 +18,9 @@ import { Plus, History, TrendingDown, XCircle, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import {
   Dialog,
   DialogContent,
@@ -32,7 +34,6 @@ import {
   AccountingHistoryTable,
   AccountingTableFrame,
   AmountSummary,
-  CurrencyAmountInput,
   DialogFooterActions,
   LoadingAccountingState,
   PaymentMethodSelect,
@@ -41,8 +42,15 @@ import {
   todayInput,
   useAccountingSubmit,
   type CurrencyFormatter,
-  type PaymentMethod,
 } from "./AccountingTabShared";
+import {
+  capitalizeAssetSchema,
+  type CapitalizeAssetFormValues,
+  impairAssetSchema,
+  type ImpairAssetFormValues,
+  disposeAssetSchema,
+  type DisposeAssetFormValues,
+} from "./fixedAsset.schema";
 
 type FixedAsset = Doc<"fixedAssets">;
 
@@ -234,129 +242,170 @@ function CapitalizeAssetDialog({
 }>) {
   const { t } = useLanguage();
   const capitalize = useMutation(api.fixedAssets.capitalize);
-
-  const [name, setName] = useState("");
-  const [purchaseDate, setPurchaseDate] = useState(todayInput);
-  const [cost, setCost] = useState("");
-  const [salvageValue, setSalvageValue] = useState("0");
-  const [usefulLifeMonths, setUsefulLifeMonths] = useState("60");
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
-  const [notes, setNotes] = useState("");
   const { submitting, submitWithFeedback } = useAccountingSubmit();
 
-  function reset() {
-    setName("");
-    setPurchaseDate(todayInput);
-    setCost("");
-    setSalvageValue("0");
-    setUsefulLifeMonths("60");
-    setPaymentMethod("CASH");
-    setNotes("");
+  const form = useForm<CapitalizeAssetFormValues>({
+    resolver: zodResolver(capitalizeAssetSchema),
+    defaultValues: {
+      name: "",
+      purchaseDate: todayInput,
+      cost: 0,
+      salvageValue: 0,
+      usefulLifeMonths: 60,
+      paymentMethod: "CASH",
+      notes: "",
+    },
+  });
+
+  function handleOpenChange(nextOpen: boolean) {
+    onOpenChange(nextOpen);
+    if (!nextOpen) form.reset();
   }
 
-  async function submit() {
-    const costMinor = Math.round(Number(cost) * factor);
-    const salvageValueMinor = Math.round(Number(salvageValue || "0") * factor);
-    const usefulLife = Math.round(Number(usefulLifeMonths));
-
-    if (!name.trim()) {
-      toast.error(t("AssetName" as any));
-      return;
-    }
-    if (!Number.isFinite(costMinor) || costMinor <= 0) {
-      toast.error(t("PurchaseValue" as any));
-      return;
-    }
-    if (!Number.isFinite(usefulLife) || usefulLife <= 0) {
-      toast.error(t("UsefulLifeMonthsLabel" as any));
-      return;
-    }
-    if (salvageValueMinor >= costMinor) {
-      toast.error(t("SalvageValueLabel" as any));
-      return;
-    }
-
+  async function onSubmit(values: CapitalizeAssetFormValues) {
     await submitWithFeedback(async () => {
       await capitalize({
         orgId,
-        name: name.trim(),
-        purchaseDate: dateInputToMs(purchaseDate),
-        costMinor,
-        salvageValueMinor,
-        usefulLifeMonths: usefulLife,
-        paymentMethod,
-        notes: notes.trim() || undefined,
+        name: values.name.trim(),
+        purchaseDate: dateInputToMs(values.purchaseDate),
+        costMinor: Math.round(values.cost * factor),
+        salvageValueMinor: Math.round(values.salvageValue * factor),
+        usefulLifeMonths: values.usefulLifeMonths,
+        paymentMethod: values.paymentMethod,
+        notes: values.notes?.trim() || undefined,
       });
       toast.success(t("AssetCapitalized" as any));
-      onOpenChange(false);
-      reset();
+      handleOpenChange(false);
     });
   }
 
   return (
-    <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) reset(); }}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{t("CapitalizeNewAsset" as any)}</DialogTitle>
           <DialogDescription>{t("CapitalizeAssetDesc" as any)}</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label>{t("AssetName" as any)}</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} />
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label>{t("PurchaseDateLabel" as any)}</Label>
-              <Input type="date" value={purchaseDate} onChange={(e) => setPurchaseDate(e.target.value)} />
-            </div>
-            <CurrencyAmountInput
-              label={t("PurchaseValue" as any)}
-              value={cost}
-              onChange={setCost}
-              factor={factor}
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+            <FormField
+              control={form.control}
+              name="name"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t("AssetName" as any)}</FormLabel>
+                  <FormControl>
+                    <Input {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
             />
-          </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <CurrencyAmountInput
-                label={t("SalvageValueLabel" as any)}
-                value={salvageValue}
-                onChange={setSalvageValue}
-                factor={factor}
+            <div className="grid grid-cols-2 gap-3">
+              <FormField
+                control={form.control}
+                name="purchaseDate"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("PurchaseDateLabel" as any)}</FormLabel>
+                    <FormControl>
+                      <Input type="date" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
               />
-              <p className="text-xs text-slate-500">{t("SalvageValueHint" as any)}</p>
+              <FormField
+                control={form.control}
+                name="cost"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("PurchaseValue" as any)}</FormLabel>
+                    <FormControl>
+                      <Input type="number" min={0} step={1 / factor} {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
             </div>
-            <div className="space-y-1.5">
-              <Label>{t("UsefulLifeMonthsLabel" as any)}</Label>
-              <Input type="number" min={1} step={1} value={usefulLifeMonths} onChange={(e) => setUsefulLifeMonths(e.target.value)} />
-              <p className="text-xs text-slate-500">{t("UsefulLifeMonthsHint" as any)}</p>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <FormField
+                  control={form.control}
+                  name="salvageValue"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("SalvageValueLabel" as any)}</FormLabel>
+                      <FormControl>
+                        <Input type="number" min={0} step={1 / factor} {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <p className="text-xs text-slate-500">{t("SalvageValueHint" as any)}</p>
+              </div>
+              <div className="space-y-1.5">
+                <FormField
+                  control={form.control}
+                  name="usefulLifeMonths"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("UsefulLifeMonthsLabel" as any)}</FormLabel>
+                      <FormControl>
+                        <Input type="number" min={1} step={1} {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <p className="text-xs text-slate-500">{t("UsefulLifeMonthsHint" as any)}</p>
+              </div>
             </div>
-          </div>
 
-          <div className="space-y-1.5">
-            <Label>{t("PaymentMethodLabel" as any)}</Label>
-            <PaymentMethodSelect t={t as any} value={paymentMethod} onValueChange={setPaymentMethod} />
-          </div>
+            <FormField
+              control={form.control}
+              name="paymentMethod"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t("PaymentMethodLabel" as any)}</FormLabel>
+                  <FormControl>
+                    <PaymentMethodSelect t={t as any} value={field.value} onValueChange={field.onChange} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
-          <div className="space-y-1.5">
-            <Label>{t("NotesLabel" as any)}</Label>
-            <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} />
-          </div>
-        </div>
+            <FormField
+              control={form.control}
+              name="notes"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t("NotesLabel" as any)}</FormLabel>
+                  <FormControl>
+                    <Textarea {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
-        <DialogFooter>
-          <DialogFooterActions
-            cancelLabel={t("Cancel" as any)}
-            confirmLabel={t("CapitalizeNewAsset" as any)}
-            onCancel={() => onOpenChange(false)}
-            onConfirm={submit}
-            submitting={submitting}
-          />
-        </DialogFooter>
+            <DialogFooter>
+              <DialogFooterActions
+                cancelLabel={t("Cancel" as any)}
+                confirmLabel={t("CapitalizeNewAsset" as any)}
+                onCancel={() => handleOpenChange(false)}
+                onConfirm={form.handleSubmit(onSubmit)}
+                submitting={submitting}
+              />
+            </DialogFooter>
+          </form>
+        </Form>
       </DialogContent>
     </Dialog>
   );
@@ -430,15 +479,19 @@ function ImpairAssetDialog({
 }>) {
   const { t } = useLanguage();
   const impair = useMutation(api.fixedAssets.impair);
-  const [amount, setAmount] = useState("");
   const { submitting, submitWithFeedback } = useAccountingSubmit();
 
   const netBookMinor = (asset.costMinor ?? 0) - (asset.accumulatedDepreciationMinor ?? 0);
 
-  async function submit() {
-    const amountMinor = Math.round(Number(amount) * factor);
-    if (!Number.isFinite(amountMinor) || amountMinor <= 0 || amountMinor > netBookMinor) {
-      toast.error(t("ImpairmentAmountLabel" as any));
+  const form = useForm<ImpairAssetFormValues>({
+    resolver: zodResolver(impairAssetSchema),
+    defaultValues: { amount: 0 },
+  });
+
+  async function onSubmit(values: ImpairAssetFormValues) {
+    const amountMinor = Math.round(values.amount * factor);
+    if (amountMinor > netBookMinor) {
+      form.setError("amount", { message: t("ImpairmentAmountLabel" as any) });
       return;
     }
     await submitWithFeedback(async () => {
@@ -456,29 +509,38 @@ function ImpairAssetDialog({
           <DialogDescription>{asset.name} — {t("ImpairAssetDesc" as any)}</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-3">
-          <AmountSummary
-            label={t("CurrentNetBookValue" as any)}
-            value={formatCurrency(netBookMinor / factor, scale)}
-          />
-          <CurrencyAmountInput
-            label={t("ImpairmentAmountLabel" as any)}
-            value={amount}
-            onChange={setAmount}
-            factor={factor}
-          />
-        </div>
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-3">
+            <AmountSummary
+              label={t("CurrentNetBookValue" as any)}
+              value={formatCurrency(netBookMinor / factor, scale)}
+            />
+            <FormField
+              control={form.control}
+              name="amount"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t("ImpairmentAmountLabel" as any)}</FormLabel>
+                  <FormControl>
+                    <Input type="number" min={0} step={1 / factor} {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
-        <DialogFooter>
-          <DialogFooterActions
-            cancelLabel={t("Cancel" as any)}
-            confirmLabel={t("ConfirmImpair" as any)}
-            onCancel={() => onOpenChange(false)}
-            onConfirm={submit}
-            submitting={submitting}
-            confirmClassName="bg-amber-600 hover:bg-amber-700 text-white"
-          />
-        </DialogFooter>
+            <DialogFooter>
+              <DialogFooterActions
+                cancelLabel={t("Cancel" as any)}
+                confirmLabel={t("ConfirmImpair" as any)}
+                onCancel={() => onOpenChange(false)}
+                onConfirm={form.handleSubmit(onSubmit)}
+                submitting={submitting}
+                confirmClassName="bg-amber-600 hover:bg-amber-700 text-white"
+              />
+            </DialogFooter>
+          </form>
+        </Form>
       </DialogContent>
     </Dialog>
   );
@@ -501,20 +563,23 @@ function DisposeAssetDialog({
 }>) {
   const { t } = useLanguage();
   const dispose = useMutation(api.fixedAssets.dispose);
-  const [proceeds, setProceeds] = useState("0");
-  const [occurredAt, setOccurredAt] = useState(todayInput);
   const { submitting, submitWithFeedback } = useAccountingSubmit();
 
   const netBookMinor = (asset.costMinor ?? 0) - (asset.accumulatedDepreciationMinor ?? 0);
 
-  async function submit() {
-    const proceedsMinor = Math.round(Number(proceeds || "0") * factor);
-    if (!Number.isFinite(proceedsMinor) || proceedsMinor < 0) {
-      toast.error(t("DisposalProceedsLabel" as any));
-      return;
-    }
+  const form = useForm<DisposeAssetFormValues>({
+    resolver: zodResolver(disposeAssetSchema),
+    defaultValues: { proceeds: 0, occurredAt: todayInput },
+  });
+
+  async function onSubmit(values: DisposeAssetFormValues) {
     await submitWithFeedback(async () => {
-      await dispose({ orgId, assetId: asset._id, proceedsMinor, occurredAt: dateInputToMs(occurredAt) });
+      await dispose({
+        orgId,
+        assetId: asset._id,
+        proceedsMinor: Math.round(values.proceeds * factor),
+        occurredAt: dateInputToMs(values.occurredAt),
+      });
       toast.success(t("AssetDisposed" as any));
       onOpenChange(false);
     });
@@ -528,35 +593,53 @@ function DisposeAssetDialog({
           <DialogDescription>{asset.name} — {t("DisposeAssetDesc" as any)}</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-3">
-          <AmountSummary
-            label={t("CurrentNetBookValue" as any)}
-            value={formatCurrency(netBookMinor / factor, scale)}
-          />
-          <div className="grid grid-cols-2 gap-3">
-            <CurrencyAmountInput
-              label={t("DisposalProceedsLabel" as any)}
-              value={proceeds}
-              onChange={setProceeds}
-              factor={factor}
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-3">
+            <AmountSummary
+              label={t("CurrentNetBookValue" as any)}
+              value={formatCurrency(netBookMinor / factor, scale)}
             />
-            <div className="space-y-1.5">
-              <Label>{t("DisposalDateLabel" as any)}</Label>
-              <Input type="date" value={occurredAt} onChange={(e) => setOccurredAt(e.target.value)} />
+            <div className="grid grid-cols-2 gap-3">
+              <FormField
+                control={form.control}
+                name="proceeds"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("DisposalProceedsLabel" as any)}</FormLabel>
+                    <FormControl>
+                      <Input type="number" min={0} step={1 / factor} {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="occurredAt"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("DisposalDateLabel" as any)}</FormLabel>
+                    <FormControl>
+                      <Input type="date" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
             </div>
-          </div>
-        </div>
 
-        <DialogFooter>
-          <DialogFooterActions
-            cancelLabel={t("Cancel" as any)}
-            confirmLabel={t("ConfirmDispose" as any)}
-            onCancel={() => onOpenChange(false)}
-            onConfirm={submit}
-            submitting={submitting}
-            confirmClassName="bg-rose-600 hover:bg-rose-700 text-white"
-          />
-        </DialogFooter>
+            <DialogFooter>
+              <DialogFooterActions
+                cancelLabel={t("Cancel" as any)}
+                confirmLabel={t("ConfirmDispose" as any)}
+                onCancel={() => onOpenChange(false)}
+                onConfirm={form.handleSubmit(onSubmit)}
+                submitting={submitting}
+                confirmClassName="bg-rose-600 hover:bg-rose-700 text-white"
+              />
+            </DialogFooter>
+          </form>
+        </Form>
       </DialogContent>
     </Dialog>
   );

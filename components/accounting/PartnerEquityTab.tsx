@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
 import { usePaginatedQuery, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
@@ -15,9 +17,9 @@ import { Plus, History, ArrowDownToLine, ArrowUpFromLine, PieChart, Loader2 } fr
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import {
   Dialog,
   DialogContent,
@@ -31,15 +33,14 @@ import {
   AccountingHistoryTable,
   AccountingTableFrame,
   AmountSummary,
-  CurrencyAmountInput,
   DialogFooterActions,
   LoadingAccountingState,
   PaymentMethodSelect,
   scaleForCurrency,
   useAccountingSubmit,
   type CurrencyFormatter,
-  type PaymentMethod,
 } from "./AccountingTabShared";
+import { addPartnerSchema, type AddPartnerFormValues, movementSchema, type MovementFormValues } from "./partnerEquity.schema";
 
 type MovementType = "CONTRIBUTION" | "DRAW" | "PROFIT_DISTRIBUTION";
 
@@ -218,42 +219,27 @@ function AddPartnerDialog({
 }>) {
   const { t } = useLanguage();
   const addPartner = useMutation(api.partnerEquity.add);
-
-  const [name, setName] = useState("");
-  const [openingContribution, setOpeningContribution] = useState("0");
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
-  const [notes, setNotes] = useState("");
   const { submitting, submitWithFeedback } = useAccountingSubmit();
 
-  function reset() {
-    setName("");
-    setOpeningContribution("0");
-    setPaymentMethod("CASH");
-    setNotes("");
-  }
+  const form = useForm<AddPartnerFormValues>({
+    resolver: zodResolver(addPartnerSchema),
+    defaultValues: { name: "", openingContribution: 0, paymentMethod: "CASH", notes: "" },
+  });
 
   function handleOpenChange(nextOpen: boolean) {
     onOpenChange(nextOpen);
-    if (!nextOpen) reset();
+    if (!nextOpen) form.reset();
   }
 
-  async function submit() {
-    if (!name.trim()) {
-      toast.error(t("PartnerNameRequired" as any));
-      return;
-    }
-    const openingMinor = Math.round(Number(openingContribution || "0") * factor);
-    if (!Number.isFinite(openingMinor) || openingMinor < 0) {
-      toast.error(t("OpeningContributionInvalid" as any));
-      return;
-    }
+  async function onSubmit(values: AddPartnerFormValues) {
+    const openingMinor = Math.round(values.openingContribution * factor);
     await submitWithFeedback(async () => {
       await addPartner({
         orgId,
-        partnerName: name.trim(),
-        notes: notes.trim() || undefined,
+        partnerName: values.name.trim(),
+        notes: values.notes?.trim() || undefined,
         openingContributionMinor: openingMinor > 0 ? openingMinor : undefined,
-        paymentMethod: openingMinor > 0 ? paymentMethod : undefined,
+        paymentMethod: openingMinor > 0 ? values.paymentMethod : undefined,
       });
       toast.success(t("PartnerAdded" as any));
       handleOpenChange(false);
@@ -268,40 +254,76 @@ function AddPartnerDialog({
           <DialogDescription>{t("AddPartnerDesc" as any)}</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label>{t("PartnerName" as any)}</Label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} />
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <CurrencyAmountInput
-              label={t("OpeningContributionLabel" as any)}
-              value={openingContribution}
-              onChange={setOpeningContribution}
-              factor={factor}
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+            <FormField
+              control={form.control}
+              name="name"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t("PartnerName" as any)}</FormLabel>
+                  <FormControl>
+                    <Input {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
             />
-            <div className="space-y-1.5">
-              <Label>{t("PaymentMethodLabel" as any)}</Label>
-              <PaymentMethodSelect t={t as any} value={paymentMethod} onValueChange={setPaymentMethod} />
+
+            <div className="grid grid-cols-2 gap-3">
+              <FormField
+                control={form.control}
+                name="openingContribution"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("OpeningContributionLabel" as any)}</FormLabel>
+                    <FormControl>
+                      <Input type="number" min={0} step={1 / factor} {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={form.control}
+                name="paymentMethod"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("PaymentMethodLabel" as any)}</FormLabel>
+                    <FormControl>
+                      <PaymentMethodSelect t={t as any} value={field.value} onValueChange={field.onChange} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
             </div>
-          </div>
 
-          <div className="space-y-1.5">
-            <Label>{t("NotesLabel" as any)}</Label>
-            <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} />
-          </div>
-        </div>
+            <FormField
+              control={form.control}
+              name="notes"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t("NotesLabel" as any)}</FormLabel>
+                  <FormControl>
+                    <Textarea {...field} value={field.value ?? ""} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
-        <DialogFooter>
-          <DialogFooterActions
-            cancelLabel={t("Cancel" as any)}
-            confirmLabel={t("AddPartner" as any)}
-            onCancel={() => handleOpenChange(false)}
-            onConfirm={submit}
-            submitting={submitting}
-          />
-        </DialogFooter>
+            <DialogFooter>
+              <DialogFooterActions
+                cancelLabel={t("Cancel" as any)}
+                confirmLabel={t("AddPartner" as any)}
+                onCancel={() => handleOpenChange(false)}
+                onConfirm={form.handleSubmit(onSubmit)}
+                submitting={submitting}
+              />
+            </DialogFooter>
+          </form>
+        </Form>
       </DialogContent>
     </Dialog>
   );
@@ -326,27 +348,24 @@ function MovementDialog({
 }>) {
   const { t } = useLanguage();
   const recordMovement = useMutation(api.partnerEquity.recordEquityMovement);
-  const [amount, setAmount] = useState("");
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
-  const [notes, setNotes] = useState("");
   const { submitting, submitWithFeedback } = useAccountingSubmit();
 
   const meta = MOVEMENT_META[type];
 
-  async function submit() {
-    const amountMinor = Math.round(Number(amount) * factor);
-    if (!Number.isFinite(amountMinor) || amountMinor <= 0) {
-      toast.error(t("MovementAmountInvalid" as any));
-      return;
-    }
+  const form = useForm<MovementFormValues>({
+    resolver: zodResolver(movementSchema),
+    defaultValues: { amount: 0, paymentMethod: "CASH", notes: "" },
+  });
+
+  async function onSubmit(values: MovementFormValues) {
     await submitWithFeedback(async () => {
       await recordMovement({
         orgId,
         partnerId: partner._id,
         type,
-        amountMinor,
-        paymentMethod: meta.needsPayment ? paymentMethod : undefined,
-        notes: notes.trim() || undefined,
+        amountMinor: Math.round(values.amount * factor),
+        paymentMethod: meta.needsPayment ? values.paymentMethod : undefined,
+        notes: values.notes?.trim() || undefined,
       });
       toast.success(t("EquityMovementRecorded" as any));
       onOpenChange(false);
@@ -361,41 +380,68 @@ function MovementDialog({
           <DialogDescription>{partner.partnerName} — {t(meta.descKey as any)}</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
-          <AmountSummary
-            label={t("CurrentBalance" as any)}
-            value={formatCurrency(partner.balanceMinor / factor, scale)}
-          />
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+            <AmountSummary
+              label={t("CurrentBalance" as any)}
+              value={formatCurrency(partner.balanceMinor / factor, scale)}
+            />
 
-          <CurrencyAmountInput
-            label={t("AmountLabel" as any)}
-            value={amount}
-            onChange={setAmount}
-            factor={factor}
-          />
+            <FormField
+              control={form.control}
+              name="amount"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t("AmountLabel" as any)}</FormLabel>
+                  <FormControl>
+                    <Input type="number" min={0} step={1 / factor} {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
-          {meta.needsPayment && (
-            <div className="space-y-1.5">
-              <Label>{t("PaymentMethodLabel" as any)}</Label>
-              <PaymentMethodSelect t={t as any} value={paymentMethod} onValueChange={setPaymentMethod} />
-            </div>
-          )}
+            {meta.needsPayment && (
+              <FormField
+                control={form.control}
+                name="paymentMethod"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("PaymentMethodLabel" as any)}</FormLabel>
+                    <FormControl>
+                      <PaymentMethodSelect t={t as any} value={field.value} onValueChange={field.onChange} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
-          <div className="space-y-1.5">
-            <Label>{t("NotesLabel" as any)}</Label>
-            <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} />
-          </div>
-        </div>
+            <FormField
+              control={form.control}
+              name="notes"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t("NotesLabel" as any)}</FormLabel>
+                  <FormControl>
+                    <Textarea {...field} value={field.value ?? ""} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
-        <DialogFooter>
-          <DialogFooterActions
-            cancelLabel={t("Cancel" as any)}
-            confirmLabel={t(meta.titleKey as any)}
-            onCancel={() => onOpenChange(false)}
-            onConfirm={submit}
-            submitting={submitting}
-          />
-        </DialogFooter>
+            <DialogFooter>
+              <DialogFooterActions
+                cancelLabel={t("Cancel" as any)}
+                confirmLabel={t(meta.titleKey as any)}
+                onCancel={() => onOpenChange(false)}
+                onConfirm={form.handleSubmit(onSubmit)}
+                submitting={submitting}
+              />
+            </DialogFooter>
+          </form>
+        </Form>
       </DialogContent>
     </Dialog>
   );

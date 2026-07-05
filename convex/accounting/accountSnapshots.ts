@@ -12,6 +12,16 @@
 import { Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 
+// Each (orgId, accountId, currency, periodId) counter is split across this
+// many independent documents, chosen at random per increment. Convex OCC
+// only conflicts when two writes touch the same document, so this bounds
+// how much concurrent posting to one hot account can serialize — without
+// it, every posting to e.g. CASH_ON_HAND across the whole org contends on
+// a single row. The read side (getCumulativeBalancesAsOf) already sums
+// every matching row regardless of how many there are, so this is the only
+// place that needs to know shards exist.
+const SHARD_COUNT = 8;
+
 export async function incrementAccountSnapshot(
   ctx: MutationCtx,
   args: {
@@ -23,14 +33,16 @@ export async function incrementAccountSnapshot(
     creditMinor: number;
   }
 ): Promise<void> {
+  const shard = Math.floor(Math.random() * SHARD_COUNT);
   const existing = await ctx.db
     .query("accountBalanceSnapshots")
-    .withIndex("by_org_account_currency_period", (q) =>
+    .withIndex("by_org_account_currency_period_shard", (q) =>
       q
         .eq("orgId", args.orgId)
         .eq("accountId", args.accountId)
         .eq("currency", args.currency)
         .eq("periodId", args.periodId)
+        .eq("shard", shard)
     )
     .unique();
 
@@ -47,6 +59,7 @@ export async function incrementAccountSnapshot(
       accountId: args.accountId,
       currency: args.currency,
       periodId: args.periodId,
+      shard,
       runningDebitMinor: args.debitMinor,
       runningCreditMinor: args.creditMinor,
       updatedAt: now,

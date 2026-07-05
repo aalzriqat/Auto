@@ -1662,11 +1662,17 @@ export default defineSchema({
     accountId: v.id("chartOfAccounts"),
     currency: v.string(),
     periodId: v.id("accountingPeriods"),
+    // Sharded counter: each account/currency/period is split across
+    // SHARD_COUNT independent documents so concurrent postings to the same
+    // hot account only ever OCC-conflict within a shard, not across the
+    // whole account. The read path sums across shards, so this is
+    // transparent to every caller of getCumulativeBalancesAsOf.
+    shard: v.number(),
     runningDebitMinor: v.number(),
     runningCreditMinor: v.number(),
     updatedAt: v.number(),
   })
-    .index("by_org_account_currency_period", ["orgId", "accountId", "currency", "periodId"])
+    .index("by_org_account_currency_period_shard", ["orgId", "accountId", "currency", "periodId", "shard"])
     .index("by_org_period", ["orgId", "periodId"]),
 
   // GL Phase 15: full cash-drawer lifecycle. Distinct from the simpler,
