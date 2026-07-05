@@ -1,6 +1,7 @@
 "use client";
 
 import { useQuery } from "convex/react";
+import type { FunctionReturnType } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -23,6 +24,7 @@ import {
   Truck,
   TrendingUp,
   Users,
+  type LucideIcon,
 } from "lucide-react";
 
 interface SaleTrailDialogProps {
@@ -32,13 +34,130 @@ interface SaleTrailDialogProps {
 }
 
 interface TrailStep {
-  icon: React.ComponentType<{ className?: string }>;
+  icon: LucideIcon;
   label: string;
   detail?: string;
   date?: number;
 }
 
-export function SaleTrailDialog({ open, onOpenChange, saleId }: SaleTrailDialogProps) {
+type SaleTrail = NonNullable<FunctionReturnType<typeof api.sales.getSaleTrail>>;
+type Translate = (key: any) => string;
+type FormatCurrency = (amount: number) => string;
+
+/**
+ * Turns the getSaleTrail query result into an ordered list of timeline steps.
+ * Pulled out of the component so the sequence is a plain function to test
+ * and doesn't add to the component's render-path complexity.
+ */
+function buildTrailSteps(trail: SaleTrail, t: Translate, format: FormatCurrency): TrailStep[] {
+  const { sale, vehicle, customer, salespersonName } = trail;
+  const vehicleLabel = vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "";
+  const customerName = customer ? `${customer.firstName} ${customer.lastName}` : "";
+
+  const steps: TrailStep[] = [
+    {
+      icon: FileText,
+      label: t("StepSaleCreated"),
+      detail: `${customerName} — ${vehicleLabel} — ${format(sale.salePrice)} — ${salespersonName}`,
+      date: sale.saleDate,
+    },
+  ];
+
+  if (sale.status !== "COMPLETED") {
+    return steps;
+  }
+
+  steps.push({ icon: Car, label: t("StepVehicleSold"), detail: vehicleLabel });
+
+  for (const deposit of trail.deposits) {
+    steps.push({
+      icon: Banknote,
+      label: t("StepDepositApplied"),
+      detail: format(deposit.amount),
+      date: deposit.resolvedAt,
+    });
+  }
+
+  if (trail.saleJournalEntry) {
+    steps.push({
+      icon: Receipt,
+      label: t("StepGLPosted"),
+      detail: `${t("JournalNumberLabel")} #${trail.saleJournalEntry.journalNumber}`,
+      date: trail.saleJournalEntry.postedAt,
+    });
+  }
+
+  if (trail.receivable) {
+    steps.push({
+      icon: FileText,
+      label: t("StepReceivableCreated"),
+      detail: `${trail.receivable.documentNumber} — ${format(sale.salePrice)}`,
+      date: trail.receivable.issueDate,
+    });
+  }
+
+  for (const payment of trail.payments) {
+    steps.push({
+      icon: Banknote,
+      label: t("StepPaymentAllocated"),
+      detail: format(payment.amount),
+      date: payment.allocationDate,
+    });
+  }
+
+  if (trail.supplierPayable) {
+    steps.push({
+      icon: Truck,
+      label: t("StepSupplierPayable"),
+      detail: `${trail.supplierPayable.sourcedFromName} — ${format(trail.supplierPayable.amountDue)}`,
+    });
+  }
+
+  steps.push(...buildCommissionSteps(trail, t, format));
+
+  if (trail.lead?.stage === "WON") {
+    steps.push({ icon: CheckCircle2, label: t("StepLeadClosed") });
+  }
+
+  steps.push({ icon: Users, label: t("StepManagersNotified") });
+
+  return steps;
+}
+
+function buildCommissionSteps(trail: SaleTrail, t: Translate, format: FormatCurrency): TrailStep[] {
+  const { sale, salespersonName } = trail;
+  if (!sale.commissionAmount) return [];
+
+  const steps: TrailStep[] = [
+    {
+      icon: TrendingUp,
+      label: t("StepCommissionAccrued"),
+      detail: `${salespersonName} — ${format(sale.commissionAmount)}`,
+    },
+  ];
+
+  if (trail.commissionJournalEntry) {
+    steps.push({
+      icon: Receipt,
+      label: t("StepCommissionGLPosted"),
+      detail: `${t("JournalNumberLabel")} #${trail.commissionJournalEntry.journalNumber}`,
+      date: trail.commissionJournalEntry.postedAt,
+    });
+  }
+
+  if (sale.commissionPaidAt) {
+    steps.push({
+      icon: CheckCircle2,
+      label: t("StepCommissionPaid"),
+      detail: `${format(sale.commissionAmount)} — ${trail.commissionPaidByName ?? ""}`,
+      date: sale.commissionPaidAt,
+    });
+  }
+
+  return steps;
+}
+
+export function SaleTrailDialog({ open, onOpenChange, saleId }: Readonly<SaleTrailDialogProps>) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const { format } = useCurrency();
@@ -48,97 +167,7 @@ export function SaleTrailDialog({ open, onOpenChange, saleId }: SaleTrailDialogP
   );
 
   const dateFormat = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" });
-
-  const steps: TrailStep[] = [];
-  if (trail) {
-    const { sale, vehicle, customer, salespersonName } = trail;
-    const vehicleLabel = vehicle ? `${vehicle.year} ${vehicle.make} ${vehicle.model}` : "";
-
-    steps.push({
-      icon: FileText,
-      label: t("StepSaleCreated" as any),
-      detail: `${customer ? `${customer.firstName} ${customer.lastName}` : ""} — ${vehicleLabel} — ${format(sale.salePrice)} — ${salespersonName}`,
-      date: sale.saleDate,
-    });
-
-    if (sale.status === "COMPLETED") {
-      steps.push({ icon: Car, label: t("StepVehicleSold" as any), detail: vehicleLabel });
-
-      for (const deposit of trail.deposits) {
-        steps.push({
-          icon: Banknote,
-          label: t("StepDepositApplied" as any),
-          detail: format(deposit.amount),
-          date: deposit.resolvedAt,
-        });
-      }
-
-      if (trail.saleJournalEntry) {
-        steps.push({
-          icon: Receipt,
-          label: t("StepGLPosted" as any),
-          detail: `${t("JournalNumberLabel" as any)} #${trail.saleJournalEntry.journalNumber}`,
-          date: trail.saleJournalEntry.postedAt,
-        });
-      }
-
-      if (trail.receivable) {
-        steps.push({
-          icon: FileText,
-          label: t("StepReceivableCreated" as any),
-          detail: `${trail.receivable.documentNumber} — ${format(sale.salePrice)}`,
-          date: trail.receivable.issueDate,
-        });
-      }
-
-      for (const payment of trail.payments) {
-        steps.push({
-          icon: Banknote,
-          label: t("StepPaymentAllocated" as any),
-          detail: format(payment.amount),
-          date: payment.allocationDate,
-        });
-      }
-
-      if (trail.supplierPayable) {
-        steps.push({
-          icon: Truck,
-          label: t("StepSupplierPayable" as any),
-          detail: `${trail.supplierPayable.sourcedFromName} — ${format(trail.supplierPayable.amountDue)}`,
-        });
-      }
-
-      if (sale.commissionAmount) {
-        steps.push({
-          icon: TrendingUp,
-          label: t("StepCommissionAccrued" as any),
-          detail: `${salespersonName} — ${format(sale.commissionAmount)}`,
-        });
-        if (trail.commissionJournalEntry) {
-          steps.push({
-            icon: Receipt,
-            label: t("StepCommissionGLPosted" as any),
-            detail: `${t("JournalNumberLabel" as any)} #${trail.commissionJournalEntry.journalNumber}`,
-            date: trail.commissionJournalEntry.postedAt,
-          });
-        }
-        if (sale.commissionPaidAt) {
-          steps.push({
-            icon: CheckCircle2,
-            label: t("StepCommissionPaid" as any),
-            detail: `${format(sale.commissionAmount)} — ${trail.commissionPaidByName ?? ""}`,
-            date: sale.commissionPaidAt,
-          });
-        }
-      }
-
-      if (trail.lead?.stage === "WON") {
-        steps.push({ icon: CheckCircle2, label: t("StepLeadClosed" as any) });
-      }
-
-      steps.push({ icon: Users, label: t("StepManagersNotified" as any) });
-    }
-  }
+  const steps = trail ? buildTrailSteps(trail, t, format) : [];
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
