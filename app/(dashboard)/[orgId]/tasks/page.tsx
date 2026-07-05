@@ -39,14 +39,17 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { useTableControls } from "@/hooks/useTableControls";
+import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
+
+const PRIORITY_RANK: Record<string, number> = { HIGH: 3, MEDIUM: 2, LOW: 1 };
 
 export default function TasksPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const { results: tasks } = usePaginatedQuery(api.tasks.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
+  const { results: tasks, status: tasksStatus, loadMore: loadMoreTasks } = usePaginatedQuery(api.tasks.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
   const updateTask = useMutation(api.tasks.update);
 
-  const [searchQuery, setSearchQuery] = useState("");
   const [priorityFilter, setPriorityFilter] = useState<"all" | "HIGH" | "MEDIUM" | "LOW">("all");
   const [isTaskDialogOpen, setIsTaskDialogOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<any>(null);
@@ -57,14 +60,26 @@ export default function TasksPage() {
   const [newDueDate, setNewDueDate] = useState<Date | undefined>(undefined);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
 
-  const filteredTasks = tasks?.filter(t => {
-    const q = searchQuery.toLowerCase();
-    const matchesSearch = t.title.toLowerCase().includes(q) ||
-      (t.customerName && t.customerName.toLowerCase().includes(q)) ||
-      (t.assigneeName && t.assigneeName.toLowerCase().includes(q));
-    const matchesPriority = priorityFilter === "all" || (t as any).priority === priorityFilter;
-    return matchesSearch && matchesPriority;
+  const {
+    search: searchQuery,
+    setSearch: setSearchQuery,
+    sortKey,
+    sortDir,
+    toggleSort,
+    rows: sortedTasks,
+  } = useTableControls({
+    data: tasks,
+    searchFields: (task) => [task.title, task.customerName, task.assigneeName],
+    sortAccessors: {
+      dueDate: (task) => task.dueDate,
+      priority: (task) => PRIORITY_RANK[(task as any).priority] ?? 0,
+    },
+    pagination: { status: tasksStatus, loadMore: loadMoreTasks, batchSize: 100 },
   });
+
+  const filteredTasks = sortedTasks?.filter((t) =>
+    priorityFilter === "all" || (t as any).priority === priorityFilter
+  );
 
   const handleEdit = (task: any) => {
     setEditingTask(task);
@@ -202,9 +217,9 @@ export default function TasksPage() {
           <TableHeader>
             <TableRow>
               <TableHead className="w-12"></TableHead>
-              <TableHead className="w-16">{t("Priority" as any)}</TableHead>
+              <SortableColumnHeader className="w-16" label={t("Priority" as any)} sortKey="priority" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               <TableHead>{t("Task" as any) || "Task"}</TableHead>
-              <TableHead>{t("DueDate" as any)}</TableHead>
+              <SortableColumnHeader label={t("DueDate" as any)} sortKey="dueDate" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               <TableHead>{t("AssignedTo" as any) || "Assigned To"}</TableHead>
               <TableHead>{t("RelatedCustomer" as any) || "Related Customer"}</TableHead>
               <TableHead>{t("Status" as any) || "Status"}</TableHead>

@@ -108,6 +108,7 @@ import type * as utils_depositHelpers from "../utils/depositHelpers.js";
 import type * as utils_depositRecording from "../utils/depositRecording.js";
 import type * as utils_env from "../utils/env.js";
 import type * as utils_errors from "../utils/errors.js";
+import type * as utils_expenseAmortization from "../utils/expenseAmortization.js";
 import type * as utils_facebookApi from "../utils/facebookApi.js";
 import type * as utils_financialGuards from "../utils/financialGuards.js";
 import type * as utils_idempotency from "../utils/idempotency.js";
@@ -255,6 +256,7 @@ declare const fullApi: ApiFromModules<{
   "utils/depositRecording": typeof utils_depositRecording;
   "utils/env": typeof utils_env;
   "utils/errors": typeof utils_errors;
+  "utils/expenseAmortization": typeof utils_expenseAmortization;
   "utils/facebookApi": typeof utils_facebookApi;
   "utils/financialGuards": typeof utils_financialGuards;
   "utils/idempotency": typeof utils_idempotency;

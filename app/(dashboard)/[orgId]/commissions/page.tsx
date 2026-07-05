@@ -32,6 +32,8 @@ import { TrendingUp, CheckCircle2, Clock, DollarSign, Check, Undo2, Pencil, X } 
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { CommissionPaymentDialog } from "@/components/commissions/CommissionPaymentDialog";
 import { type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
+import { useTableControls } from "@/hooks/useTableControls";
+import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 
 type CommissionSale = Doc<"sales"> & {
   vehicleSummary: string;
@@ -57,7 +59,6 @@ export default function CommissionsPage() {
 
   const [filterSalesperson, setFilterSalesperson] = useState<string>("all");
   const [filterStatus, setFilterStatus] = useState<"all" | "paid" | "unpaid">("all");
-  const [search, setSearch] = useState("");
 
   const commissions = useQuery(
     api.sales.listCommissions,
@@ -67,6 +68,24 @@ export default function CommissionsPage() {
       paidStatus: filterStatus !== "all" ? filterStatus : undefined,
     } : "skip"
   );
+
+  const {
+    search,
+    setSearch,
+    sortKey,
+    sortDir,
+    toggleSort,
+    rows: sortedCommissions,
+  } = useTableControls({
+    data: commissions,
+    searchFields: (c: CommissionSale) => [c.salespersonName, c.vehicleSummary, c.customerName],
+    sortAccessors: {
+      saleDate: (c: CommissionSale) => c.saleDate,
+      salePrice: (c: CommissionSale) => c.salePrice,
+      commissionAmount: (c: CommissionSale) => c.commissionAmount ?? 0,
+      status: (c: CommissionSale) => (c.commissionPaidAt ? 1 : 0),
+    },
+  });
 
   const markPaid = useMutation(api.sales.markCommissionPaid);
   const markUnpaid = useMutation(api.sales.markCommissionUnpaid);
@@ -78,16 +97,7 @@ export default function CommissionsPage() {
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("CASH");
   const [isPayingCommission, setIsPayingCommission] = useState(false);
 
-  const filtered = useMemo(() => {
-    if (!commissions) return [];
-    if (!search) return commissions;
-    const q = search.toLowerCase();
-    return commissions.filter((c: CommissionSale) =>
-      c.salespersonName.toLowerCase().includes(q) ||
-      c.vehicleSummary.toLowerCase().includes(q) ||
-      c.customerName.toLowerCase().includes(q)
-    );
-  }, [commissions, search]);
+  const filtered = sortedCommissions ?? [];
 
   const totalEarned = filtered.reduce((s: number, c: CommissionSale) => s + (c.commissionAmount ?? 0), 0);
   const totalPaid = filtered.filter((c: CommissionSale) => c.commissionPaidAt).reduce((s: number, c: CommissionSale) => s + (c.commissionAmount ?? 0), 0);
@@ -254,10 +264,10 @@ export default function CommissionsPage() {
                 <TableHead>{t("Salesperson" as any)}</TableHead>
                 <TableHead>{t("Vehicle" as any)}</TableHead>
                 <TableHead>{t("Customer" as any)}</TableHead>
-                <TableHead>{t("SaleDate" as any)}</TableHead>
-                <TableHead className="text-end">{t("SalePrice" as any)}</TableHead>
-                <TableHead className="text-end">{t("CommissionAmount" as any)}</TableHead>
-                <TableHead>{t("Status" as any)}</TableHead>
+                <SortableColumnHeader label={t("SaleDate" as any)} sortKey="saleDate" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableColumnHeader className="text-end" label={t("SalePrice" as any)} sortKey="salePrice" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableColumnHeader className="text-end" label={t("CommissionAmount" as any)} sortKey="commissionAmount" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableColumnHeader label={t("Status" as any)} sortKey="status" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 {canManage && <TableHead className="text-end">{t("Actions" as any)}</TableHead>}
               </TableRow>
             </TableHeader>

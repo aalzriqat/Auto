@@ -24,11 +24,23 @@ export const list = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_CUSTOMERS]);
 
-    return await ctx.db
+    const pageResult = await ctx.db
       .query("customers")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .filter((q) => q.neq(q.field("isDeleted"), true))
       .paginate(args.paginationOpts);
+
+    const page = await Promise.all(
+      pageResult.page.map(async (customer) => {
+        const createdByUser = customer.createdBy ? await ctx.db.get(customer.createdBy) : null;
+        return {
+          ...customer,
+          createdByName: createdByUser?.name ?? createdByUser?.email ?? null,
+        };
+      })
+    );
+
+    return { ...pageResult, page };
   },
 });
 
@@ -205,6 +217,9 @@ export const create = mutation({
       email: normalizedEmail,
       nationalId: args.nationalId?.trim(),
       address: args.address?.trim(),
+      createdAt: Date.now(),
+      createdBy: user._id,
+      source: "Manual",
     });
 
     const actorName = await getActorName(ctx);
@@ -500,7 +515,7 @@ export const importBulk = mutation({
     })),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_CUSTOMERS]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_CUSTOMERS]);
 
     let inserted = 0;
     let skipped = 0;
@@ -534,6 +549,9 @@ export const importBulk = mutation({
         email: normalizedEmail,
         nationalId: row.nationalId?.trim(),
         address: row.address?.trim(),
+        createdAt: Date.now(),
+        createdBy: user._id,
+        source: "Import",
       });
       inserted++;
     }

@@ -13,6 +13,8 @@ import { VehicleHistoryDialog } from "@/components/vehicles/VehicleHistoryDialog
 import { VehicleDetailsDialog } from "@/components/vehicles/VehicleDetailsDialog";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { useTableControls } from "@/hooks/useTableControls";
+import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 import {
   Table,
   TableBody,
@@ -79,7 +81,23 @@ export default function VehiclesPage() {
   );
   const removeVehicle = useMutation(api.vehicles.softDelete);
 
-  const [searchQuery, setSearchQuery] = useState("");
+  const {
+    search: searchQuery,
+    setSearch: setSearchQuery,
+    sortKey,
+    sortDir,
+    toggleSort,
+    rows: sortedVehicles,
+  } = useTableControls({
+    data: vehicles,
+    searchFields: (v) => [v.vin, v.make, v.model],
+    sortAccessors: {
+      price: (v) => v.sellingPrice,
+      year: (v) => v.year,
+      addedDate: (v) => v.createdAt ?? v._creationTime,
+    },
+    pagination: { status: vehiclesStatus, loadMore: loadMoreVehicles, batchSize: 20 },
+  });
   const [agingFilter, setAgingFilter] = useState<AgingFilter>("ALL");
   const [isVehicleDialogOpen, setIsVehicleDialogOpen] = useState(false);
   const [editingVehicle, setEditingVehicle] = useState<Doc<"vehicles"> | null>(null);
@@ -174,16 +192,11 @@ export default function VehiclesPage() {
     { value: "90+", label: t("AgingBucket90Plus" as any) },
   ];
 
-  const filteredVehicles = vehicles?.filter((v) => {
-    const matchesSearch =
-      (v.vin ?? "").toLowerCase().includes(searchQuery.toLowerCase()) ||
-      v.make.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      v.model.toLowerCase().includes(searchQuery.toLowerCase());
+  const filteredVehicles = sortedVehicles?.filter((v) => {
     // Sourced vehicles are excluded from the aging filter since they were never owned stock.
-    const matchesAge = agingFilter === "ALL" || (
-      (v as any).sourceType !== "SOURCED" && getVehicleAgeBucket(v._creationTime) === agingFilter
+    return agingFilter === "ALL" || (
+      (v as any).sourceType !== "SOURCED" && getVehicleAgeBucket(v.createdAt ?? v._creationTime) === agingFilter
     );
-    return matchesSearch && matchesAge;
   });
 
   useEffect(() => {
@@ -373,11 +386,13 @@ export default function VehiclesPage() {
             <TableRow>
               <TableHead>{t("Vehicle")}</TableHead>
               <TableHead>{t("VIN" as any)}</TableHead>
-              <TableHead>{t("Year" as any)}</TableHead>
+              <SortableColumnHeader label={t("Year" as any)} sortKey="year" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               <TableHead>{t("Mileage" as any)}</TableHead>
               <TableHead>{t("Transmission" as any)}</TableHead>
-              <TableHead>{t("Price" as any)}</TableHead>
+              <SortableColumnHeader label={t("Price" as any)} sortKey="price" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               <TableHead>{t("Status" as any)}</TableHead>
+              <SortableColumnHeader label={t("AddedDate" as any)} sortKey="addedDate" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <TableHead>{t("AddedByColumn" as any)}</TableHead>
               <TableHead>{t("Notes" as any)}</TableHead>
               <TableHead className="text-end">{t("Actions" as any)}</TableHead>
             </TableRow>
@@ -385,13 +400,13 @@ export default function VehiclesPage() {
           <TableBody>
             {filteredVehicles === undefined ? (
               <TableRow>
-                <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={11} className="text-center py-8 text-muted-foreground">
                   {t("LoadingInventory" as any)}
                 </TableCell>
               </TableRow>
             ) : filteredVehicles.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={11} className="text-center py-8 text-muted-foreground">
                   {t("NoVehiclesFound" as any)}
                 </TableCell>
               </TableRow>
@@ -447,6 +462,12 @@ export default function VehiclesPage() {
                         )}
                       </div>
                     )}
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {new Date(vehicle.createdAt ?? vehicle._creationTime).toLocaleDateString()}
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {(vehicle as any).addedByName ?? "—"}
                   </TableCell>
                   <TableCell className="max-w-[200px] truncate" title={vehicle.notes}>
                     {vehicle.notes ? vehicle.notes : <span className="text-muted-foreground italic text-xs">{t("NoNotes" as any)}</span>}

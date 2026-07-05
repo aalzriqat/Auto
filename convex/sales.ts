@@ -16,6 +16,7 @@ import { throwAppError, AppErrorCode } from "./utils/errors";
 import { getOrgCurrency, hookCommissionPaid, hookCommissionReversed, hookSaleCancelled } from "./accounting/workflowHooks";
 import { toMinorUnits } from "./utils/money";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
+import { fromMinorUnits } from "./utils/money";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -109,6 +110,112 @@ export const get = query({
       salesperson: salesperson
         ? { _id: salesperson._id, name: salesperson.name, email: salesperson.email }
         : null,
+    };
+  },
+});
+
+/**
+ * Reconstructs everything a completed sale triggered across the system —
+ * vehicle status, GL postings, receivable/invoice, deposits applied,
+ * commission accrual, and lead closure — for the read-only Sale Trail view.
+ * See saleCompletion.ts:applySaleCompletionSideEffects for the write side.
+ */
+export const getSaleTrail = query({
+  args: {
+    orgId: v.id("organizations"),
+    saleId: v.id("sales"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_SALES]);
+
+    const sale = await ctx.db.get(args.saleId);
+    if (!sale || sale.isDeleted || sale.orgId !== args.orgId) {
+      throwAppError(AppErrorCode.SALE_NOT_FOUND, "Sale not found in this organization.");
+    }
+
+    const [vehicle, customer, salesperson, lead] = await Promise.all([
+      ctx.db.get(sale.vehicleId),
+      ctx.db.get(sale.customerId),
+      ctx.db.get(sale.salespersonId),
+      sale.leadId ? ctx.db.get(sale.leadId) : null,
+    ]);
+
+    const receivable = sale.canonicalReceivableDocumentId
+      ? await ctx.db.get(sale.canonicalReceivableDocumentId)
+      : null;
+
+    const allocations = receivable
+      ? await ctx.db
+          .query("paymentAllocations")
+          .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", receivable._id))
+          .collect()
+      : [];
+    const payments = await Promise.all(
+      allocations
+        .filter((a) => a.status === "ACTIVE")
+        .map(async (a) => {
+          const payment = await ctx.db.get(a.paymentId);
+          return {
+            amount: fromMinorUnits(a.amountMinor, a.currency),
+            currency: a.currency,
+            allocationDate: a.allocationDate,
+            method: payment?.method ?? null,
+          };
+        })
+    );
+
+    const deposits = sale.quoteId
+      ? (
+          await ctx.db
+            .query("deposits")
+            .withIndex("by_quote", (q) => q.eq("quoteId", sale.quoteId!))
+            .collect()
+        ).filter((d) => d.status === "APPLIED")
+      : [];
+
+    const [saleJournalEntry, commissionJournalEntry] = await Promise.all([
+      ctx.db
+        .query("journalEntries")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", args.orgId).eq("sourceType", "sales").eq("sourceId", sale._id.toString())
+        )
+        .first(),
+      sale.commissionAmount
+        ? ctx.db
+            .query("journalEntries")
+            .withIndex("by_org_source", (q) =>
+              q.eq("orgId", args.orgId).eq("sourceType", "sales").eq("sourceId", `commission_${sale._id}`)
+            )
+            .first()
+        : null,
+    ]);
+
+    const supplierPayable = await ctx.db
+      .query("vehicleSupplierPayables")
+      .withIndex("by_sale", (q) => q.eq("saleId", sale._id))
+      .first();
+
+    const commissionPaidByUser = sale.commissionPaidBy ? await ctx.db.get(sale.commissionPaidBy) : null;
+
+    return {
+      sale,
+      vehicle,
+      customer,
+      salespersonName: salesperson?.name ?? salesperson?.email ?? "Unknown",
+      lead: lead ? { _id: lead._id, stage: lead.stage } : null,
+      receivable,
+      payments,
+      deposits: deposits.map((d) => ({ amount: d.amount, resolvedAt: d.resolvedAt })),
+      saleJournalEntry: saleJournalEntry
+        ? { _id: saleJournalEntry._id, journalNumber: saleJournalEntry.journalNumber, postedAt: saleJournalEntry.postedAt, status: saleJournalEntry.status }
+        : null,
+      commissionJournalEntry: commissionJournalEntry
+        ? { _id: commissionJournalEntry._id, journalNumber: commissionJournalEntry.journalNumber, postedAt: commissionJournalEntry.postedAt, status: commissionJournalEntry.status }
+        : null,
+      supplierPayable: supplierPayable
+        ? { amountDue: supplierPayable.amountDue, currency: supplierPayable.currency, status: supplierPayable.status, sourcedFromName: supplierPayable.sourcedFromName }
+        : null,
+      commissionPaidByName: commissionPaidByUser?.name ?? commissionPaidByUser?.email ?? null,
     };
   },
 });

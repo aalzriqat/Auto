@@ -7,10 +7,11 @@ import { useQuery, useMutation, usePaginatedQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { LeadDialog } from "@/components/leads/LeadDialog";
 import { SocialConversationDialog } from "@/components/leads/SocialConversationDialog";
 import { Doc, Id } from "@/convex/_generated/dataModel";
-import { Plus, User, Car, Trash2, FileText, LayoutList, Kanban, MessageCircle } from "lucide-react";
+import { Plus, User, Car, Trash2, FileText, LayoutList, Kanban, MessageCircle, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { toast } from "@/components/ui/sonner";
@@ -31,6 +32,8 @@ import {
   TableBody,
   TableCell,
 } from "@/components/ui/table";
+import { useTableControls } from "@/hooks/useTableControls";
+import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 
 import { LEAD_STAGES } from "@/convex/constants";
 
@@ -64,6 +67,25 @@ export default function LeadsPage() {
   const [conversationCustomerId, setConversationCustomerId] = useState<Id<"customers"> | null>(null);
   const [highlightedLeadId, setHighlightedLeadId] = useState<string | null>(null);
   const rowRefs = useRef<Record<string, HTMLElement | null>>({});
+
+  const {
+    search: searchQuery,
+    setSearch: setSearchQuery,
+    sortKey,
+    sortDir,
+    toggleSort,
+    rows: filteredLeads,
+  } = useTableControls({
+    data: leads,
+    searchFields: (l) => [l.customerName, l.vehicleSummary, l.assignedUserName],
+    sortAccessors: {
+      customer: (l) => (l.customerName ?? "").toLowerCase(),
+      stage: (l) => l.stage,
+      createdAt: (l) => l._creationTime,
+      updatedAt: (l) => l.updatedAt ?? l._creationTime,
+    },
+    pagination: { status: leadsStatus, loadMore: loadMoreLeads, batchSize: 25 },
+  });
 
   useEffect(() => {
     if (!highlightId || !leads?.some((l) => l._id === highlightId)) return;
@@ -180,11 +202,21 @@ export default function LeadsPage() {
         {/* TABLE VIEW */}
         {view === "table" && (
           <>
+          <div className="flex items-center w-full max-w-sm space-x-2 relative">
+            <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
+            <Input
+              placeholder={t("SearchLeads" as any) || "Search leads..."}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="ps-9"
+            />
+          </div>
+
           {/* Mobile card list */}
           <div className="flex flex-col gap-3 md:hidden">
-            {!leads || leads.length === 0 ? (
+            {!filteredLeads || filteredLeads.length === 0 ? (
               <p className="text-center py-12 text-muted-foreground">{t("Empty" as any) || "No leads found."}</p>
-            ) : leads.map((lead) => (
+            ) : filteredLeads.map((lead) => (
               <div
                 key={lead._id}
                 ref={(el) => { rowRefs.current[lead._id] = el; }}
@@ -254,26 +286,26 @@ export default function LeadsPage() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-slate-50/50 dark:bg-zinc-900/50 hover:bg-slate-50/50 dark:hover:bg-zinc-900/50">
-                  <TableHead className="py-4 px-6 font-medium">{t("Customer" as any) || "Customer"}</TableHead>
+                  <SortableColumnHeader className="py-4 px-6 font-medium" label={t("Customer" as any) || "Customer"} sortKey="customer" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <TableHead className="py-4 px-6 font-medium">{t("Vehicle" as any) || "Vehicle"}</TableHead>
-                  <TableHead className="py-4 px-6 font-medium">{t("Stage" as any) || "Stage"}</TableHead>
+                  <SortableColumnHeader className="py-4 px-6 font-medium" label={t("Stage" as any) || "Stage"} sortKey="stage" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <TableHead className="py-4 px-6 font-medium">{t("AssignedTo" as any) || "Assigned To"}</TableHead>
-                  <TableHead className="py-4 px-6 font-medium">{t("CreatedAt" as any) || "Created At"}</TableHead>
-                  <TableHead className="py-4 px-6 font-medium">{t("LastUpdated" as any) || "Last Updated"}</TableHead>
+                  <SortableColumnHeader className="py-4 px-6 font-medium" label={t("CreatedAt" as any) || "Created At"} sortKey="createdAt" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <SortableColumnHeader className="py-4 px-6 font-medium" label={t("LastUpdated" as any) || "Last Updated"} sortKey="updatedAt" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <TableHead className="py-4 px-6 font-medium">{t("CreatedBy" as any) || "Created By"}</TableHead>
                   <TableHead className="py-4 px-6 font-medium">{t("LastUpdatedBy" as any) || "Last Updated By"}</TableHead>
                   <TableHead className="py-4 px-6 font-medium text-end">{t("Actions" as any) || "Actions"}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {leads?.length === 0 ? (
+                {filteredLeads?.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={9} className="text-center py-12 text-muted-foreground">
                       {t("Empty" as any) || "No leads found. Add a new lead to get started."}
                     </TableCell>
                   </TableRow>
                 ) : (
-                  leads?.map((lead) => (
+                  filteredLeads?.map((lead) => (
                     <TableRow
                       key={lead._id}
                       ref={(el) => { rowRefs.current[lead._id] = el; }}

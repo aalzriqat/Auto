@@ -17,6 +17,7 @@ import { useCurrency } from "@/hooks/useCurrency";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Doc, Id } from "@/convex/_generated/dataModel";
+import { SaleTrailDialog } from "@/components/sales/SaleTrailDialog";
 
 export default function SalesHomePage() {
     const { activeOrgId } = useOrg();
@@ -30,6 +31,7 @@ export default function SalesHomePage() {
     const installmentEnabled = enabledPaymentTypes.includes("INSTALLMENT");
     const [wizardInitialDraft, setWizardInitialDraft] = useState<Partial<WizardData> | undefined>();
     const [wizardResumeDraft, setWizardResumeDraft] = useState<WizardDraft | undefined>();
+    const [trailSaleId, setTrailSaleId] = useState<Id<"sales"> | null>(null);
 
     // Pre-fill from a lead's "Create Quote" action (see LeadDialog)
     const searchParams = useSearchParams();
@@ -349,9 +351,11 @@ export default function SalesHomePage() {
                         </h2>
                         <div className="space-y-2">
                             {recentSales.map((sale) => (
-                                <div
+                                <button
                                     key={sale._id}
-                                    className="flex items-center justify-between rounded-lg border border-border bg-card px-4 py-3 hover:bg-muted/30 transition-colors"
+                                    type="button"
+                                    onClick={() => setTrailSaleId(sale._id)}
+                                    className="w-full flex items-center justify-between rounded-lg border border-border bg-card px-4 py-3 hover:bg-muted/30 transition-colors text-start"
                                 >
                                     <div className="flex items-center gap-3">
                                         <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center text-xs font-semibold text-muted-foreground">
@@ -360,6 +364,7 @@ export default function SalesHomePage() {
                                         <div>
                                             <p className="text-sm font-medium">{sale.customerName}</p>
                                             <p className="text-xs text-muted-foreground">{sale.vehicleSummary}</p>
+                                            <p className="text-xs text-muted-foreground">{t("SoldBy" as any)} {sale.salespersonName}</p>
                                         </div>
                                     </div>
                                     <div className="text-end">
@@ -370,12 +375,18 @@ export default function SalesHomePage() {
                                             {new Date(sale.saleDate).toLocaleDateString()}
                                         </p>
                                     </div>
-                                </div>
+                                </button>
                             ))}
                         </div>
                     </div>
                 )}
             </div>
+
+            <SaleTrailDialog
+                saleId={trailSaleId}
+                open={!!trailSaleId}
+                onOpenChange={(open) => !open && setTrailSaleId(null)}
+            />
         </RoleGuard>
     );
 }

@@ -22,6 +22,28 @@ interface VehicleHistoryDialogProps {
   vehicle: Doc<"vehicles"> | null;
 }
 
+// Maps vehicleEdits payload keys to existing i18n label keys, so the
+// audit trail shows translated field names instead of raw camelCase.
+const PAYLOAD_FIELD_LABEL_KEYS: Record<string, string> = {
+  vin: "VIN",
+  make: "Make",
+  model: "Model",
+  year: "Year",
+  trim: "Trim",
+  mileage: "Mileage",
+  color: "Color",
+  fuelType: "FuelType",
+  transmission: "Transmission",
+  purchasePrice: "PurchasePrice",
+  minimumProfit: "MinimumProfit",
+  sellingPrice: "SellingPrice",
+  status: "Status",
+  sourceType: "VehicleSource",
+  sourcedFromName: "SourceDealerName",
+  sourceCost: "SupplierCost",
+  notes: "Notes",
+};
+
 export function VehicleHistoryDialog({ open, onOpenChange, vehicle }: VehicleHistoryDialogProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
@@ -53,14 +75,14 @@ export function VehicleHistoryDialog({ open, onOpenChange, vehicle }: VehicleHis
                 <div key={edit._id} className="relative ps-6 pb-2 border-s-2 last:border-0 border-muted">
                   <div className="absolute -start-[9px] top-1 h-4 w-4 rounded-full bg-background border-2 border-primary" />
                   
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
-                    <div className="flex items-center gap-2">
-                      <Badge variant={edit.type === "CREATE" ? "default" : "secondary"}>
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                    <div className="flex flex-wrap items-center gap-2 min-w-0">
+                      <Badge variant={edit.type === "CREATE" ? "default" : "secondary"} className="shrink-0">
                         {edit.type}
                       </Badge>
-                      <span className="text-sm font-medium">{edit.requestedByName}</span>
+                      <span className="text-sm font-medium truncate" title={edit.requestedByName}>{edit.requestedByName}</span>
                     </div>
-                    <span className="text-xs text-muted-foreground">
+                    <span className="text-xs text-muted-foreground shrink-0">
                       {rtfDate.format(new Date(edit.createdAt))}
                     </span>
                   </div>
@@ -70,9 +92,11 @@ export function VehicleHistoryDialog({ open, onOpenChange, vehicle }: VehicleHis
                     <ul className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
                       {Object.entries(edit.payload || {}).map(([key, value]) => {
                         if (key === "imageIds") return null;
+                        const labelKey = PAYLOAD_FIELD_LABEL_KEYS[key];
+                        const label = labelKey ? t(labelKey as any) : key.replace(/([A-Z])/g, ' $1').trim();
                         return (
-                          <li key={key} className="flex justify-between items-center py-0.5 border-b border-border/50 last:border-0">
-                            <span className="text-muted-foreground capitalize">{key.replace(/([A-Z])/g, ' $1').trim()}:</span>
+                          <li key={key} className="flex justify-between items-center gap-2 py-0.5 border-b border-border/50 last:border-0">
+                            <span className="text-muted-foreground shrink-0">{label}:</span>
                             <span className="font-medium truncate max-w-[150px]" title={String(value)}>
                               {String(value) || "N/A"}
                             </span>
@@ -82,16 +106,16 @@ export function VehicleHistoryDialog({ open, onOpenChange, vehicle }: VehicleHis
                     </ul>
                   </div>
 
-                  <div className="flex items-center gap-2 text-sm">
+                  <div className="flex flex-wrap items-center gap-2 text-sm">
                     <Badge variant={
-                      edit.status === "APPROVED" ? "default" : 
-                      edit.status === "REJECTED" ? "destructive" : 
+                      edit.status === "APPROVED" ? "default" :
+                      edit.status === "REJECTED" ? "destructive" :
                       "outline"
-                    } className={edit.status === "APPROVED" ? "bg-green-600" : ""}>
+                    } className={edit.status === "APPROVED" ? "bg-green-600 shrink-0" : "shrink-0"}>
                       {edit.status}
                     </Badge>
                     {edit.status !== "PENDING" && edit.resolvedByName && (
-                      <span className="text-muted-foreground text-xs">
+                      <span className="text-muted-foreground text-xs min-w-0 truncate" title={`${edit.resolvedByName} — ${rtfDate.format(new Date(edit.resolvedAt!))}`}>
                         {t("ByReq" as any) || "by"} {edit.resolvedByName} {t("On" as any) || "on"} {rtfDate.format(new Date(edit.resolvedAt!))}
                       </span>
                     )}

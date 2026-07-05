@@ -32,8 +32,17 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
+import { useTableControls } from "@/hooks/useTableControls";
+import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 
 export default function CustomersPage() {
   const searchParams = useSearchParams();
@@ -48,24 +57,41 @@ export default function CustomersPage() {
   );
   const removeCustomer = useMutation(api.customers.softDelete);
 
-  const [searchQuery, setSearchQuery] = useState("");
   const [isCustomerDialogOpen, setIsCustomerDialogOpen] = useState(false);
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [editingCustomer, setEditingCustomer] = useState<Doc<"customers"> | null>(null);
   const [selectedCustomerId, setSelectedCustomerId] = useState<Id<"customers"> | null>(null);
-  
+
   const [customerToDelete, setCustomerToDelete] = useState<Doc<"customers"> | null>(null);
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
   const [isMergeDialogOpen, setIsMergeDialogOpen] = useState(false);
+  const [sourceFilter, setSourceFilter] = useState("ALL");
   const { hasPermission } = usePermissions();
 
-  const filteredCustomers = customers?.filter(c => {
-    const fullName = `${c.firstName} ${c.lastName}`.toLowerCase();
-    const q = searchQuery.toLowerCase();
-    return fullName.includes(q) || 
-           (c.email && c.email.toLowerCase().includes(q)) ||
-           (c.phone && c.phone.includes(q));
+  const {
+    search: searchQuery,
+    setSearch: setSearchQuery,
+    sortKey,
+    sortDir,
+    toggleSort,
+    rows: sortedCustomers,
+  } = useTableControls({
+    data: customers,
+    searchFields: (c) => [`${c.firstName} ${c.lastName}`, c.email, c.phone],
+    sortAccessors: {
+      name: (c) => `${c.firstName} ${c.lastName}`.toLowerCase(),
+      addedDate: (c) => c.createdAt ?? c._creationTime,
+    },
+    pagination: { status: customersStatus, loadMore: loadMoreCustomers, batchSize: 25 },
   });
+
+  const sourceOptions = Array.from(
+    new Set((customers ?? []).map((c) => (c as any).source).filter(Boolean))
+  ) as string[];
+
+  const filteredCustomers = sortedCustomers?.filter((c) =>
+    sourceFilter === "ALL" || (c as any).source === sourceFilter
+  );
 
   useEffect(() => {
     if (highlightId && customers) {
@@ -121,14 +147,29 @@ export default function CustomersPage() {
         </Button>
       </div>
 
-      <div className="flex items-center w-full max-w-sm space-x-2">
-        <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
-        <Input
-          placeholder={t("SearchCustomers" as any)}
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="ps-9"
-        />
+      <div className="flex flex-col sm:flex-row gap-2">
+        <div className="flex items-center w-full max-w-sm space-x-2 relative">
+          <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
+          <Input
+            placeholder={t("SearchCustomers" as any)}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="ps-9"
+          />
+        </div>
+        {sourceOptions.length > 0 && (
+          <Select value={sourceFilter} onValueChange={setSourceFilter}>
+            <SelectTrigger className="w-full sm:w-[180px]">
+              <SelectValue placeholder={t("Source" as any)} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">{t("AllSources" as any)}</SelectItem>
+              {sourceOptions.map((source) => (
+                <SelectItem key={source} value={source}>{source}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
       </div>
 
       {/* Mobile card list */}
@@ -194,22 +235,24 @@ export default function CustomersPage() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>{t("Name" as any)}</TableHead>
+              <SortableColumnHeader label={t("Name" as any)} sortKey="name" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               <TableHead>{t("Contact" as any)}</TableHead>
               <TableHead>{t("NationalID" as any)}</TableHead>
+              <SortableColumnHeader label={t("AddedDate" as any)} sortKey="addedDate" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+              <TableHead>{t("Source" as any)}</TableHead>
               <TableHead className="text-end">{t("Actions" as any)}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {filteredCustomers === undefined ? (
               <TableRow>
-                <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
                   {t("LoadingCustomers" as any)}
                 </TableCell>
               </TableRow>
             ) : filteredCustomers.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={4} className="text-center py-8 text-muted-foreground">
+                <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
                   {t("NoCustomers" as any)}
                 </TableCell>
               </TableRow>
@@ -243,6 +286,12 @@ export default function CustomersPage() {
                   </TableCell>
                   <TableCell className="text-sm">
                     {customer.nationalId || <span className="text-muted-foreground italic">{t("NA" as any)}</span>}
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground" title={(customer as any).createdByName ? `${t("AddedByColumn" as any)}: ${(customer as any).createdByName}` : undefined}>
+                    {new Date((customer as any).createdAt ?? customer._creationTime).toLocaleDateString()}
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {(customer as any).source ?? "—"}
                   </TableCell>
                   <TableCell className="text-end">
                     <Button variant="ghost" size="icon" onClick={(e) => handleEdit(customer, e)}>

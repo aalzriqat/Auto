@@ -9,18 +9,53 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { FileText, Eye } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { FileText, Eye, Search } from "lucide-react";
 import { format } from "date-fns";
 import { ApplicationDetailsDialog } from "@/components/applications/ApplicationDetailsDialog";
+import { useTableControls } from "@/hooks/useTableControls";
+import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 
 export function ApplicationClient() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
 
-  const { results: applications } = usePaginatedQuery(api.applications.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
+  const { results: applications, status: applicationsStatus, loadMore: loadMoreApplications } = usePaginatedQuery(api.applications.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
 
   const [selectedAppId, setSelectedAppId] = useState<any>(null);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
+  const [statusFilter, setStatusFilter] = useState("ALL");
+
+  const {
+    search: searchQuery,
+    setSearch: setSearchQuery,
+    sortKey,
+    sortDir,
+    toggleSort,
+    rows: sortedApplications,
+  } = useTableControls({
+    data: applications,
+    searchFields: (app) => [app.customerName, app.vehicleDesc, app.companyName],
+    sortAccessors: {
+      amount: (app) => app.financedAmount,
+      date: (app) => app.createdAt,
+      status: (app) => app.status,
+    },
+    pagination: { status: applicationsStatus, loadMore: loadMoreApplications, batchSize: 100 },
+  });
+
+  const statusOptions = Array.from(new Set((applications ?? []).map((app) => app.status)));
+
+  const filteredApplications = sortedApplications?.filter(
+    (app) => statusFilter === "ALL" || app.status === statusFilter
+  );
 
   return (
     <div className="flex-1 space-y-4 p-4 md:p-8 pt-6">
@@ -33,6 +68,30 @@ export function ApplicationClient() {
           </CardTitle>
         </CardHeader>
         <CardContent>
+          <div className="flex flex-col sm:flex-row gap-2 mb-4">
+            <div className="flex items-center w-full max-w-sm space-x-2 relative">
+              <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
+              <Input
+                placeholder={t("Search" as any)}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="ps-9"
+              />
+            </div>
+            {statusOptions.length > 0 && (
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-full sm:w-[180px]">
+                  <SelectValue placeholder={t("Status" as any)} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ALL">{t("AllStatuses" as any)}</SelectItem>
+                  {statusOptions.map((status) => (
+                    <SelectItem key={status} value={status}>{status}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
           <div className="rounded-md border">
             <Table>
               <TableHeader>
@@ -40,26 +99,26 @@ export function ApplicationClient() {
                   <TableHead>{t("Customer" as any)}</TableHead>
                   <TableHead>{t("Vehicle" as any)}</TableHead>
                   <TableHead>{t("Company" as any)}</TableHead>
-                  <TableHead>{t("Amount" as any)}</TableHead>
-                  <TableHead>{t("Status" as any)}</TableHead>
-                  <TableHead>{t("Date" as any)}</TableHead>
+                  <SortableColumnHeader label={t("Amount" as any)} sortKey="amount" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <SortableColumnHeader label={t("Status" as any)} sortKey="status" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <SortableColumnHeader label={t("Date" as any)} sortKey="date" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <TableHead>{t("Employee" as any)}</TableHead>
                   <TableHead className="text-right">{t("Actions" as any)}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {applications === undefined ? (
+                {filteredApplications === undefined ? (
                   <TableRow>
                     <TableCell colSpan={8} className="text-center">{t("LoadingApplications" as any)}</TableCell>
                   </TableRow>
-                ) : applications.length === 0 ? (
+                ) : filteredApplications.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={8} className="text-center text-muted-foreground">
                       {t("NoApplicationsFound" as any)}
                     </TableCell>
                   </TableRow>
                 ) : (
-                  applications.map((app) => (
+                  filteredApplications.map((app) => (
                     <TableRow key={app._id}>
                       <TableCell className="font-medium">{app.customerName}</TableCell>
                       <TableCell>{app.vehicleDesc}</TableCell>

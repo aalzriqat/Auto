@@ -29,25 +29,48 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useTableControls } from "@/hooks/useTableControls";
+import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 
 export default function ExpensesPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
   const { format } = useCurrency();
-  const { results: expenses } = usePaginatedQuery(api.expenses.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
+  const { results: expenses, status: expensesStatus, loadMore: loadMoreExpenses } = usePaginatedQuery(api.expenses.list, activeOrgId ? { orgId: activeOrgId } : "skip", { initialNumItems: 100 });
   const removeExpense = useMutation(api.expenses.remove);
 
-  const [searchQuery, setSearchQuery] = useState("");
   const [isExpenseDialogOpen, setIsExpenseDialogOpen] = useState(false);
   const [editingExpense, setEditingExpense] = useState<any>(null);
   const [expenseToDelete, setExpenseToDelete] = useState<any>(null);
+  const [categoryFilter, setCategoryFilter] = useState("ALL");
 
-  const filteredExpenses = expenses?.filter(e => {
-    const q = searchQuery.toLowerCase();
-    return e.title.toLowerCase().includes(q) ||
-      (e.vehicleSummary && e.vehicleSummary.toLowerCase().includes(q)) ||
-      e.category.toLowerCase().includes(q);
+  const {
+    search: searchQuery,
+    setSearch: setSearchQuery,
+    sortKey,
+    sortDir,
+    toggleSort,
+    rows: sortedExpenses,
+  } = useTableControls({
+    data: expenses,
+    searchFields: (e) => [e.title, e.vehicleSummary, e.category],
+    sortAccessors: {
+      date: (e) => e.date,
+      amount: (e) => e.amount,
+    },
+    pagination: { status: expensesStatus, loadMore: loadMoreExpenses, batchSize: 100 },
   });
+
+  const categoryOptions = Array.from(new Set((expenses ?? []).map((e) => e.category)));
+
+  const filteredExpenses = sortedExpenses?.filter((e) => categoryFilter === "ALL" || e.category === categoryFilter);
 
   const handleEdit = (expense: any) => {
     setEditingExpense(expense);
@@ -88,28 +111,43 @@ export default function ExpensesPage() {
         </Button>
       </div>
 
-      <div className="flex items-center w-full max-w-sm space-x-2">
-        <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
-        <Input
-          placeholder={t("SearchExpenses" as any)}
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          className="ps-9"
-        />
+      <div className="flex flex-col sm:flex-row gap-2">
+        <div className="flex items-center w-full max-w-sm space-x-2 relative">
+          <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
+          <Input
+            placeholder={t("SearchExpenses" as any)}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="ps-9"
+          />
+        </div>
+        {categoryOptions.length > 0 && (
+          <Select value={categoryFilter} onValueChange={setCategoryFilter}>
+            <SelectTrigger className="w-full sm:w-[180px]">
+              <SelectValue placeholder={t("Category" as any)} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">{t("AllCategories" as any)}</SelectItem>
+              {categoryOptions.map((category) => (
+                <SelectItem key={category} value={category}>{t(category as any)}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
       </div>
 
       <div className="rounded-md border overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>{t("Date" as any)}</TableHead>
+              <SortableColumnHeader label={t("Date" as any)} sortKey="date" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               <TableHead>{t("Title" as any)}</TableHead>
               <TableHead>{t("Status" as any)}</TableHead>
               <TableHead>{t("Category" as any)}</TableHead>
               <TableHead>{t("Vendor" as any)}</TableHead>
               <TableHead>{t("PaidBy" as any)}</TableHead>
               <TableHead>{t("LinkedVehicle" as any)}</TableHead>
-              <TableHead className="text-end">{t("Amount" as any)}</TableHead>
+              <SortableColumnHeader className="text-end" label={t("Amount" as any)} sortKey="amount" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               <TableHead className="text-end">{t("Actions" as any)}</TableHead>
             </TableRow>
           </TableHeader>
