@@ -42,6 +42,8 @@ import {
 import { useTableControls } from "@/hooks/useTableControls";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 
+const PRIORITY_RANK: Record<string, number> = { HIGH: 3, MEDIUM: 2, LOW: 1 };
+
 export default function TasksPage() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
@@ -70,7 +72,7 @@ export default function TasksPage() {
     searchFields: (task) => [task.title, task.customerName, task.assigneeName],
     sortAccessors: {
       dueDate: (task) => task.dueDate,
-      priority: (task) => (task as any).priority ?? "",
+      priority: (task) => PRIORITY_RANK[(task as any).priority] ?? 0,
     },
   });
 

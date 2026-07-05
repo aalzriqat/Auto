@@ -391,7 +391,7 @@ export default function VehiclesPage() {
               <SortableColumnHeader label={t("Price" as any)} sortKey="price" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
               <TableHead>{t("Status" as any)}</TableHead>
               <SortableColumnHeader label={t("AddedDate" as any)} sortKey="addedDate" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
-              <TableHead>{t("AddedBy" as any)}</TableHead>
+              <TableHead>{t("AddedByColumn" as any)}</TableHead>
               <TableHead>{t("Notes" as any)}</TableHead>
               <TableHead className="text-end">{t("Actions" as any)}</TableHead>
             </TableRow>

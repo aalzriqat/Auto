@@ -286,7 +286,7 @@ export default function CustomersPage() {
                   <TableCell className="text-sm">
                     {customer.nationalId || <span className="text-muted-foreground italic">{t("NA" as any)}</span>}
                   </TableCell>
-                  <TableCell className="text-sm text-muted-foreground" title={(customer as any).createdByName ? `${t("AddedBy" as any)}: ${(customer as any).createdByName}` : undefined}>
+                  <TableCell className="text-sm text-muted-foreground" title={(customer as any).createdByName ? `${t("AddedByColumn" as any)}: ${(customer as any).createdByName}` : undefined}>
                     {new Date((customer as any).createdAt ?? customer._creationTime).toLocaleDateString()}
                   </TableCell>
                   <TableCell className="text-sm text-muted-foreground">
