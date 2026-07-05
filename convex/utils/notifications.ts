@@ -62,14 +62,16 @@ export async function dispatch(
   const pref = await getPreference(ctx, orgId, userId, def.category);
   // Email defaults to the type's criticalDefault (opt-out for actionable/
   // account-affecting categories, opt-in otherwise) until the user sets an
-  // explicit preference. WhatsApp is always opt-in.
+  // explicit preference. WhatsApp and push are always opt-in.
   const emailEnabled = pref ? pref.emailEnabled : def.criticalDefault;
   const whatsappEnabled = pref ? pref.whatsappEnabled : false;
+  const pushEnabled = pref ? (pref.pushEnabled ?? false) : false;
+  const locale = user.locale ?? "en";
 
   if (emailEnabled && user.email) {
     await ctx.scheduler.runAfter(0, internal.email.sendNotificationEmail, {
       toEmail: user.email,
-      locale: user.locale ?? "en",
+      locale,
       type,
       data: data ?? {},
     });
@@ -80,9 +82,20 @@ export async function dispatch(
     await ctx.scheduler.runAfter(0, internal.whatsappSend.sendNotificationWhatsapp, {
       orgId,
       toPhone: user.whatsappPhone,
-      locale: user.locale ?? "en",
+      locale,
       type,
       data: data ?? {},
+    });
+  }
+
+  if (pushEnabled) {
+    await ctx.scheduler.runAfter(0, internal.pushSend.sendNotificationPush, {
+      orgId,
+      userId,
+      locale,
+      type,
+      data: data ?? {},
+      link: opts.link,
     });
   }
 }

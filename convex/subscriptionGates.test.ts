@@ -87,6 +87,7 @@ describe("subscription feature gates", () => {
         category: "sales",
         emailEnabled: true,
         whatsappEnabled: true,
+        pushEnabled: false,
       })
     ).rejects.toThrow(/whatsapp/i);
   });
@@ -120,6 +121,7 @@ describe("subscription feature gates", () => {
         category: "sales",
         emailEnabled: true,
         whatsappEnabled: true,
+        pushEnabled: false,
       })
     ).resolves.toBeNull();
     await expect(

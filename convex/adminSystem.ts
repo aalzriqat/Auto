@@ -105,6 +105,7 @@ const webhookSourceValidator = v.union(
   v.literal("facebook"),
   v.literal("notification-email"),
   v.literal("notification-whatsapp"),
+  v.literal("notification-push"),
   v.literal("subscription-reminder"),
   v.literal("support-inbox-notification"),
   v.literal("upgrade-request"),

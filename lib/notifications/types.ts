@@ -110,6 +110,7 @@ export const NOTIFICATION_TYPES = {
   "organization.settings_changed": { category: "team", priority: "normal", criticalDefault: false },
   "support.message_received": { category: "team", priority: "normal", criticalDefault: false },
   "support.thread_status_changed": { category: "team", priority: "normal", criticalDefault: false },
+  "message.received": { category: "team", priority: "normal", criticalDefault: false },
 
   // ─── Social inbox / integrations ───────────────────────────────────────
   "social.lead_created": { category: "social", priority: "normal", criticalDefault: false },

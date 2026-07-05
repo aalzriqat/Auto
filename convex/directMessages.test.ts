@@ -88,3 +88,48 @@ describe("directMessages receipts", () => {
     expect(conversations[0]?.lastDeliveredAt).toBe(0);
   });
 });
+
+describe("directMessages notifications", () => {
+  test("sending a message notifies the other member in-app", async () => {
+    const { orgId, conversationId, asAlice, asBob } = await setupDm();
+
+    await asAlice.mutation(api.directMessages.sendMessage, {
+      conversationId,
+      body: "Hey, can you check this?",
+    });
+
+    const bobNotifications = await asBob.query(api.notifications.listPage, {
+      orgId,
+      showArchived: false,
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+    expect(bobNotifications.page).toHaveLength(1);
+    expect(bobNotifications.page[0].type).toBe("message.received");
+    expect(bobNotifications.page[0].data).toEqual({ senderName: "Alice", preview: "Hey, can you check this?" });
+
+    // The sender doesn't notify themselves.
+    const aliceNotifications = await asAlice.query(api.notifications.listPage, {
+      orgId,
+      showArchived: false,
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+    expect(aliceNotifications.page).toHaveLength(0);
+  });
+
+  test("muting a conversation suppresses its message notifications", async () => {
+    const { orgId, conversationId, asAlice, asBob } = await setupDm();
+
+    await asBob.mutation(api.directMessages.setMuted, { conversationId, isMuted: true });
+    await asAlice.mutation(api.directMessages.sendMessage, {
+      conversationId,
+      body: "This should be muted.",
+    });
+
+    const bobNotifications = await asBob.query(api.notifications.listPage, {
+      orgId,
+      showArchived: false,
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+    expect(bobNotifications.page).toHaveLength(0);
+  });
+});

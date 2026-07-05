@@ -1072,7 +1072,7 @@ New "Analytics" tab in Reports (or a dedicated `/analytics` route):
 
 ## Phase 40 — Mobile PWA
 
-**Branch:** `feature/phase-40-pwa`
+**Branch:** `feature/phase-40-pwa` (Push/PWA slice built on `feature/phase-40a-push-notifications`)
 **Goal:** Installable app, offline inventory/customer lookup, camera VIN scanner, push notifications.
 
 ### Scope
@@ -1083,14 +1083,22 @@ New "Analytics" tab in Reports (or a dedicated `/analytics` route):
 - **GPS Check-in (stretch)** — salesperson taps "Check in" from a lead page to record their GPS location + timestamp to the lead's timeline.
 
 ### Tasks
-- [ ] Add `next-pwa` (or manual service worker) to `next.config.ts`; create `public/manifest.json` with app icons; verify offline shell renders correctly
-- [ ] `convex/schema.ts` — `pushSubscriptions` table (`userId`, `endpoint`, `keys`, `createdAt`); `notificationPreferences` gains `pushEnabled`
-- [ ] `convex/pushNotifications.ts` (new, `"use node"`) — VAPID key generation + `sendPush` action using `web-push` npm package
-- [ ] `convex/utils/notifications.ts` — add push dispatch path alongside email/WhatsApp
-- [ ] `components/vehicles/VehicleDialog.tsx` — "Scan VIN" button with camera modal
-- [ ] `lib/vinScanner.ts` (new) — thin wrapper around `zxing-js/browser` `BrowserBarcodeReader`
-- [ ] i18n EN + AR
-- [ ] Tests for push subscription CRUD, VIN scanner output parsing
+- [x] `next.config.ts` CSP — `worker-src` widened to `'self' blob:` so `/sw.js` can register (2026-07-05)
+- [x] `public/sw.js` (manual, no `next-pwa`) — push/notificationclick/pushsubscriptionchange handlers only; no asset caching/offline shell yet (2026-07-05)
+- [x] `app/manifest.ts` — Next-native PWA manifest; `app/layout.tsx` gained `appleWebApp` + `viewport.themeColor` for iOS installability (2026-07-05)
+- [x] `convex/schema.ts` — `pushSubscriptions` table (keyed by `endpoint`, one row per device); `notificationPreferences` gained `pushEnabled` (2026-07-05)
+- [x] `convex/pushSend.ts` (new, `"use node"`) — `sendNotificationPush` internalAction using `web-push`, VAPID keys from env, fans out to all enabled devices, prunes 404/410 subscriptions (2026-07-05)
+- [x] `convex/pushSubscriptions.ts` (new) — subscribe/unsubscribe/listMyDevices/disableDevice + internal helpers for the action (2026-07-05)
+- [x] `convex/utils/notifications.ts` — push dispatch path added alongside email/WhatsApp, opt-in only like WhatsApp (2026-07-05)
+- [x] `hooks/usePushNotifications.ts` + `components/notifications/PushPermissionCard.tsx` — SW registration, permission gating, device list, wired into the Notification Preferences page as a 3rd Push column (2026-07-05)
+- [x] i18n EN + AR for push UI (2026-07-05)
+- [x] Tests for push subscription CRUD + dispatch scheduling (`convex/pushSubscriptions.test.ts`, `convex/utils/notifications.test.ts`) (2026-07-05)
+- [x] Bonus (user request, not originally scoped here): wired the internal messenger (`convex/directMessages.ts` `sendMessage`) into the same notification system — DM/group recipients now get in-app + push + email/WhatsApp (per their prefs) via a new `message.received` type, skipped when the recipient has muted that conversation (2026-07-05)
+- [ ] `next-pwa`-style asset caching / offline shell for read-only vehicle/customer lookup — not built; current `sw.js` only handles push, no fetch/caching handlers
+- [ ] `components/vehicles/VehicleDialog.tsx` — "Scan VIN" button with camera modal — not started
+- [ ] `lib/vinScanner.ts` (new) — thin wrapper around `zxing-js/browser` `BrowserBarcodeReader` — not started
+- [ ] GPS Check-in (stretch) — not started
+- [ ] VAPID keys must still be generated (`npx web-push generate-vapid-keys`) and set on the Convex deployment (`VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`) + Vercel (`NEXT_PUBLIC_VAPID_PUBLIC_KEY`) before push actually works in production — the feature no-ops quietly until then
 
 ---
 
@@ -1210,7 +1218,7 @@ Each phase reuses the established pattern: immutable event table → posting rul
 | 37 | Document Management | 3 — Enterprise & Scale | ⬜ Not started |
 | 38 | Multi-Branch Operations | 3 — Enterprise & Scale | ⬜ Not started |
 | 39 | Sales Funnel Analytics | 3 — Enterprise & Scale | ⬜ Not started |
-| 40 | Mobile PWA | 3 — Enterprise & Scale | ⬜ Not started |
+| 40 | Mobile PWA | 3 — Enterprise & Scale | 🟨 Push/PWA slice built (2026-07-05), pending merge + VAPID setup; VIN scanner/GPS check-in not started |
 | 41 | Accounting Depth | 3 — Enterprise & Scale | ⬜ Not started |
 | 42 | Open API & Integration Hub | 3 — Enterprise & Scale | ⬜ Not started |
 | GL 0–9 | Double-Entry Accounting Foundation | Accounting GL Track | ✅ Done |

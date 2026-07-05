@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth, requireAuth } from "./utils/tenancy";
 import { Doc, Id } from "./_generated/dataModel";
+import { notifyUser } from "./utils/notifications";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -439,6 +440,31 @@ export const sendMessage = mutation({
 
     if (myState) {
       await ctx.db.patch(myState._id, { lastDeliveredAt: now, lastReadAt: now, typingAt: undefined });
+    }
+
+    // Notify every other member (in-app always; email/WhatsApp/push per their
+    // own preferences, via dispatch()) unless they've muted this conversation
+    // — the same signal that already suppresses the in-browser sound.
+    const senderName = user.name ?? user.email ?? "Someone";
+    const preview = trimmed.length > 80 ? trimmed.slice(0, 80) + "…" : trimmed;
+    const recipients = conv.memberIds.filter((id) => id !== user._id);
+    for (const recipientId of recipients) {
+      const recipientState = await ctx.db
+        .query("dmParticipantState")
+        .withIndex("by_conversation_user", (q) =>
+          q.eq("conversationId", args.conversationId).eq("userId", recipientId)
+        )
+        .unique();
+      if (recipientState?.isMuted) continue;
+
+      await notifyUser(
+        ctx,
+        conv.orgId,
+        recipientId,
+        "message.received",
+        { senderName, preview },
+        { link: `/${conv.orgId}/messages` }
+      );
     }
 
     return msgId;
