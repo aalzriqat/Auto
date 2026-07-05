@@ -35,6 +35,11 @@ import {
   WEBSITE_FORM_TYPES,
   WEBSITE_SECTION_GROUPS,
 } from "@/lib/website/websiteSetupConfig";
+import {
+  DEFAULT_WEBSITE_TEMPLATE_ID,
+  WEBSITE_TEMPLATE_OPTIONS,
+  websiteTemplateLabelKey,
+} from "@/lib/website/websiteTemplates";
 
 const HERO_TITLE_PRESETS: Record<"en" | "ar", string[]> = {
   en: [
@@ -124,7 +129,7 @@ export default function WebsiteSettingsPage() {
   const [customDomain, setCustomDomain] = useState("");
   const [subdomainCheckResult, setSubdomainCheckResult] = useState<DomainLookupResult>(null);
   const [customDomainSearchResult, setCustomDomainSearchResult] = useState<DomainLookupResult>(null);
-  const [templateId, setTemplateId] = useState("modern-showroom");
+  const [templateId, setTemplateId] = useState(DEFAULT_WEBSITE_TEMPLATE_ID);
   const [defaultLanguage, setDefaultLanguage] = useState<"en" | "ar">("en");
   const [supportArabic, setSupportArabic] = useState(true);
   const [primaryColor, setPrimaryColor] = useState("#0f172a");
@@ -140,7 +145,7 @@ export default function WebsiteSettingsPage() {
     if (!status) return;
     const settings = status.settings;
     if (settings) {
-      setTemplateId(settings.templateId ?? "modern-showroom");
+      setTemplateId(settings.templateId ?? DEFAULT_WEBSITE_TEMPLATE_ID);
       setDefaultLanguage(settings.defaultLanguage ?? "en");
       setSupportArabic((settings.supportedLanguages ?? []).includes("ar"));
       setPrimaryColor(settings.primaryColor ?? "#0f172a");
@@ -518,12 +523,12 @@ export default function WebsiteSettingsPage() {
               <Select value={templateId} onValueChange={setTemplateId}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="modern-showroom">{t("WebsiteTemplateModernShowroom")}</SelectItem>
-                  <SelectItem value="classic-inventory">{t("WebsiteTemplateClassicInventory")}</SelectItem>
-                  <SelectItem value="premium-minimal">{t("WebsiteTemplatePremiumMinimal")}</SelectItem>
-                  <SelectItem value="prestige">★ {t("WebsiteTemplatePrestige")}</SelectItem>
-                  <SelectItem value="velocity">★ {t("WebsiteTemplateVelocity")}</SelectItem>
-                  <SelectItem value="avant">★ {t("WebsiteTemplateAvant")}</SelectItem>
+                  {WEBSITE_TEMPLATE_OPTIONS.map((templateOption) => (
+                    <SelectItem key={templateOption.id} value={templateOption.id}>
+                      {templateOption.tier === "signature" ? "★ " : ""}
+                      {t(templateOption.labelKey)}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -643,7 +648,7 @@ export default function WebsiteSettingsPage() {
               </div>
               <div className="rounded-md border p-3">
                 <p className="text-xs text-muted-foreground">{t("WebsiteTemplate")}</p>
-                <p className="font-medium">{templateId}</p>
+                <p className="font-medium">{t(websiteTemplateLabelKey(templateId))}</p>
               </div>
               <div className="rounded-md border p-3">
                 <p className="text-xs text-muted-foreground">{t("WebsitePublicSections")}</p>

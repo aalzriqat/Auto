@@ -17,7 +17,15 @@ import { Id } from "@/convex/_generated/dataModel";
 import { PrestigeTheme } from "./themes/prestige-theme";
 import { VelocityTheme } from "./themes/velocity-theme";
 import { AvantTheme } from "./themes/avant-theme";
+import {
+  ConciergeEditorialTheme,
+  DesertGrandTourerTheme,
+  LucentStudioTheme,
+  ObsidianAtelierTheme,
+  VelocityCommandTheme,
+} from "./themes/showcase-themes";
 import { TurnstileWidget } from "./turnstile-widget";
+import { DEFAULT_WEBSITE_TEMPLATE_ID } from "@/lib/website/websiteTemplates";
 
 type PublicVehicle = {
   id: Id<"vehicles">;
@@ -148,6 +156,16 @@ type TurnstileWindow = Window & {
 
 const PUBLIC_LEAD_FINGERPRINT_KEY = "autoflow_public_lead_fingerprint";
 const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
+const PREMIUM_THEME_COMPONENTS = {
+  prestige: PrestigeTheme,
+  velocity: VelocityTheme,
+  avant: AvantTheme,
+  "obsidian-atelier": ObsidianAtelierTheme,
+  "desert-grand-tourer": DesertGrandTourerTheme,
+  "velocity-command": VelocityCommandTheme,
+  "lucent-studio": LucentStudioTheme,
+  "concierge-editorial": ConciergeEditorialTheme,
+};
 
 // crypto.randomUUID() only exists in secure contexts (HTTPS/localhost). A
 // dealer's custom domain can be reached over plain HTTP before its
@@ -239,7 +257,7 @@ export default function DealerSitePage() {
     return price == null ? t.contactForPrice : `${price.toLocaleString()} JOD`;
   }
 
-  const templateId = site?.settings?.templateId ?? "modern-showroom";
+  const templateId = site?.settings?.templateId ?? DEFAULT_WEBSITE_TEMPLATE_ID;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>, formType: string) {
     event.preventDefault();
@@ -337,9 +355,10 @@ export default function DealerSitePage() {
     />
   ) : null;
 
-  if (templateId === "prestige") return <>{turnstileScript}<PrestigeTheme {...premiumThemeProps} /></>;
-  if (templateId === "velocity") return <>{turnstileScript}<VelocityTheme {...premiumThemeProps} /></>;
-  if (templateId === "avant") return <>{turnstileScript}<AvantTheme {...premiumThemeProps} /></>;
+  const PremiumTheme = templateId in PREMIUM_THEME_COMPONENTS
+    ? PREMIUM_THEME_COMPONENTS[templateId as keyof typeof PREMIUM_THEME_COMPONENTS]
+    : null;
+  if (PremiumTheme) return <>{turnstileScript}<PremiumTheme {...premiumThemeProps} /></>;
 
   const profile = site.profile;
   const nav = [
