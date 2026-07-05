@@ -19,7 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "@/components/ui/sonner";
-import { Pencil, Trash2 } from "lucide-react";
+import { History, Pencil, Trash2 } from "lucide-react";
 
 type ChangelogType = "FEATURE" | "FIX" | "IMPROVEMENT";
 
@@ -42,6 +42,7 @@ export default function AdminChangelogPage() {
   const [form, setForm] = useState(EMPTY_FORM);
   const [editingId, setEditingId] = useState<Id<"changelogEntries"> | null>(null);
   const [saving, setSaving] = useState(false);
+  const [backfilling, setBackfilling] = useState(false);
 
   const { results: entries, loadMore, status } = usePaginatedQuery(
     api.changelog.list,
@@ -51,6 +52,7 @@ export default function AdminChangelogPage() {
   const createEntry = useMutation(api.changelog.create);
   const updateEntry = useMutation(api.changelog.update);
   const removeEntry = useMutation(api.changelog.remove);
+  const seedHistoricalEntries = useMutation(api.changelog.seedHistoricalEntries);
 
   function startEdit(entry: Doc<"changelogEntries">) {
     setEditingId(entry._id);
@@ -116,12 +118,37 @@ export default function AdminChangelogPage() {
     }
   }
 
+  async function handleBackfillHistory() {
+    if (!window.confirm("Backfill missing historical What's New entries? Existing entries will not be duplicated.")) return;
+    setBackfilling(true);
+    try {
+      const result = await seedHistoricalEntries({});
+      if (result.inserted > 0) {
+        toast.success(`Backfilled ${result.inserted} historical entries.`);
+      } else {
+        toast.success(`History is already complete. Checked ${result.total} entries.`);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBackfilling(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-semibold text-slate-100">Changelog</h1>
-      <p className="text-sm text-slate-400 -mt-4">
-        Published entries appear in the &ldquo;What&rsquo;s New&rdquo; panel for every organization.
-      </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold text-slate-100">Changelog</h1>
+          <p className="text-sm text-slate-400 mt-1">
+            Published entries appear in the &ldquo;What&rsquo;s New&rdquo; panel for every organization.
+          </p>
+        </div>
+        <Button variant="outline" onClick={handleBackfillHistory} disabled={backfilling}>
+          <History className="w-4 h-4 mr-2" />
+          {backfilling ? "Backfilling..." : "Backfill history"}
+        </Button>
+      </div>
 
       <Card className="p-6 bg-slate-900 border-slate-800 space-y-4">
         <h2 className="text-sm font-semibold text-slate-200">
