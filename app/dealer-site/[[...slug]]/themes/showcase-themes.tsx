@@ -243,6 +243,95 @@ function ArrowIcon() {
   return <ArrowRight className="wf-arrow" size={16} />;
 }
 
+function VehicleTicker({
+  vehicles,
+  props,
+  copy,
+}: {
+  vehicles: PublicVehicle[];
+  props: ThemeProps;
+  copy: ShowcaseCopy;
+}) {
+  const tickerVehicles = vehicles.slice(0, 4);
+  if (!tickerVehicles.length) return null;
+
+  return (
+    <div className="wf-live-rail" aria-hidden="true">
+      {[...tickerVehicles, ...tickerVehicles].map((vehicle, index) => (
+        <span key={`${vehicle.id}-${index}`}>
+          {copy.featuredArrival}
+          <strong>{vehicleName(vehicle)}</strong>
+          <em dir="ltr">{props.formatPrice(vehicle.price)}</em>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function RouteMarkers({ copy }: { copy: ShowcaseCopy }) {
+  return (
+    <div className="wf-route-map" aria-hidden="true">
+      <span>{copy.showroom}</span>
+      <i />
+      <span>{copy.readyToday}</span>
+      <i />
+      <span>{copy.deliveryReady}</span>
+    </div>
+  );
+}
+
+function CommandTelemetry({ count }: { count: number }) {
+  return (
+    <div className="wf-telemetry" aria-hidden="true">
+      <span />
+      <span />
+      <span />
+      <strong>{String(count).padStart(2, "0")}</strong>
+    </div>
+  );
+}
+
+function StudioStack({
+  vehicle,
+  props,
+  copy,
+}: {
+  vehicle: PublicVehicle | null;
+  props: ThemeProps;
+  copy: ShowcaseCopy;
+}) {
+  return (
+    <div className="wf-studio-stack" aria-hidden="true">
+      <span>{copy.availableNow}</span>
+      <strong>{vehicle ? vehicleName(vehicle) : props.site.profile.dealershipName}</strong>
+      <em>{vehicle ? props.formatPrice(vehicle.price) : props.t.contactForPrice}</em>
+    </div>
+  );
+}
+
+function EditorialIndex({
+  vehicles,
+  copy,
+}: {
+  vehicles: PublicVehicle[];
+  copy: ShowcaseCopy;
+}) {
+  const indexVehicles = vehicles.slice(0, 3);
+  if (!indexVehicles.length) return null;
+
+  return (
+    <div className="wf-editorial-index" aria-hidden="true">
+      {indexVehicles.map((vehicle, index) => (
+        <span key={vehicle.id}>
+          0{index + 1}
+          <strong>{vehicleName(vehicle)}</strong>
+          <em>{copy.editorsPick}</em>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function ShowcaseRoot({ props, design }: { props: ThemeProps; design: ShowcaseDesign }) {
   const copy = SHOWCASE_COPY[props.lang];
   const profile = props.site.profile;
@@ -387,14 +476,15 @@ function ObsidianHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }
       <section className="wf-hero wf-hero--obsidian">
         <HeroImage vehicle={vehicle} copy={copy} />
         <div className="wf-hero-shade" />
+        <div className="wf-atelier-sweep" aria-hidden="true" />
         <div className="wf-shell wf-hero-content wf-hero-content--obsidian">
-          <div className="wf-kicker">
+          <div className="wf-kicker wf-motion-one">
             <Crown size={16} />
             {copy.boutique}
           </div>
-          <h1 className="wf-hero-title">{profile.heroTitle ?? profile.dealershipName}</h1>
-          <p className="wf-hero-copy">{profile.heroSubtitle}</p>
-          <div className="wf-hero-buttons">
+          <h1 className="wf-hero-title wf-motion-two">{profile.heroTitle ?? profile.dealershipName}</h1>
+          <p className="wf-hero-copy wf-motion-three">{profile.heroSubtitle}</p>
+          <div className="wf-hero-buttons wf-motion-four">
             <a href="/inventory" className="wf-button wf-button--primary">
               {props.t.browseInventory}
               <ArrowIcon />
@@ -407,6 +497,7 @@ function ObsidianHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }
           <strong>{vehicle ? vehicleName(vehicle) : profile.dealershipName}</strong>
           {vehicle && <span dir="ltr">{props.formatPrice(vehicle.price)}</span>}
         </div>
+        <VehicleTicker vehicles={props.featuredVehicles} props={props} copy={copy} />
       </section>
       <ShowcaseFeatured props={props} copy={copy} variant="gallery" />
     </>
@@ -421,13 +512,18 @@ function DesertHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) 
       <section className="wf-hero wf-hero--desert">
         <div className="wf-shell wf-desert-grid">
           <div className="wf-desert-copy">
-            <div className="wf-kicker">
+            <div className="wf-kicker wf-motion-one">
               <Compass size={16} />
               {copy.routeReady}
             </div>
-            <h1 className="wf-hero-title">{profile.heroTitle ?? profile.dealershipName}</h1>
-            <p className="wf-hero-copy">{profile.heroSubtitle}</p>
-            <div className="wf-hero-buttons">
+            <h1 className="wf-hero-title wf-motion-two">{profile.heroTitle ?? profile.dealershipName}</h1>
+            <p className="wf-hero-copy wf-motion-three">{profile.heroSubtitle}</p>
+            <div className="wf-route-stats wf-motion-four">
+              <span>{copy.verifiedInventory}</span>
+              <strong dir="ltr">{props.vehicles.length}</strong>
+              <span>{copy.deliveryReady}</span>
+            </div>
+            <div className="wf-hero-buttons wf-motion-five">
               <a href="/inventory" className="wf-button wf-button--primary">
                 {props.t.browseInventory}
                 <ArrowIcon />
@@ -437,6 +533,7 @@ function DesertHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) 
           </div>
           <div className="wf-desert-stage">
             <HeroImage vehicle={vehicle} copy={copy} />
+            <RouteMarkers copy={copy} />
             <div className="wf-route-ticket">
               <span>{copy.readyToday}</span>
               <strong>{props.vehicles.length}</strong>
@@ -458,18 +555,18 @@ function CommandHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy })
       <section className="wf-hero wf-hero--command">
         <div className="wf-shell wf-command-grid">
           <div>
-            <div className="wf-kicker">
+            <div className="wf-kicker wf-motion-one">
               <Gauge size={16} />
               {copy.commandCenter}
             </div>
-            <h1 className="wf-hero-title">{profile.heroTitle ?? profile.dealershipName}</h1>
-            <p className="wf-hero-copy">{profile.heroSubtitle}</p>
-            <div className="wf-command-metrics">
+            <h1 className="wf-hero-title wf-motion-two">{profile.heroTitle ?? profile.dealershipName}</h1>
+            <p className="wf-hero-copy wf-motion-three">{profile.heroSubtitle}</p>
+            <div className="wf-command-metrics wf-motion-four">
               <Metric icon={<Car size={17} />} label={props.t.inventoryTitle} value={`${props.vehicles.length}`} />
               <Metric icon={<Zap size={17} />} label={copy.instantReply} value={copy.readyToday} />
               <Metric icon={<ShieldCheck size={17} />} label={copy.verifiedInventory} value={copy.availableNow} />
             </div>
-            <div className="wf-hero-buttons">
+            <div className="wf-hero-buttons wf-motion-five">
               <a href="/inventory" className="wf-button wf-button--primary">
                 {props.t.browseInventory}
                 <ArrowIcon />
@@ -479,6 +576,8 @@ function CommandHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy })
           </div>
           <div className="wf-command-visual">
             <HeroImage vehicle={vehicle} copy={copy} />
+            <div className="wf-command-scan" aria-hidden="true" />
+            <CommandTelemetry count={props.vehicles.length} />
             <div className="wf-command-strip">
               <span>{copy.inventorySignal}</span>
               <strong>{vehicle ? props.formatPrice(vehicle.price) : copy.availableNow}</strong>
@@ -499,13 +598,13 @@ function LucentHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) 
       <section className="wf-hero wf-hero--lucent">
         <div className="wf-shell wf-lucent-grid">
           <div className="wf-lucent-copy">
-            <div className="wf-kicker">
+            <div className="wf-kicker wf-motion-one">
               <Sparkles size={16} />
               {copy.studioSelected}
             </div>
-            <h1 className="wf-hero-title">{profile.heroTitle ?? profile.dealershipName}</h1>
-            <p className="wf-hero-copy">{profile.heroSubtitle}</p>
-            <div className="wf-hero-buttons">
+            <h1 className="wf-hero-title wf-motion-two">{profile.heroTitle ?? profile.dealershipName}</h1>
+            <p className="wf-hero-copy wf-motion-three">{profile.heroSubtitle}</p>
+            <div className="wf-hero-buttons wf-motion-four">
               <a href="/inventory" className="wf-button wf-button--primary">
                 {props.t.browseInventory}
                 <ArrowIcon />
@@ -515,6 +614,7 @@ function LucentHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) 
           </div>
           <div className="wf-lucent-stage">
             <HeroImage vehicle={vehicle} copy={copy} />
+            <StudioStack vehicle={vehicle} props={props} copy={copy} />
             <div className="wf-studio-card">
               <span>{copy.financeOptions}</span>
               <strong>{vehicle ? props.formatPrice(vehicle.price) : props.t.contactForPrice}</strong>
@@ -536,13 +636,14 @@ function ConciergeHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy 
       <section className="wf-hero wf-hero--concierge">
         <div className="wf-shell wf-editorial-grid">
           <div className="wf-editorial-story">
-            <div className="wf-kicker">
+            <div className="wf-kicker wf-motion-one">
               <Crown size={16} />
               {copy.editorsPick}
             </div>
-            <h1 className="wf-hero-title">{profile.heroTitle ?? profile.dealershipName}</h1>
-            <p className="wf-hero-copy">{profile.heroSubtitle}</p>
-            <div className="wf-hero-buttons">
+            <h1 className="wf-hero-title wf-motion-two">{profile.heroTitle ?? profile.dealershipName}</h1>
+            <p className="wf-hero-copy wf-motion-three">{profile.heroSubtitle}</p>
+            <EditorialIndex vehicles={props.featuredVehicles} copy={copy} />
+            <div className="wf-hero-buttons wf-motion-four">
               <a href="/contact" className="wf-button wf-button--primary">
                 {copy.askConcierge}
                 <ArrowIcon />
@@ -682,7 +783,18 @@ function VehicleCard({
     <a
       href={`/inventory/${vehicle.slug}`}
       className={`wf-vehicle-card wf-vehicle-card--${variant} ${index === 0 ? "wf-vehicle-card--lead" : ""}`}
+      style={{ "--wf-card-index": index } as CSSProperties}
     >
+      {variant === "command" && (
+        <span className="wf-card-signal" aria-hidden="true">
+          <i />
+          <i />
+          <i />
+        </span>
+      )}
+      {variant === "route" && <span className="wf-card-route-pin" aria-hidden="true" />}
+      {variant === "studio" && <span className="wf-card-number" aria-hidden="true">0{index + 1}</span>}
+      {variant === "editorial" && <span className="wf-card-edition" aria-hidden="true">No. 0{index + 1}</span>}
       <div className="wf-vehicle-media">
         <VehicleImage vehicle={vehicle} copy={copy} />
         <span className="wf-status">{vehicle.status}</span>
@@ -1084,6 +1196,71 @@ function ShowcaseStyles() {
       .wf a { color: inherit; text-decoration: none; }
       .wf button, .wf input, .wf textarea { font: inherit; }
       .wf-shell { width: min(1280px, calc(100% - 48px)); margin: 0 auto; }
+      @keyframes wf-rise {
+        from { opacity: 0; transform: translateY(26px); }
+        to { opacity: 1; transform: translateY(0); }
+      }
+      @keyframes wf-film {
+        from { transform: translateX(0); }
+        to { transform: translateX(-50%); }
+      }
+      @keyframes wf-sweep {
+        0% { transform: translateX(-110%) skewX(-18deg); opacity: 0; }
+        18% { opacity: .36; }
+        55% { opacity: .18; }
+        100% { transform: translateX(120%) skewX(-18deg); opacity: 0; }
+      }
+      @keyframes wf-route-flow {
+        from { background-position: 0 0; }
+        to { background-position: 32px 0; }
+      }
+      @keyframes wf-scan {
+        from { transform: translateY(-100%); }
+        to { transform: translateY(100%); }
+      }
+      @keyframes wf-meter {
+        0%, 100% { transform: scaleY(.45); }
+        50% { transform: scaleY(1); }
+      }
+      @keyframes wf-float {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-12px); }
+      }
+      @keyframes wf-editorial-slide {
+        from { transform: translateX(-18px); opacity: 0; }
+        to { transform: translateX(0); opacity: 1; }
+      }
+      @media (prefers-reduced-motion: no-preference) {
+        .wf-motion-one, .wf-motion-two, .wf-motion-three, .wf-motion-four, .wf-motion-five,
+        .wf-atelier-panel, .wf-route-ticket, .wf-command-strip, .wf-studio-card, .wf-cover-caption {
+          animation: wf-rise .72s cubic-bezier(.2, .8, .2, 1) both;
+        }
+        .wf-motion-two { animation-delay: .08s; }
+        .wf-motion-three { animation-delay: .16s; }
+        .wf-motion-four { animation-delay: .24s; }
+        .wf-motion-five { animation-delay: .32s; }
+        .wf-atelier-panel, .wf-route-ticket, .wf-command-strip, .wf-studio-card, .wf-cover-caption { animation-delay: .38s; }
+        .wf-atelier-sweep { animation: wf-sweep 6.5s ease-in-out infinite; }
+        .wf-live-rail > span { animation: wf-film 28s linear infinite; }
+        .wf-route-map::before { animation: wf-route-flow 1.6s linear infinite; }
+        .wf-command-scan { animation: wf-scan 3.6s linear infinite; }
+        .wf-telemetry span { animation: wf-meter 1.4s ease-in-out infinite; }
+        .wf-telemetry span:nth-child(2) { animation-delay: .2s; }
+        .wf-telemetry span:nth-child(3) { animation-delay: .42s; }
+        .wf-studio-stack { animation: wf-float 5.5s ease-in-out infinite; }
+        .wf-editorial-index span { animation: wf-editorial-slide .62s cubic-bezier(.2, .8, .2, 1) both; }
+        .wf-editorial-index span:nth-child(2) { animation-delay: .12s; }
+        .wf-editorial-index span:nth-child(3) { animation-delay: .24s; }
+        .wf-vehicle-card { animation: wf-rise .54s cubic-bezier(.2, .8, .2, 1) both; animation-delay: calc(var(--wf-card-index) * 60ms); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .wf *, .wf *::before, .wf *::after {
+          animation-duration: .001ms !important;
+          animation-iteration-count: 1 !important;
+          scroll-behavior: auto !important;
+          transition-duration: .001ms !important;
+        }
+      }
       .wf-preview {
         background: color-mix(in srgb, var(--wf-primary) 18%, var(--wf-bg));
         border-bottom: 1px solid var(--wf-line);
@@ -1211,8 +1388,17 @@ function ShowcaseStyles() {
       .wf-hero-shade { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(0,0,0,.88), rgba(0,0,0,.36)); }
       .wf[dir="rtl"] .wf-hero-shade { background: linear-gradient(270deg, rgba(0,0,0,.88), rgba(0,0,0,.36)); }
       .wf-hero-content { position: relative; z-index: 2; padding: 120px 0 72px; }
-      .wf-hero--obsidian .wf-hero-image { position: absolute; inset: 0; }
+      .wf-hero--obsidian .wf-hero-image { position: absolute; inset: 0; transform: scale(1.02); }
       .wf-hero-content--obsidian { min-height: 690px; display: flex; flex-direction: column; justify-content: center; }
+      .wf-atelier-sweep {
+        position: absolute;
+        z-index: 2;
+        top: -20%;
+        bottom: -20%;
+        width: 32%;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,.18), transparent);
+        pointer-events: none;
+      }
       .wf-atelier-panel {
         position: absolute;
         z-index: 3;
@@ -1227,6 +1413,31 @@ function ShowcaseStyles() {
       }
       .wf-atelier-panel p, .wf-atelier-panel span { color: var(--wf-muted); margin: 0; }
       .wf-atelier-panel strong { display: block; margin: 8px 0; font-size: 22px; }
+      .wf-live-rail {
+        position: absolute;
+        z-index: 3;
+        inset-inline: 0;
+        bottom: 0;
+        display: flex;
+        overflow: hidden;
+        border-block: 1px solid rgba(255,255,255,.12);
+        background: rgba(8,9,8,.78);
+        backdrop-filter: blur(18px);
+      }
+      .wf-live-rail > span {
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 13px;
+        min-width: 360px;
+        padding: 15px 28px;
+        color: var(--wf-muted);
+        font-size: 12px;
+        font-weight: 850;
+        text-transform: uppercase;
+      }
+      .wf-live-rail strong { color: var(--wf-text); text-transform: none; }
+      .wf-live-rail em { color: var(--wf-primary); font-style: normal; }
       .wf-desert-grid, .wf-command-grid, .wf-lucent-grid, .wf-editorial-grid {
         min-height: 650px;
         display: grid;
@@ -1236,6 +1447,21 @@ function ShowcaseStyles() {
         padding: 72px 0;
       }
       .wf-hero--desert { background: linear-gradient(135deg, #f7f8f5 0%, #eef7f3 46%, #ffffff 100%); }
+      .wf-route-stats {
+        display: inline-grid;
+        grid-template-columns: auto auto auto;
+        align-items: center;
+        gap: 12px;
+        margin-top: 26px;
+        border: 1px solid var(--wf-line);
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--wf-panel) 88%, transparent);
+        padding: 12px 14px;
+        color: var(--wf-muted);
+        font-size: 12px;
+        font-weight: 850;
+      }
+      .wf-route-stats strong { color: var(--wf-primary); font-size: 24px; }
       .wf-desert-stage, .wf-command-visual, .wf-lucent-stage, .wf-editorial-cover {
         position: relative;
         min-height: 470px;
@@ -1243,6 +1469,48 @@ function ShowcaseStyles() {
         border-radius: 8px;
         border: 1px solid var(--wf-line);
         background: var(--wf-panel);
+      }
+      .wf-route-map {
+        position: absolute;
+        z-index: 2;
+        inset-inline: 24px;
+        top: 24px;
+        display: grid;
+        grid-template-columns: max-content 1fr max-content 1fr max-content;
+        align-items: center;
+        gap: 10px;
+        border: 1px solid rgba(255,255,255,.22);
+        border-radius: 8px;
+        background: rgba(13,42,37,.72);
+        color: white;
+        padding: 11px 12px;
+        backdrop-filter: blur(14px);
+      }
+      .wf-route-map::before {
+        content: "";
+        position: absolute;
+        inset-inline: 18px;
+        top: 50%;
+        height: 2px;
+        background: repeating-linear-gradient(90deg, rgba(255,255,255,.82) 0 8px, transparent 8px 16px);
+        opacity: .5;
+      }
+      .wf-route-map span {
+        position: relative;
+        z-index: 1;
+        border-radius: 8px;
+        background: rgba(13,42,37,.86);
+        padding: 5px 8px;
+        font-size: 11px;
+        font-weight: 900;
+      }
+      .wf-route-map i {
+        position: relative;
+        z-index: 1;
+        display: block;
+        height: 10px;
+        border-radius: 99px;
+        background: rgba(255,255,255,.2);
       }
       .wf-route-ticket, .wf-command-strip, .wf-studio-card, .wf-cover-caption {
         position: absolute;
@@ -1267,7 +1535,13 @@ function ShowcaseStyles() {
         font-size: 24px;
       }
       .wf-command-grid { grid-template-columns: minmax(0, 1fr) minmax(360px, .95fr); }
-      .wf-hero--command { background: #f4f7fa; }
+      .wf-hero--command {
+        background:
+          linear-gradient(90deg, rgba(37,99,235,.08) 1px, transparent 1px),
+          linear-gradient(0deg, rgba(37,99,235,.08) 1px, transparent 1px),
+          #f4f7fa;
+        background-size: 36px 36px;
+      }
       .wf-command-metrics {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1284,16 +1558,99 @@ function ShowcaseStyles() {
       .wf-metric svg { color: var(--wf-primary); }
       .wf-metric span { display: block; margin-top: 12px; color: var(--wf-muted); font-size: 12px; }
       .wf-metric strong { display: block; margin-top: 4px; font-size: 16px; }
-      .wf-command-visual { border: 8px solid var(--wf-panel-strong); }
+      .wf-command-visual { border: 8px solid var(--wf-panel-strong); box-shadow: 0 30px 90px rgba(15,23,42,.22); }
+      .wf-command-scan {
+        position: absolute;
+        z-index: 2;
+        inset-inline: 0;
+        top: 0;
+        height: 42%;
+        background: linear-gradient(180deg, transparent, rgba(37,99,235,.24), transparent);
+        mix-blend-mode: screen;
+        pointer-events: none;
+      }
+      .wf-telemetry {
+        position: absolute;
+        z-index: 3;
+        inset-inline-end: 20px;
+        top: 20px;
+        display: grid;
+        grid-template-columns: repeat(3, 8px) auto;
+        align-items: end;
+        gap: 7px;
+        border: 1px solid rgba(255,255,255,.18);
+        border-radius: 8px;
+        background: rgba(11,17,28,.78);
+        color: white;
+        padding: 12px;
+        backdrop-filter: blur(14px);
+      }
+      .wf-telemetry span {
+        display: block;
+        height: 34px;
+        transform-origin: bottom;
+        border-radius: 99px;
+        background: var(--wf-secondary);
+      }
+      .wf-telemetry strong { font-size: 22px; line-height: 1; }
       .wf-hero--lucent { background: #fbfcfc; }
       .wf-lucent-grid { grid-template-columns: minmax(0, .9fr) minmax(360px, 1.1fr); }
-      .wf-lucent-stage { background: var(--wf-panel-strong); }
+      .wf-lucent-stage {
+        background:
+          linear-gradient(120deg, rgba(255,255,255,.66), transparent 40%),
+          var(--wf-panel-strong);
+        box-shadow: inset 0 0 0 1px rgba(255,255,255,.62), 0 30px 80px rgba(8,145,178,.12);
+      }
+      .wf-studio-stack {
+        position: absolute;
+        inset-inline-end: 26px;
+        top: 26px;
+        z-index: 3;
+        width: min(300px, calc(100% - 52px));
+        border: 1px solid rgba(255,255,255,.72);
+        border-radius: 8px;
+        background: rgba(255,255,255,.78);
+        box-shadow: 0 20px 60px rgba(8,145,178,.13);
+        padding: 18px;
+        backdrop-filter: blur(18px);
+      }
+      .wf-studio-stack span, .wf-studio-stack em {
+        display: block;
+        color: var(--wf-muted);
+        font-style: normal;
+        font-size: 12px;
+        font-weight: 850;
+      }
+      .wf-studio-stack strong { display: block; margin: 8px 0; font-size: 22px; }
       .wf-studio-card a { display: inline-flex; margin-top: 8px; color: var(--wf-primary); font-weight: 900; }
       .wf-hero--concierge { border-bottom: 1px solid var(--wf-line); }
       .wf-editorial-grid { grid-template-columns: minmax(0, .86fr) minmax(380px, 1.14fr); }
       .wf-editorial-story { border-block: 1px solid var(--wf-line); padding: 48px 0; }
       .wf-editorial-cover { min-height: 540px; }
+      .wf-editorial-index {
+        display: grid;
+        gap: 10px;
+        margin-top: 28px;
+      }
+      .wf-editorial-index span {
+        display: grid;
+        grid-template-columns: 40px 1fr;
+        gap: 12px;
+        align-items: center;
+        border-bottom: 1px solid var(--wf-line);
+        padding-bottom: 10px;
+        color: var(--wf-primary);
+        font-family: Georgia, "Times New Roman", "Noto Naskh Arabic", serif;
+        font-weight: 900;
+      }
+      .wf-editorial-index strong { color: var(--wf-text); font-family: inherit; }
+      .wf-editorial-index em { grid-column: 2; color: var(--wf-muted); font-style: normal; font-size: 12px; }
       .wf-section { padding: 84px 0; }
+      .wf-section--gallery { background: color-mix(in srgb, var(--wf-bg) 88%, #000); }
+      .wf-section--route { background: #f7f8f5; }
+      .wf-section--command { background: #eef3f9; }
+      .wf-section--studio { background: #fbfcfc; }
+      .wf-section--editorial { background: #f8f7f3; }
       .wf-section-heading {
         display: flex;
         align-items: end;
@@ -1310,9 +1667,17 @@ function ShowcaseStyles() {
       .wf-section-heading p, .wf-page-heading p { color: var(--wf-muted); margin: 8px 0 0; line-height: 1.7; }
       .wf-inline-link { display: inline-flex; align-items: center; gap: 8px; color: var(--wf-primary); font-weight: 900; white-space: nowrap; }
       .wf-vehicle-grid { display: grid; gap: 18px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .wf-vehicle-grid--route { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: stretch; }
+      .wf-vehicle-grid--command { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .wf-vehicle-grid--studio { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 30px; }
+      .wf-vehicle-grid--editorial {
+        grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr) minmax(0, .85fr);
+        align-items: start;
+      }
       .wf-vehicle-grid--gallery .wf-vehicle-card--lead,
       .wf-vehicle-grid--editorial .wf-vehicle-card--lead { grid-column: span 2; }
       .wf-vehicle-card {
+        position: relative;
         display: block;
         overflow: hidden;
         border-radius: 8px;
@@ -1334,6 +1699,88 @@ function ShowcaseStyles() {
       .wf-vehicle-card--lead .wf-vehicle-media { aspect-ratio: 21 / 10; }
       .wf-vehicle-media img { transition: transform .55s ease; }
       .wf-vehicle-card:hover .wf-vehicle-media img { transform: scale(1.045); }
+      .wf-vehicle-card--gallery:nth-child(3n + 2) { margin-top: 26px; }
+      .wf-vehicle-card--route {
+        display: grid;
+        grid-template-columns: minmax(150px, .78fr) minmax(0, 1fr);
+        min-height: 226px;
+        background: linear-gradient(90deg, var(--wf-panel), color-mix(in srgb, var(--wf-panel) 82%, var(--wf-primary)));
+      }
+      .wf-vehicle-card--route .wf-vehicle-media { aspect-ratio: auto; min-height: 100%; }
+      .wf-card-route-pin {
+        position: absolute;
+        z-index: 4;
+        inset-inline-start: 14px;
+        top: 14px;
+        width: 15px;
+        height: 15px;
+        border: 3px solid white;
+        border-radius: 999px;
+        background: var(--wf-secondary);
+        box-shadow: 0 0 0 5px rgba(255,255,255,.28);
+      }
+      .wf-vehicle-card--command {
+        background: #0b111c;
+        color: white;
+        font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      }
+      .wf-vehicle-card--command .wf-vehicle-media { aspect-ratio: 1 / 1; }
+      .wf-vehicle-card--command .wf-vehicle-body { border-inline-start: 0; }
+      .wf-vehicle-card--command .wf-vehicle-eyebrow,
+      .wf-vehicle-card--command .wf-card-footer span,
+      .wf-vehicle-card--command .wf-specs span { color: #9fb2c9; }
+      .wf-card-signal {
+        position: absolute;
+        z-index: 4;
+        inset-inline-end: 12px;
+        top: 12px;
+        display: inline-flex;
+        gap: 4px;
+        padding: 6px;
+        border-radius: 8px;
+        background: rgba(11,17,28,.72);
+      }
+      .wf-card-signal i {
+        width: 6px;
+        height: 6px;
+        border-radius: 99px;
+        background: var(--wf-secondary);
+      }
+      .wf-vehicle-card--studio {
+        border-color: transparent;
+        background: rgba(255,255,255,.9);
+        box-shadow: 0 24px 80px rgba(8,145,178,.1);
+      }
+      .wf-vehicle-card--studio:nth-child(even) { margin-top: 46px; }
+      .wf-card-number {
+        position: absolute;
+        z-index: 4;
+        inset-inline-end: 18px;
+        top: 18px;
+        color: rgba(24,32,36,.18);
+        font-size: 58px;
+        font-weight: 950;
+        line-height: 1;
+      }
+      .wf-vehicle-card--editorial {
+        background: #fff;
+        box-shadow: none;
+      }
+      .wf-vehicle-card--editorial .wf-vehicle-media { aspect-ratio: 4 / 5; }
+      .wf-vehicle-card--editorial.wf-vehicle-card--lead .wf-vehicle-media { aspect-ratio: 16 / 8; }
+      .wf-card-edition {
+        position: absolute;
+        z-index: 4;
+        inset-inline-start: 14px;
+        top: 14px;
+        border-radius: 8px;
+        background: white;
+        color: var(--wf-primary);
+        padding: 6px 9px;
+        font-family: Georgia, "Times New Roman", "Noto Naskh Arabic", serif;
+        font-size: 12px;
+        font-weight: 900;
+      }
       .wf-status {
         position: absolute;
         inset-block-start: 12px;
@@ -1466,7 +1913,6 @@ function ShowcaseStyles() {
       .wf--obsidian .wf-vehicle-card { background: #10120f; }
       .wf--obsidian .wf-nav, .wf--obsidian .wf-footer { background: rgba(8,9,8,.88); }
       .wf--desert .wf-button--primary, .wf--desert .wf-primary-action { color: white; }
-      .wf--command .wf-vehicle-card--command .wf-vehicle-body { border-inline-start: 4px solid var(--wf-secondary); }
       .wf--lucent .wf-vehicle-card, .wf--lucent .wf-lead-panel { box-shadow: 0 18px 60px rgba(8,145,178,.08); }
       .wf--concierge .wf-hero-title { font-family: Georgia, "Times New Roman", "Noto Naskh Arabic", serif; font-weight: 850; }
       .wf--concierge .wf-vehicle-card--editorial .wf-vehicle-body { border-block-start: 4px solid var(--wf-primary); }
@@ -1493,6 +1939,9 @@ function ShowcaseStyles() {
         .wf-vehicle-grid, .wf-branch-grid, .wf-footer-grid { grid-template-columns: 1fr; }
         .wf-vehicle-grid--gallery .wf-vehicle-card--lead,
         .wf-vehicle-grid--editorial .wf-vehicle-card--lead { grid-column: auto; }
+        .wf-vehicle-card--gallery:nth-child(3n + 2),
+        .wf-vehicle-card--studio:nth-child(even) { margin-top: 0; }
+        .wf-vehicle-card--route { grid-template-columns: 1fr; }
         .wf-vehicle-card--lead .wf-vehicle-media { aspect-ratio: 16 / 10; }
         .wf-section-heading { align-items: start; flex-direction: column; }
         .wf-section-heading h2, .wf-page-heading h1, .wf-contact-page h1, .wf-legal-page h1 { font-size: 31px; }
