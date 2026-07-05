@@ -18,7 +18,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Search, Pencil, Trash2, FileText, ExternalLink } from "lucide-react";
+import { Search, Pencil, Trash2, FileText, ExternalLink, Eye } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import Link from "next/link";
 import { useLanguage } from "@/components/providers/LanguageProvider";
@@ -33,6 +33,16 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { useTableControls } from "@/hooks/useTableControls";
+import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
+import { SaleTrailDialog } from "@/components/sales/SaleTrailDialog";
 
 export default function SalesPage() {
   const { activeOrgId } = useOrg();
@@ -45,19 +55,31 @@ export default function SalesPage() {
   );
   const removeSale = useMutation(api.sales.softDelete);
 
-  const [searchQuery, setSearchQuery] = useState("");
   const [isSaleDialogOpen, setIsSaleDialogOpen] = useState(false);
   const [isQuoteDialogOpen, setIsQuoteDialogOpen] = useState(false);
   const [editingSale, setEditingSale] = useState<any>(null);
   const [saleToDelete, setSaleToDelete] = useState<any>(null);
+  const [trailSaleId, setTrailSaleId] = useState<any>(null);
+  const [statusFilter, setStatusFilter] = useState("ALL");
 
-  const filteredSales = sales?.filter(s => {
-    const q = searchQuery.toLowerCase();
-    return s.customerName.toLowerCase().includes(q) ||
-      s.vehicleSummary.toLowerCase().includes(q) ||
-      s.salespersonName.toLowerCase().includes(q) ||
-      s.vehicleVin.toLowerCase().includes(q);
+  const {
+    search: searchQuery,
+    setSearch: setSearchQuery,
+    sortKey,
+    sortDir,
+    toggleSort,
+    rows: sortedSales,
+  } = useTableControls({
+    data: sales,
+    searchFields: (s) => [s.customerName, s.vehicleSummary, s.salespersonName, s.vehicleVin],
+    sortAccessors: {
+      date: (s) => s.saleDate,
+      price: (s) => s.salePrice,
+      status: (s) => s.status,
+    },
   });
+
+  const filteredSales = sortedSales?.filter((s) => statusFilter === "ALL" || s.status === statusFilter);
 
   const handleEdit = (sale: any) => {
     setEditingSale(sale);
@@ -95,14 +117,27 @@ export default function SalesPage() {
           </div>
         </div>
 
-        <div className="flex items-center w-full max-w-sm space-x-2">
-          <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
-          <Input
-            placeholder={t("SearchSales" as any)}
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="ps-9"
-          />
+        <div className="flex flex-col sm:flex-row gap-2">
+          <div className="flex items-center w-full max-w-sm space-x-2 relative">
+            <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
+            <Input
+              placeholder={t("SearchSales" as any)}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="ps-9"
+            />
+          </div>
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="w-full sm:w-[180px]">
+              <SelectValue placeholder={t("Status" as any)} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">{t("AllStatuses" as any)}</SelectItem>
+              <SelectItem value="COMPLETED">{t("CompletedStatus" as any)}</SelectItem>
+              <SelectItem value="PENDING">{t("PendingStatus" as any)}</SelectItem>
+              <SelectItem value="CANCELLED">{t("CancelledStatus" as any)}</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
 
         {/* Mobile card list */}
@@ -127,6 +162,9 @@ export default function SalesPage() {
                   <p className="text-xs text-muted-foreground">{new Date(sale.saleDate).toLocaleDateString()} · {sale.salespersonName}</p>
                 </div>
                 <div className="flex gap-0.5">
+                  <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => setTrailSaleId(sale._id)}>
+                    <Eye className="h-4 w-4 text-muted-foreground" />
+                  </Button>
                   <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => {
                     try { generateBillOfSale("AutoFlow Dealership", sale.customerName, sale.vehicleSummary, sale.vehicleVin, sale.salePrice, sale.saleDate); toast.success(t("BillOfSaleGenerated" as any)); } catch { toast.error(t("FailedGeneratePDF" as any)); }
                   }}>
@@ -154,12 +192,12 @@ export default function SalesPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>{t("Date" as any)}</TableHead>
+                <SortableColumnHeader label={t("Date" as any)} sortKey="date" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <TableHead>{t("Customer" as any)}</TableHead>
                 <TableHead>{t("Vehicle" as any)}</TableHead>
                 <TableHead>{t("Salesperson" as any)}</TableHead>
-                <TableHead className="text-end">{t("Price" as any)}</TableHead>
-                <TableHead>{t("Status" as any)}</TableHead>
+                <SortableColumnHeader className="text-end" label={t("Price" as any)} sortKey="price" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                <SortableColumnHeader label={t("Status" as any)} sortKey="status" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                 <TableHead className="text-end">{t("Actions" as any)}</TableHead>
               </TableRow>
             </TableHeader>
@@ -204,6 +242,9 @@ export default function SalesPage() {
                     </TableCell>
                     <TableCell>{getStatusBadge(sale.status)}</TableCell>
                     <TableCell className="text-end">
+                      <Button variant="ghost" size="icon" onClick={() => setTrailSaleId(sale._id)} title={t("ViewSaleTrail" as any)}>
+                        <Eye className="h-4 w-4 text-muted-foreground" />
+                      </Button>
                       <Button variant="ghost" size="icon" onClick={() => {
 
                         try {
@@ -253,6 +294,12 @@ export default function SalesPage() {
         <QuoteDialog
           open={isQuoteDialogOpen}
           onOpenChange={setIsQuoteDialogOpen}
+        />
+
+        <SaleTrailDialog
+          saleId={trailSaleId}
+          open={!!trailSaleId}
+          onOpenChange={(open) => !open && setTrailSaleId(null)}
         />
 
         <Dialog open={!!saleToDelete} onOpenChange={(open) => !open && setSaleToDelete(null)}>

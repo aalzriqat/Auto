@@ -7,6 +7,7 @@ import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { InviteMemberDialog } from "@/components/team/InviteMemberDialog";
 import {
   Table,
@@ -16,7 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Plus, Trash2, ShieldAlert, Pencil, Check, X, RefreshCw } from "lucide-react";
+import { Plus, Trash2, ShieldAlert, Pencil, Check, X, RefreshCw, Search } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/components/ui/sonner";
 import {
@@ -27,10 +28,19 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EditRoleDialog } from "@/components/team/EditRoleDialog";
 import { ChangeMemberRoleDialog } from "@/components/team/ChangeMemberRoleDialog";
 import { RoleGuard } from "@/components/auth/RoleGuard";
+import { useTableControls } from "@/hooks/useTableControls";
+import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 
 // lastSeenAt is throttled to a write at most every few minutes (see
 // memberships.touchLastSeen), so "active now" below lines up with that
@@ -76,6 +86,28 @@ export default function TeamPage() {
   const [roleToEdit, setRoleToEdit] = useState<any>(null);
   const [editingCommission, setEditingCommission] = useState<string | null>(null);
   const [commissionDraft, setCommissionDraft] = useState("");
+  const [roleFilter, setRoleFilter] = useState("ALL");
+
+  const {
+    search: searchQuery,
+    setSearch: setSearchQuery,
+    sortKey,
+    sortDir,
+    toggleSort,
+    rows: sortedMemberships,
+  } = useTableControls({
+    data: memberships,
+    searchFields: (m) => [m.userName, m.userEmail],
+    sortAccessors: {
+      name: (m) => m.userName.toLowerCase(),
+      role: (m) => m.roleName,
+      lastSeen: (m) => (m as any).lastSeenAt ?? 0,
+    },
+  });
+
+  const roleOptions = Array.from(new Set((memberships ?? []).map((m) => m.roleName)));
+
+  const filteredMemberships = sortedMemberships?.filter((m) => roleFilter === "ALL" || m.roleName === roleFilter);
 
   async function handleSaveCommission(membershipId: string) {
     if (!activeOrgId) return;
@@ -143,13 +175,37 @@ export default function TeamPage() {
         </TabsList>
 
         <TabsContent value="members">
+          <div className="flex flex-col sm:flex-row gap-2 mb-4">
+            <div className="flex items-center w-full max-w-sm space-x-2 relative">
+              <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
+              <Input
+                placeholder={t("Search" as any)}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="ps-9"
+              />
+            </div>
+            {roleOptions.length > 0 && (
+              <Select value={roleFilter} onValueChange={setRoleFilter}>
+                <SelectTrigger className="w-full sm:w-[180px]">
+                  <SelectValue placeholder={t("Role" as any)} />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="ALL">{t("AllRoles" as any)}</SelectItem>
+                  {roleOptions.map((role) => (
+                    <SelectItem key={role} value={role}>{t(role as any) || role}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
           <div className="rounded-md border overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>{t("Member" as any)}</TableHead>
-                  <TableHead>{t("Role" as any)}</TableHead>
-                  <TableHead>{t("LastSeen" as any)}</TableHead>
+                  <SortableColumnHeader label={t("Member" as any)} sortKey="name" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <SortableColumnHeader label={t("Role" as any)} sortKey="role" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
+                  <SortableColumnHeader label={t("LastSeen" as any)} sortKey="lastSeen" activeSortKey={sortKey} sortDir={sortDir} onSort={toggleSort} />
                   <TableHead>
                     <div className="flex items-center gap-1.5">
                       {t("CommissionPct" as any)}
@@ -168,20 +224,20 @@ export default function TeamPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {memberships === undefined ? (
+                {filteredMemberships === undefined ? (
                   <TableRow>
                     <TableCell colSpan={canManageUsers ? 5 : 4} className="text-center py-8 text-muted-foreground">
                       {t("LoadingTeam" as any)}
                     </TableCell>
                   </TableRow>
-                ) : memberships.length === 0 ? (
+                ) : filteredMemberships.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={canManageUsers ? 5 : 4} className="text-center py-8 text-muted-foreground">
                       {t("NoTeamMembersFound" as any)}
                     </TableCell>
                   </TableRow>
                 ) : (
-                  memberships.map((member) => (
+                  filteredMemberships.map((member) => (
                     <TableRow key={member._id}>
                       <TableCell>
                         <div className="flex items-center gap-3">

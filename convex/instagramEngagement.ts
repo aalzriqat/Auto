@@ -110,6 +110,8 @@ export const handleIncomingInstagramEvent = internalMutation({
         firstName: nameParts[0] ?? PLACEHOLDER_FIRST_NAME,
         lastName: nameParts.slice(1).join(" ") || PLACEHOLDER_LAST_NAME,
         instagramUserId: senderInstagramId,
+        createdAt: Date.now(),
+        source: "Instagram",
       });
       customer = await ctx.db.get(customerId);
     }

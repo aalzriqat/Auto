@@ -95,6 +95,8 @@ export const handleIncomingFacebookEvent = internalMutation({
         firstName: nameParts[0] ?? "Facebook",
         lastName: nameParts.slice(1).join(" ") || "Contact",
         facebookUserId: senderFacebookId,
+        createdAt: Date.now(),
+        source: "Facebook",
       });
       customer = await ctx.db.get(customerId);
     }

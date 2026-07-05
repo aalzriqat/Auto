@@ -8,9 +8,11 @@ import { useCurrency } from "@/hooks/useCurrency";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Loader2, CheckCircle2, XCircle, AlertCircle } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Loader2, CheckCircle2, XCircle, AlertCircle, Search } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
 import { Id, Doc } from "@/convex/_generated/dataModel";
+import { useTableControls } from "@/hooks/useTableControls";
 
 type ApprovalRequest = Doc<"profitApprovalRequests"> & {
   salespersonName: string;
@@ -25,6 +27,15 @@ export default function ApprovalsPage() {
 
   const pendingApprovals = useQuery(api.approvals.listPendingApprovals, activeOrgId ? { orgId: activeOrgId } : "skip");
   const respondToApproval = useMutation(api.approvals.respondToApproval);
+
+  const {
+    search: searchQuery,
+    setSearch: setSearchQuery,
+    rows: filteredApprovals,
+  } = useTableControls({
+    data: pendingApprovals as ApprovalRequest[] | undefined,
+    searchFields: (r) => [r.salespersonName, r.vehicleMakeModel, r.vehicleVin],
+  });
 
   const handleRespond = async (requestId: Id<"profitApprovalRequests">, status: "APPROVED" | "REJECTED") => {
     try {
@@ -47,19 +58,31 @@ export default function ApprovalsPage() {
         <h2 className="text-3xl font-bold tracking-tight">{t("Approvals")}</h2>
       </div>
 
+      {pendingApprovals && pendingApprovals.length > 0 && (
+        <div className="flex items-center w-full max-w-sm space-x-2 relative">
+          <Search className="h-4 w-4 text-muted-foreground absolute ms-3" />
+          <Input
+            placeholder={t("Search" as any)}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="ps-9"
+          />
+        </div>
+      )}
+
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {pendingApprovals === undefined ? (
+        {filteredApprovals === undefined ? (
           <div className="col-span-full flex justify-center p-8">
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>
-        ) : pendingApprovals.length === 0 ? (
+        ) : filteredApprovals.length === 0 ? (
           <div className="col-span-full flex flex-col items-center justify-center p-12 text-center border rounded-xl border-dashed bg-muted/20">
             <CheckCircle2 className="h-10 w-10 text-emerald-500 mb-4 opacity-50" />
             <p className="text-lg font-medium text-slate-700">{t("NoPendingApprovals")}</p>
             <p className="text-sm text-slate-500">{t("AllCaughtUp")}</p>
           </div>
         ) : (
-          pendingApprovals.map((request: ApprovalRequest) => (
+          filteredApprovals.map((request: ApprovalRequest) => (
             <Card key={request._id} className="relative overflow-hidden flex flex-col">
               <div className="absolute top-0 left-0 w-1 h-full bg-yellow-500" />
               <CardHeader className="pb-3">

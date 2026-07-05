@@ -748,6 +748,9 @@ export default defineSchema({
         dbr: v.optional(v.number()), // Debt Burden Ratio
       })
     ),
+    createdAt: v.optional(v.number()),
+    createdBy: v.optional(v.id("users")),
+    source: v.optional(v.string()),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
     deletedBy: v.optional(v.string()),

@@ -8,11 +8,6 @@
  * @module
  */
 
-import type * as accounting_accountSnapshots from "../accounting/accountSnapshots.js";
-import type * as accounting_postingEngine from "../accounting/postingEngine.js";
-import type * as accounting_postingRules from "../accounting/postingRules.js";
-import type * as accounting_reversals from "../accounting/reversals.js";
-import type * as accounting_workflowHooks from "../accounting/workflowHooks.js";
 import type * as accountingCutover from "../accountingCutover.js";
 import type * as accountingLedger from "../accountingLedger.js";
 import type * as accountingMigration from "../accountingMigration.js";
@@ -20,6 +15,11 @@ import type * as accountingOutbox from "../accountingOutbox.js";
 import type * as accountingPeriods from "../accountingPeriods.js";
 import type * as accountingReports from "../accountingReports.js";
 import type * as accountingSetup from "../accountingSetup.js";
+import type * as accounting_accountSnapshots from "../accounting/accountSnapshots.js";
+import type * as accounting_postingEngine from "../accounting/postingEngine.js";
+import type * as accounting_postingRules from "../accounting/postingRules.js";
+import type * as accounting_reversals from "../accounting/reversals.js";
+import type * as accounting_workflowHooks from "../accounting/workflowHooks.js";
 import type * as adminAudit from "../adminAudit.js";
 import type * as adminAuth from "../adminAuth.js";
 import type * as adminBroadcasts from "../adminBroadcasts.js";
@@ -108,6 +108,7 @@ import type * as utils_depositHelpers from "../utils/depositHelpers.js";
 import type * as utils_depositRecording from "../utils/depositRecording.js";
 import type * as utils_env from "../utils/env.js";
 import type * as utils_errors from "../utils/errors.js";
+import type * as utils_expenseAmortization from "../utils/expenseAmortization.js";
 import type * as utils_facebookApi from "../utils/facebookApi.js";
 import type * as utils_financialGuards from "../utils/financialGuards.js";
 import type * as utils_idempotency from "../utils/idempotency.js";
@@ -155,11 +156,6 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
-  "accounting/accountSnapshots": typeof accounting_accountSnapshots;
-  "accounting/postingEngine": typeof accounting_postingEngine;
-  "accounting/postingRules": typeof accounting_postingRules;
-  "accounting/reversals": typeof accounting_reversals;
-  "accounting/workflowHooks": typeof accounting_workflowHooks;
   accountingCutover: typeof accountingCutover;
   accountingLedger: typeof accountingLedger;
   accountingMigration: typeof accountingMigration;
@@ -167,6 +163,11 @@ declare const fullApi: ApiFromModules<{
   accountingPeriods: typeof accountingPeriods;
   accountingReports: typeof accountingReports;
   accountingSetup: typeof accountingSetup;
+  "accounting/accountSnapshots": typeof accounting_accountSnapshots;
+  "accounting/postingEngine": typeof accounting_postingEngine;
+  "accounting/postingRules": typeof accounting_postingRules;
+  "accounting/reversals": typeof accounting_reversals;
+  "accounting/workflowHooks": typeof accounting_workflowHooks;
   adminAudit: typeof adminAudit;
   adminAuth: typeof adminAuth;
   adminBroadcasts: typeof adminBroadcasts;
@@ -255,6 +256,7 @@ declare const fullApi: ApiFromModules<{
   "utils/depositRecording": typeof utils_depositRecording;
   "utils/env": typeof utils_env;
   "utils/errors": typeof utils_errors;
+  "utils/expenseAmortization": typeof utils_expenseAmortization;
   "utils/facebookApi": typeof utils_facebookApi;
   "utils/financialGuards": typeof utils_financialGuards;
   "utils/idempotency": typeof utils_idempotency;

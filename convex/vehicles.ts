@@ -128,11 +128,13 @@ export const list = query({
         const imageUrls = await Promise.all(
           (vehicle.imageIds ?? []).map((id) => ctx.storage.getUrl(id))
         );
+        const addedByUser = vehicle.addedBy ? await ctx.db.get(vehicle.addedBy) : null;
         const { purchasePrice, ...rest } = vehicle;
         return {
           ...rest,
           ...(canViewCostPrice ? { purchasePrice } : {}),
           imageUrls,
+          addedByName: addedByUser?.name ?? addedByUser?.email ?? null,
           pendingStatusRequest: pendingMap.get(vehicle._id) ?? null
         };
       })
