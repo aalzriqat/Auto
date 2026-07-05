@@ -2621,6 +2621,7 @@ export default defineSchema({
   dmParticipantState: defineTable({
     conversationId: v.id("dmConversations"),
     userId: v.id("users"),
+    lastDeliveredAt: v.optional(v.number()), // marks messages up to here as delivered to this user's active client
     lastReadAt: v.optional(v.number()), // marks messages up to here as "seen"
     typingAt: v.optional(v.number()),   // last keystroke timestamp
     isMuted: v.optional(v.boolean()),   // suppress sounds for this conversation

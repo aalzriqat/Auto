@@ -42,6 +42,7 @@ export const listConversations = query({
           .unique();
 
         const hasUnread =
+          conv.lastMessageSenderId !== undefined &&
           conv.lastMessageAt > (state?.lastReadAt ?? 0) &&
           conv.lastMessageSenderId !== user._id;
 
@@ -60,6 +61,7 @@ export const listConversations = query({
           members: members.filter(Boolean),
           hasUnread,
           isMuted: state?.isMuted ?? false,
+          lastDeliveredAt: state?.lastDeliveredAt ?? 0,
         };
       })
     );
@@ -91,6 +93,7 @@ export const getUnreadCount = query({
         .unique();
 
       if (
+        conv.lastMessageSenderId !== undefined &&
         conv.lastMessageAt > (state?.lastReadAt ?? 0) &&
         conv.lastMessageSenderId !== user._id
       ) {
@@ -146,6 +149,7 @@ export const listMessages = query({
         const u = await ctx.db.get(uid);
         return {
           userId: uid,
+          lastDeliveredAt: Math.max(state?.lastDeliveredAt ?? 0, state?.lastReadAt ?? 0),
           lastReadAt: state?.lastReadAt ?? 0,
           name: u?.name ?? u?.email ?? "?",
           imageUrl: u?.imageUrl,
@@ -167,13 +171,14 @@ export const listMessages = query({
       const seenBy = otherStates
         .filter((s) => s.lastReadAt >= msgTime)
         .map((s) => ({ userId: s.userId, name: s.name, imageUrl: s.imageUrl }));
+      const deliveredBy = otherStates.filter((s) => s.lastDeliveredAt >= msgTime);
 
-      const allSeen = seenBy.length === otherStates.length;
-      const someRead = seenBy.length > 0;
+      const allSeen = otherStates.length > 0 && seenBy.length === otherStates.length;
+      const someDelivered = deliveredBy.length > 0;
 
       const status = allSeen
         ? ("seen" as const)
-        : someRead
+        : someDelivered
           ? ("delivered" as const)
           : ("sent" as const);
 
@@ -209,6 +214,10 @@ export const getConversation = query({
         q.eq("conversationId", args.conversationId).eq("userId", user._id)
       )
       .unique();
+    const hasUnread =
+      conv.lastMessageSenderId !== undefined &&
+      conv.lastMessageAt > (myState?.lastReadAt ?? 0) &&
+      conv.lastMessageSenderId !== user._id;
 
     // Typing indicators from other members
     const now = Date.now();
@@ -235,6 +244,8 @@ export const getConversation = query({
       ...conv,
       members: members.filter(Boolean),
       isMuted: myState?.isMuted ?? false,
+      hasUnread,
+      lastDeliveredAt: myState?.lastDeliveredAt ?? 0,
       typingUsers: typingStates.filter(Boolean),
     };
   },
@@ -322,6 +333,7 @@ export const getOrCreateDm = mutation({
     await ctx.db.insert("dmParticipantState", {
       conversationId: id,
       userId: user._id,
+      lastDeliveredAt: now,
       lastReadAt: now,
     });
     await ctx.db.insert("dmParticipantState", {
@@ -377,6 +389,7 @@ export const createGroup = mutation({
       await ctx.db.insert("dmParticipantState", {
         conversationId: id,
         userId: uid,
+        lastDeliveredAt: uid === user._id ? now : undefined,
         lastReadAt: uid === user._id ? now : undefined,
       });
     }
@@ -425,10 +438,44 @@ export const sendMessage = mutation({
       .unique();
 
     if (myState) {
-      await ctx.db.patch(myState._id, { lastReadAt: now, typingAt: undefined });
+      await ctx.db.patch(myState._id, { lastDeliveredAt: now, lastReadAt: now, typingAt: undefined });
     }
 
     return msgId;
+  },
+});
+
+/** Mark the latest incoming conversation activity as delivered to this user's active client. */
+export const markDelivered = mutation({
+  args: { conversationId: v.id("dmConversations") },
+  handler: async (ctx, args) => {
+    const user = await requireAuth(ctx);
+
+    const conv = await ctx.db.get(args.conversationId);
+    if (!conv) return;
+    if (!conv.memberIds.includes(user._id)) return;
+    if (conv.lastMessageSenderId === undefined) return;
+    if (conv.lastMessageSenderId === user._id) return;
+
+    const state = await ctx.db
+      .query("dmParticipantState")
+      .withIndex("by_conversation_user", (q) =>
+        q.eq("conversationId", args.conversationId).eq("userId", user._id)
+      )
+      .unique();
+
+    const deliveredAt = conv.lastMessageAt;
+    if (state) {
+      if ((state.lastDeliveredAt ?? 0) >= deliveredAt) return;
+      await ctx.db.patch(state._id, { lastDeliveredAt: deliveredAt });
+      return;
+    }
+
+    await ctx.db.insert("dmParticipantState", {
+      conversationId: args.conversationId,
+      userId: user._id,
+      lastDeliveredAt: deliveredAt,
+    });
   },
 });
 
@@ -450,12 +497,14 @@ export const markRead = mutation({
       .unique();
 
     const now = Date.now();
+    const deliveredAt = Math.max(now, conv.lastMessageAt);
     if (state) {
-      await ctx.db.patch(state._id, { lastReadAt: now });
+      await ctx.db.patch(state._id, { lastDeliveredAt: deliveredAt, lastReadAt: now });
     } else {
       await ctx.db.insert("dmParticipantState", {
         conversationId: args.conversationId,
         userId: user._id,
+        lastDeliveredAt: deliveredAt,
         lastReadAt: now,
       });
     }
