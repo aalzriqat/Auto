@@ -20,7 +20,19 @@ export const metadata: Metadata = {
   description: "Ditch the spreadsheets. Manage your vehicle inventory, track sales pipelines, and generate professional PDF quotes instantly. Built for modern showrooms.",
   icons: {
     icon: "/logo.png",
+    apple: "/logo.png",
   },
+  // iOS/iPadOS only supports Web Push (and standalone "app" chrome) for a
+  // site added to the Home Screen — this is what makes that installable.
+  appleWebApp: {
+    capable: true,
+    title: "AutoFlow",
+    statusBarStyle: "default",
+  },
+};
+
+export const viewport = {
+  themeColor: "#0f172a",
 };
 
 export default function RootLayout({

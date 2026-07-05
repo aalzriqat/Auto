@@ -3,6 +3,7 @@ import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth, requireAuth } from "./utils/tenancy";
 import { Doc, Id } from "./_generated/dataModel";
+import { notifyUser } from "./utils/notifications";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -60,6 +61,7 @@ export const listConversations = query({
           members: members.filter(Boolean),
           hasUnread,
           isMuted: state?.isMuted ?? false,
+          lastDeliveredAt: state?.lastDeliveredAt ?? 0,
         };
       })
     );
@@ -146,6 +148,7 @@ export const listMessages = query({
         const u = await ctx.db.get(uid);
         return {
           userId: uid,
+          lastDeliveredAt: Math.max(state?.lastDeliveredAt ?? 0, state?.lastReadAt ?? 0),
           lastReadAt: state?.lastReadAt ?? 0,
           name: u?.name ?? u?.email ?? "?",
           imageUrl: u?.imageUrl,
@@ -167,13 +170,14 @@ export const listMessages = query({
       const seenBy = otherStates
         .filter((s) => s.lastReadAt >= msgTime)
         .map((s) => ({ userId: s.userId, name: s.name, imageUrl: s.imageUrl }));
+      const deliveredBy = otherStates.filter((s) => s.lastDeliveredAt >= msgTime);
 
-      const allSeen = seenBy.length === otherStates.length;
-      const someRead = seenBy.length > 0;
+      const allSeen = otherStates.length > 0 && seenBy.length === otherStates.length;
+      const someDelivered = deliveredBy.length > 0;
 
       const status = allSeen
         ? ("seen" as const)
-        : someRead
+        : someDelivered
           ? ("delivered" as const)
           : ("sent" as const);
 
@@ -209,6 +213,9 @@ export const getConversation = query({
         q.eq("conversationId", args.conversationId).eq("userId", user._id)
       )
       .unique();
+    const hasUnread =
+      conv.lastMessageAt > (myState?.lastReadAt ?? 0) &&
+      conv.lastMessageSenderId !== user._id;
 
     // Typing indicators from other members
     const now = Date.now();
@@ -235,6 +242,8 @@ export const getConversation = query({
       ...conv,
       members: members.filter(Boolean),
       isMuted: myState?.isMuted ?? false,
+      hasUnread,
+      lastDeliveredAt: myState?.lastDeliveredAt ?? 0,
       typingUsers: typingStates.filter(Boolean),
     };
   },
@@ -322,6 +331,7 @@ export const getOrCreateDm = mutation({
     await ctx.db.insert("dmParticipantState", {
       conversationId: id,
       userId: user._id,
+      lastDeliveredAt: now,
       lastReadAt: now,
     });
     await ctx.db.insert("dmParticipantState", {
@@ -377,6 +387,7 @@ export const createGroup = mutation({
       await ctx.db.insert("dmParticipantState", {
         conversationId: id,
         userId: uid,
+        lastDeliveredAt: uid === user._id ? now : undefined,
         lastReadAt: uid === user._id ? now : undefined,
       });
     }
@@ -425,10 +436,68 @@ export const sendMessage = mutation({
       .unique();
 
     if (myState) {
-      await ctx.db.patch(myState._id, { lastReadAt: now, typingAt: undefined });
+      await ctx.db.patch(myState._id, { lastDeliveredAt: now, lastReadAt: now, typingAt: undefined });
+    }
+
+    // Notify every other member (in-app always; email/WhatsApp/push per their
+    // own preferences, via dispatch()) unless they've muted this conversation
+    // — the same signal that already suppresses the in-browser sound.
+    const senderName = user.name ?? user.email ?? "Someone";
+    const preview = trimmed.length > 80 ? trimmed.slice(0, 80) + "…" : trimmed;
+    const recipients = conv.memberIds.filter((id) => id !== user._id);
+    for (const recipientId of recipients) {
+      const recipientState = await ctx.db
+        .query("dmParticipantState")
+        .withIndex("by_conversation_user", (q) =>
+          q.eq("conversationId", args.conversationId).eq("userId", recipientId)
+        )
+        .unique();
+      if (recipientState?.isMuted) continue;
+
+      await notifyUser(
+        ctx,
+        conv.orgId,
+        recipientId,
+        "message.received",
+        { senderName, preview },
+        { link: `/${conv.orgId}/messages` }
+      );
     }
 
     return msgId;
+  },
+});
+
+/** Mark the latest incoming conversation activity as delivered to this user's active client. */
+export const markDelivered = mutation({
+  args: { conversationId: v.id("dmConversations") },
+  handler: async (ctx, args) => {
+    const user = await requireAuth(ctx);
+
+    const conv = await ctx.db.get(args.conversationId);
+    if (!conv) return;
+    if (!conv.memberIds.includes(user._id)) return;
+    if (conv.lastMessageSenderId === user._id) return;
+
+    const state = await ctx.db
+      .query("dmParticipantState")
+      .withIndex("by_conversation_user", (q) =>
+        q.eq("conversationId", args.conversationId).eq("userId", user._id)
+      )
+      .unique();
+
+    const deliveredAt = conv.lastMessageAt;
+    if (state) {
+      if ((state.lastDeliveredAt ?? 0) >= deliveredAt) return;
+      await ctx.db.patch(state._id, { lastDeliveredAt: deliveredAt });
+      return;
+    }
+
+    await ctx.db.insert("dmParticipantState", {
+      conversationId: args.conversationId,
+      userId: user._id,
+      lastDeliveredAt: deliveredAt,
+    });
   },
 });
 
@@ -450,12 +519,14 @@ export const markRead = mutation({
       .unique();
 
     const now = Date.now();
+    const deliveredAt = Math.max(now, conv.lastMessageAt);
     if (state) {
-      await ctx.db.patch(state._id, { lastReadAt: now });
+      await ctx.db.patch(state._id, { lastDeliveredAt: deliveredAt, lastReadAt: now });
     } else {
       await ctx.db.insert("dmParticipantState", {
         conversationId: args.conversationId,
         userId: user._id,
+        lastDeliveredAt: deliveredAt,
         lastReadAt: now,
       });
     }

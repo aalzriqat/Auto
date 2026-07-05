@@ -8,7 +8,11 @@ const envSchema = z.object({
   // Used in server-side email links. Must be set in all non-local environments.
   NEXT_PUBLIC_APP_URL: z.string().url(),
   NEXT_PUBLIC_SENTRY_DSN: z.string().min(1).optional(),
-  
+  // Public half of the VAPID keypair used by the client to subscribe to Web
+  // Push (see convex/pushSend.ts). Optional — push subscribe UI stays hidden
+  // until this and the server-side VAPID_PRIVATE_KEY are both set.
+  NEXT_PUBLIC_VAPID_PUBLIC_KEY: z.string().min(1).optional(),
+
   // Next.js server-side variables
   CLERK_SECRET_KEY: z.string().min(1).optional(),
   SENTRY_ORG: z.string().optional(),

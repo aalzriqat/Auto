@@ -169,6 +169,7 @@ describe("notificationPreferences", () => {
       category: "sales",
       emailEnabled: true,
       whatsappEnabled: true,
+      pushEnabled: false,
     });
 
     const prefs = await asMember.query(api.notificationPreferences.getMyPreferences, { orgId });
@@ -182,6 +183,7 @@ describe("notificationPreferences", () => {
       category: "sales",
       emailEnabled: false,
       whatsappEnabled: true,
+      pushEnabled: false,
     });
     const updated = await asMember.query(api.notificationPreferences.getMyPreferences, { orgId });
     expect(updated.filter((p) => p.category === "sales")).toHaveLength(1);

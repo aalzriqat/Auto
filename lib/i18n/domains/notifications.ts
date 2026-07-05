@@ -165,6 +165,9 @@ export const notificationsEn = {
   Notif_AdminUserRoleChanged_Title: "Your Role Changed",
   Notif_AdminUserRoleChanged_Message: "An administrator changed your role to {roleName}.",
 
+  Notif_MessageReceived_Title: "New Message",
+  Notif_MessageReceived_Message: "{senderName}: {preview}",
+
   Notif_FeedbackReplied_Title: "Admin replied to your feedback",
   Notif_FeedbackReplied_Message: "Your submission \"{title}\" received a reply from the team.",
   Notif_FeedbackResolved_Title: "Your feedback was resolved",
@@ -188,9 +191,22 @@ export const notificationsEn = {
   NotificationsChannelInApp: "In-app",
   NotificationsChannelEmail: "Email",
   NotificationsChannelWhatsapp: "WhatsApp",
+  NotificationsChannelPush: "Push",
   NotificationsWhatsappPhoneLabel: "WhatsApp number for notifications",
   NotificationsWhatsappPhoneHelp: "Used only to deliver notifications you've opted into via WhatsApp.",
   NotificationsPreferencesSaved: "Preferences saved.",
+
+  NotificationsPushTitle: "Push notifications on this device",
+  NotificationsPushDescription: "Get an alert even when AutoFlow isn't open in a browser tab.",
+  NotificationsPushEnableButton: "Enable on this device",
+  NotificationsPushDisableButton: "Disable on this device",
+  NotificationsPushStateGranted: "Enabled on this device",
+  NotificationsPushStateDenied: "Blocked — enable notifications for this site in your browser settings.",
+  NotificationsPushStateUnsupported: "Not supported on this browser or device.",
+  NotificationsPushStateNoVapidKey: "Push isn't configured for this deployment yet.",
+  NotificationsPushIosHint: "On iPhone/iPad: add AutoFlow to your Home Screen first, then open it from there to enable push.",
+  NotificationsPushDevicesTitle: "Devices with push enabled",
+  NotificationsPushNoDevices: "No devices enabled yet.",
 };
 
 export const notificationsAr = {
@@ -353,6 +369,9 @@ export const notificationsAr = {
   Notif_AdminUserRoleChanged_Title: "تم تغيير دورك",
   Notif_AdminUserRoleChanged_Message: "قام أحد المسؤولين بتغيير دورك إلى {roleName}.",
 
+  Notif_MessageReceived_Title: "رسالة جديدة",
+  Notif_MessageReceived_Message: "{senderName}: {preview}",
+
   Notif_FeedbackReplied_Title: "رد فريق الدعم على ملاحظتك",
   Notif_FeedbackReplied_Message: "تلقّت ملاحظتك \"{title}\" ردًا من الفريق.",
   Notif_FeedbackResolved_Title: "تم حل ملاحظتك",
@@ -375,7 +394,20 @@ export const notificationsAr = {
   NotificationsChannelInApp: "داخل التطبيق",
   NotificationsChannelEmail: "البريد الإلكتروني",
   NotificationsChannelWhatsapp: "واتساب",
+  NotificationsChannelPush: "إشعارات فورية",
   NotificationsWhatsappPhoneLabel: "رقم واتساب لاستلام الإشعارات",
   NotificationsWhatsappPhoneHelp: "يُستخدم فقط لإرسال الإشعارات التي اشتركت بها عبر واتساب.",
   NotificationsPreferencesSaved: "تم حفظ التفضيلات.",
+
+  NotificationsPushTitle: "الإشعارات الفورية على هذا الجهاز",
+  NotificationsPushDescription: "احصل على تنبيه حتى عندما لا يكون AutoFlow مفتوحاً في المتصفح.",
+  NotificationsPushEnableButton: "تفعيل على هذا الجهاز",
+  NotificationsPushDisableButton: "إيقاف على هذا الجهاز",
+  NotificationsPushStateGranted: "مفعّل على هذا الجهاز",
+  NotificationsPushStateDenied: "محظور — فعّل الإشعارات لهذا الموقع من إعدادات المتصفح.",
+  NotificationsPushStateUnsupported: "غير مدعوم على هذا المتصفح أو الجهاز.",
+  NotificationsPushStateNoVapidKey: "الإشعارات الفورية غير مُهيأة لهذا النظام بعد.",
+  NotificationsPushIosHint: "على آيفون/آيباد: أضف AutoFlow إلى الشاشة الرئيسية أولاً، ثم افتحه من هناك لتفعيل الإشعارات.",
+  NotificationsPushDevicesTitle: "الأجهزة المفعّل عليها الإشعارات الفورية",
+  NotificationsPushNoDevices: "لا توجد أجهزة مفعّلة بعد.",
 };

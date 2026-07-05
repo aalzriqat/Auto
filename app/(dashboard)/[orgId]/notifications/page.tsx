@@ -17,6 +17,7 @@ import Link from "next/link";
 import { renderNotification } from "@/lib/notifications/render";
 import { CATEGORY_ICONS } from "@/lib/notifications/icons";
 import { NOTIFICATION_CATEGORIES, NotificationCategory } from "@/lib/notifications/types";
+import { PushPermissionCard } from "@/components/notifications/PushPermissionCard";
 
 const CATEGORY_LABEL_KEYS: Record<NotificationCategory, string> = {
   sales: "NotificationsCategorySales",
@@ -175,6 +176,8 @@ function PreferencesPanel({ orgId }: { orgId: Id<"organizations"> }) {
 
   return (
     <div className="mt-4 space-y-6">
+      <PushPermissionCard orgId={orgId} />
+
       <div className="space-y-1">
         <Label htmlFor="whatsapp-phone">{t("NotificationsWhatsappPhoneLabel" as any)}</Label>
         <div className="flex gap-2 max-w-sm">
@@ -190,17 +193,18 @@ function PreferencesPanel({ orgId }: { orgId: Id<"organizations"> }) {
       </div>
 
       <div className="border rounded-md divide-y">
-        <div className="grid grid-cols-[1fr_auto_auto] gap-4 items-center px-4 py-2 text-xs font-medium text-muted-foreground">
+        <div className="grid grid-cols-[1fr_auto_auto_auto] gap-4 items-center px-4 py-2 text-xs font-medium text-muted-foreground">
           <span />
           <span>{t("NotificationsChannelEmail" as any)}</span>
           <span>{t("NotificationsChannelWhatsapp" as any)}</span>
+          <span>{t("NotificationsChannelPush" as any)}</span>
         </div>
         {preferences === undefined
           ? null
-          : preferences.map((pref: { category: string; emailEnabled: boolean; whatsappEnabled: boolean }) => {
+          : preferences.map((pref: { category: string; emailEnabled: boolean; whatsappEnabled: boolean; pushEnabled: boolean }) => {
               const CategoryIcon = CATEGORY_ICONS[pref.category as NotificationCategory];
               return (
-                <div key={pref.category} className="grid grid-cols-[1fr_auto_auto] gap-4 items-center px-4 py-3">
+                <div key={pref.category} className="grid grid-cols-[1fr_auto_auto_auto] gap-4 items-center px-4 py-3">
                   <div className="flex items-center gap-2 text-sm">
                     <CategoryIcon className="h-4 w-4 text-muted-foreground" />
                     {t(CATEGORY_LABEL_KEYS[pref.category as NotificationCategory] as any)}
@@ -208,13 +212,19 @@ function PreferencesPanel({ orgId }: { orgId: Id<"organizations"> }) {
                   <Switch
                     checked={pref.emailEnabled}
                     onCheckedChange={(checked) =>
-                      setPreference({ orgId, category: pref.category, emailEnabled: checked, whatsappEnabled: pref.whatsappEnabled })
+                      setPreference({ orgId, category: pref.category, emailEnabled: checked, whatsappEnabled: pref.whatsappEnabled, pushEnabled: pref.pushEnabled })
                     }
                   />
                   <Switch
                     checked={pref.whatsappEnabled}
                     onCheckedChange={(checked) =>
-                      setPreference({ orgId, category: pref.category, emailEnabled: pref.emailEnabled, whatsappEnabled: checked })
+                      setPreference({ orgId, category: pref.category, emailEnabled: pref.emailEnabled, whatsappEnabled: checked, pushEnabled: pref.pushEnabled })
+                    }
+                  />
+                  <Switch
+                    checked={pref.pushEnabled}
+                    onCheckedChange={(checked) =>
+                      setPreference({ orgId, category: pref.category, emailEnabled: pref.emailEnabled, whatsappEnabled: pref.whatsappEnabled, pushEnabled: checked })
                     }
                   />
                 </div>

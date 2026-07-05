@@ -961,7 +961,33 @@ export default defineSchema({
     category: v.string(),
     emailEnabled: v.boolean(),
     whatsappEnabled: v.boolean(),
+    pushEnabled: v.optional(v.boolean()),
   }).index("by_org_user_category", ["orgId", "userId", "category"]),
+
+  // One row per (device, org, user) a user has enabled Web Push on. A push
+  // endpoint is scoped to the browser origin, not to an AutoFlow org — a
+  // user who belongs to several orgs on the same device reuses the same
+  // endpoint across all of them, so the natural key is the full triple, not
+  // endpoint alone (that would let enabling push in org B silently steal the
+  // row from org A).
+  pushSubscriptions: defineTable({
+    orgId: v.id("organizations"),
+    userId: v.id("users"),
+    endpoint: v.string(),
+    p256dh: v.string(),
+    auth: v.string(),
+    userAgent: v.optional(v.string()),
+    deviceName: v.optional(v.string()),
+    enabled: v.boolean(),
+    createdAt: v.number(),
+    lastSeenAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_org_user", ["orgId", "userId"])
+    .index("by_endpoint_org_user", ["endpoint", "orgId", "userId"])
+    // Cross-org/user lookup used only to purge every row tied to an endpoint
+    // the push service reports as gone (HTTP 404/410) — see removeByEndpoint.
+    .index("by_endpoint", ["endpoint"]),
 
   notificationBroadcasts: defineTable({
     orgId: v.optional(v.id("organizations")), // omitted = platform-wide
@@ -2422,6 +2448,7 @@ export default defineSchema({
       v.literal("facebook"),
       v.literal("notification-email"),
       v.literal("notification-whatsapp"),
+      v.literal("notification-push"),
       v.literal("subscription-reminder"),
       v.literal("support-inbox-notification"),
       v.literal("upgrade-request"),
@@ -2621,6 +2648,7 @@ export default defineSchema({
   dmParticipantState: defineTable({
     conversationId: v.id("dmConversations"),
     userId: v.id("users"),
+    lastDeliveredAt: v.optional(v.number()), // marks messages up to here as delivered to this user's active client
     lastReadAt: v.optional(v.number()), // marks messages up to here as "seen"
     typingAt: v.optional(v.number()),   // last keystroke timestamp
     isMuted: v.optional(v.boolean()),   // suppress sounds for this conversation

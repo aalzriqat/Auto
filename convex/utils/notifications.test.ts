@@ -116,4 +116,35 @@ describe("dispatch helpers", () => {
     const scheduled = await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
     expect(scheduled).toHaveLength(0);
   });
+
+  test("push is not scheduled by default even when email is (opt-in only, unlike email)", async () => {
+    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, salesId } = await seedOrg(t);
+
+    // "approval.requested" has criticalDefault: true, so email schedules with no
+    // preference row set — but push has no criticalDefault fallback, so the total
+    // scheduled count should be exactly 1 (email only), not 2.
+    await t.run((ctx) => notifyUser(ctx, orgId, salesId, "approval.requested", { actorName: "Dana", saleLabel: "2024 Civic" }));
+    const scheduled = await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
+    expect(scheduled).toHaveLength(1);
+  });
+
+  test("push is scheduled once the user opts a category into pushEnabled", async () => {
+    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, salesId } = await seedOrg(t);
+    await t.run((ctx) =>
+      ctx.db.insert("notificationPreferences", {
+        orgId,
+        userId: salesId,
+        category: "inventory",
+        emailEnabled: false,
+        whatsappEnabled: false,
+        pushEnabled: true,
+      })
+    );
+
+    await t.run((ctx) => notifyUser(ctx, orgId, salesId, "vehicle.created", { actorName: "Dana" }));
+    const scheduled = await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
+    expect(scheduled).toHaveLength(1);
+  });
 });

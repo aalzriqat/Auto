@@ -58,6 +58,15 @@ const backendEnvSchema = z.object({
   // Auto-injected by Convex at runtime; validated here so a missing value
   // fails loudly instead of producing a broken OAuth redirect URI.
   CONVEX_SITE_URL: z.string().url().optional(),
+
+  // Web Push (VAPID) keypair for sendNotificationPush (convex/pushSend.ts).
+  // Optional like RESEND_API_KEY: push sends quietly no-op until generated
+  // via `npx web-push generate-vapid-keys` and set on the deployment.
+  VAPID_PUBLIC_KEY: z.string().optional(),
+  VAPID_PRIVATE_KEY: z.string().optional(),
+  // Contact URI required by the Web Push protocol (mailto: or https:) so
+  // push services can reach the sender about problems with a subscription.
+  VAPID_SUBJECT: z.string().optional(),
 });
 
 // auth.config.ts is special: Convex statically scans every process.env
@@ -107,6 +116,9 @@ export function getValidatedEnv() {
     TURNSTILE_SECRET_KEY: process.env.TURNSTILE_SECRET_KEY,
     DOMAIN_REGISTRAR_MODE: process.env.DOMAIN_REGISTRAR_MODE,
     CONVEX_SITE_URL: process.env.CONVEX_SITE_URL,
+    VAPID_PUBLIC_KEY: process.env.VAPID_PUBLIC_KEY,
+    VAPID_PRIVATE_KEY: process.env.VAPID_PRIVATE_KEY,
+    VAPID_SUBJECT: process.env.VAPID_SUBJECT,
   });
   
   if (!result.success) {

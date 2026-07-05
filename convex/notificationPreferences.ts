@@ -27,6 +27,7 @@ export const getMyPreferences = query({
         category,
         emailEnabled: row ? row.emailEnabled : categoryDefaultEmail(category),
         whatsappEnabled: row ? row.whatsappEnabled : false,
+        pushEnabled: row ? (row.pushEnabled ?? false) : false,
       };
     });
   },
@@ -38,6 +39,7 @@ export const setPreference = mutation({
     category: v.string(),
     emailEnabled: v.boolean(),
     whatsappEnabled: v.boolean(),
+    pushEnabled: v.boolean(),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId);
@@ -56,6 +58,7 @@ export const setPreference = mutation({
       await ctx.db.patch(existing._id, {
         emailEnabled: args.emailEnabled,
         whatsappEnabled: args.whatsappEnabled,
+        pushEnabled: args.pushEnabled,
       });
     } else {
       await ctx.db.insert("notificationPreferences", {
@@ -64,6 +67,7 @@ export const setPreference = mutation({
         category: args.category,
         emailEnabled: args.emailEnabled,
         whatsappEnabled: args.whatsappEnabled,
+        pushEnabled: args.pushEnabled,
       });
     }
   },
