@@ -56,6 +56,10 @@ export default function SalesHomePage() {
             ? { orgId: activeOrgId, vehicleId: prefillSourceLikeVehicleId as Id<"vehicles"> }
             : "skip"
     );
+    // Convex returns undefined while this query is in flight — block launching the
+    // wizard until it resolves, otherwise openFreshWizard would capture `undefined`
+    // and permanently lose the prefill (VehiclePicker only applies it once, on mount).
+    const sourceLikeVehicleLoading = !!prefillSourceLikeVehicleId && sourceLikeVehicle === undefined;
 
     const { results: recentSales } = usePaginatedQuery(
         api.sales.list,
@@ -147,6 +151,12 @@ export default function SalesHomePage() {
         setActiveWizard(draft.paymentType as PaymentType);
     }
 
+    const prefillHintText = prefillSourceLikeVehicleId
+        ? sourceLikeVehicleLoading
+            ? (t("LoadingVehicleDetails" as any) ?? "Loading vehicle details…")
+            : `${sourceLikeVehicle ? `${sourceLikeVehicle.year} ${sourceLikeVehicle.make} ${sourceLikeVehicle.model} — ` : ""}${t("SourcingVehicleForSaleHint" as any)}`
+        : `Creating a quote for ${prefillCustomer ? `${prefillCustomer.firstName} ${prefillCustomer.lastName}` : "this lead"} — choose a payment type to continue.`;
+
     // If wizard is active, render it full-width instead of the hero
     if (activeWizard) {
         return (
@@ -168,9 +178,7 @@ export default function SalesHomePage() {
 
                 {hasPrefill && (
                     <div className="rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-4 py-3 text-sm text-indigo-300">
-                        {prefillSourceLikeVehicleId
-                            ? `${sourceLikeVehicle ? `${sourceLikeVehicle.year} ${sourceLikeVehicle.make} ${sourceLikeVehicle.model} — ` : ""}${t("SourcingVehicleForSaleHint" as any)}`
-                            : `Creating a quote for ${prefillCustomer ? `${prefillCustomer.firstName} ${prefillCustomer.lastName}` : "this lead"} — choose a payment type to continue.`}
+                        {prefillHintText}
                     </div>
                 )}
 
@@ -201,10 +209,12 @@ export default function SalesHomePage() {
                             <button
                                 id="btn-new-cash-sale"
                                 onClick={() => openFreshWizard("CASH")}
+                                disabled={sourceLikeVehicleLoading}
                                 className={cn(
                                     "group relative flex flex-col items-start gap-4 rounded-xl border border-teal-500/30 bg-teal-500/10",
                                     "hover:bg-teal-500/20 hover:border-teal-500/60 hover:shadow-lg hover:shadow-teal-500/10",
-                                    "transition-all duration-300 p-6 text-start cursor-pointer"
+                                    "transition-all duration-300 p-6 text-start cursor-pointer",
+                                    sourceLikeVehicleLoading && "opacity-50 cursor-not-allowed pointer-events-none"
                                 )}
                             >
                                 <div className="flex items-center justify-between w-full">
@@ -230,10 +240,12 @@ export default function SalesHomePage() {
                             <button
                                 id="btn-new-installment-sale"
                                 onClick={() => openFreshWizard("INSTALLMENT")}
+                                disabled={sourceLikeVehicleLoading}
                                 className={cn(
                                     "group relative flex flex-col items-start gap-4 rounded-xl border border-indigo-500/30 bg-indigo-500/10",
                                     "hover:bg-indigo-500/20 hover:border-indigo-500/60 hover:shadow-lg hover:shadow-indigo-500/10",
-                                    "transition-all duration-300 p-6 text-start cursor-pointer"
+                                    "transition-all duration-300 p-6 text-start cursor-pointer",
+                                    sourceLikeVehicleLoading && "opacity-50 cursor-not-allowed pointer-events-none"
                                 )}
                             >
                                 <div className="flex items-center justify-between w-full">
