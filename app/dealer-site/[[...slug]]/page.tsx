@@ -18,10 +18,20 @@ import { PrestigeTheme } from "./themes/prestige-theme";
 import { VelocityTheme } from "./themes/velocity-theme";
 import { AvantTheme } from "./themes/avant-theme";
 import {
+  AtlasRallyTheme,
+  CarbonTrackTheme,
+  CinemaNoirTheme,
   ConciergeEditorialTheme,
   DesertGrandTourerTheme,
+  GlassHorizonTheme,
   LucentStudioTheme,
+  NeonGridTheme,
   ObsidianAtelierTheme,
+  PearlMajlisTheme,
+  PixelShowroomTheme,
+  PrismMotionTheme,
+  SolarisBayTheme,
+  TorqueLabTheme,
   VelocityCommandTheme,
 } from "./themes/showcase-themes";
 import { TurnstileWidget } from "./turnstile-widget";
@@ -171,6 +181,16 @@ const PREMIUM_THEME_COMPONENTS = {
   "velocity-command": VelocityCommandTheme,
   "lucent-studio": LucentStudioTheme,
   "concierge-editorial": ConciergeEditorialTheme,
+  "neon-grid": NeonGridTheme,
+  "cinema-noir": CinemaNoirTheme,
+  "atlas-rally": AtlasRallyTheme,
+  "glass-horizon": GlassHorizonTheme,
+  "torque-lab": TorqueLabTheme,
+  "pearl-majlis": PearlMajlisTheme,
+  "prism-motion": PrismMotionTheme,
+  "carbon-track": CarbonTrackTheme,
+  "solaris-bay": SolarisBayTheme,
+  "pixel-showroom": PixelShowroomTheme,
 };
 
 // crypto.randomUUID() only exists in secure contexts (HTTPS/localhost). A
