@@ -61,10 +61,10 @@ export function PrestigeTheme(props: ThemeProps) {
             {t.previewBanner}
           </div>
         )}
-        <div style={{ maxWidth: 1280, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "0 24px", height: 64 }}>
+        <div style={{ maxWidth: 1280, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "0 24px", height: 104 }}>
           <Link href="/" style={{ display: "flex", alignItems: "center", gap: 12, textDecoration: "none" }}>
             {profile.logoUrl ? (
-              <img src={profile.logoUrl} alt={profile.dealershipName} style={{ height: 36, width: "auto", maxWidth: 140, objectFit: "contain" }} />
+              <img src={profile.logoUrl} alt={profile.dealershipName} style={{ height: 72, width: "auto", maxWidth: 280, objectFit: "contain" }} />
             ) : (
               <>
                 <div style={{ width: 36, height: 36, background: primary, borderRadius: 4, display: "grid", placeItems: "center" }}>
@@ -385,7 +385,7 @@ export function PrestigeTheme(props: ThemeProps) {
         <div style={{ maxWidth: 1280, margin: "0 auto", display: "flex", flexDirection: "column", gap: 20, alignItems: "center" }}>
           <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}>
             {profile.logoUrl ? (
-              <img src={profile.logoUrl} alt={profile.dealershipName} style={{ height: 28, width: "auto", objectFit: "contain", opacity: 0.6 }} />
+              <img src={profile.logoUrl} alt={profile.dealershipName} style={{ height: 56, width: "auto", objectFit: "contain", opacity: 0.6 }} />
             ) : (
               <p style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.25em", textTransform: "uppercase", color: "#555" }}>{profile.dealershipName}</p>
             )}

@@ -62,10 +62,10 @@ export function VelocityTheme(props: ThemeProps) {
             {t.previewBanner}
           </div>
         )}
-        <div style={{ maxWidth: 1280, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "0 24px", height: 68 }}>
+        <div style={{ maxWidth: 1280, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "0 24px", height: 106 }}>
           <Link href="/" style={{ display: "flex", alignItems: "center", gap: 12, textDecoration: "none" }}>
             {profile.logoUrl ? (
-              <img src={profile.logoUrl} alt={profile.dealershipName} style={{ height: 38, width: "auto", maxWidth: 150, objectFit: "contain" }} />
+              <img src={profile.logoUrl} alt={profile.dealershipName} style={{ height: 76, width: "auto", maxWidth: 300, objectFit: "contain" }} />
             ) : (
               <>
                 <div style={{ width: 38, height: 38, background: primary, borderRadius: 8, display: "grid", placeItems: "center" }}>
@@ -374,7 +374,7 @@ export function VelocityTheme(props: ThemeProps) {
           <div style={{ display: "flex", flexWrap: "wrap", gap: 40, justifyContent: "space-between", marginBottom: 36 }}>
             <div>
               {profile.logoUrl ? (
-                <img src={profile.logoUrl} alt={profile.dealershipName} style={{ height: 30, width: "auto", objectFit: "contain", opacity: 0.7, marginBottom: 8 }} />
+                <img src={profile.logoUrl} alt={profile.dealershipName} style={{ height: 60, width: "auto", objectFit: "contain", opacity: 0.7, marginBottom: 8 }} />
               ) : (
                 <p style={{ fontSize: 15, fontWeight: 700, color: "#f1f5f9", marginBottom: 6 }}>{profile.dealershipName}</p>
               )}
