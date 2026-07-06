@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import { Inter, Cairo } from "next/font/google";
+import { headers } from "next/headers";
 import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 import ConvexClientProvider from "@/components/ConvexClientProvider";
 import { ClerkProviderWithLocale } from "@/components/providers/ClerkProviderWithLocale";
 import { LanguageProvider } from "@/components/providers/LanguageProvider";
+import { isDealerWebsiteHost } from "@/lib/dealerHost";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -39,11 +41,14 @@ export const viewport = {
   themeColor: "#0f172a",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const requestHeaders = await headers();
+  const showAnalytics = !isDealerWebsiteHost(requestHeaders.get("host"));
+
   return (
     <html lang="ar" dir="rtl">
       <body
@@ -54,7 +59,7 @@ export default function RootLayout({
             <ConvexClientProvider>{children}</ConvexClientProvider>
           </ClerkProviderWithLocale>
         </LanguageProvider>
-        <Analytics />
+        {showAnalytics ? <Analytics /> : null}
       </body>
     </html>
   );
