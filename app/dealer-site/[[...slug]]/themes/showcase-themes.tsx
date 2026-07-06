@@ -1674,6 +1674,21 @@ function InventoryPersonaPanel({
   copy: ShowcaseCopy;
   variant: VehicleCardVariant;
 }) {
+  const personaContent: Record<Exclude<VehicleCardVariant, "command" | "route" | "editorial">, { icon: ReactNode; label: string }> = {
+    gallery: { icon: <Crown size={18} />, label: copy.privateViewing },
+    studio: { icon: <Sparkles size={18} />, label: copy.studioSelected },
+    neon: { icon: <Zap size={18} />, label: copy.inventorySignal },
+    poster: { icon: <Crown size={18} />, label: copy.editorsPick },
+    atlas: { icon: <Compass size={18} />, label: copy.routeReady },
+    glass: { icon: <Sparkles size={18} />, label: copy.studioSelected },
+    lab: { icon: <Gauge size={18} />, label: copy.commandCenter },
+    pearl: { icon: <Crown size={18} />, label: copy.askConcierge },
+    prism: { icon: <Sparkles size={18} />, label: copy.featuredArrival },
+    track: { icon: <Gauge size={18} />, label: copy.routeReady },
+    solar: { icon: <Compass size={18} />, label: copy.deliveryReady },
+    pixel: { icon: <Zap size={18} />, label: copy.commandCenter },
+  };
+
   if (variant === "command") {
     return (
       <div className="wf-inventory-persona wf-inventory-persona--command">
@@ -1693,14 +1708,6 @@ function InventoryPersonaPanel({
       </div>
     );
   }
-  if (variant === "studio") {
-    return (
-      <div className="wf-inventory-persona wf-inventory-persona--studio">
-        <Sparkles size={18} />
-        <span>{copy.studioSelected}</span>
-      </div>
-    );
-  }
   if (variant === "editorial") {
     return (
       <div className="wf-inventory-persona wf-inventory-persona--editorial">
@@ -1709,10 +1716,11 @@ function InventoryPersonaPanel({
       </div>
     );
   }
+  const persona = personaContent[variant];
   return (
-    <div className="wf-inventory-persona wf-inventory-persona--gallery">
-      <Crown size={18} />
-      <span>{copy.privateViewing}</span>
+    <div className={`wf-inventory-persona wf-inventory-persona--${variant}`}>
+      {persona.icon}
+      <span>{persona.label}</span>
     </div>
   );
 }
@@ -4254,6 +4262,67 @@ function ShowcaseStyles() {
         font-family: Georgia, "Times New Roman", "Noto Naskh Arabic", serif;
       }
       .wf-inventory-persona--editorial span { color: var(--wf-primary); font-size: 32px; }
+      .wf-inventory-persona--neon, .wf-inventory-persona--poster, .wf-inventory-persona--atlas,
+      .wf-inventory-persona--glass, .wf-inventory-persona--lab, .wf-inventory-persona--pearl,
+      .wf-inventory-persona--prism, .wf-inventory-persona--track, .wf-inventory-persona--solar,
+      .wf-inventory-persona--pixel {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .wf-inventory-persona--neon {
+        background: #0e1320;
+        color: #f4f8ff;
+        border-color: rgba(34,211,238,.28);
+        box-shadow: inset 0 0 0 1px rgba(255,255,255,.04);
+      }
+      .wf-inventory-persona--poster {
+        background: #141312;
+        color: #f6f1e7;
+        border-color: #34302a;
+        font-family: Georgia, "Times New Roman", "Noto Naskh Arabic", serif;
+      }
+      .wf-inventory-persona--atlas {
+        background: #fbfcf7;
+        color: #16231d;
+        border-block-end: 4px solid var(--wf-secondary);
+      }
+      .wf-inventory-persona--glass {
+        background: rgba(255,255,255,.72);
+        box-shadow: 0 18px 60px rgba(14,116,144,.1);
+        backdrop-filter: blur(16px);
+      }
+      .wf-inventory-persona--lab {
+        background: #111412;
+        color: white;
+        border-color: rgba(22,101,52,.38);
+        font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      }
+      .wf-inventory-persona--pearl {
+        background: #122223;
+        color: #f7fbf6;
+        border-color: rgba(214,179,106,.34);
+      }
+      .wf-inventory-persona--prism {
+        background: linear-gradient(135deg, rgba(124,58,237,.12), rgba(244,63,94,.1)), #fff;
+      }
+      .wf-inventory-persona--track {
+        background: #101315;
+        color: #f4f7f7;
+        border-color: rgba(239,68,68,.34);
+        font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      }
+      .wf-inventory-persona--solar {
+        background: linear-gradient(180deg, #fff, var(--wf-panel-strong));
+        border-block-start: 4px solid var(--wf-secondary);
+      }
+      .wf-inventory-persona--pixel {
+        background: #1f2937;
+        color: #f8fafc;
+        border-color: #334155;
+        box-shadow: 6px 6px 0 rgba(56,189,248,.16);
+        font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      }
       .wf-inventory-side .wf-inventory-controls,
       .wf-inventory-side .wf-filter-grid { grid-template-columns: 1fr; }
       .wf-inventory-side .wf-filter-reset { width: 100%; }
@@ -4295,6 +4364,74 @@ function ShowcaseStyles() {
         border-inline: 0;
         border-radius: 0;
         box-shadow: none;
+      }
+      .wf-inventory-page--neon, .wf-inventory-page--poster, .wf-inventory-page--lab,
+      .wf-inventory-page--pearl, .wf-inventory-page--track, .wf-inventory-page--pixel {
+        width: min(1420px, calc(100% - 48px));
+      }
+      .wf-inventory-page--glass, .wf-inventory-page--prism, .wf-inventory-page--solar {
+        width: min(1360px, calc(100% - 48px));
+      }
+      .wf-inventory-page--neon .wf-inventory-layout,
+      .wf-inventory-page--pearl .wf-inventory-layout,
+      .wf-inventory-page--track .wf-inventory-layout,
+      .wf-inventory-page--pixel .wf-inventory-layout {
+        grid-template-columns: minmax(290px, .3fr) minmax(0, 1fr);
+      }
+      .wf-inventory-page--poster .wf-inventory-layout {
+        grid-template-columns: minmax(260px, .24fr) minmax(0, 1fr);
+      }
+      .wf-inventory-page--atlas .wf-inventory-layout,
+      .wf-inventory-page--lab .wf-inventory-layout {
+        grid-template-columns: 1fr;
+      }
+      .wf-inventory-page--atlas .wf-inventory-side,
+      .wf-inventory-page--lab .wf-inventory-side,
+      .wf-inventory-page--glass .wf-inventory-side,
+      .wf-inventory-page--prism .wf-inventory-side,
+      .wf-inventory-page--solar .wf-inventory-side {
+        position: relative;
+        top: auto;
+        grid-template-columns: minmax(250px, .72fr) minmax(0, 1.28fr);
+        align-items: stretch;
+      }
+      .wf-inventory-page--atlas .wf-inventory-side .wf-inventory-controls,
+      .wf-inventory-page--atlas .wf-inventory-side .wf-filter-grid,
+      .wf-inventory-page--lab .wf-inventory-side .wf-inventory-controls,
+      .wf-inventory-page--lab .wf-inventory-side .wf-filter-grid,
+      .wf-inventory-page--glass .wf-inventory-side .wf-inventory-controls,
+      .wf-inventory-page--glass .wf-inventory-side .wf-filter-grid,
+      .wf-inventory-page--prism .wf-inventory-side .wf-inventory-controls,
+      .wf-inventory-page--prism .wf-inventory-side .wf-filter-grid,
+      .wf-inventory-page--solar .wf-inventory-side .wf-inventory-controls,
+      .wf-inventory-page--solar .wf-inventory-side .wf-filter-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .wf-inventory-page--atlas .wf-inventory-side .wf-filter-reset,
+      .wf-inventory-page--lab .wf-inventory-side .wf-filter-reset,
+      .wf-inventory-page--glass .wf-inventory-side .wf-filter-reset,
+      .wf-inventory-page--prism .wf-inventory-side .wf-filter-reset,
+      .wf-inventory-page--solar .wf-inventory-side .wf-filter-reset {
+        width: auto;
+        grid-column: span 2;
+      }
+      .wf-inventory-page--neon .wf-inventory-toolbar,
+      .wf-inventory-page--track .wf-inventory-toolbar,
+      .wf-inventory-page--pixel .wf-inventory-toolbar {
+        background: color-mix(in srgb, var(--wf-panel) 86%, #000);
+        border-color: color-mix(in srgb, var(--wf-primary) 30%, var(--wf-line));
+      }
+      .wf-inventory-page--poster .wf-page-heading h1,
+      .wf-inventory-page--poster .wf-section-kicker {
+        font-family: Georgia, "Times New Roman", "Noto Naskh Arabic", serif;
+      }
+      .wf-inventory-page--lab .wf-page-heading h1,
+      .wf-inventory-page--lab .wf-section-kicker,
+      .wf-inventory-page--track .wf-page-heading h1,
+      .wf-inventory-page--track .wf-section-kicker,
+      .wf-inventory-page--pixel .wf-page-heading h1,
+      .wf-inventory-page--pixel .wf-section-kicker {
+        font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
       }
       .wf-inventory-toolbar {
         display: flex;
@@ -4422,6 +4559,104 @@ function ShowcaseStyles() {
       }
       .wf-detail-page--editorial .wf-detail-info h1 {
         font-family: Georgia, "Times New Roman", "Noto Naskh Arabic", serif;
+      }
+      .wf-detail-page--neon, .wf-detail-page--poster, .wf-detail-page--pearl,
+      .wf-detail-page--track, .wf-detail-page--pixel {
+        width: min(1420px, calc(100% - 48px));
+      }
+      .wf-detail-page--neon, .wf-detail-page--pixel {
+        grid-template-columns: minmax(0, 1.16fr) minmax(360px, .84fr);
+      }
+      .wf-detail-page--poster {
+        grid-template-columns: minmax(320px, .62fr) minmax(0, 1.38fr);
+        border-block: 1px solid #34302a;
+      }
+      .wf-detail-page--atlas {
+        grid-template-columns: minmax(0, .9fr) minmax(360px, 1.1fr);
+      }
+      .wf-detail-page--glass, .wf-detail-page--prism, .wf-detail-page--solar {
+        grid-template-columns: minmax(360px, .92fr) minmax(0, 1.08fr);
+      }
+      .wf-detail-page--lab, .wf-detail-page--track {
+        grid-template-columns: minmax(0, .82fr) minmax(380px, 1.18fr);
+      }
+      .wf-detail-page--pearl {
+        grid-template-columns: minmax(0, 1.08fr) minmax(360px, .92fr);
+      }
+      .wf-detail-page--neon .wf-detail-info,
+      .wf-detail-page--poster .wf-detail-info,
+      .wf-detail-page--lab .wf-detail-info,
+      .wf-detail-page--pearl .wf-detail-info,
+      .wf-detail-page--track .wf-detail-info,
+      .wf-detail-page--pixel .wf-detail-info {
+        border: 1px solid color-mix(in srgb, var(--wf-primary) 28%, var(--wf-line));
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--wf-panel) 88%, #000);
+        color: var(--wf-text);
+        padding: 24px;
+      }
+      .wf-detail-page--poster .wf-detail-info h1,
+      .wf-detail-page--poster .wf-section-kicker {
+        font-family: Georgia, "Times New Roman", "Noto Naskh Arabic", serif;
+      }
+      .wf-detail-page--lab .wf-detail-info,
+      .wf-detail-page--track .wf-detail-info,
+      .wf-detail-page--pixel .wf-detail-info {
+        font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      }
+      .wf-detail-page--neon .wf-detail-media,
+      .wf-detail-page--pixel .wf-detail-media {
+        aspect-ratio: 16 / 9;
+        border-color: color-mix(in srgb, var(--wf-primary) 38%, var(--wf-line));
+        box-shadow: 0 30px 100px color-mix(in srgb, var(--wf-primary) 15%, transparent);
+      }
+      .wf-detail-page--poster .wf-detail-media,
+      .wf-detail-page--pearl .wf-detail-media {
+        aspect-ratio: 4 / 5;
+      }
+      .wf-detail-page--atlas .wf-detail-media,
+      .wf-detail-page--solar .wf-detail-media {
+        border-block-end: 8px solid var(--wf-secondary);
+      }
+      .wf-detail-page--glass .wf-detail-media,
+      .wf-detail-page--prism .wf-detail-media {
+        box-shadow: 0 28px 90px color-mix(in srgb, var(--wf-primary) 12%, transparent);
+      }
+      .wf-detail-page--lab .wf-detail-media,
+      .wf-detail-page--track .wf-detail-media {
+        border: 8px solid var(--wf-panel-strong);
+      }
+      .wf-detail-page--track .wf-detail-trim,
+      .wf-detail-page--track .wf-detail-specs span,
+      .wf-detail-page--track .wf-trust-list li,
+      .wf-detail-page--pixel .wf-detail-trim,
+      .wf-detail-page--pixel .wf-detail-specs span,
+      .wf-detail-page--pixel .wf-trust-list li,
+      .wf-detail-page--lab .wf-detail-trim,
+      .wf-detail-page--lab .wf-detail-specs span,
+      .wf-detail-page--lab .wf-trust-list li {
+        color: var(--wf-muted);
+      }
+      .wf-detail-page--track .wf-detail-specs div,
+      .wf-detail-page--track .wf-detail-action-panel,
+      .wf-detail-page--track .wf-lead-panel,
+      .wf-detail-page--pixel .wf-detail-specs div,
+      .wf-detail-page--pixel .wf-detail-action-panel,
+      .wf-detail-page--pixel .wf-lead-panel,
+      .wf-detail-page--lab .wf-detail-specs div,
+      .wf-detail-page--lab .wf-detail-action-panel,
+      .wf-detail-page--lab .wf-lead-panel,
+      .wf-detail-page--neon .wf-detail-specs div,
+      .wf-detail-page--neon .wf-detail-action-panel,
+      .wf-detail-page--neon .wf-lead-panel,
+      .wf-detail-page--poster .wf-detail-specs div,
+      .wf-detail-page--poster .wf-detail-action-panel,
+      .wf-detail-page--poster .wf-lead-panel,
+      .wf-detail-page--pearl .wf-detail-specs div,
+      .wf-detail-page--pearl .wf-detail-action-panel,
+      .wf-detail-page--pearl .wf-lead-panel {
+        background: color-mix(in srgb, var(--wf-panel) 86%, #000);
+        border-color: color-mix(in srgb, var(--wf-primary) 24%, var(--wf-line));
       }
       .wf-detail-info h1 { margin: 0; font-size: 44px; line-height: 1.08; letter-spacing: 0; }
       .wf-detail-trim { color: var(--wf-muted); font-size: 18px; margin: 10px 0 0; }
@@ -4630,7 +4865,17 @@ function ShowcaseStyles() {
         .wf-editorial-issue-layout, .wf-inventory-layout,
         .wf-inventory-page--gallery .wf-inventory-layout,
         .wf-inventory-page--command .wf-inventory-layout,
-        .wf-inventory-page--editorial .wf-inventory-layout { grid-template-columns: 1fr; }
+        .wf-inventory-page--editorial .wf-inventory-layout,
+        .wf-inventory-page--neon .wf-inventory-layout,
+        .wf-inventory-page--poster .wf-inventory-layout,
+        .wf-inventory-page--atlas .wf-inventory-layout,
+        .wf-inventory-page--glass .wf-inventory-layout,
+        .wf-inventory-page--lab .wf-inventory-layout,
+        .wf-inventory-page--pearl .wf-inventory-layout,
+        .wf-inventory-page--prism .wf-inventory-layout,
+        .wf-inventory-page--track .wf-inventory-layout,
+        .wf-inventory-page--solar .wf-inventory-layout,
+        .wf-inventory-page--pixel .wf-inventory-layout { grid-template-columns: 1fr; }
         .wf-desert-stage, .wf-command-visual, .wf-lucent-stage, .wf-editorial-cover { min-height: 390px; }
         .wf-detail-media, .wf-inventory-side, .wf-atelier-ledger, .wf-command-sidebar { position: relative; top: auto; }
         .wf-detail-action-panel { position: relative; top: auto; }
@@ -4641,9 +4886,19 @@ function ShowcaseStyles() {
         .wf-route-lanes::before { inset-inline-start: 24px; }
         .wf-inventory-masthead { grid-template-columns: 1fr; }
         .wf-inventory-page--route .wf-inventory-side,
+        .wf-inventory-page--atlas .wf-inventory-side,
+        .wf-inventory-page--glass .wf-inventory-side,
+        .wf-inventory-page--lab .wf-inventory-side,
+        .wf-inventory-page--prism .wf-inventory-side,
+        .wf-inventory-page--solar .wf-inventory-side,
         .wf-inventory-page--studio .wf-inventory-side .wf-inventory-controls,
         .wf-inventory-page--studio .wf-inventory-side .wf-filter-grid { grid-template-columns: 1fr; }
-        .wf-inventory-page--route .wf-inventory-side .wf-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .wf-inventory-page--route .wf-inventory-side .wf-filter-grid,
+        .wf-inventory-page--atlas .wf-inventory-side .wf-filter-grid,
+        .wf-inventory-page--glass .wf-inventory-side .wf-filter-grid,
+        .wf-inventory-page--lab .wf-inventory-side .wf-filter-grid,
+        .wf-inventory-page--prism .wf-inventory-side .wf-filter-grid,
+        .wf-inventory-page--solar .wf-inventory-side .wf-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .wf-vehicle-grid, .wf-branch-grid, .wf-footer-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       }
       @media (max-width: 720px) {
@@ -4677,6 +4932,11 @@ function ShowcaseStyles() {
           padding: 16px 0;
         }
         .wf-inventory-page--route .wf-inventory-side .wf-filter-grid,
+        .wf-inventory-page--atlas .wf-inventory-side .wf-filter-grid,
+        .wf-inventory-page--glass .wf-inventory-side .wf-filter-grid,
+        .wf-inventory-page--lab .wf-inventory-side .wf-filter-grid,
+        .wf-inventory-page--prism .wf-inventory-side .wf-filter-grid,
+        .wf-inventory-page--solar .wf-inventory-side .wf-filter-grid,
         .wf-filter-grid { grid-template-columns: 1fr; }
         .wf-vehicle-grid--gallery .wf-vehicle-card--lead,
         .wf-vehicle-grid--editorial .wf-vehicle-card--lead { grid-column: auto; }
