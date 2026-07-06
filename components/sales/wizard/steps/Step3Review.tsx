@@ -16,6 +16,7 @@ import { OTHER_COMPANY_ID } from "../types";
 import { ArrowLeft, CheckCircle2, Car, User, TrendingUp, FileText } from "lucide-react";
 
 import  ReviewVehicleCard  from "../components/ReviewVehicleCard";
+import  ReviewVehicleListCard  from "../components/ReviewVehicleListCard";
 import  ReviewCustomerCard  from "../components/ReviewCustomerCard";
 import  ReviewFinanceSummary  from "../components/ReviewFinanceSummary";
 import { buildWizardQuotePayload } from "../quotePayload";
@@ -34,6 +35,7 @@ export function Step3Review({
   onSuccess: (data: {
     quoteId: Id<"quotes">;
     selectedVehicle?: Doc<"vehicles">;
+    selectedVehicles?: Array<{ vehicle: Doc<"vehicles">; unitPrice: number }>;
     selectedCompany?: Doc<"financeCompanies">;
     selectedResult: any;
   }) => void;
@@ -61,6 +63,15 @@ export function Step3Review({
   const selectedVehicle = availableVehicles?.find(
     (v: Doc<"vehicles">) => v._id === wizardData.vehicleId
   );
+
+  const selectedVehicles = wizardData.vehicleItems?.length > 1
+    ? (wizardData.vehicleItems
+        .map((item: { vehicleId: string; unitPrice: number }) => {
+          const vehicle = availableVehicles?.find((v: Doc<"vehicles">) => v._id === item.vehicleId);
+          return vehicle ? { vehicle, unitPrice: item.unitPrice } : null;
+        })
+        .filter(Boolean) as Array<{ vehicle: Doc<"vehicles">; unitPrice: number }>)
+    : undefined;
 
   const isManualFinance = wizardData.selectedCompanyId === OTHER_COMPANY_ID;
 
@@ -169,6 +180,9 @@ export function Step3Review({
         ...quotePayload,
         orgId: quotePayload.orgId as Id<"organizations">,
         vehicleId: quotePayload.vehicleId as Id<"vehicles">,
+        vehicleItems: quotePayload.vehicleItems as
+          | Array<{ vehicleId: Id<"vehicles">; unitPrice: number }>
+          | undefined,
         customerId: quotePayload.customerId as Id<"customers">,
         leadId: quotePayload.leadId as Id<"leads"> | undefined,
         companyId: quotePayload.companyId as Id<"financeCompanies"> | undefined,
@@ -178,6 +192,7 @@ export function Step3Review({
       onSuccess({
         quoteId: quoteId as Id<"quotes">,
         selectedVehicle,
+        selectedVehicles,
         selectedCompany,
         selectedResult: {
           ...selectedResult,
@@ -200,12 +215,16 @@ export function Step3Review({
     <div className="space-y-6">
       {/* HEADER SUMMARY GRID */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {selectedVehicle && (
-          <ReviewVehicleCard
-            vehicle={selectedVehicle}
-            basePrice={wizardData.vehiclePrice}
-            desiredProfit={wizardData.desiredProfit}
-          />
+        {selectedVehicles ? (
+          <ReviewVehicleListCard vehicles={selectedVehicles} />
+        ) : (
+          selectedVehicle && (
+            <ReviewVehicleCard
+              vehicle={selectedVehicle}
+              basePrice={wizardData.vehiclePrice}
+              desiredProfit={wizardData.desiredProfit}
+            />
+          )
         )}
 
         <ReviewCustomerCard customer={selectedCustomer} />

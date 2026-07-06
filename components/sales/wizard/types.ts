@@ -1,6 +1,13 @@
+export interface VehicleLineItem {
+  vehicleId: string;
+  unitPrice: number;
+}
+
 export interface WizardData {
   vehicleId: string;
   vehiclePrice: number;
+  /** Multiple vehicles (or several units of the same model) on one CASH quote. Undefined for the common single-vehicle case and for all INSTALLMENT quotes. */
+  vehicleItems?: VehicleLineItem[];
   desiredProfit: number;
   downPayment: number;
   termMonths: number;

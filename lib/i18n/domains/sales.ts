@@ -420,6 +420,9 @@ export const salesEn = {
   CreatingSourcingVehicle: "Creating sourced vehicle…",
   SourcingVehicleForSaleHint: "sourcing a replacement unit — choose a payment type to continue.",
   LoadingVehicleDetails: "Loading vehicle details…",
+  AddAnotherVehicle: "Add another vehicle",
+  TotalVehiclesCount: "Total",
+  SelectAllVehiclesInQuote: "Select a vehicle for every row, or remove the empty one.",
 };
 
 export const salesAr = {
@@ -838,4 +841,7 @@ export const salesAr = {
   CreatingSourcingVehicle: "جاري إنشاء المركبة المورَّدة…",
   SourcingVehicleForSaleHint: "توريد وحدة بديلة — اختر نوع الدفع للمتابعة.",
   LoadingVehicleDetails: "جاري تحميل تفاصيل المركبة…",
+  AddAnotherVehicle: "إضافة مركبة أخرى",
+  TotalVehiclesCount: "الإجمالي",
+  SelectAllVehiclesInQuote: "الرجاء اختيار مركبة لكل صف، أو إزالة الصف الفارغ.",
 };

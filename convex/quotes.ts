@@ -48,6 +48,14 @@ export const saveQuote = mutation({
     orgId: v.id("organizations"),
     customerId: v.id("customers"),
     vehicleId: v.id("vehicles"),
+    // When set (2+ vehicles, or several units of the same model), this is the
+    // authoritative source for which vehicles/prices are on the quote —
+    // vehicleId/vehiclePrice below are derived server-side from it and the
+    // client-supplied values for them are ignored.
+    vehicleItems: v.optional(v.array(v.object({
+      vehicleId: v.id("vehicles"),
+      unitPrice: v.number(),
+    }))),
     companyId: v.optional(v.id("financeCompanies")),
     mode: quoteModeValidator,
     leadId: v.optional(v.id("leads")),
@@ -77,9 +85,31 @@ export const saveQuote = mutation({
       throw new ConvexError("Customer not found in this organization.");
     }
 
-    const vehicle = await ctx.db.get(args.vehicleId);
-    if (!vehicle || vehicle.orgId !== args.orgId) {
-      throw new ConvexError("Vehicle not found in this organization.");
+    let vehicleId = args.vehicleId;
+    let vehiclePrice = args.vehiclePrice;
+
+    if (args.vehicleItems && args.vehicleItems.length > 0) {
+      const seen = new Set<string>();
+      for (const item of args.vehicleItems) {
+        if (item.unitPrice <= 0) {
+          throw new ConvexError("Each vehicle in the quote must have a positive price.");
+        }
+        if (seen.has(item.vehicleId)) {
+          throw new ConvexError("The same vehicle cannot be added twice to a quote.");
+        }
+        seen.add(item.vehicleId);
+        const lineVehicle = await ctx.db.get(item.vehicleId);
+        if (!lineVehicle || lineVehicle.orgId !== args.orgId) {
+          throw new ConvexError("Vehicle not found in this organization.");
+        }
+      }
+      vehicleId = args.vehicleItems[0].vehicleId;
+      vehiclePrice = args.vehicleItems.reduce((sum, item) => sum + item.unitPrice, 0);
+    } else {
+      const vehicle = await ctx.db.get(args.vehicleId);
+      if (!vehicle || vehicle.orgId !== args.orgId) {
+        throw new ConvexError("Vehicle not found in this organization.");
+      }
     }
 
     if (args.mode === "CONFIGURED_FINANCE_COMPANY" && !args.companyId) {
@@ -102,7 +132,7 @@ export const saveQuote = mutation({
       if (!lead || lead.orgId !== args.orgId) {
         throw new ConvexError("Lead not found in this organization.");
       }
-      if (lead.customerId !== args.customerId || (lead.vehicleId && lead.vehicleId !== args.vehicleId)) {
+      if (lead.customerId !== args.customerId || (lead.vehicleId && lead.vehicleId !== vehicleId)) {
         throw new ConvexError("Lead does not match the quote customer and vehicle.");
       }
     }
@@ -119,6 +149,8 @@ export const saveQuote = mutation({
 
     return await ctx.db.insert("quotes", {
       ...quoteArgs,
+      vehicleId,
+      vehiclePrice,
       ...(args.mode === "MANUAL_FINANCE_COMPANY" && manualProviderName !== undefined ? { manualProviderName } : {}),
       ...(args.mode === "MANUAL_FINANCE_COMPANY" && manualProfitRate !== undefined ? { manualProfitRate } : {}),
       ...(args.mode === "MANUAL_FINANCE_COMPANY" && manualInsuranceRate !== undefined ? { manualInsuranceRate } : {}),

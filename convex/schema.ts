@@ -1116,6 +1116,14 @@ export default defineSchema({
     orgId: v.id("organizations"),
     customerId: v.id("customers"),
     vehicleId: v.id("vehicles"),
+    // When set, this quote covers multiple vehicles (or several units of the
+    // same model — each still its own inventory row/VIN). vehicleId/vehiclePrice
+    // above become derived convenience values (first line item / sum of all
+    // line items) for single-vehicle readers that haven't been updated yet.
+    vehicleItems: v.optional(v.array(v.object({
+      vehicleId: v.id("vehicles"),
+      unitPrice: v.number(),
+    }))),
     companyId: v.optional(v.id("financeCompanies")), // Null if cash deal
     mode: v.optional(v.union(
       v.literal("CASH"),
@@ -1173,6 +1181,12 @@ export default defineSchema({
     quoteId: v.id("quotes"),
     customerId: v.id("customers"),
     vehicleId: v.id("vehicles"),
+    // Mirrors quotes.vehicleItems — snapshotted at application creation so
+    // finalization can complete a sale per vehicle without re-reading the quote.
+    vehicleItems: v.optional(v.array(v.object({
+      vehicleId: v.id("vehicles"),
+      unitPrice: v.number(),
+    }))),
     companyId: v.optional(v.id("financeCompanies")),
     salespersonId: v.id("users"),
 

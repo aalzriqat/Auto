@@ -95,6 +95,7 @@ export function SalesWizard({
   const [finalQuoteData, setFinalQuoteData] = useState<{
     quoteId: Id<"quotes">;
     selectedVehicle?: Doc<"vehicles">;
+    selectedVehicles?: Array<{ vehicle: Doc<"vehicles">; unitPrice: number }>;
     selectedCompany?: Doc<"financeCompanies">;
     selectedResult: any;
   } | null>(null);
@@ -263,6 +264,7 @@ export function SalesWizard({
             selectedCustomer={selectedCustomer}
             quoteId={finalQuoteData.quoteId}
             selectedVehicle={finalQuoteData.selectedVehicle}
+            selectedVehicles={finalQuoteData.selectedVehicles}
             selectedCompany={finalQuoteData.selectedCompany}
             selectedResult={finalQuoteData.selectedResult}
             onClose={onClose}

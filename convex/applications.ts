@@ -280,9 +280,13 @@ export const createFromQuote = mutation({
     if (!customer || customer.orgId !== args.orgId) {
       throw new ConvexError("Quote customer not found in this organization.");
     }
-    const vehicle = await ctx.db.get(quote.vehicleId);
-    if (!vehicle || vehicle.orgId !== args.orgId) {
-      throw new ConvexError("Quote vehicle not found in this organization.");
+
+    const quoteVehicleItems = quote.vehicleItems ?? [{ vehicleId: quote.vehicleId, unitPrice: quote.vehiclePrice }];
+    for (const item of quoteVehicleItems) {
+      const lineVehicle = await ctx.db.get(item.vehicleId);
+      if (!lineVehicle || lineVehicle.orgId !== args.orgId) {
+        throw new ConvexError("Quote vehicle not found in this organization.");
+      }
     }
     if (quote.companyId) {
       const company = await ctx.db.get(quote.companyId);
@@ -302,21 +306,23 @@ export const createFromQuote = mutation({
       throw new ConvexError("An application already exists for this quote.");
     }
 
-    // A vehicle should only have one in-flight application at a time.
-    // Use an explicit allowlist of blocking statuses so REJECTED and CLOSED
-    // applications (which are effectively terminal) don't strand the vehicle
-    // indefinitely and allow a fresh deal to begin without requiring cancellation.
+    // Every vehicle on the quote should only have one in-flight application at
+    // a time. Use an explicit allowlist of blocking statuses so REJECTED and
+    // CLOSED applications (which are effectively terminal) don't strand the
+    // vehicle indefinitely and allow a fresh deal to begin without cancellation.
     const IN_FLIGHT_STATUSES: string[] = ["DRAFT", "PENDING_DOCS", "UNDER_REVIEW", "APPROVED"];
-    const activeForVehicle = await ctx.db
-      .query("financeApplications")
-      .withIndex("by_vehicle", (q) => q.eq("vehicleId", quote.vehicleId))
-      .filter((q) => q.eq(q.field("orgId"), args.orgId))
-      .collect()
-      .then((rows) => rows.find((r) => IN_FLIGHT_STATUSES.includes(r.status)));
-    if (activeForVehicle) {
-      throw new ConvexError(
-        "This vehicle already has an active finance application. Cancel it before starting a new one."
-      );
+    for (const item of quoteVehicleItems) {
+      const activeForVehicle = await ctx.db
+        .query("financeApplications")
+        .withIndex("by_vehicle", (q) => q.eq("vehicleId", item.vehicleId))
+        .filter((q) => q.eq(q.field("orgId"), args.orgId))
+        .collect()
+        .then((rows) => rows.find((r) => IN_FLIGHT_STATUSES.includes(r.status)));
+      if (activeForVehicle) {
+        throw new ConvexError(
+          "This vehicle already has an active finance application. Cancel it before starting a new one."
+        );
+      }
     }
 
     const guarantors = await ctx.db
@@ -336,12 +342,21 @@ export const createFromQuote = mutation({
     let vehicleValuation: number | undefined;
     let ltv: number | undefined;
     if (quote.companyId) {
-      const valuation = await ctx.db
-        .query("vehicleValuations")
-        .withIndex("by_vehicle", (q) => q.eq("vehicleId", quote.vehicleId))
-        .filter((q) => q.eq(q.field("companyId"), quote.companyId))
-        .first();
-      vehicleValuation = valuation?.valuationAmount;
+      const valuations = await Promise.all(
+        quoteVehicleItems.map((item) =>
+          ctx.db
+            .query("vehicleValuations")
+            .withIndex("by_vehicle", (q) => q.eq("vehicleId", item.vehicleId))
+            .filter((q) => q.eq(q.field("companyId"), quote.companyId))
+            .first()
+        )
+      );
+      // Only treat the combined valuation as meaningful if every vehicle on the
+      // quote has one — a partial sum would understate true collateral value.
+      const allValued = valuations.every((v) => v?.valuationAmount !== undefined);
+      vehicleValuation = allValued
+        ? valuations.reduce((sum, v) => sum + (v?.valuationAmount ?? 0), 0)
+        : undefined;
       if (vehicleValuation && quote.totalFinancedAmount !== undefined) {
         ltv = (quote.totalFinancedAmount / vehicleValuation) * 100;
       }
@@ -390,6 +405,7 @@ export const createFromQuote = mutation({
       quoteId: quote._id,
       customerId: quote.customerId,
       vehicleId: quote.vehicleId,
+      ...(quote.vehicleItems ? { vehicleItems: quote.vehicleItems } : {}),
       companyId: quote.companyId,
       salespersonId: auth.user._id,
       status: "PENDING_DOCS",

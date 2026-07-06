@@ -20,6 +20,8 @@ import { Badge } from "@/components/ui/badge";
 import { ArrowRight, Banknote, CreditCard, TrendingUp, ShieldAlert, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import VehiclePicker from "../components/VehiclePicker";
+import { VehicleLineItemsPicker } from "../components/VehicleLineItemsPicker";
+import type { VehicleLineItem } from "../types";
 import { FinancePanel } from "../components/FinancePanel";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -135,6 +137,26 @@ export default function Step1QuoteSetup({
   const watchedDown = form.watch("downPayment");
   const watchedTerm = form.watch("termMonths");
 
+  // Multiple vehicles / quantities are only supported for CASH quotes — see
+  // Step1QuoteSetup's install-vs-cash split (financed deals keep the
+  // per-vehicle profit-approval and LTV-eligibility engines below single-vehicle
+  // for now). vehicleId/vehiclePrice above stay in sync as the first item /
+  // total so the rest of this form's logic (which is entirely single-vehicle)
+  // doesn't need to change.
+  const [vehicleItems, setVehicleItems] = useState<VehicleLineItem[]>(
+    () => initialData.vehicleItems ?? [{ vehicleId: initialData.vehicleId, unitPrice: initialData.vehiclePrice || 0 }]
+  );
+
+  const handleVehicleItemsChange = (items: VehicleLineItem[]) => {
+    setVehicleItems(items);
+    form.setValue("vehicleId", items[0]?.vehicleId ?? "");
+    form.setValue(
+      "vehiclePrice",
+      items.reduce((sum, item) => sum + (item.unitPrice || 0), 0)
+    );
+    setSelectedCompanyId(undefined);
+  };
+
   const selectedVehicle = availableVehicles?.find((v: Doc<"vehicles">) => v._id === watchedVehicleId);
   const minimumProfit = selectedVehicle?.minimumProfit || 0;
   const isProfitBelowMinimum = !isCash && watchedVehicleId && Number(watchedProfit) < minimumProfit;
@@ -191,8 +213,16 @@ export default function Step1QuoteSetup({
       return;
     }
 
+    if (isCash && vehicleItems.some((item) => !item.vehicleId)) {
+      form.setError("vehicleId", {
+        message: t("SelectAllVehiclesInQuote" as any) ?? "Select a vehicle for every row, or remove the empty one.",
+      });
+      return;
+    }
+
     onNext({
       ...values,
+      vehicleItems: isCash && vehicleItems.length > 1 ? vehicleItems : undefined,
       selectedCompanyId,
       manualProfitRate,
       manualInsuranceRate,
@@ -245,25 +275,38 @@ export default function Step1QuoteSetup({
             <FormItem>
               <FormLabel>{t("Vehicle" as any)}</FormLabel>
               <FormControl>
-                <VehiclePicker
-                  vehicles={allPickerVehicles}
-                  nonSelectableVehicles={nonSelectableVehicles}
-                  value={field.value}
-                  onChange={(id, price) => {
-                    field.onChange(id);
-                    form.setValue("vehiclePrice", price);
-                    setSelectedCompanyId(undefined);
-                  }}
-                  onSourceVehicle={async (data) => {
-                    if (!activeOrgId) throw new Error("No org selected");
-                    const newId = await createSourced({
-                      orgId: activeOrgId,
-                      ...data,
-                    });
-                    return newId;
-                  }}
-                  initialSourceData={initialData.sourceLikeVehicle}
-                />
+                {isCash ? (
+                  <VehicleLineItemsPicker
+                    vehicles={allPickerVehicles}
+                    nonSelectableVehicles={nonSelectableVehicles}
+                    items={vehicleItems}
+                    onChange={handleVehicleItemsChange}
+                    onSourceVehicle={async (data) => {
+                      if (!activeOrgId) throw new Error("No org selected");
+                      return await createSourced({ orgId: activeOrgId, ...data });
+                    }}
+                  />
+                ) : (
+                  <VehiclePicker
+                    vehicles={allPickerVehicles}
+                    nonSelectableVehicles={nonSelectableVehicles}
+                    value={field.value}
+                    onChange={(id, price) => {
+                      field.onChange(id);
+                      form.setValue("vehiclePrice", price);
+                      setSelectedCompanyId(undefined);
+                    }}
+                    onSourceVehicle={async (data) => {
+                      if (!activeOrgId) throw new Error("No org selected");
+                      const newId = await createSourced({
+                        orgId: activeOrgId,
+                        ...data,
+                      });
+                      return newId;
+                    }}
+                    initialSourceData={initialData.sourceLikeVehicle}
+                  />
+                )}
               </FormControl>
               <FormMessage />
             </FormItem>

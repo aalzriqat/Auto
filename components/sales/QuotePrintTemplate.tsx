@@ -9,6 +9,8 @@ interface QuotePrintTemplateProps {
   paymentType: "CASH" | "INSTALLMENT";
   wizardData: WizardData;
   selectedVehicle?: Doc<"vehicles">;
+  /** 2+ vehicles on a CASH quote — when present, renders a per-vehicle table instead of the single-vehicle spec table. */
+  selectedVehicles?: Array<{ vehicle: Doc<"vehicles">; unitPrice: number }>;
   selectedCompany?: Doc<"financeCompanies">;
   selectedCustomer: Doc<"customers">;
   selectedResult: any;
@@ -19,6 +21,7 @@ interface QuotePrintTemplateProps {
 export function QuotePrintTemplate({
   wizardData: _wizardData,
   selectedVehicle,
+  selectedVehicles,
   selectedCompany: _selectedCompany,
   selectedCustomer,
   selectedResult,
@@ -109,34 +112,60 @@ export function QuotePrintTemplate({
             >
               {t("VehicleSpecs" as any)}
             </h2>
-            <table className="w-full text-xs border-collapse border border-[#e5e7eb]">
-              <tbody>
-                <tr className="border-b border-[#e5e7eb]">
-                  <th scope="row" className="py-2.5 font-semibold text-[#374151] text-start w-1/3 bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("VehicleType" as any)}:</th>
-                  <td className="py-2.5 px-3 font-medium text-[#111827]">{selectedVehicle?.make ?? t("NotSpecified" as any)} {selectedVehicle?.model}</td>
-                </tr>
-                <tr className="border-b border-[#e5e7eb]">
-                  <th scope="row" className="py-2.5 font-semibold text-[#374151] text-start bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("ManufactureYear" as any)}</th>
-                  <td className="py-2.5 px-3 font-medium text-[#111827]">{selectedVehicle?.year}</td>
-                </tr>
-                <tr className="border-b border-[#e5e7eb]">
-                  <th scope="row" className="py-2.5 font-semibold text-[#374151] text-start bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("BatteryFuelType" as any)}</th>
-                  <td className="py-2.5 px-3 font-medium text-[#111827]">{selectedVehicle?.fuelType ?? t("NotSpecified" as any)} {selectedVehicle?.trim ? `(${selectedVehicle.trim})` : ""}</td>
-                </tr>
-                <tr className="border-b border-[#e5e7eb]">
-                  <th scope="row" className="py-2.5 font-semibold text-[#374151] text-start bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("ConditionNewUsed" as any)}</th>
-                  <td className="py-2.5 px-3 font-medium text-[#111827]">{condition}</td>
-                </tr>
-                <tr className="border-b border-[#e5e7eb]">
-                  <th scope="row" className="py-2.5 font-semibold text-[#374151] text-start bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("ChassisNumberVIN" as any)}</th>
-                  <td className="py-2.5 px-3 font-mono text-xs text-[#111827]">{selectedVehicle?.vin ?? t("PendingQuoteVIN" as any)}</td>
-                </tr>
-                <tr className="border-b border-[#e5e7eb]">
-                  <th scope="row" className="py-2.5 font-semibold text-[#374151] text-start bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("AdditionsSpecs" as any)}</th>
-                  <td className="py-2.5 px-3 text-[#374151] leading-relaxed">{additions}</td>
-                </tr>
-              </tbody>
-            </table>
+            {selectedVehicles && selectedVehicles.length > 1 ? (
+              <table className="w-full text-xs border-collapse border border-[#e5e7eb]">
+                <thead>
+                  <tr className="border-b border-[#e5e7eb] bg-[#f0f4f2]">
+                    <th className="py-2 px-3 text-start font-semibold text-[#374151]">{t("VehicleType" as any)}</th>
+                    <th className="py-2 px-3 text-start font-semibold text-[#374151]">{t("ChassisNumberVIN" as any)}</th>
+                    <th className="py-2 px-3 text-end font-semibold text-[#374151]">{t("TotalVehiclePrice" as any)}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedVehicles.map(({ vehicle, unitPrice }) => (
+                    <tr key={vehicle._id} className="border-b border-[#e5e7eb]">
+                      <td className="py-2.5 px-3 font-medium text-[#111827]">
+                        {vehicle.year} {vehicle.make} {vehicle.model}
+                        {vehicle.trim ? ` (${vehicle.trim})` : ""}
+                      </td>
+                      <td className="py-2.5 px-3 font-mono text-[#111827]">{vehicle.vin ?? t("PendingQuoteVIN" as any)}</td>
+                      <td className="py-2.5 px-3 text-end font-medium text-[#111827]">
+                        {unitPrice.toLocaleString(undefined, { minimumFractionDigits: 2 })} {currencyLabel}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <table className="w-full text-xs border-collapse border border-[#e5e7eb]">
+                <tbody>
+                  <tr className="border-b border-[#e5e7eb]">
+                    <th scope="row" className="py-2.5 font-semibold text-[#374151] text-start w-1/3 bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("VehicleType" as any)}:</th>
+                    <td className="py-2.5 px-3 font-medium text-[#111827]">{selectedVehicle?.make ?? t("NotSpecified" as any)} {selectedVehicle?.model}</td>
+                  </tr>
+                  <tr className="border-b border-[#e5e7eb]">
+                    <th scope="row" className="py-2.5 font-semibold text-[#374151] text-start bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("ManufactureYear" as any)}</th>
+                    <td className="py-2.5 px-3 font-medium text-[#111827]">{selectedVehicle?.year}</td>
+                  </tr>
+                  <tr className="border-b border-[#e5e7eb]">
+                    <th scope="row" className="py-2.5 font-semibold text-[#374151] text-start bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("BatteryFuelType" as any)}</th>
+                    <td className="py-2.5 px-3 font-medium text-[#111827]">{selectedVehicle?.fuelType ?? t("NotSpecified" as any)} {selectedVehicle?.trim ? `(${selectedVehicle.trim})` : ""}</td>
+                  </tr>
+                  <tr className="border-b border-[#e5e7eb]">
+                    <th scope="row" className="py-2.5 font-semibold text-[#374151] text-start bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("ConditionNewUsed" as any)}</th>
+                    <td className="py-2.5 px-3 font-medium text-[#111827]">{condition}</td>
+                  </tr>
+                  <tr className="border-b border-[#e5e7eb]">
+                    <th scope="row" className="py-2.5 font-semibold text-[#374151] text-start bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("ChassisNumberVIN" as any)}</th>
+                    <td className="py-2.5 px-3 font-mono text-xs text-[#111827]">{selectedVehicle?.vin ?? t("PendingQuoteVIN" as any)}</td>
+                  </tr>
+                  <tr className="border-b border-[#e5e7eb]">
+                    <th scope="row" className="py-2.5 font-semibold text-[#374151] text-start bg-[#f0f4f2] px-3 border-e border-[#e5e7eb]">{t("AdditionsSpecs" as any)}</th>
+                    <td className="py-2.5 px-3 text-[#374151] leading-relaxed">{additions}</td>
+                  </tr>
+                </tbody>
+              </table>
+            )}
           </div>
 
           {/* Pricing */}

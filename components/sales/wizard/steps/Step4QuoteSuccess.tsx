@@ -22,6 +22,7 @@ interface Step4QuoteSuccessProps {
   selectedCustomer: Doc<"customers">;
   quoteId: Id<"quotes">;
   selectedVehicle?: Doc<"vehicles">;
+  selectedVehicles?: Array<{ vehicle: Doc<"vehicles">; unitPrice: number }>;
   selectedCompany?: Doc<"financeCompanies">;
   selectedResult: any;
   onClose: () => void;
@@ -33,6 +34,7 @@ export function Step4QuoteSuccess({
   selectedCustomer,
   quoteId,
   selectedVehicle,
+  selectedVehicles,
   selectedCompany,
   selectedResult,
   onClose,
@@ -233,6 +235,7 @@ export function Step4QuoteSuccess({
         paymentType={paymentType}
         wizardData={wizardData}
         selectedVehicle={selectedVehicle}
+        selectedVehicles={selectedVehicles}
         selectedCompany={selectedCompany}
         selectedCustomer={selectedCustomer}
         selectedResult={selectedResult}

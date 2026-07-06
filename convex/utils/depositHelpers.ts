@@ -182,6 +182,9 @@ export async function releaseHoldForApplicationQuote(
     .withIndex("by_quote", (q) => q.eq("quoteId", args.quoteId))
     .collect();
 
+  // Only releases each deposit's primary vehicle (deposits snapshot one
+  // vehicleId). For a multi-vehicle quote, the other vehicles held via
+  // holdVehicleForDeposit stay RESERVED and need a manual status correction.
   for (const deposit of deposits) {
     if (!deposit.holdActive) continue;
     await ctx.db.patch(deposit._id, { holdActive: false });

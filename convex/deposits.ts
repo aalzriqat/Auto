@@ -79,9 +79,13 @@ export const create = mutation({
           throw new ConvexError("Total deposits cannot exceed the quote amount.");
         }
 
-        // Throws if the vehicle is SOLD/ARCHIVED; otherwise patches AVAILABLE -> RESERVED
-        // (no-op if it's already RESERVED — parallel deposits are allowed).
-        await holdVehicleForDeposit(ctx, quote.vehicleId);
+        // Throws if a vehicle is SOLD/ARCHIVED; otherwise patches AVAILABLE -> RESERVED
+        // (no-op if already RESERVED — parallel deposits are allowed). A multi-vehicle
+        // quote holds every vehicle on the deal, not just the first one.
+        const depositVehicleItems = quote.vehicleItems ?? [{ vehicleId: quote.vehicleId }];
+        for (const item of depositVehicleItems) {
+          await holdVehicleForDeposit(ctx, item.vehicleId);
+        }
 
         const now = Date.now();
         const depositId = await recordHeldDeposit(ctx, {
@@ -246,6 +250,10 @@ export const release = mutation({
           });
         }
 
+        // Only releases the deposit's primary vehicle. For a multi-vehicle quote,
+        // the other vehicles held via holdVehicleForDeposit are not auto-released
+        // here (deposits only snapshot one vehicleId) — staff must flip their
+        // status back to AVAILABLE manually if the whole deal falls through.
         await maybeReleaseVehicleHold(ctx, deposit.vehicleId);
 
         const actorName = await getActorName(ctx);

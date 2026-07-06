@@ -43,6 +43,7 @@ export function buildWizardQuotePayload({
   return {
     orgId,
     vehicleId: wizardData.vehicleId,
+    vehicleItems: wizardData.vehicleItems,
     customerId,
     leadId: wizardData.leadId || undefined,
     companyId:
