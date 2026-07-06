@@ -55,6 +55,7 @@ async function seedPhase0Dealer() {
         "review:finance_application", "approve:finance_application",
         "finalize:financed_deal", "confirm:finance_disbursement",
         "verify:finance_documents",
+        "register:vehicle_handover", "register:expected_payment",
       ],
     })
   );
@@ -167,6 +168,13 @@ describe("Phase 0 financial safety controls", () => {
     const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
     await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
     await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
+    await asUser.mutation(api.applications.registerVehicleHandover, { orgId, applicationId });
+    await asUser.mutation(api.applications.registerExpectedPayment, {
+      orgId,
+      applicationId,
+      method: "CASH",
+      expectedDate: Date.now(),
+    });
 
     const firstSaleId = await asUser.mutation(api.applications.finalizeDeal, {
       orgId,

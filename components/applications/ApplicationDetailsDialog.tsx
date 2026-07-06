@@ -19,6 +19,8 @@ import { PERMISSIONS } from "@/convex/utils/permissions";
 import { useCurrency } from "@/hooks/useCurrency";
 import { scaleForCurrency } from "@/components/accounting/AccountingTabShared";
 import { DisbursementConfirmationDialog } from "./DisbursementConfirmationDialog";
+import { VehicleHandoverDialog } from "./VehicleHandoverDialog";
+import { RegisterExpectedPaymentDialog, type ExpectedPaymentMethod } from "./RegisterExpectedPaymentDialog";
 
 export function ApplicationDetailsDialog({
   applicationId,
@@ -39,10 +41,16 @@ export function ApplicationDetailsDialog({
   const canFinalizeApplication = hasPermission(PERMISSIONS.FINALIZE_FINANCED_DEAL);
   const canVerifyDocuments = hasPermission(PERMISSIONS.VERIFY_FINANCE_DOCUMENTS);
   const canConfirmFinanceDisbursement = hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
+  const canRegisterHandover = hasPermission(PERMISSIONS.REGISTER_VEHICLE_HANDOVER);
+  const canRegisterExpectedPayment = hasPermission(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
   const [previewFile, setPreviewFile] = useState<{ url: string; name: string } | null>(null);
   const [isCancelDialogOpen, setIsCancelDialogOpen] = useState(false);
   const [isDisbursementDialogOpen, setIsDisbursementDialogOpen] = useState(false);
   const [isConfirmingDisbursement, setIsConfirmingDisbursement] = useState(false);
+  const [isHandoverDialogOpen, setIsHandoverDialogOpen] = useState(false);
+  const [isRegisteringHandover, setIsRegisteringHandover] = useState(false);
+  const [isPaymentDialogOpen, setIsPaymentDialogOpen] = useState(false);
+  const [isRegisteringPayment, setIsRegisteringPayment] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
   const finalizeDealIdempotencyKeyRef = useRef<string | null>(null);
   const cancelApplicationIdempotencyKeyRef = useRef<string | null>(null);
@@ -56,6 +64,8 @@ export function ApplicationDetailsDialog({
   const cancelApplication = useMutation(api.applications.cancelApplication);
   const finalizeDeal = useMutation(api.applications.finalizeDeal);
   const confirmDisbursement = useMutation(api.applications.confirmDisbursement);
+  const registerVehicleHandover = useMutation(api.applications.registerVehicleHandover);
+  const registerExpectedPayment = useMutation(api.applications.registerExpectedPayment);
   const updateDocStatus = useMutation(api.documents.updateDocumentStatus);
   const generateUploadUrl = useMutation(api.documents.generateUploadUrl);
   const saveDocumentFile = useMutation(api.documents.saveDocumentFile);
@@ -150,6 +160,38 @@ export function ApplicationDetailsDialog({
       onOpenChange(false);
     } catch {
       toast.error(t("UnexpectedError" as any));
+    }
+  };
+
+  const handleRegisterHandover = async (notes?: string) => {
+    if (!activeOrgId) return;
+    setIsRegisteringHandover(true);
+    try {
+      await registerVehicleHandover({ orgId: activeOrgId, applicationId, notes });
+      toast.success(t("VehicleHandoverRegisteredSuccess" as any));
+      setIsHandoverDialogOpen(false);
+    } catch {
+      toast.error(t("UnexpectedError" as any));
+    } finally {
+      setIsRegisteringHandover(false);
+    }
+  };
+
+  const handleRegisterExpectedPayment = async (values: {
+    method: ExpectedPaymentMethod;
+    expectedDate: number;
+    chequeDetails?: { bank: string; chequeNumber: string };
+  }) => {
+    if (!activeOrgId) return;
+    setIsRegisteringPayment(true);
+    try {
+      await registerExpectedPayment({ orgId: activeOrgId, applicationId, ...values });
+      toast.success(t("ExpectedPaymentRegisteredSuccess" as any));
+      setIsPaymentDialogOpen(false);
+    } catch {
+      toast.error(t("UnexpectedError" as any));
+    } finally {
+      setIsRegisteringPayment(false);
     }
   };
 
@@ -306,13 +348,59 @@ export function ApplicationDetailsDialog({
                     </Button>
                 )}
 
+                {app.status === "APPROVED" && (
+                  <>
+                    {app.vehicleHandoverAt ? (
+                      <Badge variant="outline" className="justify-center py-2 border-orange-500/40 text-orange-600">
+                        {t("VehicleHandoverRegistered" as any)}
+                      </Badge>
+                    ) : (
+                      canRegisterHandover && (
+                        <VehicleHandoverDialog
+                          open={isHandoverDialogOpen}
+                          disabled={isRegisteringHandover}
+                          submitting={isRegisteringHandover}
+                          t={(key) => t(key as any)}
+                          onOpenChange={setIsHandoverDialogOpen}
+                          onConfirm={handleRegisterHandover}
+                        />
+                      )
+                    )}
+
+                    {app.expectedPaymentMethod ? (
+                      <Badge variant="outline" className="justify-center py-2 border-indigo-500/40 text-indigo-600">
+                        {t("ExpectedPaymentRegistered" as any)}
+                      </Badge>
+                    ) : (
+                      canRegisterExpectedPayment && (
+                        <RegisterExpectedPaymentDialog
+                          open={isPaymentDialogOpen}
+                          disabled={isRegisteringPayment || !app.vehicleHandoverAt}
+                          submitting={isRegisteringPayment}
+                          t={(key) => t(key as any)}
+                          onOpenChange={setIsPaymentDialogOpen}
+                          onConfirm={handleRegisterExpectedPayment}
+                        />
+                      )
+                    )}
+                  </>
+                )}
+
                 {app.status === "APPROVED" && canFinalizeApplication && (
-                  <Button
-                    onClick={handleFinalizeDeal}
-                    className="bg-blue-600 hover:bg-blue-700 text-white mt-2"
-                  >
-                    {t("FinalizeDealClose" as any)}
-                  </Button>
+                  <>
+                    <Button
+                      onClick={handleFinalizeDeal}
+                      className="bg-blue-600 hover:bg-blue-700 text-white mt-2"
+                      disabled={!app.vehicleHandoverAt || !app.expectedPaymentMethod}
+                    >
+                      {t("FinalizeDealClose" as any)}
+                    </Button>
+                    {!app.vehicleHandoverAt ? (
+                      <p className="text-xs text-muted-foreground text-center">{t("FinalizeBlockedHandoverHint" as any)}</p>
+                    ) : !app.expectedPaymentMethod ? (
+                      <p className="text-xs text-muted-foreground text-center">{t("FinalizeBlockedPaymentHint" as any)}</p>
+                    ) : null}
+                  </>
                 )}
 
                 {expectsFinanceCompanyDisbursement && app.status === "CLOSED" && app.disbursedAt && (

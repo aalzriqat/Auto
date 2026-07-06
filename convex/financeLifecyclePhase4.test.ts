@@ -21,6 +21,8 @@ const FINANCE_LIFECYCLE_PERMISSIONS = {
   APPROVE: "approve:finance_application",
   FINALIZE: "finalize:financed_deal",
   CONFIRM_DISBURSEMENT: "confirm:finance_disbursement",
+  REGISTER_HANDOVER: "register:vehicle_handover",
+  REGISTER_EXPECTED_PAYMENT: "register:expected_payment",
 } as const;
 
 let applicationSeedCounter = 0;
@@ -104,6 +106,8 @@ async function seedFinanceLifecycleDealer(tag = "fl4") {
       permissions: [
         FINANCE_LIFECYCLE_PERMISSIONS.VIEW,
         FINANCE_LIFECYCLE_PERMISSIONS.FINALIZE,
+        FINANCE_LIFECYCLE_PERMISSIONS.REGISTER_HANDOVER,
+        FINANCE_LIFECYCLE_PERMISSIONS.REGISTER_EXPECTED_PAYMENT,
       ],
     })
   );
@@ -361,6 +365,14 @@ describe("Finance lifecycle Phase 4", () => {
     await expect(
       asLimitedUser.mutation(api.applications.finalizeDeal, { orgId, applicationId })
     ).rejects.toThrow(/finalize:financed_deal/);
+
+    await asFinalizer.mutation(api.applications.registerVehicleHandover, { orgId, applicationId });
+    await asFinalizer.mutation(api.applications.registerExpectedPayment, {
+      orgId,
+      applicationId,
+      method: "CASH",
+      expectedDate: Date.now(),
+    });
 
     const saleId = await asFinalizer.mutation(api.applications.finalizeDeal, {
       orgId,

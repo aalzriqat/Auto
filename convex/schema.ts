@@ -1228,6 +1228,23 @@ export default defineSchema({
     disbursedAt: v.optional(v.number()),
     disbursedAmountMinor: v.optional(v.number()),
     disbursementIdempotencyKey: v.optional(v.string()),
+    // التنازل بالسيارة للعميل — vehicle handover to the customer, registered
+    // before finalizeDeal is allowed to run.
+    vehicleHandoverAt: v.optional(v.number()),
+    vehicleHandoverBy: v.optional(v.id("users")),
+    vehicleHandoverNotes: v.optional(v.string()),
+    // How and when the deal's payment is expected to be received, registered
+    // before finalizeDeal — generalizes the finance-company-only disbursement
+    // flow to also cover cash/in-house-installment/cheque/bank deals.
+    expectedPaymentMethod: v.optional(v.union(
+      v.literal("CASH"),
+      v.literal("INTERNAL_INSTALLMENT"),
+      v.literal("CHEQUE"),
+      v.literal("BANK_TRANSFER"),
+    )),
+    expectedPaymentDate: v.optional(v.number()),
+    expectedPaymentRegisteredAt: v.optional(v.number()),
+    expectedPaymentRegisteredBy: v.optional(v.id("users")),
     cancelledBy: v.optional(v.id("users")),
     cancelledAt: v.optional(v.number()),
     cancellationReason: v.optional(v.string()),
@@ -1436,6 +1453,9 @@ export default defineSchema({
     customerId: v.id("customers"),
     vehicleId: v.optional(v.id("vehicles")),
     saleId: v.optional(v.id("sales")),
+    // Set when this cheque is the registered expected-payment method for a
+    // finance application, ahead of finalizeDeal — see registerExpectedPayment.
+    applicationId: v.optional(v.id("financeApplications")),
     bank: v.string(),
     chequeNumber: v.string(),
     chequeDate: v.number(),
@@ -1471,7 +1491,8 @@ export default defineSchema({
     .index("by_org_bank_and_chequeNumber", ["orgId", "bank", "chequeNumber"])
     .index("by_org_customer", ["orgId", "customerId"])
     .index("by_receivable", ["receivableId"])
-    .index("by_replacementCheque", ["replacementChequeId"]),
+    .index("by_replacementCheque", ["replacementChequeId"])
+    .index("by_application", ["applicationId"]),
 
   cashierReconciliations: defineTable({
     orgId: v.id("organizations"),

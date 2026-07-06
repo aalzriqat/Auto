@@ -834,6 +834,81 @@ export const recordPayment = mutation({
   },
 });
 
+/**
+ * Shared cheque-registration core, reused by the registerCheque mutation
+ * (MANAGE_FINANCE-gated, for Collections) and applications.registerExpectedPayment
+ * (REGISTER_EXPECTED_PAYMENT-gated, for the pre-finalize payment step) — each
+ * caller does its own permission check before calling this.
+ */
+export async function registerChequeCore(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    receivableId?: Id<"receivables">;
+    customerId: Id<"customers">;
+    vehicleId?: Id<"vehicles">;
+    saleId?: Id<"sales">;
+    applicationId?: Id<"financeApplications">;
+    bank: string;
+    chequeNumber: string;
+    chequeDate: number;
+    amount: number;
+    notes?: string;
+    actorId: Id<"users">;
+    branchId?: Id<"branches">;
+  }
+) {
+  assertPositiveAmount(args.amount);
+  if (!args.bank.trim() || !args.chequeNumber.trim()) {
+    throw new ConvexError("Bank and cheque number are required.");
+  }
+
+  await validateOrgCustomer(ctx, args.orgId, args.customerId);
+  await validateOptionalLinks(ctx, args.orgId, {
+    vehicleId: args.vehicleId,
+    saleId: args.saleId,
+    applicationId: args.applicationId,
+  });
+
+  let receivable: Doc<"receivables"> | null = null;
+  if (args.receivableId) {
+    receivable = await ctx.db.get(args.receivableId);
+    if (!receivable || receivable.orgId !== args.orgId) throw new ConvexError("Receivable not found.");
+    if (receivable.customerId !== args.customerId) throw new ConvexError("Cheque customer must match receivable customer.");
+  }
+
+  const duplicate = await ctx.db
+    .query("postDatedCheques")
+    .withIndex("by_org_bank_and_chequeNumber", (q) =>
+      q.eq("orgId", args.orgId).eq("bank", args.bank.trim()).eq("chequeNumber", args.chequeNumber.trim())
+    )
+    .first();
+  if (duplicate && !duplicate.isDeleted && duplicate.status !== "CANCELLED") {
+    throw new ConvexError("A cheque with this bank and number already exists.");
+  }
+
+  const currency = await getOrgCurrency(ctx, args.orgId);
+  const now = Date.now();
+  return await ctx.db.insert("postDatedCheques", {
+    orgId: args.orgId,
+    branchId: args.branchId,
+    receivableId: receivable?._id,
+    customerId: args.customerId,
+    vehicleId: receivable?.vehicleId ?? args.vehicleId,
+    saleId: receivable?.saleId ?? args.saleId,
+    applicationId: args.applicationId,
+    bank: args.bank.trim(),
+    chequeNumber: args.chequeNumber.trim(),
+    chequeDate: args.chequeDate,
+    amount: roundMoney(args.amount, currency),
+    status: "HELD",
+    notes: args.notes,
+    createdBy: args.actorId,
+    createdAt: now,
+    updatedAt: now,
+  });
+}
+
 export const registerCheque = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -849,50 +924,7 @@ export const registerCheque = mutation({
   },
   handler: async (ctx, args) => {
     const { user, membership } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    assertPositiveAmount(args.amount);
-    if (!args.bank.trim() || !args.chequeNumber.trim()) {
-      throw new ConvexError("Bank and cheque number are required.");
-    }
-
-    await validateOrgCustomer(ctx, args.orgId, args.customerId);
-    await validateOptionalLinks(ctx, args.orgId, { vehicleId: args.vehicleId, saleId: args.saleId });
-
-    let receivable: Doc<"receivables"> | null = null;
-    if (args.receivableId) {
-      receivable = await ctx.db.get(args.receivableId);
-      if (!receivable || receivable.orgId !== args.orgId) throw new ConvexError("Receivable not found.");
-      if (receivable.customerId !== args.customerId) throw new ConvexError("Cheque customer must match receivable customer.");
-    }
-
-    const duplicate = await ctx.db
-      .query("postDatedCheques")
-      .withIndex("by_org_bank_and_chequeNumber", (q) =>
-        q.eq("orgId", args.orgId).eq("bank", args.bank.trim()).eq("chequeNumber", args.chequeNumber.trim())
-      )
-      .first();
-    if (duplicate && !duplicate.isDeleted && duplicate.status !== "CANCELLED") {
-      throw new ConvexError("A cheque with this bank and number already exists.");
-    }
-
-    const currency = await getOrgCurrency(ctx, args.orgId);
-    const now = Date.now();
-    return await ctx.db.insert("postDatedCheques", {
-      orgId: args.orgId,
-      branchId: membership.branchId,
-      receivableId: receivable?._id,
-      customerId: args.customerId,
-      vehicleId: receivable?.vehicleId ?? args.vehicleId,
-      saleId: receivable?.saleId ?? args.saleId,
-      bank: args.bank.trim(),
-      chequeNumber: args.chequeNumber.trim(),
-      chequeDate: args.chequeDate,
-      amount: roundMoney(args.amount, currency),
-      status: "HELD",
-      notes: args.notes,
-      createdBy: user._id,
-      createdAt: now,
-      updatedAt: now,
-    });
+    return await registerChequeCore(ctx, { ...args, actorId: user._id, branchId: membership.branchId });
   },
 });
 

@@ -48,6 +48,8 @@ async function seedFinanceLifecycleDealer(): Promise<SetupResult> {
         "finalize:financed_deal",
         "view:finance_applications",
         "view:customers",
+        "register:vehicle_handover",
+        "register:expected_payment",
       ],
     })
   );
@@ -106,6 +108,13 @@ async function finalizeQuote(
   const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
   await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
   await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
+  await asUser.mutation(api.applications.registerVehicleHandover, { orgId, applicationId });
+  await asUser.mutation(api.applications.registerExpectedPayment, {
+    orgId,
+    applicationId,
+    method: "CASH",
+    expectedDate: Date.now(),
+  });
   return await asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId });
 }
 
@@ -213,6 +222,13 @@ describe("Finance lifecycle phase 1 quote mode", () => {
     const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
     await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
     await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
+    await asUser.mutation(api.applications.registerVehicleHandover, { orgId, applicationId });
+    await asUser.mutation(api.applications.registerExpectedPayment, {
+      orgId,
+      applicationId,
+      method: "CASH",
+      expectedDate: Date.now(),
+    });
     await asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId });
 
     await t.run(async (ctx) => {

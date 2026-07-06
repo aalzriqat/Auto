@@ -23,6 +23,8 @@ const PERMISSIONS = [
   "confirm:finance_disbursement",
   "verify:finance_documents",
   "view:finance",
+  "register:vehicle_handover",
+  "register:expected_payment",
 ];
 
 async function setup() {
@@ -517,6 +519,13 @@ describe("applications deposit hooks", () => {
     const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
     await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
     await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
+    await asUser.mutation(api.applications.registerVehicleHandover, { orgId, applicationId });
+    await asUser.mutation(api.applications.registerExpectedPayment, {
+      orgId,
+      applicationId,
+      method: "CASH",
+      expectedDate: Date.now(),
+    });
     await asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId });
 
     await t.run(async (ctx) => {

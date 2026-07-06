@@ -9,6 +9,7 @@ import { releaseHoldForApplicationQuote } from "./utils/depositHelpers";
 import { completeSale } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { runWithIdempotency } from "./utils/idempotency";
+import { registerChequeCore } from "./collections";
 import {
   hookFinanceDisbursed,
   hookFinanceCashReceived,
@@ -726,6 +727,97 @@ export const getLog = query({
   },
 });
 
+const expectedPaymentMethodValidator = v.union(
+  v.literal("CASH"),
+  v.literal("INTERNAL_INSTALLMENT"),
+  v.literal("CHEQUE"),
+  v.literal("BANK_TRANSFER"),
+);
+
+/**
+ * التنازل بالسيارة للعميل — records that the vehicle has been handed over to
+ * the customer. Required before finalizeDeal. Data-capture only, no document
+ * is generated.
+ */
+export const registerVehicleHandover = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    notes: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.REGISTER_VEHICLE_HANDOVER]);
+    const app = await ctx.db.get(args.applicationId);
+    if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
+    if (app.status !== "APPROVED") throw new ConvexError("Application must be APPROVED before registering handover.");
+
+    const now = Date.now();
+    await ctx.db.patch(args.applicationId, {
+      vehicleHandoverAt: now,
+      vehicleHandoverBy: user._id,
+      vehicleHandoverNotes: args.notes,
+      updatedAt: now,
+    });
+    return now;
+  },
+});
+
+/**
+ * Registers how and when the deal's payment is expected to arrive — cash,
+ * in-house installment with the customer, a cheque (from the finance company
+ * or the customer's bank), or a bank transfer — before finalizeDeal. For
+ * CHEQUE this also opens a real postDatedCheques record so it flows through
+ * the existing cheque lifecycle (HELD -> DEPOSITED -> CLEARED).
+ */
+export const registerExpectedPayment = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    applicationId: v.id("financeApplications"),
+    method: expectedPaymentMethodValidator,
+    expectedDate: v.number(),
+    chequeDetails: v.optional(v.object({
+      bank: v.string(),
+      chequeNumber: v.string(),
+    })),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.REGISTER_EXPECTED_PAYMENT]);
+    const app = await ctx.db.get(args.applicationId);
+    if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
+    if (app.status !== "APPROVED") throw new ConvexError("Application must be APPROVED before registering expected payment.");
+    if (!app.vehicleHandoverAt) throw new ConvexError("Register the vehicle handover before the expected payment.");
+
+    if (args.method === "CHEQUE") {
+      if (!args.chequeDetails?.bank?.trim() || !args.chequeDetails?.chequeNumber?.trim()) {
+        throw new ConvexError("Bank and cheque number are required for a cheque payment.");
+      }
+      const quote = await ctx.db.get(app.quoteId);
+      const amount = quote?.totalFinancedAmount ?? quote?.vehiclePrice ?? 0;
+      await registerChequeCore(ctx, {
+        orgId: args.orgId,
+        customerId: app.customerId,
+        vehicleId: app.vehicleId,
+        applicationId: args.applicationId,
+        bank: args.chequeDetails.bank,
+        chequeNumber: args.chequeDetails.chequeNumber,
+        chequeDate: args.expectedDate,
+        amount,
+        actorId: user._id,
+      });
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(args.applicationId, {
+      expectedPaymentMethod: args.method,
+      expectedPaymentDate: args.expectedDate,
+      expectedPaymentRegisteredAt: now,
+      expectedPaymentRegisteredBy: user._id,
+      updatedAt: now,
+    });
+    return now;
+  },
+});
+
 export const finalizeDeal = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -748,6 +840,12 @@ export const finalizeDeal = mutation({
         if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
         if (app.status === "CLOSED" && app.finalizedSaleId) return app.finalizedSaleId;
         if (app.status !== "APPROVED") throw new ConvexError("Application must be APPROVED before finalizing");
+        if (!app.vehicleHandoverAt) {
+          throw new ConvexError("Register the vehicle handover to the customer before finalizing the deal.");
+        }
+        if (!app.expectedPaymentMethod || !app.expectedPaymentDate) {
+          throw new ConvexError("Register how and when the payment is expected before finalizing the deal.");
+        }
 
         const quote = await ctx.db.get(app.quoteId);
         if (!quote || quote.orgId !== args.orgId) throw new ConvexError("Quote not found");
@@ -923,12 +1021,18 @@ export const confirmDisbursement = mutation({
           actorId: user._id,
           now,
         });
+        // Reflects whatever method was registered before finalization
+        // (registerExpectedPayment) instead of assuming bank transfer.
+        const disbursementMethod =
+          app.expectedPaymentMethod === "CASH" || app.expectedPaymentMethod === "CHEQUE"
+            ? app.expectedPaymentMethod
+            : "BANK_TRANSFER";
         const canonicalPaymentId = await createCanonicalPayment(ctx, {
           orgId: args.orgId,
           direction: "IN",
           payerType: "FINANCE_COMPANY",
           financeCompanyId: app.companyId,
-          method: "BANK_TRANSFER",
+          method: disbursementMethod,
           amountMinor: args.disbursedAmountMinor,
           currency,
           idempotencyKey: `finance_disbursement_${args.applicationId}`,

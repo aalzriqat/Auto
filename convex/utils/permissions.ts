@@ -106,6 +106,8 @@ export const PERMISSIONS = {
   FINALIZE_FINANCED_DEAL: "finalize:financed_deal",
   CONFIRM_FINANCE_DISBURSEMENT: "confirm:finance_disbursement",
   VERIFY_FINANCE_DOCUMENTS: "verify:finance_documents",
+  REGISTER_VEHICLE_HANDOVER: "register:vehicle_handover",
+  REGISTER_EXPECTED_PAYMENT: "register:expected_payment",
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -215,6 +217,8 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.FINALIZE_FINANCED_DEAL,
       PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
       PERMISSIONS.VERIFY_FINANCE_DOCUMENTS,
+      PERMISSIONS.REGISTER_VEHICLE_HANDOVER,
+      PERMISSIONS.REGISTER_EXPECTED_PAYMENT,
     ],
   },
   {
@@ -245,6 +249,8 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
       PERMISSIONS.CREATE_FINANCE_APPLICATION,
       PERMISSIONS.FINALIZE_FINANCED_DEAL,
+      PERMISSIONS.REGISTER_VEHICLE_HANDOVER,
+      PERMISSIONS.REGISTER_EXPECTED_PAYMENT,
     ],
   },
   {

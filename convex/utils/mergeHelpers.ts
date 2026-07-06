@@ -184,4 +184,12 @@ export const CUSTOMER_REFERENCING_TABLES = [
         .withIndex("by_org_customer", (q) => q.eq("orgId", orgId).eq("customerId", customerId))
         .collect(),
   },
+  {
+    table: "paymentVouchers" as const,
+    find: (ctx: QueryCtx, _orgId: Id<"organizations">, customerId: Id<"customers">) =>
+      ctx.db
+        .query("paymentVouchers")
+        .withIndex("by_customer", (q) => q.eq("customerId", customerId))
+        .collect(),
+  },
 ];
