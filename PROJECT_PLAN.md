@@ -1114,7 +1114,7 @@ Vercel production deploy both completed same day. Push notifications are live.
 > **Cheque Management** already shipped (post-dated cheques, clearing, return-after-clearing,
 > GL posting) in Accounting Phases 8–9 — both removed from scope here.
 
-**Status: ✅ Done (2026-07-06).** Bank accounts are reference/reconciliation records
+**Status: ✅ Code complete — pending manual UI verification (2026-07-06).** Bank accounts are reference/reconciliation records
 (not new GL control accounts — there remains exactly one `BANK_ACCOUNT` control
 account); opening balance is a reporting-layer number, not a posted journal entry, so
 only one bank account per org (`isReconciliationTarget`) gets real reconciliation math.
@@ -1241,7 +1241,7 @@ Each phase reuses the established pattern: immutable event table → posting rul
 | 38 | Multi-Branch Operations | 3 — Enterprise & Scale | ⬜ Not started |
 | 39 | Sales Funnel Analytics | 3 — Enterprise & Scale | ⬜ Not started |
 | 40 | Mobile PWA | 3 — Enterprise & Scale | 🟨 Push/PWA slice MERGED + DEPLOYED to prod (2026-07-05); VIN scanner/GPS check-in not started |
-| 41 | Accounting Depth | 3 — Enterprise & Scale | ✅ Done (2026-07-06) |
+| 41 | Accounting Depth | 3 — Enterprise & Scale | 🟨 Code complete, pending UI verification (2026-07-06) |
 | 42 | Open API & Integration Hub | 3 — Enterprise & Scale | ⬜ Not started |
 | GL 0–9 | Double-Entry Accounting Foundation | Accounting GL Track | ✅ Done |
 | GL 10 | True two-person manual-journal approval | Accounting GL Track | ✅ Done |

@@ -67,6 +67,7 @@ export function SupplierPaymentDialog({
                 type="number"
                 step="0.01"
                 min="0"
+                max={payable.amountDue}
                 placeholder="0"
                 value={taxAmount}
                 onChange={(event) => onTaxAmountChange(event.target.value)}

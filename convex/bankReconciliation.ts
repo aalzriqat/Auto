@@ -9,7 +9,8 @@
  * explicit user click, never auto-applies.
  */
 import { v, ConvexError } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { mutation, query, MutationCtx } from "./_generated/server";
+import { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { resolveSystemAccount } from "./chartOfAccounts";
@@ -162,6 +163,13 @@ export const suggestMatches = query({
   },
 });
 
+async function assertBankAccountActive(ctx: MutationCtx, orgId: Id<"organizations">, bankAccountId: Id<"bankAccounts">) {
+  const bankAccount = await ctx.db.get(bankAccountId);
+  if (!bankAccount || bankAccount.orgId !== orgId || bankAccount.isDeleted) {
+    throw new ConvexError("This bank account is no longer active.");
+  }
+}
+
 export const confirmMatch = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -175,6 +183,7 @@ export const confirmMatch = mutation({
     if (!statementLine || statementLine.orgId !== args.orgId) {
       throw new ConvexError("Statement line not found.");
     }
+    await assertBankAccountActive(ctx, args.orgId, statementLine.bankAccountId);
     if (statementLine.status !== "UNMATCHED") {
       throw new ConvexError("This statement line is no longer unmatched.");
     }
@@ -214,6 +223,7 @@ export const unmatch = mutation({
     if (!statementLine || statementLine.orgId !== args.orgId) {
       throw new ConvexError("Statement line not found.");
     }
+    await assertBankAccountActive(ctx, args.orgId, statementLine.bankAccountId);
     await ctx.db.patch(args.statementLineId, {
       status: "UNMATCHED",
       matchedJournalLineId: undefined,
@@ -234,6 +244,7 @@ export const ignoreLine = mutation({
     if (!statementLine || statementLine.orgId !== args.orgId) {
       throw new ConvexError("Statement line not found.");
     }
+    await assertBankAccountActive(ctx, args.orgId, statementLine.bankAccountId);
     if (statementLine.status === "MATCHED") {
       throw new ConvexError("Unmatch this line before ignoring it.");
     }

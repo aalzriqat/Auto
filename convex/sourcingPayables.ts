@@ -123,6 +123,9 @@ export const markPaid = mutation({
         if (payable.status === "CANCELLED") {
           throw new ConvexError("This payable was cancelled with its sale.");
         }
+        if (args.taxAmount !== undefined && (!Number.isFinite(args.taxAmount) || args.taxAmount < 0)) {
+          throw new ConvexError("VAT amount cannot be negative.");
+        }
         if (args.taxAmount !== undefined && args.taxAmount > payable.amountDue) {
           throw new ConvexError("VAT amount cannot exceed the amount due.");
         }

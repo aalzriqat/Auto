@@ -46,6 +46,10 @@ export const create = mutation({
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     const now = Date.now();
 
+    if (!Number.isFinite(args.openingBalanceMinor) || !Number.isFinite(args.openingBalanceDate)) {
+      throw new ConvexError("Opening balance and date must be valid numbers.");
+    }
+
     if (args.isReconciliationTarget) {
       await clearOtherReconciliationTargets(ctx, args.orgId);
     }
@@ -86,6 +90,12 @@ export const update = mutation({
     const account = await ctx.db.get(args.bankAccountId);
     if (!account || account.orgId !== args.orgId || account.isDeleted) {
       throw new ConvexError("Bank account not found in this organization.");
+    }
+    if (args.openingBalanceMinor !== undefined && !Number.isFinite(args.openingBalanceMinor)) {
+      throw new ConvexError("Opening balance must be a valid number.");
+    }
+    if (args.openingBalanceDate !== undefined && !Number.isFinite(args.openingBalanceDate)) {
+      throw new ConvexError("Opening balance date must be a valid number.");
     }
 
     const patch: Record<string, unknown> = { updatedAt: Date.now() };

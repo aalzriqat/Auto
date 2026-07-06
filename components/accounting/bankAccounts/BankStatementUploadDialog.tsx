@@ -97,6 +97,10 @@ export function BankStatementUploadDialog({
       toast.error(t("StatementNoValidRows" as any));
       return;
     }
+    const skippedCount = dataRows.length - parsedRows.length;
+    if (skippedCount > 0) {
+      toast.warning(t("StatementRowsSkipped" as any).replace("{count}", String(skippedCount)));
+    }
     await onImport(parsedRows);
     setOpen(false);
     setRows([]);

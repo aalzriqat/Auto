@@ -516,7 +516,7 @@ export const listReceivablesDueBetween = query({
         q.eq("orgId", args.orgId).gte("dueDate", args.startDate).lte("dueDate", args.endDate)
       )
       .collect();
-    const openRows = rows.filter((row) => !["PAID", "CANCELLED", "REFUNDED"].includes(row.status));
+    const openRows = rows.filter((row) => !row.isDeleted && !["PAID", "CANCELLED", "REFUNDED"].includes(row.status));
     return Promise.all(openRows.map((row) => hydrateReceivable(ctx, row)));
   },
 });

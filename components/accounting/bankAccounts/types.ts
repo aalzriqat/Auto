@@ -42,5 +42,9 @@ export function defaultCreateBankAccountForm(currency: string): CreateBankAccoun
 }
 
 export function dateInputToMs(value: string): number {
-  return new Date(`${value}T00:00:00`).getTime();
+  const ms = new Date(`${value}T00:00:00`).getTime();
+  if (Number.isNaN(ms)) {
+    throw new Error("A valid opening balance date is required.");
+  }
+  return ms;
 }

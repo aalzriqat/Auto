@@ -57,8 +57,17 @@ export function SourcingClient() {
     if (!activeOrgId || !payDialogPayable) return;
     setIsPaying(true);
     try {
+      const trimmedTax = taxAmount.trim();
+      let parsedTaxAmount: number | undefined;
+      if (trimmedTax) {
+        parsedTaxAmount = Number(trimmedTax);
+        if (!Number.isFinite(parsedTaxAmount) || parsedTaxAmount < 0) {
+          toast.error(t("InvalidVatAmount" as any));
+          setIsPaying(false);
+          return;
+        }
+      }
       markPaidIdempotencyKeyRef.current ??= `mark-paid:${crypto.randomUUID()}`;
-      const parsedTaxAmount = taxAmount.trim() ? Number(taxAmount) : undefined;
       await markPaid({
         orgId: activeOrgId,
         payableId: payDialogPayable._id,
