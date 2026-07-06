@@ -940,7 +940,22 @@ export const createSourced = mutation({
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
+    // Sourcing a vehicle mid-sale needs to write immediately (the salesperson
+    // is actively closing a deal), so this accepts CREATE_VEHICLES_REQUEST —
+    // the same permission sales already holds for creating/editing normal
+    // stock with approval — not just the manager-only direct CREATE_VEHICLES.
+    // Every sourced vehicle still gets an APPROVED-status vehicleEdits audit
+    // row and a manager notification below, so oversight isn't lost.
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
+    if (
+      !isSystemOwnerRole(role) &&
+      !role.permissions.includes(PERMISSIONS.CREATE_VEHICLES) &&
+      !role.permissions.includes(PERMISSIONS.CREATE_VEHICLES_REQUEST)
+    ) {
+      throw new ConvexError(
+        `Forbidden: Missing required permissions: ${PERMISSIONS.CREATE_VEHICLES_REQUEST}`
+      );
+    }
 
     const vehicleGate = await ctx.runQuery(internal.subscriptions.canAddVehicle, { orgId: args.orgId });
     if (!vehicleGate.allowed) {

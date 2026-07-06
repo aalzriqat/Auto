@@ -150,6 +150,93 @@ describe("vehicles.create", () => {
   });
 });
 
+describe("vehicles.createSourced", () => {
+  const sourcedArgs = {
+    make: "Toyota",
+    model: "Camry",
+    year: 2024,
+    color: "White",
+    mileage: 0,
+    fuelType: "Gasoline",
+    transmission: "Automatic",
+    sourcedFromName: "Al-Safeer Motors",
+    sourceCost: 18000,
+    sellingPrice: 21000,
+  };
+
+  test("a sales role with only create:vehicles:request (no create:vehicles) can source a vehicle", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Sales Sourcing Dealer", createdAt: Date.now() })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("subscriptions", {
+        orgId,
+        plan: "professional",
+        status: "active",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    );
+    const userId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "sales_sourcer", email: "sales@test.com", name: "Sales User" })
+    );
+    const roleId = await t.run((ctx) =>
+      ctx.db.insert("roles", {
+        orgId,
+        name: "SALES",
+        permissions: ["view:vehicles", "create:vehicles:request", "view:sales"],
+      })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+    const asSales = t.withIdentity({ subject: "sales_sourcer" });
+
+    const vehicleId = await asSales.mutation(api.vehicles.createSourced, { orgId, ...sourcedArgs });
+
+    await t.run(async (ctx) => {
+      const vehicle = await ctx.db.get(vehicleId);
+      expect(vehicle?.status).toBe("SOURCING");
+      expect(vehicle?.sourceType).toBe("SOURCED");
+      expect(vehicle?.sourcedFromName).toBe("Al-Safeer Motors");
+
+      const edit = await ctx.db
+        .query("vehicleEdits")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .first();
+      expect(edit?.type).toBe("CREATE");
+      expect(edit?.status).toBe("APPROVED");
+    });
+  });
+
+  test("rejects a role with neither create:vehicles nor create:vehicles:request", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "No Sourcing Dealer", createdAt: Date.now() })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("subscriptions", {
+        orgId,
+        plan: "professional",
+        status: "active",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    );
+    const userId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "reception_user", email: "reception@test.com", name: "Reception User" })
+    );
+    const roleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "RECEPTION", permissions: ["view:vehicles"] })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+    const asReception = t.withIdentity({ subject: "reception_user" });
+
+    await expect(
+      asReception.mutation(api.vehicles.createSourced, { orgId, ...sourcedArgs })
+    ).rejects.toThrow(/create:vehicles/);
+  });
+});
+
 describe("vehicles.update — protected lifecycle transitions", () => {
   test.each(["SOLD", "RESERVED"] as const)(
     "rejects direct updates to %s",
