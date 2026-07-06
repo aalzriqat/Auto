@@ -154,6 +154,12 @@ type TurnstileWindow = Window & {
   turnstile?: { reset: (container?: HTMLElement | string) => void };
 };
 
+type StoredHeadLink = {
+  rel: string;
+  href: string | null;
+  existed: boolean;
+};
+
 const PUBLIC_LEAD_FINGERPRINT_KEY = "autoflow_public_lead_fingerprint";
 const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
 const PREMIUM_THEME_COMPONENTS = {
@@ -198,6 +204,72 @@ function resetTurnstile(formElement: HTMLFormElement) {
   const turnstile = (window as TurnstileWindow).turnstile;
   const widget = formElement.querySelector<HTMLElement>(".cf-turnstile");
   if (turnstile && widget) turnstile.reset(widget);
+}
+
+function publicSiteOrigin(host: string) {
+  const trimmedHost = host.trim();
+  if (!trimmedHost) return "";
+  if (typeof window !== "undefined" && window.location.hostname === trimmedHost) {
+    return window.location.origin;
+  }
+  const protocolOrigin = trimmedHost.match(/^(https?:\/\/[^/]+)/i)?.[1];
+  if (protocolOrigin) {
+    return protocolOrigin;
+  }
+  return `https://${trimmedHost}`;
+}
+
+function setHeadIcon(rel: string, href: string): StoredHeadLink {
+  let link = document.head.querySelector<HTMLLinkElement>(`link[rel="${rel}"]`);
+  const previousLink = {
+    rel,
+    href: link?.getAttribute("href") ?? null,
+    existed: Boolean(link),
+  };
+  if (!link) {
+    link = document.createElement("link");
+    link.rel = rel;
+    document.head.appendChild(link);
+  }
+  link.href = href;
+  return previousLink;
+}
+
+function restoreHeadIcon(previousLink: StoredHeadLink) {
+  const link = document.head.querySelector<HTMLLinkElement>(`link[rel="${previousLink.rel}"]`);
+  if (!link) return;
+  if (!previousLink.existed) {
+    link.remove();
+    return;
+  }
+  if (previousLink.href) {
+    link.href = previousLink.href;
+  } else {
+    link.removeAttribute("href");
+  }
+}
+
+function DealerBrowserChrome({
+  dealershipName,
+  logoUrl,
+}: {
+  dealershipName: string;
+  logoUrl?: string | null;
+}) {
+  useEffect(() => {
+    const previousTitle = document.title;
+    document.title = dealershipName;
+    const previousIcons = logoUrl
+      ? ["icon", "shortcut icon", "apple-touch-icon"].map((rel) => setHeadIcon(rel, logoUrl))
+      : [];
+
+    return () => {
+      document.title = previousTitle;
+      previousIcons.forEach(restoreHeadIcon);
+    };
+  }, [dealershipName, logoUrl]);
+
+  return null;
 }
 
 export default function DealerSitePage() {
@@ -257,6 +329,7 @@ export default function DealerSitePage() {
     return price == null ? t.contactForPrice : `${price.toLocaleString()} JOD`;
   }
 
+  const siteOrigin = publicSiteOrigin(host);
   const templateId = site?.settings?.templateId ?? DEFAULT_WEBSITE_TEMPLATE_ID;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>, formType: string) {
@@ -322,6 +395,7 @@ export default function DealerSitePage() {
     site,
     page,
     detailVehicle,
+    siteOrigin,
     lang,
     isArabic,
     dir,
@@ -358,7 +432,15 @@ export default function DealerSitePage() {
   const PremiumTheme = templateId in PREMIUM_THEME_COMPONENTS
     ? PREMIUM_THEME_COMPONENTS[templateId as keyof typeof PREMIUM_THEME_COMPONENTS]
     : null;
-  if (PremiumTheme) return <>{turnstileScript}<PremiumTheme {...premiumThemeProps} /></>;
+  if (PremiumTheme) {
+    return (
+      <>
+        {turnstileScript}
+        <DealerBrowserChrome dealershipName={site.profile.dealershipName} logoUrl={site.profile.logoUrl} />
+        <PremiumTheme {...premiumThemeProps} />
+      </>
+    );
+  }
 
   const profile = site.profile;
   const nav = [
@@ -372,6 +454,7 @@ export default function DealerSitePage() {
   return (
     <>
     {turnstileScript}
+    <DealerBrowserChrome dealershipName={profile.dealershipName} logoUrl={profile.logoUrl} />
     <main dir={dir} className="min-h-screen bg-white text-slate-950">
       {/* Header */}
       <header className="sticky top-0 z-30 border-b bg-white/95 backdrop-blur">

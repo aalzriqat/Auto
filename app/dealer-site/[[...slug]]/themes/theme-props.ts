@@ -106,6 +106,7 @@ export type ThemeProps = {
   site: PublicSite;
   page: string;
   detailVehicle: PublicVehicle | null;
+  siteOrigin: string;
   lang: Lang;
   isArabic: boolean;
   dir: "ltr" | "rtl";

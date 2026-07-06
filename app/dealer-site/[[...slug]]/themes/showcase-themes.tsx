@@ -444,14 +444,20 @@ function dealerContactMessage(props: ThemeProps) {
   return `Hello, I want to contact ${props.site.profile.dealershipName}.`;
 }
 
+function absoluteSitePath(origin: string, path: string) {
+  if (!origin) return path;
+  return `${origin.replace(/\/+$/, "")}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
 function vehicleShareMessage(props: ThemeProps, vehicle: PublicVehicle) {
   const vehicleTitle = vehicleName(vehicle);
   const price = props.formatPrice(vehicle.price);
   const listingPath = `/inventory/${vehicle.slug}`;
+  const listingUrl = absoluteSitePath(props.siteOrigin, listingPath);
   if (props.lang === "ar") {
-    return `${vehicleTitle} لدى ${props.site.profile.dealershipName} - ${price} - ${listingPath}`;
+    return `${vehicleTitle} لدى ${props.site.profile.dealershipName} - ${price} - ${listingUrl}`;
   }
-  return `${vehicleTitle} at ${props.site.profile.dealershipName} - ${price} - ${listingPath}`;
+  return `${vehicleTitle} at ${props.site.profile.dealershipName} - ${price} - ${listingUrl}`;
 }
 
 function similarVehiclesFor(vehicle: PublicVehicle, vehicles: PublicVehicle[]) {
