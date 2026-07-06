@@ -369,6 +369,9 @@ export const salesEn = {
   TotalVehiclePrice: "Total Vehicle Price:",
   Respects: "With Best Regards,",
   SealAndSignature: "Seal & Signature",
+  PreparedFor: "Prepared for",
+  EstimatedPricing: "Estimated Pricing",
+  QuoteValidityNote: "This quote is valid for 7 days. Taxes and fees are estimates and subject to final negotiation.",
 
   // Sourcing page
   SpecialOrdersSourcing: "Special Orders & Sourcing",
@@ -784,6 +787,9 @@ export const salesAr = {
   TotalVehiclePrice: "سعر المركبة الإجمالي:",
   Respects: "وتفضلوا بقبول فائق الإحترام",
   SealAndSignature: "الختم والتوقيع",
+  PreparedFor: "معد من أجل",
+  EstimatedPricing: "السعر التقديري",
+  QuoteValidityNote: "هذا العرض ساري لمدة 7 أيام. الضرائب والرسوم تقديرية وقابلة للتفاوض النهائي.",
 
   // صفحة التوريد
   SpecialOrdersSourcing: "الطلبيات الخاصة والتوريد",

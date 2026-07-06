@@ -15,7 +15,9 @@ import { Plus, User, Car, Trash2, FileText, LayoutList, Kanban, MessageCircle, S
 import { Badge } from "@/components/ui/badge";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { toast } from "@/components/ui/sonner";
-import { generateQuote } from "@/lib/pdf";
+import { downloadElementAsPdf } from "@/lib/htmlToPdf";
+import { useOrgSettings } from "@/hooks/useOrgSettings";
+import { LeadQuotePrintTemplate } from "@/components/leads/LeadQuotePrintTemplate";
 import {
   Dialog,
   DialogContent,
@@ -59,10 +61,16 @@ export default function LeadsPage() {
   const removeLead = useMutation(api.leads.softDelete);
   const searchParams = useSearchParams();
   const highlightId = searchParams.get("highlightId");
+  const orgSettings = useOrgSettings();
+  const logoUrl = useQuery(
+    api.orgSettings.getLogoUrl,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
 
   const [isLeadDialogOpen, setIsLeadDialogOpen] = useState(false);
   const [editingLead, setEditingLead] = useState<any>(null);
   const [leadToDelete, setLeadToDelete] = useState<any>(null);
+  const [printingLead, setPrintingLead] = useState<any>(null);
   const [view, setView] = useState<"table" | "kanban">("table");
   const [conversationCustomerId, setConversationCustomerId] = useState<Id<"customers"> | null>(null);
   const [highlightedLeadId, setHighlightedLeadId] = useState<string | null>(null);
@@ -115,6 +123,19 @@ export default function LeadsPage() {
     } catch (error: any) {
       toast.error(error);
     }
+  };
+
+  const handleDownloadLeadQuote = async (lead: any) => {
+    setPrintingLead(lead);
+    // Wait for the (now-mounted) print template to actually paint before capturing it.
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    const saved = await downloadElementAsPdf("lead-quote-pdf-content", `Quote_${lead.customerName}.pdf`);
+    if (saved) {
+      toast.success(t("QuoteGenerated" as any) || "Quote generated");
+    } else {
+      toast.error(t("FailedGenerateQuote" as any) || "Failed to generate Quote");
+    }
+    setPrintingLead(null);
   };
 
   const leadsByStage = LEAD_STAGES.reduce((acc, stage) => {
@@ -375,7 +396,7 @@ export default function LeadsPage() {
                             </button>
                           )}
                           <button
-                            onClick={(e) => { e.stopPropagation(); try { generateQuote("AutoFlow Dealership", lead.customerName, lead.vehicleSummary || "Unknown Vehicle", "TBD", 0); toast.success(t("QuoteGenerated" as any) || "Quote generated"); } catch { toast.error(t("FailedGenerateQuote" as any) || "Failed to generate Quote"); } }}
+                            onClick={(e) => { e.stopPropagation(); handleDownloadLeadQuote(lead); }}
                             className="p-2 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-md text-muted-foreground hover:text-blue-600 transition-colors"
                           >
                             <FileText className="w-4 h-4" />
@@ -510,6 +531,22 @@ export default function LeadsPage() {
             </DialogFooter>
           </DialogContent>
         </Dialog>
+
+        {printingLead && (
+          <LeadQuotePrintTemplate
+            customerName={printingLead.customerName}
+            vehicleSummary={printingLead.vehicleSummary || t("UnknownVehicle" as any) || "Unknown Vehicle"}
+            estimatedPrice={printingLead.vehiclePrice ?? 0}
+            dateStr={new Date().toLocaleDateString()}
+            orgBranding={{
+              name: orgSettings?.dealershipName,
+              legalName: orgSettings?.legalCompanyName,
+              logoUrl,
+              primaryColor: orgSettings?.primaryColor,
+              currencySymbol: orgSettings?.currencySymbol,
+            }}
+          />
+        )}
       </div>
     </RoleGuard>
   );

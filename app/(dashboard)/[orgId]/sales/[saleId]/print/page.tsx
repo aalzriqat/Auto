@@ -11,13 +11,18 @@ import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { format } from "date-fns";
 import { Loader2, Printer, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { DocumentLetterhead } from "@/components/print/DocumentLetterhead";
 
 export default function PrintBillOfSalePage() {
   const params = useParams();
   const router = useRouter();
   const { activeOrgId } = useOrg();
-  const { t } = useLanguage();
+  const { t, isRtl } = useLanguage();
   const orgSettings = useOrgSettings();
+  const logoUrl = useQuery(
+    api.orgSettings.getLogoUrl,
+    activeOrgId ? { orgId: activeOrgId } : "skip"
+  );
   const saleId = params.saleId as Id<"sales">;
 
   const sale = useQuery(api.sales.get, activeOrgId ? { orgId: activeOrgId, saleId } : "skip");
@@ -63,14 +68,18 @@ export default function PrintBillOfSalePage() {
       </div>
 
       {/* Printable Area */}
-      <div className="max-w-4xl mx-auto p-12 bg-white text-black" id="printable-area">
-        <div className="text-center mb-10">
-          <h1 className="text-4xl font-bold uppercase tracking-widest border-b-4 border-black pb-4 mb-2">
-            {t("BillOfSale")}
-          </h1>
-          <p className="text-xl font-semibold">{orgName}</p>
-          <p className="text-sm">{t("OfficialRecordOfTransaction")}</p>
-        </div>
+      <div className="max-w-4xl mx-auto p-12 bg-white text-black" id="printable-area" dir={isRtl ? "rtl" : "ltr"}>
+        <DocumentLetterhead
+          variant="legal"
+          titleLabel={t("BillOfSale")}
+          orgBranding={{
+            name: orgSettings?.dealershipName,
+            legalName: orgSettings?.legalCompanyName,
+            logoUrl,
+            primaryColor: orgSettings?.primaryColor,
+          }}
+        />
+        <p className="text-center text-sm mb-8 -mt-4">{t("OfficialRecordOfTransaction")}</p>
 
         <div className="grid grid-cols-2 gap-12 mb-8">
           <div>

@@ -14,6 +14,7 @@ import { useQuery, useMutation } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { toast } from "@/components/ui/sonner";
+import { downloadElementAsPdf } from "@/lib/htmlToPdf";
 
 interface Step4QuoteSuccessProps {
   paymentType: PaymentType;
@@ -105,6 +106,7 @@ export function Step4QuoteSuccess({
 
   const orgBranding = {
     name: orgSettings?.dealershipName,
+    legalName: orgSettings?.legalCompanyName,
     logoUrl,
     primaryColor: orgSettings?.primaryColor,
     address: orgSettings?.dealershipAddress,
@@ -113,41 +115,13 @@ export function Step4QuoteSuccess({
   };
 
   const handleDownload = async () => {
-    const element = document.getElementById("pdf-quote-content");
-    if (!element) return;
+    const saved = await downloadElementAsPdf("pdf-quote-content", `Quote_${selectedCustomer.firstName}.pdf`);
 
-    try {
-      element.classList.remove("hidden");
-      element.style.position = "absolute";
-      element.style.left = "-9999px";
-      element.style.top = "-9999px";
-      element.style.display = "block";
-
-      const { default: html2canvas } = await import("html2canvas");
-      const { jsPDF } = await import("jspdf");
-
-      const canvas = await html2canvas(element, { scale: 2, useCORS: true });
-      const imgData = canvas.toDataURL("image/png");
-      const pdf = new jsPDF("p", "mm", "a4");
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-      pdf.addImage(imgData, "PNG", 0, 0, pdfWidth, pdfHeight);
-      pdf.save(`Quote_${selectedCustomer.firstName}.pdf`);
-
-      // Downloading the quote means it's being handed to the customer — mark it
-      // SHARED so the originating lead (if any) advances to NEGOTIATION. The PDF
-      // already saved successfully, so a failure here shouldn't surface as an error.
-      if (activeOrgId) {
-        markQuoteShared({ orgId: activeOrgId, quoteId, status: "SHARED" }).catch(() => {});
-      }
-    } catch {
-      // silently fail — browser PDF generation
-    } finally {
-      element.style.display = "";
-      element.style.position = "";
-      element.style.left = "";
-      element.style.top = "";
-      element.classList.add("hidden");
+    // Downloading the quote means it's being handed to the customer — mark it
+    // SHARED so the originating lead (if any) advances to NEGOTIATION. The PDF
+    // already saved successfully, so a failure here shouldn't surface as an error.
+    if (saved && activeOrgId) {
+      markQuoteShared({ orgId: activeOrgId, quoteId, status: "SHARED" }).catch(() => {});
     }
   };
 

@@ -1942,6 +1942,10 @@ export default defineSchema({
     logoStorageId: v.optional(v.id("_storage")),
     primaryColor: v.optional(v.string()),
     dealershipName: v.optional(v.string()),
+    // The officially registered legal entity name (e.g. "Al-Noor Trading Co. LLC"),
+    // shown alongside dealershipName (the trade/showroom name) on every printed
+    // legal document — bill of sale, quotes, receipt vouchers.
+    legalCompanyName: v.optional(v.string()),
     dealershipAddress: v.optional(v.string()),
     dealershipPhone: v.optional(v.string()),
     whatsappPhoneNumberId: v.optional(v.string()),

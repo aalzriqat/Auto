@@ -28,6 +28,7 @@ import { CustomerFinancialsTab } from "@/components/customers/CustomerFinancials
 import { QuotePrintTemplate } from "@/components/sales/QuotePrintTemplate";
 import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { toast } from "@/components/ui/sonner";
+import { downloadElementAsPdf } from "@/lib/htmlToPdf";
 
 interface CustomerDetailsDialogProps {
   customerId: Id<"customers"> | null;
@@ -52,6 +53,7 @@ export function CustomerDetailsDialog({
   );
   const orgBranding = {
     name: orgSettings?.dealershipName,
+    legalName: orgSettings?.legalCompanyName,
     logoUrl,
     primaryColor: orgSettings?.primaryColor,
     address: orgSettings?.dealershipAddress,
@@ -80,41 +82,13 @@ export function CustomerDetailsDialog({
     // Wait for the (now-mounted) print template to actually paint before capturing it.
     await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 
-    const element = document.getElementById("pdf-quote-content");
-    if (!element) {
-      setPrintingQuoteId(null);
-      toast.error(t("FailedGeneratePDF" as any));
-      return;
-    }
-
-    try {
-      element.classList.remove("hidden");
-      element.style.position = "absolute";
-      element.style.left = "-9999px";
-      element.style.top = "-9999px";
-      element.style.display = "block";
-
-      const { default: html2canvas } = await import("html2canvas");
-      const { jsPDF } = await import("jspdf");
-
-      const canvas = await html2canvas(element, { scale: 2, useCORS: true });
-      const imgData = canvas.toDataURL("image/png");
-      const pdf = new jsPDF("p", "mm", "a4");
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-      pdf.addImage(imgData, "PNG", 0, 0, pdfWidth, pdfHeight);
-      pdf.save(`Quote_${customer?.firstName ?? ""}.pdf`);
+    const saved = await downloadElementAsPdf("pdf-quote-content", `Quote_${customer?.firstName ?? ""}.pdf`);
+    if (saved) {
       toast.success(t("QuotePDFGenerated" as any));
-    } catch {
+    } else {
       toast.error(t("FailedGeneratePDF" as any));
-    } finally {
-      element.style.display = "";
-      element.style.position = "";
-      element.style.left = "";
-      element.style.top = "";
-      element.classList.add("hidden");
-      setPrintingQuoteId(null);
     }
+    setPrintingQuoteId(null);
   }
 
   const printingQuote = relations?.quotes?.find((q: any) => q._id === printingQuoteId);

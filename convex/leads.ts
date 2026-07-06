@@ -84,6 +84,7 @@ export const list = query({
           vehicleSummary: vehicle
             ? `${vehicle.year} ${vehicle.make} ${vehicle.model}`
             : null,
+          vehiclePrice: vehicle?.sellingPrice ?? null,
           assignedUserName: assignedUser?.name ?? assignedUser?.email ?? null,
           createdByName: createdByUser?.name ?? createdByUser?.email ?? null,
           updatedByName: updatedByUser?.name ?? updatedByUser?.email ?? null,

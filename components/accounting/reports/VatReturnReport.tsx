@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { downloadCSV } from "@/lib/utils/export";
 import { AccountingEmptyRow, AccountingTableFrame } from "../AccountingTabShared";
 import { ReportMetric, formatMinorAmount, type ReportMoneyFormatter } from "./FinancialReportShared";
+import { useOrgSettings } from "@/hooks/useOrgSettings";
 
 export type VatReturnLine = {
   currency: string;
@@ -37,6 +38,8 @@ export function VatReturnReport({
   t: (key: string) => string;
   formatMoney: ReportMoneyFormatter;
 }>) {
+  const orgSettings = useOrgSettings();
+
   if (report === undefined) return <p className="p-8 text-center text-slate-500">{t("Loading")}</p>;
 
   function exportCSV() {
@@ -53,16 +56,24 @@ export function VatReturnReport({
 
   function exportPDF() {
     const doc = new jsPDF();
+    const legalName = orgSettings?.legalCompanyName || orgSettings?.dealershipName;
+    let cursorY = 18;
+    if (legalName) {
+      doc.setFontSize(11);
+      doc.text(legalName, 14, cursorY);
+      cursorY += 8;
+    }
     doc.setFontSize(16);
-    doc.text(t("VatReturn"), 14, 18);
+    doc.text(t("VatReturn"), 14, cursorY);
+    cursorY += 8;
     doc.setFontSize(10);
     const periodLabel = report!.fromDate
       ? `${new Date(report!.fromDate).toLocaleDateString()} - ${new Date(report!.toDate).toLocaleDateString()}`
       : `${t("AsOf")} ${new Date(report!.toDate).toLocaleDateString()}`;
-    doc.text(periodLabel, 14, 26);
+    doc.text(periodLabel, 14, cursorY);
 
     autoTable(doc, {
-      startY: 34,
+      startY: cursorY + 8,
       head: [[t("Currency"), t("OutputVat"), t("InputVat"), t("NetVatDue")]],
       body: report!.lines.map((line) => [
         line.currency,

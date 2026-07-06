@@ -1,15 +1,9 @@
 import { Doc } from "@/convex/_generated/dataModel";
 import { WizardData } from "./wizard/types";
 import { useLanguage } from "@/components/providers/LanguageProvider";
+import { DocumentLetterhead, type OrgBranding } from "@/components/print/DocumentLetterhead";
 
-export interface OrgBranding {
-  name?: string | null;
-  logoUrl?: string | null;
-  primaryColor?: string | null;
-  address?: string | null;
-  phone?: string | null;
-  currencySymbol?: string | null;
-}
+export type { OrgBranding };
 
 interface QuotePrintTemplateProps {
   paymentType: "CASH" | "INSTALLMENT";
@@ -80,15 +74,11 @@ export function QuotePrintTemplate({
       <div className="relative z-10 flex flex-col justify-between h-full w-full">
         <div>
           {/* Header */}
-          <div className="flex justify-between items-center border-b border-[#d0e0d8] pb-4 mb-6">
-            <div className="flex items-center gap-4">
-              <img src={logoSrc} alt="Dealer Logo" className="h-16 object-contain" />
-            </div>
-            <div className="text-end text-xs text-[#4b5563] space-y-1">
-              <p className="font-bold" style={{ color: primary }}>{orgName}</p>
-              <p>{t("Date" as any)}: {dateStr}</p>
-            </div>
-          </div>
+          <DocumentLetterhead
+            variant="quote"
+            orgBranding={orgBranding}
+            rightSlot={<p>{t("Date" as any)}: {dateStr}</p>}
+          />
 
           {/* Title */}
           <div className="mb-4 flex justify-center">

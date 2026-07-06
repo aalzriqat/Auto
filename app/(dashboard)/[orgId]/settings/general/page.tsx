@@ -58,6 +58,7 @@ export default function GeneralSettingsPage() {
   const [vatRate, setVatRate] = useState("");
   const [timezone, setTimezone] = useState("");
   const [dealershipName, setDealershipName] = useState("");
+  const [legalCompanyName, setLegalCompanyName] = useState("");
   const [dealershipAddress, setDealershipAddress] = useState("");
   const [dealershipPhone, setDealershipPhone] = useState("");
 
@@ -84,6 +85,7 @@ export default function GeneralSettingsPage() {
       setVatRate(settings.vatRate !== undefined ? String(settings.vatRate) : "");
       setTimezone(settings.timezone ?? "");
       setDealershipName(settings.dealershipName ?? "");
+      setLegalCompanyName(settings.legalCompanyName ?? "");
       setDealershipAddress(settings.dealershipAddress ?? "");
       setDealershipPhone(settings.dealershipPhone ?? "");
       const pt = settings.enabledPaymentTypes ?? ["CASH", "INSTALLMENT"];
@@ -115,6 +117,7 @@ export default function GeneralSettingsPage() {
         vatRate: vatRate ? parseFloat(vatRate) : undefined,
         timezone: timezone || undefined,
         dealershipName: dealershipName || undefined,
+        legalCompanyName: legalCompanyName || undefined,
         dealershipAddress: dealershipAddress || undefined,
         dealershipPhone: dealershipPhone || undefined,
       });
@@ -299,6 +302,15 @@ export default function GeneralSettingsPage() {
                 <p className="text-sm font-semibold mb-1">{t("DealershipInfo")}</p>
                 <p className="text-xs text-muted-foreground mb-4">{t("DealershipInfoDesc")}</p>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-2">
+                    <Label>{t("LegalCompanyName")}</Label>
+                    <Input
+                      placeholder={t("LegalCompanyNamePlaceholder")}
+                      value={legalCompanyName}
+                      onChange={(e) => setLegalCompanyName(e.target.value)}
+                    />
+                    <p className="text-xs text-muted-foreground">{t("LegalCompanyNameHint")}</p>
+                  </div>
                   <div className="space-y-2">
                     <Label>{t("DealershipName")}</Label>
                     <Input

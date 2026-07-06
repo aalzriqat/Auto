@@ -24,7 +24,6 @@ import Link from "next/link";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
 import { toast } from "@/components/ui/sonner";
-import { generateBillOfSale } from "@/lib/pdf";
 import {
   Dialog,
   DialogContent,
@@ -54,6 +53,10 @@ export default function SalesPage() {
     { initialNumItems: 25 }
   );
   const removeSale = useMutation(api.sales.softDelete);
+
+  const openBillOfSale = (saleId: string) => {
+    window.open(`/${activeOrgId}/sales/${saleId}/print`, "_blank");
+  };
 
   const [isSaleDialogOpen, setIsSaleDialogOpen] = useState(false);
   const [isQuoteDialogOpen, setIsQuoteDialogOpen] = useState(false);
@@ -166,9 +169,7 @@ export default function SalesPage() {
                   <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => setTrailSaleId(sale._id)}>
                     <Eye className="h-4 w-4 text-muted-foreground" />
                   </Button>
-                  <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => {
-                    try { generateBillOfSale("AutoFlow Dealership", sale.customerName, sale.vehicleSummary, sale.vehicleVin, sale.salePrice, sale.saleDate); toast.success(t("BillOfSaleGenerated" as any)); } catch { toast.error(t("FailedGeneratePDF" as any)); }
-                  }}>
+                  <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => openBillOfSale(sale._id)}>
                     <FileText className="h-4 w-4 text-blue-500" />
                   </Button>
                   <Button variant="ghost" size="icon" className="h-10 w-10" onClick={() => handleEdit(sale)}>
@@ -246,23 +247,7 @@ export default function SalesPage() {
                       <Button variant="ghost" size="icon" onClick={() => setTrailSaleId(sale._id)} title={t("ViewSaleTrail" as any)}>
                         <Eye className="h-4 w-4 text-muted-foreground" />
                       </Button>
-                      <Button variant="ghost" size="icon" onClick={() => {
-
-                        try {
-                          console.log("SALE RECORD", sale);
-                          generateBillOfSale(
-                            "AutoFlow Dealership",
-                            sale.customerName,
-                            sale.vehicleSummary,
-                            sale.vehicleVin,
-                            sale.salePrice,
-                            sale.saleDate
-                          );
-                          toast.success(t("BillOfSaleGenerated" as any));
-                        } catch (err) {
-                          toast.error(t("FailedGeneratePDF" as any));
-                        }
-                      }}>
+                      <Button variant="ghost" size="icon" onClick={() => openBillOfSale(sale._id)}>
                         <FileText className="h-4 w-4 text-blue-500" />
                       </Button>
                       <Button variant="ghost" size="icon" onClick={() => handleEdit(sale)}>
