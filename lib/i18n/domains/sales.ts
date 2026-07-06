@@ -414,6 +414,8 @@ export const salesEn = {
   MarginLabel: "Margin",
   CreateAndSelectVehicle: "Create & select this vehicle",
   CreatingSourcingVehicle: "Creating sourced vehicle…",
+  SourcingVehicleForSaleHint: "sourcing a replacement unit — choose a payment type to continue.",
+  LoadingVehicleDetails: "Loading vehicle details…",
 };
 
 export const salesAr = {
@@ -826,4 +828,6 @@ export const salesAr = {
   MarginLabel: "هامش الربح",
   CreateAndSelectVehicle: "إنشاء المركبة واختيارها",
   CreatingSourcingVehicle: "جاري إنشاء المركبة المورَّدة…",
+  SourcingVehicleForSaleHint: "توريد وحدة بديلة — اختر نوع الدفع للمتابعة.",
+  LoadingVehicleDetails: "جاري تحميل تفاصيل المركبة…",
 };
