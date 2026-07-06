@@ -41,7 +41,8 @@ import {
   Landmark,
   Percent,
   Smartphone,
-  BookOpen
+  BookOpen,
+  type LucideIcon
 } from "lucide-react";
 import { motion, AnimatePresence, useScroll, useTransform, useMotionValue, useSpring } from "framer-motion";
 
@@ -262,6 +263,60 @@ const copy: Record<"en" | "ar", LocalCopy> = {
     growSub: "موقع إلكتروني عام ثنائي اللغة، صندوق وارد موحّد لمنصات التواصل، ومحادثات داخلية للفريق، كل ما يتعلق بعميل أو زميل عمل، في مكان واحد."
   }
 };
+
+interface FeatureGridItem {
+  icon: LucideIcon;
+  titleEn: string;
+  titleAr: string;
+  descEn: string;
+  descAr: string;
+}
+
+function FeatureCardGrid({
+  features,
+  locale,
+  gridClassName,
+  cardClassName,
+  iconWrapClassName,
+  titleClassName,
+  descClassName,
+  delayStep,
+}: {
+  features: FeatureGridItem[];
+  locale: string;
+  gridClassName: string;
+  cardClassName: string;
+  iconWrapClassName: string;
+  titleClassName: string;
+  descClassName: string;
+  delayStep: number;
+}) {
+  return (
+    <div className={gridClassName}>
+      {features.map((feature, idx) => {
+        const Icon = feature.icon;
+        return (
+          <motion.div
+            key={idx}
+            initial={{ opacity: 0, y: 24 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.6, delay: idx * delayStep }}
+            className={cardClassName}
+          >
+            <div className={iconWrapClassName}>
+              <Icon className="w-5 h-5 text-blue-400" />
+            </div>
+            <div>
+              <h3 className={titleClassName}>{locale === "ar" ? feature.titleAr : feature.titleEn}</h3>
+              <p className={descClassName}>{locale === "ar" ? feature.descAr : feature.descEn}</p>
+            </div>
+          </motion.div>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function CreativeMarketingPage() {
   const { locale, setLocale, isRtl } = useLanguage();
@@ -1118,29 +1173,16 @@ export default function CreativeMarketingPage() {
               </p>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-              {financeFeatures.map((feature, idx) => {
-                const Icon = feature.icon;
-                return (
-                  <motion.div
-                    key={idx}
-                    initial={{ opacity: 0, y: 24 }}
-                    whileInView={{ opacity: 1, y: 0 }}
-                    viewport={{ once: true }}
-                    transition={{ duration: 0.6, delay: idx * 0.08 }}
-                    className="rounded-2xl bg-gradient-to-br from-white/5 to-[#05031b] border border-white/5 p-6 hover:border-blue-500/30 transition-all duration-500 flex flex-col gap-4"
-                  >
-                    <div className="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center">
-                      <Icon className="w-5 h-5 text-blue-400" />
-                    </div>
-                    <div>
-                      <h3 className="text-sm font-bold text-white mb-1.5">{locale === "ar" ? feature.titleAr : feature.titleEn}</h3>
-                      <p className="text-xs text-white/62 leading-relaxed">{locale === "ar" ? feature.descAr : feature.descEn}</p>
-                    </div>
-                  </motion.div>
-                );
-              })}
-            </div>
+            <FeatureCardGrid
+              features={financeFeatures}
+              locale={locale}
+              gridClassName="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5"
+              cardClassName="rounded-2xl bg-gradient-to-br from-white/5 to-[#05031b] border border-white/5 p-6 hover:border-blue-500/30 transition-all duration-500 flex flex-col gap-4"
+              iconWrapClassName="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center"
+              titleClassName="text-sm font-bold text-white mb-1.5"
+              descClassName="text-xs text-white/62 leading-relaxed"
+              delayStep={0.08}
+            />
           </div>
         </section>
 
@@ -1534,29 +1576,16 @@ export default function CreativeMarketingPage() {
               </p>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {growFeatures.map((feature, idx) => {
-                const Icon = feature.icon;
-                return (
-                  <motion.div
-                    key={idx}
-                    initial={{ opacity: 0, y: 24 }}
-                    whileInView={{ opacity: 1, y: 0 }}
-                    viewport={{ once: true }}
-                    transition={{ duration: 0.6, delay: idx * 0.1 }}
-                    className="rounded-2xl bg-gradient-to-br from-white/5 to-[#05031b] border border-white/5 p-7 hover:border-blue-500/30 transition-all duration-500 flex flex-col gap-4"
-                  >
-                    <div className="w-11 h-11 rounded-xl bg-blue-500/10 border border-blue-500/10 flex items-center justify-center">
-                      <Icon className="w-5 h-5 text-blue-400" />
-                    </div>
-                    <div>
-                      <h3 className="text-base font-bold text-white mb-2">{locale === "ar" ? feature.titleAr : feature.titleEn}</h3>
-                      <p className="text-xs sm:text-sm text-white/62 leading-relaxed">{locale === "ar" ? feature.descAr : feature.descEn}</p>
-                    </div>
-                  </motion.div>
-                );
-              })}
-            </div>
+            <FeatureCardGrid
+              features={growFeatures}
+              locale={locale}
+              gridClassName="grid grid-cols-1 md:grid-cols-3 gap-6"
+              cardClassName="rounded-2xl bg-gradient-to-br from-white/5 to-[#05031b] border border-white/5 p-7 hover:border-blue-500/30 transition-all duration-500 flex flex-col gap-4"
+              iconWrapClassName="w-11 h-11 rounded-xl bg-blue-500/10 border border-blue-500/10 flex items-center justify-center"
+              titleClassName="text-base font-bold text-white mb-2"
+              descClassName="text-xs sm:text-sm text-white/62 leading-relaxed"
+              delayStep={0.1}
+            />
           </div>
         </section>
 

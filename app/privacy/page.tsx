@@ -28,7 +28,7 @@ const sections = {
     {
       title: "3. Cookies and similar technologies",
       body: [
-        "We use a small number of cookies and browser-storage entries that are strictly necessary to run the Service: an authentication session cookie managed by our sign-in provider (Clerk), and a cookie that remembers whether your sidebar is expanded or collapsed. These are functional and are not used for advertising.",
+        "We use a small number of cookies and browser-storage entries that are strictly necessary to run the Service: an authentication session cookie managed by our sign-in provider (Clerk), and a \"sidebar_state\" cookie that remembers whether your sidebar is expanded or collapsed. These are functional and are not used for advertising.",
         "We also use your browser's local storage (not a cookie) to remember your selected language, your active organization, and whether you've already seen certain onboarding tips, as described in \"Information we collect\" above.",
         "We use Sentry, an error-monitoring service, to help us detect and fix bugs. Sentry may record a replay of your on-screen session when an error occurs, and randomly records a small sample of sessions (about 5%) in production even without an error, so we can catch problems that don't otherwise trigger a report. These replays are used only for debugging and are never shared with advertisers.",
         "We use Vercel Analytics to understand aggregate site traffic, such as which pages are visited and which sites referred visitors to us. It is cookieless and does not build a profile of you or track you across other websites.",
@@ -117,7 +117,7 @@ const sections = {
     {
       title: "٣. ملفات تعريف الارتباط والتقنيات المشابهة",
       body: [
-        "نستخدم عدداً محدوداً من ملفات تعريف الارتباط (الكوكيز) وعناصر التخزين المحلي في المتصفح الضرورية بشكل أساسي لتشغيل الخدمة: كوكي جلسة المصادقة الذي يديره مزوّد تسجيل الدخول لدينا (Clerk)، وكوكي يتذكر ما إذا كان الشريط الجانبي مفتوحاً أو مطوياً. هذه العناصر وظيفية بحتة ولا تُستخدم لأغراض إعلانية.",
+        "نستخدم عدداً محدوداً من ملفات تعريف الارتباط (الكوكيز) وعناصر التخزين المحلي في المتصفح الضرورية بشكل أساسي لتشغيل الخدمة: كوكي جلسة المصادقة الذي يديره مزوّد تسجيل الدخول لدينا (Clerk)، وكوكي \"sidebar_state\" الذي يتذكر ما إذا كان الشريط الجانبي مفتوحاً أو مطوياً. هذه العناصر وظيفية بحتة ولا تُستخدم لأغراض إعلانية.",
         "نستخدم أيضاً التخزين المحلي للمتصفح (وهو ليس كوكي) لتذكر اللغة المختارة والمؤسسة النشطة وما إذا كنت قد شاهدت بعض إرشادات التعريف بالميزات مسبقاً، كما هو موضح في قسم \"المعلومات التي نجمعها\" أعلاه.",
         "نستخدم خدمة Sentry لمراقبة الأخطاء لمساعدتنا على اكتشاف المشاكل البرمجية وإصلاحها. قد تقوم Sentry بتسجيل إعادة عرض لجلستك على الشاشة عند حدوث خطأ، كما تسجل عشوائياً عينة صغيرة من الجلسات (حوالي 5%) في بيئة الإنتاج حتى دون حدوث خطأ، لمساعدتنا على رصد المشاكل التي لا تُنتج تقرير خطأ بطريقة أخرى. تُستخدم هذه التسجيلات فقط لأغراض التصحيح البرمجي ولا تتم مشاركتها أبداً مع أي جهة إعلانية.",
         "نستخدم خدمة Vercel Analytics لفهم إجمالي حركة الزيارات على موقعنا، مثل الصفحات الأكثر زيارة والمواقع التي أحالت الزوار إلينا. هذه الخدمة لا تعتمد على ملفات تعريف الارتباط ولا تُنشئ ملفاً تعريفياً عنك ولا تتتبعك عبر مواقع أخرى.",
