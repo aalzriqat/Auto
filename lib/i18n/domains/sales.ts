@@ -373,6 +373,14 @@ export const salesEn = {
   EstimatedPricing: "Estimated Pricing",
   QuoteValidityNote: "This quote is valid for 7 days. Taxes and fees are estimates and subject to final negotiation.",
 
+  // Receipt Voucher (سند قبض)
+  ReceiptVoucherTitle: "Receipt Voucher",
+  ReceivedFrom: "Received from",
+  VoucherDescriptionLabel: "For",
+  ReceivedBySignature: "Recipient Signature",
+  DownloadReceiptVoucher: "Download Receipt Voucher",
+  ReceiptVoucherGenerated: "Receipt voucher generated",
+
   // Sourcing page
   SpecialOrdersSourcing: "Special Orders & Sourcing",
   SpecialOrdersDesc: "Track vehicles sourced from other dealers on behalf of customers and manage outstanding supplier payments.",
@@ -793,6 +801,14 @@ export const salesAr = {
   PreparedFor: "معد من أجل",
   EstimatedPricing: "السعر التقديري",
   QuoteValidityNote: "هذا العرض ساري لمدة 7 أيام. الضرائب والرسوم تقديرية وقابلة للتفاوض النهائي.",
+
+  // سند القبض
+  ReceiptVoucherTitle: "سند قبض",
+  ReceivedFrom: "استلمنا من السيد/ة",
+  VoucherDescriptionLabel: "وذلك عن",
+  ReceivedBySignature: "توقيع المستلم",
+  DownloadReceiptVoucher: "تنزيل سند القبض",
+  ReceiptVoucherGenerated: "تم إنشاء سند القبض",
 
   // صفحة التوريد
   SpecialOrdersSourcing: "الطلبيات الخاصة والتوريد",

@@ -5,8 +5,9 @@ import Link from "next/link";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { PaymentType, WizardData } from "../types";
 import { Button } from "@/components/ui/button";
-import { CheckCircle2, FileDown, LogOut, HandCoins, FileText, BadgeCheck } from "lucide-react";
+import { CheckCircle2, FileDown, LogOut, HandCoins, FileText, BadgeCheck, Receipt } from "lucide-react";
 import { QuotePrintTemplate } from "../../QuotePrintTemplate";
+import { ReceiptVoucherPrintTemplate } from "../../ReceiptVoucherPrintTemplate";
 import { RecordDepositDialog } from "../components/RecordDepositDialog";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -49,6 +50,11 @@ export function Step4QuoteSuccess({
 
   const [depositDialogOpen, setDepositDialogOpen] = useState(false);
   const [depositRecorded, setDepositRecorded] = useState(false);
+  const [depositId, setDepositId] = useState<Id<"deposits"> | null>(null);
+  const voucher = useQuery(
+    api.paymentVouchers.getByDeposit,
+    activeOrgId && depositId ? { orgId: activeOrgId, depositId } : "skip"
+  );
   const [applicationId, setApplicationId] = useState<Id<"financeApplications"> | null>(null);
   const [isStartingApplication, setIsStartingApplication] = useState(false);
   const createApplication = useMutation(api.applications.createFromQuote);
@@ -122,6 +128,18 @@ export function Step4QuoteSuccess({
     }
   };
 
+  const handleDownloadVoucher = async () => {
+    const saved = await downloadElementAsPdf(
+      "receipt-voucher-pdf-content",
+      `Receipt_${voucher?.voucherNumber ?? selectedCustomer.firstName}.pdf`
+    );
+    if (saved) {
+      toast.success(t("ReceiptVoucherGenerated"));
+    } else {
+      toast.error(t("FailedGeneratePDF" as any));
+    }
+  };
+
   return (
     <>
       <div className="flex flex-col items-center justify-center py-12 space-y-6 text-center print:hidden">
@@ -163,6 +181,18 @@ export function Step4QuoteSuccess({
               ? (t("DepositRecorded" as any) ?? "Deposit Recorded ✓")
               : (t("RecordDeposit" as any) ?? "Record Deposit")}
           </Button>
+
+          {depositRecorded && voucher && (
+            <Button
+              onClick={handleDownloadVoucher}
+              variant="outline"
+              size="lg"
+              className="min-w-[200px] border-amber-500/40 text-amber-600 hover:bg-amber-500/10"
+            >
+              <Receipt className="w-4 h-4 me-2" />
+              {t("DownloadReceiptVoucher")}
+            </Button>
+          )}
 
           {paymentType === "INSTALLMENT" && (
             applicationId ? (
@@ -223,7 +253,10 @@ export function Step4QuoteSuccess({
         open={depositDialogOpen}
         onOpenChange={setDepositDialogOpen}
         quoteId={quoteId}
-        onRecorded={() => setDepositRecorded(true)}
+        onRecorded={(id) => {
+          setDepositRecorded(true);
+          setDepositId(id);
+        }}
       />
 
       <QuotePrintTemplate
@@ -237,6 +270,18 @@ export function Step4QuoteSuccess({
         dateStr={new Date().toLocaleDateString("ar-JO")}
         orgBranding={orgBranding}
       />
+
+      {voucher && (
+        <ReceiptVoucherPrintTemplate
+          voucherNumber={voucher.voucherNumber}
+          customerName={`${selectedCustomer.firstName} ${selectedCustomer.lastName}`}
+          descriptionAr={voucher.descriptionAr}
+          amount={voucher.amount}
+          currency={voucher.currency}
+          issuedAtStr={new Date(voucher.issuedAt).toLocaleDateString("ar-JO")}
+          orgBranding={orgBranding}
+        />
+      )}
     </>
   );
 }

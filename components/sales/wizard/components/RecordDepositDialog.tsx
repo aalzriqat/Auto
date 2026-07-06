@@ -40,7 +40,7 @@ interface RecordDepositDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   quoteId: Id<"quotes">;
-  onRecorded: () => void;
+  onRecorded: (depositId: Id<"deposits">) => void;
 }
 
 export function RecordDepositDialog({ open, onOpenChange, quoteId, onRecorded }: RecordDepositDialogProps) {
@@ -60,7 +60,7 @@ export function RecordDepositDialog({ open, onOpenChange, quoteId, onRecorded }:
     setIsSubmitting(true);
     try {
       idempotencyKeyRef.current ??= `deposit:${crypto.randomUUID()}`;
-      await createDeposit({
+      const depositId = await createDeposit({
         orgId: activeOrgId,
         quoteId,
         amount: values.amount,
@@ -70,7 +70,7 @@ export function RecordDepositDialog({ open, onOpenChange, quoteId, onRecorded }:
       toast.success(t("DepositRecordedSuccess" as any) ?? "Deposit recorded — vehicle is now on hold");
       idempotencyKeyRef.current = null;
       onOpenChange(false);
-      onRecorded();
+      onRecorded(depositId);
     } catch (error: any) {
       toast.error(error);
     } finally {

@@ -1305,6 +1305,28 @@ export default defineSchema({
     .index("by_org_customer", ["orgId", "customerId"])
     .index("by_vehicle_hold", ["vehicleId", "holdActive"]),
 
+  // Receipt voucher (سند قبض) auto-generated as proof of payment whenever a
+  // deposit is recorded — one per deposit.
+  paymentVouchers: defineTable({
+    orgId: v.id("organizations"),
+    depositId: v.id("deposits"),
+    voucherNumber: v.string(),
+    customerId: v.id("customers"),
+    customerNameSnapshot: v.string(),
+    descriptionAr: v.string(),
+    amount: v.number(),
+    amountMinor: v.number(),
+    currency: v.string(),
+    issuedAt: v.number(),
+    issuedBy: v.id("users"),
+    isDeleted: v.optional(v.boolean()),
+    deletedAt: v.optional(v.number()),
+    deletedBy: v.optional(v.string()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_deposit", ["depositId"])
+    .index("by_customer", ["customerId"]),
+
   receivables: defineTable({
     orgId: v.id("organizations"),
     branchId: v.optional(v.id("branches")),

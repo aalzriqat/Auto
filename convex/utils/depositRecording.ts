@@ -151,5 +151,24 @@ export async function recordHeldDeposit(
     occurredAt: now,
   });
 
+  // Receipt voucher (سند قبض) — proof-of-payment document auto-generated for
+  // every deposit, printable from the wizard/reservation flow that took it.
+  const voucherId = await ctx.db.insert("paymentVouchers", {
+    orgId: args.orgId,
+    depositId,
+    voucherNumber: "pending",
+    customerId: args.customerId,
+    customerNameSnapshot: customerLabel,
+    descriptionAr: `عربون شراء سيارة ${vehicleLabel}`.trim(),
+    amount: args.amount,
+    amountMinor: args.amountMinor,
+    currency: args.currency,
+    issuedAt: now,
+    issuedBy: args.actorId,
+  });
+  await ctx.db.patch(voucherId, {
+    voucherNumber: `RV-${new Date(now).getFullYear()}-${String(now).slice(-6)}`,
+  });
+
   return depositId;
 }
