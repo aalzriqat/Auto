@@ -41,20 +41,36 @@ export default function VehiclePicker({
   value,
   onChange,
   onSourceVehicle,
+  initialSourceData,
 }: {
   vehicles: any[] | undefined;
   value: string;
   onChange: (id: string, price: number) => void;
   onSourceVehicle?: (data: SourceVehicleData) => Promise<string>;
+  /** Pre-fills and auto-opens the "source a vehicle" form, e.g. when re-sourcing a match for a vehicle already sold. */
+  initialSourceData?: Partial<SourceVehicleData>;
 }) {
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
   const [showSourceForm, setShowSourceForm] = useState(false);
   const [isSourcing, setIsSourcing] = useState(false);
-  const [sourceData, setSourceData] = useState<SourceVehicleData>(DEFAULT_SOURCE_DATA);
+  const [sourceData, setSourceData] = useState<SourceVehicleData>(() =>
+    initialSourceData ? { ...DEFAULT_SOURCE_DATA, ...initialSourceData } : DEFAULT_SOURCE_DATA
+  );
   const containerRef = useRef<HTMLDivElement>(null);
   const { t, isRtl } = useLanguage();
   const currency = useCurrency();
+
+  // Jump straight into the pre-filled source form on mount rather than making
+  // the user open the dropdown and click "source a vehicle" themselves.
+  const appliedInitialSourceData = useRef(false);
+  useEffect(() => {
+    if (initialSourceData && !appliedInitialSourceData.current) {
+      appliedInitialSourceData.current = true;
+      setOpen(true);
+      setShowSourceForm(true);
+    }
+  }, [initialSourceData]);
 
   const selected = vehicles?.find((v) => v._id === value);
 

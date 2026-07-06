@@ -13,6 +13,16 @@ export interface WizardData {
   recipientName?: string;
   /** Set when the wizard was launched from a lead's context, so the resulting quote links back to it. */
   leadId?: string;
+  /** Seeds the vehicle picker's "source a vehicle" form when launched via a SOLD vehicle's "Source another like this" action. */
+  sourceLikeVehicle?: {
+    make: string;
+    model: string;
+    year: number;
+    trim?: string;
+    color: string;
+    fuelType: string;
+    transmission: string;
+  };
 }
 export type PaymentType = "CASH" | "INSTALLMENT";
 

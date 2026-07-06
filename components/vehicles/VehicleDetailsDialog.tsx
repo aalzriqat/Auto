@@ -1,4 +1,5 @@
 import { useQuery, useMutation } from "convex/react";
+import { useRouter } from "next/navigation";
 import {
   ExternalLink,
   Printer,
@@ -12,6 +13,7 @@ import {
   Plus,
   Save,
   Trash2,
+  Truck,
 } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
 import { api } from "@/convex/_generated/api";
@@ -70,10 +72,12 @@ export function VehicleDetailsDialog({
 }: VehicleDetailsDialogProps) {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  const router = useRouter();
   const orgSettings = useOrgSettings();
   const { hasPermission, isLoading: permissionsLoading } = usePermissions();
   const canEditVehicles = !permissionsLoading && hasPermission(PERMISSIONS.EDIT_VEHICLES);
   const canViewCustomers = !permissionsLoading && hasPermission(PERMISSIONS.VIEW_CUSTOMERS);
+  const canCreateVehicles = !permissionsLoading && hasPermission(PERMISSIONS.CREATE_VEHICLES);
 
   const relations = useQuery(
     api.vehicles.getRelations,
@@ -209,6 +213,12 @@ export function VehicleDetailsDialog({
     }
   };
 
+  const handleSourceAnotherLikeThis = () => {
+    if (!activeOrgId || !vehicle) return;
+    router.push(`/${activeOrgId}/sales?sourceLikeVehicleId=${vehicle._id}`);
+    onOpenChange(false);
+  };
+
   const [testDriveOpen, setTestDriveOpen] = useState(false);
   const [selectedTestDrive, setSelectedTestDrive] = useState(null);
 
@@ -229,6 +239,17 @@ export function VehicleDetailsDialog({
               {t("VehicleDetailsDesc" as any) || "Detailed information and related records for this vehicle."}
             </DialogDescription>
           </DialogHeader>
+          {vehicle.status === "SOLD" && canCreateVehicles && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-3 gap-1.5"
+              onClick={handleSourceAnotherLikeThis}
+            >
+              <Truck className="w-4 h-4" />
+              {t("SourceAnotherLikeThis" as any)}
+            </Button>
+          )}
         </div>
 
         <Tabs defaultValue="overview" className="flex-1 flex flex-col min-h-0">

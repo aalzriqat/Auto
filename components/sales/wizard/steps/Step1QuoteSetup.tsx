@@ -247,6 +247,7 @@ export default function Step1QuoteSetup({
                     });
                     return newId;
                   }}
+                  initialSourceData={initialData.sourceLikeVehicle}
                 />
               </FormControl>
               <FormMessage />

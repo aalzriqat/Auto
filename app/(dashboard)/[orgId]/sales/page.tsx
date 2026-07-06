@@ -38,12 +38,22 @@ export default function SalesHomePage() {
     const prefillLeadId = searchParams.get("leadId");
     const prefillCustomerId = searchParams.get("customerId");
     const prefillVehicleId = searchParams.get("vehicleId");
-    const hasPrefill = !!(prefillLeadId || prefillCustomerId || prefillVehicleId);
+    // Set by a SOLD vehicle's "Source another like this" action — seeds the
+    // wizard's sourcing form instead of selecting an existing vehicle.
+    const prefillSourceLikeVehicleId = searchParams.get("sourceLikeVehicleId");
+    const hasPrefill = !!(prefillLeadId || prefillCustomerId || prefillVehicleId || prefillSourceLikeVehicleId);
 
     const prefillCustomer = useQuery(
         api.customers.get,
         activeOrgId && prefillCustomerId
             ? { orgId: activeOrgId, customerId: prefillCustomerId as Id<"customers"> }
+            : "skip"
+    );
+
+    const sourceLikeVehicle = useQuery(
+        api.vehicles.get,
+        activeOrgId && prefillSourceLikeVehicleId
+            ? { orgId: activeOrgId, vehicleId: prefillSourceLikeVehicleId as Id<"vehicles"> }
             : "skip"
     );
 
@@ -92,6 +102,17 @@ export default function SalesHomePage() {
                 ? {
                       vehicleId: prefillVehicleId ?? undefined,
                       leadId: prefillLeadId ?? undefined,
+                      sourceLikeVehicle: sourceLikeVehicle
+                          ? {
+                                make: sourceLikeVehicle.make,
+                                model: sourceLikeVehicle.model,
+                                year: sourceLikeVehicle.year,
+                                trim: sourceLikeVehicle.trim,
+                                color: sourceLikeVehicle.color,
+                                fuelType: sourceLikeVehicle.fuelType,
+                                transmission: sourceLikeVehicle.transmission,
+                            }
+                          : undefined,
                   }
                 : undefined
         );
@@ -147,8 +168,9 @@ export default function SalesHomePage() {
 
                 {hasPrefill && (
                     <div className="rounded-lg border border-indigo-500/30 bg-indigo-500/10 px-4 py-3 text-sm text-indigo-300">
-                        {t("CreatingQuoteForLead" as any) ??
-                            `Creating a quote for ${prefillCustomer ? `${prefillCustomer.firstName} ${prefillCustomer.lastName}` : "this lead"} — choose a payment type to continue.`}
+                        {prefillSourceLikeVehicleId
+                            ? `${sourceLikeVehicle ? `${sourceLikeVehicle.year} ${sourceLikeVehicle.make} ${sourceLikeVehicle.model} — ` : ""}${t("SourcingVehicleForSaleHint" as any)}`
+                            : `Creating a quote for ${prefillCustomer ? `${prefillCustomer.firstName} ${prefillCustomer.lastName}` : "this lead"} — choose a payment type to continue.`}
                     </div>
                 )}
 
