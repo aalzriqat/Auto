@@ -1,5 +1,10 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
+import {
+  dealerManifestResponse,
+  emptyAnalyticsScriptResponse,
+  VERCEL_ANALYTICS_SCRIPT_PATH,
+} from "@/lib/dealerAssets";
 import { isDealerWebsiteHost, normalizedHost } from "@/lib/dealerHost";
 
 const isPublicRoute = createRouteMatcher([
@@ -15,54 +20,8 @@ const isPublicRoute = createRouteMatcher([
   "/clerk-webhook",
 ]);
 
-const VERCEL_ANALYTICS_SCRIPT_PATH = /^\/[a-f0-9]{16,}\/script\.js$/i;
-
 function isDealerWebsiteRequest(req: Request): boolean {
   return isDealerWebsiteHost(req.headers.get("host"));
-}
-
-function dealerManifest(): Response {
-  return NextResponse.json(
-    {
-      name: "AutoFlow Dealer Website",
-      short_name: "Dealer Website",
-      description: "Browse this dealership's vehicles, offers, and contact options.",
-      start_url: "/",
-      scope: "/",
-      display: "standalone",
-      background_color: "#ffffff",
-      theme_color: "#111827",
-      icons: [
-        {
-          src: "/icon.png",
-          sizes: "512x512",
-          type: "image/png",
-          purpose: "any",
-        },
-        {
-          src: "/icon-maskable.png",
-          sizes: "512x512",
-          type: "image/png",
-          purpose: "maskable",
-        },
-      ],
-    },
-    {
-      headers: {
-        "Cache-Control": "public, max-age=300, stale-while-revalidate=86400",
-        "Content-Type": "application/manifest+json; charset=utf-8",
-      },
-    },
-  );
-}
-
-function emptyAnalyticsScript(): Response {
-  return new NextResponse("", {
-    headers: {
-      "Cache-Control": "public, max-age=300",
-      "Content-Type": "application/javascript; charset=utf-8",
-    },
-  });
 }
 
 export default clerkMiddleware(async (auth, req) => {
@@ -70,11 +29,11 @@ export default clerkMiddleware(async (auth, req) => {
     const host = normalizedHost(req.headers.get("host"));
 
     if (req.nextUrl.pathname === "/manifest.webmanifest") {
-      return dealerManifest();
+      return dealerManifestResponse();
     }
 
     if (VERCEL_ANALYTICS_SCRIPT_PATH.test(req.nextUrl.pathname)) {
-      return emptyAnalyticsScript();
+      return emptyAnalyticsScriptResponse();
     }
 
     const url = req.nextUrl.clone();
