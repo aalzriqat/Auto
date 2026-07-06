@@ -38,12 +38,22 @@ const DEFAULT_SOURCE_DATA: SourceVehicleData = {
 
 function getOtherStatusLabel(status: string, t: (key: any) => string) {
   switch (status) {
-    case "SOLD": return t("Sold" as any) || "Sold";
-    case "IN_INSPECTION": return t("InInspection" as any) || "Inspection";
-    case "IN_REPAIR": return t("InRepair" as any) || "Repair";
-    case "ARCHIVED": return t("Archived" as any) || "Archived";
+    case "SOLD": return t("StatusSold" as any) || "Sold";
+    case "IN_INSPECTION": return t("StatusInInspection" as any) || "Inspection";
+    case "IN_REPAIR": return t("StatusInRepair" as any) || "In Repair";
+    case "ARCHIVED": return t("StatusArchived" as any) || "Archived";
     default: return status;
   }
+}
+
+function matchesVehicleSearch(v: any, q: string) {
+  return (
+    v.make.toLowerCase().includes(q) ||
+    v.model.toLowerCase().includes(q) ||
+    String(v.year).includes(q) ||
+    (v.vin ?? "").toLowerCase().includes(q) ||
+    (v.color || "").toLowerCase().includes(q)
+  );
 }
 
 export default function VehiclePicker({
@@ -91,14 +101,7 @@ export default function VehiclePicker({
     if (!vehicles) return [];
     const q = search.toLowerCase();
     if (!q) return vehicles;
-    return vehicles.filter(
-      (v) =>
-        v.make.toLowerCase().includes(q) ||
-        v.model.toLowerCase().includes(q) ||
-        String(v.year).includes(q) ||
-        (v.vin ?? "").toLowerCase().includes(q) ||
-        (v.color || "").toLowerCase().includes(q)
-    );
+    return vehicles.filter((v) => matchesVehicleSearch(v, q));
   }, [vehicles, search]);
 
   // Only surface non-selectable (SOLD/IN_INSPECTION/IN_REPAIR/ARCHIVED) matches once the
@@ -106,14 +109,7 @@ export default function VehiclePicker({
   const nonSelectableMatches = useMemo(() => {
     if (!nonSelectableVehicles || !search.trim()) return [];
     const q = search.toLowerCase();
-    return nonSelectableVehicles.filter(
-      (v) =>
-        v.make.toLowerCase().includes(q) ||
-        v.model.toLowerCase().includes(q) ||
-        String(v.year).includes(q) ||
-        (v.vin ?? "").toLowerCase().includes(q) ||
-        (v.color || "").toLowerCase().includes(q)
-    );
+    return nonSelectableVehicles.filter((v) => matchesVehicleSearch(v, q));
   }, [nonSelectableVehicles, search]);
 
   const handleSourceLikeMatch = (v: any) => {

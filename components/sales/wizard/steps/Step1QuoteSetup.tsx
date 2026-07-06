@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -108,9 +108,14 @@ export default function Step1QuoteSetup({
     api.vehicles.listAll,
     activeOrgId ? { orgId: activeOrgId } : "skip"
   );
-  const allPickerVehicles = [...(availableVehicles ?? []), ...(sourcingVehicles ?? [])];
-  const pickerIds = new Set(allPickerVehicles.map((v) => v._id));
-  const nonSelectableVehicles = (otherStatusVehicles ?? []).filter((v) => !pickerIds.has(v._id));
+  const allPickerVehicles = useMemo(
+    () => [...(availableVehicles ?? []), ...(sourcingVehicles ?? [])],
+    [availableVehicles, sourcingVehicles]
+  );
+  const nonSelectableVehicles = useMemo(() => {
+    const pickerIds = new Set(allPickerVehicles.map((v) => v._id));
+    return (otherStatusVehicles ?? []).filter((v) => !pickerIds.has(v._id));
+  }, [allPickerVehicles, otherStatusVehicles]);
   const createSourced = useMutation(api.vehicles.createSourced);
 
   const form = useForm<Step1Values>({

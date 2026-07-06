@@ -818,7 +818,7 @@ export const salesAr = {
   Sourced: "مورَّدة",
   VINPendingLabel: "رقم الهيكل قيد الانتظار",
   SourceVehicleForCustomer: "توريد مركبة لهذا العميل",
-  NotInStockSourceHint: "غير متوفرة في المخزون — وريّد مركبة أخرى مماثلة",
+  NotInStockSourceHint: "غير متوفرة في المخزون — توريد مركبة أخرى مماثلة",
   BackToList: "→ العودة للقائمة",
   CarNotInStockHint: "المركبة غير متوفرة في المخزون؟ أدخل التفاصيل لإنشاء مركبة مورَّدة ومتابعة بناء عرض السعر.",
   TrimOptional: "الفئة (اختياري)",
