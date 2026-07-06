@@ -4,6 +4,7 @@ import "./globals.css";
 import ConvexClientProvider from "@/components/ConvexClientProvider";
 import { ClerkProviderWithLocale } from "@/components/providers/ClerkProviderWithLocale";
 import { LanguageProvider } from "@/components/providers/LanguageProvider";
+import { Analytics } from "@vercel/analytics/next";
 
 const inter = Inter({
   variable: "--font-inter",
@@ -53,6 +54,7 @@ export default function RootLayout({
             <ConvexClientProvider>{children}</ConvexClientProvider>
           </ClerkProviderWithLocale>
         </LanguageProvider>
+        <Analytics />
       </body>
     </html>
   );
