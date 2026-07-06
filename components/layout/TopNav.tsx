@@ -110,11 +110,11 @@ export function TopNav() {
             </SheetTrigger>
             <SheetContent side={isRtl ? "right" : "left"} className="w-[280px] p-0 flex flex-col">
               <SheetHeader className="p-4 border-b border-slate-100 text-start shrink-0">
-                <SheetTitle className="flex items-center gap-2">
+                <SheetTitle className="flex items-center justify-center">
                   {logoUrl ? (
-                    <img src={logoUrl} alt="Organization Logo" className="w-28 h-auto object-contain max-h-10" />
+                    <img src={logoUrl} alt="Organization Logo" className="h-20 w-auto max-w-[180px] object-contain" />
                   ) : (
-                    <Image src="/logo.png" alt="AutoFlow Logo" width={180} height={80} className="w-28 h-auto object-contain max-h-10" priority />
+                    <Image src="/logo.png" alt="AutoFlow Logo" width={180} height={80} className="h-20 w-auto max-w-[180px] object-contain" priority />
                   )}
                 </SheetTitle>
               </SheetHeader>

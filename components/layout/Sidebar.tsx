@@ -74,12 +74,12 @@ export function Sidebar() {
 
   return (
     <aside className="hidden md:flex flex-col w-64 border-e border-slate-200/50 bg-white shadow-sm shrink-0">
-      <div className="h-20 flex items-center px-6 border-b border-slate-200/50 shrink-0">
-        <Link href={`/${activeOrgId}/dashboard`} className="flex items-center gap-2">
+      <div className="flex items-center justify-center px-6 py-3 border-b border-slate-200/50 shrink-0">
+        <Link href={`/${activeOrgId}/dashboard`} className="flex items-center justify-center">
           {logoUrl ? (
-            <img src={logoUrl} alt="Organization Logo" className="w-28 h-auto object-contain max-h-12" />
+            <img src={logoUrl} alt="Organization Logo" className="h-24 w-auto max-w-[180px] object-contain" />
           ) : (
-            <Image src="/logo.png" alt="AutoFlow Logo" width={180} height={80} className="w-28 h-auto object-contain" priority />
+            <Image src="/logo.png" alt="AutoFlow Logo" width={180} height={80} className="h-24 w-auto max-w-[180px] object-contain" priority />
           )}
         </Link>
       </div>

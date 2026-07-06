@@ -2112,9 +2112,9 @@ function ShowcaseStyles() {
         background: color-mix(in srgb, var(--wf-bg) 92%, transparent);
         backdrop-filter: blur(18px);
       }
-      .wf-nav-inner { min-height: 72px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+      .wf-nav-inner { min-height: 112px; display: flex; align-items: center; justify-content: space-between; gap: 18px; }
       .wf-brand { display: inline-flex; align-items: center; gap: 12px; min-width: 0; }
-      .wf-logo { height: 40px; max-width: 170px; object-fit: contain; }
+      .wf-logo { height: 80px; max-width: 320px; object-fit: contain; }
       .wf-brand-mark {
         display: grid;
         place-items: center;
