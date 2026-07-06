@@ -56,7 +56,7 @@ export function Step4QuoteSuccess({
   const [saleId, setSaleId] = useState<Id<"sales"> | null>(null);
   const [isCompletingSale, setIsCompletingSale] = useState(false);
   const completeSaleIdempotencyKeyRef = useRef<string | null>(null);
-  const createSale = useMutation(api.sales.create);
+  const completeFromQuote = useMutation(api.sales.completeFromQuote);
   const markQuoteShared = useMutation(api.quotes.updateQuoteStatus);
   const quote = useQuery(
     api.quotes.get,
@@ -78,25 +78,20 @@ export function Step4QuoteSuccess({
     }
   };
 
-  const handleCompleteCashSale = async () => {
+  // The only place in the wizard that ever registers a sale — generating a
+  // quote (Step3Review) never does. Loops every vehicle on the quote (one for
+  // the common case, several for a multi-vehicle/fleet quote).
+  const handleSubmitSale = async () => {
     if (!activeOrgId || !quote || !me) return;
     setIsCompletingSale(true);
     try {
-      completeSaleIdempotencyKeyRef.current ??= `cash-sale:${crypto.randomUUID()}`;
-      const id = await createSale({
+      completeSaleIdempotencyKeyRef.current ??= `submit-sale:${crypto.randomUUID()}`;
+      const ids = await completeFromQuote({
         orgId: activeOrgId,
-        vehicleId: wizardData.vehicleId as Id<"vehicles">,
-        customerId: selectedCustomer._id,
-        salespersonId: me._id,
-        salePrice: quote.vehiclePrice,
-        saleDate: Date.now(),
-        status: "COMPLETED",
-        financingType: "CASH",
-        downPayment: quote.downPayment,
         quoteId,
         idempotencyKey: completeSaleIdempotencyKeyRef.current,
       });
-      setSaleId(id);
+      setSaleId(ids[0]);
       completeSaleIdempotencyKeyRef.current = null;
       toast.success(t("SaleCompletedSuccess" as any) ?? "Cash sale completed");
     } catch (error: any) {
@@ -203,7 +198,7 @@ export function Step4QuoteSuccess({
               </Button>
             ) : (
               <Button
-                onClick={handleCompleteCashSale}
+                onClick={handleSubmitSale}
                 disabled={isCompletingSale || !quote || !me}
                 variant="outline"
                 size="lg"
@@ -212,7 +207,7 @@ export function Step4QuoteSuccess({
                 <BadgeCheck className="w-4 h-4 me-2" />
                 {isCompletingSale
                   ? (t("Saving" as any) || "Saving...")
-                  : (t("CompleteCashSale" as any) ?? "Complete Cash Sale")}
+                  : (t("SubmitSale" as any) ?? "Submit Sale")}
               </Button>
             )
           )}

@@ -93,7 +93,12 @@ async function prepareSaleCompletion(
     if (!quote || quote.orgId !== args.orgId) {
       throwAppError(AppErrorCode.QUOTE_NOT_FOUND, "Quote not found in this organization.");
     }
-    if (quote.customerId !== args.customerId || quote.vehicleId !== args.vehicleId) {
+    // A multi-vehicle quote's vehicleId is only its first line item — accept
+    // any vehicle actually on the quote, not just the primary one.
+    const quoteVehicleIds = quote.vehicleItems
+      ? quote.vehicleItems.map((item) => item.vehicleId)
+      : [quote.vehicleId];
+    if (quote.customerId !== args.customerId || !quoteVehicleIds.includes(args.vehicleId)) {
       throw new ConvexError("Quote does not match the sale customer and vehicle.");
     }
     leadId = quote.leadId;
@@ -366,6 +371,58 @@ export async function completeSale(
   await applySaleCompletionSideEffects(ctx, args, prepared, saleId);
 
   return saleId;
+}
+
+/**
+ * Completes one sale per vehicle on a (possibly multi-vehicle) quote/application,
+ * all sharing the same quoteId — inventory is tracked per-VIN, so a single sale
+ * row can't span multiple vehicles. Down payment/tax are split proportionally
+ * by each vehicle's share of the total price so every sale row's own numbers
+ * stay reconcilable rather than double-counting the deal-level totals.
+ */
+export async function completeSalesForLineItems(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    quoteId: Id<"quotes">;
+    applicationId?: Id<"financeApplications">;
+    vehicleItems: Array<{ vehicleId: Id<"vehicles">; unitPrice: number }>;
+    customerId: Id<"customers">;
+    salespersonId: Id<"users">;
+    saleDate: number;
+    downPayment?: number;
+    taxRate?: number;
+    financingType?: FinancingType;
+    idempotencyKey?: string;
+    actorId: Id<"users">;
+  }
+): Promise<Id<"sales">[]> {
+  const total = args.vehicleItems.reduce((sum, item) => sum + item.unitPrice, 0);
+  const saleIds: Id<"sales">[] = [];
+
+  for (const item of args.vehicleItems) {
+    const share = total > 0 ? item.unitPrice / total : 1 / args.vehicleItems.length;
+    const saleId = await completeSale(ctx, {
+      orgId: args.orgId,
+      vehicleId: item.vehicleId,
+      customerId: args.customerId,
+      salespersonId: args.salespersonId,
+      salePrice: item.unitPrice,
+      saleDate: args.saleDate,
+      status: "COMPLETED",
+      quoteId: args.quoteId,
+      applicationId: args.applicationId,
+      downPayment: args.downPayment !== undefined ? args.downPayment * share : undefined,
+      taxRate: args.taxRate,
+      taxAmount: args.taxRate !== undefined ? item.unitPrice * (args.taxRate / 100) : undefined,
+      financingType: args.financingType,
+      idempotencyKey: args.idempotencyKey ? `${args.idempotencyKey}:${item.vehicleId}` : undefined,
+      actorId: args.actorId,
+    });
+    saleIds.push(saleId);
+  }
+
+  return saleIds;
 }
 
 export async function completeExistingSale(

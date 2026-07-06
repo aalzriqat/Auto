@@ -8,7 +8,7 @@ import { checkTenantWriteLimit } from "./rateLimit";
 import { validateInput } from "./utils/validation";
 import { CreateDraftSaleSchema, CreateSaleSchema, UpdateSaleSchema } from "./validations/sales";
 import { restoreVehicleToAvailable } from "./utils/saleHelpers";
-import { completeExistingSale, completeSale, createDraftSale } from "./utils/saleCompletion";
+import { completeExistingSale, completeSale, completeSalesForLineItems, createDraftSale } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
@@ -269,6 +269,64 @@ export const create = mutation({
         actorId: user._id,
       },
       async () => await completeSale(ctx, { ...args, actorId: user._id })
+    );
+  },
+});
+
+/**
+ * Completes a CASH quote's sale — the one and only path that registers a sale
+ * for the sales wizard. Loops the quote's vehicleItems (one vehicle for the
+ * common case, several for a multi-vehicle/fleet quote), completing one sale
+ * row per vehicle, all sharing the quote's id.
+ */
+export const completeFromQuote = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    quoteId: v.id("quotes"),
+    idempotencyKey: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_SALES]);
+
+    const statusLimit = await checkTenantWriteLimit(ctx, "create", args.orgId);
+    if (!statusLimit.ok) {
+      throwAppError(AppErrorCode.RATE_LIMIT_EXCEEDED, `Rate limit exceeded. Try again in ${Math.ceil(statusLimit.retryAfter / 1000)}s`);
+    }
+
+    return await runWithIdempotency(
+      ctx,
+      {
+        orgId: args.orgId,
+        operation: "sales.completeFromQuote",
+        idempotencyKey: args.idempotencyKey,
+        actorId: user._id,
+      },
+      async () => {
+        const quote = await ctx.db.get(args.quoteId);
+        if (!quote || quote.orgId !== args.orgId) {
+          throw new ConvexError("Quote not found in this organization.");
+        }
+        if (quote.mode !== undefined && quote.mode !== "CASH") {
+          throw new ConvexError(
+            "Only cash quotes can be completed directly — financed quotes go through the finance application workflow."
+          );
+        }
+
+        const vehicleItems = quote.vehicleItems ?? [{ vehicleId: quote.vehicleId, unitPrice: quote.vehiclePrice }];
+
+        return await completeSalesForLineItems(ctx, {
+          orgId: args.orgId,
+          quoteId: quote._id,
+          vehicleItems,
+          customerId: quote.customerId,
+          salespersonId: user._id,
+          saleDate: Date.now(),
+          downPayment: quote.downPayment,
+          financingType: "CASH",
+          idempotencyKey: args.idempotencyKey,
+          actorId: user._id,
+        });
+      }
     );
   },
 });
