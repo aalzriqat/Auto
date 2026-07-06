@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { internalMutation, mutation, query, type MutationCtx } from "./_generated/server";
 import { paginationOptsValidator } from "convex/server";
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Doc, Id } from "./_generated/dataModel";
 import { requireAuth, requireSuperAdmin } from "./utils/tenancy";
 import { notifyAllMembers } from "./utils/notifications";
 import { logAdminAction } from "./adminAudit";
@@ -10,49 +10,70 @@ import { getValidatedEnv } from "./utils/env";
 
 const changelogTypeValidator = v.union(v.literal("FEATURE"), v.literal("FIX"), v.literal("IMPROVEMENT"));
 
+const changelogEntryArgs = {
+  type: changelogTypeValidator,
+  titleEn: v.string(),
+  titleAr: v.string(),
+  descriptionEn: v.string(),
+  descriptionAr: v.string(),
+  publishedAt: v.optional(v.number()),
+  notifyUsers: v.optional(v.boolean()),
+};
+
+type ChangelogEntryArgs = {
+  type: "FEATURE" | "FIX" | "IMPROVEMENT";
+  titleEn: string;
+  titleAr: string;
+  descriptionEn: string;
+  descriptionAr: string;
+  publishedAt?: number;
+  notifyUsers?: boolean;
+};
+
+/** Shared by `create` and `createInternal` — the only difference between them is how `admin` is resolved. */
+async function insertChangelogEntry(
+  ctx: MutationCtx,
+  admin: Doc<"users">,
+  args: ChangelogEntryArgs,
+  action: "changelog:create" | "changelog:createInternal"
+) {
+  const now = Date.now();
+  const entryId = await ctx.db.insert("changelogEntries", {
+    type: args.type,
+    titleEn: args.titleEn,
+    titleAr: args.titleAr,
+    descriptionEn: args.descriptionEn,
+    descriptionAr: args.descriptionAr,
+    publishedAt: args.publishedAt ?? now,
+    createdBy: admin._id,
+    createdAt: now,
+  });
+
+  if (args.notifyUsers) {
+    // Fanning out to every org/member can be a lot of work — hand it to a
+    // self-paginating scheduled mutation so this insert never blocks on (or
+    // fails because of) the size of that fan-out.
+    await ctx.scheduler.runAfter(0, internal.changelog.broadcastNewEntry, {
+      titleEn: args.titleEn,
+      descriptionEn: args.descriptionEn,
+    });
+  }
+
+  await logAdminAction(ctx, admin, {
+    action,
+    targetTable: "changelogEntries",
+    targetId: entryId,
+    after: { type: args.type, titleEn: args.titleEn, notifyUsers: args.notifyUsers ?? false },
+  });
+
+  return entryId;
+}
+
 export const create = mutation({
-  args: {
-    type: changelogTypeValidator,
-    titleEn: v.string(),
-    titleAr: v.string(),
-    descriptionEn: v.string(),
-    descriptionAr: v.string(),
-    publishedAt: v.optional(v.number()),
-    notifyUsers: v.optional(v.boolean()),
-  },
+  args: changelogEntryArgs,
   handler: async (ctx, args) => {
     const admin = await requireSuperAdmin(ctx);
-    const now = Date.now();
-
-    const entryId = await ctx.db.insert("changelogEntries", {
-      type: args.type,
-      titleEn: args.titleEn,
-      titleAr: args.titleAr,
-      descriptionEn: args.descriptionEn,
-      descriptionAr: args.descriptionAr,
-      publishedAt: args.publishedAt ?? now,
-      createdBy: admin._id,
-      createdAt: now,
-    });
-
-    if (args.notifyUsers) {
-      // Fanning out to every org/member can be a lot of work — hand it to a
-      // self-paginating scheduled mutation so this insert never blocks on (or
-      // fails because of) the size of that fan-out.
-      await ctx.scheduler.runAfter(0, internal.changelog.broadcastNewEntry, {
-        titleEn: args.titleEn,
-        descriptionEn: args.descriptionEn,
-      });
-    }
-
-    await logAdminAction(ctx, admin, {
-      action: "changelog:create",
-      targetTable: "changelogEntries",
-      targetId: entryId,
-      after: { type: args.type, titleEn: args.titleEn, notifyUsers: args.notifyUsers ?? false },
-    });
-
-    return entryId;
+    return insertChangelogEntry(ctx, admin, args, "changelog:create");
   },
 });
 
@@ -66,15 +87,7 @@ export const create = mutation({
  * SUPER_ADMIN_EMAILS address rather than a mutation argument.
  */
 export const createInternal = internalMutation({
-  args: {
-    type: changelogTypeValidator,
-    titleEn: v.string(),
-    titleAr: v.string(),
-    descriptionEn: v.string(),
-    descriptionAr: v.string(),
-    publishedAt: v.optional(v.number()),
-    notifyUsers: v.optional(v.boolean()),
-  },
+  args: changelogEntryArgs,
   handler: async (ctx, args) => {
     const attributedEmail = (getValidatedEnv().SUPER_ADMIN_EMAILS ?? "")
       .split(",")
@@ -91,33 +104,7 @@ export const createInternal = internalMutation({
       throw new Error(`No user found for super-admin email "${attributedEmail}" — cannot attribute an automated changelog entry.`);
     }
 
-    const now = Date.now();
-    const entryId = await ctx.db.insert("changelogEntries", {
-      type: args.type,
-      titleEn: args.titleEn,
-      titleAr: args.titleAr,
-      descriptionEn: args.descriptionEn,
-      descriptionAr: args.descriptionAr,
-      publishedAt: args.publishedAt ?? now,
-      createdBy: admin._id,
-      createdAt: now,
-    });
-
-    if (args.notifyUsers) {
-      await ctx.scheduler.runAfter(0, internal.changelog.broadcastNewEntry, {
-        titleEn: args.titleEn,
-        descriptionEn: args.descriptionEn,
-      });
-    }
-
-    await logAdminAction(ctx, admin, {
-      action: "changelog:createInternal",
-      targetTable: "changelogEntries",
-      targetId: entryId,
-      after: { type: args.type, titleEn: args.titleEn, notifyUsers: args.notifyUsers ?? false },
-    });
-
-    return entryId;
+    return insertChangelogEntry(ctx, admin, args, "changelog:createInternal");
   },
 });
 
