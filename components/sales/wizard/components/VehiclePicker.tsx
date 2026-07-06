@@ -36,14 +36,37 @@ const DEFAULT_SOURCE_DATA: SourceVehicleData = {
   vin: "",
 };
 
+function getOtherStatusLabel(status: string, t: (key: any) => string) {
+  switch (status) {
+    case "SOLD": return t("StatusSold" as any) || "Sold";
+    case "IN_INSPECTION": return t("StatusInInspection" as any) || "Inspection";
+    case "IN_REPAIR": return t("StatusInRepair" as any) || "In Repair";
+    case "ARCHIVED": return t("StatusArchived" as any) || "Archived";
+    default: return status;
+  }
+}
+
+function matchesVehicleSearch(v: any, q: string) {
+  return (
+    v.make.toLowerCase().includes(q) ||
+    v.model.toLowerCase().includes(q) ||
+    String(v.year).includes(q) ||
+    (v.vin ?? "").toLowerCase().includes(q) ||
+    (v.color || "").toLowerCase().includes(q)
+  );
+}
+
 export default function VehiclePicker({
   vehicles,
+  nonSelectableVehicles,
   value,
   onChange,
   onSourceVehicle,
   initialSourceData,
 }: {
   vehicles: any[] | undefined;
+  /** Vehicles in a status that can't be picked for a new sale (SOLD, IN_INSPECTION, IN_REPAIR, ARCHIVED) — surfaced as search matches with a "source another like this" action instead of a dead-end search. */
+  nonSelectableVehicles?: any[];
   value: string;
   onChange: (id: string, price: number) => void;
   onSourceVehicle?: (data: SourceVehicleData) => Promise<string>;
@@ -78,15 +101,31 @@ export default function VehiclePicker({
     if (!vehicles) return [];
     const q = search.toLowerCase();
     if (!q) return vehicles;
-    return vehicles.filter(
-      (v) =>
-        v.make.toLowerCase().includes(q) ||
-        v.model.toLowerCase().includes(q) ||
-        String(v.year).includes(q) ||
-        (v.vin ?? "").toLowerCase().includes(q) ||
-        (v.color || "").toLowerCase().includes(q)
-    );
+    return vehicles.filter((v) => matchesVehicleSearch(v, q));
   }, [vehicles, search]);
+
+  // Only surface non-selectable (SOLD/IN_INSPECTION/IN_REPAIR/ARCHIVED) matches once the
+  // user is actively searching — there's no reason to list them by default.
+  const nonSelectableMatches = useMemo(() => {
+    if (!nonSelectableVehicles || !search.trim()) return [];
+    const q = search.toLowerCase();
+    return nonSelectableVehicles.filter((v) => matchesVehicleSearch(v, q));
+  }, [nonSelectableVehicles, search]);
+
+  const handleSourceLikeMatch = (v: any) => {
+    setSourceData({
+      ...DEFAULT_SOURCE_DATA,
+      make: v.make,
+      model: v.model,
+      year: v.year,
+      trim: v.trim,
+      color: v.color,
+      fuelType: v.fuelType,
+      transmission: v.transmission,
+    });
+    setShowSourceForm(true);
+    setSearch("");
+  };
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -171,49 +210,82 @@ export default function VehiclePicker({
 
               {/* Vehicle list */}
               <div className="max-h-64 overflow-y-auto">
-                {filtered.length === 0 ? (
+                {filtered.length === 0 && nonSelectableMatches.length === 0 ? (
                   <p className="text-center text-sm text-muted-foreground py-6">{t("NoVehiclesMatchSearch" as any)}</p>
                 ) : (
-                  filtered.map((v) => {
-                    const isSelected = v._id === value;
-                    return (
-                      <button
-                        key={v._id}
-                        type="button"
-                        onClick={() => {
-                          onChange(v._id, v.sellingPrice);
-                          setOpen(false);
-                          setSearch("");
-                        }}
-                        className={cn(
-                          "w-full flex items-center justify-between px-3 py-2.5 text-sm text-start hover:bg-muted/60 transition-colors",
-                          isSelected && "bg-indigo-500/10 text-indigo-400"
-                        )}
-                      >
-                        <div>
-                          <p className="font-medium flex items-center gap-2">
-                            {v.year} {v.make} {v.model}
-                            {v.trim ? ` ${v.trim}` : ""}
-                            {v.status === "RESERVED" && (
-                              <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-500">
-                                {t("ReservedPendingDeal" as any)}
-                              </span>
-                            )}
-                            {v.sourceType === "SOURCED" && (
-                              <span className="rounded-full bg-orange-500/15 px-2 py-0.5 text-xs font-medium text-orange-500">
-                                {t("Sourced" as any)}
-                              </span>
-                            )}
-                          </p>
-                          <p className="text-xs text-muted-foreground">{v.vin ?? t("VINPendingLabel" as any)} · {v.color}</p>
-                        </div>
-                        <div className="text-end flex-shrink-0 ms-4">
-                          <p className="font-semibold">{currency.format(v.sellingPrice)}</p>
-                          {isSelected && <Check className="w-3.5 h-3.5 text-indigo-400 ms-auto mt-0.5" />}
-                        </div>
-                      </button>
-                    );
-                  })
+                  <>
+                    {filtered.map((v) => {
+                      const isSelected = v._id === value;
+                      return (
+                        <button
+                          key={v._id}
+                          type="button"
+                          onClick={() => {
+                            onChange(v._id, v.sellingPrice);
+                            setOpen(false);
+                            setSearch("");
+                          }}
+                          className={cn(
+                            "w-full flex items-center justify-between px-3 py-2.5 text-sm text-start hover:bg-muted/60 transition-colors",
+                            isSelected && "bg-indigo-500/10 text-indigo-400"
+                          )}
+                        >
+                          <div>
+                            <p className="font-medium flex items-center gap-2">
+                              {v.year} {v.make} {v.model}
+                              {v.trim ? ` ${v.trim}` : ""}
+                              {v.status === "RESERVED" && (
+                                <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-500">
+                                  {t("ReservedPendingDeal" as any)}
+                                </span>
+                              )}
+                              {v.sourceType === "SOURCED" && (
+                                <span className="rounded-full bg-orange-500/15 px-2 py-0.5 text-xs font-medium text-orange-500">
+                                  {t("Sourced" as any)}
+                                </span>
+                              )}
+                            </p>
+                            <p className="text-xs text-muted-foreground">{v.vin ?? t("VINPendingLabel" as any)} · {v.color}</p>
+                          </div>
+                          <div className="text-end flex-shrink-0 ms-4">
+                            <p className="font-semibold">{currency.format(v.sellingPrice)}</p>
+                            {isSelected && <Check className="w-3.5 h-3.5 text-indigo-400 ms-auto mt-0.5" />}
+                          </div>
+                        </button>
+                      );
+                    })}
+
+                    {nonSelectableMatches.length > 0 && onSourceVehicle && (
+                      <div className="border-t border-border">
+                        <p className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          {t("NotInStockSourceHint" as any) || "Not in stock — source another like this"}
+                        </p>
+                        {nonSelectableMatches.map((v) => (
+                          <button
+                            key={v._id}
+                            type="button"
+                            onClick={() => handleSourceLikeMatch(v)}
+                            className="w-full flex items-center justify-between px-3 py-2.5 text-sm text-start hover:bg-orange-500/10 transition-colors"
+                          >
+                            <div>
+                              <p className="font-medium flex items-center gap-2">
+                                {v.year} {v.make} {v.model}
+                                {v.trim ? ` ${v.trim}` : ""}
+                                <span className="rounded-full bg-blue-500/15 px-2 py-0.5 text-xs font-medium text-blue-500">
+                                  {getOtherStatusLabel(v.status, t)}
+                                </span>
+                              </p>
+                              <p className="text-xs text-muted-foreground">{v.color}</p>
+                            </div>
+                            <span className="flex items-center gap-1 text-orange-600 text-xs font-medium flex-shrink-0 ms-4">
+                              <Truck className="w-3.5 h-3.5" />
+                              {t("SourceAnotherLikeThis" as any)}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
 
