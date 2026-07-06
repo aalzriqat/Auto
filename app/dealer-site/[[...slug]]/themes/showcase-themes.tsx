@@ -32,12 +32,24 @@ type ShowcaseDesignId =
   | "desert"
   | "command"
   | "lucent"
-  | "concierge";
+  | "concierge"
+  | "neon-grid"
+  | "cinema-noir"
+  | "atlas-rally"
+  | "glass-horizon"
+  | "torque-lab"
+  | "pearl-majlis"
+  | "prism-motion"
+  | "carbon-track"
+  | "solaris-bay"
+  | "pixel-showroom";
 
 type ShowcaseDesign = {
   id: ShowcaseDesignId;
   shellClass: string;
   title: string;
+  homeComponent: ShowcaseHomeComponent;
+  vehicleVariant: VehicleCardVariant;
   bg: string;
   text: string;
   muted: string;
@@ -49,7 +61,22 @@ type ShowcaseDesign = {
   darkTurnstile: boolean;
 };
 
-type VehicleCardVariant = "gallery" | "route" | "command" | "studio" | "editorial";
+type VehicleCardVariant =
+  | "gallery"
+  | "route"
+  | "command"
+  | "studio"
+  | "editorial"
+  | "neon"
+  | "poster"
+  | "atlas"
+  | "glass"
+  | "lab"
+  | "pearl"
+  | "prism"
+  | "track"
+  | "solar"
+  | "pixel";
 
 type InventorySort = "newest" | "price_low" | "price_high" | "mileage_low";
 
@@ -122,6 +149,8 @@ type ShowcaseCopy = {
   contactDealer: string;
   mobileContactPrompt: string;
 };
+
+type ShowcaseHomeComponent = (props: { props: ThemeProps; copy: ShowcaseCopy }) => ReactNode;
 
 const SHOWCASE_COPY: Record<"en" | "ar", ShowcaseCopy> = {
   en: {
@@ -233,6 +262,8 @@ const DESIGNS: Record<ShowcaseDesignId, ShowcaseDesign> = {
     id: "obsidian",
     shellClass: "wf--obsidian",
     title: "Obsidian Atelier",
+    homeComponent: ObsidianHome,
+    vehicleVariant: "gallery",
     bg: "#080908",
     text: "#f7f2e8",
     muted: "#a7aaa4",
@@ -247,6 +278,8 @@ const DESIGNS: Record<ShowcaseDesignId, ShowcaseDesign> = {
     id: "desert",
     shellClass: "wf--desert",
     title: "Desert Grand Tourer",
+    homeComponent: DesertHome,
+    vehicleVariant: "route",
     bg: "#f7f8f5",
     text: "#17221d",
     muted: "#64706a",
@@ -261,6 +294,8 @@ const DESIGNS: Record<ShowcaseDesignId, ShowcaseDesign> = {
     id: "command",
     shellClass: "wf--command",
     title: "Velocity Command",
+    homeComponent: CommandHome,
+    vehicleVariant: "command",
     bg: "#f4f7fa",
     text: "#111827",
     muted: "#5c6674",
@@ -275,6 +310,8 @@ const DESIGNS: Record<ShowcaseDesignId, ShowcaseDesign> = {
     id: "lucent",
     shellClass: "wf--lucent",
     title: "Lucent Studio",
+    homeComponent: LucentHome,
+    vehicleVariant: "studio",
     bg: "#fbfcfc",
     text: "#182024",
     muted: "#667277",
@@ -289,6 +326,8 @@ const DESIGNS: Record<ShowcaseDesignId, ShowcaseDesign> = {
     id: "concierge",
     shellClass: "wf--concierge",
     title: "Concierge Editorial",
+    homeComponent: ConciergeHome,
+    vehicleVariant: "editorial",
     bg: "#f8f7f3",
     text: "#17171b",
     muted: "#686661",
@@ -298,6 +337,166 @@ const DESIGNS: Record<ShowcaseDesignId, ShowcaseDesign> = {
     primaryFallback: "#7f1d1d",
     secondaryFallback: "#2f6f63",
     darkTurnstile: false,
+  },
+  "neon-grid": {
+    id: "neon-grid",
+    shellClass: "wf--neon",
+    title: "Neon Grid",
+    homeComponent: NeonGridHome,
+    vehicleVariant: "neon",
+    bg: "#06070d",
+    text: "#f4f8ff",
+    muted: "#9aa8c7",
+    panel: "#0e1320",
+    panelStrong: "#151d33",
+    line: "#25314d",
+    primaryFallback: "#22d3ee",
+    secondaryFallback: "#f43f5e",
+    darkTurnstile: true,
+  },
+  "cinema-noir": {
+    id: "cinema-noir",
+    shellClass: "wf--cinema",
+    title: "Cinema Noir",
+    homeComponent: CinemaNoirHome,
+    vehicleVariant: "poster",
+    bg: "#0a0a0a",
+    text: "#f6f1e7",
+    muted: "#a69f94",
+    panel: "#141312",
+    panelStrong: "#211f1c",
+    line: "#34302a",
+    primaryFallback: "#eab308",
+    secondaryFallback: "#f5f5f4",
+    darkTurnstile: true,
+  },
+  "atlas-rally": {
+    id: "atlas-rally",
+    shellClass: "wf--atlas",
+    title: "Atlas Rally",
+    homeComponent: AtlasRallyHome,
+    vehicleVariant: "atlas",
+    bg: "#eff4ed",
+    text: "#16231d",
+    muted: "#637066",
+    panel: "#fbfcf7",
+    panelStrong: "#1b3d35",
+    line: "#d5dfd3",
+    primaryFallback: "#17745f",
+    secondaryFallback: "#d14f2f",
+    darkTurnstile: false,
+  },
+  "glass-horizon": {
+    id: "glass-horizon",
+    shellClass: "wf--glass",
+    title: "Glass Horizon",
+    homeComponent: GlassHorizonHome,
+    vehicleVariant: "glass",
+    bg: "#eef7f9",
+    text: "#10252e",
+    muted: "#55707a",
+    panel: "#ffffff",
+    panelStrong: "#dceff3",
+    line: "#c8dfe5",
+    primaryFallback: "#0e7490",
+    secondaryFallback: "#7c3aed",
+    darkTurnstile: false,
+  },
+  "torque-lab": {
+    id: "torque-lab",
+    shellClass: "wf--lab",
+    title: "Torque Lab",
+    homeComponent: TorqueLabHome,
+    vehicleVariant: "lab",
+    bg: "#f2f3f1",
+    text: "#111412",
+    muted: "#626b64",
+    panel: "#ffffff",
+    panelStrong: "#1c211e",
+    line: "#d8ded8",
+    primaryFallback: "#166534",
+    secondaryFallback: "#f97316",
+    darkTurnstile: false,
+  },
+  "pearl-majlis": {
+    id: "pearl-majlis",
+    shellClass: "wf--pearl",
+    title: "Pearl Majlis",
+    homeComponent: PearlMajlisHome,
+    vehicleVariant: "pearl",
+    bg: "#0c1617",
+    text: "#f7fbf6",
+    muted: "#aac0b9",
+    panel: "#122223",
+    panelStrong: "#193132",
+    line: "#2f4848",
+    primaryFallback: "#d6b36a",
+    secondaryFallback: "#3dd6b6",
+    darkTurnstile: true,
+  },
+  "prism-motion": {
+    id: "prism-motion",
+    shellClass: "wf--prism",
+    title: "Prism Motion",
+    homeComponent: PrismMotionHome,
+    vehicleVariant: "prism",
+    bg: "#fbfbff",
+    text: "#171526",
+    muted: "#66627b",
+    panel: "#ffffff",
+    panelStrong: "#ebe9ff",
+    line: "#dedbf5",
+    primaryFallback: "#7c3aed",
+    secondaryFallback: "#f43f5e",
+    darkTurnstile: false,
+  },
+  "carbon-track": {
+    id: "carbon-track",
+    shellClass: "wf--carbon",
+    title: "Carbon Track",
+    homeComponent: CarbonTrackHome,
+    vehicleVariant: "track",
+    bg: "#07090a",
+    text: "#f4f7f7",
+    muted: "#9aa3a6",
+    panel: "#101315",
+    panelStrong: "#191f22",
+    line: "#2c3337",
+    primaryFallback: "#ef4444",
+    secondaryFallback: "#f8fafc",
+    darkTurnstile: true,
+  },
+  "solaris-bay": {
+    id: "solaris-bay",
+    shellClass: "wf--solaris",
+    title: "Solaris Bay",
+    homeComponent: SolarisBayHome,
+    vehicleVariant: "solar",
+    bg: "#f9faf2",
+    text: "#18211c",
+    muted: "#68766f",
+    panel: "#ffffff",
+    panelStrong: "#fff7d6",
+    line: "#dfe9d6",
+    primaryFallback: "#0f766e",
+    secondaryFallback: "#facc15",
+    darkTurnstile: false,
+  },
+  "pixel-showroom": {
+    id: "pixel-showroom",
+    shellClass: "wf--pixel",
+    title: "Pixel Showroom",
+    homeComponent: PixelShowroomHome,
+    vehicleVariant: "pixel",
+    bg: "#111827",
+    text: "#f8fafc",
+    muted: "#a7b1c2",
+    panel: "#1f2937",
+    panelStrong: "#0f172a",
+    line: "#334155",
+    primaryFallback: "#38bdf8",
+    secondaryFallback: "#f472b6",
+    darkTurnstile: true,
   },
 };
 
@@ -331,21 +530,6 @@ function vehicleSpecs(vehicle: PublicVehicle, copy: ShowcaseCopy) {
     vehicle.transmission,
     vehicle.fuelType,
   ].filter((value): value is string => Boolean(value));
-}
-
-function vehicleVariantForDesign(design: ShowcaseDesign): VehicleCardVariant {
-  switch (design.id) {
-    case "obsidian":
-      return "gallery";
-    case "desert":
-      return "route";
-    case "command":
-      return "command";
-    case "lucent":
-      return "studio";
-    case "concierge":
-      return "editorial";
-  }
 }
 
 function uniqueVehicleValues(
@@ -685,18 +869,8 @@ function ShowcaseHome({
   design: ShowcaseDesign;
   copy: ShowcaseCopy;
 }) {
-  switch (design.id) {
-    case "obsidian":
-      return <ObsidianHome props={props} copy={copy} />;
-    case "desert":
-      return <DesertHome props={props} copy={copy} />;
-    case "command":
-      return <CommandHome props={props} copy={copy} />;
-    case "lucent":
-      return <LucentHome props={props} copy={copy} />;
-    case "concierge":
-      return <ConciergeHome props={props} copy={copy} />;
-  }
+  const HomeComponent = design.homeComponent;
+  return <HomeComponent props={props} copy={copy} />;
 }
 
 function ObsidianHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) {
@@ -896,8 +1070,360 @@ function ConciergeHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy 
   );
 }
 
+function NeonGridHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) {
+  const vehicle = heroVehicle(props);
+  const profile = props.site.profile;
+  return (
+    <>
+      <section className="wf-hero wf-hero--neon">
+        <div className="wf-neon-floor" aria-hidden="true" />
+        <div className="wf-shell wf-neon-grid">
+          <div className="wf-neon-copy">
+            <div className="wf-kicker wf-motion-one"><Zap size={16} /> {copy.inventorySignal}</div>
+            <h1 className="wf-hero-title wf-motion-two">{profile.heroTitle ?? profile.dealershipName}</h1>
+            <p className="wf-hero-copy wf-motion-three">{profile.heroSubtitle}</p>
+            <div className="wf-neon-console wf-motion-four">
+              <Metric icon={<Car size={17} />} label={copy.availableNow} value={`${props.vehicles.length}`} />
+              <Metric icon={<ShieldCheck size={17} />} label={copy.verifiedInventory} value={copy.readyToday} />
+            </div>
+            <div className="wf-hero-buttons wf-motion-five">
+              <a href="/inventory" className="wf-button wf-button--primary">{props.t.browseInventory}<ArrowIcon /></a>
+              <a href="/contact" className="wf-button wf-button--ghost">{copy.instantReply}</a>
+            </div>
+          </div>
+          <div className="wf-neon-stage">
+            <div className="wf-neon-frame"><HeroImage vehicle={vehicle} copy={copy} /></div>
+            <div className="wf-neon-readout">
+              <span>{copy.featuredArrival}</span>
+              <strong>{vehicle ? vehicleName(vehicle) : profile.dealershipName}</strong>
+              <em dir="ltr">{vehicle ? props.formatPrice(vehicle.price) : props.t.contactForPrice}</em>
+            </div>
+            <div className="wf-neon-bars" aria-hidden="true"><i /><i /><i /><i /></div>
+          </div>
+        </div>
+      </section>
+      <ShowcaseFeatured props={props} copy={copy} variant="neon" />
+    </>
+  );
+}
+
+function CinemaNoirHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) {
+  const vehicle = heroVehicle(props);
+  const profile = props.site.profile;
+  return (
+    <>
+      <section className="wf-hero wf-hero--cinema">
+        <div className="wf-cinema-titlebar wf-motion-one">
+          <span>{copy.privateViewing}</span>
+          <span>{copy.availableNow}</span>
+          <span dir="ltr">{props.vehicles.length} {props.t.inventoryTitle}</span>
+        </div>
+        <div className="wf-shell wf-cinema-layout">
+          <div className="wf-cinema-copy">
+            <p className="wf-section-kicker">{copy.editorsPick}</p>
+            <h1 className="wf-hero-title wf-motion-two">{profile.heroTitle ?? profile.dealershipName}</h1>
+            <p className="wf-hero-copy wf-motion-three">{profile.heroSubtitle}</p>
+            <div className="wf-hero-buttons wf-motion-four">
+              <a href="/contact" className="wf-button wf-button--primary">{copy.bookViewing}<ArrowIcon /></a>
+              <a href="/inventory" className="wf-button wf-button--ghost">{props.t.browseInventory}</a>
+            </div>
+          </div>
+          <div className="wf-cinema-screen">
+            <HeroImage vehicle={vehicle} copy={copy} />
+            <div className="wf-filmstrip" aria-hidden="true">{Array.from({ length: 18 }, (_, index) => <i key={index} />)}</div>
+            <div className="wf-cinema-caption">
+              <span>{copy.featuredArrival}</span>
+              <strong>{vehicle ? vehicleName(vehicle) : profile.dealershipName}</strong>
+            </div>
+          </div>
+        </div>
+      </section>
+      <ShowcaseFeatured props={props} copy={copy} variant="poster" />
+    </>
+  );
+}
+
+function AtlasRallyHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) {
+  const vehicle = heroVehicle(props);
+  const profile = props.site.profile;
+  return (
+    <>
+      <section className="wf-hero wf-hero--atlas">
+        <div className="wf-shell wf-atlas-layout">
+          <div className="wf-atlas-map" aria-hidden="true">
+            <span /><span /><span />
+            <strong>{props.vehicles.length}</strong>
+          </div>
+          <div className="wf-atlas-copy">
+            <div className="wf-kicker wf-motion-one"><Compass size={16} /> {copy.routeReady}</div>
+            <h1 className="wf-hero-title wf-motion-two">{profile.heroTitle ?? profile.dealershipName}</h1>
+            <p className="wf-hero-copy wf-motion-three">{profile.heroSubtitle}</p>
+            <div className="wf-atlas-actions wf-motion-four">
+              <a href="/inventory" className="wf-button wf-button--primary">{props.t.browseInventory}<ArrowIcon /></a>
+              <a href="/branches" className="wf-button wf-button--ghost">{props.t.branchesTitle}</a>
+            </div>
+          </div>
+          <div className="wf-atlas-card">
+            <HeroImage vehicle={vehicle} copy={copy} />
+            <div className="wf-atlas-ticket">
+              <span>{copy.readyToday}</span>
+              <strong>{vehicle ? vehicleName(vehicle) : profile.dealershipName}</strong>
+              <em>{copy.deliveryReady}</em>
+            </div>
+          </div>
+        </div>
+      </section>
+      <ShowcaseFeatured props={props} copy={copy} variant="atlas" />
+    </>
+  );
+}
+
+function GlassHorizonHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) {
+  const vehicle = heroVehicle(props);
+  const profile = props.site.profile;
+  return (
+    <>
+      <section className="wf-hero wf-hero--glass">
+        <div className="wf-shell wf-glass-layout">
+          <div className="wf-glass-main">
+            <div className="wf-kicker wf-motion-one"><Sparkles size={16} /> {copy.studioSelected}</div>
+            <h1 className="wf-hero-title wf-motion-two">{profile.heroTitle ?? profile.dealershipName}</h1>
+            <p className="wf-hero-copy wf-motion-three">{profile.heroSubtitle}</p>
+            <div className="wf-glass-panes wf-motion-four">
+              <span>{copy.verifiedInventory}</span>
+              <span>{copy.instantReply}</span>
+              <span>{copy.financeOptions}</span>
+            </div>
+          </div>
+          <div className="wf-glass-image">
+            <HeroImage vehicle={vehicle} copy={copy} />
+            <div className="wf-glass-floating">
+              <span>{copy.availableNow}</span>
+              <strong>{vehicle ? props.formatPrice(vehicle.price) : props.t.contactForPrice}</strong>
+              <a href="/inventory">{copy.viewDetails}</a>
+            </div>
+          </div>
+        </div>
+      </section>
+      <ShowcaseFeatured props={props} copy={copy} variant="glass" />
+    </>
+  );
+}
+
+function TorqueLabHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) {
+  const vehicle = heroVehicle(props);
+  const profile = props.site.profile;
+  return (
+    <>
+      <section className="wf-hero wf-hero--lab">
+        <div className="wf-shell wf-lab-layout">
+          <div className="wf-lab-specsheet">
+            <span>{copy.verifiedInventory}</span>
+            <strong>{props.vehicles.length}</strong>
+            <em>{copy.availableNow}</em>
+            <i />
+          </div>
+          <div className="wf-lab-image"><HeroImage vehicle={vehicle} copy={copy} /></div>
+          <div className="wf-lab-copy">
+            <div className="wf-kicker wf-motion-one"><Gauge size={16} /> {copy.commandCenter}</div>
+            <h1 className="wf-hero-title wf-motion-two">{profile.heroTitle ?? profile.dealershipName}</h1>
+            <p className="wf-hero-copy wf-motion-three">{profile.heroSubtitle}</p>
+            <div className="wf-hero-buttons wf-motion-four">
+              <a href="/inventory" className="wf-button wf-button--primary">{props.t.browseInventory}<ArrowIcon /></a>
+              <a href="/finance" className="wf-button wf-button--ghost">{props.t.financeTitle}</a>
+            </div>
+          </div>
+        </div>
+      </section>
+      <ShowcaseFeatured props={props} copy={copy} variant="lab" />
+    </>
+  );
+}
+
+function PearlMajlisHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) {
+  const vehicle = heroVehicle(props);
+  const profile = props.site.profile;
+  return (
+    <>
+      <section className="wf-hero wf-hero--pearl">
+        <div className="wf-shell wf-pearl-layout">
+          <div className="wf-pearl-copy">
+            <div className="wf-kicker wf-motion-one"><Crown size={16} /> {copy.boutique}</div>
+            <h1 className="wf-hero-title wf-motion-two">{profile.heroTitle ?? profile.dealershipName}</h1>
+            <p className="wf-hero-copy wf-motion-three">{profile.heroSubtitle}</p>
+            <div className="wf-hero-buttons wf-motion-four">
+              <a href="/contact" className="wf-button wf-button--primary">{copy.askConcierge}<ArrowIcon /></a>
+              <a href="/inventory" className="wf-button wf-button--ghost">{props.t.browseInventory}</a>
+            </div>
+          </div>
+          <div className="wf-pearl-window">
+            <HeroImage vehicle={vehicle} copy={copy} />
+            <div className="wf-pearl-tag">
+              <span>{copy.featuredArrival}</span>
+              <strong>{vehicle ? vehicleName(vehicle) : profile.dealershipName}</strong>
+            </div>
+          </div>
+        </div>
+      </section>
+      <ShowcaseFeatured props={props} copy={copy} variant="pearl" />
+    </>
+  );
+}
+
+function PrismMotionHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) {
+  const vehicle = heroVehicle(props);
+  const profile = props.site.profile;
+  return (
+    <>
+      <section className="wf-hero wf-hero--prism">
+        <div className="wf-shell wf-prism-layout">
+          <div className="wf-prism-copy">
+            <div className="wf-kicker wf-motion-one"><Sparkles size={16} /> {copy.featuredArrival}</div>
+            <h1 className="wf-hero-title wf-motion-two">{profile.heroTitle ?? profile.dealershipName}</h1>
+            <p className="wf-hero-copy wf-motion-three">{profile.heroSubtitle}</p>
+            <div className="wf-hero-buttons wf-motion-four">
+              <a href="/inventory" className="wf-button wf-button--primary">{props.t.browseInventory}<ArrowIcon /></a>
+              <a href="/contact" className="wf-button wf-button--ghost">{props.t.contactTitle}</a>
+            </div>
+          </div>
+          <div className="wf-prism-mosaic">
+            <div className="wf-prism-tile wf-prism-tile--image"><HeroImage vehicle={vehicle} copy={copy} /></div>
+            <div className="wf-prism-tile"><span>{copy.readyToday}</span><strong>{props.vehicles.length}</strong></div>
+            <div className="wf-prism-tile"><span>{copy.financeOptions}</span><strong>{vehicle ? props.formatPrice(vehicle.price) : props.t.contactForPrice}</strong></div>
+            <div className="wf-prism-tile wf-prism-tile--accent"><span>{copy.instantReply}</span></div>
+          </div>
+        </div>
+      </section>
+      <ShowcaseFeatured props={props} copy={copy} variant="prism" />
+    </>
+  );
+}
+
+function CarbonTrackHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) {
+  const vehicle = heroVehicle(props);
+  const profile = props.site.profile;
+  return (
+    <>
+      <section className="wf-hero wf-hero--carbon">
+        <div className="wf-track-lanes" aria-hidden="true" />
+        <div className="wf-shell wf-carbon-layout">
+          <div className="wf-carbon-copy">
+            <div className="wf-kicker wf-motion-one"><Gauge size={16} /> {copy.routeReady}</div>
+            <h1 className="wf-hero-title wf-motion-two">{profile.heroTitle ?? profile.dealershipName}</h1>
+            <p className="wf-hero-copy wf-motion-three">{profile.heroSubtitle}</p>
+            <div className="wf-carbon-timer wf-motion-four">
+              <span>{copy.availableNow}</span>
+              <strong dir="ltr">00:{String(props.vehicles.length).padStart(2, "0")}</strong>
+            </div>
+            <div className="wf-hero-buttons wf-motion-five">
+              <a href="/inventory" className="wf-button wf-button--primary">{props.t.browseInventory}<ArrowIcon /></a>
+              <a href="/finance" className="wf-button wf-button--ghost">{copy.requestFinance}</a>
+            </div>
+          </div>
+          <div className="wf-carbon-image"><HeroImage vehicle={vehicle} copy={copy} /></div>
+        </div>
+      </section>
+      <ShowcaseFeatured props={props} copy={copy} variant="track" />
+    </>
+  );
+}
+
+function SolarisBayHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) {
+  const vehicle = heroVehicle(props);
+  const profile = props.site.profile;
+  return (
+    <>
+      <section className="wf-hero wf-hero--solaris">
+        <div className="wf-shell wf-solaris-layout">
+          <div className="wf-solaris-banner">
+            <span>{copy.deliveryReady}</span>
+            <strong>{copy.readyToday}</strong>
+          </div>
+          <div className="wf-solaris-copy">
+            <div className="wf-kicker wf-motion-one"><Compass size={16} /> {copy.showroom}</div>
+            <h1 className="wf-hero-title wf-motion-two">{profile.heroTitle ?? profile.dealershipName}</h1>
+            <p className="wf-hero-copy wf-motion-three">{profile.heroSubtitle}</p>
+            <div className="wf-hero-buttons wf-motion-four">
+              <a href="/inventory" className="wf-button wf-button--primary">{props.t.browseInventory}<ArrowIcon /></a>
+              <a href="/branches" className="wf-button wf-button--ghost">{copy.visit}</a>
+            </div>
+          </div>
+          <div className="wf-solaris-image">
+            <HeroImage vehicle={vehicle} copy={copy} />
+            <div className="wf-solaris-price">{vehicle ? props.formatPrice(vehicle.price) : props.t.contactForPrice}</div>
+          </div>
+        </div>
+      </section>
+      <ShowcaseFeatured props={props} copy={copy} variant="solar" />
+    </>
+  );
+}
+
+function PixelShowroomHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) {
+  const vehicle = heroVehicle(props);
+  const profile = props.site.profile;
+  return (
+    <>
+      <section className="wf-hero wf-hero--pixel">
+        <div className="wf-pixel-grid-bg" aria-hidden="true" />
+        <div className="wf-shell wf-pixel-layout">
+          <div className="wf-pixel-terminal">
+            <span>inventory.run()</span>
+            <strong>{props.vehicles.length}</strong>
+            <em>{copy.availableNow}</em>
+          </div>
+          <div className="wf-pixel-copy">
+            <div className="wf-kicker wf-motion-one"><Zap size={16} /> {copy.commandCenter}</div>
+            <h1 className="wf-hero-title wf-motion-two">{profile.heroTitle ?? profile.dealershipName}</h1>
+            <p className="wf-hero-copy wf-motion-three">{profile.heroSubtitle}</p>
+            <div className="wf-hero-buttons wf-motion-four">
+              <a href="/inventory" className="wf-button wf-button--primary">{props.t.browseInventory}<ArrowIcon /></a>
+              <a href="/contact" className="wf-button wf-button--ghost">{copy.instantReply}</a>
+            </div>
+          </div>
+          <div className="wf-pixel-preview">
+            <HeroImage vehicle={vehicle} copy={copy} />
+            <div className="wf-pixel-label">{vehicle ? vehicleName(vehicle) : profile.dealershipName}</div>
+          </div>
+        </div>
+      </section>
+      <ShowcaseFeatured props={props} copy={copy} variant="pixel" />
+    </>
+  );
+}
+
 function showcaseVehicles(props: ThemeProps) {
   return props.featuredVehicles.length ? props.featuredVehicles : props.vehicles.slice(0, 6);
+}
+
+function ShowcaseFeatured({
+  props,
+  copy,
+  variant,
+}: {
+  props: ThemeProps;
+  copy: ShowcaseCopy;
+  variant: VehicleCardVariant;
+}) {
+  const vehicles = showcaseVehicles(props);
+  return (
+    <section className={`wf-section wf-section--${variant}`}>
+      <div className="wf-shell">
+        <div className="wf-section-heading">
+          <div>
+            <p className="wf-section-kicker">{copy.curated}</p>
+            <h2>{props.t.featuredVehicles}</h2>
+            <p>{props.t.featuredSub}</p>
+          </div>
+          <a href="/inventory" className="wf-inline-link">
+            {props.t.viewAll}
+            <ArrowIcon />
+          </a>
+        </div>
+        <VehicleGrid vehicles={vehicles} props={props} copy={copy} variant={variant} />
+      </div>
+    </section>
+  );
 }
 
 function AtelierInventoryWall({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) {
@@ -1073,7 +1599,7 @@ function ShowcaseInventory({
   design: ShowcaseDesign;
   copy: ShowcaseCopy;
 }) {
-  const variant = vehicleVariantForDesign(design);
+  const variant = design.vehicleVariant;
   const [query, setQuery] = useState("");
   const [make, setMake] = useState("all");
   const [status, setStatus] = useState("all");
@@ -1358,6 +1884,22 @@ function VehicleCardDecoration({
       {variant === "route" && <span className="wf-card-route-pin" aria-hidden="true" />}
       {variant === "studio" && <span className="wf-card-number" aria-hidden="true">0{index + 1}</span>}
       {variant === "editorial" && <span className="wf-card-edition" aria-hidden="true">No. 0{index + 1}</span>}
+      {variant === "neon" && (
+        <span className="wf-card-signal wf-card-signal--neon" aria-hidden="true">
+          <i />
+          <i />
+          <i />
+        </span>
+      )}
+      {variant === "poster" && <span className="wf-card-edition wf-card-edition--poster" aria-hidden="true">Scene 0{index + 1}</span>}
+      {variant === "atlas" && <span className="wf-card-route-pin wf-card-route-pin--atlas" aria-hidden="true" />}
+      {variant === "glass" && <span className="wf-card-glass-strip" aria-hidden="true" />}
+      {variant === "lab" && <span className="wf-card-lab-tag" aria-hidden="true">SPEC 0{index + 1}</span>}
+      {variant === "pearl" && <span className="wf-card-pearl-line" aria-hidden="true" />}
+      {variant === "prism" && <span className="wf-card-prism-tag" aria-hidden="true">0{index + 1}</span>}
+      {variant === "track" && <span className="wf-card-track-lane" aria-hidden="true" />}
+      {variant === "solar" && <span className="wf-card-solar-ribbon" aria-hidden="true">NEW</span>}
+      {variant === "pixel" && <span className="wf-card-pixel-cursor" aria-hidden="true" />}
     </>
   );
 }
@@ -1427,7 +1969,7 @@ function ShowcaseVehicleDetail({
   const vehicle = props.detailVehicle;
   if (!vehicle) return null;
   const similarVehicles = similarVehiclesFor(vehicle, props.vehicles);
-  const variant = vehicleVariantForDesign(design);
+  const variant = design.vehicleVariant;
   const specs = [
     [props.t.trim, vehicle.trim],
     [props.t.mileage, vehicle.mileage ? `${vehicle.mileage.toLocaleString()} ${copy.mileageShort}` : null],
@@ -2723,6 +3265,703 @@ function ShowcaseStyles() {
         font-size: 12px;
         font-weight: 900;
       }
+      @keyframes wf-glowline {
+        0%, 100% { opacity: .42; transform: translateY(0); }
+        50% { opacity: 1; transform: translateY(-8px); }
+      }
+      @keyframes wf-panelslide {
+        0%, 100% { transform: translateX(0); }
+        50% { transform: translateX(22px); }
+      }
+      @keyframes wf-gridmove {
+        from { background-position: 0 0; }
+        to { background-position: 48px 48px; }
+      }
+      @keyframes wf-ticket {
+        0%, 100% { transform: rotate(-1deg) translateY(0); }
+        50% { transform: rotate(1deg) translateY(-8px); }
+      }
+      @keyframes wf-lane {
+        from { background-position: 0 0; }
+        to { background-position: 0 44px; }
+      }
+      @keyframes wf-pixelblink {
+        0%, 48% { opacity: 1; }
+        49%, 100% { opacity: .12; }
+      }
+      .wf-hero--neon {
+        background:
+          linear-gradient(90deg, rgba(34,211,238,.13) 1px, transparent 1px),
+          linear-gradient(0deg, rgba(244,63,94,.1) 1px, transparent 1px),
+          #06070d;
+        background-size: 42px 42px;
+      }
+      .wf-hero--cinema {
+        background:
+          linear-gradient(180deg, rgba(234,179,8,.12), transparent 32%),
+          linear-gradient(90deg, #050505, #15110d 48%, #060606);
+      }
+      .wf-hero--atlas {
+        background:
+          linear-gradient(135deg, rgba(23,116,95,.1) 0 25%, transparent 25% 50%, rgba(209,79,47,.08) 50% 75%, transparent 75%),
+          #eff4ed;
+        background-size: 58px 58px;
+      }
+      .wf-hero--glass {
+        background:
+          linear-gradient(120deg, rgba(255,255,255,.82), rgba(14,116,144,.08) 46%, rgba(124,58,237,.1)),
+          #eef7f9;
+      }
+      .wf-hero--lab {
+        background:
+          linear-gradient(90deg, rgba(22,101,52,.08) 1px, transparent 1px),
+          linear-gradient(0deg, rgba(249,115,22,.08) 1px, transparent 1px),
+          #f2f3f1;
+        background-size: 34px 34px;
+      }
+      .wf-hero--pearl {
+        background:
+          linear-gradient(115deg, rgba(214,179,106,.18), transparent 34%),
+          linear-gradient(245deg, rgba(61,214,182,.14), transparent 38%),
+          #0c1617;
+      }
+      .wf-hero--prism {
+        background:
+          linear-gradient(120deg, rgba(124,58,237,.16), transparent 28%),
+          linear-gradient(220deg, rgba(244,63,94,.13), transparent 34%),
+          #fbfbff;
+      }
+      .wf-hero--carbon {
+        background:
+          linear-gradient(135deg, rgba(255,255,255,.07) 12.5%, transparent 12.5% 50%, rgba(255,255,255,.07) 50% 62.5%, transparent 62.5%),
+          #07090a;
+        background-size: 18px 18px;
+      }
+      .wf-hero--solaris {
+        background:
+          linear-gradient(180deg, rgba(250,204,21,.22), transparent 36%),
+          linear-gradient(120deg, rgba(15,118,110,.12), transparent 52%),
+          #f9faf2;
+      }
+      .wf-hero--pixel {
+        background:
+          linear-gradient(90deg, rgba(56,189,248,.12) 1px, transparent 1px),
+          linear-gradient(0deg, rgba(244,114,182,.1) 1px, transparent 1px),
+          #111827;
+        background-size: 28px 28px;
+      }
+      .wf-neon-grid, .wf-cinema-layout, .wf-atlas-layout, .wf-glass-layout, .wf-lab-layout,
+      .wf-pearl-layout, .wf-prism-layout, .wf-carbon-layout, .wf-solaris-layout, .wf-pixel-layout {
+        position: relative;
+        z-index: 2;
+        min-height: 650px;
+        display: grid;
+        align-items: center;
+        gap: 42px;
+        padding: 72px 0;
+      }
+      .wf-neon-grid { grid-template-columns: minmax(0, .9fr) minmax(380px, 1.1fr); }
+      .wf-cinema-layout { grid-template-columns: minmax(260px, .74fr) minmax(420px, 1.26fr); padding-top: 102px; }
+      .wf-atlas-layout { grid-template-columns: minmax(150px, .28fr) minmax(0, .72fr) minmax(360px, 1fr); }
+      .wf-glass-layout { grid-template-columns: minmax(0, .9fr) minmax(380px, 1.1fr); }
+      .wf-lab-layout { grid-template-columns: minmax(170px, .32fr) minmax(330px, .82fr) minmax(0, .86fr); }
+      .wf-pearl-layout { grid-template-columns: minmax(0, .86fr) minmax(390px, 1.14fr); }
+      .wf-prism-layout { grid-template-columns: minmax(0, .82fr) minmax(390px, 1.18fr); }
+      .wf-carbon-layout { grid-template-columns: minmax(0, .78fr) minmax(420px, 1.22fr); }
+      .wf-solaris-layout { grid-template-columns: minmax(160px, .34fr) minmax(0, .76fr) minmax(370px, .9fr); }
+      .wf-pixel-layout { grid-template-columns: minmax(180px, .34fr) minmax(0, .72fr) minmax(360px, .94fr); }
+      .wf-neon-floor, .wf-pixel-grid-bg, .wf-track-lanes {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+      .wf-neon-floor {
+        background:
+          linear-gradient(90deg, rgba(34,211,238,.24) 1px, transparent 1px),
+          linear-gradient(0deg, rgba(244,63,94,.2) 1px, transparent 1px);
+        background-size: 56px 56px;
+        mask-image: linear-gradient(180deg, transparent, #000 44%, transparent);
+      }
+      .wf-pixel-grid-bg {
+        background:
+          linear-gradient(90deg, rgba(56,189,248,.22) 1px, transparent 1px),
+          linear-gradient(0deg, rgba(244,114,182,.18) 1px, transparent 1px);
+        background-size: 18px 18px;
+        opacity: .55;
+      }
+      .wf-track-lanes {
+        background:
+          repeating-linear-gradient(90deg, transparent 0 19%, rgba(239,68,68,.28) 19% 20%, transparent 20% 39%),
+          repeating-linear-gradient(180deg, transparent 0 24px, rgba(255,255,255,.08) 24px 26px);
+        opacity: .58;
+      }
+      .wf-neon-stage, .wf-cinema-screen, .wf-atlas-card, .wf-glass-image, .wf-lab-image,
+      .wf-pearl-window, .wf-carbon-image, .wf-solaris-image, .wf-pixel-preview {
+        position: relative;
+        min-height: 470px;
+        overflow: hidden;
+        border: 1px solid var(--wf-line);
+        border-radius: 8px;
+        background: var(--wf-panel);
+      }
+      .wf-neon-frame, .wf-neon-frame .wf-hero-image, .wf-neon-frame .wf-image-fallback,
+      .wf-cinema-screen .wf-hero-image, .wf-cinema-screen .wf-image-fallback,
+      .wf-atlas-card .wf-hero-image, .wf-atlas-card .wf-image-fallback,
+      .wf-glass-image .wf-hero-image, .wf-glass-image .wf-image-fallback,
+      .wf-lab-image .wf-hero-image, .wf-lab-image .wf-image-fallback,
+      .wf-pearl-window .wf-hero-image, .wf-pearl-window .wf-image-fallback,
+      .wf-carbon-image .wf-hero-image, .wf-carbon-image .wf-image-fallback,
+      .wf-solaris-image .wf-hero-image, .wf-solaris-image .wf-image-fallback,
+      .wf-pixel-preview .wf-hero-image, .wf-pixel-preview .wf-image-fallback {
+        position: absolute;
+        inset: 0;
+      }
+      .wf-neon-stage {
+        border-color: rgba(34,211,238,.36);
+        box-shadow: 0 34px 110px rgba(34,211,238,.14), inset 0 0 0 1px rgba(255,255,255,.08);
+      }
+      .wf-neon-readout, .wf-cinema-caption, .wf-atlas-ticket, .wf-glass-floating,
+      .wf-pearl-tag, .wf-solaris-price, .wf-pixel-label {
+        position: absolute;
+        z-index: 3;
+        border: 1px solid color-mix(in srgb, var(--wf-line) 68%, transparent);
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--wf-panel) 86%, transparent);
+        padding: 14px 16px;
+        backdrop-filter: blur(16px);
+      }
+      .wf-neon-readout { inset-inline: 20px; bottom: 20px; }
+      .wf-neon-readout span, .wf-cinema-caption span, .wf-atlas-ticket span, .wf-glass-floating span,
+      .wf-pearl-tag span, .wf-solaris-banner span, .wf-pixel-label { color: var(--wf-muted); font-size: 12px; font-weight: 850; }
+      .wf-neon-readout strong, .wf-cinema-caption strong, .wf-atlas-ticket strong, .wf-glass-floating strong,
+      .wf-pearl-tag strong, .wf-solaris-banner strong {
+        display: block;
+        margin-top: 5px;
+        font-size: 22px;
+      }
+      .wf-neon-readout em, .wf-atlas-ticket em {
+        display: block;
+        color: var(--wf-primary);
+        font-style: normal;
+        font-weight: 900;
+        margin-top: 6px;
+      }
+      .wf-neon-console, .wf-glass-panes {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+        margin-top: 28px;
+      }
+      .wf-neon-console .wf-metric {
+        background: rgba(255,255,255,.05);
+        border-color: rgba(34,211,238,.24);
+      }
+      .wf-neon-bars {
+        position: absolute;
+        z-index: 4;
+        inset-inline-end: 20px;
+        top: 20px;
+        display: inline-grid;
+        grid-auto-flow: column;
+        gap: 6px;
+        align-items: end;
+      }
+      .wf-neon-bars i {
+        width: 7px;
+        height: 54px;
+        border-radius: 8px;
+        background: linear-gradient(180deg, var(--wf-primary), var(--wf-secondary));
+      }
+      .wf-neon-bars i:nth-child(2) { height: 34px; }
+      .wf-neon-bars i:nth-child(3) { height: 68px; }
+      .wf-neon-bars i:nth-child(4) { height: 44px; }
+      .wf-cinema-titlebar {
+        position: absolute;
+        z-index: 3;
+        inset-inline: 24px;
+        top: 24px;
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        border-block: 1px solid rgba(234,179,8,.36);
+        padding: 13px 0;
+        color: #e7d8b5;
+        font-family: Georgia, "Times New Roman", "Noto Naskh Arabic", serif;
+        font-size: 13px;
+        font-weight: 900;
+      }
+      .wf-cinema-screen {
+        min-height: 560px;
+        border: 10px solid #211f1c;
+        box-shadow: 0 32px 110px rgba(0,0,0,.5);
+      }
+      .wf-filmstrip {
+        position: absolute;
+        z-index: 3;
+        inset-inline: 0;
+        bottom: 0;
+        display: grid;
+        grid-template-columns: repeat(18, minmax(20px, 1fr));
+        gap: 8px;
+        padding: 12px;
+        background: rgba(0,0,0,.74);
+      }
+      .wf-filmstrip i {
+        display: block;
+        min-height: 32px;
+        border: 1px solid rgba(234,179,8,.36);
+        background: rgba(255,255,255,.08);
+      }
+      .wf-cinema-caption { inset-inline-start: 20px; bottom: 76px; color: #f6f1e7; }
+      .wf-atlas-map {
+        min-height: 430px;
+        border: 1px solid var(--wf-line);
+        border-radius: 8px;
+        background:
+          linear-gradient(90deg, rgba(23,116,95,.12) 1px, transparent 1px),
+          linear-gradient(0deg, rgba(23,116,95,.12) 1px, transparent 1px),
+          var(--wf-panel);
+        background-size: 28px 28px;
+        position: relative;
+      }
+      .wf-atlas-map span {
+        position: absolute;
+        width: 18px;
+        height: 18px;
+        border: 3px solid white;
+        border-radius: 999px;
+        background: var(--wf-secondary);
+        box-shadow: 0 0 0 5px rgba(209,79,47,.2);
+      }
+      .wf-atlas-map span:nth-child(1) { inset-inline-start: 24%; top: 18%; }
+      .wf-atlas-map span:nth-child(2) { inset-inline-start: 58%; top: 46%; }
+      .wf-atlas-map span:nth-child(3) { inset-inline-start: 36%; top: 72%; }
+      .wf-atlas-map strong {
+        position: absolute;
+        inset-inline: 20px;
+        bottom: 20px;
+        color: var(--wf-primary);
+        font-size: 72px;
+        line-height: 1;
+      }
+      .wf-atlas-card { border-block-end: 8px solid var(--wf-secondary); }
+      .wf-atlas-ticket { inset-inline-start: 18px; bottom: 18px; max-width: min(330px, calc(100% - 36px)); }
+      .wf-atlas-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 30px; }
+      .wf-glass-main {
+        border: 1px solid rgba(255,255,255,.72);
+        border-radius: 8px;
+        background: rgba(255,255,255,.56);
+        padding: 34px;
+        box-shadow: 0 28px 80px rgba(14,116,144,.13);
+        backdrop-filter: blur(20px);
+      }
+      .wf-glass-panes { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .wf-glass-panes span {
+        min-height: 86px;
+        display: grid;
+        place-items: end start;
+        border: 1px solid rgba(255,255,255,.72);
+        border-radius: 8px;
+        background: rgba(255,255,255,.5);
+        color: var(--wf-text);
+        padding: 13px;
+        font-size: 12px;
+        font-weight: 900;
+      }
+      .wf-glass-image {
+        box-shadow: 0 26px 84px rgba(14,116,144,.16);
+      }
+      .wf-glass-floating { inset-inline-end: 18px; bottom: 18px; }
+      .wf-glass-floating a { display: inline-flex; margin-top: 8px; color: var(--wf-primary); font-weight: 900; }
+      .wf-lab-specsheet {
+        position: relative;
+        overflow: hidden;
+        min-height: 430px;
+        border: 1px solid var(--wf-line);
+        border-radius: 8px;
+        background: #111412;
+        color: white;
+        padding: 24px;
+        font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      }
+      .wf-lab-specsheet span, .wf-lab-specsheet em { display: block; color: #a7b0a9; font-style: normal; font-size: 12px; font-weight: 900; }
+      .wf-lab-specsheet strong { display: block; margin-top: 18px; color: var(--wf-secondary); font-size: 84px; line-height: 1; }
+      .wf-lab-specsheet i {
+        position: absolute;
+        inset-inline: 24px;
+        bottom: 24px;
+        height: 46%;
+        border: 1px solid rgba(249,115,22,.34);
+        border-top: 0;
+        background: repeating-linear-gradient(90deg, rgba(249,115,22,.34) 0 2px, transparent 2px 28px);
+      }
+      .wf-lab-image {
+        min-height: 540px;
+        border: 8px solid #1c211e;
+        box-shadow: 0 28px 86px rgba(17,20,18,.2);
+      }
+      .wf-pearl-window {
+        min-height: 560px;
+        border-color: rgba(214,179,106,.36);
+        box-shadow: 0 30px 100px rgba(0,0,0,.34);
+      }
+      .wf-pearl-window::before {
+        content: "";
+        position: absolute;
+        z-index: 2;
+        inset-inline: 12%;
+        top: 0;
+        height: 100%;
+        border-inline: 1px solid rgba(214,179,106,.32);
+        pointer-events: none;
+      }
+      .wf-pearl-tag { inset-inline-start: 20px; bottom: 20px; }
+      .wf-prism-mosaic {
+        display: grid;
+        grid-template-columns: 1.15fr .85fr;
+        grid-template-rows: 260px 190px;
+        gap: 14px;
+      }
+      .wf-prism-tile {
+        position: relative;
+        overflow: hidden;
+        border: 1px solid var(--wf-line);
+        border-radius: 8px;
+        background: var(--wf-panel);
+        padding: 20px;
+      }
+      .wf-prism-tile--image {
+        grid-row: span 2;
+        min-height: 464px;
+      }
+      .wf-prism-tile--image .wf-hero-image,
+      .wf-prism-tile--image .wf-image-fallback {
+        position: absolute;
+        inset: 0;
+      }
+      .wf-prism-tile span { display: block; color: var(--wf-muted); font-size: 12px; font-weight: 900; }
+      .wf-prism-tile strong { display: block; margin-top: 12px; color: var(--wf-primary); font-size: 34px; line-height: 1.05; }
+      .wf-prism-tile--accent {
+        display: grid;
+        place-items: center;
+        color: white;
+        background: linear-gradient(135deg, var(--wf-primary), var(--wf-secondary));
+      }
+      .wf-prism-tile--accent span { color: white; font-size: 20px; }
+      .wf-carbon-timer {
+        display: inline-grid;
+        gap: 8px;
+        margin-top: 28px;
+        border: 1px solid rgba(239,68,68,.38);
+        border-radius: 8px;
+        background: rgba(255,255,255,.05);
+        padding: 16px;
+        font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      }
+      .wf-carbon-timer span { color: var(--wf-muted); font-size: 12px; font-weight: 900; }
+      .wf-carbon-timer strong { color: var(--wf-primary); font-size: 38px; line-height: 1; }
+      .wf-carbon-image {
+        min-height: 540px;
+        border-color: rgba(239,68,68,.34);
+        transform: skewX(-3deg);
+        box-shadow: 0 30px 100px rgba(0,0,0,.38);
+      }
+      .wf-carbon-image > * { transform: skewX(3deg) scale(1.04); }
+      .wf-solaris-banner {
+        align-self: stretch;
+        display: flex;
+        flex-direction: column;
+        justify-content: end;
+        border: 1px solid var(--wf-line);
+        border-radius: 8px;
+        background: linear-gradient(180deg, var(--wf-panel-strong), var(--wf-panel));
+        padding: 22px;
+      }
+      .wf-solaris-banner strong { color: var(--wf-primary); font-size: 28px; }
+      .wf-solaris-image {
+        min-height: 510px;
+        border-block-start: 8px solid var(--wf-secondary);
+        box-shadow: 0 28px 86px rgba(15,118,110,.14);
+      }
+      .wf-solaris-price {
+        inset-inline-end: 18px;
+        bottom: 18px;
+        color: var(--wf-primary);
+        font-size: 22px;
+        font-weight: 950;
+      }
+      .wf-pixel-terminal {
+        border: 1px solid rgba(56,189,248,.32);
+        border-radius: 8px;
+        background: #0f172a;
+        color: #f8fafc;
+        padding: 22px;
+        font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+        box-shadow: inset 0 0 0 1px rgba(255,255,255,.04);
+      }
+      .wf-pixel-terminal span, .wf-pixel-terminal em { display: block; color: #a7b1c2; font-style: normal; font-size: 12px; font-weight: 900; }
+      .wf-pixel-terminal strong { display: block; color: var(--wf-primary); font-size: 82px; line-height: 1; margin: 18px 0 8px; }
+      .wf-pixel-preview {
+        min-height: 500px;
+        border-color: rgba(56,189,248,.32);
+        box-shadow: 12px 12px 0 rgba(244,114,182,.24);
+      }
+      .wf-pixel-label {
+        inset-inline: 18px;
+        bottom: 18px;
+        color: #f8fafc;
+        font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      }
+      .wf-section--neon, .wf-section--poster, .wf-section--pearl, .wf-section--track, .wf-section--pixel {
+        background: color-mix(in srgb, var(--wf-bg) 90%, #000);
+      }
+      .wf-section--atlas, .wf-section--glass, .wf-section--lab, .wf-section--prism, .wf-section--solar {
+        background: color-mix(in srgb, var(--wf-bg) 88%, #fff);
+      }
+      .wf-vehicle-grid--neon { grid-template-columns: 1.2fr .8fr .8fr; }
+      .wf-vehicle-grid--poster { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .wf-vehicle-grid--atlas { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .wf-vehicle-grid--glass { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; }
+      .wf-vehicle-grid--lab { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .wf-vehicle-grid--pearl { grid-template-columns: minmax(0, 1.1fr) minmax(0, .9fr) minmax(0, .9fr); }
+      .wf-vehicle-grid--prism { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+      .wf-vehicle-grid--track { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .wf-vehicle-grid--solar { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .wf-vehicle-grid--pixel { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .wf-vehicle-grid--neon .wf-vehicle-card--lead,
+      .wf-vehicle-grid--pearl .wf-vehicle-card--lead { grid-column: span 2; }
+      .wf-vehicle-grid--prism .wf-vehicle-card { grid-column: span 2; }
+      .wf-vehicle-grid--prism .wf-vehicle-card--lead { grid-column: span 3; }
+      .wf-vehicle-card--neon {
+        background: linear-gradient(180deg, rgba(255,255,255,.05), rgba(34,211,238,.07));
+        border-color: rgba(34,211,238,.24);
+        box-shadow: inset 0 0 0 1px rgba(255,255,255,.04);
+      }
+      .wf-vehicle-card--poster {
+        background: #141312;
+        color: #f6f1e7;
+        border-color: #34302a;
+      }
+      .wf-vehicle-card--poster .wf-vehicle-media { aspect-ratio: 4 / 5; }
+      .wf-vehicle-card--poster .wf-vehicle-eyebrow,
+      .wf-vehicle-card--poster .wf-specs span,
+      .wf-vehicle-card--poster .wf-card-footer span { color: #a69f94; }
+      .wf-vehicle-card--atlas {
+        display: grid;
+        grid-template-columns: minmax(170px, .75fr) minmax(0, 1fr);
+        min-height: 234px;
+        border-block-end: 5px solid var(--wf-secondary);
+      }
+      .wf-vehicle-card--atlas .wf-vehicle-media-link { min-height: 100%; }
+      .wf-vehicle-card--atlas .wf-vehicle-media { aspect-ratio: auto; min-height: 100%; }
+      .wf-vehicle-card--glass {
+        background: rgba(255,255,255,.72);
+        box-shadow: 0 24px 78px rgba(14,116,144,.1);
+        backdrop-filter: blur(16px);
+      }
+      .wf-vehicle-card--lab {
+        background:
+          linear-gradient(90deg, rgba(22,101,52,.07) 1px, transparent 1px),
+          var(--wf-panel);
+        background-size: 24px 24px;
+        font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      }
+      .wf-vehicle-card--lab .wf-vehicle-media { aspect-ratio: 1 / 1; }
+      .wf-vehicle-card--pearl {
+        background: #122223;
+        color: #f7fbf6;
+        border-color: #2f4848;
+      }
+      .wf-vehicle-card--pearl .wf-vehicle-eyebrow,
+      .wf-vehicle-card--pearl .wf-specs span,
+      .wf-vehicle-card--pearl .wf-card-footer span { color: #aac0b9; }
+      .wf-vehicle-card--prism {
+        background: linear-gradient(135deg, rgba(124,58,237,.1), rgba(244,63,94,.08)), #fff;
+      }
+      .wf-vehicle-card--track {
+        background: #101315;
+        color: #f4f7f7;
+        border-color: #2c3337;
+        transform: skewX(-1deg);
+      }
+      .wf-vehicle-card--track > * { transform: skewX(1deg); }
+      .wf-vehicle-card--track .wf-vehicle-eyebrow,
+      .wf-vehicle-card--track .wf-specs span,
+      .wf-vehicle-card--track .wf-card-footer span { color: #9aa3a6; }
+      .wf-vehicle-card--solar {
+        border-block-start: 5px solid var(--wf-secondary);
+        background: linear-gradient(180deg, #fff, var(--wf-panel-strong));
+      }
+      .wf-vehicle-card--pixel {
+        background: #1f2937;
+        color: #f8fafc;
+        border-color: #334155;
+        box-shadow: 8px 8px 0 rgba(56,189,248,.16);
+        font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      }
+      .wf-vehicle-card--pixel .wf-vehicle-eyebrow,
+      .wf-vehicle-card--pixel .wf-specs span,
+      .wf-vehicle-card--pixel .wf-card-footer span { color: #a7b1c2; }
+      .wf-card-signal--neon { background: rgba(6,7,13,.78); box-shadow: 0 0 24px rgba(34,211,238,.24); }
+      .wf-card-edition--poster { background: #eab308; color: #141312; }
+      .wf-card-route-pin--atlas { background: var(--wf-secondary); }
+      .wf-card-glass-strip {
+        position: absolute;
+        z-index: 4;
+        inset-inline-start: 14px;
+        top: 14px;
+        width: 54px;
+        height: 8px;
+        border-radius: 8px;
+        background: linear-gradient(90deg, var(--wf-primary), var(--wf-secondary));
+      }
+      .wf-card-lab-tag, .wf-card-prism-tag, .wf-card-solar-ribbon {
+        position: absolute;
+        z-index: 4;
+        inset-inline-end: 14px;
+        top: 14px;
+        border-radius: 8px;
+        background: var(--wf-primary);
+        color: white;
+        padding: 6px 9px;
+        font-size: 11px;
+        font-weight: 950;
+      }
+      .wf-card-pearl-line {
+        position: absolute;
+        z-index: 4;
+        inset-inline: 16px;
+        top: 16px;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, var(--wf-primary), transparent);
+      }
+      .wf-card-track-lane {
+        position: absolute;
+        z-index: 4;
+        inset-block: 0;
+        inset-inline-end: 16px;
+        width: 3px;
+        background: repeating-linear-gradient(180deg, var(--wf-primary) 0 14px, transparent 14px 26px);
+      }
+      .wf-card-solar-ribbon { background: var(--wf-secondary); color: #18211c; }
+      .wf-card-pixel-cursor {
+        position: absolute;
+        z-index: 4;
+        inset-inline-end: 14px;
+        top: 14px;
+        width: 10px;
+        height: 22px;
+        background: var(--wf-secondary);
+      }
+      @media (prefers-reduced-motion: no-preference) {
+        .wf-neon-floor, .wf-pixel-grid-bg { animation: wf-gridmove 18s linear infinite; }
+        .wf-neon-bars i { animation: wf-meter 1.4s ease-in-out infinite; transform-origin: bottom; }
+        .wf-neon-bars i:nth-child(2) { animation-delay: .16s; }
+        .wf-neon-bars i:nth-child(3) { animation-delay: .32s; }
+        .wf-neon-bars i:nth-child(4) { animation-delay: .48s; }
+        .wf-filmstrip { animation: wf-film 24s linear infinite; }
+        .wf-atlas-map span { animation: wf-glowline 2.8s ease-in-out infinite; }
+        .wf-atlas-map span:nth-child(2) { animation-delay: .34s; }
+        .wf-atlas-map span:nth-child(3) { animation-delay: .68s; }
+        .wf-glass-floating, .wf-pearl-tag, .wf-pixel-terminal { animation: wf-float 5.8s ease-in-out infinite; }
+        .wf-lab-specsheet i, .wf-track-lanes { animation: wf-lane 2.8s linear infinite; }
+        .wf-prism-tile { animation: wf-rise .72s cubic-bezier(.2, .8, .2, 1) both; animation-delay: calc(var(--wf-card-index, 1) * 70ms); }
+        .wf-carbon-image { animation: wf-ticket 6.2s ease-in-out infinite; }
+        .wf-solaris-banner { animation: wf-panelslide 7s ease-in-out infinite; }
+        .wf-card-pixel-cursor { animation: wf-pixelblink 1s steps(1) infinite; }
+        .wf-vehicle-card--neon::after,
+        .wf-vehicle-card--glass::after,
+        .wf-vehicle-card--pixel::after {
+          content: "";
+          position: absolute;
+          inset: 0;
+          background: linear-gradient(110deg, transparent, rgba(255,255,255,.18), transparent);
+          transform: translateX(-120%);
+          animation: wf-sweep 5.8s ease-in-out infinite;
+          pointer-events: none;
+        }
+      }
+      @media (max-width: 1060px) {
+        .wf-neon-grid, .wf-cinema-layout, .wf-atlas-layout, .wf-glass-layout, .wf-lab-layout,
+        .wf-pearl-layout, .wf-prism-layout, .wf-carbon-layout, .wf-solaris-layout, .wf-pixel-layout {
+          grid-template-columns: 1fr;
+          min-height: auto;
+        }
+        .wf-atlas-map, .wf-lab-specsheet, .wf-solaris-banner, .wf-pixel-terminal {
+          min-height: auto;
+        }
+        .wf-neon-stage, .wf-cinema-screen, .wf-atlas-card, .wf-glass-image, .wf-lab-image,
+        .wf-pearl-window, .wf-carbon-image, .wf-solaris-image, .wf-pixel-preview {
+          min-height: 390px;
+        }
+        .wf-carbon-image {
+          transform: none;
+        }
+        .wf-carbon-image > * {
+          transform: none;
+        }
+        .wf-vehicle-grid--neon, .wf-vehicle-grid--poster, .wf-vehicle-grid--atlas, .wf-vehicle-grid--glass,
+        .wf-vehicle-grid--lab, .wf-vehicle-grid--pearl, .wf-vehicle-grid--track, .wf-vehicle-grid--solar,
+        .wf-vehicle-grid--pixel {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .wf-vehicle-grid--prism {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .wf-vehicle-grid--prism .wf-vehicle-card,
+        .wf-vehicle-grid--prism .wf-vehicle-card--lead {
+          grid-column: auto;
+        }
+        .wf-vehicle-card--track {
+          transform: none;
+        }
+        .wf-vehicle-card--track > * {
+          transform: none;
+        }
+      }
+      @media (max-width: 720px) {
+        .wf-neon-grid, .wf-cinema-layout, .wf-atlas-layout, .wf-glass-layout, .wf-lab-layout,
+        .wf-pearl-layout, .wf-prism-layout, .wf-carbon-layout, .wf-solaris-layout, .wf-pixel-layout {
+          padding: 44px 0;
+          gap: 28px;
+        }
+        .wf-cinema-layout {
+          padding-top: 92px;
+        }
+        .wf-cinema-titlebar {
+          inset-inline: 16px;
+          display: grid;
+          grid-template-columns: 1fr;
+          gap: 6px;
+        }
+        .wf-neon-console, .wf-glass-panes, .wf-prism-mosaic,
+        .wf-vehicle-grid--neon, .wf-vehicle-grid--poster, .wf-vehicle-grid--atlas, .wf-vehicle-grid--glass,
+        .wf-vehicle-grid--lab, .wf-vehicle-grid--pearl, .wf-vehicle-grid--prism, .wf-vehicle-grid--track,
+        .wf-vehicle-grid--solar, .wf-vehicle-grid--pixel {
+          grid-template-columns: 1fr;
+        }
+        .wf-prism-tile--image {
+          grid-row: auto;
+          min-height: 330px;
+        }
+        .wf-neon-stage, .wf-cinema-screen, .wf-atlas-card, .wf-glass-image, .wf-lab-image,
+        .wf-pearl-window, .wf-carbon-image, .wf-solaris-image, .wf-pixel-preview {
+          min-height: 330px;
+        }
+        .wf-vehicle-grid--neon .wf-vehicle-card--lead,
+        .wf-vehicle-grid--pearl .wf-vehicle-card--lead {
+          grid-column: auto;
+        }
+        .wf-vehicle-card--atlas {
+          grid-template-columns: 1fr;
+        }
+        .wf-vehicle-card--atlas .wf-vehicle-media {
+          aspect-ratio: 16 / 10;
+        }
+        .wf-pixel-preview {
+          box-shadow: 6px 6px 0 rgba(56,189,248,.16);
+        }
+      }
       .wf-section { padding: 84px 0; }
       .wf-section--gallery { background: color-mix(in srgb, var(--wf-bg) 88%, #000); }
       .wf-section--route { background: #f7f8f5; }
@@ -3482,4 +4721,44 @@ export function LucentStudioTheme(props: ThemeProps) {
 
 export function ConciergeEditorialTheme(props: ThemeProps) {
   return <ShowcaseRoot props={props} design={DESIGNS.concierge} />;
+}
+
+export function NeonGridTheme(props: ThemeProps) {
+  return <ShowcaseRoot props={props} design={DESIGNS["neon-grid"]} />;
+}
+
+export function CinemaNoirTheme(props: ThemeProps) {
+  return <ShowcaseRoot props={props} design={DESIGNS["cinema-noir"]} />;
+}
+
+export function AtlasRallyTheme(props: ThemeProps) {
+  return <ShowcaseRoot props={props} design={DESIGNS["atlas-rally"]} />;
+}
+
+export function GlassHorizonTheme(props: ThemeProps) {
+  return <ShowcaseRoot props={props} design={DESIGNS["glass-horizon"]} />;
+}
+
+export function TorqueLabTheme(props: ThemeProps) {
+  return <ShowcaseRoot props={props} design={DESIGNS["torque-lab"]} />;
+}
+
+export function PearlMajlisTheme(props: ThemeProps) {
+  return <ShowcaseRoot props={props} design={DESIGNS["pearl-majlis"]} />;
+}
+
+export function PrismMotionTheme(props: ThemeProps) {
+  return <ShowcaseRoot props={props} design={DESIGNS["prism-motion"]} />;
+}
+
+export function CarbonTrackTheme(props: ThemeProps) {
+  return <ShowcaseRoot props={props} design={DESIGNS["carbon-track"]} />;
+}
+
+export function SolarisBayTheme(props: ThemeProps) {
+  return <ShowcaseRoot props={props} design={DESIGNS["solaris-bay"]} />;
+}
+
+export function PixelShowroomTheme(props: ThemeProps) {
+  return <ShowcaseRoot props={props} design={DESIGNS["pixel-showroom"]} />;
 }
