@@ -617,7 +617,7 @@ function ShowcaseHeader({
 }) {
   const profile = props.site.profile;
   return (
-    <header className="wf-nav">
+    <header className={`wf-nav wf-nav--${design.id}`}>
       <div className="wf-shell wf-nav-inner">
         <Link href="/" className="wf-brand">
           {profile.logoUrl ? (
@@ -730,7 +730,7 @@ function ObsidianHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }
         </div>
         <VehicleTicker vehicles={props.featuredVehicles} props={props} copy={copy} />
       </section>
-      <ShowcaseFeatured props={props} copy={copy} variant="gallery" />
+      <AtelierInventoryWall props={props} copy={copy} />
     </>
   );
 }
@@ -773,7 +773,7 @@ function DesertHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) 
           </div>
         </div>
       </section>
-      <ShowcaseFeatured props={props} copy={copy} variant="route" />
+      <RouteInventoryJourney props={props} copy={copy} />
     </>
   );
 }
@@ -816,7 +816,7 @@ function CommandHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy })
           </div>
         </div>
       </section>
-      <ShowcaseFeatured props={props} copy={copy} variant="command" />
+      <CommandInventoryBoard props={props} copy={copy} />
     </>
   );
 }
@@ -854,7 +854,7 @@ function LucentHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) 
           </div>
         </div>
       </section>
-      <ShowcaseFeatured props={props} copy={copy} variant="studio" />
+      <StudioInventoryLookbook props={props} copy={copy} />
     </>
   );
 }
@@ -891,41 +891,174 @@ function ConciergeHome({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy 
           </div>
         </div>
       </section>
-      <ShowcaseFeatured props={props} copy={copy} variant="editorial" />
+      <EditorialInventoryIssue props={props} copy={copy} />
     </>
   );
 }
 
-function ShowcaseFeatured({
-  props,
-  copy,
-  variant,
-}: {
-  props: ThemeProps;
-  copy: ShowcaseCopy;
-  variant: VehicleCardVariant;
-}) {
-  const vehicles = props.featuredVehicles.length ? props.featuredVehicles : props.vehicles.slice(0, 6);
+function showcaseVehicles(props: ThemeProps) {
+  return props.featuredVehicles.length ? props.featuredVehicles : props.vehicles.slice(0, 6);
+}
+
+function AtelierInventoryWall({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) {
+  const vehicles = showcaseVehicles(props);
+  if (!vehicles.length) return <HomeExperienceEmpty props={props} copy={copy} className="wf-atelier-wall" />;
   return (
-    <section className={`wf-section wf-section--${variant}`}>
-      <div className="wf-shell">
-        <div className="wf-section-heading">
-          <div>
-            <p className="wf-section-kicker">{copy.curated}</p>
-            <h2>{props.t.featuredVehicles}</h2>
-            <p>{props.t.featuredSub}</p>
+    <section className="wf-home-experience wf-atelier-wall">
+      <div className="wf-shell wf-atelier-wall-grid">
+        <div className="wf-atelier-ledger">
+          <p className="wf-section-kicker">{copy.privateViewing}</p>
+          <h2>{props.t.featuredVehicles}</h2>
+          <p>{copy.updatedFromShowroom}</p>
+          <div className="wf-atelier-ledger-stats">
+            <span>{copy.availableNow}<strong>{props.vehicles.length}</strong></span>
+            <span>{copy.instantReply}<strong>{copy.readyToday}</strong></span>
           </div>
           <a href="/inventory" className="wf-inline-link">
             {props.t.viewAll}
             <ArrowIcon />
           </a>
         </div>
-        <VehicleGrid
-          vehicles={vehicles}
-          props={props}
-          copy={copy}
-          variant={variant}
-        />
+        <div className="wf-atelier-showroom-track">
+          {vehicles.slice(0, 4).map((vehicle, index) => (
+            <VehicleCard key={vehicle.id} vehicle={vehicle} props={props} copy={copy} index={index} variant="gallery" />
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function RouteInventoryJourney({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) {
+  const vehicles = showcaseVehicles(props);
+  if (!vehicles.length) return <HomeExperienceEmpty props={props} copy={copy} className="wf-route-journey" />;
+  return (
+    <section className="wf-home-experience wf-route-journey">
+      <div className="wf-shell">
+        <div className="wf-route-journey-heading">
+          <div>
+            <p className="wf-section-kicker">{copy.routeReady}</p>
+            <h2>{props.t.featuredVehicles}</h2>
+          </div>
+          <a href="/inventory" className="wf-inline-link">
+            {props.t.viewAll}
+            <ArrowIcon />
+          </a>
+        </div>
+        <div className="wf-route-lanes">
+          {vehicles.slice(0, 5).map((vehicle, index) => (
+            <div key={vehicle.id} className="wf-route-stop">
+              <span className="wf-route-stop-index">0{index + 1}</span>
+              <VehicleCard vehicle={vehicle} props={props} copy={copy} index={index} variant="route" />
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function CommandInventoryBoard({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) {
+  const vehicles = showcaseVehicles(props);
+  if (!vehicles.length) return <HomeExperienceEmpty props={props} copy={copy} className="wf-command-board" />;
+  return (
+    <section className="wf-home-experience wf-command-board">
+      <div className="wf-shell wf-command-board-grid">
+        <aside className="wf-command-sidebar">
+          <p className="wf-section-kicker">{copy.inventorySignal}</p>
+          <h2>{copy.commandCenter}</h2>
+          <div className="wf-command-readouts">
+            <Metric icon={<Car size={16} />} label={props.t.inventoryTitle} value={`${props.vehicles.length}`} />
+            <Metric icon={<ShieldCheck size={16} />} label={copy.verifiedInventory} value={copy.availableNow} />
+            <Metric icon={<Zap size={16} />} label={copy.instantReply} value={copy.readyToday} />
+          </div>
+        </aside>
+        <div className="wf-command-board-results">
+          <div className="wf-command-board-bar">
+            <span>{copy.availableNow}</span>
+            <a href="/inventory">{props.t.viewAll}</a>
+          </div>
+          <VehicleGrid vehicles={vehicles.slice(0, 6)} props={props} copy={copy} variant="command" />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function StudioInventoryLookbook({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) {
+  const vehicles = showcaseVehicles(props);
+  if (!vehicles.length) return <HomeExperienceEmpty props={props} copy={copy} className="wf-studio-lookbook" />;
+  const leadVehicle = vehicles[0] ?? null;
+  return (
+    <section className="wf-home-experience wf-studio-lookbook">
+      <div className="wf-shell wf-studio-lookbook-grid">
+        <div className="wf-studio-lookbook-cover">
+          <p className="wf-section-kicker">{copy.studioSelected}</p>
+          <h2>{props.t.featuredVehicles}</h2>
+          <p>{props.t.featuredSub}</p>
+          {leadVehicle && (
+            <Link href={`/inventory/${leadVehicle.slug}`} className="wf-studio-feature-link">
+              <HeroImage vehicle={leadVehicle} copy={copy} />
+              <span>{vehicleName(leadVehicle)}</span>
+            </Link>
+          )}
+        </div>
+        <div className="wf-studio-lookbook-strip">
+          {vehicles.slice(1, 5).map((vehicle, index) => (
+            <VehicleCard key={vehicle.id} vehicle={vehicle} props={props} copy={copy} index={index} variant="studio" />
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function EditorialInventoryIssue({ props, copy }: { props: ThemeProps; copy: ShowcaseCopy }) {
+  const vehicles = showcaseVehicles(props);
+  if (!vehicles.length) return <HomeExperienceEmpty props={props} copy={copy} className="wf-editorial-issue" />;
+  return (
+    <section className="wf-home-experience wf-editorial-issue">
+      <div className="wf-shell wf-editorial-issue-layout">
+        <div className="wf-editorial-issue-title">
+          <p className="wf-section-kicker">{copy.editorsPick}</p>
+          <h2>{props.t.featuredVehicles}</h2>
+          <p>{copy.updatedFromShowroom}</p>
+          <a href="/inventory" className="wf-inline-link">
+            {props.t.viewAll}
+            <ArrowIcon />
+          </a>
+        </div>
+        <div className="wf-editorial-issue-list">
+          {vehicles.slice(0, 5).map((vehicle, index) => (
+            <Link key={vehicle.id} href={`/inventory/${vehicle.slug}`} className="wf-editorial-row">
+              <span>0{index + 1}</span>
+              <strong>{vehicleName(vehicle)}</strong>
+              <em>{props.formatPrice(vehicle.price)}</em>
+              <i>{vehicle.status}</i>
+            </Link>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function HomeExperienceEmpty({
+  props,
+  copy,
+  className,
+}: {
+  props: ThemeProps;
+  copy: ShowcaseCopy;
+  className: string;
+}) {
+  return (
+    <section className={`wf-home-experience ${className}`}>
+      <div className="wf-shell">
+        <div className="wf-empty">
+          <strong>{copy.updatedFromShowroom}</strong>
+          <p>{props.t.noVehicles}</p>
+        </div>
       </div>
     </section>
   );
@@ -975,25 +1108,86 @@ function ShowcaseInventory({
   };
 
   return (
-    <section className="wf-page wf-shell">
-      <div className="wf-page-heading">
-        <p className="wf-section-kicker">{copy.availableNow}</p>
-        <h1>{props.t.inventoryTitle}</h1>
-        <p>{props.t.inventorySub}</p>
+    <section className={`wf-page wf-shell wf-inventory-page wf-inventory-page--${variant}`}>
+      <div className="wf-inventory-masthead">
+        <div className="wf-page-heading">
+          <p className="wf-section-kicker">{copy.availableNow}</p>
+          <h1>{props.t.inventoryTitle}</h1>
+          <p>{props.t.inventorySub}</p>
+        </div>
+        <InventoryPersonaPanel props={props} copy={copy} variant={variant} />
       </div>
-      <div className="wf-inventory-toolbar">
-        <span><SlidersHorizontal size={15} /> {copy.verifiedInventory}</span>
-        <span dir="ltr">{filteredVehicles.length} / {props.vehicles.length} {copy.matchingCars}</span>
+      <div className="wf-inventory-layout">
+        <aside className="wf-inventory-side">
+          <div className="wf-inventory-toolbar">
+            <span><SlidersHorizontal size={15} /> {copy.verifiedInventory}</span>
+            <span dir="ltr">{filteredVehicles.length} / {props.vehicles.length} {copy.matchingCars}</span>
+          </div>
+          <InventoryControls copy={copy} filters={filters} actions={filterActions} />
+        </aside>
+        <div className="wf-inventory-results">
+          <VehicleGrid
+            vehicles={filteredVehicles}
+            props={props}
+            copy={copy}
+            variant={variant}
+            emptyMessage={hasActiveFilters ? copy.noMatches : props.t.noVehicles}
+          />
+        </div>
       </div>
-      <InventoryControls copy={copy} filters={filters} actions={filterActions} />
-      <VehicleGrid
-        vehicles={filteredVehicles}
-        props={props}
-        copy={copy}
-        variant={variant}
-        emptyMessage={hasActiveFilters ? copy.noMatches : props.t.noVehicles}
-      />
     </section>
+  );
+}
+
+function InventoryPersonaPanel({
+  props,
+  copy,
+  variant,
+}: {
+  props: ThemeProps;
+  copy: ShowcaseCopy;
+  variant: VehicleCardVariant;
+}) {
+  if (variant === "command") {
+    return (
+      <div className="wf-inventory-persona wf-inventory-persona--command">
+        <CommandTelemetry count={props.vehicles.length} />
+        <span>{copy.inventorySignal}</span>
+      </div>
+    );
+  }
+  if (variant === "route") {
+    return (
+      <div className="wf-inventory-persona wf-inventory-persona--route">
+        <span>{copy.showroom}</span>
+        <i />
+        <span>{copy.readyToday}</span>
+        <i />
+        <span>{copy.deliveryReady}</span>
+      </div>
+    );
+  }
+  if (variant === "studio") {
+    return (
+      <div className="wf-inventory-persona wf-inventory-persona--studio">
+        <Sparkles size={18} />
+        <span>{copy.studioSelected}</span>
+      </div>
+    );
+  }
+  if (variant === "editorial") {
+    return (
+      <div className="wf-inventory-persona wf-inventory-persona--editorial">
+        <span>01</span>
+        <strong>{copy.editorsPick}</strong>
+      </div>
+    );
+  }
+  return (
+    <div className="wf-inventory-persona wf-inventory-persona--gallery">
+      <Crown size={18} />
+      <span>{copy.privateViewing}</span>
+    </div>
   );
 }
 
@@ -1244,7 +1438,7 @@ function ShowcaseVehicleDetail({
 
   return (
     <>
-      <section className="wf-page wf-shell wf-detail-page">
+      <section className={`wf-page wf-shell wf-detail-page wf-detail-page--${variant}`}>
         <div className="wf-detail-media">
           <VehicleImage vehicle={vehicle} copy={copy} />
         </div>
@@ -1870,7 +2064,7 @@ function ShowcaseStyles() {
       @media (prefers-reduced-motion: no-preference) {
         .wf-motion-one, .wf-motion-two, .wf-motion-three, .wf-motion-four, .wf-motion-five,
         .wf-atelier-panel, .wf-route-ticket, .wf-command-strip, .wf-studio-card, .wf-cover-caption,
-        .wf-inventory-controls, .wf-detail-action-panel {
+        .wf-inventory-controls, .wf-detail-action-panel, .wf-home-experience {
           animation: wf-rise .72s cubic-bezier(.2, .8, .2, 1) both;
         }
         .wf-motion-two { animation-delay: .08s; }
@@ -1879,6 +2073,7 @@ function ShowcaseStyles() {
         .wf-motion-five { animation-delay: .32s; }
         .wf-atelier-panel, .wf-route-ticket, .wf-command-strip, .wf-studio-card, .wf-cover-caption { animation-delay: .38s; }
         .wf-inventory-controls, .wf-detail-action-panel { animation-delay: .1s; }
+        .wf-home-experience { animation-delay: .18s; }
         .wf-atelier-sweep { animation: wf-sweep 6.5s ease-in-out infinite; }
         .wf-live-rail > span { animation: wf-film 28s linear infinite; }
         .wf-route-map::before { animation: wf-route-flow 1.6s linear infinite; }
@@ -1934,6 +2129,33 @@ function ShowcaseStyles() {
       .wf-nav-link { color: var(--wf-muted); font-size: 14px; font-weight: 700; transition: color .2s ease; }
       .wf-nav-link:hover { color: var(--wf-text); }
       .wf-actions { display: flex; align-items: center; gap: 10px; }
+      .wf-nav--obsidian .wf-nav-inner { min-height: 82px; border-inline: 1px solid rgba(255,255,255,.08); }
+      .wf-nav--desert .wf-nav-inner { min-height: 78px; }
+      .wf-nav--desert .wf-desktop-nav { border: 1px solid var(--wf-line); border-radius: 8px; padding: 9px 14px; background: rgba(255,255,255,.62); }
+      .wf-nav--command {
+        background:
+          linear-gradient(90deg, rgba(37,99,235,.16) 1px, transparent 1px),
+          rgba(11,17,28,.94);
+        background-size: 24px 24px;
+        color: white;
+      }
+      .wf-nav--command .wf-nav-link,
+      .wf-nav--command .wf-brand-name { color: #dbe8ff; }
+      .wf-nav--command .wf-language,
+      .wf-nav--command .wf-menu-button { background: rgba(255,255,255,.08); color: white; border-color: rgba(255,255,255,.16); }
+      .wf-nav--lucent { border-bottom: 0; background: color-mix(in srgb, var(--wf-bg) 78%, transparent); }
+      .wf-nav--lucent .wf-nav-inner {
+        min-height: 76px;
+        margin-top: 12px;
+        margin-bottom: 12px;
+        border: 1px solid var(--wf-line);
+        border-radius: 8px;
+        background: rgba(255,255,255,.78);
+        box-shadow: 0 18px 60px rgba(8,145,178,.08);
+        padding-inline: 16px;
+      }
+      .wf-nav--concierge .wf-nav-inner { border-block-end: 3px double var(--wf-line); }
+      .wf-nav--concierge .wf-brand-name { font-family: Georgia, "Times New Roman", "Noto Naskh Arabic", serif; }
       .wf-language, .wf-menu-button {
         display: inline-flex;
         align-items: center;
@@ -2284,6 +2506,223 @@ function ShowcaseStyles() {
       }
       .wf-editorial-index strong { color: var(--wf-text); font-family: inherit; }
       .wf-editorial-index em { grid-column: 2; color: var(--wf-muted); font-style: normal; font-size: 12px; }
+      .wf-home-experience {
+        position: relative;
+        overflow: hidden;
+        padding: 88px 0;
+      }
+      .wf-home-experience h2 {
+        margin: 0;
+        font-size: 42px;
+        line-height: 1.08;
+        letter-spacing: 0;
+      }
+      .wf-home-experience p { color: var(--wf-muted); line-height: 1.7; }
+      .wf-atelier-wall { background: #080908; color: #f7f2e8; border-top: 1px solid rgba(255,255,255,.08); }
+      .wf-atelier-wall-grid {
+        display: grid;
+        grid-template-columns: minmax(260px, .62fr) minmax(0, 1.38fr);
+        gap: 34px;
+        align-items: start;
+      }
+      .wf-atelier-ledger {
+        position: sticky;
+        top: 110px;
+        border: 1px solid rgba(255,255,255,.12);
+        border-radius: 8px;
+        padding: 26px;
+        background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02));
+      }
+      .wf-atelier-ledger-stats {
+        display: grid;
+        gap: 10px;
+        margin: 24px 0;
+      }
+      .wf-atelier-ledger-stats span {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        border-bottom: 1px solid rgba(255,255,255,.1);
+        padding-bottom: 10px;
+        color: var(--wf-muted);
+        font-size: 12px;
+        font-weight: 850;
+      }
+      .wf-atelier-ledger-stats strong { color: var(--wf-primary); }
+      .wf-atelier-showroom-track {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(210px, 1fr));
+        gap: 18px;
+        align-items: start;
+      }
+      .wf-atelier-showroom-track .wf-vehicle-card:nth-child(even) { margin-top: 54px; }
+      .wf-route-journey { background: #f7f8f5; }
+      .wf-route-journey-heading {
+        display: flex;
+        justify-content: space-between;
+        align-items: end;
+        gap: 22px;
+        margin-bottom: 30px;
+      }
+      .wf-route-lanes {
+        position: relative;
+        display: grid;
+        gap: 16px;
+      }
+      .wf-route-lanes::before {
+        content: "";
+        position: absolute;
+        inset-block: 24px;
+        inset-inline-start: 30px;
+        width: 2px;
+        background: repeating-linear-gradient(180deg, var(--wf-primary) 0 10px, transparent 10px 20px);
+        opacity: .36;
+      }
+      .wf-route-stop {
+        position: relative;
+        display: grid;
+        grid-template-columns: 62px minmax(0, 1fr);
+        gap: 16px;
+        align-items: start;
+      }
+      .wf-route-stop-index {
+        position: sticky;
+        top: 104px;
+        z-index: 2;
+        display: grid;
+        place-items: center;
+        width: 62px;
+        height: 62px;
+        border-radius: 8px;
+        background: var(--wf-primary);
+        color: white;
+        font-weight: 950;
+      }
+      .wf-command-board {
+        background:
+          linear-gradient(90deg, rgba(37,99,235,.11) 1px, transparent 1px),
+          linear-gradient(0deg, rgba(37,99,235,.1) 1px, transparent 1px),
+          #09111d;
+        background-size: 32px 32px;
+        color: white;
+      }
+      .wf-command-board-grid {
+        display: grid;
+        grid-template-columns: minmax(260px, .36fr) minmax(0, 1fr);
+        gap: 22px;
+        align-items: start;
+      }
+      .wf-command-sidebar {
+        position: sticky;
+        top: 112px;
+        border: 1px solid rgba(255,255,255,.14);
+        border-radius: 8px;
+        background: rgba(11,17,28,.72);
+        padding: 22px;
+      }
+      .wf-command-sidebar h2 { color: white; font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
+      .wf-command-readouts { display: grid; gap: 10px; margin-top: 22px; }
+      .wf-command-readouts .wf-metric { min-height: 92px; background: rgba(255,255,255,.06); border-color: rgba(255,255,255,.12); }
+      .wf-command-board-results {
+        border: 1px solid rgba(255,255,255,.14);
+        border-radius: 8px;
+        background: rgba(255,255,255,.04);
+        padding: 16px;
+      }
+      .wf-command-board-bar {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 14px;
+        color: #9fb2c9;
+        font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+        font-size: 12px;
+        font-weight: 900;
+      }
+      .wf-command-board-bar a { color: var(--wf-secondary); }
+      .wf-studio-lookbook { background: #fbfcfc; }
+      .wf-studio-lookbook-grid {
+        display: grid;
+        grid-template-columns: minmax(280px, .9fr) minmax(0, 1.1fr);
+        gap: 34px;
+        align-items: start;
+      }
+      .wf-studio-lookbook-cover {
+        min-height: 620px;
+        border-radius: 8px;
+        border: 1px solid var(--wf-line);
+        background: linear-gradient(180deg, #fff, #eef5f6);
+        padding: 28px;
+        box-shadow: 0 24px 80px rgba(8,145,178,.1);
+      }
+      .wf-studio-feature-link {
+        position: relative;
+        display: block;
+        overflow: hidden;
+        min-height: 390px;
+        margin-top: 26px;
+        border-radius: 8px;
+        background: var(--wf-panel-strong);
+      }
+      .wf-studio-feature-link .wf-hero-image,
+      .wf-studio-feature-link .wf-image-fallback { position: absolute; inset: 0; }
+      .wf-studio-feature-link span {
+        position: absolute;
+        inset-inline: 18px;
+        bottom: 18px;
+        border-radius: 8px;
+        background: rgba(255,255,255,.86);
+        padding: 14px;
+        color: var(--wf-text);
+        font-weight: 950;
+      }
+      .wf-studio-lookbook-strip {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+      }
+      .wf-editorial-issue {
+        background: #f8f7f3;
+        border-top: 1px solid var(--wf-line);
+      }
+      .wf-editorial-issue-layout {
+        display: grid;
+        grid-template-columns: minmax(250px, .52fr) minmax(0, 1.48fr);
+        gap: 38px;
+      }
+      .wf-editorial-issue-title {
+        border-block: 4px double var(--wf-line);
+        padding: 34px 0;
+      }
+      .wf-editorial-issue-title h2 {
+        font-family: Georgia, "Times New Roman", "Noto Naskh Arabic", serif;
+      }
+      .wf-editorial-issue-list { display: grid; border-top: 1px solid var(--wf-line); }
+      .wf-editorial-row {
+        display: grid;
+        grid-template-columns: 58px minmax(0, 1fr) auto auto;
+        gap: 16px;
+        align-items: center;
+        min-height: 92px;
+        border-bottom: 1px solid var(--wf-line);
+      }
+      .wf-editorial-row span {
+        color: var(--wf-primary);
+        font-family: Georgia, "Times New Roman", "Noto Naskh Arabic", serif;
+        font-size: 30px;
+        font-weight: 900;
+      }
+      .wf-editorial-row strong { font-size: 20px; font-family: Georgia, "Times New Roman", "Noto Naskh Arabic", serif; }
+      .wf-editorial-row em { color: var(--wf-primary); font-style: normal; font-weight: 900; }
+      .wf-editorial-row i {
+        border: 1px solid var(--wf-line);
+        border-radius: 8px;
+        padding: 7px 10px;
+        color: var(--wf-muted);
+        font-style: normal;
+        font-size: 12px;
+        font-weight: 900;
+      }
       .wf-section { padding: 84px 0; }
       .wf-section--gallery { background: color-mix(in srgb, var(--wf-bg) 88%, #000); }
       .wf-section--route { background: #f7f8f5; }
@@ -2498,6 +2937,126 @@ function ShowcaseStyles() {
       .wf-page { padding-block: 72px 92px; }
       .wf-page-heading { max-width: 760px; margin-bottom: 34px; }
       .wf-page-heading h1 { margin-bottom: 10px; }
+      .wf-inventory-masthead {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 24px;
+        align-items: end;
+      }
+      .wf-inventory-layout {
+        display: grid;
+        grid-template-columns: minmax(270px, .32fr) minmax(0, 1fr);
+        gap: 24px;
+        align-items: start;
+      }
+      .wf-inventory-side {
+        position: sticky;
+        top: 96px;
+        display: grid;
+        gap: 14px;
+      }
+      .wf-inventory-results { min-width: 0; }
+      .wf-inventory-persona {
+        min-width: 260px;
+        border: 1px solid var(--wf-line);
+        border-radius: 8px;
+        background: var(--wf-panel);
+        color: var(--wf-text);
+        padding: 16px;
+        font-weight: 900;
+      }
+      .wf-inventory-persona--gallery {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        background: #10120f;
+        color: #f7f2e8;
+        border-color: rgba(255,255,255,.12);
+      }
+      .wf-inventory-persona--route {
+        display: grid;
+        grid-template-columns: max-content 1fr max-content 1fr max-content;
+        align-items: center;
+        gap: 10px;
+        background: #0d2a25;
+        color: white;
+      }
+      .wf-inventory-persona--route i {
+        height: 2px;
+        border-radius: 99px;
+        background: repeating-linear-gradient(90deg, rgba(255,255,255,.9) 0 8px, transparent 8px 16px);
+        opacity: .7;
+      }
+      .wf-inventory-persona--studio {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        background: linear-gradient(135deg, #fff, #eef5f6);
+        box-shadow: 0 18px 60px rgba(8,145,178,.08);
+      }
+      .wf-inventory-persona--command {
+        position: relative;
+        min-height: 96px;
+        overflow: hidden;
+        background: #0b111c;
+        color: white;
+        font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      }
+      .wf-inventory-persona--command .wf-telemetry { inset-inline-end: 12px; top: 12px; transform: scale(.82); transform-origin: top right; }
+      .wf-inventory-persona--command > span { position: absolute; inset-inline-start: 16px; bottom: 16px; color: #9fb2c9; }
+      .wf-inventory-persona--editorial {
+        display: grid;
+        grid-template-columns: 54px 1fr;
+        gap: 12px;
+        align-items: center;
+        border-block: 4px double var(--wf-line);
+        border-inline: 0;
+        background: transparent;
+        font-family: Georgia, "Times New Roman", "Noto Naskh Arabic", serif;
+      }
+      .wf-inventory-persona--editorial span { color: var(--wf-primary); font-size: 32px; }
+      .wf-inventory-side .wf-inventory-controls,
+      .wf-inventory-side .wf-filter-grid { grid-template-columns: 1fr; }
+      .wf-inventory-side .wf-filter-reset { width: 100%; }
+      .wf-inventory-page--gallery {
+        width: min(1360px, calc(100% - 48px));
+        border-inline: 1px solid rgba(255,255,255,.08);
+      }
+      .wf-inventory-page--gallery .wf-inventory-layout { grid-template-columns: minmax(280px, .28fr) minmax(0, 1fr); }
+      .wf-inventory-page--route .wf-inventory-layout { grid-template-columns: 1fr; }
+      .wf-inventory-page--route .wf-inventory-side {
+        position: relative;
+        top: auto;
+        grid-template-columns: minmax(260px, .8fr) minmax(0, 1.2fr);
+        align-items: stretch;
+      }
+      .wf-inventory-page--route .wf-inventory-side .wf-inventory-controls,
+      .wf-inventory-page--route .wf-inventory-side .wf-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .wf-inventory-page--route .wf-inventory-side .wf-filter-reset { width: auto; grid-column: span 2; }
+      .wf-inventory-page--command {
+        width: min(1420px, calc(100% - 48px));
+      }
+      .wf-inventory-page--command .wf-page-heading h1,
+      .wf-inventory-page--command .wf-section-kicker { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; }
+      .wf-inventory-page--studio .wf-inventory-layout {
+        grid-template-columns: 1fr;
+      }
+      .wf-inventory-page--studio .wf-inventory-side {
+        position: relative;
+        top: auto;
+        grid-template-columns: 1fr;
+      }
+      .wf-inventory-page--studio .wf-inventory-side .wf-inventory-controls { grid-template-columns: minmax(260px, 1fr) minmax(0, 1.5fr); }
+      .wf-inventory-page--studio .wf-inventory-side .wf-filter-grid { grid-template-columns: repeat(3, minmax(0, 1fr)) auto; }
+      .wf-inventory-page--editorial .wf-inventory-layout {
+        grid-template-columns: minmax(260px, .42fr) minmax(0, 1fr);
+      }
+      .wf-inventory-page--editorial .wf-inventory-toolbar,
+      .wf-inventory-page--editorial .wf-inventory-controls {
+        border-inline: 0;
+        border-radius: 0;
+        box-shadow: none;
+      }
       .wf-inventory-toolbar {
         display: flex;
         justify-content: space-between;
@@ -2578,6 +3137,53 @@ function ShowcaseStyles() {
       }
       .wf-detail-page { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(340px, .92fr); gap: 44px; align-items: start; }
       .wf-detail-media { aspect-ratio: 4 / 3; overflow: hidden; border-radius: 8px; background: var(--wf-panel-strong); border: 1px solid var(--wf-line); position: sticky; top: 96px; }
+      .wf-detail-page--gallery {
+        width: min(1360px, calc(100% - 48px));
+        grid-template-columns: minmax(0, 1.25fr) minmax(360px, .75fr);
+      }
+      .wf-detail-page--gallery .wf-detail-media { aspect-ratio: 16 / 9; border-color: rgba(255,255,255,.12); box-shadow: 0 30px 110px rgba(0,0,0,.28); }
+      .wf-detail-page--route {
+        grid-template-columns: minmax(0, .88fr) minmax(360px, 1.12fr);
+      }
+      .wf-detail-page--route .wf-detail-media {
+        border-block-end: 8px solid var(--wf-secondary);
+      }
+      .wf-detail-page--command {
+        width: min(1400px, calc(100% - 48px));
+        grid-template-columns: minmax(0, .82fr) minmax(380px, 1.18fr);
+      }
+      .wf-detail-page--command .wf-detail-info {
+        border: 1px solid rgba(255,255,255,.12);
+        border-radius: 8px;
+        background: #0b111c;
+        color: white;
+        padding: 24px;
+        font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      }
+      .wf-detail-page--command .wf-detail-trim,
+      .wf-detail-page--command .wf-detail-specs span,
+      .wf-detail-page--command .wf-trust-list li { color: #9fb2c9; }
+      .wf-detail-page--command .wf-detail-specs div,
+      .wf-detail-page--command .wf-detail-action-panel,
+      .wf-detail-page--command .wf-lead-panel { background: rgba(255,255,255,.06); border-color: rgba(255,255,255,.14); }
+      .wf-detail-page--studio {
+        grid-template-columns: minmax(360px, .9fr) minmax(0, 1.1fr);
+      }
+      .wf-detail-page--studio .wf-detail-media {
+        aspect-ratio: 4 / 5;
+        box-shadow: 0 28px 90px rgba(8,145,178,.12);
+      }
+      .wf-detail-page--editorial {
+        grid-template-columns: minmax(300px, .68fr) minmax(0, 1.32fr);
+        border-block: 1px solid var(--wf-line);
+      }
+      .wf-detail-page--editorial .wf-detail-media {
+        aspect-ratio: 3 / 4;
+        border-radius: 0;
+      }
+      .wf-detail-page--editorial .wf-detail-info h1 {
+        font-family: Georgia, "Times New Roman", "Noto Naskh Arabic", serif;
+      }
       .wf-detail-info h1 { margin: 0; font-size: 44px; line-height: 1.08; letter-spacing: 0; }
       .wf-detail-trim { color: var(--wf-muted); font-size: 18px; margin: 10px 0 0; }
       .wf-detail-price { display: block; color: var(--wf-primary); font-size: 32px; margin: 22px 0; }
@@ -2780,13 +3386,25 @@ function ShowcaseStyles() {
         .wf-menu-button { display: inline-flex; }
         .wf-hero-title { font-size: 54px; }
         .wf-desert-grid, .wf-command-grid, .wf-lucent-grid, .wf-editorial-grid,
-        .wf-detail-page, .wf-contact-page { grid-template-columns: 1fr; }
+        .wf-detail-page, .wf-contact-page,
+        .wf-atelier-wall-grid, .wf-command-board-grid, .wf-studio-lookbook-grid,
+        .wf-editorial-issue-layout, .wf-inventory-layout,
+        .wf-inventory-page--gallery .wf-inventory-layout,
+        .wf-inventory-page--command .wf-inventory-layout,
+        .wf-inventory-page--editorial .wf-inventory-layout { grid-template-columns: 1fr; }
         .wf-desert-stage, .wf-command-visual, .wf-lucent-stage, .wf-editorial-cover { min-height: 390px; }
-        .wf-detail-media { position: relative; top: auto; }
+        .wf-detail-media, .wf-inventory-side, .wf-atelier-ledger, .wf-command-sidebar { position: relative; top: auto; }
         .wf-detail-action-panel { position: relative; top: auto; }
         .wf-inventory-controls { grid-template-columns: 1fr; }
         .wf-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .wf-filter-reset { grid-column: span 2; }
+        .wf-atelier-showroom-track, .wf-studio-lookbook-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .wf-route-lanes::before { inset-inline-start: 24px; }
+        .wf-inventory-masthead { grid-template-columns: 1fr; }
+        .wf-inventory-page--route .wf-inventory-side,
+        .wf-inventory-page--studio .wf-inventory-side .wf-inventory-controls,
+        .wf-inventory-page--studio .wf-inventory-side .wf-filter-grid { grid-template-columns: 1fr; }
+        .wf-inventory-page--route .wf-inventory-side .wf-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         .wf-vehicle-grid, .wf-branch-grid, .wf-footer-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       }
       @media (max-width: 720px) {
@@ -2800,6 +3418,27 @@ function ShowcaseStyles() {
         .wf-desert-grid, .wf-command-grid, .wf-lucent-grid, .wf-editorial-grid { padding: 44px 0; gap: 28px; }
         .wf-command-metrics, .wf-field-row--two, .wf-field-row--three, .wf-detail-specs,
         .wf-vehicle-grid, .wf-branch-grid, .wf-footer-grid { grid-template-columns: 1fr; }
+        .wf-home-experience { padding: 56px 0; }
+        .wf-home-experience h2 { font-size: 31px; }
+        .wf-atelier-showroom-track,
+        .wf-studio-lookbook-strip,
+        .wf-inventory-persona--route,
+        .wf-editorial-row { grid-template-columns: 1fr; }
+        .wf-atelier-showroom-track .wf-vehicle-card:nth-child(even),
+        .wf-vehicle-card--studio:nth-child(even) { margin-top: 0; }
+        .wf-route-journey-heading { align-items: start; flex-direction: column; }
+        .wf-route-stop { grid-template-columns: 44px minmax(0, 1fr); gap: 10px; }
+        .wf-route-stop-index { width: 44px; height: 44px; font-size: 12px; }
+        .wf-route-lanes::before { inset-inline-start: 21px; }
+        .wf-studio-lookbook-cover { min-height: auto; }
+        .wf-studio-feature-link { min-height: 280px; }
+        .wf-editorial-row {
+          align-items: start;
+          gap: 7px;
+          padding: 16px 0;
+        }
+        .wf-inventory-page--route .wf-inventory-side .wf-filter-grid,
+        .wf-filter-grid { grid-template-columns: 1fr; }
         .wf-vehicle-grid--gallery .wf-vehicle-card--lead,
         .wf-vehicle-grid--editorial .wf-vehicle-card--lead { grid-column: auto; }
         .wf-vehicle-card--gallery:nth-child(3n + 2),
