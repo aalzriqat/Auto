@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, Cairo } from "next/font/google";
+import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 import ConvexClientProvider from "@/components/ConvexClientProvider";
 import { ClerkProviderWithLocale } from "@/components/providers/ClerkProviderWithLocale";
@@ -53,6 +54,7 @@ export default function RootLayout({
             <ConvexClientProvider>{children}</ConvexClientProvider>
           </ClerkProviderWithLocale>
         </LanguageProvider>
+        <Analytics />
       </body>
     </html>
   );

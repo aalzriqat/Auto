@@ -7,7 +7,6 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import {
   ArrowLeft,
   ArrowRight,
-  Sparkles,
   Fingerprint,
   Activity,
   Zap,
@@ -36,7 +35,14 @@ import {
   ClipboardCheck,
   UploadCloud,
   Wallet,
-  ListChecks
+  ListChecks,
+  MessageCircle,
+  MessageSquare,
+  Landmark,
+  Percent,
+  Smartphone,
+  BookOpen,
+  type LucideIcon
 } from "lucide-react";
 import { motion, AnimatePresence, useScroll, useTransform, useMotionValue, useSpring } from "framer-motion";
 
@@ -50,7 +56,6 @@ interface LocalCopy {
   navContact: string;
   navLogin: string;
   navStart: string;
-  heroBadge: string;
   heroTitle1: string;
   heroTitle2: string;
   heroSubhead: string;
@@ -108,6 +113,10 @@ interface LocalCopy {
   analyticsSub: string;
   opsTitle: string;
   opsSub: string;
+  financeTitle: string;
+  financeSub: string;
+  growTitle: string;
+  growSub: string;
 }
 
 const copy: Record<"en" | "ar", LocalCopy> = {
@@ -120,7 +129,6 @@ const copy: Record<"en" | "ar", LocalCopy> = {
     navContact: "Contact",
     navLogin: "Sign In",
     navStart: "Get Started",
-    heroBadge: "AUTOFLOW OS • THE DEALERSHIP STANDARD",
     heroTitle1: "The Creative Engine",
     heroTitle2: "For Elite Car Dealerships",
     heroSubhead: "Ditch slow spreadsheets. Manage luxury inventory, automate credit approvals, and scale sales pipeline in a fast, unified digital workspace.",
@@ -177,7 +185,11 @@ const copy: Record<"en" | "ar", LocalCopy> = {
     analyticsTitle: "Reports That Actually Run Your Business",
     analyticsSub: "Six built-in report types turn raw transactions into decisions — filter any date range and export what you need.",
     opsTitle: "Built To Scale With Your Group",
-    opsSub: "Multi-branch operations, secure approval chains, bulk data tools, and a form builder that bends to your workflow — not the other way around."
+    opsSub: "Multi-branch operations, secure approval chains, bulk data tools, and a form builder that bends to your workflow — not the other way around.",
+    financeTitle: "A Real Finance Department, Built In",
+    financeSub: "Double-entry general ledger, bank reconciliation, VAT returns, and installment tracking — no separate accounting software required.",
+    growTitle: "Grow Beyond The Showroom Floor",
+    growSub: "A bilingual public website, a unified social inbox, and internal team chat — everything that touches a customer or a coworker, in one place."
   },
   ar: {
     navFeatures: "الميزات",
@@ -188,7 +200,6 @@ const copy: Record<"en" | "ar", LocalCopy> = {
     navContact: "تواصل معنا",
     navLogin: "دخول",
     navStart: "ابدأ الآن",
-    heroBadge: "نظام أوتوفلو • المعيار الحديث لإدارة المعارض",
     heroTitle1: "المحرك الإبداعي",
     heroTitle2: "لمعارض السيارات النخبة",
     heroSubhead: "ودع الجداول التقليدية البطيئة. أدر مخزونك الفاخر، وأتمت موافقات التمويل، وضاعف مبيعاتك في منصة سحابية واحدة تمتاز بالسرعة والجمال.",
@@ -245,9 +256,67 @@ const copy: Record<"en" | "ar", LocalCopy> = {
     analyticsTitle: "تقارير تدير أعمالك فعلياً",
     analyticsSub: "ستة أنواع تقارير جاهزة تحوّل بياناتك الخام إلى قرارات، فلترة أي مدى تاريخي وتصدير ما تحتاجه بسهولة.",
     opsTitle: "مصمم للنمو مع مجموعتك",
-    opsSub: "عمليات متعددة الفروع، سلاسل اعتماد آمنة، أدوات استيراد جماعية، ومُنشئ حقول مرن يتكيف مع أسلوب عملك."
+    opsSub: "عمليات متعددة الفروع، سلاسل اعتماد آمنة، أدوات استيراد جماعية، ومُنشئ حقول مرن يتكيف مع أسلوب عملك.",
+    financeTitle: "قسم محاسبة متكامل داخل النظام",
+    financeSub: "دفتر أستاذ عام بقيد مزدوج، تسوية بنكية، إقرارات ضريبة القيمة المضافة، ومتابعة أقساط التمويل، دون الحاجة لأي برنامج محاسبي منفصل.",
+    growTitle: "انطلق خارج صالة العرض",
+    growSub: "موقع إلكتروني عام ثنائي اللغة، صندوق وارد موحّد لمنصات التواصل، ومحادثات داخلية للفريق، كل ما يتعلق بعميل أو زميل عمل، في مكان واحد."
   }
 };
+
+interface FeatureGridItem {
+  icon: LucideIcon;
+  titleEn: string;
+  titleAr: string;
+  descEn: string;
+  descAr: string;
+}
+
+function FeatureCardGrid({
+  features,
+  locale,
+  gridClassName,
+  cardClassName,
+  iconWrapClassName,
+  titleClassName,
+  descClassName,
+  delayStep,
+}: {
+  features: FeatureGridItem[];
+  locale: string;
+  gridClassName: string;
+  cardClassName: string;
+  iconWrapClassName: string;
+  titleClassName: string;
+  descClassName: string;
+  delayStep: number;
+}) {
+  return (
+    <div className={gridClassName}>
+      {features.map((feature, idx) => {
+        const Icon = feature.icon;
+        return (
+          <motion.div
+            key={idx}
+            initial={{ opacity: 0, y: 24 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            transition={{ duration: 0.6, delay: idx * delayStep }}
+            className={cardClassName}
+          >
+            <div className={iconWrapClassName}>
+              <Icon className="w-5 h-5 text-blue-400" />
+            </div>
+            <div>
+              <h3 className={titleClassName}>{locale === "ar" ? feature.titleAr : feature.titleEn}</h3>
+              <p className={descClassName}>{locale === "ar" ? feature.descAr : feature.descEn}</p>
+            </div>
+          </motion.div>
+        );
+      })}
+    </div>
+  );
+}
 
 export default function CreativeMarketingPage() {
   const { locale, setLocale, isRtl } = useLanguage();
@@ -441,6 +510,18 @@ export default function CreativeMarketingPage() {
       qAr: "هل واجهة اللغة العربية ترجمة حقيقية أم مجرد انعكاس للتصميم؟",
       aEn: "It's a genuine right-to-left experience, not a CSS mirror trick. Every screen, form, and report is fully translated and laid out natively for Arabic, and switching languages is instant — no reload, no broken layouts.",
       aAr: "هي تجربة عربية حقيقية بترتيب من اليمين لليسار، وليست مجرد انعكاس بصري بواسطة CSS. كل شاشة ونموذج وتقرير مترجم بالكامل ومصمم بشكل أصلي للغة العربية، والتبديل بين اللغتين فوري دون إعادة تحميل أو أي خلل في التصميم."
+    },
+    {
+      qEn: "Can AutoFlow build our dealership's public website?",
+      qAr: "هل يمكن لأوتوفلو بناء الموقع الإلكتروني العام لمعرضنا؟",
+      aEn: "Yes. Every org gets a bilingual, public-facing dealer website synced live to your inventory, with a choice of standard themes plus premium designs — no separate hosting or developer needed.",
+      aAr: "نعم. تحصل كل مؤسسة على موقع إلكتروني عام ثنائي اللغة مرتبط مباشرة بمخزونها الحي، مع تشكيلة من القوالب القياسية والتصاميم المميزة، دون الحاجة لاستضافة منفصلة أو مطور."
+    },
+    {
+      qEn: "Does AutoFlow connect to our Instagram and Facebook pages?",
+      qAr: "هل يتصل أوتوفلو بصفحاتنا على إنستغرام وفيسبوك؟",
+      aEn: "Yes. Connect your pages to auto-post vehicles when they go available, capture every comment and DM into one Social Inbox, auto-reply to common questions, and convert engaged followers straight into leads.",
+      aAr: "نعم. اربط صفحاتك لنشر السيارات تلقائياً عند توفرها، وتجميع كل تعليق ورسالة خاصة في صندوق وارد اجتماعي واحد، مع رد تلقائي على الأسئلة الشائعة وتحويل المتابعين المتفاعلين إلى عملاء محتملين مباشرة."
     }
   ];
 
@@ -462,6 +543,12 @@ export default function CreativeMarketingPage() {
     { icon: SlidersHorizontal, titleEn: "Custom Fields", titleAr: "حقول مخصصة" },
     { icon: UploadCloud, titleEn: "Bulk Import / Export", titleAr: "استيراد وتصدير جماعي" },
     { icon: Languages, titleEn: "Bilingual EN / AR (RTL)", titleAr: "ثنائي اللغة (دعم RTL)" },
+    { icon: Globe, titleEn: "Dealer Website Builder", titleAr: "منشئ مواقع المعارض" },
+    { icon: MessageCircle, titleEn: "Instagram & Facebook Inbox", titleAr: "صندوق وارد إنستغرام وفيسبوك" },
+    { icon: MessageSquare, titleEn: "Internal Team Chat", titleAr: "محادثات الفريق الداخلية" },
+    { icon: Landmark, titleEn: "Bank Reconciliation", titleAr: "التسوية البنكية" },
+    { icon: Percent, titleEn: "VAT Return Filing", titleAr: "إقرارات ضريبة القيمة المضافة" },
+    { icon: Smartphone, titleEn: "Installable Mobile App (PWA)", titleAr: "تطبيق جوال قابل للتثبيت" },
   ];
 
   // --- Role-based access showcase ---
@@ -536,6 +623,21 @@ export default function CreativeMarketingPage() {
     { icon: SlidersHorizontal, titleEn: "Custom Fields", titleAr: "حقول مخصصة", descEn: "Add the fields your dealership actually needs to vehicle and lead forms — no developer required.", descAr: "أضف الحقول التي يحتاجها معرضك فعلياً لنماذج السيارات والعملاء المحتملين، دون الحاجة لمطور." },
   ];
 
+  // --- Finance department: GL, bank reconciliation, VAT, installments ---
+  const financeFeatures = [
+    { icon: BookOpen, titleEn: "Double-Entry General Ledger", titleAr: "دفتر أستاذ عام بقيد مزدوج", descEn: "Every sale, expense, and payment auto-posts a balanced journal entry — no manual bookkeeping.", descAr: "كل عملية بيع أو مصروف أو دفعة تُسجَّل تلقائياً كقيد محاسبي متوازن، دون إدخال يدوي." },
+    { icon: Landmark, titleEn: "Bank Accounts & Reconciliation", titleAr: "الحسابات البنكية والتسوية", descEn: "Upload a bank statement and get scored transaction matches — nothing is ever auto-confirmed without you.", descAr: "ارفع كشف الحساب البنكي واحصل على مطابقات مقترحة للمعاملات، ولا يتم اعتماد أي تسوية دون مراجعتك." },
+    { icon: Percent, titleEn: "VAT Return Reports", titleAr: "تقارير إقرار ضريبة القيمة المضافة", descEn: "Output vs. input VAT calculated from every sale, expense, and supplier payment — export as PDF or CSV.", descAr: "احتساب ضريبة المخرجات مقابل ضريبة المدخلات من كل بيع ومصروف ودفعة مورد، مع تصدير بصيغة PDF أو CSV." },
+    { icon: Calendar, titleEn: "Installment Due-Date Calendar", titleAr: "تقويم استحقاق الأقساط", descEn: "See every financed sale's upcoming installment in one collections calendar — never miss a due date.", descAr: "شاهد جميع أقساط المبيعات الممولة القادمة في تقويم تحصيل واحد، ولا تفوّت أي تاريخ استحقاق." },
+  ];
+
+  // --- Grow beyond the showroom: website, social inbox, team chat ---
+  const growFeatures = [
+    { icon: Globe, titleEn: "Bilingual Dealer Website Builder", titleAr: "منشئ مواقع المعارض ثنائي اللغة", descEn: "Publish a public, bilingual dealership site synced to your live inventory — pick from standard themes or premium designs like Prestige, Velocity, and Avant.", descAr: "أطلق موقعاً عاماً ثنائي اللغة لمعرضك مرتبطاً بمخزونك الحي، اختر من القوالب القياسية أو التصاميم المميزة مثل Prestige و Velocity و Avant." },
+    { icon: MessageCircle, titleEn: "Instagram & Facebook Social Inbox", titleAr: "صندوق وارد إنستغرام وفيسبوك", descEn: "Every comment and DM from Instagram and Facebook lands in one inbox, with auto-reply and automatic lead creation.", descAr: "كل تعليق أو رسالة خاصة من إنستغرام وفيسبوك تصل إلى صندوق وارد واحد، مع رد تلقائي وإنشاء عملاء محتملين تلقائياً." },
+    { icon: MessageSquare, titleEn: "Internal Team Messaging", titleAr: "محادثات الفريق الداخلية", descEn: "A built-in messenger for direct and group chats, with seen receipts and sound alerts — no need for a separate chat app.", descAr: "محادثات جماعية وفردية مدمجة مع إشعارات القراءة والتنبيهات الصوتية، دون الحاجة لتطبيق محادثة منفصل." },
+  ];
+
   const roleColorMap: Record<string, { ring: string; bg: string; text: string; glow: string }> = {
     blue: { ring: "border-blue-500/30", bg: "bg-blue-500/10", text: "text-blue-400", glow: "rgba(59,130,246,0.15)" },
     cyan: { ring: "border-cyan-500/30", bg: "bg-cyan-500/10", text: "text-cyan-400", glow: "rgba(6,182,212,0.15)" },
@@ -582,7 +684,7 @@ export default function CreativeMarketingPage() {
             />
           </Link>
           
-          <nav className="hidden lg:flex items-center gap-8 text-xs font-semibold tracking-wider text-white/60 uppercase">
+          <nav className={`hidden lg:flex items-center gap-8 text-sm font-semibold text-white/75 uppercase ${isRtl ? "" : "tracking-wider"}`}>
             <a href="#features" className="hover:text-white transition-colors duration-300 relative group py-2">
               {t.navFeatures}
               <span className="absolute bottom-0 left-0 w-0 h-0.5 bg-blue-500 group-hover:w-full transition-all duration-300" />
@@ -615,7 +717,7 @@ export default function CreativeMarketingPage() {
               <span>{locale === "en" ? "العربية" : "EN"}</span>
             </button>
 
-            <Link href="/sign-in" className="text-xs font-bold text-white/60 hover:text-white transition-colors duration-300 py-2">
+            <Link href="/sign-in" className="text-sm font-bold text-white/75 hover:text-white transition-colors duration-300 py-2">
               {t.navLogin}
             </Link>
 
@@ -692,18 +794,7 @@ export default function CreativeMarketingPage() {
         {/* Cinematic Premium Hero */}
         <section className="relative min-h-[90vh] flex items-center justify-center pt-16 pb-12">
           <div className="container mx-auto px-6 max-w-6xl flex flex-col items-center text-center">
-            
-            {/* Ambient Badge */}
-            <motion.div 
-              initial={{ opacity: 0, scale: 0.9 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ duration: 1.2, ease: [0.16, 1, 0.3, 1] }}
-              className="inline-flex items-center gap-2.5 px-4 py-1.5 rounded-full bg-white/5 border border-white/10 backdrop-blur-md mb-8"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-blue-400" />
-              <span className="text-[10px] sm:text-xs font-bold tracking-widest text-blue-200/90">{t.heroBadge}</span>
-            </motion.div>
-            
+
             {/* Split Title Animations */}
             <h1 className="text-[2.25rem] sm:text-[4rem] lg:text-[5.5rem] font-black leading-[1.05] tracking-tight mb-8">
               <motion.span 
@@ -749,7 +840,7 @@ export default function CreativeMarketingPage() {
               </Link>
               
               <a href="#features" className="w-full sm:w-auto">
-                <button className="w-full sm:w-auto px-8 py-4.5 bg-white/5 border border-white/10 hover:border-white/20 rounded-full text-sm font-semibold tracking-wide text-white/80 hover:text-white backdrop-blur-md transition-all duration-300 cursor-pointer">
+                <button className={`w-full sm:w-auto px-8 py-4.5 bg-white/5 border border-white/10 hover:border-white/20 rounded-full text-sm font-semibold text-white/80 hover:text-white backdrop-blur-md transition-all duration-300 cursor-pointer ${isRtl ? "" : "tracking-wide"}`}>
                   {t.heroDemo}
                 </button>
               </a>
@@ -1051,7 +1142,7 @@ export default function CreativeMarketingPage() {
                     </div>
                     <div className="relative z-10">
                       <h3 className="text-base font-extrabold text-white">{locale === "ar" ? role.nameAr : role.nameEn}</h3>
-                      <span className={`text-[10px] font-bold uppercase tracking-wide ${colors.text}`}>
+                      <span className={`text-[10px] font-bold uppercase ${colors.text} ${isRtl ? "" : "tracking-wide"}`}>
                         {locale === "ar" ? role.taglineAr : role.taglineEn}
                       </span>
                     </div>
@@ -1067,6 +1158,31 @@ export default function CreativeMarketingPage() {
                 );
               })}
             </div>
+          </div>
+        </section>
+
+        {/* Finance Department: GL, bank reconciliation, VAT, installments */}
+        <section id="finance" className="py-24 relative border-t border-white/5 bg-white/[0.01]">
+          <div className="container mx-auto px-6 max-w-6xl">
+            <div className="text-center mb-16">
+              <h2 className="text-2xl sm:text-4xl font-extrabold text-white mb-3">
+                {t.financeTitle}
+              </h2>
+              <p className="text-sm sm:text-base text-white/60 max-w-2xl mx-auto font-medium leading-relaxed">
+                {t.financeSub}
+              </p>
+            </div>
+
+            <FeatureCardGrid
+              features={financeFeatures}
+              locale={locale}
+              gridClassName="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5"
+              cardClassName="rounded-2xl bg-gradient-to-br from-white/5 to-[#05031b] border border-white/5 p-6 hover:border-blue-500/30 transition-all duration-500 flex flex-col gap-4"
+              iconWrapClassName="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center"
+              titleClassName="text-sm font-bold text-white mb-1.5"
+              descClassName="text-xs text-white/62 leading-relaxed"
+              delayStep={0.08}
+            />
           </div>
         </section>
 
@@ -1186,10 +1302,10 @@ export default function CreativeMarketingPage() {
                 <div className="absolute -top-1/4 -right-1/4 w-60 h-60 bg-blue-500/[0.04] rounded-full blur-3xl" />
                 
                 <div className="text-center relative z-10">
-                  <span className="text-[10px] font-extrabold tracking-widest text-white/50 uppercase">{t.calcMonthly}</span>
+                  <span className={`text-[10px] font-extrabold text-white/50 uppercase ${isRtl ? "" : "tracking-widest"}`}>{t.calcMonthly}</span>
                   <div className="text-4xl sm:text-5xl font-black text-white mt-1 mb-2" style={{ direction: "ltr" }}>
                     {Math.round(monthlyInstallment).toLocaleString()} <span className="text-xl font-bold">{locale === "ar" ? "د.أ" : "JOD"}</span>
-                    <span className="text-sm font-light text-white/60 tracking-wider"> / {locale === "ar" ? "شهرياً" : "mo"}</span>
+                    <span className={`text-sm font-light text-white/60 ${isRtl ? "" : "tracking-wider"}`}> / {locale === "ar" ? "شهرياً" : "mo"}</span>
                   </div>
                 </div>
 
@@ -1222,7 +1338,7 @@ export default function CreativeMarketingPage() {
                   {/* Digital percentage display inside circle */}
                   <div className="absolute flex flex-col items-center select-none" style={{ direction: "ltr" }}>
                     <span className="text-lg font-black text-white">{Math.round(principalPercent)}%</span>
-                    <span className="text-[8px] text-white/50 font-bold uppercase tracking-wider">{t.calcPrinc}</span>
+                    <span className={`text-[8px] text-white/50 font-bold uppercase ${isRtl ? "" : "tracking-wider"}`}>{t.calcPrinc}</span>
                   </div>
                 </div>
 
@@ -1448,6 +1564,31 @@ export default function CreativeMarketingPage() {
           </div>
         </section>
 
+        {/* Grow Beyond The Showroom: website builder, social inbox, team chat */}
+        <section id="grow" className="py-24 relative border-t border-white/5 bg-white/[0.01]">
+          <div className="container mx-auto px-6 max-w-6xl">
+            <div className="text-center mb-16">
+              <h2 className="text-2xl sm:text-4xl font-extrabold text-white mb-3">
+                {t.growTitle}
+              </h2>
+              <p className="text-sm sm:text-base text-white/60 max-w-2xl mx-auto font-medium leading-relaxed">
+                {t.growSub}
+              </p>
+            </div>
+
+            <FeatureCardGrid
+              features={growFeatures}
+              locale={locale}
+              gridClassName="grid grid-cols-1 md:grid-cols-3 gap-6"
+              cardClassName="rounded-2xl bg-gradient-to-br from-white/5 to-[#05031b] border border-white/5 p-7 hover:border-blue-500/30 transition-all duration-500 flex flex-col gap-4"
+              iconWrapClassName="w-11 h-11 rounded-xl bg-blue-500/10 border border-blue-500/10 flex items-center justify-center"
+              titleClassName="text-base font-bold text-white mb-2"
+              descClassName="text-xs sm:text-sm text-white/62 leading-relaxed"
+              delayStep={0.1}
+            />
+          </div>
+        </section>
+
         {/* Dynamic ROI Calculator widget section */}
         <section className="py-24 relative border-t border-white/5 bg-[#030014]">
           <div className="container mx-auto px-6 max-w-4xl">
@@ -1492,7 +1633,7 @@ export default function CreativeMarketingPage() {
                     <div className="text-2xl sm:text-3xl font-black text-white mb-1">
                       {hoursSavedPerWk}
                     </div>
-                    <div className="text-[10px] text-blue-400 font-extrabold uppercase tracking-wide mb-1">
+                    <div className={`text-[10px] text-blue-400 font-extrabold uppercase mb-1 ${isRtl ? "" : "tracking-wide"}`}>
                       {t.roiHours}
                     </div>
                     <div className="text-[9px] text-white/55 font-bold leading-tight">
@@ -1504,7 +1645,7 @@ export default function CreativeMarketingPage() {
                     <div className="text-2xl sm:text-3xl font-black text-white mb-1" style={{ direction: "ltr" }}>
                       {annualSavingsDollars.toLocaleString()} {locale === "ar" ? "د.أ" : "JOD"}
                     </div>
-                    <div className="text-[10px] text-blue-400 font-extrabold uppercase tracking-wide mb-1">
+                    <div className={`text-[10px] text-blue-400 font-extrabold uppercase mb-1 ${isRtl ? "" : "tracking-wide"}`}>
                       {t.roiSavings}
                     </div>
                     <div className="text-[9px] text-white/55 font-bold leading-tight">
@@ -1588,11 +1729,11 @@ export default function CreativeMarketingPage() {
             />
           </div>
 
-          <p className="text-white/40 text-xs font-semibold tracking-wider">
+          <p className={`text-white/60 text-sm font-semibold ${isRtl ? "" : "tracking-wider"}`}>
             © {new Date().getFullYear()} {t.footerRights}
           </p>
 
-          <div className="flex gap-6 text-xs font-semibold tracking-wider text-white/50 uppercase">
+          <div className={`flex gap-6 text-sm font-semibold text-white/70 uppercase ${isRtl ? "" : "tracking-wider"}`}>
             <Link href="/privacy" className="hover:text-white transition-colors duration-300">{t.footerPrivacy}</Link>
             <Link href="/terms" className="hover:text-white transition-colors duration-300">{t.footerTerms}</Link>
             <Link href="/contact" className="hover:text-white transition-colors duration-300">{t.footerContact}</Link>
