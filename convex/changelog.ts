@@ -6,6 +6,7 @@ import type { Id } from "./_generated/dataModel";
 import { requireAuth, requireSuperAdmin } from "./utils/tenancy";
 import { notifyAllMembers } from "./utils/notifications";
 import { logAdminAction } from "./adminAudit";
+import { getValidatedEnv } from "./utils/env";
 
 const changelogTypeValidator = v.union(v.literal("FEATURE"), v.literal("FIX"), v.literal("IMPROVEMENT"));
 
@@ -46,6 +47,71 @@ export const create = mutation({
 
     await logAdminAction(ctx, admin, {
       action: "changelog:create",
+      targetTable: "changelogEntries",
+      targetId: entryId,
+      after: { type: args.type, titleEn: args.titleEn, notifyUsers: args.notifyUsers ?? false },
+    });
+
+    return entryId;
+  },
+});
+
+/**
+ * Automation-only entry point for creating a changelog entry without a live
+ * Clerk session — invoked via `npx convex run changelog:createInternal '{...}' --prod`.
+ * Internal mutations are never reachable by any client (browser, mobile, or
+ * public API), only by the Convex CLI with deploy-key auth or server-side
+ * code, so this is safe without its own auth check — it just needs a real
+ * `users` row to attribute the entry to, resolved from the first configured
+ * SUPER_ADMIN_EMAILS address rather than a mutation argument.
+ */
+export const createInternal = internalMutation({
+  args: {
+    type: changelogTypeValidator,
+    titleEn: v.string(),
+    titleAr: v.string(),
+    descriptionEn: v.string(),
+    descriptionAr: v.string(),
+    publishedAt: v.optional(v.number()),
+    notifyUsers: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const attributedEmail = (getValidatedEnv().SUPER_ADMIN_EMAILS ?? "")
+      .split(",")
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean)[0];
+    if (!attributedEmail) {
+      throw new Error("SUPER_ADMIN_EMAILS is not set on this deployment — cannot attribute an automated changelog entry.");
+    }
+    const admin = await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", attributedEmail))
+      .unique();
+    if (!admin) {
+      throw new Error(`No user found for super-admin email "${attributedEmail}" — cannot attribute an automated changelog entry.`);
+    }
+
+    const now = Date.now();
+    const entryId = await ctx.db.insert("changelogEntries", {
+      type: args.type,
+      titleEn: args.titleEn,
+      titleAr: args.titleAr,
+      descriptionEn: args.descriptionEn,
+      descriptionAr: args.descriptionAr,
+      publishedAt: args.publishedAt ?? now,
+      createdBy: admin._id,
+      createdAt: now,
+    });
+
+    if (args.notifyUsers) {
+      await ctx.scheduler.runAfter(0, internal.changelog.broadcastNewEntry, {
+        titleEn: args.titleEn,
+        descriptionEn: args.descriptionEn,
+      });
+    }
+
+    await logAdminAction(ctx, admin, {
+      action: "changelog:createInternal",
       targetTable: "changelogEntries",
       targetId: entryId,
       after: { type: args.type, titleEn: args.titleEn, notifyUsers: args.notifyUsers ?? false },

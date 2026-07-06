@@ -1,7 +1,7 @@
 import { convexTest } from "convex-test";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 
 const modules = import.meta.glob("./**/*.ts");
 
@@ -68,5 +68,59 @@ describe("changelog historical seed", () => {
     const asMember = await seedUser(t, "member_changelog", "member@autoflow.dev");
 
     await expect(asMember.mutation(api.changelog.seedHistoricalEntries, {})).rejects.toThrow();
+  });
+});
+
+describe("changelog createInternal (CLI automation, no live session)", () => {
+  test("attributes the entry to the resolved SUPER_ADMIN_EMAILS user", async () => {
+    const t = convexTest(schema, modules);
+    await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "admin_cli", email: "admin@autoflow.dev", name: "Admin" })
+    );
+
+    const entryId = await t.mutation(internal.changelog.createInternal, {
+      type: "FEATURE",
+      titleEn: "Test feature",
+      titleAr: "ميزة تجريبية",
+      descriptionEn: "Test description",
+      descriptionAr: "وصف تجريبي",
+    });
+
+    const entry = await t.run((ctx) => ctx.db.get(entryId));
+    const admin = await t.run((ctx) =>
+      ctx.db.query("users").withIndex("by_email", (q) => q.eq("email", "admin@autoflow.dev")).unique()
+    );
+
+    expect(entry?.createdBy).toEqual(admin?._id);
+    expect(entry?.titleEn).toBe("Test feature");
+  });
+
+  test("throws when SUPER_ADMIN_EMAILS is not set", async () => {
+    const t = convexTest(schema, modules);
+    delete process.env.SUPER_ADMIN_EMAILS;
+
+    await expect(
+      t.mutation(internal.changelog.createInternal, {
+        type: "FIX",
+        titleEn: "x",
+        titleAr: "x",
+        descriptionEn: "x",
+        descriptionAr: "x",
+      })
+    ).rejects.toThrow();
+  });
+
+  test("throws when no user matches the configured super-admin email", async () => {
+    const t = convexTest(schema, modules);
+
+    await expect(
+      t.mutation(internal.changelog.createInternal, {
+        type: "IMPROVEMENT",
+        titleEn: "x",
+        titleAr: "x",
+        descriptionEn: "x",
+        descriptionAr: "x",
+      })
+    ).rejects.toThrow();
   });
 });
