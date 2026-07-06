@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import type { CSSProperties, FormEvent, ReactNode } from "react";
 import Link from "next/link";
 import {
@@ -13,7 +14,10 @@ import {
   Mail,
   MapPin,
   Menu,
+  MessageCircle,
   Phone,
+  Search,
+  Share2,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
@@ -45,6 +49,28 @@ type ShowcaseDesign = {
   darkTurnstile: boolean;
 };
 
+type VehicleCardVariant = "gallery" | "route" | "command" | "studio" | "editorial";
+
+type InventorySort = "newest" | "price_low" | "price_high" | "mileage_low";
+
+type InventoryFilterValues = {
+  query: string;
+  make: string;
+  status: string;
+  sort: InventorySort;
+  makeOptions: string[];
+  statusOptions: string[];
+  hasActiveFilters: boolean;
+};
+
+type InventoryFilterActions = {
+  setQuery: (query: string) => void;
+  setMake: (make: string) => void;
+  setStatus: (status: string) => void;
+  setSort: (sort: InventorySort) => void;
+  clearFilters: () => void;
+};
+
 type ShowcaseCopy = {
   boutique: string;
   privateViewing: string;
@@ -71,6 +97,30 @@ type ShowcaseCopy = {
   instantReply: string;
   featuredArrival: string;
   noImage: string;
+  searchPlaceholder: string;
+  filters: string;
+  allMakes: string;
+  allStatuses: string;
+  sortBy: string;
+  sortNewest: string;
+  sortPriceLow: string;
+  sortPriceHigh: string;
+  sortMileageLow: string;
+  clearFilters: string;
+  matchingCars: string;
+  noMatches: string;
+  viewDetails: string;
+  callDealer: string;
+  whatsappDealer: string;
+  requestFinance: string;
+  shareVehicle: string;
+  similarCars: string;
+  dealerTrust: string;
+  updatedFromShowroom: string;
+  stickyInquiry: string;
+  financeBadge: string;
+  contactDealer: string;
+  mobileContactPrompt: string;
 };
 
 const SHOWCASE_COPY: Record<"en" | "ar", ShowcaseCopy> = {
@@ -100,6 +150,30 @@ const SHOWCASE_COPY: Record<"en" | "ar", ShowcaseCopy> = {
     instantReply: "Instant reply",
     featuredArrival: "Featured arrival",
     noImage: "Vehicle image coming soon",
+    searchPlaceholder: "Search make, model, year, fuel, price...",
+    filters: "Filters",
+    allMakes: "All makes",
+    allStatuses: "All statuses",
+    sortBy: "Sort by",
+    sortNewest: "Newest year",
+    sortPriceLow: "Price: low to high",
+    sortPriceHigh: "Price: high to low",
+    sortMileageLow: "Mileage: low first",
+    clearFilters: "Clear filters",
+    matchingCars: "matching cars",
+    noMatches: "No matching cars yet. Contact the showroom and we will help you find one.",
+    viewDetails: "View details",
+    callDealer: "Call dealer",
+    whatsappDealer: "WhatsApp",
+    requestFinance: "Request financing",
+    shareVehicle: "Share listing",
+    similarCars: "Similar cars",
+    dealerTrust: "Dealer-direct information",
+    updatedFromShowroom: "Inventory updated directly from the showroom",
+    stickyInquiry: "Ask about this car",
+    financeBadge: "Finance available",
+    contactDealer: "Contact dealer",
+    mobileContactPrompt: "Quick vehicle contact actions",
   },
   ar: {
     boutique: "صالة عرض خاصة",
@@ -127,6 +201,30 @@ const SHOWCASE_COPY: Record<"en" | "ar", ShowcaseCopy> = {
     instantReply: "رد سريع",
     featuredArrival: "وصول مميز",
     noImage: "صورة المركبة قريباً",
+    searchPlaceholder: "ابحث بالشركة أو الموديل أو السنة أو السعر...",
+    filters: "الفلاتر",
+    allMakes: "كل الشركات",
+    allStatuses: "كل الحالات",
+    sortBy: "ترتيب حسب",
+    sortNewest: "الأحدث سنة",
+    sortPriceLow: "السعر: من الأقل",
+    sortPriceHigh: "السعر: من الأعلى",
+    sortMileageLow: "الممشى: الأقل أولاً",
+    clearFilters: "مسح الفلاتر",
+    matchingCars: "سيارة مطابقة",
+    noMatches: "لا توجد سيارات مطابقة حالياً. تواصل مع المعرض وسنساعدك في إيجادها.",
+    viewDetails: "عرض التفاصيل",
+    callDealer: "اتصال",
+    whatsappDealer: "واتساب",
+    requestFinance: "اطلب تمويل",
+    shareVehicle: "مشاركة السيارة",
+    similarCars: "سيارات مشابهة",
+    dealerTrust: "معلومات مباشرة من المعرض",
+    updatedFromShowroom: "المخزون محدث مباشرة من المعرض",
+    stickyInquiry: "اسأل عن هذه السيارة",
+    financeBadge: "تمويل متاح",
+    contactDealer: "تواصل مع المعرض",
+    mobileContactPrompt: "إجراءات تواصل سريعة للسيارة",
   },
 };
 
@@ -233,6 +331,133 @@ function vehicleSpecs(vehicle: PublicVehicle, copy: ShowcaseCopy) {
     vehicle.transmission,
     vehicle.fuelType,
   ].filter((value): value is string => Boolean(value));
+}
+
+function vehicleVariantForDesign(design: ShowcaseDesign): VehicleCardVariant {
+  switch (design.id) {
+    case "obsidian":
+      return "gallery";
+    case "desert":
+      return "route";
+    case "command":
+      return "command";
+    case "lucent":
+      return "studio";
+    case "concierge":
+      return "editorial";
+  }
+}
+
+function uniqueVehicleValues(
+  vehicles: PublicVehicle[],
+  selector: (vehicle: PublicVehicle) => string | number | null | undefined,
+) {
+  return Array.from(
+    new Set(
+      vehicles
+        .map(selector)
+        .filter((value): value is string | number => value !== null && value !== undefined && String(value).trim() !== "")
+        .map((value) => String(value)),
+    ),
+  ).sort((a, b) => a.localeCompare(b));
+}
+
+function searchableVehicleText(vehicle: PublicVehicle) {
+  return [
+    vehicle.make,
+    vehicle.model,
+    vehicle.year,
+    vehicle.trim,
+    vehicle.status,
+    vehicle.fuelType,
+    vehicle.transmission,
+    vehicle.exteriorColor,
+    vehicle.mileage,
+    vehicle.price,
+  ]
+    .filter((value): value is string | number => value !== null && value !== undefined)
+    .join(" ")
+    .toLocaleLowerCase();
+}
+
+function sortableNumber(value: number | null, fallback: number) {
+  return typeof value === "number" ? value : fallback;
+}
+
+function filterAndSortVehicles({
+  vehicles,
+  query,
+  make,
+  status,
+  sort,
+}: {
+  vehicles: PublicVehicle[];
+  query: string;
+  make: string;
+  status: string;
+  sort: InventorySort;
+}) {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  const filtered = vehicles.filter((vehicle) => {
+    const matchesQuery = normalizedQuery ? searchableVehicleText(vehicle).includes(normalizedQuery) : true;
+    const matchesMake = make === "all" ? true : vehicle.make === make;
+    const matchesStatus = status === "all" ? true : vehicle.status === status;
+    return matchesQuery && matchesMake && matchesStatus;
+  });
+
+  return [...filtered].sort((a, b) => {
+    if (sort === "price_low") {
+      return sortableNumber(a.price, Number.MAX_SAFE_INTEGER) - sortableNumber(b.price, Number.MAX_SAFE_INTEGER);
+    }
+    if (sort === "price_high") {
+      return sortableNumber(b.price, -1) - sortableNumber(a.price, -1);
+    }
+    if (sort === "mileage_low") {
+      return sortableNumber(a.mileage, Number.MAX_SAFE_INTEGER) - sortableNumber(b.mileage, Number.MAX_SAFE_INTEGER);
+    }
+    return b.year - a.year;
+  });
+}
+
+function phoneHref(phone: string | null | undefined) {
+  const normalized = phone?.replace(/[^\d+]/g, "");
+  return normalized ? `tel:${normalized}` : "/contact";
+}
+
+function whatsappHref(phone: string | null | undefined, message: string) {
+  const digits = phone?.replace(/\D/g, "");
+  if (!digits) return "/contact";
+  return `https://wa.me/${digits}?text=${encodeURIComponent(message)}`;
+}
+
+function vehicleContactMessage(props: ThemeProps, vehicle: PublicVehicle) {
+  if (props.lang === "ar") {
+    return `مرحبا، أريد الاستفسار عن ${vehicleName(vehicle)} من ${props.site.profile.dealershipName}.`;
+  }
+  return `Hello, I want to ask about ${vehicleName(vehicle)} at ${props.site.profile.dealershipName}.`;
+}
+
+function dealerContactMessage(props: ThemeProps) {
+  if (props.lang === "ar") {
+    return `مرحبا، أريد التواصل مع ${props.site.profile.dealershipName}.`;
+  }
+  return `Hello, I want to contact ${props.site.profile.dealershipName}.`;
+}
+
+function vehicleShareMessage(props: ThemeProps, vehicle: PublicVehicle) {
+  const vehicleTitle = vehicleName(vehicle);
+  const price = props.formatPrice(vehicle.price);
+  const listingPath = `/inventory/${vehicle.slug}`;
+  if (props.lang === "ar") {
+    return `${vehicleTitle} لدى ${props.site.profile.dealershipName} - ${price} - ${listingPath}`;
+  }
+  return `${vehicleTitle} at ${props.site.profile.dealershipName} - ${price} - ${listingPath}`;
+}
+
+function similarVehiclesFor(vehicle: PublicVehicle, vehicles: PublicVehicle[]) {
+  const sameMake = vehicles.filter((item) => item.id !== vehicle.id && item.make === vehicle.make);
+  if (sameMake.length) return sameMake.slice(0, 3);
+  return vehicles.filter((item) => item.id !== vehicle.id).slice(0, 3);
 }
 
 function heroVehicle(props: ThemeProps) {
@@ -672,7 +897,7 @@ function ShowcaseFeatured({
 }: {
   props: ThemeProps;
   copy: ShowcaseCopy;
-  variant: "gallery" | "route" | "command" | "studio" | "editorial";
+  variant: VehicleCardVariant;
 }) {
   const vehicles = props.featuredVehicles.length ? props.featuredVehicles : props.vehicles.slice(0, 6);
   return (
@@ -709,15 +934,39 @@ function ShowcaseInventory({
   design: ShowcaseDesign;
   copy: ShowcaseCopy;
 }) {
-  const variant = design.id === "obsidian"
-    ? "gallery"
-    : design.id === "desert"
-      ? "route"
-      : design.id === "command"
-        ? "command"
-        : design.id === "lucent"
-          ? "studio"
-          : "editorial";
+  const variant = vehicleVariantForDesign(design);
+  const [query, setQuery] = useState("");
+  const [make, setMake] = useState("all");
+  const [status, setStatus] = useState("all");
+  const [sort, setSort] = useState<InventorySort>("newest");
+  const makeOptions = useMemo(() => uniqueVehicleValues(props.vehicles, (vehicle) => vehicle.make), [props.vehicles]);
+  const statusOptions = useMemo(() => uniqueVehicleValues(props.vehicles, (vehicle) => vehicle.status), [props.vehicles]);
+  const filteredVehicles = useMemo(
+    () => filterAndSortVehicles({ vehicles: props.vehicles, query, make, status, sort }),
+    [make, props.vehicles, query, sort, status],
+  );
+  const hasActiveFilters = Boolean(query.trim()) || make !== "all" || status !== "all" || sort !== "newest";
+  const filters: InventoryFilterValues = {
+    query,
+    make,
+    status,
+    sort,
+    makeOptions,
+    statusOptions,
+    hasActiveFilters,
+  };
+  const filterActions: InventoryFilterActions = {
+    setQuery,
+    setMake,
+    setStatus,
+    setSort,
+    clearFilters: () => {
+      setQuery("");
+      setMake("all");
+      setStatus("all");
+      setSort("newest");
+    },
+  };
 
   return (
     <section className="wf-page wf-shell">
@@ -728,10 +977,96 @@ function ShowcaseInventory({
       </div>
       <div className="wf-inventory-toolbar">
         <span><SlidersHorizontal size={15} /> {copy.verifiedInventory}</span>
-        <span dir="ltr">{props.vehicles.length} {props.t.inventoryTitle}</span>
+        <span dir="ltr">{filteredVehicles.length} / {props.vehicles.length} {copy.matchingCars}</span>
       </div>
-      <VehicleGrid vehicles={props.vehicles} props={props} copy={copy} variant={variant} />
+      <InventoryControls copy={copy} filters={filters} actions={filterActions} />
+      <VehicleGrid
+        vehicles={filteredVehicles}
+        props={props}
+        copy={copy}
+        variant={variant}
+        emptyMessage={hasActiveFilters ? copy.noMatches : props.t.noVehicles}
+      />
     </section>
+  );
+}
+
+function InventoryControls({
+  copy,
+  filters,
+  actions,
+}: {
+  copy: ShowcaseCopy;
+  filters: InventoryFilterValues;
+  actions: InventoryFilterActions;
+}) {
+  return (
+    <div className="wf-inventory-controls">
+      <label className="wf-search-field">
+        <Search size={17} />
+        <input
+          type="search"
+          dir="auto"
+          value={filters.query}
+          onChange={(event) => actions.setQuery(event.target.value)}
+          placeholder={copy.searchPlaceholder}
+          aria-label={copy.searchPlaceholder}
+        />
+      </label>
+      <div className="wf-filter-grid" role="group" aria-label={copy.filters}>
+        <InventorySelect
+          value={filters.make}
+          allLabel={copy.allMakes}
+          options={filters.makeOptions}
+          onChange={actions.setMake}
+        />
+        <InventorySelect
+          value={filters.status}
+          allLabel={copy.allStatuses}
+          options={filters.statusOptions}
+          onChange={actions.setStatus}
+        />
+        <select
+          value={filters.sort}
+          onChange={(event) => actions.setSort(event.target.value as InventorySort)}
+          aria-label={copy.sortBy}
+        >
+          <option value="newest">{copy.sortNewest}</option>
+          <option value="price_low">{copy.sortPriceLow}</option>
+          <option value="price_high">{copy.sortPriceHigh}</option>
+          <option value="mileage_low">{copy.sortMileageLow}</option>
+        </select>
+        <button
+          type="button"
+          className="wf-filter-reset"
+          disabled={!filters.hasActiveFilters}
+          onClick={actions.clearFilters}
+        >
+          {copy.clearFilters}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function InventorySelect({
+  value,
+  allLabel,
+  options,
+  onChange,
+}: {
+  value: string;
+  allLabel: string;
+  options: string[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <select value={value} onChange={(event) => onChange(event.target.value)} aria-label={allLabel}>
+      <option value="all">{allLabel}</option>
+      {options.map((option) => (
+        <option key={option} value={option}>{option}</option>
+      ))}
+    </select>
   );
 }
 
@@ -740,14 +1075,16 @@ function VehicleGrid({
   props,
   copy,
   variant,
+  emptyMessage,
 }: {
   vehicles: PublicVehicle[];
   props: ThemeProps;
   copy: ShowcaseCopy;
-  variant: "gallery" | "route" | "command" | "studio" | "editorial";
+  variant: VehicleCardVariant;
+  emptyMessage?: string;
 }) {
   if (!vehicles.length) {
-    return <div className="wf-empty">{props.t.noVehicles}</div>;
+    return <div className="wf-empty">{emptyMessage ?? props.t.noVehicles}</div>;
   }
   return (
     <div className={`wf-vehicle-grid wf-vehicle-grid--${variant}`}>
@@ -776,15 +1113,41 @@ function VehicleCard({
   props: ThemeProps;
   copy: ShowcaseCopy;
   index: number;
-  variant: "gallery" | "route" | "command" | "studio" | "editorial";
+  variant: VehicleCardVariant;
 }) {
   const specs = vehicleSpecs(vehicle, copy).slice(0, 3);
   return (
-    <a
-      href={`/inventory/${vehicle.slug}`}
+    <article
       className={`wf-vehicle-card wf-vehicle-card--${variant} ${index === 0 ? "wf-vehicle-card--lead" : ""}`}
       style={{ "--wf-card-index": index } as CSSProperties}
     >
+      <VehicleCardDecoration variant={variant} index={index} />
+      <VehicleCardMedia vehicle={vehicle} copy={copy} />
+      <div className="wf-vehicle-body">
+        <p className="wf-vehicle-eyebrow">{variant === "editorial" ? copy.editorsPick : copy.availableNow}</p>
+        <h3>{vehicleName(vehicle)}</h3>
+        <div className="wf-specs">
+          {specs.map((spec) => <span key={spec}>{spec}</span>)}
+        </div>
+        <div className="wf-card-footer">
+          <strong dir="ltr">{props.formatPrice(vehicle.price)}</strong>
+          <span>{copy.financeBadge}</span>
+        </div>
+        <VehicleCardActions vehicle={vehicle} props={props} copy={copy} />
+      </div>
+    </article>
+  );
+}
+
+function VehicleCardDecoration({
+  variant,
+  index,
+}: {
+  variant: VehicleCardVariant;
+  index: number;
+}) {
+  return (
+    <>
       {variant === "command" && (
         <span className="wf-card-signal" aria-hidden="true">
           <i />
@@ -795,22 +1158,60 @@ function VehicleCard({
       {variant === "route" && <span className="wf-card-route-pin" aria-hidden="true" />}
       {variant === "studio" && <span className="wf-card-number" aria-hidden="true">0{index + 1}</span>}
       {variant === "editorial" && <span className="wf-card-edition" aria-hidden="true">No. 0{index + 1}</span>}
+    </>
+  );
+}
+
+function VehicleCardMedia({ vehicle, copy }: { vehicle: PublicVehicle; copy: ShowcaseCopy }) {
+  return (
+    <Link href={`/inventory/${vehicle.slug}`} className="wf-vehicle-media-link" aria-label={`${copy.viewDetails}: ${vehicleName(vehicle)}`}>
       <div className="wf-vehicle-media">
         <VehicleImage vehicle={vehicle} copy={copy} />
         <span className="wf-status">{vehicle.status}</span>
       </div>
-      <div className="wf-vehicle-body">
-        <p className="wf-vehicle-eyebrow">{variant === "editorial" ? copy.editorsPick : copy.availableNow}</p>
-        <h3>{vehicleName(vehicle)}</h3>
-        <div className="wf-specs">
-          {specs.map((spec) => <span key={spec}>{spec}</span>)}
-        </div>
-        <div className="wf-card-footer">
-          <strong dir="ltr">{props.formatPrice(vehicle.price)}</strong>
-          <span>{copy.details}</span>
-        </div>
-      </div>
-    </a>
+    </Link>
+  );
+}
+
+function VehicleCardActions({
+  vehicle,
+  props,
+  copy,
+}: {
+  vehicle: PublicVehicle;
+  props: ThemeProps;
+  copy: ShowcaseCopy;
+}) {
+  const phone = props.site.profile.phone;
+  const inquiryMessage = vehicleContactMessage(props, vehicle);
+
+  return (
+    <div className="wf-card-actions">
+      <Link href={`/inventory/${vehicle.slug}`} className="wf-card-action wf-card-action--primary">
+        {copy.viewDetails}
+      </Link>
+      {phone ? (
+        <>
+          <a
+            href={whatsappHref(phone, inquiryMessage)}
+            className="wf-card-action"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <MessageCircle size={14} />
+            <span>{copy.whatsappDealer}</span>
+          </a>
+          <a href={phoneHref(phone)} className="wf-card-action">
+            <Phone size={14} />
+            <span>{copy.callDealer}</span>
+          </a>
+        </>
+      ) : (
+        <a href="/contact" className="wf-card-action">
+          {copy.contactDealer}
+        </a>
+      )}
+    </div>
   );
 }
 
@@ -825,6 +1226,8 @@ function ShowcaseVehicleDetail({
 }) {
   const vehicle = props.detailVehicle;
   if (!vehicle) return null;
+  const similarVehicles = similarVehiclesFor(vehicle, props.vehicles);
+  const variant = vehicleVariantForDesign(design);
   const specs = [
     [props.t.trim, vehicle.trim],
     [props.t.mileage, vehicle.mileage ? `${vehicle.mileage.toLocaleString()} ${copy.mileageShort}` : null],
@@ -834,41 +1237,240 @@ function ShowcaseVehicleDetail({
   ].filter(([, value]) => Boolean(value));
 
   return (
-    <section className="wf-page wf-shell wf-detail-page">
-      <div className="wf-detail-media">
-        <VehicleImage vehicle={vehicle} copy={copy} />
-      </div>
-      <div className="wf-detail-info">
-        <p className="wf-section-kicker">{design.title}</p>
-        <span className="wf-status wf-status--static">{vehicle.status}</span>
-        <h1>{vehicleName(vehicle)}</h1>
-        {vehicle.trim && <p className="wf-detail-trim">{vehicle.trim}</p>}
-        <strong className="wf-detail-price" dir="ltr">{props.formatPrice(vehicle.price)}</strong>
-        <div className="wf-detail-specs">
-          {specs.map(([label, value]) => (
-            <div key={label}>
-              <span>{label}</span>
-              <strong>{value}</strong>
-            </div>
-          ))}
+    <>
+      <section className="wf-page wf-shell wf-detail-page">
+        <div className="wf-detail-media">
+          <VehicleImage vehicle={vehicle} copy={copy} />
         </div>
-        {props.formSuccess === "vehicle_inquiry" ? (
-          <SuccessPanel t={props.t} onReset={() => props.setFormSuccess(null)} />
-        ) : (
-          <LeadPanel
-            title={props.t.askAbout}
-            submitLabel={props.t.sendInquiry}
-            props={props}
-            copy={copy}
-            turnstileTheme={design.darkTurnstile ? "dark" : "light"}
-            onSubmit={(event) => {
-              props.setSelectedVehicleId(vehicle.id);
-              props.onSubmit(event, "vehicle_inquiry");
-            }}
-          />
-        )}
+        <div className="wf-detail-info">
+          <p className="wf-section-kicker">{design.title}</p>
+          <span className="wf-status wf-status--static">{vehicle.status}</span>
+          <h1>{vehicleName(vehicle)}</h1>
+          {vehicle.trim && <p className="wf-detail-trim">{vehicle.trim}</p>}
+          <strong className="wf-detail-price" dir="ltr">{props.formatPrice(vehicle.price)}</strong>
+          <DetailActionPanel props={props} copy={copy} vehicle={vehicle} />
+          <div className="wf-detail-specs">
+            {specs.map(([label, value]) => (
+              <div key={label}>
+                <span>{label}</span>
+                <strong>{value}</strong>
+              </div>
+            ))}
+          </div>
+          <VehicleDetailLeadPanel props={props} design={design} copy={copy} vehicle={vehicle} />
+        </div>
+      </section>
+      <SimilarVehiclesSection vehicles={similarVehicles} props={props} copy={copy} variant={variant} />
+      <MobileVehicleActions props={props} copy={copy} vehicle={vehicle} />
+    </>
+  );
+}
+
+function VehicleDetailLeadPanel({
+  props,
+  design,
+  copy,
+  vehicle,
+}: {
+  props: ThemeProps;
+  design: ShowcaseDesign;
+  copy: ShowcaseCopy;
+  vehicle: PublicVehicle;
+}) {
+  if (props.formSuccess === "vehicle_inquiry") {
+    return <SuccessPanel t={props.t} onReset={() => props.setFormSuccess(null)} />;
+  }
+
+  return (
+    <LeadPanel
+      id="vehicle-lead-form"
+      title={props.t.askAbout}
+      submitLabel={props.t.sendInquiry}
+      props={props}
+      copy={copy}
+      turnstileTheme={design.darkTurnstile ? "dark" : "light"}
+      onSubmit={(event) => {
+        props.setSelectedVehicleId(vehicle.id);
+        props.onSubmit(event, "vehicle_inquiry");
+      }}
+    />
+  );
+}
+
+function SimilarVehiclesSection({
+  vehicles,
+  props,
+  copy,
+  variant,
+}: {
+  vehicles: PublicVehicle[];
+  props: ThemeProps;
+  copy: ShowcaseCopy;
+  variant: VehicleCardVariant;
+}) {
+  if (!vehicles.length) return null;
+
+  return (
+    <section className="wf-section wf-similar-section">
+      <div className="wf-shell">
+        <div className="wf-section-heading">
+          <div>
+            <p className="wf-section-kicker">{copy.updatedFromShowroom}</p>
+            <h2>{copy.similarCars}</h2>
+          </div>
+          <a href="/inventory" className="wf-inline-link">
+            {props.t.viewAll}
+            <ArrowIcon />
+          </a>
+        </div>
+        <VehicleGrid vehicles={vehicles} props={props} copy={copy} variant={variant} />
       </div>
     </section>
+  );
+}
+
+function DetailActionPanel({
+  props,
+  copy,
+  vehicle,
+}: {
+  props: ThemeProps;
+  copy: ShowcaseCopy;
+  vehicle: PublicVehicle;
+}) {
+  const profile = props.site.profile;
+
+  return (
+    <aside className="wf-detail-action-panel" aria-label={copy.stickyInquiry}>
+      <p className="wf-panel-kicker">
+        <ShieldCheck size={15} />
+        {copy.dealerTrust}
+      </p>
+      <h2>{copy.stickyInquiry}</h2>
+      <DetailActionButtons props={props} copy={copy} vehicle={vehicle} />
+      <DetailTrustList profile={profile} props={props} copy={copy} />
+    </aside>
+  );
+}
+
+function DetailActionButtons({
+  props,
+  copy,
+  vehicle,
+}: {
+  props: ThemeProps;
+  copy: ShowcaseCopy;
+  vehicle: PublicVehicle;
+}) {
+  const phone = props.site.profile.phone;
+  const inquiryMessage = vehicleContactMessage(props, vehicle);
+  const shareMessage = vehicleShareMessage(props, vehicle);
+
+  return (
+    <div className="wf-detail-action-grid">
+      {phone ? (
+        <>
+          <a
+            href={whatsappHref(phone, inquiryMessage)}
+            className="wf-detail-action wf-detail-action--primary"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <MessageCircle size={16} />
+            {copy.whatsappDealer}
+          </a>
+          <a href={phoneHref(phone)} className="wf-detail-action">
+            <Phone size={16} />
+            {copy.callDealer}
+          </a>
+        </>
+      ) : (
+        <a href="#vehicle-lead-form" className="wf-detail-action wf-detail-action--primary">
+          <Mail size={16} />
+          {copy.contactDealer}
+        </a>
+      )}
+      <a href="/finance" className="wf-detail-action">
+        <Sparkles size={16} />
+        {copy.requestFinance}
+      </a>
+      <a
+        href={`https://wa.me/?text=${encodeURIComponent(shareMessage)}`}
+        className="wf-detail-action"
+        target="_blank"
+        rel="noopener noreferrer"
+      >
+        <Share2 size={16} />
+        {copy.shareVehicle}
+      </a>
+    </div>
+  );
+}
+
+function DetailTrustList({
+  profile,
+  props,
+  copy,
+}: {
+  profile: ThemeProps["site"]["profile"];
+  props: ThemeProps;
+  copy: ShowcaseCopy;
+}) {
+  return (
+    <ul className="wf-trust-list">
+      <li>
+        <CheckCircle2 size={15} />
+        <span>{copy.updatedFromShowroom}</span>
+      </li>
+      <li>
+        <CheckCircle2 size={15} />
+        <span>{props.t.contactMethodHint}</span>
+      </li>
+      {profile.address && (
+        <li>
+          <MapPin size={15} />
+          <span>{profile.address}</span>
+        </li>
+      )}
+    </ul>
+  );
+}
+
+function MobileVehicleActions({
+  props,
+  copy,
+  vehicle,
+}: {
+  props: ThemeProps;
+  copy: ShowcaseCopy;
+  vehicle: PublicVehicle;
+}) {
+  const phone = props.site.profile.phone;
+  const inquiryMessage = vehicleContactMessage(props, vehicle);
+
+  return (
+    <div className={`wf-mobile-sticky-actions ${phone ? "" : "wf-mobile-sticky-actions--two"}`} role="region" aria-label={copy.mobileContactPrompt}>
+      {phone ? (
+        <>
+          <a href={whatsappHref(phone, inquiryMessage)} target="_blank" rel="noopener noreferrer">
+            <MessageCircle size={16} />
+            <span>{copy.whatsappDealer}</span>
+          </a>
+          <a href={phoneHref(phone)}>
+            <Phone size={16} />
+            <span>{copy.callDealer}</span>
+          </a>
+        </>
+      ) : (
+        <a href="#vehicle-lead-form">
+          <Mail size={16} />
+          <span>{copy.contactDealer}</span>
+        </a>
+      )}
+      <a href="#vehicle-lead-form" className="wf-mobile-sticky-primary">
+        {props.t.sendInquiry}
+      </a>
+    </div>
   );
 }
 
@@ -952,9 +1554,36 @@ function ShowcaseContact({
       <div>
         <p className="wf-section-kicker">{design.title}</p>
         <h1>{props.t.contactTitle}</h1>
+        {profile.phone && (
+          <div className="wf-contact-actions">
+            <a
+              href={whatsappHref(profile.phone, dealerContactMessage(props))}
+              className="wf-button wf-button--primary"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <MessageCircle size={17} />
+              {copy.whatsappDealer}
+            </a>
+            <a href={phoneHref(profile.phone)} className="wf-button wf-button--ghost" dir="ltr">
+              <Phone size={17} />
+              {copy.callDealer}
+            </a>
+          </div>
+        )}
         <div className="wf-contact-list">
           {profile.phone && (
-            <a href={`tel:${profile.phone}`}>
+            <a
+              href={whatsappHref(profile.phone, dealerContactMessage(props))}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <MessageCircle size={18} />
+              <span>{copy.whatsappDealer}</span>
+            </a>
+          )}
+          {profile.phone && (
+            <a href={phoneHref(profile.phone)}>
               <Phone size={18} />
               <span dir="ltr">{profile.phone}</span>
             </a>
@@ -1009,6 +1638,7 @@ function ShowcaseLegal({ props }: { props: ThemeProps }) {
 }
 
 function LeadPanel({
+  id,
   title,
   submitLabel,
   props,
@@ -1016,6 +1646,7 @@ function LeadPanel({
   turnstileTheme,
   onSubmit,
 }: {
+  id?: string;
   title: string;
   submitLabel: string;
   props: ThemeProps;
@@ -1024,7 +1655,7 @@ function LeadPanel({
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   return (
-    <form className="wf-lead-panel" onSubmit={onSubmit}>
+    <form id={id} className="wf-lead-panel" onSubmit={onSubmit}>
       <h2>{title}</h2>
       <LeadFields form={props.form} setForm={props.setForm} t={props.t} />
       <TurnstileWidget siteKey={props.turnstileSiteKey} theme={turnstileTheme} />
@@ -1194,7 +1825,7 @@ function ShowcaseStyles() {
       }
       .wf * { box-sizing: border-box; }
       .wf a { color: inherit; text-decoration: none; }
-      .wf button, .wf input, .wf textarea { font: inherit; }
+      .wf button, .wf input, .wf textarea, .wf select { font: inherit; }
       .wf-shell { width: min(1280px, calc(100% - 48px)); margin: 0 auto; }
       @keyframes wf-rise {
         from { opacity: 0; transform: translateY(26px); }
@@ -1232,7 +1863,8 @@ function ShowcaseStyles() {
       }
       @media (prefers-reduced-motion: no-preference) {
         .wf-motion-one, .wf-motion-two, .wf-motion-three, .wf-motion-four, .wf-motion-five,
-        .wf-atelier-panel, .wf-route-ticket, .wf-command-strip, .wf-studio-card, .wf-cover-caption {
+        .wf-atelier-panel, .wf-route-ticket, .wf-command-strip, .wf-studio-card, .wf-cover-caption,
+        .wf-inventory-controls, .wf-detail-action-panel {
           animation: wf-rise .72s cubic-bezier(.2, .8, .2, 1) both;
         }
         .wf-motion-two { animation-delay: .08s; }
@@ -1240,6 +1872,7 @@ function ShowcaseStyles() {
         .wf-motion-four { animation-delay: .24s; }
         .wf-motion-five { animation-delay: .32s; }
         .wf-atelier-panel, .wf-route-ticket, .wf-command-strip, .wf-studio-card, .wf-cover-caption { animation-delay: .38s; }
+        .wf-inventory-controls, .wf-detail-action-panel { animation-delay: .1s; }
         .wf-atelier-sweep { animation: wf-sweep 6.5s ease-in-out infinite; }
         .wf-live-rail > span { animation: wf-film 28s linear infinite; }
         .wf-route-map::before { animation: wf-route-flow 1.6s linear infinite; }
@@ -1685,6 +2318,7 @@ function ShowcaseStyles() {
         background: var(--wf-panel);
         transition: transform .24s ease, box-shadow .24s ease, border-color .24s ease;
       }
+      .wf-vehicle-media-link { display: block; min-width: 0; }
       .wf-vehicle-card:hover {
         transform: translateY(-5px);
         border-color: color-mix(in srgb, var(--wf-primary) 45%, var(--wf-line));
@@ -1706,6 +2340,7 @@ function ShowcaseStyles() {
         min-height: 226px;
         background: linear-gradient(90deg, var(--wf-panel), color-mix(in srgb, var(--wf-panel) 82%, var(--wf-primary)));
       }
+      .wf-vehicle-card--route .wf-vehicle-media-link { min-height: 100%; }
       .wf-vehicle-card--route .wf-vehicle-media { aspect-ratio: auto; min-height: 100%; }
       .wf-card-route-pin {
         position: absolute;
@@ -1796,7 +2431,7 @@ function ShowcaseStyles() {
         font-weight: 900;
       }
       .wf-status--static { position: static; margin-bottom: 18px; }
-      .wf-vehicle-body { padding: 18px; }
+      .wf-vehicle-body { padding: 18px; min-width: 0; }
       .wf-vehicle-eyebrow { margin: 0 0 8px; color: var(--wf-primary); font-size: 12px; font-weight: 900; }
       .wf-vehicle-body h3 { margin: 0; font-size: 19px; line-height: 1.25; letter-spacing: 0; }
       .wf-specs { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0; }
@@ -1810,7 +2445,50 @@ function ShowcaseStyles() {
       }
       .wf-card-footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
       .wf-card-footer strong { color: var(--wf-primary); font-size: 18px; }
-      .wf-card-footer span { color: var(--wf-muted); font-size: 13px; font-weight: 850; }
+      .wf-card-footer span {
+        display: inline-flex;
+        align-items: center;
+        min-height: 25px;
+        border-radius: 8px;
+        border: 1px solid color-mix(in srgb, var(--wf-primary) 25%, var(--wf-line));
+        color: var(--wf-muted);
+        background: color-mix(in srgb, var(--wf-primary) 7%, transparent);
+        padding: 0 8px;
+        font-size: 12px;
+        font-weight: 850;
+        white-space: nowrap;
+      }
+      .wf-card-actions {
+        display: grid;
+        grid-template-columns: 1fr auto auto;
+        gap: 8px;
+        margin-top: 16px;
+      }
+      .wf-card-action {
+        min-height: 38px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        border: 1px solid var(--wf-line);
+        border-radius: 8px;
+        color: var(--wf-text);
+        background: color-mix(in srgb, var(--wf-panel) 84%, var(--wf-bg));
+        padding: 0 10px;
+        font-size: 12px;
+        font-weight: 900;
+        white-space: nowrap;
+        transition: transform .2s ease, border-color .2s ease, background .2s ease;
+      }
+      .wf-card-action:hover {
+        transform: translateY(-1px);
+        border-color: color-mix(in srgb, var(--wf-primary) 42%, var(--wf-line));
+      }
+      .wf-card-action--primary {
+        background: var(--wf-primary);
+        border-color: var(--wf-primary);
+        color: white;
+      }
       .wf-page { padding-block: 72px 92px; }
       .wf-page-heading { max-width: 760px; margin-bottom: 34px; }
       .wf-page-heading h1 { margin-bottom: 10px; }
@@ -1828,6 +2506,70 @@ function ShowcaseStyles() {
         font-weight: 850;
       }
       .wf-inventory-toolbar span { display: inline-flex; align-items: center; gap: 8px; }
+      .wf-inventory-controls {
+        display: grid;
+        grid-template-columns: minmax(260px, 1.1fr) minmax(0, 1.6fr);
+        gap: 12px;
+        border: 1px solid var(--wf-line);
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--wf-panel) 88%, var(--wf-bg));
+        padding: 14px;
+        margin-bottom: 28px;
+        box-shadow: 0 18px 54px rgba(0,0,0,.05);
+      }
+      .wf-search-field {
+        min-height: 46px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        border: 1px solid var(--wf-line);
+        border-radius: 8px;
+        background: var(--wf-panel);
+        color: var(--wf-muted);
+        padding: 0 13px;
+      }
+      .wf-search-field input {
+        min-width: 0;
+        width: 100%;
+        border: 0;
+        outline: 0;
+        background: transparent;
+        color: var(--wf-text);
+      }
+      .wf-filter-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+        gap: 10px;
+      }
+      .wf-filter-grid select,
+      .wf-filter-reset {
+        min-height: 46px;
+        min-width: 0;
+        border: 1px solid var(--wf-line);
+        border-radius: 8px;
+        background: var(--wf-panel);
+        color: var(--wf-text);
+        padding: 0 12px;
+        outline: none;
+      }
+      .wf-filter-grid select:focus,
+      .wf-filter-reset:focus-visible,
+      .wf-card-action:focus-visible,
+      .wf-detail-action:focus-visible {
+        border-color: var(--wf-primary);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--wf-primary) 18%, transparent);
+      }
+      .wf-filter-reset {
+        color: var(--wf-primary);
+        font-weight: 900;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .wf-filter-reset:disabled {
+        color: var(--wf-muted);
+        opacity: .55;
+        cursor: not-allowed;
+      }
       .wf-detail-page { display: grid; grid-template-columns: minmax(0, 1.08fr) minmax(340px, .92fr); gap: 44px; align-items: start; }
       .wf-detail-media { aspect-ratio: 4 / 3; overflow: hidden; border-radius: 8px; background: var(--wf-panel-strong); border: 1px solid var(--wf-line); position: sticky; top: 96px; }
       .wf-detail-info h1 { margin: 0; font-size: 44px; line-height: 1.08; letter-spacing: 0; }
@@ -1842,8 +2584,84 @@ function ShowcaseStyles() {
       }
       .wf-detail-specs span { display: block; color: var(--wf-muted); font-size: 12px; margin-bottom: 4px; }
       .wf-detail-specs strong { font-size: 14px; }
+      .wf-detail-action-panel {
+        position: sticky;
+        top: 94px;
+        z-index: 8;
+        border: 1px solid var(--wf-line);
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--wf-panel) 92%, var(--wf-bg));
+        padding: 18px;
+        margin-bottom: 24px;
+        box-shadow: 0 20px 70px rgba(0,0,0,.09);
+      }
+      .wf-panel-kicker {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0 0 9px;
+        color: var(--wf-primary);
+        font-size: 12px;
+        font-weight: 900;
+      }
+      .wf-detail-action-panel h2 {
+        margin: 0 0 14px;
+        font-size: 21px;
+        letter-spacing: 0;
+      }
+      .wf-detail-action-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 9px;
+      }
+      .wf-detail-action {
+        min-height: 44px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        border: 1px solid var(--wf-line);
+        border-radius: 8px;
+        background: var(--wf-panel);
+        color: var(--wf-text);
+        padding: 0 10px;
+        font-size: 13px;
+        font-weight: 900;
+        text-align: center;
+        transition: transform .2s ease, border-color .2s ease, background .2s ease;
+      }
+      .wf-detail-action:hover {
+        transform: translateY(-1px);
+        border-color: color-mix(in srgb, var(--wf-primary) 42%, var(--wf-line));
+      }
+      .wf-detail-action--primary {
+        background: var(--wf-primary);
+        border-color: var(--wf-primary);
+        color: white;
+      }
+      .wf-trust-list {
+        display: grid;
+        gap: 10px;
+        margin: 16px 0 0;
+        padding: 0;
+        list-style: none;
+      }
+      .wf-trust-list li {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        color: var(--wf-muted);
+        font-size: 12px;
+        line-height: 1.55;
+      }
+      .wf-trust-list svg { color: var(--wf-primary); flex: none; margin-top: 2px; }
+      .wf-similar-section {
+        border-top: 1px solid var(--wf-line);
+        background: color-mix(in srgb, var(--wf-panel) 58%, var(--wf-bg));
+      }
       .wf-form-page { max-width: 820px; }
       .wf-contact-page { display: grid; grid-template-columns: minmax(0, .85fr) minmax(360px, 1.15fr); gap: 48px; }
+      .wf-contact-actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 24px 0 18px; }
       .wf-contact-list { display: grid; gap: 12px; margin: 24px 0; }
       .wf-contact-list a, .wf-contact-list p {
         margin: 0;
@@ -1904,6 +2722,41 @@ function ShowcaseStyles() {
         padding: 60px 20px;
         background: var(--wf-panel);
       }
+      .wf-mobile-sticky-actions {
+        display: none;
+        position: fixed;
+        inset-inline: 12px;
+        bottom: 12px;
+        z-index: 70;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+        border: 1px solid color-mix(in srgb, var(--wf-primary) 24%, var(--wf-line));
+        border-radius: 8px;
+        background: color-mix(in srgb, var(--wf-panel) 94%, var(--wf-bg));
+        padding: 8px;
+        box-shadow: 0 24px 80px rgba(0,0,0,.24);
+      }
+      .wf-mobile-sticky-actions a {
+        min-height: 46px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 7px;
+        border-radius: 8px;
+        border: 1px solid var(--wf-line);
+        background: var(--wf-panel);
+        color: var(--wf-text);
+        padding: 0 8px;
+        font-size: 12px;
+        font-weight: 900;
+        text-align: center;
+      }
+      .wf-mobile-sticky-actions .wf-mobile-sticky-primary {
+        background: var(--wf-primary);
+        border-color: var(--wf-primary);
+        color: white;
+      }
+      .wf-mobile-sticky-actions--two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .wf-footer { border-top: 1px solid var(--wf-line); padding: 44px 0; background: color-mix(in srgb, var(--wf-bg) 94%, var(--wf-panel)); }
       .wf-footer-grid { display: grid; grid-template-columns: 1fr 1.4fr 1fr; gap: 24px; align-items: start; }
       .wf-footer-brand { margin: 0 0 8px; font-size: 18px; font-weight: 900; }
@@ -1924,6 +2777,10 @@ function ShowcaseStyles() {
         .wf-detail-page, .wf-contact-page { grid-template-columns: 1fr; }
         .wf-desert-stage, .wf-command-visual, .wf-lucent-stage, .wf-editorial-cover { min-height: 390px; }
         .wf-detail-media { position: relative; top: auto; }
+        .wf-detail-action-panel { position: relative; top: auto; }
+        .wf-inventory-controls { grid-template-columns: 1fr; }
+        .wf-filter-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        .wf-filter-reset { grid-column: span 2; }
         .wf-vehicle-grid, .wf-branch-grid, .wf-footer-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       }
       @media (max-width: 720px) {
@@ -1943,6 +2800,15 @@ function ShowcaseStyles() {
         .wf-vehicle-card--studio:nth-child(even) { margin-top: 0; }
         .wf-vehicle-card--route { grid-template-columns: 1fr; }
         .wf-vehicle-card--lead .wf-vehicle-media { aspect-ratio: 16 / 10; }
+        .wf-card-actions { grid-template-columns: 1fr 1fr; }
+        .wf-card-action--primary { grid-column: 1 / -1; }
+        .wf-filter-grid { grid-template-columns: 1fr; }
+        .wf-filter-reset { grid-column: auto; }
+        .wf-detail-page { padding-bottom: 98px; }
+        .wf-detail-info h1 { font-size: 34px; }
+        .wf-detail-action-grid { grid-template-columns: 1fr; }
+        .wf-mobile-sticky-actions { display: grid; }
+        .wf-mobile-sticky-actions a span { display: inline; }
         .wf-section-heading { align-items: start; flex-direction: column; }
         .wf-section-heading h2, .wf-page-heading h1, .wf-contact-page h1, .wf-legal-page h1 { font-size: 31px; }
         .wf-atelier-panel { position: relative; inset-inline-end: auto; bottom: auto; width: calc(100% - 32px); margin: -110px auto 28px; }
