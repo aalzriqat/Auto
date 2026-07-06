@@ -255,6 +255,19 @@ export async function ensureClaimAccounts(
   await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.CLAIM_WRITE_OFF_EXPENSE, "6700");
 }
 
+/**
+ * Phase 41 self-heal: input VAT on expenses/supplier payables debits this
+ * account. Scoped to those two posting hooks only, same reasoning as
+ * ensureFixedAssetAccounts — no other event type ever needs it.
+ */
+export async function ensureVatReceivableAccount(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.VAT_RECEIVABLE, "1130");
+}
+
 // ─── Queries ──────────────────────────────────────────────────────────────────
 
 export const list = query({

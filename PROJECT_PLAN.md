@@ -1107,32 +1107,51 @@ Vercel production deploy both completed same day. Push notifications are live.
 
 ## Phase 41 — Accounting Depth
 
-**Branch:** `feature/phase-41-accounting`
 **Goal:** Dealership-facing accounting UX that sits on top of the double-entry GL track.
 
 > **Pruned (2026-07-03):** This phase was scoped before the double-entry GL track existed.
 > **Cash Register** is superseded by GL Phase 15 (full cash-drawer sessions) and
 > **Cheque Management** already shipped (post-dated cheques, clearing, return-after-clearing,
-> GL posting) in Accounting Phases 8–9 — both removed from scope here. Bank-account
-> linkage should target the GL `BANK_ACCOUNT` system key, not the legacy `transactions` table.
-> See [`docs/architecture/accounting-implementation-progress.md`](docs/architecture/accounting-implementation-progress.md)
-> and [`docs/architecture/accounting-final-phase-plan.md`](docs/architecture/accounting-final-phase-plan.md).
+> GL posting) in Accounting Phases 8–9 — both removed from scope here.
 
-### Scope (remaining unique items)
+**Status: ✅ Code complete — pending manual UI verification (2026-07-06).** Bank accounts are reference/reconciliation records
+(not new GL control accounts — there remains exactly one `BANK_ACCOUNT` control
+account); opening balance is a reporting-layer number, not a posted journal entry, so
+only one bank account per org (`isReconciliationTarget`) gets real reconciliation math.
+Input VAT tracking was added to both `expenses` and `vehicleSupplierPayables` (not just
+expenses) so the VAT return's net-due figure isn't misleading. See
+[`docs/architecture/accounting-implementation-progress.md`](docs/architecture/accounting-implementation-progress.md)
+and [`docs/architecture/accounting-final-phase-plan.md`](docs/architecture/accounting-final-phase-plan.md)
+for the GL track this phase sits on top of.
 
-- **Bank Accounts** — track multiple bank accounts per org (name, IBAN, currency, opening balance); map each to a GL `BANK_ACCOUNT` account so postings and statements reconcile.
-- **Payment Reconciliation** — match sales payments against bank statement lines (manual upload of CSV statement → auto-suggest matches → confirm) against the GL bank balance.
-- **Installment Collections Calendar** — all upcoming installment due dates on a calendar view with overdue highlighting.
-- **VAT Return Export** — generate a VAT summary for a period (total sales VAT collected, total purchase VAT paid, net due) exportable as PDF/CSV.
+### Scope
+
+- **Bank Accounts** — `convex/bankAccounts.ts` (CRUD, `getBookBalance`), `bankAccounts` table (name, IBAN, currency, opening balance/date, `isReconciliationTarget`). UI: `components/accounting/BankAccountsTab.tsx` + `components/accounting/bankAccounts/*`.
+- **Payment Reconciliation** — `convex/bankReconciliation.ts` (CSV/XLSX upload via existing `lib/spreadsheet.ts`, scored `suggestMatches` — exact amount + date proximity, never auto-confirms, `confirmMatch` with a double-claim guard). UI: `components/accounting/bankAccounts/ReconciliationPanel.tsx` + `BankStatementUploadDialog.tsx`.
+- **Installment Collections Calendar** — `convex/collections.ts`'s `listReceivablesDueBetween` + `components/accounting/collections/InstallmentCalendar.tsx`, toggled inside the existing Collections tab's Receivables view.
+- **VAT Return Export** — `convex/vatReport.ts`'s `generateVatSummary` (output VAT from `SALES_TAX_PAYABLE`, input VAT from new `VAT_RECEIVABLE` system key, self-healing via `ensureVatReceivableAccount`). UI: `components/accounting/reports/VatReturnReport.tsx`, PDF/CSV export reusing `lib/pdf.ts`/`lib/utils/export.ts`, 4th tab in `FinancialReportsTab.tsx`.
 
 ### Tasks
-- [ ] `convex/schema.ts` — `bankAccounts` table; map each bank account to its GL `chartOfAccounts` id
-- [ ] `convex/bankAccounts.ts` (new) — CRUD + statement-reconciliation helpers against posted GL bank lines
-- [ ] `convex/vatReport.ts` (new) — `generateVatSummary` query
-- [ ] `app/(dashboard)/[orgId]/accounting/` — new Bank Accounts tab, VAT Export button
-- [ ] `app/(dashboard)/[orgId]/collections/` — installment calendar view
-- [ ] i18n EN + AR
-- [ ] Tests for reconciliation matching and VAT calculation
+- [x] `convex/schema.ts` — `bankAccounts`, `bankStatementLines` tables; `taxAmount` on `expenses`/`vehicleSupplierPayables`
+- [x] `convex/bankAccounts.ts` (new) — CRUD + book-balance query
+- [x] `convex/bankReconciliation.ts` (new) — upload, suggestMatches, confirmMatch, ignoreLine/unmatch
+- [x] `convex/vatReport.ts` (new) — `generateVatSummary` query
+- [x] `components/accounting/BankAccountsTab.tsx` + new Bank Accounts tab in `AccountingClient.tsx`; VAT Export tab in `FinancialReportsTab.tsx`
+- [x] Installment calendar view inside the Collections tab (no standalone `/collections` route exists)
+- [x] i18n EN + AR
+- [x] Tests: `convex/bankAccounts.test.ts`, `convex/bankReconciliation.test.ts`, `convex/vatReport.test.ts`, `convex/sourcingPayables.test.ts`, plus VAT-split cases added to `convex/expenses.test.ts`
+
+**Known limitation (by design):** day-to-day postings (collections, cheque clearing,
+disbursements) don't carry a per-transaction bank-account tag — the posting engine has
+no `ctx` at the rule layer, and no payment dialog lets a user pick a bank account. Full
+reconciliation accuracy holds for the common single-operating-account case; additional
+registered bank accounts are reference-only until a future phase adds per-transaction
+bank selection.
+
+**Not yet done, out of scope for this batch:** no browser-automation tool is available in
+this environment, so the new UI (Bank Accounts tab, statement upload, VAT export button,
+installment calendar) has been typechecked and unit-tested but not click-tested in a
+running app — verify visually in `pnpm dev` before considering this shippable.
 
 ---
 
@@ -1222,7 +1241,7 @@ Each phase reuses the established pattern: immutable event table → posting rul
 | 38 | Multi-Branch Operations | 3 — Enterprise & Scale | ⬜ Not started |
 | 39 | Sales Funnel Analytics | 3 — Enterprise & Scale | ⬜ Not started |
 | 40 | Mobile PWA | 3 — Enterprise & Scale | 🟨 Push/PWA slice MERGED + DEPLOYED to prod (2026-07-05); VIN scanner/GPS check-in not started |
-| 41 | Accounting Depth | 3 — Enterprise & Scale | ⬜ Not started |
+| 41 | Accounting Depth | 3 — Enterprise & Scale | 🟨 Code complete, pending UI verification (2026-07-06) |
 | 42 | Open API & Integration Hub | 3 — Enterprise & Scale | ⬜ Not started |
 | GL 0–9 | Double-Entry Accounting Foundation | Accounting GL Track | ✅ Done |
 | GL 10 | True two-person manual-journal approval | Accounting GL Track | ✅ Done |

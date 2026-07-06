@@ -64,7 +64,7 @@ async function getOrgCurrencyForReports(ctx: QueryCtx, orgId: Id<"organizations"
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
-async function getPostedLines(
+export async function getPostedLines(
   ctx: QueryCtx,
   orgId: Id<"organizations">,
   fromDate?: number,

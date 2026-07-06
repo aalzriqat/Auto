@@ -619,6 +619,9 @@ export default defineSchema({
     paidBy: v.optional(v.id("users")),
     paymentMethod: v.optional(paymentMethodValidator),
     paymentNotes: v.optional(v.string()),
+    // Portion of amountDue that is input VAT paid to the supplier (tax-inclusive,
+    // not additive) — feeds the VAT return's input side. Optional/backward compatible.
+    taxAmount: v.optional(v.number()),
     cancelledAt: v.optional(v.number()),
     cancelledBy: v.optional(v.id("users")),
     createdBy: v.id("users"),
@@ -868,6 +871,9 @@ export default defineSchema({
     ),
     isPrepaid: v.optional(v.boolean()),
     amortizationMonths: v.optional(v.number()),
+    // Portion of amount that is input VAT paid (tax-inclusive, not additive) —
+    // feeds the VAT return's input side. Optional/backward compatible.
+    taxAmount: v.optional(v.number()),
     status: v.optional(v.union(v.literal("PENDING"), v.literal("PAID"))),
     idempotencyKey: v.optional(v.string()),
     paymentMethod: v.optional(paymentMethodValidator),
@@ -1759,6 +1765,54 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_org_session", ["orgId", "sessionId"])
     .index("by_org_idempotency", ["orgId", "idempotencyKey"]),
+
+  // Phase 41: Accounting Depth — bank accounts are reference/reconciliation
+  // records, not new GL control accounts (there is still exactly one
+  // SYSTEM_KEYS.BANK_ACCOUNT control account). Opening balance is a reporting-
+  // layer number (not a posted journal entry) added to a dated ledger scan of
+  // that control account — see convex/bankAccounts.ts. Only one account per
+  // org may have isReconciliationTarget = true.
+  bankAccounts: defineTable({
+    orgId: v.id("organizations"),
+    name: v.string(),
+    bankName: v.optional(v.string()),
+    iban: v.optional(v.string()),
+    accountNumber: v.optional(v.string()),
+    currency: v.string(),
+    openingBalanceMinor: v.number(),
+    openingBalanceDate: v.number(),
+    isActive: v.boolean(),
+    isReconciliationTarget: v.boolean(),
+    notes: v.optional(v.string()),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+    isDeleted: v.optional(v.boolean()),
+    deletedAt: v.optional(v.number()),
+    deletedBy: v.optional(v.string()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_active", ["orgId", "isActive"]),
+
+  // Uploaded bank-statement rows for the reconciliation-target bank account,
+  // matched against posted journalLines on SYSTEM_KEYS.BANK_ACCOUNT.
+  bankStatementLines: defineTable({
+    orgId: v.id("organizations"),
+    bankAccountId: v.id("bankAccounts"),
+    importBatchId: v.string(),
+    statementDate: v.number(),
+    description: v.string(),
+    amountMinor: v.number(),
+    status: v.union(v.literal("UNMATCHED"), v.literal("MATCHED"), v.literal("IGNORED")),
+    matchedJournalLineId: v.optional(v.id("journalLines")),
+    matchedAt: v.optional(v.number()),
+    matchedBy: v.optional(v.id("users")),
+    createdAt: v.number(),
+    createdBy: v.id("users"),
+  })
+    .index("by_org_bankAccount", ["orgId", "bankAccountId"])
+    .index("by_org_status", ["orgId", "status"])
+    .index("by_matched_journal_line", ["matchedJournalLineId"]),
 
   // GL Phase 17: a one-time accountant attestation that the legacy-to-GL
   // cutover for this org has been reviewed and is correct, carrying a

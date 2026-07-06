@@ -62,6 +62,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
     defaultValues: {
       title: "",
       amount: 0,
+      taxAmount: 0,
       date: new Date().toISOString().split('T')[0],
       category: "OTHER",
       vehicleId: "none",
@@ -80,6 +81,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
       form.reset({
         title: expense.title,
         amount: expense.amount,
+        taxAmount: expense.taxAmount || 0,
         date: date.toISOString().split('T')[0],
         category: expense.category as any,
         vehicleId: expense.vehicleId || "none",
@@ -93,6 +95,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
       form.reset({
         title: "",
         amount: 0,
+        taxAmount: 0,
         date: new Date().toISOString().split('T')[0],
         category: "OTHER",
         vehicleId: "none",
@@ -124,6 +127,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
           expenseId: expense._id,
           title: values.title,
           amount: values.amount,
+          taxAmount: values.taxAmount || undefined,
           date: parsedDate,
           category: values.category as any,
           vehicleId: parsedVehicleId === undefined ? null : parsedVehicleId,
@@ -139,6 +143,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
           orgId: activeOrgId,
           title: values.title,
           amount: values.amount,
+          taxAmount: values.taxAmount || undefined,
           date: parsedDate,
           category: values.category as any,
           vehicleId: parsedVehicleId,
@@ -195,6 +200,20 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                     <FormLabel>{t("AmountUSD" as any)} <span className="text-red-500">*</span></FormLabel>
                     <FormControl>
                       <Input type="number" step="0.01" placeholder="250" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="taxAmount"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("VatAmount" as any)} ({t("Optional" as any)})</FormLabel>
+                    <FormControl>
+                      <Input type="number" step="0.01" placeholder="0" {...field} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>

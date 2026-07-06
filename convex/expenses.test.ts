@@ -461,3 +461,111 @@ describe("expenses.reverseExpense", () => {
     ).rejects.toThrow();
   });
 });
+
+describe("expenses VAT split (Phase 41)", () => {
+  async function setupFullyPosted() {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "VAT Dealer", createdAt: Date.now() })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("subscriptions", {
+        orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now(),
+      })
+    );
+    const userId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "vat_user", email: "vat@test.com", name: "Finance User" })
+    );
+    const roleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "Finance", permissions: [...PERMISSIONS, "manage:finance", "view:finance"] })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+    const asUser = t.withIdentity({ subject: "vat_user" });
+
+    await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
+    const now = Date.now();
+    const monthStart = new Date(new Date(now).getFullYear(), new Date(now).getMonth(), 1).getTime();
+    const monthEnd = new Date(new Date(now).getFullYear(), new Date(now).getMonth() + 1, 0, 23, 59, 59, 999).getTime();
+    await asUser.mutation(api.accountingPeriods.create, {
+      orgId,
+      fiscalYear: new Date(now).getFullYear(),
+      periodNumber: new Date(now).getMonth() + 1,
+      startDate: monthStart,
+      endDate: monthEnd,
+      openImmediately: true,
+    });
+    return { t, orgId, asUser };
+  }
+
+  test("an expense with a VAT amount splits the ledger into net expense + VAT receivable", async () => {
+    const { t, orgId, asUser } = await setupFullyPosted();
+
+    const expenseId = await asUser.mutation(api.expenses.create, {
+      orgId,
+      title: "Office rent with VAT",
+      amount: 1100,
+      taxAmount: 100,
+      date: Date.now(),
+      category: "RENT",
+    });
+
+    await t.run(async (ctx) => {
+      const expense = await ctx.db.get(expenseId);
+      expect(expense?.taxAmount).toBe(100);
+
+      const event = await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", "expenses").eq("sourceId", expenseId.toString())
+        )
+        .filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED"))
+        .first();
+      expect(event?.status).toBe("POSTED");
+      expect(event?.journalEntryId).toBeDefined();
+
+      const lines = await ctx.db
+        .query("journalLines")
+        .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", event!.journalEntryId!))
+        .collect();
+      const totalDebit = lines.reduce((s, l) => s + l.debitMinor, 0);
+      const totalCredit = lines.reduce((s, l) => s + l.creditMinor, 0);
+      expect(totalDebit).toBe(totalCredit);
+      expect(totalDebit).toBe(1_100_000);
+
+      const vatAccount = await ctx.db
+        .query("chartOfAccounts")
+        .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", "VAT_RECEIVABLE"))
+        .unique();
+      expect(vatAccount).toBeTruthy();
+      const vatLine = lines.find((l) => l.accountId === vatAccount!._id);
+      expect(vatLine?.debitMinor).toBe(100_000);
+    });
+  });
+
+  test("an expense without a VAT amount posts the plain two-line entry (unchanged behavior)", async () => {
+    const { t, orgId, asUser } = await setupFullyPosted();
+
+    const expenseId = await asUser.mutation(api.expenses.create, {
+      orgId,
+      title: "No VAT",
+      amount: 200,
+      date: Date.now(),
+      category: "OFFICE",
+    });
+
+    await t.run(async (ctx) => {
+      const event = await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", "expenses").eq("sourceId", expenseId.toString())
+        )
+        .filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED"))
+        .first();
+      const lines = await ctx.db
+        .query("journalLines")
+        .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", event!.journalEntryId!))
+        .collect();
+      expect(lines).toHaveLength(2);
+    });
+  });
+});

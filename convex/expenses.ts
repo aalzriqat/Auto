@@ -89,6 +89,7 @@ async function recordPaidExpenseSideEffects(
     orgId: args.expense.orgId,
     expenseId: args.expense._id,
     amountMinor: toMinorUnits(args.expense.amount, currency),
+    taxMinor: args.expense.taxAmount ? toMinorUnits(args.expense.taxAmount, currency) : undefined,
     currency,
     category: args.expense.category,
     paymentMethod: normalizePaymentMethod(args.expense.paymentMethod),
@@ -189,6 +190,7 @@ export const create = mutation({
     vehicleId: v.optional(v.id("vehicles")),
     title: v.string(),
     amount: v.number(),
+    taxAmount: v.optional(v.number()),
     date: v.number(),
     category: expenseCategory,
     status: v.optional(v.union(v.literal("PENDING"), v.literal("PAID"))),
@@ -202,6 +204,9 @@ export const create = mutation({
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_EXPENSES]);
     const status = args.status ?? "PAID";
     const paymentMethod = status === "PAID" ? normalizePaymentMethod(args.paymentMethod) : args.paymentMethod;
+    if (args.taxAmount !== undefined && args.taxAmount > args.amount) {
+      throw new ConvexError("VAT amount cannot exceed the expense amount.");
+    }
 
     return await runWithIdempotency(
       ctx,
@@ -214,6 +219,7 @@ export const create = mutation({
           vehicleId: args.vehicleId ?? null,
           title: args.title,
           amount: args.amount,
+          taxAmount: args.taxAmount ?? null,
           date: args.date,
           category: args.category,
           status,
@@ -238,6 +244,7 @@ export const create = mutation({
           vehicleId: args.vehicleId,
           title: args.title,
           amount: args.amount,
+          taxAmount: args.taxAmount,
           date: args.date,
           category: args.category,
           status,
@@ -283,6 +290,7 @@ export const update = mutation({
     vehicleId: v.optional(v.union(v.id("vehicles"), v.null())),
     title: v.optional(v.string()),
     amount: v.optional(v.number()),
+    taxAmount: v.optional(v.number()),
     date: v.optional(v.number()),
     category: v.optional(expenseCategory),
     status: v.optional(v.union(v.literal("PENDING"), v.literal("PAID"))),
@@ -316,6 +324,12 @@ export const update = mutation({
       throw new ConvexError("Expense not found.");
     }
 
+    const effectiveAmount = args.amount ?? expense.amount;
+    const effectiveTaxAmount = args.taxAmount ?? expense.taxAmount;
+    if (effectiveTaxAmount !== undefined && effectiveTaxAmount > effectiveAmount) {
+      throw new ConvexError("VAT amount cannot exceed the expense amount.");
+    }
+
     const currentStatus = expense.status ?? "PAID";
     const nextStatus = args.status ?? currentStatus;
     const willMarkPaid = currentStatus === "PENDING" && nextStatus === "PAID";
@@ -324,6 +338,7 @@ export const update = mutation({
       (args.vehicleId !== undefined && args.vehicleId !== (expense.vehicleId ?? null)) ||
       (args.title !== undefined && args.title !== expense.title) ||
       (args.amount !== undefined && args.amount !== expense.amount) ||
+      (args.taxAmount !== undefined && (args.taxAmount || 0) !== (expense.taxAmount || 0)) ||
       (args.date !== undefined && args.date !== expense.date) ||
       (args.category !== undefined && args.category !== expense.category) ||
       (args.status !== undefined && args.status !== currentStatus) ||
@@ -348,6 +363,7 @@ export const update = mutation({
 
     if (args.title !== undefined) patch.title = args.title;
     if (args.amount !== undefined) patch.amount = args.amount;
+    if (args.taxAmount !== undefined) patch.taxAmount = args.taxAmount;
     if (args.date !== undefined) patch.date = args.date;
     if (args.category !== undefined) patch.category = args.category;
     if (args.status !== undefined) patch.status = args.status;

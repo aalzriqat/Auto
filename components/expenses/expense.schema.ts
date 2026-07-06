@@ -4,6 +4,7 @@ import { Doc } from "@/convex/_generated/dataModel";
 export const expenseSchema = z.object({
   title: z.string().min(1, "Title is required"),
   amount: z.coerce.number().min(0, "Amount must be positive"),
+  taxAmount: z.coerce.number().min(0, "VAT amount cannot be negative").optional(),
   date: z.string().min(1, "Date is required"),
   category: z.enum(["REPAIR", "MAINTENANCE", "DETAILING", "TRANSPORT", "MARKETING", "OFFICE", "OTHER"]),
   vehicleId: z.string().optional(),

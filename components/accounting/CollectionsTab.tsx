@@ -7,9 +7,11 @@ import {
   AlertTriangle,
   Banknote,
   CalendarClock,
+  CalendarDays,
   FileCheck2,
   HandCoins,
   Landmark,
+  List,
   Plus,
   RotateCcw,
   ShieldCheck,
@@ -45,6 +47,7 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { toast } from "@/components/ui/sonner";
 import { CashDrawerPanel } from "./collections/CashDrawerPanel";
 import { PaymentLinksPanel } from "./collections/PaymentLinksPanel";
+import { InstallmentCalendar } from "./collections/InstallmentCalendar";
 
 type ReceivableRow = Doc<"receivables"> & {
   customerName: string;
@@ -110,6 +113,7 @@ export function CollectionsTab() {
   const [replaceTarget, setReplaceTarget] = useState<ChequeRow | null>(null);
   const [returnTarget, setReturnTarget] = useState<ChequeRow | null>(null);
   const [reconcileOpen, setReconcileOpen] = useState(false);
+  const [receivablesView, setReceivablesView] = useState<"list" | "calendar">("list");
 
   const summary = useQuery(api.collections.summary, activeOrgId ? { orgId: activeOrgId } : "skip");
   const { results: receivables, status: receivableLoadStatus, loadMore: loadMoreReceivables } = usePaginatedQuery(
@@ -230,7 +234,7 @@ export function CollectionsTab() {
         </TabsList>
 
         <TabsContent value="receivables" className="space-y-3">
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <Select value={receivableStatus} onValueChange={setReceivableStatus}>
               <SelectTrigger className="w-[220px]">
                 <SelectValue />
@@ -241,8 +245,29 @@ export function CollectionsTab() {
                 ))}
               </SelectContent>
             </Select>
+            <div className="flex gap-1 rounded-md border border-slate-200 p-1">
+              <Button
+                size="sm"
+                variant={receivablesView === "list" ? "secondary" : "ghost"}
+                onClick={() => setReceivablesView("list")}
+              >
+                <List className="h-3.5 w-3.5" />
+                {t("ListView" as any)}
+              </Button>
+              <Button
+                size="sm"
+                variant={receivablesView === "calendar" ? "secondary" : "ghost"}
+                onClick={() => setReceivablesView("calendar")}
+              >
+                <CalendarDays className="h-3.5 w-3.5" />
+                {t("InstallmentCalendar" as any)}
+              </Button>
+            </div>
           </div>
 
+          {receivablesView === "calendar" ? (
+            <InstallmentCalendar />
+          ) : (
           <div className="rounded-md border border-slate-200 overflow-x-auto">
             <Table>
               <TableHeader className="bg-slate-50">
@@ -295,7 +320,10 @@ export function CollectionsTab() {
               </TableBody>
             </Table>
           </div>
-          {receivableLoadStatus === "CanLoadMore" && <Button variant="outline" onClick={() => loadMoreReceivables(75)}>{t("LoadMore" as any)}</Button>}
+          )}
+          {receivablesView === "list" && receivableLoadStatus === "CanLoadMore" && (
+            <Button variant="outline" onClick={() => loadMoreReceivables(75)}>{t("LoadMore" as any)}</Button>
+          )}
         </TabsContent>
 
         <TabsContent value="cheques" className="space-y-3">
