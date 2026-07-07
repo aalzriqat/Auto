@@ -31,6 +31,15 @@ import {
 
 export type ExpectedPaymentMethod = "CASH" | "INTERNAL_INSTALLMENT" | "CHEQUE" | "BANK_TRANSFER";
 
+/** yyyy-mm-dd for today from local date parts — toISOString() is UTC and can be off by a day near midnight. */
+function todayLocalInput(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 type RegisterExpectedPaymentDialogProps = {
   open: boolean;
   disabled: boolean;
@@ -57,7 +66,7 @@ export function RegisterExpectedPaymentDialog({
     resolver: zodResolver(registerExpectedPaymentSchema),
     defaultValues: {
       method: "BANK_TRANSFER",
-      expectedDate: new Date().toISOString().slice(0, 10),
+      expectedDate: todayLocalInput(),
       bank: "",
       chequeNumber: "",
     },
