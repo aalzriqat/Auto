@@ -1,6 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect } from "react";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
 import { Loader2, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,6 +22,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import { dateInputToMs } from "@/components/accounting/AccountingTabShared";
+import {
+  registerExpectedPaymentSchema,
+  type RegisterExpectedPaymentFormValues,
+} from "./expectedPayment.schema";
 
 export type ExpectedPaymentMethod = "CASH" | "INTERNAL_INSTALLMENT" | "CHEQUE" | "BANK_TRANSFER";
 
@@ -45,23 +53,42 @@ export function RegisterExpectedPaymentDialog({
   onOpenChange,
   onConfirm,
 }: Readonly<RegisterExpectedPaymentDialogProps>) {
-  const [method, setMethod] = useState<ExpectedPaymentMethod>("BANK_TRANSFER");
-  const [dateStr, setDateStr] = useState(() => new Date().toISOString().slice(0, 10));
-  const [bank, setBank] = useState("");
-  const [chequeNumber, setChequeNumber] = useState("");
+  const form = useForm<RegisterExpectedPaymentFormValues>({
+    resolver: zodResolver(registerExpectedPaymentSchema),
+    defaultValues: {
+      method: "BANK_TRANSFER",
+      expectedDate: new Date().toISOString().slice(0, 10),
+      bank: "",
+      chequeNumber: "",
+    },
+  });
 
-  const canSubmit = method !== "CHEQUE" || (bank.trim().length > 0 && chequeNumber.trim().length > 0);
+  const method = form.watch("method");
 
-  const handleConfirm = () => {
+  useEffect(() => {
+    if (method !== "CHEQUE") {
+      form.clearErrors(["bank", "chequeNumber"]);
+    }
+  }, [method, form]);
+
+  function handleOpenChange(nextOpen: boolean) {
+    onOpenChange(nextOpen);
+    if (!nextOpen) form.reset();
+  }
+
+  function onSubmit(values: RegisterExpectedPaymentFormValues) {
     onConfirm({
-      method,
-      expectedDate: new Date(dateStr).getTime(),
-      chequeDetails: method === "CHEQUE" ? { bank, chequeNumber } : undefined,
+      method: values.method,
+      expectedDate: dateInputToMs(values.expectedDate),
+      chequeDetails:
+        values.method === "CHEQUE"
+          ? { bank: values.bank ?? "", chequeNumber: values.chequeNumber ?? "" }
+          : undefined,
     });
-  };
+  }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogTrigger asChild>
         <Button variant="outline" className="border-indigo-500/40 text-indigo-600 hover:bg-indigo-500/10" disabled={disabled}>
           <Wallet className="h-4 w-4 me-2" />
@@ -74,54 +101,92 @@ export function RegisterExpectedPaymentDialog({
           <DialogDescription>{t("RegisterExpectedPaymentDesc")}</DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-3">
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">{t("PaymentMethodLabel")}</label>
-            <Select value={method} onValueChange={(value) => setMethod(value as ExpectedPaymentMethod)}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="CASH">{t("PaymentMethodCash")}</SelectItem>
-                <SelectItem value="INTERNAL_INSTALLMENT">{t("PaymentMethodInternalInstallment")}</SelectItem>
-                <SelectItem value="CHEQUE">{t("PaymentMethodCheque")}</SelectItem>
-                <SelectItem value="BANK_TRANSFER">{t("PaymentMethodBankTransfer")}</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+        <Form {...form}>
+          <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-3">
+            <FormField
+              control={form.control}
+              name="method"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t("PaymentMethodLabel")}</FormLabel>
+                  <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
+                    <FormControl>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                    </FormControl>
+                    <SelectContent>
+                      <SelectItem value="CASH">{t("PaymentMethodCash")}</SelectItem>
+                      <SelectItem value="INTERNAL_INSTALLMENT">{t("PaymentMethodInternalInstallment")}</SelectItem>
+                      <SelectItem value="CHEQUE">{t("PaymentMethodCheque")}</SelectItem>
+                      <SelectItem value="BANK_TRANSFER">{t("PaymentMethodBankTransfer")}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
-          <div className="space-y-1.5">
-            <label className="text-sm font-medium">{t("ExpectedPaymentDateLabel")}</label>
-            <Input type="date" value={dateStr} onChange={(e) => setDateStr(e.target.value)} />
-          </div>
+            <FormField
+              control={form.control}
+              name="expectedDate"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel>{t("ExpectedPaymentDateLabel")}</FormLabel>
+                  <FormControl>
+                    <Input type="date" {...field} />
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
 
-          {method === "CHEQUE" && (
-            <>
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">{t("Bank")}</label>
-                <Input value={bank} onChange={(e) => setBank(e.target.value)} />
-              </div>
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium">{t("ChequeNumber")}</label>
-                <Input value={chequeNumber} onChange={(e) => setChequeNumber(e.target.value)} />
-              </div>
-            </>
-          )}
-        </div>
+            {method === "CHEQUE" && (
+              <>
+                <FormField
+                  control={form.control}
+                  name="bank"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("Bank")}</FormLabel>
+                      <FormControl>
+                        <Input {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="chequeNumber"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("ChequeNumber")}</FormLabel>
+                      <FormControl>
+                        <Input {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </>
+            )}
 
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            {t("Cancel")}
-          </Button>
-          <Button
-            onClick={handleConfirm}
-            disabled={submitting || !canSubmit}
-            className="bg-indigo-600 hover:bg-indigo-700 text-white"
-          >
-            {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
-            {t("Confirm")}
-          </Button>
-        </DialogFooter>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => handleOpenChange(false)}>
+                {t("Cancel")}
+              </Button>
+              <Button
+                type="submit"
+                disabled={submitting}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white"
+              >
+                {submitting && <Loader2 className="h-4 w-4 animate-spin" />}
+                {t("Confirm")}
+              </Button>
+            </DialogFooter>
+          </form>
+        </Form>
       </DialogContent>
     </Dialog>
   );
