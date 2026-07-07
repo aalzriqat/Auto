@@ -34,6 +34,7 @@ import {
   TorqueLabTheme,
   VelocityCommandTheme,
 } from "./themes/showcase-themes";
+import { KineticLuxuryTheme, KineticModernEvTheme, KineticSalesTheme } from "./themes/kinetic-themes";
 import { TurnstileWidget } from "./turnstile-widget";
 import { DEFAULT_WEBSITE_TEMPLATE_ID } from "@/lib/website/websiteTemplates";
 
@@ -108,6 +109,7 @@ const STRINGS = {
     thankYou: "Thank you!",
     messageReceived: "We've received your message. Our team will be in touch with you shortly.",
     sendAnother: "Send another message",
+    specialOffers: "Special offers",
   },
   ar: {
     brand: "موقع معرض AutoFlow",
@@ -156,6 +158,7 @@ const STRINGS = {
     thankYou: "شكراً لك!",
     messageReceived: "لقد استلمنا رسالتك. سيتواصل معك فريقنا قريباً.",
     sendAnother: "إرسال رسالة أخرى",
+    specialOffers: "عروض خاصة",
   },
 } as const;
 
@@ -191,6 +194,9 @@ const PREMIUM_THEME_COMPONENTS = {
   "carbon-track": CarbonTrackTheme,
   "solaris-bay": SolarisBayTheme,
   "pixel-showroom": PixelShowroomTheme,
+  "kinetic-luxury": KineticLuxuryTheme,
+  "kinetic-ev": KineticModernEvTheme,
+  "kinetic-sales": KineticSalesTheme,
 };
 
 // crypto.randomUUID() only exists in secure contexts (HTTPS/localhost). A
