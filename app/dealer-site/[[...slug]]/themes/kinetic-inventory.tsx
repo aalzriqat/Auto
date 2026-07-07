@@ -86,14 +86,15 @@ export function KineticInventoryList(props: ThemeProps) {
 
   const [search, setSearch] = useState("");
   const [make, setMake] = useState("all");
+  const [maxPriceOverride, setMaxPriceOverride] = useState<number | null>(null);
   const prices = vehicles.map((v) => v.price).filter((p): p is number => p != null);
   const priceCeiling = prices.length ? Math.max(...prices) : 100000;
-  const [maxPrice, setMaxPrice] = useState(priceCeiling);
+  const maxPrice = maxPriceOverride ?? priceCeiling;
   const makes = useMemo(() => Array.from(new Set(vehicles.map((v) => v.make))).sort(), [vehicles]);
 
   const filtered = vehicles.filter((v) => {
     if (make !== "all" && v.make !== make) return false;
-    if (v.price != null && v.price > maxPrice) return false;
+    if (maxPriceOverride != null && v.price != null && v.price > maxPriceOverride) return false;
     if (search.trim()) {
       const haystack = `${v.make} ${v.model} ${v.trim ?? ""}`.toLowerCase();
       if (!haystack.includes(search.trim().toLowerCase())) return false;
@@ -133,7 +134,7 @@ export function KineticInventoryList(props: ThemeProps) {
                   min={0}
                   type="range"
                   value={maxPrice}
-                  onChange={(e) => setMaxPrice(Number(e.target.value))}
+                  onChange={(e) => setMaxPriceOverride(Number(e.target.value))}
                 />
                 <div className="flex justify-between mt-1 text-xs font-semibold text-primary">
                   <span>0</span>
