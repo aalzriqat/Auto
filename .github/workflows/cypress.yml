@@ -1,0 +1,84 @@
+name: E2E Tests (Cypress)
+
+# Uses the same QA fixture and no-real-email guarantee documented in
+# e2e.yml (TestSprite) — a dedicated Clerk test-mode account, so signing in
+# during these runs never sends a real email.
+#
+# Cypress Cloud recording is opt-in and only activates once CYPRESS_RECORD_KEY
+# is set as a repo secret (a Cypress Cloud project has to be created once,
+# interactively, via `npx cypress open` — see cypress.config.ts). Until then
+# this just runs the suite locally in CI without recording.
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  cypress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        persist-credentials: false
+
+    - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      with:
+        version: 10.28.1
+
+    - name: Use Node.js
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version: '22.21.1'
+        cache: 'pnpm'
+
+    - name: Install dependencies
+      run: pnpm install --frozen-lockfile --ignore-scripts
+
+    - name: Build production bundle
+      run: pnpm build
+      env:
+        NEXT_PUBLIC_CONVEX_URL: ${{ secrets.NEXT_PUBLIC_CONVEX_URL }}
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+        CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+        NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+
+    - name: Cypress run
+      uses: cypress-io/github-action@fa4a118725a8f001170d49631ea89e5d66fee626 # v7.4.1
+      with:
+        install: false
+        start: pnpm start
+        wait-on: 'http://localhost:3000'
+        wait-on-timeout: 60
+        browser: chrome
+        record: ${{ secrets.CYPRESS_RECORD_KEY != '' }}
+      env:
+        NEXT_PUBLIC_CONVEX_URL: ${{ secrets.NEXT_PUBLIC_CONVEX_URL }}
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+        CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+        NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+        CYPRESS_E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+        CYPRESS_E2E_LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
+        CYPRESS_PROJECT_ID: ${{ secrets.CYPRESS_PROJECT_ID }}
+        CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
+
+    - name: Upload Cypress screenshots
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      if: failure()
+      with:
+        name: cypress-screenshots
+        path: cypress/screenshots/
+        retention-days: 14
+        if-no-files-found: ignore
+
+    - name: Upload Cypress videos
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      if: always()
+      with:
+        name: cypress-videos
+        path: cypress/videos/
+        retention-days: 7
+        if-no-files-found: ignore

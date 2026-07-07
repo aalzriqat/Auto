@@ -38,6 +38,7 @@
   "exclude": [
     "node_modules",
     "convex",
-    "dealer-worker"
+    "dealer-worker",
+    "cypress"
   ]
 }

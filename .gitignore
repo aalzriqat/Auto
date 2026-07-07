@@ -13,6 +13,16 @@
 # testing
 /coverage
 
+# Playwright — .auth/ holds a real signed-in storageState (session cookies)
+playwright-report/
+test-results/
+playwright/.auth/
+
+# Cypress
+cypress/videos/
+cypress/screenshots/
+cypress/downloads/
+
 # next.js
 /.next/
 /out/
