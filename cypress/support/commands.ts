@@ -36,6 +36,14 @@ Cypress.Commands.add("login", () => {
         },
       });
       cy.get("#identifier-field", { timeout: 15_000 }).should("be.visible").type(user);
+      // Clerk shows the password field on the same screen for some
+      // identifiers (combined form) but only after clicking "Continue" for
+      // others (two-step form) — handle both rather than assuming one.
+      cy.get("body").then(($body) => {
+        if ($body.find("#password-field:visible").length === 0) {
+          cy.contains("button", "Continue").click();
+        }
+      });
       cy.get("#password-field", { timeout: 15_000 }).should("be.visible").type(password, { log: false });
       cy.contains("button", "Continue").click();
       cy.url({ timeout: 30_000 }).should("match", /\/[^/]+\/(dashboard|sales|leads|accounting)(\?.*)?$/);

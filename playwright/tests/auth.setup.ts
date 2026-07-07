@@ -28,11 +28,18 @@ setup("authenticate", async ({ page }) => {
   await identifierField.waitFor({ state: "visible", timeout: 15_000 });
   await identifierField.fill(user);
 
+  // Clerk shows the password field on the same screen for some identifiers
+  // (combined form) but only after clicking "Continue" for others (two-step
+  // form) — handle both rather than assuming one.
   const passwordField = page.locator("#password-field");
+  const continueButton = page.getByRole("button", { name: "Continue", exact: true });
+  if (!(await passwordField.isVisible().catch(() => false))) {
+    await continueButton.click();
+  }
   await passwordField.waitFor({ state: "visible", timeout: 15_000 });
   await passwordField.fill(password);
 
-  await page.getByRole("button", { name: "Continue", exact: true }).click();
+  await continueButton.click();
 
   // A logged-in session always ends up on some /{orgId}/... route; the
   // exact landing page depends on the fixture's role (owner -> /dashboard,
