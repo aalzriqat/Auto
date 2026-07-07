@@ -960,7 +960,7 @@ export async function markChequeClearedCore(
   args: { orgId: Id<"organizations">; chequeId: Id<"postDatedCheques">; clearedAt?: number; idempotencyKey?: string }
 ): Promise<Doc<"postDatedCheques">> {
   const cheque = await ctx.db.get(args.chequeId);
-  if (!cheque || cheque.orgId !== args.orgId) throw new ConvexError("Cheque not found.");
+  if (!cheque || cheque.orgId !== args.orgId || cheque.isDeleted) throw new ConvexError("Cheque not found.");
   if (cheque.status !== "HELD" && cheque.status !== "DEPOSITED") {
     throw new ConvexError("Only held or deposited cheques can be cleared.");
   }

@@ -1005,7 +1005,7 @@ export const confirmDisbursement = mutation({
             .query("postDatedCheques")
             .withIndex("by_application", (q) => q.eq("applicationId", args.applicationId))
             .unique();
-          if (!cheque) {
+          if (!cheque || cheque.isDeleted) {
             throw new ConvexError("Expected cheque record not found for this application.");
           }
           if (cheque.status === "RETURNED" || cheque.status === "CANCELLED") {
