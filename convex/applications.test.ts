@@ -475,6 +475,21 @@ describe("applications.confirmDisbursement cheque linking", () => {
     expect(chequeAfter?._id).toBe(newChequeId);
     expect(chequeAfter?.status).toBe("CLEARED");
   });
+
+  test("confirmDisbursement treats a soft-deleted linked cheque as not found", async () => {
+    const { t, orgId, applicationId, asUser, getCheque } = await setupFinalizedFinancedDealWithCheque();
+    const cheque = await getCheque();
+
+    await t.run((ctx) => ctx.db.patch(cheque!._id, { isDeleted: true }));
+
+    await expect(
+      asUser.mutation(api.applications.confirmDisbursement, {
+        orgId,
+        applicationId,
+        disbursedAmountMinor: 17_000_000,
+      })
+    ).rejects.toThrow(/cheque record not found/i);
+  });
 });
 
 describe("applications required document enforcement", () => {

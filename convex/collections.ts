@@ -999,7 +999,9 @@ export const clearCheque = mutation({
       async () => {
         const currency = await getOrgCurrency(ctx, args.orgId);
         const existingCheque = await ctx.db.get(args.chequeId);
-        if (!existingCheque || existingCheque.orgId !== args.orgId) throw new ConvexError("Cheque not found.");
+        if (!existingCheque || existingCheque.orgId !== args.orgId || existingCheque.isDeleted) {
+          throw new ConvexError("Cheque not found.");
+        }
         if (existingCheque.applicationId) {
           throw new ConvexError(
             `This cheque belongs to finance application ${existingCheque.applicationId} — confirm disbursement from the Applications page instead.`
