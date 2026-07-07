@@ -37,7 +37,11 @@ export default defineConfig({
     ? undefined
     : {
         command: "pnpm build && pnpm start",
-        url: baseURL,
+        // Probes the JSON health route rather than "/" — the homepage is a
+        // real Clerk-instrumented page render and can reflect dev-instance
+        // handshake behavior that a bare readiness check doesn't handle the
+        // same way a browser does.
+        url: `${baseURL}/api/health`,
         reuseExistingServer: !process.env.CI,
         timeout: 180_000,
         stdout: "pipe",

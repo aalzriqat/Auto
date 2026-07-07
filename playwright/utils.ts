@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test";
 import { expect } from "@playwright/test";
+import { randomInt } from "node:crypto";
 
 /**
  * Every authenticated route is scoped under /{orgId}/... and the QA fixture's
@@ -23,7 +24,7 @@ export async function gotoOrgRoute(page: Page, path: string): Promise<void> {
 
 /** Unique-ish suffix for test data so repeated CI runs don't collide. */
 export function testDataSuffix(): string {
-  return `${Date.now()}-${Math.floor(Math.random() * 10_000)}`;
+  return `${Date.now()}-${randomInt(0, 10_000)}`;
 }
 
 /**

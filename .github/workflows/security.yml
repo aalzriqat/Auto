@@ -19,7 +19,7 @@ jobs:
   semgrep:
     runs-on: ubuntu-latest
     container:
-      image: semgrep/semgrep
+      image: semgrep/semgrep:1.168.0
     permissions:
       contents: read
       security-events: write
@@ -91,7 +91,11 @@ jobs:
         continue-on-error: true
         with:
           directory: .
-          framework: github_actions,secrets
+          # The underlying checkov CLI takes a single --framework value here
+          # (this action passes it through unsplit) — "secrets" is dropped
+          # since Gitleaks, Semgrep's p/secrets ruleset, and GitGuardian
+          # already cover secret scanning elsewhere in CI.
+          framework: github_actions
           output_format: sarif
           output_file_path: checkov-results
           skip_download: 'true'

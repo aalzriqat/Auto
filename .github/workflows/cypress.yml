@@ -51,7 +51,11 @@ jobs:
       with:
         install: false
         start: pnpm start
-        wait-on: 'http://localhost:3000'
+        # Probes the JSON health route rather than "/" — the homepage is a
+        # real Clerk-instrumented page render and can reflect dev-instance
+        # handshake behavior that a bare readiness check doesn't handle the
+        # same way a browser does.
+        wait-on: 'http://localhost:3000/api/health'
         wait-on-timeout: 60
         browser: chrome
         record: ${{ secrets.CYPRESS_RECORD_KEY != '' }}

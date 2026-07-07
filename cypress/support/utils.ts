@@ -2,7 +2,7 @@
 
 /** Unique-ish suffix for test data so repeated CI runs don't collide. */
 export function testDataSuffix(): string {
-  return `${Date.now()}-${Math.floor(Math.random() * 10_000)}`;
+  return `${Date.now()}-${crypto.getRandomValues(new Uint32Array(1))[0] % 10_000}`;
 }
 
 /**
