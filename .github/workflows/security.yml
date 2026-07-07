@@ -1,0 +1,228 @@
+name: Security
+
+# New security tooling — reports only for now (continue-on-error on every
+# job) so findings can be triaged before any of these gate merges. Gitleaks
+# (secret scanning) already runs in test.yml's secret-scan job and is not
+# duplicated here.
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # SAST — static analysis of application source for insecure patterns.
+  semgrep:
+    runs-on: ubuntu-latest
+    container:
+      image: semgrep/semgrep
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Run Semgrep (CE rulesets)
+        run: |
+          semgrep scan \
+            --config=p/security-audit \
+            --config=p/secrets \
+            --config=p/typescript \
+            --config=p/nextjs \
+            --config=p/react \
+            --sarif --output=semgrep.sarif \
+            --exclude=node_modules --exclude=.next --exclude=dealer-worker/node_modules \
+            --exclude=graphify-out
+        continue-on-error: true
+
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+
+  # SCA — dependency vulnerabilities against the OSV database (npm + pnpm lockfiles).
+  osv-scanner:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Run OSV-Scanner
+        id: osv-scanner
+        continue-on-error: true
+        uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+        with:
+          scan-args: |-
+            --output=osv-results.sarif
+            --format=sarif
+            --recursive
+            ./
+
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3
+        if: always()
+        with:
+          sarif_file: osv-results.sarif
+
+  # IaC / CI config security — scans GitHub Actions workflows for misconfigurations.
+  checkov:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@99bb2caf247dfd9f03cf984373bc6043d4e32ebf # v12.1347.0
+        continue-on-error: true
+        with:
+          directory: .
+          framework: github_actions,secrets
+          output_format: sarif
+          output_file_path: checkov-results
+          skip_download: 'true'
+          soft_fail: 'true'
+
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3
+        if: always()
+        with:
+          sarif_file: checkov-results/results_sarif.sarif
+
+  # DAST — passive baseline scan (headers, cookies, exposed files, auth/session
+  # hints) against a production build running locally in the runner. This
+  # never touches a real deployment, so it's always scanning "a system we own".
+  zap-baseline:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.28.1
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.21.1'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Build production bundle
+        run: pnpm build
+        env:
+          NEXT_PUBLIC_CONVEX_URL: ${{ secrets.NEXT_PUBLIC_CONVEX_URL }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+
+      - name: Start production server
+        run: pnpm start &
+        env:
+          NEXT_PUBLIC_CONVEX_URL: ${{ secrets.NEXT_PUBLIC_CONVEX_URL }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+
+      - name: Wait for server
+        run: |
+          for attempt in {1..60}; do
+            if curl --silent --fail http://localhost:3000 > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Server did not become ready within 60 seconds." >&2
+          exit 1
+
+      - name: ZAP baseline scan
+        uses: zaproxy/action-baseline@de8ad967d3548d44ef623df22cf95c3b0baf8b25 # v0.15.0
+        continue-on-error: true
+        with:
+          target: 'http://localhost:3000'
+          cmd_options: '-a'
+          fail_action: false
+          allow_issue_writing: false
+
+  # Community-template scan for known misconfigurations/exposed-service
+  # patterns, against the same local build (never a real deployment).
+  nuclei:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.28.1
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22.21.1'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Build production bundle
+        run: pnpm build
+        env:
+          NEXT_PUBLIC_CONVEX_URL: ${{ secrets.NEXT_PUBLIC_CONVEX_URL }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+
+      - name: Start production server
+        run: pnpm start &
+        env:
+          NEXT_PUBLIC_CONVEX_URL: ${{ secrets.NEXT_PUBLIC_CONVEX_URL }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+
+      - name: Wait for server
+        run: |
+          for attempt in {1..60}; do
+            if curl --silent --fail http://localhost:3000 > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Server did not become ready within 60 seconds." >&2
+          exit 1
+
+      - name: Run Nuclei
+        uses: projectdiscovery/nuclei-action@32a91c0da7be14c07b0ade6c14fa0f6e78d97c9c # v3.1.0
+        continue-on-error: true
+        with:
+          version: latest
+          args: >-
+            -target http://localhost:3000
+            -tags cves,misconfig,exposure,default-login
+            -severity critical,high,medium
+            -silent
