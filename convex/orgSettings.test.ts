@@ -37,6 +37,24 @@ describe("orgSettings", () => {
     expect(settings).toBeNull();
   });
 
+  test("get returns null when unauthenticated", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOwner(t);
+    const settings = await t.query(api.orgSettings.get, { orgId });
+    expect(settings).toBeNull();
+  });
+
+  test("get returns null when the caller isn't a member of the org", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOwner(t);
+    await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "outsider_001", email: "outsider@test.com", name: "Outsider" })
+    );
+    const asOutsider = t.withIdentity({ subject: "outsider_001" });
+    const settings = await asOutsider.query(api.orgSettings.get, { orgId });
+    expect(settings).toBeNull();
+  });
+
   test("upsert creates settings with defaults", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
@@ -102,5 +120,38 @@ describe("orgSettings", () => {
     await expect(
       asMember.mutation(api.orgSettings.upsert, { orgId, currency: "EUR" })
     ).rejects.toThrow();
+  });
+
+  test("upsert requires the whatsapp feature when touching WhatsApp fields", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asOwner } = await seedOwner(t);
+
+    // No subscription row seeded, so the org has no plan features enabled.
+    await expect(
+      asOwner.mutation(api.orgSettings.upsert, { orgId, whatsappPhoneNumberId: "12345" })
+    ).rejects.toThrow(/upgrade required/i);
+  });
+
+  test("getLogoUrl returns null when no logo is set, and a URL once one is uploaded", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asOwner } = await seedOwner(t);
+    await asOwner.mutation(api.orgSettings.upsert, { orgId, currency: "JOD" });
+
+    const noLogo = await asOwner.query(api.orgSettings.getLogoUrl, { orgId });
+    expect(noLogo).toBeNull();
+
+    const storageId = await t.run((ctx) => ctx.storage.store(new Blob(["fake-logo"], { type: "image/png" })));
+    await asOwner.mutation(api.orgSettings.upsert, { orgId, logoStorageId: storageId });
+
+    const withLogo = await asOwner.query(api.orgSettings.getLogoUrl, { orgId });
+    expect(withLogo).toEqual(expect.any(String));
+  });
+
+  test("generateLogoUploadUrl returns an upload URL for the owner", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asOwner } = await seedOwner(t);
+
+    const uploadUrl = await asOwner.mutation(api.orgSettings.generateLogoUploadUrl, { orgId });
+    expect(uploadUrl).toEqual(expect.any(String));
   });
 });

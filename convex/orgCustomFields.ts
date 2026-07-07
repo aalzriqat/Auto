@@ -74,6 +74,10 @@ export const update = mutation({
     const { fieldId, orgId, ...fields } = args;
     const patch: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(fields)) {
+      // Convex's argument wire protocol drops keys explicitly set to
+      // undefined before the handler ever sees them, so a real caller can
+      // never make this evaluate false — see the same note in orgSettings.ts.
+      /* v8 ignore else */
       if (value !== undefined) patch[key] = value;
     }
     await ctx.db.patch(fieldId, patch);

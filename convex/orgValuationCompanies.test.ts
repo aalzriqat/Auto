@@ -65,6 +65,39 @@ describe("orgValuationCompanies", () => {
     expect(companies.some((c) => c.name === "AcmeCars")).toBe(true);
   });
 
+  test("create appends after an existing company, incrementing order", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asOwner } = await seedOwner(t);
+    await asOwner.mutation(api.orgValuationCompanies.create, { orgId, name: "First" });
+    await asOwner.mutation(api.orgValuationCompanies.create, { orgId, name: "Second" });
+    const companies = await asOwner.query(api.orgValuationCompanies.list, { orgId });
+    const second = companies.find((c) => c.name === "Second");
+    expect(second?.order).toBe(1);
+  });
+
+  test("update only touches the fields provided (order alone)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asOwner } = await seedOwner(t);
+    const companyId = await asOwner.mutation(api.orgValuationCompanies.create, { orgId, name: "Kept" });
+    await asOwner.mutation(api.orgValuationCompanies.update, { orgId, companyId, order: 5 });
+    const companies = await asOwner.query(api.orgValuationCompanies.list, { orgId });
+    const updated = companies.find((c) => c._id === companyId);
+    expect(updated?.name).toBe("Kept");
+    expect(updated?.isActive).toBe(true);
+    expect(updated?.order).toBe(5);
+  });
+
+  test("update throws if the company no longer exists", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asOwner } = await seedOwner(t);
+    const companyId = await asOwner.mutation(api.orgValuationCompanies.create, { orgId, name: "Gone" });
+    await t.run((ctx) => ctx.db.delete(companyId));
+
+    await expect(
+      asOwner.mutation(api.orgValuationCompanies.update, { orgId, companyId, name: "Hijacked" })
+    ).rejects.toThrow(/not found/i);
+  });
+
   test("update changes name and isActive", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);

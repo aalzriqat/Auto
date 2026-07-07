@@ -58,6 +58,27 @@ describe("orgCustomFields", () => {
     expect(vehicleFields[0].fieldKey).toBe("condition");
   });
 
+  test("list sorts multiple fields by order", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asOwner } = await seedOwner(t);
+    await asOwner.mutation(api.orgCustomFields.create, {
+      orgId,
+      entityType: "vehicle",
+      fieldName: "First",
+      fieldKey: "first",
+      fieldType: "text",
+    });
+    await asOwner.mutation(api.orgCustomFields.create, {
+      orgId,
+      entityType: "vehicle",
+      fieldName: "Second",
+      fieldKey: "second",
+      fieldType: "text",
+    });
+    const fields = await asOwner.query(api.orgCustomFields.list, { orgId, entityType: "vehicle" });
+    expect(fields.map((f) => f.fieldKey)).toEqual(["first", "second"]);
+  });
+
   test("create inserts a field with correct defaults", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
@@ -211,6 +232,48 @@ describe("orgCustomFields", () => {
       values: [{ fieldId, value: "" }],
     });
     vals = await asOwner.query(api.orgCustomFields.getValues, {
+      orgId,
+      entityType: "vehicle",
+      entityId: vehicleId,
+    });
+    expect(vals).toHaveLength(0);
+  });
+
+  test("setValues is a no-op when setting a field with no existing row to an empty string", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asOwner } = await seedOwner(t);
+
+    const vehicleId = await t.run(async (ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "TEST00003",
+        make: "Test",
+        model: "M",
+        year: 2021,
+        color: "White",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        mileage: 0,
+        sellingPrice: 8000,
+        status: "AVAILABLE",
+      })
+    );
+    const fieldId = await asOwner.mutation(api.orgCustomFields.create, {
+      orgId,
+      entityType: "vehicle",
+      fieldName: "Blank",
+      fieldKey: "blank",
+      fieldType: "text",
+    });
+
+    await asOwner.mutation(api.orgCustomFields.setValues, {
+      orgId,
+      entityType: "vehicle",
+      entityId: vehicleId,
+      values: [{ fieldId, value: "" }],
+    });
+
+    const vals = await asOwner.query(api.orgCustomFields.getValues, {
       orgId,
       entityType: "vehicle",
       entityId: vehicleId,

@@ -135,4 +135,16 @@ describe("validateVinChecksum", () => {
   it("is case-insensitive", () => {
     expect(validateVinChecksum("1hgcm82633a004352")).toBe(true);
   });
+
+  it("rejects a 17-char string containing a non-alphanumeric character", () => {
+    // Position 5 replaced with '-' — not caught by the I/O/Q filter, but
+    // isn't a digit or a transliteration-table letter either.
+    expect(validateVinChecksum("1HGCM-2633A004352")).toBe(false);
+  });
+
+  it("uses 'X' as the expected check character when the checksum remainder is 10", () => {
+    // Position 8 (weight 0, doesn't affect the sum) set to 'X' to match the
+    // expected check character for this VIN's actual remainder of 10.
+    expect(validateVinChecksum("1HGCM826X3A004350")).toBe(true);
+  });
 });

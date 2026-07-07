@@ -49,4 +49,14 @@ describe("hexToHslString", () => {
     // 'ff0000' without # — after replace, cleaned = 'ff0000', length 6 → valid
     expect(hexToHslString("ff0000")).toBe("0 100% 50%");
   });
+
+  it("uses the light-color saturation formula when lightness is above 50%", () => {
+    // #ffcccc: r=1, g=b=0.8 -> l=0.9 (>0.5), max===r, g===b
+    expect(hexToHslString("#ffcccc")).toBe("0 100% 90%");
+  });
+
+  it("wraps hue past 360 when max is red and green is less than blue", () => {
+    // #ff00ff: r=b=1, g=0 -> max===r matches first, g<b is true here
+    expect(hexToHslString("#ff00ff")).toBe("300 100% 50%");
+  });
 });
