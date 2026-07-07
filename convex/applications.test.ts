@@ -451,6 +451,30 @@ describe("applications.confirmDisbursement cheque linking", () => {
       asUser.mutation(api.collections.clearCheque, { orgId, chequeId: cheque!._id })
     ).rejects.toThrow(/confirm disbursement from the Applications page/i);
   });
+
+  test("confirmDisbursement resolves the replacement cheque after the original was replaced", async () => {
+    const { orgId, applicationId, asUser, getCheque } = await setupFinalizedFinancedDealWithCheque();
+    const originalCheque = await getCheque();
+
+    const newChequeId = await asUser.mutation(api.collections.replaceCheque, {
+      orgId,
+      chequeId: originalCheque!._id,
+      bank: "Cairo Amman Bank",
+      chequeNumber: "CHQ-002",
+      chequeDate: Date.now(),
+      amount: originalCheque!.amount,
+    });
+
+    await asUser.mutation(api.applications.confirmDisbursement, {
+      orgId,
+      applicationId,
+      disbursedAmountMinor: 17_000_000,
+    });
+
+    const chequeAfter = await getCheque();
+    expect(chequeAfter?._id).toBe(newChequeId);
+    expect(chequeAfter?.status).toBe("CLEARED");
+  });
 });
 
 describe("applications required document enforcement", () => {

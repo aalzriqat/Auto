@@ -1162,6 +1162,10 @@ export const replaceCheque = mutation({
       customerId: oldCheque.customerId,
       vehicleId: oldCheque.vehicleId,
       saleId: oldCheque.saleId,
+      // Transfers rather than copies — an application's expected-payment
+      // cheque must stay a 1:1 link so confirmDisbursement's lookup by
+      // applicationId keeps resolving to exactly one (the active) cheque.
+      applicationId: oldCheque.applicationId,
       bank: args.bank.trim(),
       chequeNumber: args.chequeNumber.trim(),
       chequeDate: args.chequeDate,
@@ -1176,6 +1180,7 @@ export const replaceCheque = mutation({
     await ctx.db.patch(args.chequeId, {
       status: "REPLACED",
       replacementChequeId: newChequeId,
+      applicationId: undefined,
       updatedAt: now,
     });
 
