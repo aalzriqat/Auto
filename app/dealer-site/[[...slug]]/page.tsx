@@ -109,7 +109,6 @@ const STRINGS = {
     thankYou: "Thank you!",
     messageReceived: "We've received your message. Our team will be in touch with you shortly.",
     sendAnother: "Send another message",
-    specialOffers: "Special offers",
   },
   ar: {
     brand: "موقع معرض AutoFlow",
@@ -158,7 +157,6 @@ const STRINGS = {
     thankYou: "شكراً لك!",
     messageReceived: "لقد استلمنا رسالتك. سيتواصل معك فريقنا قريباً.",
     sendAnother: "إرسال رسالة أخرى",
-    specialOffers: "عروض خاصة",
   },
 } as const;
 

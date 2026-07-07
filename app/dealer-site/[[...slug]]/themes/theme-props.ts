@@ -62,7 +62,6 @@ export type SiteStrings = {
   thankYou: string;
   messageReceived: string;
   sendAnother: string;
-  specialOffers: string;
 };
 
 export type FormState = {
