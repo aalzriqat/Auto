@@ -38,6 +38,12 @@ jobs:
     - name: Install dependencies
       run: pnpm install --frozen-lockfile --ignore-scripts
 
+    - name: Install Cypress binary
+      # --ignore-scripts above suppresses Cypress's own postinstall (which
+      # downloads its native binary), same as playwright.yml's explicit
+      # `playwright install` step for the same reason.
+      run: pnpm exec cypress install
+
     - name: Build production bundle
       run: pnpm build
       env:
@@ -56,7 +62,7 @@ jobs:
         # handshake behavior that a bare readiness check doesn't handle the
         # same way a browser does.
         wait-on: 'http://localhost:3000/api/health'
-        wait-on-timeout: 60
+        wait-on-timeout: 120
         browser: chrome
         record: ${{ secrets.CYPRESS_RECORD_KEY != '' }}
       env:
