@@ -5,7 +5,7 @@ const backendEnvSchema = z.object({
   // Require these for the application to function
   CLERK_JWT_ISSUER_DOMAIN: z.string().url(),
   NEXT_PUBLIC_APP_URL: z.string().url(),
-  
+
   // Optional but recommended
   RESEND_API_KEY: z.string().startsWith("re_").optional(),
   CLERK_WEBHOOK_SECRET: z.string().startsWith("whsec_").optional(),
@@ -76,13 +76,24 @@ const backendEnvSchema = z.object({
 // the full getValidatedEnv() meant an unset, unrelated integration secret
 // (e.g. WHATSAPP_APP_SECRET) could take down the entire backend. This
 // validates only what auth bootstrapping actually needs.
+// CLERK_DEV_JWT_ISSUER_DOMAIN is a second trusted OIDC issuer, additive to
+// CLERK_JWT_ISSUER_DOMAIN. Convex's static env scan of auth.config.ts (see
+// comment above) requires it set on every deployment regardless of intent,
+// so deployments that don't need a second issuer just set it equal to
+// CLERK_JWT_ISSUER_DOMAIN (a harmless duplicate provider entry). Deployments
+// that DO need one (e.g. accepting sessions from Clerk's development
+// instance for local/CI E2E testing, since production Clerk rejects
+// non-autoflowdealer.com origins outright) set it to that instance's real
+// issuer domain.
 const authConfigEnvSchema = z.object({
   CLERK_JWT_ISSUER_DOMAIN: z.string().url(),
+  CLERK_DEV_JWT_ISSUER_DOMAIN: z.string().url(),
 });
 
 export function getAuthConfigEnv() {
   const result = authConfigEnvSchema.safeParse({
     CLERK_JWT_ISSUER_DOMAIN: process.env.CLERK_JWT_ISSUER_DOMAIN,
+    CLERK_DEV_JWT_ISSUER_DOMAIN: process.env.CLERK_DEV_JWT_ISSUER_DOMAIN,
   });
 
   if (!result.success) {

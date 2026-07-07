@@ -1,0 +1,113 @@
+name: E2E Tests (Cypress)
+
+# Uses the same QA fixture and no-real-email guarantee documented in
+# e2e.yml (TestSprite) — a dedicated Clerk test-mode account, so signing in
+# during these runs never sends a real email.
+#
+# Records to Cypress Cloud (project 7p2uis) whenever CYPRESS_RECORD_KEY is
+# set as a repo secret; falls back to running locally without recording
+# otherwise.
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  cypress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        persist-credentials: false
+
+    - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+      with:
+        version: 10.28.1
+
+    - name: Use Node.js
+      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version: '22.21.1'
+        cache: 'pnpm'
+
+    - name: Install dependencies
+      run: pnpm install --frozen-lockfile --ignore-scripts
+
+    - name: Install Cypress binary
+      # --ignore-scripts above suppresses Cypress's own postinstall (which
+      # downloads its native binary), same as playwright.yml's explicit
+      # `playwright install` step for the same reason.
+      run: pnpm exec cypress install
+
+    - name: Build production bundle
+      run: pnpm build
+      env:
+        NEXT_PUBLIC_CONVEX_URL: ${{ secrets.NEXT_PUBLIC_CONVEX_URL }}
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+        CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+        NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+
+    - name: Start production server
+      run: pnpm start &
+      env:
+        NEXT_PUBLIC_CONVEX_URL: ${{ secrets.NEXT_PUBLIC_CONVEX_URL }}
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+        CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+        NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+
+    - name: Wait for server
+      # A plain curl loop instead of cypress-io/github-action's bundled
+      # wait-on: that library's HTTP client got stuck reporting "Redirected
+      # 10 times. Aborting." against this app even on the plain JSON
+      # /api/health route, while a bare curl (and Playwright's own
+      # readiness poller) both succeed against the same URL immediately —
+      # points at a wait-on-specific client quirk, not an app issue. This
+      # mirrors the same curl-loop pattern already used in security.yml's
+      # zap-baseline/nuclei jobs.
+      run: |
+        for attempt in {1..60}; do
+          if curl --silent --fail http://localhost:3000/api/health > /dev/null; then
+            exit 0
+          fi
+          sleep 2
+        done
+        echo "Server did not become ready within 120 seconds." >&2
+        exit 1
+
+    - name: Cypress run
+      run: |
+        if [ -n "$CYPRESS_RECORD_KEY" ]; then
+          pnpm exec cypress run --browser chrome --record
+        else
+          pnpm exec cypress run --browser chrome
+        fi
+      env:
+        NEXT_PUBLIC_CONVEX_URL: ${{ secrets.NEXT_PUBLIC_CONVEX_URL }}
+        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+        CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+        NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+        CYPRESS_E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+        CYPRESS_E2E_LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
+        CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
+
+    - name: Upload Cypress screenshots
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      if: failure()
+      with:
+        name: cypress-screenshots
+        path: cypress/screenshots/
+        retention-days: 14
+        if-no-files-found: ignore
+
+    - name: Upload Cypress videos
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      if: always()
+      with:
+        name: cypress-videos
+        path: cypress/videos/
+        retention-days: 7
+        if-no-files-found: ignore

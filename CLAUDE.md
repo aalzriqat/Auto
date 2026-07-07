@@ -17,6 +17,17 @@ pnpm test         # vitest (unit + Convex function tests)
 
 To run a single test file: `pnpm test convex/sales.test.ts`
 
+### E2E testing
+
+Two parallel E2E suites cover the same "must have" flows (sign-in, dashboard landing, add vehicle, create customer, create lead, record expense, cash sale end-to-end, language switch) against a real build — TestSprite (AI-driven, `.github/workflows/e2e.yml`) remains in place separately.
+
+- **Playwright**: config at `playwright.config.ts`, specs + auth setup in `playwright/tests/*.spec.ts` and `playwright/tests/auth.setup.ts` (the "setup" project's `testMatch` only searches within `testDir`, so auth setup must live inside `playwright/tests/`, not alongside it). Run locally with `pnpm e2e:playwright` (its `webServer` builds + starts + waits for the app itself). CI: `.github/workflows/playwright.yml`.
+- **Cypress**: config at `cypress.config.ts`, specs in `cypress/e2e/*.cy.ts`, login command in `cypress/support/commands.ts`. Run locally with `pnpm e2e:cypress` against an already-running server (`pnpm build && pnpm start`, or `pnpm dev`). CI: `.github/workflows/cypress.yml` starts/waits for the server with a plain curl loop rather than the `cypress-io/github-action`'s bundled `wait-on`, which got stuck in a redirect-retry loop against this app for reasons isolated to that specific HTTP client.
+
+Both suites reuse the same QA fixture as TestSprite (`E2E_LOGIN_USER`/`E2E_LOGIN_PASSWORD` secrets — a dedicated Clerk test-mode account, so sign-ins send no real email) and force English locale before interacting with the app (`LanguageProvider` defaults to Arabic/RTL on an empty `localStorage`).
+
+Cypress Cloud recording is wired up (project `7p2uis`) and activates automatically whenever the `CYPRESS_RECORD_KEY` repo secret is set; the suite still runs (without recording) if it's ever unset.
+
 ## Architecture
 
 ### Provider chain
