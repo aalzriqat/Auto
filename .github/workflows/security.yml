@@ -97,7 +97,6 @@ jobs:
           # already cover secret scanning elsewhere in CI.
           framework: github_actions
           output_format: sarif
-          output_file_path: checkov-results
           skip_download: 'true'
           soft_fail: 'true'
 
@@ -105,7 +104,9 @@ jobs:
         uses: github/codeql-action/upload-sarif@411c4c9a36b3fca4d674f06b6396b2c6d23522c6 # v3
         if: always()
         with:
-          sarif_file: checkov-results/results_sarif.sarif
+          # The pinned checkov version in this action ignores
+          # output_file_path and always writes results.sarif to cwd.
+          sarif_file: results.sarif
 
   # DAST — passive baseline scan (headers, cookies, exposed files, auth/session
   # hints) against a production build running locally in the runner. This
