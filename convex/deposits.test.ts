@@ -2,6 +2,7 @@ import { convexTest } from "convex-test";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -473,7 +474,7 @@ describe("deposits multi-vehicle holds", () => {
     });
   }
 
-  async function makeSecondVehicle(t: any, orgId: any) {
+  async function makeSecondVehicle(t: any, orgId: any): Promise<Id<"vehicles">> {
     return await t.run((ctx: any) =>
       ctx.db.insert("vehicles", {
         orgId,
