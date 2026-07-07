@@ -109,15 +109,16 @@ jobs:
     # CONVEX_AGENT_MODE=anonymous runs a throwaway local backend so CI needs
     # no cloud credentials. `dev --once` pushes the code (full schema/function
     # validation) and regenerates convex/_generated for the freshness check.
-    # auth.config.ts reads CLERK_JWT_ISSUER_DOMAIN from the deployment's env,
-    # and `convex env set` refuses to run before a deployment exists — so the
-    # first `dev --once` only bootstraps the anonymous deployment (its push is
-    # allowed to fail on the missing env var), then the var is set and the
-    # real validation pass runs.
+    # auth.config.ts reads CLERK_JWT_ISSUER_DOMAIN and CLERK_DEV_JWT_ISSUER_DOMAIN
+    # from the deployment's env, and `convex env set` refuses to run before a
+    # deployment exists — so the first `dev --once` only bootstraps the
+    # anonymous deployment (its push is allowed to fail on the missing env
+    # vars), then both vars are set and the real validation pass runs.
     - name: Generate Convex bindings and validate backend types
       run: |
         pnpm exec convex dev --once --typecheck disable || true
         pnpm exec convex env set CLERK_JWT_ISSUER_DOMAIN https://ci-placeholder.clerk.accounts.dev
+        pnpm exec convex env set CLERK_DEV_JWT_ISSUER_DOMAIN https://ci-placeholder-dev.clerk.accounts.dev
         pnpm exec convex dev --once --typecheck enable
       env:
         CONVEX_AGENT_MODE: anonymous
