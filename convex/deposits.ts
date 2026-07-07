@@ -1,5 +1,6 @@
 import { ConvexError, v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import { Doc } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { throwAppError, AppErrorCode } from "./utils/errors";
@@ -396,12 +397,31 @@ export const listByVehicle = query({
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_VEHICLES]);
 
-    const deposits = await ctx.db
+    const primaryDeposits = await ctx.db
       .query("deposits")
       .withIndex("by_vehicle_hold", (q) => q.eq("vehicleId", args.vehicleId))
       .order("desc")
       .take(50);
 
-    return deposits.filter((d) => d.orgId === args.orgId);
+    // A vehicle can also be a secondary line item on a multi-vehicle deposit,
+    // which only ever snapshots its primary vehicleId on the deposits row —
+    // pull those in via the join table so this vehicle's deposit history is
+    // complete, not just deposits where it happens to be the primary.
+    const secondaryHolds = await ctx.db
+      .query("depositVehicleHolds")
+      .withIndex("by_vehicle_active", (q) => q.eq("vehicleId", args.vehicleId))
+      .collect();
+    const secondaryDeposits = await Promise.all(
+      secondaryHolds.map((hold) => ctx.db.get(hold.depositId))
+    );
+
+    const byId = new Map<string, Doc<"deposits">>();
+    for (const deposit of [...primaryDeposits, ...secondaryDeposits]) {
+      if (deposit && deposit.orgId === args.orgId) {
+        byId.set(deposit._id, deposit);
+      }
+    }
+
+    return Array.from(byId.values()).sort((a, b) => b._creationTime - a._creationTime);
   },
 });

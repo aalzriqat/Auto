@@ -4,7 +4,7 @@ import type { MutationCtx } from "../_generated/server";
 import { hookDepositApplicationReversed } from "../accounting/workflowHooks";
 import { reverseAllocation } from "../subledger";
 import { restoreVehicleToAvailable } from "./saleHelpers";
-import { syncVehicleHoldStatus } from "./depositHelpers";
+import { reactivateAllVehiclesForDeposit, syncVehicleHoldStatus } from "./depositHelpers";
 
 async function getActiveReceivableAllocations(
   ctx: MutationCtx,
@@ -123,6 +123,11 @@ async function reinstateAppliedDeposits(
       resolvedBy: undefined,
       resolvedAt: undefined,
     });
+    // Puts every vehicle on the deposit's quote back on hold, not just
+    // whichever vehicle belongs to the sale row being cancelled — a
+    // multi-vehicle quote's other vehicles would otherwise stay AVAILABLE
+    // despite the deposit being active again.
+    await reactivateAllVehiclesForDeposit(ctx, deposit);
     await hookDepositApplicationReversed(ctx, {
       orgId: args.orgId,
       depositId: deposit._id,

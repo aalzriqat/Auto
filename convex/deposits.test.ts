@@ -10,6 +10,7 @@ vi.mock("./rateLimit", () => ({
 
 const PERMISSIONS = [
   "create:sales",
+  "edit:sales",
   "view:sales",
   "edit:vehicles",
   "view:vehicles",
@@ -555,6 +556,54 @@ describe("deposits multi-vehicle holds", () => {
       expect(deposit?.status).toBe("APPLIED");
       expect(deposit?.holdActive).toBe(false);
     });
+  });
+
+  test("cancelling every sale row of a multi-vehicle deal reactivates every held vehicle, not just the primary", async () => {
+    const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
+    const secondVehicleId = await makeSecondVehicle(t, orgId);
+    const quoteId = await makeMultiVehicleQuote(t, asUser, orgId, customerId, vehicleId, secondVehicleId);
+    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 5000 });
+
+    const saleIds = await asUser.mutation(api.sales.completeFromQuote, { orgId, quoteId });
+
+    // Unwinding the whole deal cancels each vehicle's own sale row in turn.
+    // The first cancellation reactivates the shared deposit (APPLIED -> HELD)
+    // and every depositVehicleHolds row; the second sale's own vehicle must
+    // still come back on hold even though the deposit itself no longer
+    // transitions again on this second call.
+    for (const saleId of saleIds) {
+      await asApprover.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
+    }
+
+    await t.run(async (ctx) => {
+      const primary = await ctx.db.get(vehicleId);
+      const secondary = await ctx.db.get(secondVehicleId);
+      expect(primary?.status).toBe("RESERVED");
+      expect(secondary?.status).toBe("RESERVED");
+
+      const deposit = await ctx.db.get(depositId);
+      expect(deposit?.status).toBe("HELD");
+      expect(deposit?.holdActive).toBe(true);
+    });
+  });
+
+  test("listByVehicle surfaces a multi-vehicle deposit for its secondary vehicle too", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const secondVehicleId = await makeSecondVehicle(t, orgId);
+    const quoteId = await makeMultiVehicleQuote(t, asUser, orgId, customerId, vehicleId, secondVehicleId);
+    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 5000 });
+
+    const secondaryDeposits = await asUser.query(api.deposits.listByVehicle, {
+      orgId,
+      vehicleId: secondVehicleId,
+    });
+    expect(secondaryDeposits.map((d) => d._id)).toContain(depositId);
+
+    const primaryDeposits = await asUser.query(api.deposits.listByVehicle, {
+      orgId,
+      vehicleId,
+    });
+    expect(primaryDeposits.map((d) => d._id)).toContain(depositId);
   });
 });
 

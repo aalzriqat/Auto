@@ -159,6 +159,31 @@ export async function releaseAllVehiclesForDeposit(
 }
 
 /**
+ * Reactivates every vehicle a deposit holds — the inverse of
+ * releaseAllVehiclesForDeposit. Use when a completed sale is cancelled and
+ * its APPLIED deposit is reinstated to HELD, so every vehicle on a
+ * multi-vehicle quote goes back on hold, not just the primary one.
+ */
+export async function reactivateAllVehiclesForDeposit(
+  ctx: MutationCtx,
+  deposit: Doc<"deposits">
+): Promise<void> {
+  await syncVehicleHoldStatus(ctx, deposit.vehicleId);
+
+  const secondaryHolds = await ctx.db
+    .query("depositVehicleHolds")
+    .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))
+    .collect();
+
+  for (const hold of secondaryHolds) {
+    if (!hold.active) {
+      await ctx.db.patch(hold._id, { active: true });
+    }
+    await syncVehicleHoldStatus(ctx, hold.vehicleId);
+  }
+}
+
+/**
  * Resolves every actively-held deposit on a quote (e.g. when its sale
  * completes) and releases the vehicle hold if nothing else is holding it.
  */
