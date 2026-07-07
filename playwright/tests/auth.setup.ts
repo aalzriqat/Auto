@@ -22,17 +22,6 @@ setup("authenticate", async ({ page }) => {
     window.localStorage.setItem("autoflow-locale", "en");
   });
 
-  // TEMP DEBUG: capture browser console/network activity to diagnose the
-  // "stuck on Loading your workspace" hang after a successful sign-in.
-  page.on("console", (msg) => console.log(`[browser:${msg.type()}]`, msg.text()));
-  page.on("pageerror", (err) => console.log("[pageerror]", err.message));
-  page.on("requestfailed", (req) => console.log("[requestfailed]", req.url(), req.failure()?.errorText));
-  page.on("response", (res) => {
-    if (res.url().includes("convex") || res.url().includes("clerk")) {
-      console.log("[response]", res.status(), res.url());
-    }
-  });
-
   await page.goto("/sign-in");
 
   const identifierField = page.locator("#identifier-field");
