@@ -1,10 +1,7 @@
 import { defineConfig } from "cypress";
 
 export default defineConfig({
-  // TODO: set this once a project is created under the Cypress Cloud org —
-  // see the "Cypress Cloud setup" note in the E2E README for the one-time
-  // manual step (this can't be provisioned non-interactively).
-  projectId: process.env.CYPRESS_PROJECT_ID,
+  projectId: "7p2uis",
 
   e2e: {
     baseUrl: process.env.CYPRESS_BASE_URL ?? "http://localhost:3000",
