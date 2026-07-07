@@ -397,6 +397,13 @@ export async function completeSalesForLineItems(
     actorId: Id<"users">;
   }
 ): Promise<Id<"sales">[]> {
+  if (args.vehicleItems.length === 0) {
+    throw new ConvexError("Cannot complete a sale without at least one vehicle line item.");
+  }
+  if (args.vehicleItems.some((item) => item.unitPrice <= 0)) {
+    throw new ConvexError("Vehicle line item prices must be greater than zero.");
+  }
+
   const total = args.vehicleItems.reduce((sum, item) => sum + item.unitPrice, 0);
   const saleIds: Id<"sales">[] = [];
 

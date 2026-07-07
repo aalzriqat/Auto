@@ -877,13 +877,14 @@ export async function registerChequeCore(
     if (receivable.customerId !== args.customerId) throw new ConvexError("Cheque customer must match receivable customer.");
   }
 
-  const duplicate = await ctx.db
+  const existingCheques = await ctx.db
     .query("postDatedCheques")
     .withIndex("by_org_bank_and_chequeNumber", (q) =>
       q.eq("orgId", args.orgId).eq("bank", args.bank.trim()).eq("chequeNumber", args.chequeNumber.trim())
     )
-    .first();
-  if (duplicate && !duplicate.isDeleted && duplicate.status !== "CANCELLED") {
+    .collect();
+  const hasActiveDuplicate = existingCheques.some((c) => !c.isDeleted && c.status !== "CANCELLED");
+  if (hasActiveDuplicate) {
     throw new ConvexError("A cheque with this bank and number already exists.");
   }
 

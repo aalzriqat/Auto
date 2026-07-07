@@ -339,12 +339,19 @@ export default function Step1QuoteSetup({
                   <Input
                     type="number"
                     {...field}
+                    readOnly={isCash && vehicleItems.length > 1}
+                    disabled={isCash && vehicleItems.length > 1}
                     onChange={(e) => {
                       field.onChange(e);
                       setSelectedCompanyId(undefined);
                     }}
                   />
                 </FormControl>
+                {isCash && vehicleItems.length > 1 && (
+                  <p className="text-xs text-muted-foreground">
+                    {t("VehiclePriceLockedMultiVehicle" as any) ?? "Locked to the sum of the vehicles above."}
+                  </p>
+                )}
               </FormItem>
             )}
           />

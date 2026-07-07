@@ -270,7 +270,7 @@ export const salesEn = {
   DisbursementReceived: "Received",
   AwaitingDisbursement: "Awaiting receipt",
   RegisterVehicleHandover: "Register Vehicle Handover",
-  RegisterVehicleHandoverDesc: "Confirm the vehicle (التنازل بالسيارة) has been handed over to the customer.",
+  RegisterVehicleHandoverDesc: "Confirm the vehicle has been handed over to the customer.",
   ConfirmHandover: "Confirm Handover",
   VehicleHandoverRegisteredSuccess: "Vehicle handover registered.",
   VehicleHandoverRegistered: "Handover registered",
@@ -448,6 +448,7 @@ export const salesEn = {
   AddAnotherVehicle: "Add another vehicle",
   TotalVehiclesCount: "Total",
   SelectAllVehiclesInQuote: "Select a vehicle for every row, or remove the empty one.",
+  VehiclePriceLockedMultiVehicle: "Locked to the sum of the vehicles above.",
 };
 
 export const salesAr = {
@@ -894,4 +895,5 @@ export const salesAr = {
   AddAnotherVehicle: "إضافة مركبة أخرى",
   TotalVehiclesCount: "الإجمالي",
   SelectAllVehiclesInQuote: "الرجاء اختيار مركبة لكل صف، أو إزالة الصف الفارغ.",
+  VehiclePriceLockedMultiVehicle: "مثبّت على مجموع أسعار المركبات أعلاه.",
 };

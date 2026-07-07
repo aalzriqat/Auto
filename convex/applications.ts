@@ -283,9 +283,17 @@ export const createFromQuote = mutation({
     }
 
     const quoteVehicleItems = quote.vehicleItems ?? [{ vehicleId: quote.vehicleId, unitPrice: quote.vehiclePrice }];
+    // Financed deals stay single-vehicle for now — finalizeDeal only ever
+    // completes app.vehicleId's sale, so a multi-vehicle quote reaching this
+    // point would silently drop every other vehicle at finalization. The
+    // wizard never produces this today (multi-vehicle is CASH-only), but
+    // reject it defensively rather than relying on that never changing.
+    if (quoteVehicleItems.length !== 1) {
+      throw new ConvexError("Finance applications currently support exactly one vehicle.");
+    }
     for (const item of quoteVehicleItems) {
       const lineVehicle = await ctx.db.get(item.vehicleId);
-      if (!lineVehicle || lineVehicle.orgId !== args.orgId) {
+      if (!lineVehicle || lineVehicle.orgId !== args.orgId || lineVehicle.isDeleted) {
         throw new ConvexError("Quote vehicle not found in this organization.");
       }
     }
@@ -750,6 +758,7 @@ export const registerVehicleHandover = mutation({
     const app = await ctx.db.get(args.applicationId);
     if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
     if (app.status !== "APPROVED") throw new ConvexError("Application must be APPROVED before registering handover.");
+    if (app.vehicleHandoverAt) throw new ConvexError("Vehicle handover has already been registered.");
 
     const now = Date.now();
     await ctx.db.patch(args.applicationId, {
@@ -786,6 +795,7 @@ export const registerExpectedPayment = mutation({
     if (!app || app.orgId !== args.orgId) throw new ConvexError("Application not found");
     if (app.status !== "APPROVED") throw new ConvexError("Application must be APPROVED before registering expected payment.");
     if (!app.vehicleHandoverAt) throw new ConvexError("Register the vehicle handover before the expected payment.");
+    if (app.expectedPaymentRegisteredAt) throw new ConvexError("Expected payment has already been registered.");
 
     if (args.method === "CHEQUE") {
       if (!args.chequeDetails?.bank?.trim() || !args.chequeDetails?.chequeNumber?.trim()) {

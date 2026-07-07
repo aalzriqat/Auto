@@ -300,6 +300,7 @@ export const completeFromQuote = mutation({
         operation: "sales.completeFromQuote",
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
+        fingerprint: JSON.stringify({ quoteId: args.quoteId }),
       },
       async () => {
         const quote = await ctx.db.get(args.quoteId);

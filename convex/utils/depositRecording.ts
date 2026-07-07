@@ -167,7 +167,7 @@ export async function recordHeldDeposit(
     issuedBy: args.actorId,
   });
   await ctx.db.patch(voucherId, {
-    voucherNumber: `RV-${new Date(now).getFullYear()}-${String(now).slice(-6)}`,
+    voucherNumber: `RV-${new Date(now).getFullYear()}-${String(voucherId).slice(-8).toUpperCase()}`,
   });
 
   return depositId;

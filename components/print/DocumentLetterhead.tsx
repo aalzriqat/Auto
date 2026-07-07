@@ -74,7 +74,7 @@ export function DocumentLetterhead({ orgBranding, variant, rightSlot, titleLabel
         {logoSrc && <img src={logoSrc} alt="Dealer Logo" className="h-16 object-contain" />}
       </div>
       <div className="text-end text-xs text-[#4b5563] space-y-1">
-        {legalName && <p className="text-[10px] text-[#6b7280]">{legalName}</p>}
+        {legalName && legalName !== tradeName && <p className="text-[10px] text-[#6b7280]">{legalName}</p>}
         {tradeName && (
           <p className="font-bold" style={{ color: primary }}>
             {tradeName}
