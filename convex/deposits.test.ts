@@ -448,6 +448,116 @@ describe("deposits.voidDeposit", () => {
   });
 });
 
+describe("deposits multi-vehicle holds", () => {
+  async function makeMultiVehicleQuote(
+    t: any,
+    asUser: any,
+    orgId: any,
+    customerId: any,
+    primaryVehicleId: any,
+    secondVehicleId: any
+  ) {
+    return await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId: primaryVehicleId,
+      vehicleItems: [
+        { vehicleId: primaryVehicleId, unitPrice: 22000 },
+        { vehicleId: secondVehicleId, unitPrice: 18000 },
+      ],
+      mode: "CASH",
+      vehiclePrice: 40000,
+      downPayment: 0,
+      termMonths: 0,
+    });
+  }
+
+  async function makeSecondVehicle(t: any, orgId: any) {
+    return await t.run((ctx: any) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "1HGCM82633A444444",
+        make: "Toyota",
+        model: "Camry",
+        year: 2022,
+        color: "Blue",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        mileage: 800,
+        sellingPrice: 18000,
+        status: "AVAILABLE",
+      })
+    );
+  }
+
+  test("recording a deposit on a multi-vehicle quote holds every vehicle, not just the primary", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const secondVehicleId = await makeSecondVehicle(t, orgId);
+    const quoteId = await makeMultiVehicleQuote(t, asUser, orgId, customerId, vehicleId, secondVehicleId);
+
+    await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 5000 });
+
+    await t.run(async (ctx) => {
+      const primary = await ctx.db.get(vehicleId);
+      const secondary = await ctx.db.get(secondVehicleId);
+      expect(primary?.status).toBe("RESERVED");
+      expect(secondary?.status).toBe("RESERVED");
+    });
+  });
+
+  test("releasing a multi-vehicle deposit restores every held vehicle to AVAILABLE", async () => {
+    const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
+    const secondVehicleId = await makeSecondVehicle(t, orgId);
+    const quoteId = await makeMultiVehicleQuote(t, asUser, orgId, customerId, vehicleId, secondVehicleId);
+    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 5000 });
+
+    await asApprover.mutation(api.deposits.release, { orgId, depositId, resolution: "REFUNDED" });
+
+    await t.run(async (ctx) => {
+      const primary = await ctx.db.get(vehicleId);
+      const secondary = await ctx.db.get(secondVehicleId);
+      expect(primary?.status).toBe("AVAILABLE");
+      expect(secondary?.status).toBe("AVAILABLE");
+    });
+  });
+
+  test("voiding a multi-vehicle deposit restores every held vehicle to AVAILABLE", async () => {
+    const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
+    const secondVehicleId = await makeSecondVehicle(t, orgId);
+    const quoteId = await makeMultiVehicleQuote(t, asUser, orgId, customerId, vehicleId, secondVehicleId);
+    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 5000 });
+
+    await asApprover.mutation(api.deposits.voidDeposit, { orgId, depositId, reason: "test" });
+
+    await t.run(async (ctx) => {
+      const primary = await ctx.db.get(vehicleId);
+      const secondary = await ctx.db.get(secondVehicleId);
+      expect(primary?.status).toBe("AVAILABLE");
+      expect(secondary?.status).toBe("AVAILABLE");
+    });
+  });
+
+  test("completing a multi-vehicle quote's sale resolves the deposit and correctly sells every vehicle (none stay stuck RESERVED)", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const secondVehicleId = await makeSecondVehicle(t, orgId);
+    const quoteId = await makeMultiVehicleQuote(t, asUser, orgId, customerId, vehicleId, secondVehicleId);
+    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 5000 });
+
+    await asUser.mutation(api.sales.completeFromQuote, { orgId, quoteId });
+
+    await t.run(async (ctx) => {
+      const primary = await ctx.db.get(vehicleId);
+      const secondary = await ctx.db.get(secondVehicleId);
+      expect(primary?.status).toBe("SOLD");
+      expect(secondary?.status).toBe("SOLD");
+
+      const deposit = await ctx.db.get(depositId);
+      expect(deposit?.status).toBe("APPLIED");
+      expect(deposit?.holdActive).toBe(false);
+    });
+  });
+});
+
 describe("sales.create resolves deposits", () => {
   test("a sale created from a quote resolves its deposit to APPLIED and excludes it from the sale transaction amount", async () => {
     const { t, orgId, userId, customerId, vehicleId, asUser } = await setup();

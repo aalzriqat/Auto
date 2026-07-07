@@ -3,7 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { throwAppError, AppErrorCode } from "./utils/errors";
-import { holdVehicleForDeposit, maybeReleaseVehicleHold } from "./utils/depositHelpers";
+import { holdVehicleForDeposit, releaseAllVehiclesForDeposit } from "./utils/depositHelpers";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
@@ -103,6 +103,21 @@ export const create = mutation({
           now,
           sourceLabel: `quote ${args.quoteId}`,
         });
+
+        // Only multi-vehicle deposits need a join row per vehicle — a
+        // single-vehicle deposit is already fully tracked by the deposit's
+        // own vehicleId + by_vehicle_hold index.
+        if (depositVehicleItems.length > 1) {
+          for (const item of depositVehicleItems) {
+            await ctx.db.insert("depositVehicleHolds", {
+              orgId: args.orgId,
+              depositId,
+              vehicleId: item.vehicleId,
+              active: true,
+              createdAt: now,
+            });
+          }
+        }
 
         const actorName = await getActorName(ctx);
         await notifyManagers(
@@ -250,11 +265,7 @@ export const release = mutation({
           });
         }
 
-        // Only releases the deposit's primary vehicle. For a multi-vehicle quote,
-        // the other vehicles held via holdVehicleForDeposit are not auto-released
-        // here (deposits only snapshot one vehicleId) — staff must flip their
-        // status back to AVAILABLE manually if the whole deal falls through.
-        await maybeReleaseVehicleHold(ctx, deposit.vehicleId);
+        await releaseAllVehiclesForDeposit(ctx, deposit);
 
         const actorName = await getActorName(ctx);
         await notifyManagers(
@@ -371,7 +382,7 @@ export const voidDeposit = mutation({
       });
     }
 
-    await maybeReleaseVehicleHold(ctx, deposit.vehicleId);
+    await releaseAllVehiclesForDeposit(ctx, deposit);
 
     return args.depositId;
   },

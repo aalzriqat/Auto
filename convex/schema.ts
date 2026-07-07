@@ -1322,6 +1322,20 @@ export default defineSchema({
     .index("by_org_customer", ["orgId", "customerId"])
     .index("by_vehicle_hold", ["vehicleId", "holdActive"]),
 
+  // Tracks every vehicle a multi-vehicle deposit holds, not just the
+  // deposit's primary `vehicleId`. Only written for deposits on quotes with
+  // more than one vehicle — single-vehicle deposits (the vast majority) get
+  // zero rows here and rely solely on `deposits.by_vehicle_hold` as before.
+  depositVehicleHolds: defineTable({
+    orgId: v.id("organizations"),
+    depositId: v.id("deposits"),
+    vehicleId: v.id("vehicles"),
+    active: v.boolean(),
+    createdAt: v.number(),
+  })
+    .index("by_deposit", ["depositId"])
+    .index("by_vehicle_active", ["vehicleId", "active"]),
+
   // Receipt voucher (سند قبض) auto-generated as proof of payment whenever a
   // deposit is recorded — one per deposit.
   paymentVouchers: defineTable({

@@ -1,5 +1,5 @@
 import { MutationCtx } from "../_generated/server";
-import { Id } from "../_generated/dataModel";
+import { Doc, Id } from "../_generated/dataModel";
 import { throwAppError, AppErrorCode } from "./errors";
 
 /** Used when an org hasn't configured a reservationHoldDays setting. */
@@ -65,7 +65,15 @@ async function hasActiveDepositHold(
     .withIndex("by_vehicle_hold", (q) => q.eq("vehicleId", vehicleId).eq("holdActive", true))
     .take(50);
 
-  return deposits.some((deposit) => deposit.isDeleted !== true);
+  if (deposits.some((deposit) => deposit.isDeleted !== true)) return true;
+
+  // Covers secondary vehicles on a multi-vehicle deposit, which only ever
+  // snapshot their primary vehicleId on the `deposits` row itself.
+  const secondaryHolds = await ctx.db
+    .query("depositVehicleHolds")
+    .withIndex("by_vehicle_active", (q) => q.eq("vehicleId", vehicleId).eq("active", true))
+    .take(50);
+  return secondaryHolds.length > 0;
 }
 
 async function hasActiveReservationHold(
@@ -127,6 +135,30 @@ export async function maybeReleaseVehicleHold(
 }
 
 /**
+ * Releases every vehicle a deposit holds — the primary `deposit.vehicleId`
+ * plus any secondary vehicles recorded in `depositVehicleHolds` for
+ * multi-vehicle quotes. Use this instead of a bare `maybeReleaseVehicleHold`
+ * whenever a deposit is being resolved (released/voided/applied).
+ */
+export async function releaseAllVehiclesForDeposit(
+  ctx: MutationCtx,
+  deposit: Doc<"deposits">
+): Promise<void> {
+  await maybeReleaseVehicleHold(ctx, deposit.vehicleId);
+
+  const secondaryHolds = await ctx.db
+    .query("depositVehicleHolds")
+    .withIndex("by_deposit", (q) => q.eq("depositId", deposit._id))
+    .collect();
+
+  for (const hold of secondaryHolds) {
+    if (!hold.active) continue;
+    await ctx.db.patch(hold._id, { active: false });
+    await maybeReleaseVehicleHold(ctx, hold.vehicleId);
+  }
+}
+
+/**
  * Resolves every actively-held deposit on a quote (e.g. when its sale
  * completes) and releases the vehicle hold if nothing else is holding it.
  */
@@ -162,7 +194,7 @@ export async function resolveDepositsForQuote(
         amount: deposit.amount,
       });
     }
-    await maybeReleaseVehicleHold(ctx, deposit.vehicleId);
+    await releaseAllVehiclesForDeposit(ctx, deposit);
   }
   return { total: resolvedTotal, appliedDeposits };
 }
@@ -182,12 +214,9 @@ export async function releaseHoldForApplicationQuote(
     .withIndex("by_quote", (q) => q.eq("quoteId", args.quoteId))
     .collect();
 
-  // Only releases each deposit's primary vehicle (deposits snapshot one
-  // vehicleId). For a multi-vehicle quote, the other vehicles held via
-  // holdVehicleForDeposit stay RESERVED and need a manual status correction.
   for (const deposit of deposits) {
     if (!deposit.holdActive) continue;
     await ctx.db.patch(deposit._id, { holdActive: false });
-    await maybeReleaseVehicleHold(ctx, deposit.vehicleId);
+    await releaseAllVehiclesForDeposit(ctx, deposit);
   }
 }
