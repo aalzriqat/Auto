@@ -72,10 +72,10 @@ export const create = mutation({
       roleId: ownerRoleId,
     });
 
-    // All new orgs start on the free plan (no time limit)
+    // All new orgs start on the enterprise plan (no time limit)
     await ctx.db.insert("subscriptions", {
       orgId,
-      plan: "free",
+      plan: "enterprise",
       status: "active",
       createdAt: Date.now(),
       updatedAt: Date.now(),
