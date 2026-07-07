@@ -9,7 +9,7 @@ import { releaseHoldForApplicationQuote } from "./utils/depositHelpers";
 import { completeSale } from "./utils/saleCompletion";
 import { cancelCompletedSaleOperationalRecords } from "./utils/saleCancellation";
 import { runWithIdempotency } from "./utils/idempotency";
-import { registerChequeCore } from "./collections";
+import { registerChequeCore, markChequeClearedCore } from "./collections";
 import {
   hookFinanceDisbursed,
   hookFinanceCashReceived,
@@ -994,6 +994,30 @@ export const confirmDisbursement = mutation({
           }
         }
 
+        // registerExpectedPayment always opens a HELD postDatedCheques row when
+        // the registered method is CHEQUE — link this confirmation to it so the
+        // cheque doesn't stay HELD forever while the payment says settled.
+        // (Not yet handled: a cheque that bounces AFTER this clears it — see
+        // the note below, after the cheque is transitioned.)
+        let chequeToClear: Doc<"postDatedCheques"> | null = null;
+        if (app.expectedPaymentMethod === "CHEQUE") {
+          const cheque = await ctx.db
+            .query("postDatedCheques")
+            .withIndex("by_application", (q) => q.eq("applicationId", args.applicationId))
+            .unique();
+          if (!cheque) {
+            throw new ConvexError("Expected cheque record not found for this application.");
+          }
+          if (cheque.status === "RETURNED" || cheque.status === "CANCELLED") {
+            throw new ConvexError(
+              "This cheque was returned/cancelled — register a replacement or a different payment method before confirming disbursement."
+            );
+          }
+          if (cheque.status !== "CLEARED") {
+            chequeToClear = cheque;
+          }
+        }
+
         const now = Date.now();
         await ctx.db.patch(args.applicationId, {
           disbursedAt: now,
@@ -1001,6 +1025,19 @@ export const confirmDisbursement = mutation({
           disbursementIdempotencyKey: args.idempotencyKey,
           updatedAt: now,
         });
+
+        if (chequeToClear) {
+          // Transitions the cheque only — deliberately not clearCheque's
+          // legacy collectionPayments/GL posting, since this disbursement is
+          // already posted through the canonical finance-company receivable
+          // below. A cheque that bounces after this point (post-hoc reversal)
+          // is not yet handled; see clearCheque's applicationId guard.
+          await markChequeClearedCore(ctx, {
+            orgId: args.orgId,
+            chequeId: chequeToClear._id,
+            clearedAt: now,
+          });
+        }
 
         // Post the actual receipt of funds: DR Bank / CR Accounts Receivable —
         // Finance Companies. Without this the finance-company receivable opened

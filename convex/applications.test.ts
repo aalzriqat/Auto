@@ -19,6 +19,7 @@ const PERMISSIONS = [
   "verify:finance_documents",
   "register:vehicle_handover",
   "register:expected_payment",
+  "manage:finance",
 ];
 
 async function setup() {
@@ -350,6 +351,105 @@ describe("applications finance-company canonical receivable", () => {
       expect(allocations.length).toBeGreaterThan(0);
       expect(allocations.every((allocation) => allocation.status === "REVERSED")).toBe(true);
     });
+  });
+});
+
+/** Seeds a finalized financed deal whose expected payment method is CHEQUE. */
+async function setupFinalizedFinancedDealWithCheque() {
+  const base = await setup();
+  const { t, orgId, customerId, vehicleId, asUser, asApprover } = base;
+
+  const companyId = await t.run((ctx) =>
+    ctx.db.insert("financeCompanies", {
+      orgId,
+      name: "Jordan Auto Finance",
+      profitRate: 5,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      isActive: true,
+    })
+  );
+
+  const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+    orgId,
+    customerId,
+    vehicleId,
+    vehiclePrice: 20000,
+    downPayment: 3000,
+    termMonths: 48,
+    mode: "CONFIGURED_FINANCE_COMPANY",
+    companyId,
+    totalFinancedAmount: 17000,
+  });
+
+  const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
+  await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
+  await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
+  await asUser.mutation(api.applications.registerVehicleHandover, { orgId, applicationId });
+  await asUser.mutation(api.applications.registerExpectedPayment, {
+    orgId,
+    applicationId,
+    method: "CHEQUE",
+    expectedDate: Date.now(),
+    chequeDetails: { bank: "Arab Bank", chequeNumber: "CHQ-001" },
+  });
+  await asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId });
+
+  const getCheque = () =>
+    t.run((ctx) =>
+      ctx.db
+        .query("postDatedCheques")
+        .withIndex("by_application", (q) => q.eq("applicationId", applicationId))
+        .unique()
+    );
+
+  return { ...base, companyId, quoteId, applicationId, getCheque };
+}
+
+describe("applications.confirmDisbursement cheque linking", () => {
+  test("confirmDisbursement transitions the linked postDatedCheques row to CLEARED", async () => {
+    const { orgId, applicationId, asUser, getCheque } = await setupFinalizedFinancedDealWithCheque();
+
+    const chequeBefore = await getCheque();
+    expect(chequeBefore?.status).toBe("HELD");
+
+    await asUser.mutation(api.applications.confirmDisbursement, {
+      orgId,
+      applicationId,
+      disbursedAmountMinor: 17_000_000,
+    });
+
+    const chequeAfter = await getCheque();
+    expect(chequeAfter?.status).toBe("CLEARED");
+    expect(chequeAfter?.clearedAt).toBeTruthy();
+  });
+
+  test("confirmDisbursement throws if the linked cheque was already returned", async () => {
+    const { orgId, applicationId, asUser, getCheque } = await setupFinalizedFinancedDealWithCheque();
+    const cheque = await getCheque();
+
+    await asUser.mutation(api.collections.returnCheque, {
+      orgId,
+      chequeId: cheque!._id,
+      returnReason: "Insufficient funds",
+    });
+
+    await expect(
+      asUser.mutation(api.applications.confirmDisbursement, {
+        orgId,
+        applicationId,
+        disbursedAmountMinor: 17_000_000,
+      })
+    ).rejects.toThrow(/returned\/cancelled/i);
+  });
+
+  test("clearCheque refuses to clear a cheque that belongs to a finance application", async () => {
+    const { orgId, asUser, getCheque } = await setupFinalizedFinancedDealWithCheque();
+    const cheque = await getCheque();
+
+    await expect(
+      asUser.mutation(api.collections.clearCheque, { orgId, chequeId: cheque!._id })
+    ).rejects.toThrow(/confirm disbursement from the Applications page/i);
   });
 });
 

@@ -948,6 +948,36 @@ export const depositCheque = mutation({
   },
 });
 
+/**
+ * Shared state-transition core for marking a cheque CLEARED — used both by
+ * the ordinary `clearCheque` mutation (legacy collections/GL flow below) and
+ * by `applications.confirmDisbursement` (canonical finance-company flow),
+ * which needs to transition an application-linked cheque without any of the
+ * legacy collectionPayments/GL posting clearCheque does afterward.
+ */
+export async function markChequeClearedCore(
+  ctx: MutationCtx,
+  args: { orgId: Id<"organizations">; chequeId: Id<"postDatedCheques">; clearedAt?: number; idempotencyKey?: string }
+): Promise<Doc<"postDatedCheques">> {
+  const cheque = await ctx.db.get(args.chequeId);
+  if (!cheque || cheque.orgId !== args.orgId) throw new ConvexError("Cheque not found.");
+  if (cheque.status !== "HELD" && cheque.status !== "DEPOSITED") {
+    throw new ConvexError("Only held or deposited cheques can be cleared.");
+  }
+
+  const clearedAt = args.clearedAt ?? Date.now();
+  const patch: Partial<Doc<"postDatedCheques">> = {
+    status: "CLEARED",
+    clearedAt,
+    depositedDate: cheque.depositedDate ?? clearedAt,
+    updatedAt: Date.now(),
+  };
+  if (args.idempotencyKey !== undefined) patch.idempotencyKey = args.idempotencyKey;
+  await ctx.db.patch(args.chequeId, patch);
+
+  return { ...cheque, ...patch };
+}
+
 export const clearCheque = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -968,20 +998,21 @@ export const clearCheque = mutation({
       },
       async () => {
         const currency = await getOrgCurrency(ctx, args.orgId);
-        const cheque = await ctx.db.get(args.chequeId);
-        if (!cheque || cheque.orgId !== args.orgId) throw new ConvexError("Cheque not found.");
-        if (cheque.status !== "HELD" && cheque.status !== "DEPOSITED") {
-          throw new ConvexError("Only held or deposited cheques can be cleared.");
+        const existingCheque = await ctx.db.get(args.chequeId);
+        if (!existingCheque || existingCheque.orgId !== args.orgId) throw new ConvexError("Cheque not found.");
+        if (existingCheque.applicationId) {
+          throw new ConvexError(
+            `This cheque belongs to finance application ${existingCheque.applicationId} — confirm disbursement from the Applications page instead.`
+          );
         }
 
-        const clearedAt = args.clearedAt ?? Date.now();
-        await ctx.db.patch(args.chequeId, {
-          status: "CLEARED",
-          clearedAt,
-          depositedDate: cheque.depositedDate ?? clearedAt,
+        const cheque = await markChequeClearedCore(ctx, {
+          orgId: args.orgId,
+          chequeId: args.chequeId,
+          clearedAt: args.clearedAt,
           idempotencyKey: args.idempotencyKey,
-          updatedAt: Date.now(),
         });
+        const clearedAt = cheque.clearedAt!;
 
         let receivable: Doc<"receivables"> | null = null;
         if (cheque.receivableId) {
