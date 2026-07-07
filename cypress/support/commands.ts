@@ -46,7 +46,13 @@ Cypress.Commands.add("login", () => {
       });
       cy.get("#password-field", { timeout: 15_000 }).should("be.visible").type(password, { log: false });
       cy.contains("button", "Continue").click();
-      cy.url({ timeout: 30_000 }).should("match", /\/[^/]+\/(dashboard|sales|leads|accounting)(\?.*)?$/);
+      // Matched against pathname specifically (not the full URL string) — a
+      // regex without a leading anchor can accidentally match "host:port" as
+      // the orgId segment against the bare Clerk-fallback /dashboard URL.
+      cy.location("pathname", { timeout: 30_000 }).should(
+        "match",
+        /^\/[^/]+\/(dashboard|sales|leads|accounting)$/
+      );
     },
     {
       validate() {

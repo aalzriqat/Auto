@@ -22,17 +22,6 @@ setup("authenticate", async ({ page }) => {
     window.localStorage.setItem("autoflow-locale", "en");
   });
 
-  // TEMP DEBUG
-  page.on("console", (msg) => console.log(`[browser:${msg.type()}]`, msg.text()));
-  page.on("pageerror", (err) => console.log("[pageerror]", err.message));
-  page.on("requestfailed", (req) => console.log("[requestfailed]", req.url(), req.failure()?.errorText));
-  page.on("response", (res) => {
-    if (res.url().includes("convex") || res.url().includes("clerk")) {
-      console.log("[response]", res.status(), res.url());
-    }
-  });
-  console.log("[debug] final URL will be logged after waitForURL");
-
   await page.goto("/sign-in");
 
   const identifierField = page.locator("#identifier-field");
@@ -55,9 +44,13 @@ setup("authenticate", async ({ page }) => {
   // A logged-in session always ends up on some /{orgId}/... route; the
   // exact landing page depends on the fixture's role (owner -> /dashboard,
   // sales -> /sales, etc.), so match broadly rather than one specific path.
-  await page.waitForURL(/\/[^/]+\/(dashboard|sales|leads|accounting)(\?.*)?$/, { timeout: 30_000 });
-  console.log("[debug] landed on URL:", page.url());
-  console.log("[debug] body text:", (await page.textContent("body"))?.slice(0, 300));
+  // Matched against pathname specifically (not the full URL string) — a
+  // regex without a leading anchor can accidentally match "host:port" as
+  // the orgId segment against the bare Clerk-fallback /dashboard URL.
+  await page.waitForURL(
+    (url) => /^\/[^/]+\/(dashboard|sales|leads|accounting)(\?.*)?$/.test(url.pathname + url.search),
+    { timeout: 30_000 }
+  );
 
   await expect(page.getByRole("banner")).toBeVisible();
 
