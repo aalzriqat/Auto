@@ -22,6 +22,9 @@ export const WEBSITE_TEMPLATE_OPTIONS = [
   { id: "carbon-track", labelKey: "WebsiteTemplateCarbonTrack", tier: "signature" },
   { id: "solaris-bay", labelKey: "WebsiteTemplateSolarisBay", tier: "signature" },
   { id: "pixel-showroom", labelKey: "WebsiteTemplatePixelShowroom", tier: "signature" },
+  { id: "kinetic-luxury", labelKey: "WebsiteTemplateKineticLuxury", tier: "signature" },
+  { id: "kinetic-ev", labelKey: "WebsiteTemplateKineticModernEv", tier: "signature" },
+  { id: "kinetic-sales", labelKey: "WebsiteTemplateKineticSales", tier: "signature" },
 ] as const;
 
 export type WebsiteTemplateId = (typeof WEBSITE_TEMPLATE_OPTIONS)[number]["id"];
