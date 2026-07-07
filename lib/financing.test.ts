@@ -122,6 +122,23 @@ describe("Financing Logic", () => {
 
       expect(result.monthlyInstallment).toBeCloseTo(10951.5625 / 57); // 60 - 3
     });
+
+    it("returns a zero monthlyInstallment when the grace period consumes the whole term", () => {
+      const result = calculateUnifiedMurabaha({
+        vehiclePrice: 10000,
+        downPayment: 2000,
+        commission: 100,
+        processingFees: 50,
+        annualProfitRate: 5,
+        annualInsuranceRate: 1.5,
+        termMonths: 12,
+        gracePeriodMonths: 12,
+      });
+
+      expect(result.monthlyInstallment).toBe(0);
+      // Everything else still computes normally — only the division is guarded.
+      expect(result.totalContractValue).toBeGreaterThan(0);
+    });
   });
 
   describe("calculateDBR", () => {

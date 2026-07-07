@@ -94,6 +94,39 @@ describe("notifications", () => {
     expect(result.page[0].category).toBe("finance");
   });
 
+  test("listPage filters by category and shows only archived when requested", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, userId, asMember } = await seedOrgWithMember(t);
+
+    await insertNotification(t, orgId, userId, { category: "finance" });
+    await insertNotification(t, orgId, userId, { category: "finance", isArchived: true });
+
+    const result = await asMember.query(api.notifications.listPage, {
+      orgId,
+      category: "finance",
+      showArchived: true,
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+    expect(result.page).toHaveLength(1);
+    expect(result.page[0].isArchived).toBe(true);
+  });
+
+  test("listPage shows only archived when requested, with no category filter", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, userId, asMember } = await seedOrgWithMember(t);
+
+    await insertNotification(t, orgId, userId);
+    await insertNotification(t, orgId, userId, { isArchived: true });
+
+    const result = await asMember.query(api.notifications.listPage, {
+      orgId,
+      showArchived: true,
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+    expect(result.page).toHaveLength(1);
+    expect(result.page[0].isArchived).toBe(true);
+  });
+
   test("markAsRead only succeeds for the caller's own notification", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const { orgId, userId, asMember } = await seedOrgWithMember(t);
@@ -144,6 +177,20 @@ describe("notifications", () => {
     const list = await asMember.query(api.notifications.list, { orgId });
     expect(list).toHaveLength(0);
   });
+
+  test("archive throws for a notification belonging to another user", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asMember } = await seedOrgWithMember(t);
+
+    const otherUserId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "other_003", email: "other3@test.com" }));
+    const roleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "SALES", permissions: [] }));
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: otherUserId, roleId }));
+    const notifId = await insertNotification(t, orgId, otherUserId);
+
+    await expect(
+      asMember.mutation(api.notifications.archive, { orgId, notificationId: notifId })
+    ).rejects.toThrow(/not found/i);
+  });
 });
 
 describe("notificationPreferences", () => {
@@ -188,5 +235,39 @@ describe("notificationPreferences", () => {
     const updated = await asMember.query(api.notificationPreferences.getMyPreferences, { orgId });
     expect(updated.filter((p) => p.category === "sales")).toHaveLength(1);
     expect(updated.find((p) => p.category === "sales")?.emailEnabled).toBe(false);
+  });
+
+  test("setPreference skips the whatsapp feature check when whatsappEnabled is false", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asMember } = await seedOrgWithMember(t);
+
+    await expect(
+      asMember.mutation(api.notificationPreferences.setPreference, {
+        orgId,
+        category: "sales",
+        emailEnabled: true,
+        whatsappEnabled: false,
+        pushEnabled: false,
+      })
+    ).resolves.not.toThrow();
+  });
+
+  test("getMyPreferences defaults pushEnabled to false for a legacy row that predates the field", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, userId, asMember } = await seedOrgWithMember(t);
+
+    await t.run((ctx) =>
+      ctx.db.insert("notificationPreferences", {
+        orgId,
+        userId,
+        category: "sales",
+        emailEnabled: true,
+        whatsappEnabled: false,
+        // pushEnabled intentionally omitted, matching rows written before that field existed.
+      })
+    );
+
+    const prefs = await asMember.query(api.notificationPreferences.getMyPreferences, { orgId });
+    expect(prefs.find((p) => p.category === "sales")?.pushEnabled).toBe(false);
   });
 });

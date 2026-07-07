@@ -84,6 +84,29 @@ describe("orgLeadSources", () => {
     expect(updated?.isActive).toBe(false);
   });
 
+  test("update only touches the fields provided (order alone)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asOwner } = await seedOwner(t);
+    const sourceId = await asOwner.mutation(api.orgLeadSources.create, { orgId, label: "Kept" });
+    await asOwner.mutation(api.orgLeadSources.update, { orgId, sourceId, order: 5 });
+    const sources = await asOwner.query(api.orgLeadSources.list, { orgId });
+    const updated = sources.find((s) => s._id === sourceId);
+    expect(updated?.label).toBe("Kept");
+    expect(updated?.isActive).toBe(true);
+    expect(updated?.order).toBe(5);
+  });
+
+  test("update throws if the lead source no longer exists", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asOwner } = await seedOwner(t);
+    const sourceId = await asOwner.mutation(api.orgLeadSources.create, { orgId, label: "Gone" });
+    await t.run((ctx) => ctx.db.delete(sourceId));
+
+    await expect(
+      asOwner.mutation(api.orgLeadSources.update, { orgId, sourceId, label: "Hijacked" })
+    ).rejects.toThrow(/not found/i);
+  });
+
   test("remove deletes the lead source", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
@@ -91,6 +114,17 @@ describe("orgLeadSources", () => {
     await asOwner.mutation(api.orgLeadSources.remove, { orgId, sourceId });
     const sources = await asOwner.query(api.orgLeadSources.list, { orgId });
     expect(sources.find((s) => s._id === sourceId)).toBeUndefined();
+  });
+
+  test("remove throws if the lead source no longer exists", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asOwner } = await seedOwner(t);
+    const sourceId = await asOwner.mutation(api.orgLeadSources.create, { orgId, label: "Gone" });
+    await t.run((ctx) => ctx.db.delete(sourceId));
+
+    await expect(
+      asOwner.mutation(api.orgLeadSources.remove, { orgId, sourceId })
+    ).rejects.toThrow(/not found/i);
   });
 
   test("reorder reassigns order values", async () => {
@@ -103,5 +137,16 @@ describe("orgLeadSources", () => {
     const sources = await asOwner.query(api.orgLeadSources.list, { orgId });
     expect(sources[0]._id).toBe(id2);
     expect(sources[1]._id).toBe(id1);
+  });
+
+  test("reorder throws if one of the ids no longer exists", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asOwner } = await seedOwner(t);
+    const id1 = await asOwner.mutation(api.orgLeadSources.create, { orgId, label: "First" });
+    await t.run((ctx) => ctx.db.delete(id1));
+
+    await expect(
+      asOwner.mutation(api.orgLeadSources.reorder, { orgId, orderedIds: [id1] })
+    ).rejects.toThrow(/not found/i);
   });
 });

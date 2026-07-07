@@ -1,7 +1,7 @@
 import { convexTest } from "convex-test";
 import { expect, test, describe, vi } from "vitest";
 import schema from "../schema";
-import { notifyUser, notifyManagers, notifyAllMembers, notifyOwner } from "./notifications";
+import { notifyUser, notifyManagers, notifyAllMembers, notifyOwner, getActorName } from "./notifications";
 
 vi.mock("../rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -146,5 +146,193 @@ describe("dispatch helpers", () => {
     await t.run((ctx) => notifyUser(ctx, orgId, salesId, "vehicle.created", { actorName: "Dana" }));
     const scheduled = await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
     expect(scheduled).toHaveLength(1);
+  });
+
+  test("dispatch still inserts the in-app row but no-ops the rest if the user no longer exists", async () => {
+    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, salesId } = await seedOrg(t);
+    await t.run((ctx) => ctx.db.delete(salesId));
+
+    await expect(
+      t.run((ctx) => notifyUser(ctx, orgId, salesId, "vehicle.created", { actorName: "Dana" }))
+    ).resolves.not.toThrow();
+
+    const rows = await t.run((ctx) =>
+      ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", salesId)).collect()
+    );
+    expect(rows).toHaveLength(1);
+    const scheduled = await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
+    expect(scheduled).toHaveLength(0);
+  });
+
+  test("schedules an email with no data argument at all (not just an empty object)", async () => {
+    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, salesId } = await seedOrg(t);
+    await t.run((ctx) => ctx.db.patch(salesId, { email: "sales@test.com" }));
+
+    // "approval.requested" has criticalDefault: true, so this schedules an
+    // email even with no preference row and no data argument.
+    await t.run((ctx) => notifyUser(ctx, orgId, salesId, "approval.requested"));
+    const scheduled = await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
+    expect(scheduled).toHaveLength(1);
+  });
+
+  test("schedules a WhatsApp notification when enabled, the plan supports it, and the user has a phone", async () => {
+    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, salesId } = await seedOrg(t);
+    await t.run((ctx) =>
+      ctx.db.insert("subscriptions", {
+        orgId,
+        plan: "professional",
+        status: "active",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      })
+    );
+    await t.run((ctx) => ctx.db.patch(salesId, { whatsappPhone: "+962700000000" }));
+    await t.run((ctx) =>
+      ctx.db.insert("notificationPreferences", {
+        orgId,
+        userId: salesId,
+        category: "inventory",
+        emailEnabled: false,
+        whatsappEnabled: true,
+      })
+    );
+
+    // Also omits the data argument, exercising WhatsApp's own `data ?? {}` fallback.
+    await t.run((ctx) => notifyUser(ctx, orgId, salesId, "vehicle.created"));
+    const scheduled = await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
+    expect(scheduled).toHaveLength(1);
+  });
+
+  test("does not schedule WhatsApp when enabled by preference but the org's plan doesn't include it", async () => {
+    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, salesId } = await seedOrg(t);
+    await t.run((ctx) => ctx.db.patch(salesId, { whatsappPhone: "+962700000000" }));
+    await t.run((ctx) =>
+      ctx.db.insert("notificationPreferences", {
+        orgId,
+        userId: salesId,
+        category: "inventory",
+        emailEnabled: false,
+        whatsappEnabled: true,
+      })
+    );
+
+    // No subscription row -> free plan, which doesn't include whatsapp.
+    await t.run((ctx) => notifyUser(ctx, orgId, salesId, "vehicle.created"));
+    const scheduled = await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
+    expect(scheduled).toHaveLength(0);
+  });
+
+  test("passes an empty object to the scheduled push action when no data is given", async () => {
+    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, salesId } = await seedOrg(t);
+    await t.run((ctx) =>
+      ctx.db.insert("notificationPreferences", {
+        orgId,
+        userId: salesId,
+        category: "inventory",
+        emailEnabled: false,
+        whatsappEnabled: false,
+        pushEnabled: true,
+      })
+    );
+
+    await t.run((ctx) => notifyUser(ctx, orgId, salesId, "vehicle.created"));
+    const scheduled = await t.run((ctx) => ctx.db.system.query("_scheduled_functions").collect());
+    expect(scheduled).toHaveLength(1);
+  });
+
+  test("notifyManagers skips a membership whose role has been deleted", async () => {
+    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, managerId } = await seedOrg(t);
+    const ghostUserId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "ghost_001", email: "ghost@test.com" }));
+    const ghostRoleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "GHOST", permissions: ["manage:users"] }));
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: ghostUserId, roleId: ghostRoleId }));
+    await t.run((ctx) => ctx.db.delete(ghostRoleId));
+
+    await expect(
+      t.run((ctx) => notifyManagers(ctx, orgId, "vehicle.created", { actorName: "Eve" }))
+    ).resolves.not.toThrow();
+
+    const managerRows = await t.run((ctx) =>
+      ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", managerId)).collect()
+    );
+    expect(managerRows).toHaveLength(1);
+    const ghostRows = await t.run((ctx) =>
+      ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", ghostUserId)).collect()
+    );
+    expect(ghostRows).toHaveLength(0);
+  });
+
+  test("notifyAllMembers honors excludeUserId", async () => {
+    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, ownerId, managerId, salesId } = await seedOrg(t);
+
+    await t.run((ctx) =>
+      notifyAllMembers(ctx, orgId, "system.announcement", { title: "Heads up", message: "Maintenance" }, { excludeUserId: salesId })
+    );
+
+    const salesRows = await t.run((ctx) =>
+      ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", salesId)).collect()
+    );
+    expect(salesRows).toHaveLength(0);
+    const ownerRows = await t.run((ctx) =>
+      ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", ownerId)).collect()
+    );
+    expect(ownerRows).toHaveLength(1);
+    const managerRows = await t.run((ctx) =>
+      ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", managerId)).collect()
+    );
+    expect(managerRows).toHaveLength(1);
+  });
+});
+
+describe("getActorName", () => {
+  test("returns 'Someone' when unauthenticated", async () => {
+    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const name = await t.run((ctx) => getActorName(ctx));
+    expect(name).toBe("Someone");
+  });
+
+  test("returns the user's own name when set", async () => {
+    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    await t.run((ctx) => ctx.db.insert("users", { clerkId: "actor_1", email: "a@test.com", name: "Farah" }));
+
+    const name = await t.run((ctx) =>
+      getActorName({
+        ...ctx,
+        auth: { ...ctx.auth, getUserIdentity: async () => ({ subject: "actor_1", name: "Identity Name" }) as any },
+      } as any)
+    );
+    expect(name).toBe("Farah");
+  });
+
+  test("falls back to the identity's name when the user row has none", async () => {
+    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    await t.run((ctx) => ctx.db.insert("users", { clerkId: "actor_2", email: "b@test.com" }));
+
+    const name = await t.run((ctx) =>
+      getActorName({
+        ...ctx,
+        auth: { ...ctx.auth, getUserIdentity: async () => ({ subject: "actor_2", name: "Identity Name" }) as any },
+      } as any)
+    );
+    expect(name).toBe("Identity Name");
+  });
+
+  test("falls back to 'A team member' when neither the user nor identity have a name", async () => {
+    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    await t.run((ctx) => ctx.db.insert("users", { clerkId: "actor_3", email: "c@test.com" }));
+
+    const name = await t.run((ctx) =>
+      getActorName({
+        ...ctx,
+        auth: { ...ctx.auth, getUserIdentity: async () => ({ subject: "actor_3" }) as any },
+      } as any)
+    );
+    expect(name).toBe("A team member");
   });
 });

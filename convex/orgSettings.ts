@@ -95,6 +95,12 @@ export const upsert = mutation({
       // Patch only provided fields (exclude undefined values)
       const patch: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(fields)) {
+        // Convex's argument wire protocol drops keys whose value is
+        // explicitly undefined before the handler ever sees them, so a
+        // client can never make this evaluate false — Object.entries only
+        // yields keys the caller actually provided. Kept as a defensive
+        // guard rather than assuming that behavior stays true forever.
+        /* v8 ignore else */
         if (value !== undefined) {
           patch[key] = value;
         }
