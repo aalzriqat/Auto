@@ -405,7 +405,8 @@ export function SocialConversationDialog({
                 <p className="text-sm text-muted-foreground">{t("NoConversation" as any)}</p>
               )}
               {events?.map((event, index) => {
-                const replied = event.autoRepliedAt ? "auto" : event.manualRepliedAt ? "manual" : null;
+                const autoReplied = Boolean(event.autoRepliedAt);
+                const manualReplied = Boolean(event.manualRepliedAt);
                 const showVehicleLabel =
                   event.vehicleSummary && event.vehicleSummary !== events[index - 1]?.vehicleSummary;
                 const postUrl = buildPostUrl(event.platform, event.kind, event.postId, event.senderHandle);
@@ -446,23 +447,37 @@ export function SocialConversationDialog({
                       </div>
                     </div>
 
-                    {/* Our reply bubble (end-aligned) */}
-                    {replied && (
+                    {/* Auto-reply bubble (end-aligned) — a canned reply doesn't */}
+                    {/* preclude a real manual follow-up, so this doesn't hide the composer */}
+                    {autoReplied && (
                       <div className="flex justify-end">
-                        <div className="max-w-[80%] bg-primary text-primary-foreground rounded-2xl rounded-br-sm px-3 py-2 space-y-1">
-                          <span className="text-[10px] opacity-80 font-medium">
-                            {replied === "auto" ? t("AutoReply" as any) : event.manualRepliedByName ?? t("You" as any)}
-                          </span>
-                          <p className="text-sm break-words whitespace-pre-wrap">{replied === "auto" ? event.autoReplyText : event.manualReplyText}</p>
+                        <div className="max-w-[80%] bg-primary/70 text-primary-foreground rounded-2xl rounded-br-sm px-3 py-2 space-y-1">
+                          <span className="text-[10px] opacity-80 font-medium">{t("AutoReply" as any)}</span>
+                          <p className="text-sm break-words whitespace-pre-wrap">{event.autoReplyText}</p>
                           <p className="text-[10px] opacity-70">
-                            {new Date((replied === "auto" ? event.autoRepliedAt : event.manualRepliedAt) ?? 0).toLocaleString()}
+                            {new Date(event.autoRepliedAt ?? 0).toLocaleString()}
                           </p>
                         </div>
                       </div>
                     )}
 
-                    {/* Inline reply composer — comments only */}
-                    {!replied && event.kind === "comment" && (
+                    {/* Manual reply bubble (end-aligned) */}
+                    {manualReplied && (
+                      <div className="flex justify-end">
+                        <div className="max-w-[80%] bg-primary text-primary-foreground rounded-2xl rounded-br-sm px-3 py-2 space-y-1">
+                          <span className="text-[10px] opacity-80 font-medium">
+                            {event.manualRepliedByName ?? t("You" as any)}
+                          </span>
+                          <p className="text-sm break-words whitespace-pre-wrap">{event.manualReplyText}</p>
+                          <p className="text-[10px] opacity-70">
+                            {new Date(event.manualRepliedAt ?? 0).toLocaleString()}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Inline reply composer — comments only, until a human has replied */}
+                    {!manualReplied && event.kind === "comment" && (
                       <div className="flex justify-start">
                         <div className="max-w-[80%] w-full flex items-center gap-1.5">
                           <input

@@ -239,15 +239,16 @@ function facebookSurfaceFromPayload(value: unknown): FacebookSourceSurface {
   if (!value || typeof value !== "object") return "unknown";
   const text = collectTextParts(value).join(" ").toLowerCase();
   const record = value as Record<string, unknown>;
-  if (optionalString(record.reel_id) || text.includes("reel")) return "reel";
-  if (optionalString(record.story_id) || text.includes("story")) return "story";
-  if (optionalString(record.ad_id) || text.includes("ad")) return "ad";
-  if (
-    optionalString(record.post_id) ||
-    optionalString(record.video_id) ||
-    optionalString(record.media_id)
-  )
-    return "post";
+  // DM messaging events carry these under message.referral (or, for m.me
+  // referral-link opens, referral directly) rather than at the top level —
+  // mirrors the same nesting facebookMessageMediaId() already reads from.
+  const message = optionalRecord(record.message);
+  const referral = optionalRecord(record.referral) ?? optionalRecord(message?.referral);
+  const field = (key: string) => optionalString(record[key]) ?? optionalString(referral?.[key]);
+  if (field("reel_id") || text.includes("reel")) return "reel";
+  if (field("story_id") || text.includes("story")) return "story";
+  if (field("ad_id") || text.includes("ad")) return "ad";
+  if (field("post_id") || field("video_id") || field("media_id")) return "post";
   return "unknown";
 }
 
@@ -1581,6 +1582,7 @@ http.route({
                 externalId: String(value.comment_id),
                 postId: fbPostId,
                 text: optionalString(value.message),
+                sourceSurface,
               },
             );
           }
@@ -1652,6 +1654,7 @@ http.route({
                 ),
                 postId: mediaId,
                 text: messageText,
+                sourceSurface,
               },
             );
           }
