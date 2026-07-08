@@ -16,12 +16,12 @@ export function KineticLuxuryHome(props: ThemeProps) {
         <div className="bg-secondary px-4 py-2 text-center text-sm font-bold text-white">{t.previewBanner}</div>
       )}
       <nav className="bg-surface-container-low dark:bg-surface-dim backdrop-blur-xl docked full-width top-0 sticky z-50 shadow-sm">
-        <div className="flex justify-between items-center px-gutter py-4 w-full max-w-screen-2xl mx-auto">
-          <div className="flex items-center gap-8">
+        <div className="flex justify-between items-center px-gutter py-5 w-full max-w-screen-2xl mx-auto">
+          <div className="flex items-center gap-10">
             <Link href="/">
-              <KineticBrand profile={profile} />
+              <KineticBrand profile={profile} size="lg" />
             </Link>
-            <div className="hidden md:flex gap-6 items-center">
+            <div className="hidden md:flex gap-8 items-center">
               <Link className="font-label-caps text-label-caps text-secondary dark:text-secondary-fixed-dim border-b-2 border-secondary font-bold pb-1" href="/inventory">{t.nav.inventory}</Link>
               <Link className="font-label-caps text-label-caps text-on-surface-variant dark:text-outline-variant hover:text-primary dark:hover:text-primary-fixed-dim transition-colors" href="/finance">{t.nav.finance}</Link>
               <Link className="font-label-caps text-label-caps text-on-surface-variant dark:text-outline-variant hover:text-primary dark:hover:text-primary-fixed-dim transition-colors" href="/contact">{t.nav.contact}</Link>
@@ -222,11 +222,21 @@ export function KineticLuxuryHome(props: ThemeProps) {
             <h4 className="font-label-caps text-white uppercase tracking-widest text-sm">{k.footerShowroom}</h4>
             <div className="font-body-md text-on-primary-container text-sm space-y-4">
               {profile.address && (
-                <p className="flex items-start gap-3"><span className="material-symbols-outlined text-luxury-gold text-lg">location_on</span>{profile.address}</p>
+                <p className="flex items-start gap-3">
+                  <span className="material-symbols-outlined text-luxury-gold text-lg">location_on</span>
+                  {profile.address.startsWith("http") ? (
+                    <a href={profile.address} target="_blank" rel="noopener noreferrer" className="hover:underline">{t.viewOnMap}</a>
+                  ) : (
+                    profile.address
+                  )}
+                </p>
               )}
-              {profile.phone && (
-                <p className="flex items-start gap-3"><span className="material-symbols-outlined text-luxury-gold text-lg">phone</span>{profile.phone}</p>
-              )}
+              {profile.phones.map((phone) => (
+                <p key={phone} className="flex items-start gap-3">
+                  <span className="material-symbols-outlined text-luxury-gold text-lg">phone</span>
+                  <a href={`tel:${phone}`} className="hover:underline">{phone}</a>
+                </p>
+              ))}
             </div>
           </div>
         </div>

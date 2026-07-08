@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import type { ThemeProps } from "./theme-props";
-import { KineticBrand, KineticVehicleImage, useKineticStrings, waLink } from "./kinetic-shared";
+import { KineticBrand, KineticVehicleImage, estimateMonthlyInstallment, useKineticStrings, waLink } from "./kinetic-shared";
 
 export function KineticSalesHome(props: ThemeProps) {
   const { site, lang, showLangToggle, isPreviewMode, onToggleLang, t, formatPrice, featuredVehicles, dir } = props;
@@ -13,12 +13,14 @@ export function KineticSalesHome(props: ThemeProps) {
 
   const [price, setPrice] = useState(25000);
   const [downPercent, setDownPercent] = useState(20);
-  const monthlyRate = 0.045 / 12;
-  const termMonths = 60;
-  const loanAmount = price * (1 - downPercent / 100);
-  const monthly = Math.round(
-    (loanAmount * monthlyRate * Math.pow(1 + monthlyRate, termMonths)) / (Math.pow(1 + monthlyRate, termMonths) - 1)
-  );
+  const termMonths = Math.min(60, site.financeCompany?.maxTermMonths ?? 60);
+  const { monthlyInstallment } = estimateMonthlyInstallment({
+    financeCompany: site.financeCompany,
+    vehiclePrice: price,
+    downPayment: price * (downPercent / 100),
+    termMonths,
+  });
+  const monthly = Math.round(monthlyInstallment);
 
   return (
     <div className="theme-kinetic bg-background text-on-background font-body-md selection:bg-secondary selection:text-white" dir={dir}>
@@ -26,12 +28,12 @@ export function KineticSalesHome(props: ThemeProps) {
         <div className="bg-secondary px-4 py-2 text-center text-sm font-bold text-white">{t.previewBanner}</div>
       )}
       <nav className="bg-surface/90 backdrop-blur-xl docked full-width top-0 sticky z-50 shadow-sm">
-        <div className="flex justify-between items-center px-gutter py-4 w-full max-w-screen-2xl mx-auto">
-          <div className="flex items-center gap-8">
+        <div className="flex justify-between items-center px-gutter py-5 w-full max-w-screen-2xl mx-auto">
+          <div className="flex items-center gap-10">
             <Link href="/">
-              <KineticBrand profile={profile} />
+              <KineticBrand profile={profile} size="lg" />
             </Link>
-            <div className="hidden lg:flex items-center gap-6">
+            <div className="hidden lg:flex items-center gap-8">
               <Link className="text-secondary border-b-2 border-secondary font-bold pb-1 font-label-caps text-label-caps" href="/inventory">{t.nav.inventory}</Link>
               <Link className="text-on-surface-variant hover:text-primary transition-colors font-label-caps text-label-caps" href="/finance">{t.nav.finance}</Link>
               <Link className="text-on-surface-variant hover:text-primary transition-colors font-label-caps text-label-caps" href="/contact">{t.nav.contact}</Link>
@@ -62,7 +64,7 @@ export function KineticSalesHome(props: ThemeProps) {
             <div className="space-y-8">
               <div className="inline-flex items-center gap-2 px-4 py-1 bg-secondary rounded-full">
                 <span className="animate-ping h-2 w-2 rounded-full bg-white opacity-75" />
-                <span className="font-label-caps text-label-caps uppercase tracking-widest text-white">{deals.length}+ {k.carsAvailableSuffix}</span>
+                <span className="font-label-caps text-label-caps uppercase tracking-widest text-white">{profile.heroBadgeText ?? k.heroBadgeDefault}</span>
               </div>
               <h1 className="font-headline-lg text-[64px] leading-tight font-extrabold uppercase italic tracking-tighter">
                 {profile.heroTitle ?? k.salesHeroTitle}
@@ -151,12 +153,13 @@ export function KineticSalesHome(props: ThemeProps) {
                 <div className="bg-white/5 border border-white/10 p-4 rounded-xl">
                   <span className="material-symbols-outlined text-secondary text-3xl mb-2">speed</span>
                   <p className="font-bold">{k.fastApprovalTitle}</p>
-                  <p className="text-xs text-on-primary-container">{k.fastApprovalDesc}</p>
                 </div>
                 <div className="bg-white/5 border border-white/10 p-4 rounded-xl">
                   <span className="material-symbols-outlined text-secondary text-3xl mb-2">percent</span>
                   <p className="font-bold">{k.lowInterestTitle}</p>
-                  <p className="text-xs text-on-primary-container">{k.lowInterestDesc}</p>
+                  {site.financeCompany && (
+                    <p className="text-xs text-on-primary-container">{site.financeCompany.name}</p>
+                  )}
                 </div>
               </div>
             </div>
@@ -237,8 +240,22 @@ export function KineticSalesHome(props: ThemeProps) {
           <div>
             <h4 className="font-bold text-white mb-6 uppercase tracking-widest">{k.footerShowroom}</h4>
             <div className="space-y-4 text-on-primary-container">
-              {profile.address && <p className="flex items-center gap-2"><span className="material-symbols-outlined text-secondary">location_on</span>{profile.address}</p>}
-              {profile.phone && <p className="flex items-center gap-2"><span className="material-symbols-outlined text-secondary">phone</span>{profile.phone}</p>}
+              {profile.address && (
+                <p className="flex items-center gap-2">
+                  <span className="material-symbols-outlined text-secondary">location_on</span>
+                  {profile.address.startsWith("http") ? (
+                    <a href={profile.address} target="_blank" rel="noopener noreferrer" className="hover:underline">{t.viewOnMap}</a>
+                  ) : (
+                    profile.address
+                  )}
+                </p>
+              )}
+              {profile.phones.map((phone) => (
+                <p key={phone} className="flex items-center gap-2">
+                  <span className="material-symbols-outlined text-secondary">phone</span>
+                  <a href={`tel:${phone}`} className="hover:underline">{phone}</a>
+                </p>
+              ))}
             </div>
           </div>
           <div>

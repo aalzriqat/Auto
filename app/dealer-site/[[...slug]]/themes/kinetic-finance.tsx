@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import type { ThemeProps } from "./theme-props";
 import { TurnstileWidget } from "../turnstile-widget";
-import { KineticBrand, useKineticStrings, waLink } from "./kinetic-shared";
+import { DEFAULT_FINANCE_TERMS, KineticBrand, estimateMonthlyInstallment, useKineticStrings, waLink } from "./kinetic-shared";
 
 function sliderGradient(value: number, min: number, max: number) {
   const pct = ((value - min) / (max - min)) * 100;
@@ -22,11 +22,19 @@ export function KineticFinanceCalculator(props: ThemeProps) {
   const [downPercent, setDownPercent] = useState(20);
   const [months, setMonths] = useState(60);
 
+  const financeCompany = site.financeCompany;
+  const maxMonths = financeCompany?.maxTermMonths ?? DEFAULT_FINANCE_TERMS.maxTermMonths;
+  const clampedMonths = Math.min(months, maxMonths);
+
   const downAmount = price * (downPercent / 100);
-  const loanAmount = price - downAmount;
-  const monthlyRate = 0.045 / 12;
-  const monthlyPayment = (loanAmount * monthlyRate * Math.pow(1 + monthlyRate, months)) / (Math.pow(1 + monthlyRate, months) - 1);
-  const total = monthlyPayment * months + downAmount;
+  const { monthlyInstallment: monthlyPayment, totalContractValue } = estimateMonthlyInstallment({
+    financeCompany,
+    vehiclePrice: price,
+    downPayment: downAmount,
+    termMonths: clampedMonths,
+  });
+  const total = totalContractValue + downAmount;
+  const profitRate = financeCompany?.profitRate ?? 4.5;
 
   return (
     <div className="theme-kinetic bg-surface font-body-md text-on-surface" dir={dir}>
@@ -34,12 +42,12 @@ export function KineticFinanceCalculator(props: ThemeProps) {
         <div className="bg-secondary px-4 py-2 text-center text-sm font-bold text-white">{t.previewBanner}</div>
       )}
       <header className="bg-surface/90 backdrop-blur-xl docked full-width top-0 sticky z-50 shadow-sm">
-        <nav className="flex justify-between items-center px-gutter py-4 w-full max-w-screen-2xl mx-auto">
-          <div className="flex items-center gap-8">
+        <nav className="flex justify-between items-center px-gutter py-5 w-full max-w-screen-2xl mx-auto">
+          <div className="flex items-center gap-10">
             <Link href="/">
-              <KineticBrand profile={profile} />
+              <KineticBrand profile={profile} size="lg" />
             </Link>
-            <div className="hidden md:flex gap-6 items-center">
+            <div className="hidden md:flex gap-8 items-center">
               <Link className="text-on-surface-variant hover:text-primary transition-colors font-label-caps text-label-caps" href="/inventory">{t.nav.inventory}</Link>
               <Link className="text-secondary border-b-2 border-secondary font-bold pb-1 font-label-caps text-label-caps" href="/finance">{t.nav.finance}</Link>
               <Link className="text-on-surface-variant hover:text-primary transition-colors font-label-caps text-label-caps" href="/contact">{t.nav.contact}</Link>
@@ -101,17 +109,17 @@ export function KineticFinanceCalculator(props: ThemeProps) {
               <div className="mb-6">
                 <div className="flex justify-between items-center mb-4">
                   <label className="font-label-caps text-label-caps text-on-surface-variant uppercase">{k.paymentPeriodLabel}</label>
-                  <span className="font-headline-lg text-headline-lg text-2xl text-primary">{months} {k.monthsUnit}</span>
+                  <span className="font-headline-lg text-headline-lg text-2xl text-primary">{clampedMonths} {k.monthsUnit}</span>
                 </div>
                 <input
                   className="w-full h-2 rounded-lg cursor-pointer appearance-none"
-                  style={{ background: sliderGradient(months, 12, 84) }}
-                  max={84} min={12} step={12} type="range" value={months}
+                  style={{ background: sliderGradient(clampedMonths, 12, maxMonths) }}
+                  max={maxMonths} min={12} step={12} type="range" value={clampedMonths}
                   onChange={(e) => setMonths(Number(e.target.value))}
                 />
                 <div className="flex justify-between mt-2 font-label-caps text-[10px] text-outline">
                   <span>12 {k.monthsUnit}</span>
-                  <span>84 {k.monthsUnit}</span>
+                  <span>{maxMonths} {k.monthsUnit}</span>
                 </div>
               </div>
             </div>
@@ -132,7 +140,7 @@ export function KineticFinanceCalculator(props: ThemeProps) {
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-on-primary-container font-body-md">{k.fixedInterestRate}</span>
-                  <span className="font-bold text-lg text-secondary-fixed-dim">4.50%</span>
+                  <span className="font-bold text-lg text-secondary-fixed-dim">{profitRate.toFixed(2)}%</span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-on-primary-container font-body-md">{k.downPaymentAmount}</span>
@@ -184,7 +192,9 @@ export function KineticFinanceCalculator(props: ThemeProps) {
               </div>
               <div>
                 <p className="font-bold text-primary">{k.certifiedAdvisorsTitle}</p>
-                <p className="text-sm text-on-surface-variant">{k.certifiedAdvisorsDesc}</p>
+                <p className="text-sm text-on-surface-variant">
+                  {financeCompany ? financeCompany.name : k.certifiedAdvisorsDesc}
+                </p>
               </div>
             </div>
 
@@ -216,8 +226,18 @@ export function KineticFinanceCalculator(props: ThemeProps) {
           </div>
           <div className="flex flex-col gap-4">
             <h5 className="text-white font-bold uppercase tracking-widest text-xs">{t.nav.contact}</h5>
-            {profile.address && <p className="text-on-primary-container font-body-md">{profile.address}</p>}
-            {profile.phone && <p className="text-on-primary-container font-body-md">{profile.phone}</p>}
+            {profile.address && (
+              <p className="text-on-primary-container font-body-md">
+                {profile.address.startsWith("http") ? (
+                  <a href={profile.address} target="_blank" rel="noopener noreferrer" className="hover:underline">{t.viewOnMap}</a>
+                ) : (
+                  profile.address
+                )}
+              </p>
+            )}
+            {profile.phones.map((phone) => (
+              <a key={phone} href={`tel:${phone}`} className="text-on-primary-container font-body-md hover:underline">{phone}</a>
+            ))}
           </div>
         </div>
         <div className="border-t border-white/5 mt-12 pt-8 text-center px-margin-desktop">

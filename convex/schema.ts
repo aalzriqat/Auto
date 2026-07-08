@@ -1643,6 +1643,9 @@ export default defineSchema({
     name: v.string(),
     address: v.optional(v.string()),
     phone: v.optional(v.string()),
+    // Extra numbers for this branch (mobile lines, additional sales staff, etc.)
+    // shown alongside `phone` on the public dealer website.
+    additionalPhones: v.optional(v.array(v.string())),
     managerId: v.optional(v.id("users")),
     isActive: v.boolean(),
   })
@@ -2019,6 +2022,10 @@ export default defineSchema({
     legalCompanyName: v.optional(v.string()),
     dealershipAddress: v.optional(v.string()),
     dealershipPhone: v.optional(v.string()),
+    // Extra org-wide numbers (sales line, support line, etc.) shown alongside
+    // dealershipPhone on the public dealer website. dealershipPhone stays the
+    // one used for WhatsApp deep links.
+    dealershipPhones: v.optional(v.array(v.string())),
     whatsappPhoneNumberId: v.optional(v.string()),
     whatsappApiToken: v.optional(v.string()),
     whatsappWebhookSecret: v.optional(v.string()),
@@ -2157,7 +2164,14 @@ export default defineSchema({
     logoUrl: v.optional(v.string()),
     heroTitle: v.optional(v.string()),
     heroSubtitle: v.optional(v.string()),
+    // Free-text badge shown as a small pill over the hero (e.g. Kinetic Sales'
+    // hero). Replaces showing a raw "N+ cars available" count.
+    heroBadgeText: v.optional(v.string()),
     slogan: v.optional(v.string()),
+    // Which of the org's finance companies (see `financeCompanies`) the public
+    // site's finance calculator uses for its rate/term. Unset falls back to a
+    // generic illustrative rate.
+    activeFinanceCompanyId: v.optional(v.id("financeCompanies")),
     themeConfig: v.optional(v.any()),
     createdAt: v.number(),
     updatedAt: v.number(),

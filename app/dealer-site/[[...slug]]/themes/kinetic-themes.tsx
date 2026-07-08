@@ -4,6 +4,7 @@ import Link from "next/link";
 import type { ChangeEvent, ReactElement } from "react";
 import type { FormState, PublicSite, ThemeProps } from "./theme-props";
 import { TurnstileWidget } from "../turnstile-widget";
+import { KineticBrand } from "./kinetic-shared";
 import { KineticLuxuryHome } from "./kinetic-home-luxury";
 import { KineticModernEvHome } from "./kinetic-home-ev";
 import { KineticSalesHome } from "./kinetic-home-sales";
@@ -49,9 +50,9 @@ function KineticFallbackPage({ props }: { props: ThemeProps }) {
 
   return (
     <main className="theme-kinetic min-h-screen bg-background text-on-background font-body-md" dir={props.dir}>
-      <FallbackNav site={props.site} />
+      <FallbackNav props={props} />
       <section className="mx-auto max-w-screen-2xl px-margin-desktop py-section-gap">
-        {page === "branches" ? <BranchesContent site={props.site} /> : null}
+        {page === "branches" ? <BranchesContent props={props} /> : null}
         {page === "contact" ? <ContactContent props={props} /> : null}
         {page === "privacy" || page === "terms" || page === "data-deletion" ? <LegalContent props={props} /> : null}
       </section>
@@ -60,25 +61,26 @@ function KineticFallbackPage({ props }: { props: ThemeProps }) {
   );
 }
 
-function FallbackNav({ site }: { site: PublicSite }) {
+function FallbackNav({ props }: { props: ThemeProps }) {
+  const { site, t } = props;
   return (
     <header className="sticky top-0 z-50 bg-surface/90 shadow-sm backdrop-blur-xl">
-      <nav className="mx-auto flex w-full max-w-screen-2xl items-center justify-between px-gutter py-4">
-        <Link href="/" className="font-display-luxury text-[32px] text-luxury-gold">
-          {site.profile.dealershipName}
+      <nav className="mx-auto flex w-full max-w-screen-2xl items-center justify-between px-gutter py-5">
+        <Link href="/">
+          <KineticBrand profile={site.profile} size="lg" />
         </Link>
         <div className="hidden items-center gap-8 md:flex">
           <Link className="font-label-caps text-label-caps text-on-surface-variant hover:text-primary" href="/inventory">
-            Inventory
+            {t.nav.inventory}
           </Link>
           <Link className="font-label-caps text-label-caps text-on-surface-variant hover:text-primary" href="/finance">
-            Finance
+            {t.nav.finance}
           </Link>
           <Link className="font-label-caps text-label-caps text-on-surface-variant hover:text-primary" href="/branches">
-            Branches
+            {t.nav.branches}
           </Link>
           <Link className="font-label-caps text-label-caps text-secondary" href="/contact">
-            Contact
+            {t.nav.contact}
           </Link>
         </div>
       </nav>
@@ -86,16 +88,38 @@ function FallbackNav({ site }: { site: PublicSite }) {
   );
 }
 
-function BranchesContent({ site }: { site: PublicSite }) {
+function BranchesContent({ props }: { props: ThemeProps }) {
+  const { site, t } = props;
   return (
     <>
-      <h1 className="font-headline-lg text-headline-lg text-primary">Branches</h1>
+      <h1 className="font-headline-lg text-headline-lg text-primary">{t.branchesTitle}</h1>
       <div className="mt-8 grid grid-cols-1 gap-gutter md:grid-cols-3">
         {site.profile.branches.map((branch) => (
           <article key={branch.id} className="rounded-xl border border-outline-variant bg-surface-container-lowest p-6">
             <h2 className="text-xl font-bold text-primary">{branch.name}</h2>
-            {branch.address ? <p className="mt-3 text-on-surface-variant">{branch.address}</p> : null}
-            {branch.phone ? <p className="mt-2 font-bold text-secondary">{branch.phone}</p> : null}
+            {branch.address ? (
+              branch.address.startsWith("http") ? (
+                <a
+                  href={branch.address}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-3 flex items-center gap-1 text-secondary hover:underline"
+                >
+                  <span className="material-symbols-outlined text-base">location_on</span>
+                  {t.viewOnMap}
+                </a>
+              ) : (
+                <p className="mt-3 flex items-start gap-2 text-on-surface-variant">
+                  <span className="material-symbols-outlined text-base">location_on</span>
+                  {branch.address}
+                </p>
+              )
+            ) : null}
+            {branch.phones.map((phone) => (
+              <a key={phone} href={`tel:${phone}`} className="mt-2 block font-bold text-secondary hover:underline">
+                {phone}
+              </a>
+            ))}
           </article>
         ))}
       </div>
@@ -104,12 +128,24 @@ function BranchesContent({ site }: { site: PublicSite }) {
 }
 
 function ContactContent({ props }: { props: ThemeProps }) {
+  const profile = props.site.profile;
   return (
     <div className="grid grid-cols-1 gap-gutter lg:grid-cols-12">
       <div className="lg:col-span-5">
         <h1 className="font-headline-lg text-headline-lg text-primary">{props.t.contactTitle}</h1>
-        <p className="mt-4 text-on-surface-variant">{props.site.profile.address}</p>
-        <p className="mt-2 font-bold text-secondary">{props.site.profile.phone}</p>
+        {profile.address ? (
+          profile.address.startsWith("http") ? (
+            <a href={profile.address} target="_blank" rel="noopener noreferrer" className="mt-4 flex items-center gap-1 text-secondary hover:underline">
+              <span className="material-symbols-outlined text-base">location_on</span>
+              {props.t.viewOnMap}
+            </a>
+          ) : (
+            <p className="mt-4 text-on-surface-variant">{profile.address}</p>
+          )
+        ) : null}
+        {profile.phones.map((phone) => (
+          <a key={phone} href={`tel:${phone}`} className="mt-2 block font-bold text-secondary hover:underline">{phone}</a>
+        ))}
       </div>
       <div className="rounded-xl border border-outline-variant bg-surface-container-lowest p-8 lg:col-span-7">
         {props.formSuccess === "contact" ? (
@@ -119,7 +155,7 @@ function ContactContent({ props }: { props: ThemeProps }) {
           </div>
         ) : (
           <form className="grid gap-4" onSubmit={(event) => props.onSubmit(event, "contact")}>
-            <FallbackLeadFields form={props.form} setForm={props.setForm} />
+            <FallbackLeadFields form={props.form} setForm={props.setForm} t={props.t} />
             <TurnstileWidget siteKey={props.turnstileSiteKey} />
             <button type="submit" disabled={props.isSubmitting} className="rounded-xl bg-secondary px-8 py-4 font-bold text-white">
               {props.t.sendMessage}
@@ -163,9 +199,11 @@ function FallbackFooter({ site }: { site: PublicSite }) {
 function FallbackLeadFields({
   form,
   setForm,
+  t,
 }: {
   form: FormState;
   setForm: (form: FormState) => void;
+  t: ThemeProps["t"];
 }) {
   return (
     <>
@@ -173,26 +211,26 @@ function FallbackLeadFields({
         <input
           required
           className="rounded-lg border border-outline-variant px-4 py-3"
-          placeholder="First name"
+          placeholder={t.placeholderFirstName}
           value={form.firstName}
           onChange={(event: ChangeEvent<HTMLInputElement>) => setForm({ ...form, firstName: event.currentTarget.value })}
         />
         <input
           className="rounded-lg border border-outline-variant px-4 py-3"
-          placeholder="Last name"
+          placeholder={t.placeholderLastName}
           value={form.lastName}
           onChange={(event: ChangeEvent<HTMLInputElement>) => setForm({ ...form, lastName: event.currentTarget.value })}
         />
       </div>
       <input
         className="rounded-lg border border-outline-variant px-4 py-3"
-        placeholder="Phone"
+        placeholder={t.placeholderPhone}
         value={form.phone}
         onChange={(event: ChangeEvent<HTMLInputElement>) => setForm({ ...form, phone: event.currentTarget.value })}
       />
       <textarea
         className="min-h-32 rounded-lg border border-outline-variant px-4 py-3"
-        placeholder="Message"
+        placeholder={t.placeholderMessage}
         value={form.message}
         onChange={(event: ChangeEvent<HTMLTextAreaElement>) => setForm({ ...form, message: event.currentTarget.value })}
       />

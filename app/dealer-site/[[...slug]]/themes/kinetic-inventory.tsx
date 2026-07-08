@@ -2,8 +2,8 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import type { PublicVehicle, ThemeProps } from "./theme-props";
-import { KineticBrand, KineticVehicleImage, telLink, useKineticStrings, vehicleTitle, waLink } from "./kinetic-shared";
+import type { PublicSite, PublicVehicle, ThemeProps } from "./theme-props";
+import { KineticBrand, KineticVehicleImage, estimateMonthlyInstallment, telLink, useKineticStrings, vehicleTitle, waLink } from "./kinetic-shared";
 
 function KineticTopNav({ props, activeInventory, activeFinance }: { props: ThemeProps; activeInventory?: boolean; activeFinance?: boolean }) {
   const { site, lang, showLangToggle, onToggleLang, t } = props;
@@ -15,12 +15,12 @@ function KineticTopNav({ props, activeInventory, activeFinance }: { props: Theme
       : "text-on-surface-variant hover:text-primary transition-colors font-label-caps text-label-caps";
   return (
     <header className="bg-surface/90 backdrop-blur-xl docked full-width top-0 sticky z-50 shadow-sm">
-      <nav className="flex justify-between items-center px-gutter py-4 w-full max-w-screen-2xl mx-auto">
-        <div className="flex items-center gap-8">
+      <nav className="flex justify-between items-center px-gutter py-5 w-full max-w-screen-2xl mx-auto">
+        <div className="flex items-center gap-10">
           <Link href="/">
-            <KineticBrand profile={profile} />
+            <KineticBrand profile={profile} size="lg" />
           </Link>
-          <div className="hidden md:flex items-center gap-6">
+          <div className="hidden md:flex items-center gap-8">
             <Link className={linkClass(activeInventory)} href="/inventory">{t.nav.inventory}</Link>
             <Link className={linkClass(activeFinance)} href="/finance">{t.nav.finance}</Link>
             <Link className={linkClass(false)} href="/contact">{t.nav.contact}</Link>
@@ -74,8 +74,18 @@ function KineticFooter({ props }: { props: ThemeProps }) {
         </div>
         <div>
           <h4 className="font-bold text-white mb-6 uppercase tracking-widest text-xs">{k.footerShowroom}</h4>
-          {profile.address && <p className="text-sm text-on-primary-container mb-2">{profile.address}</p>}
-          {profile.phone && <p className="text-sm text-on-primary-container">{profile.phone}</p>}
+          {profile.address && (
+            <p className="text-sm text-on-primary-container mb-2">
+              {profile.address.startsWith("http") ? (
+                <a href={profile.address} target="_blank" rel="noopener noreferrer" className="hover:underline">{t.viewOnMap}</a>
+              ) : (
+                profile.address
+              )}
+            </p>
+          )}
+          {profile.phones.map((phone) => (
+            <a key={phone} href={`tel:${phone}`} className="block text-sm text-on-primary-container hover:underline">{phone}</a>
+          ))}
         </div>
       </div>
       <div className="max-w-screen-2xl mx-auto border-t border-on-primary-fixed-variant mt-16 pt-8 text-center text-[10px] text-on-primary-container tracking-widest uppercase">
@@ -382,7 +392,7 @@ export function KineticVehicleDetail(props: ThemeProps) {
                   </a>
                 )}
               </div>
-              <KineticFinanceMiniCalculator startingPrice={v.price ?? 25000} k={k} />
+              <KineticFinanceMiniCalculator startingPrice={v.price ?? 25000} k={k} financeCompany={site.financeCompany} />
               {profile.address && (
                 <div className="bg-surface-container-low p-4 rounded-2xl border border-outline-variant">
                   <h3 className="font-bold mb-3 flex items-center gap-2">
@@ -390,7 +400,14 @@ export function KineticVehicleDetail(props: ThemeProps) {
                     {k.ourLocation}
                   </h3>
                   <p className="text-sm font-semibold">{profile.dealershipName}</p>
-                  <p className="text-xs text-on-surface-variant">{profile.address}</p>
+                  {profile.address.startsWith("http") ? (
+                    <a href={profile.address} target="_blank" rel="noopener noreferrer" className="text-xs text-secondary hover:underline flex items-center gap-1 mt-1">
+                      <span className="material-symbols-outlined text-sm">location_on</span>
+                      {t.viewOnMap}
+                    </a>
+                  ) : (
+                    <p className="text-xs text-on-surface-variant">{profile.address}</p>
+                  )}
                 </div>
               )}
             </div>
@@ -437,15 +454,28 @@ export function KineticVehicleDetail(props: ThemeProps) {
   );
 }
 
-function KineticFinanceMiniCalculator({ startingPrice, k }: { startingPrice: number; k: ReturnType<typeof useKineticStrings> }) {
+function KineticFinanceMiniCalculator({
+  startingPrice,
+  k,
+  financeCompany,
+}: {
+  startingPrice: number;
+  k: ReturnType<typeof useKineticStrings>;
+  financeCompany: PublicSite["financeCompany"];
+}) {
   const [downPercent, setDownPercent] = useState(20);
   const [termMonths, setTermMonths] = useState(60);
-  const monthlyRate = 0.045 / 12;
-  const loanAmount = startingPrice * (1 - downPercent / 100);
-  const monthly = Math.round(
-    (loanAmount * monthlyRate * Math.pow(1 + monthlyRate, termMonths)) / (Math.pow(1 + monthlyRate, termMonths) - 1)
-  );
+  const maxMonths = financeCompany?.maxTermMonths ?? 84;
+  const clampedTermMonths = Math.min(termMonths, maxMonths);
+
   const downAmount = Math.round(startingPrice * (downPercent / 100));
+  const { monthlyInstallment } = estimateMonthlyInstallment({
+    financeCompany,
+    vehiclePrice: startingPrice,
+    downPayment: downAmount,
+    termMonths: clampedTermMonths,
+  });
+  const monthly = Math.round(monthlyInstallment);
 
   return (
     <div className="bg-primary text-white p-6 rounded-2xl shadow-xl space-y-6 overflow-hidden relative">
@@ -459,10 +489,10 @@ function KineticFinanceMiniCalculator({ startingPrice, k }: { startingPrice: num
           </div>
         </div>
         <div>
-          <label className="text-xs text-on-primary-container font-semibold uppercase tracking-wider">{k.termSuffix} ({termMonths} {k.monthsUnit})</label>
+          <label className="text-xs text-on-primary-container font-semibold uppercase tracking-wider">{k.termSuffix} ({clampedTermMonths} {k.monthsUnit})</label>
           <div className="mt-1 flex items-center justify-between gap-3">
-            <span className="font-bold whitespace-nowrap">{Math.round(termMonths / 12)} {k.yearsUnit}</span>
-            <input className="w-1/2 accent-secondary" max={84} min={12} step={12} type="range" value={termMonths} onChange={(e) => setTermMonths(Number(e.target.value))} />
+            <span className="font-bold whitespace-nowrap">{Math.round(clampedTermMonths / 12)} {k.yearsUnit}</span>
+            <input className="w-1/2 accent-secondary" max={maxMonths} min={12} step={12} type="range" value={clampedTermMonths} onChange={(e) => setTermMonths(Number(e.target.value))} />
           </div>
         </div>
         <div className="pt-4 border-t border-white/10 flex items-center justify-between">

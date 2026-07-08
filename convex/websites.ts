@@ -574,7 +574,9 @@ export const saveDraft = mutation({
     logoUrl: v.optional(v.string()),
     heroTitle: v.optional(v.string()),
     heroSubtitle: v.optional(v.string()),
+    heroBadgeText: v.optional(v.string()),
     slogan: v.optional(v.string()),
+    activeFinanceCompanyId: v.optional(v.union(v.id("financeCompanies"), v.null())),
     themeConfig: v.optional(v.any()),
     sections: v.optional(v.array(sectionInputValidator)),
     routing: v.optional(v.array(routingInputValidator)),
@@ -582,6 +584,14 @@ export const saveDraft = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.WEBSITE_MANAGE]);
     await requireFeature(ctx, args.orgId, "websiteBuilder");
+
+    if (args.activeFinanceCompanyId) {
+      const company = await ctx.db.get(args.activeFinanceCompanyId);
+      if (!company || company.orgId !== args.orgId || !company.isActive) {
+        throw new ConvexError("Finance company not found.");
+      }
+    }
+
     let settings = await getSettingsByOrg(ctx, args.orgId);
     if (!settings) {
       const settingsId = await ctx.db.insert("websiteSettings", {
@@ -654,6 +664,9 @@ export const saveDraft = mutation({
     const patch: Record<string, unknown> = { updatedAt: Date.now(), status: settings.status === "disabled" ? "draft" : settings.status };
     if (defaultSubdomain !== undefined) patch.defaultSubdomain = defaultSubdomain;
     if (activeDomainId !== undefined) patch.activeDomainId = activeDomainId;
+    // `null` means "clear the selection" — patching with `undefined` unsets the
+    // field, whereas omitting the key entirely (undefined argument) leaves it untouched.
+    if (args.activeFinanceCompanyId !== undefined) patch.activeFinanceCompanyId = args.activeFinanceCompanyId ?? undefined;
     for (const key of [
       "templateId",
       "defaultLanguage",
@@ -663,6 +676,7 @@ export const saveDraft = mutation({
       "logoUrl",
       "heroTitle",
       "heroSubtitle",
+      "heroBadgeText",
       "slogan",
       "themeConfig",
     ] as const) {
