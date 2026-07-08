@@ -3,11 +3,12 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import type { PublicVehicle, ThemeProps } from "./theme-props";
-import { KineticVehicleImage, telLink, vehicleTitle, waLink } from "./kinetic-shared";
+import { KineticBrand, KineticVehicleImage, telLink, useKineticStrings, vehicleTitle, waLink } from "./kinetic-shared";
 
 function KineticTopNav({ props, activeInventory, activeFinance }: { props: ThemeProps; activeInventory?: boolean; activeFinance?: boolean }) {
   const { site, lang, showLangToggle, onToggleLang, t } = props;
   const profile = site.profile;
+  const k = useKineticStrings(lang);
   const linkClass = (active?: boolean) =>
     active
       ? "text-secondary border-b-2 border-secondary font-bold pb-1 font-label-caps text-label-caps"
@@ -16,7 +17,9 @@ function KineticTopNav({ props, activeInventory, activeFinance }: { props: Theme
     <header className="bg-surface/90 backdrop-blur-xl docked full-width top-0 sticky z-50 shadow-sm">
       <nav className="flex justify-between items-center px-gutter py-4 w-full max-w-screen-2xl mx-auto">
         <div className="flex items-center gap-8">
-          <Link className="font-display-luxury text-display-luxury text-luxury-gold" href="/">{profile.dealershipName}</Link>
+          <Link href="/">
+            <KineticBrand profile={profile} />
+          </Link>
           <div className="hidden md:flex items-center gap-6">
             <Link className={linkClass(activeInventory)} href="/inventory">{t.nav.inventory}</Link>
             <Link className={linkClass(activeFinance)} href="/finance">{t.nav.finance}</Link>
@@ -28,7 +31,7 @@ function KineticTopNav({ props, activeInventory, activeFinance }: { props: Theme
             <a className="hidden lg:flex items-center gap-2 bg-whatsapp-green text-white px-4 py-2 rounded-lg font-bold hover:opacity-90 transition-opacity"
               href={waLink(profile.phone, `Hi ${profile.dealershipName}, I have a question.`)} target="_blank" rel="noopener noreferrer">
               <span className="material-symbols-outlined">whatshot</span>
-              <span>WhatsApp Support</span>
+              <span>{k.whatsappSupport}</span>
             </a>
           )}
           {showLangToggle && (
@@ -44,17 +47,18 @@ function KineticTopNav({ props, activeInventory, activeFinance }: { props: Theme
 }
 
 function KineticFooter({ props }: { props: ThemeProps }) {
-  const { site, t } = props;
+  const { site, t, lang } = props;
   const profile = site.profile;
+  const k = useKineticStrings(lang);
   return (
     <footer className="bg-primary py-section-gap w-full px-margin-desktop text-on-primary">
       <div className="max-w-screen-2xl mx-auto grid grid-cols-1 md:grid-cols-4 gap-gutter">
         <div className="flex flex-col gap-4">
           <h2 className="font-display-luxury text-[32px] text-luxury-gold">{profile.dealershipName}</h2>
-          <p className="text-on-primary-container text-sm leading-relaxed">{profile.slogan ?? "Providing unparalleled vehicle sourcing and financing solutions."}</p>
+          <p className="text-on-primary-container text-sm leading-relaxed">{profile.slogan ?? k.inventoryFooterSloganDefault}</p>
         </div>
         <div>
-          <h4 className="font-bold text-white mb-6 uppercase tracking-widest text-xs">Quick Links</h4>
+          <h4 className="font-bold text-white mb-6 uppercase tracking-widest text-xs">{k.quickLinks}</h4>
           <ul className="flex flex-col gap-4 text-sm text-on-primary-container">
             <li><Link className="hover:text-white transition-colors" href="/inventory">{t.nav.inventory}</Link></li>
             <li><Link className="hover:text-white transition-colors" href="/finance">{t.nav.finance}</Link></li>
@@ -62,27 +66,28 @@ function KineticFooter({ props }: { props: ThemeProps }) {
           </ul>
         </div>
         <div>
-          <h4 className="font-bold text-white mb-6 uppercase tracking-widest text-xs">Policies</h4>
+          <h4 className="font-bold text-white mb-6 uppercase tracking-widest text-xs">{k.policiesHeading}</h4>
           <ul className="flex flex-col gap-4 text-sm text-on-primary-container">
             <li><Link className="hover:text-white transition-colors" href="/privacy">{t.footerPrivacy}</Link></li>
             <li><Link className="hover:text-white transition-colors" href="/terms">{t.footerTerms}</Link></li>
           </ul>
         </div>
         <div>
-          <h4 className="font-bold text-white mb-6 uppercase tracking-widest text-xs">Our Showroom</h4>
+          <h4 className="font-bold text-white mb-6 uppercase tracking-widest text-xs">{k.footerShowroom}</h4>
           {profile.address && <p className="text-sm text-on-primary-container mb-2">{profile.address}</p>}
           {profile.phone && <p className="text-sm text-on-primary-container">{profile.phone}</p>}
         </div>
       </div>
       <div className="max-w-screen-2xl mx-auto border-t border-on-primary-fixed-variant mt-16 pt-8 text-center text-[10px] text-on-primary-container tracking-widest uppercase">
-        © {new Date().getFullYear()} {profile.dealershipName}. All Rights Reserved.
+        © {new Date().getFullYear()} {profile.dealershipName}. {k.allRightsReserved}.
       </div>
     </footer>
   );
 }
 
 export function KineticInventoryList(props: ThemeProps) {
-  const { site, t, formatPrice, vehicles, isPreviewMode, dir } = props;
+  const { site, t, lang, formatPrice, vehicles, isPreviewMode, dir } = props;
+  const k = useKineticStrings(lang);
 
   const [search, setSearch] = useState("");
   const [make, setMake] = useState("all");
@@ -117,7 +122,7 @@ export function KineticInventoryList(props: ThemeProps) {
             <div className="relative">
               <input
                 className="w-full pl-10 pr-4 py-3 bg-surface-container rounded-xl border-none focus:ring-2 focus:ring-luxury-gold transition-all"
-                placeholder="Search vehicle..."
+                placeholder={k.searchPlaceholder}
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
@@ -127,10 +132,10 @@ export function KineticInventoryList(props: ThemeProps) {
             <div className="flex flex-col gap-6">
               <h3 className="font-headline-lg text-lg flex items-center gap-2">
                 <span className="material-symbols-outlined text-luxury-gold">filter_list</span>
-                Filter Inventory
+                {k.filterInventory}
               </h3>
               <div className="mb-4">
-                <span className="font-label-caps text-label-caps uppercase text-outline block mb-2">Price Range</span>
+                <span className="font-label-caps text-label-caps uppercase text-outline block mb-2">{k.priceRangeLabel}</span>
                 <input
                   className="w-full accent-luxury-gold"
                   max={priceCeiling}
@@ -145,13 +150,13 @@ export function KineticInventoryList(props: ThemeProps) {
                 </div>
               </div>
               <div className="flex flex-col gap-1">
-                <label className="font-label-caps text-label-caps text-outline">Make</label>
+                <label className="font-label-caps text-label-caps text-outline">{k.makeLabel}</label>
                 <select
                   className="bg-surface-container border-none rounded-lg focus:ring-luxury-gold p-3"
                   value={make}
                   onChange={(e) => setMake(e.target.value)}
                 >
-                  <option value="all">All Makes</option>
+                  <option value="all">{k.allMakes}</option>
                   {makes.map((m) => (
                     <option key={m} value={m}>{m}</option>
                   ))}
@@ -170,7 +175,7 @@ export function KineticInventoryList(props: ThemeProps) {
           {filtered.length ? (
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-8">
               {filtered.map((v) => (
-                <KineticInventoryCard key={v.id} vehicle={v} formatPrice={formatPrice} profile={site.profile} t={t} />
+                <KineticInventoryCard key={v.id} vehicle={v} formatPrice={formatPrice} profile={site.profile} k={k} />
               ))}
             </div>
           ) : (
@@ -187,13 +192,19 @@ function KineticInventoryCard({
   vehicle: v,
   formatPrice,
   profile,
-  t,
+  k,
 }: {
   vehicle: PublicVehicle;
   formatPrice: (p: number | null) => string;
   profile: ThemeProps["site"]["profile"];
-  t: ThemeProps["t"];
+  k: ReturnType<typeof useKineticStrings>;
 }) {
+  const specChips = [
+    v.mileage != null ? { icon: "speed", value: `${v.mileage.toLocaleString()} KM` } : null,
+    v.fuelType ? { icon: "local_gas_station", value: v.fuelType } : null,
+    v.transmission ? { icon: "settings_input_component", value: v.transmission } : null,
+  ].filter((chip): chip is { icon: string; value: string } => chip !== null);
+
   return (
     <div className="group bg-surface-container-lowest rounded-xl overflow-hidden shadow-sm hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1 border border-outline-variant/30 flex flex-col">
       <Link href={`/inventory/${v.slug}`} className="relative aspect-[16/9] overflow-hidden block">
@@ -206,24 +217,20 @@ function KineticInventoryCard({
         <Link href={`/inventory/${v.slug}`}>
           <h3 className="font-headline-lg text-xl text-primary mb-2 hover:text-secondary transition-colors">{vehicleTitle(v)}</h3>
         </Link>
-        <div className="grid grid-cols-3 gap-2 mb-6">
-          <div className="flex flex-col items-center p-2 bg-surface-container-low rounded-lg">
-            <span className="material-symbols-outlined text-luxury-gold text-lg">speed</span>
-            <span className="text-[10px] font-bold text-outline">{v.mileage != null ? `${v.mileage.toLocaleString()} KM` : t.mileage}</span>
+        {specChips.length > 0 && (
+          <div className="grid grid-cols-3 gap-2 mb-6">
+            {specChips.map((chip) => (
+              <div className="flex flex-col items-center p-2 bg-surface-container-low rounded-lg" key={chip.icon}>
+                <span className="material-symbols-outlined text-luxury-gold text-lg">{chip.icon}</span>
+                <span className="text-[10px] font-bold text-outline">{chip.value}</span>
+              </div>
+            ))}
           </div>
-          <div className="flex flex-col items-center p-2 bg-surface-container-low rounded-lg">
-            <span className="material-symbols-outlined text-luxury-gold text-lg">local_gas_station</span>
-            <span className="text-[10px] font-bold text-outline">{v.fuelType ?? t.fuelType}</span>
-          </div>
-          <div className="flex flex-col items-center p-2 bg-surface-container-low rounded-lg">
-            <span className="material-symbols-outlined text-luxury-gold text-lg">settings_input_component</span>
-            <span className="text-[10px] font-bold text-outline">{v.transmission ?? t.transmission}</span>
-          </div>
-        </div>
+        )}
         <div className="mt-auto">
           <p className="text-2xl font-extrabold text-primary mb-4">{formatPrice(v.price)}</p>
           <div className="grid grid-cols-2 gap-3">
-            <Link href={`/inventory/${v.slug}`} className="py-3 px-4 bg-primary text-white rounded-lg font-bold text-sm hover:bg-primary/90 transition-colors text-center">View Details</Link>
+            <Link href={`/inventory/${v.slug}`} className="py-3 px-4 bg-primary text-white rounded-lg font-bold text-sm hover:bg-primary/90 transition-colors text-center">{k.viewDetails}</Link>
             {profile.phone && (
               <a
                 href={waLink(profile.phone, `Hi, I'm interested in the ${vehicleTitle(v)}.`)}
@@ -231,7 +238,7 @@ function KineticInventoryCard({
                 className="py-3 px-4 bg-whatsapp-green text-white rounded-lg font-bold text-sm flex items-center justify-center gap-2 hover:opacity-90 transition-opacity"
               >
                 <span className="material-symbols-outlined text-sm">whatshot</span>
-                Chat
+                {k.chat}
               </a>
             )}
           </div>
@@ -242,7 +249,8 @@ function KineticInventoryCard({
 }
 
 export function KineticVehicleDetail(props: ThemeProps) {
-  const { site, detailVehicle, t, formatPrice, vehicles, isPreviewMode, dir } = props;
+  const { site, detailVehicle, t, lang, formatPrice, vehicles, isPreviewMode, dir } = props;
+  const k = useKineticStrings(lang);
   const [activeImage, setActiveImage] = useState(0);
 
   if (!detailVehicle) return null;
@@ -252,13 +260,19 @@ export function KineticVehicleDetail(props: ThemeProps) {
   const similar = vehicles.filter((other) => other.id !== v.id).slice(0, 4);
 
   const specs: Array<[string, string, string]> = [
-    ["calendar_month", "Year", String(v.year)],
+    ["calendar_month", k.yearSpecLabel, String(v.year)],
     ...(v.mileage != null ? [["speed", t.mileage, `${v.mileage.toLocaleString()} KM`] as [string, string, string]] : []),
     ...(v.fuelType ? [["gas_meter", t.fuelType, v.fuelType] as [string, string, string]] : []),
     ...(v.transmission ? [["settings_input_component", t.transmission, v.transmission] as [string, string, string]] : []),
     ...(v.exteriorColor ? [["palette", t.color, v.exteriorColor] as [string, string, string]] : []),
     ...(v.trim ? [["style", t.trim, v.trim] as [string, string, string]] : []),
   ];
+
+  const descriptionParts = [
+    v.mileage != null ? k.vehicleDescriptionMileage.replace("{mileage}", v.mileage.toLocaleString()) : null,
+    v.transmission ? k.vehicleDescriptionTransmission.replace("{transmission}", v.transmission.toLowerCase()) : null,
+    v.fuelType ? k.vehicleDescriptionFuel.replace("{fuel}", v.fuelType.toLowerCase()) : null,
+  ].filter((part): part is string => part !== null);
 
   return (
     <div className="theme-kinetic bg-background text-on-background font-body-md antialiased" dir={dir}>
@@ -268,7 +282,7 @@ export function KineticVehicleDetail(props: ThemeProps) {
       <KineticTopNav props={props} activeInventory />
       <main className="max-w-screen-2xl mx-auto px-4 lg:px-gutter py-8">
         <nav className="mb-6 flex items-center gap-2 text-on-surface-variant font-label-caps text-label-caps">
-          <Link className="hover:text-primary" href="/">Home</Link>
+          <Link className="hover:text-primary" href="/">{k.homeBreadcrumb}</Link>
           <span className="material-symbols-outlined text-sm">chevron_right</span>
           <Link className="hover:text-primary" href="/inventory">{t.nav.inventory}</Link>
           <span className="material-symbols-outlined text-sm">chevron_right</span>
@@ -321,7 +335,7 @@ export function KineticVehicleDetail(props: ThemeProps) {
             </section>
             {specs.length > 0 && (
               <section>
-                <h2 className="font-headline-lg text-xl mb-6">Key Specifications</h2>
+                <h2 className="font-headline-lg text-xl mb-6">{k.keySpecifications}</h2>
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
                   {specs.map(([icon, label, value]) => (
                     <div className="bg-surface-container-low p-4 rounded-xl flex items-center gap-4" key={label}>
@@ -339,12 +353,10 @@ export function KineticVehicleDetail(props: ThemeProps) {
             )}
             <section className="space-y-6">
               <div className="bg-white p-6 rounded-2xl shadow-sm border border-outline-variant">
-                <h2 className="font-headline-lg text-xl mb-4">Vehicle Description</h2>
+                <h2 className="font-headline-lg text-xl mb-4">{k.vehicleDescriptionHeading}</h2>
                 <p className="text-on-surface-variant leading-relaxed">
-                  This {vehicleTitle(v)} is available now
-                  {v.mileage != null ? ` with ${v.mileage.toLocaleString()} km on the odometer` : ""}
-                  {v.transmission ? `, ${v.transmission.toLowerCase()} transmission` : ""}
-                  {v.fuelType ? `, running on ${v.fuelType.toLowerCase()}` : ""}. Contact us for a full inspection report and viewing appointment.
+                  {vehicleTitle(v)} {k.vehicleDescriptionAvailable}
+                  {descriptionParts.length > 0 ? `, ${descriptionParts.join(", ")}` : ""}. {k.vehicleDescriptionContact}
                 </p>
               </div>
             </section>
@@ -352,30 +364,30 @@ export function KineticVehicleDetail(props: ThemeProps) {
           <aside className="lg:col-span-4">
             <div className="sticky top-24 space-y-6">
               <div className="bg-white p-6 rounded-2xl shadow-xl border border-outline-variant space-y-4">
-                <h3 className="font-bold text-xl">Interested in this car?</h3>
-                <p className="text-on-surface-variant text-sm">Speak with our sales team for personalized assistance.</p>
+                <h3 className="font-bold text-xl">{k.interestedInCar}</h3>
+                <p className="text-on-surface-variant text-sm">{k.speakWithSalesTeam}</p>
                 {profile.phone && (
                   <a
                     className="w-full bg-whatsapp-green text-white py-4 rounded-xl flex items-center justify-center gap-3 font-bold text-lg hover:brightness-95 transition-all shadow-lg"
                     href={waLink(profile.phone, `Hi, I'm interested in the ${vehicleTitle(v)}.`)} target="_blank" rel="noopener noreferrer"
                   >
                     <span className="material-symbols-outlined">whatshot</span>
-                    WhatsApp Sales Advisor
+                    {k.whatsappSalesAdvisor}
                   </a>
                 )}
                 {profile.phone && (
                   <a className="w-full bg-surface-container-highest text-primary py-4 rounded-xl flex items-center justify-center gap-3 font-bold text-lg hover:bg-outline-variant transition-all" href={telLink(profile.phone)}>
                     <span className="material-symbols-outlined">call</span>
-                    Call Showroom
+                    {k.callShowroom}
                   </a>
                 )}
               </div>
-              <KineticFinanceMiniCalculator startingPrice={v.price ?? 25000} />
+              <KineticFinanceMiniCalculator startingPrice={v.price ?? 25000} k={k} />
               {profile.address && (
                 <div className="bg-surface-container-low p-4 rounded-2xl border border-outline-variant">
                   <h3 className="font-bold mb-3 flex items-center gap-2">
                     <span className="material-symbols-outlined text-secondary">map</span>
-                    Our Location
+                    {k.ourLocation}
                   </h3>
                   <p className="text-sm font-semibold">{profile.dealershipName}</p>
                   <p className="text-xs text-on-surface-variant">{profile.address}</p>
@@ -386,7 +398,7 @@ export function KineticVehicleDetail(props: ThemeProps) {
         </div>
         {similar.length > 0 && (
           <section className="mt-section-gap">
-            <h2 className="font-headline-lg text-headline-lg mb-8">Similar Inventory</h2>
+            <h2 className="font-headline-lg text-headline-lg mb-8">{k.similarInventory}</h2>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-gutter">
               {similar.map((sv) => (
                 <Link key={sv.id} href={`/inventory/${sv.slug}`} className="group bg-white rounded-xl overflow-hidden border border-outline-variant hover:shadow-2xl transition-all duration-300 block">
@@ -412,11 +424,11 @@ export function KineticVehicleDetail(props: ThemeProps) {
           <>
             <a className="flex-1 bg-whatsapp-green text-white py-3 rounded-lg flex items-center justify-center gap-2 font-bold text-sm" href={waLink(profile.phone, `Hi, I'm interested in the ${vehicleTitle(v)}.`)} target="_blank" rel="noopener noreferrer">
               <span className="material-symbols-outlined">whatshot</span>
-              WhatsApp
+              {k.whatsapp}
             </a>
             <a className="flex-1 bg-primary text-white py-3 rounded-lg flex items-center justify-center gap-2 font-bold text-sm" href={telLink(profile.phone)}>
               <span className="material-symbols-outlined">call</span>
-              Call Now
+              {k.callNow}
             </a>
           </>
         )}
@@ -425,7 +437,7 @@ export function KineticVehicleDetail(props: ThemeProps) {
   );
 }
 
-function KineticFinanceMiniCalculator({ startingPrice }: { startingPrice: number }) {
+function KineticFinanceMiniCalculator({ startingPrice, k }: { startingPrice: number; k: ReturnType<typeof useKineticStrings> }) {
   const [downPercent, setDownPercent] = useState(20);
   const [termMonths, setTermMonths] = useState(60);
   const monthlyRate = 0.045 / 12;
@@ -437,28 +449,28 @@ function KineticFinanceMiniCalculator({ startingPrice }: { startingPrice: number
 
   return (
     <div className="bg-primary text-white p-6 rounded-2xl shadow-xl space-y-6 overflow-hidden relative">
-      <h3 className="font-bold text-xl relative z-10">Finance Calculator</h3>
+      <h3 className="font-bold text-xl relative z-10">{k.financeCalculatorLabel}</h3>
       <div className="space-y-4 relative z-10">
         <div>
-          <label className="text-xs text-on-primary-container font-semibold uppercase tracking-wider">Down Payment ({downPercent}%)</label>
+          <label className="text-xs text-on-primary-container font-semibold uppercase tracking-wider">{k.downPaymentSuffix} ({downPercent}%)</label>
           <div className="mt-1 flex items-center justify-between gap-3">
             <span className="font-bold whitespace-nowrap">{downAmount.toLocaleString()} JOD</span>
             <input className="w-1/2 accent-secondary" max={80} min={10} step={5} type="range" value={downPercent} onChange={(e) => setDownPercent(Number(e.target.value))} />
           </div>
         </div>
         <div>
-          <label className="text-xs text-on-primary-container font-semibold uppercase tracking-wider">Term ({termMonths} Months)</label>
+          <label className="text-xs text-on-primary-container font-semibold uppercase tracking-wider">{k.termSuffix} ({termMonths} {k.monthsUnit})</label>
           <div className="mt-1 flex items-center justify-between gap-3">
-            <span className="font-bold whitespace-nowrap">{Math.round(termMonths / 12)} Years</span>
+            <span className="font-bold whitespace-nowrap">{Math.round(termMonths / 12)} {k.yearsUnit}</span>
             <input className="w-1/2 accent-secondary" max={84} min={12} step={12} type="range" value={termMonths} onChange={(e) => setTermMonths(Number(e.target.value))} />
           </div>
         </div>
         <div className="pt-4 border-t border-white/10 flex items-center justify-between">
-          <p className="text-sm">Monthly Installment</p>
+          <p className="text-sm">{k.monthlyInstallment}</p>
           <p className="text-2xl font-bold text-luxury-gold">{monthly.toLocaleString()} JOD</p>
         </div>
       </div>
-      <Link href="/finance" className="w-full bg-secondary text-white py-3 rounded-xl font-bold hover:brightness-110 transition-all z-10 relative block text-center">Apply for Finance</Link>
+      <Link href="/finance" className="w-full bg-secondary text-white py-3 rounded-xl font-bold hover:brightness-110 transition-all z-10 relative block text-center">{k.applyForFinance}</Link>
     </div>
   );
 }

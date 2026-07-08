@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import type { ThemeProps } from "./theme-props";
 import { TurnstileWidget } from "../turnstile-widget";
-import { waLink } from "./kinetic-shared";
+import { KineticBrand, useKineticStrings, waLink } from "./kinetic-shared";
 
 function sliderGradient(value: number, min: number, max: number) {
   const pct = ((value - min) / (max - min)) * 100;
@@ -13,9 +13,10 @@ function sliderGradient(value: number, min: number, max: number) {
 
 export function KineticFinanceCalculator(props: ThemeProps) {
   const {
-    site, t, isPreviewMode, dir, form, setForm, isSubmitting, formSuccess, setFormSuccess, onSubmit, turnstileSiteKey,
+    site, t, lang, isPreviewMode, dir, form, setForm, isSubmitting, formSuccess, setFormSuccess, onSubmit, turnstileSiteKey,
   } = props;
   const profile = site.profile;
+  const k = useKineticStrings(lang);
 
   const [price, setPrice] = useState(25000);
   const [downPercent, setDownPercent] = useState(20);
@@ -35,7 +36,9 @@ export function KineticFinanceCalculator(props: ThemeProps) {
       <header className="bg-surface/90 backdrop-blur-xl docked full-width top-0 sticky z-50 shadow-sm">
         <nav className="flex justify-between items-center px-gutter py-4 w-full max-w-screen-2xl mx-auto">
           <div className="flex items-center gap-8">
-            <Link className="font-display-luxury text-display-luxury text-luxury-gold" href="/">{profile.dealershipName}</Link>
+            <Link href="/">
+              <KineticBrand profile={profile} />
+            </Link>
             <div className="hidden md:flex gap-6 items-center">
               <Link className="text-on-surface-variant hover:text-primary transition-colors font-label-caps text-label-caps" href="/inventory">{t.nav.inventory}</Link>
               <Link className="text-secondary border-b-2 border-secondary font-bold pb-1 font-label-caps text-label-caps" href="/finance">{t.nav.finance}</Link>
@@ -46,7 +49,7 @@ export function KineticFinanceCalculator(props: ThemeProps) {
             <a className="hidden lg:flex items-center gap-2 px-4 py-2 bg-whatsapp-green text-white rounded-lg font-bold hover:scale-95 transition-transform"
               href={waLink(profile.phone, `Hi ${profile.dealershipName}, I have a finance question.`)} target="_blank" rel="noopener noreferrer">
               <span className="material-symbols-outlined">whatshot</span>
-              WhatsApp Support
+              {k.whatsappSupport}
             </a>
           )}
         </nav>
@@ -61,11 +64,11 @@ export function KineticFinanceCalculator(props: ThemeProps) {
             <div className="bg-surface-container-lowest p-8 rounded-xl shadow-sm border border-outline-variant/30">
               <div className="flex items-center gap-3 mb-8">
                 <span className="material-symbols-outlined text-secondary" style={{ fontVariationSettings: "'FILL' 1" }}>calculate</span>
-                <h3 className="font-headline-lg text-headline-lg text-primary text-xl">Customize Your Plan</h3>
+                <h3 className="font-headline-lg text-headline-lg text-primary text-xl">{k.customizeYourPlan}</h3>
               </div>
               <div className="mb-10">
                 <div className="flex justify-between items-center mb-4">
-                  <label className="font-label-caps text-label-caps text-on-surface-variant uppercase">Vehicle Price (JOD)</label>
+                  <label className="font-label-caps text-label-caps text-on-surface-variant uppercase">{k.vehiclePriceLabel}</label>
                   <span className="font-headline-lg text-headline-lg text-2xl text-primary">{price.toLocaleString()} JOD</span>
                 </div>
                 <input
@@ -81,7 +84,7 @@ export function KineticFinanceCalculator(props: ThemeProps) {
               </div>
               <div className="mb-10">
                 <div className="flex justify-between items-center mb-4">
-                  <label className="font-label-caps text-label-caps text-on-surface-variant uppercase">Down Payment (%)</label>
+                  <label className="font-label-caps text-label-caps text-on-surface-variant uppercase">{k.downPaymentPercentLabel}</label>
                   <span className="font-headline-lg text-headline-lg text-2xl text-primary">{downPercent}%</span>
                 </div>
                 <input
@@ -97,8 +100,8 @@ export function KineticFinanceCalculator(props: ThemeProps) {
               </div>
               <div className="mb-6">
                 <div className="flex justify-between items-center mb-4">
-                  <label className="font-label-caps text-label-caps text-on-surface-variant uppercase">Payment Period (Months)</label>
-                  <span className="font-headline-lg text-headline-lg text-2xl text-primary">{months} Months</span>
+                  <label className="font-label-caps text-label-caps text-on-surface-variant uppercase">{k.paymentPeriodLabel}</label>
+                  <span className="font-headline-lg text-headline-lg text-2xl text-primary">{months} {k.monthsUnit}</span>
                 </div>
                 <input
                   className="w-full h-2 rounded-lg cursor-pointer appearance-none"
@@ -107,8 +110,8 @@ export function KineticFinanceCalculator(props: ThemeProps) {
                   onChange={(e) => setMonths(Number(e.target.value))}
                 />
                 <div className="flex justify-between mt-2 font-label-caps text-[10px] text-outline">
-                  <span>12 Mo.</span>
-                  <span>84 Mo.</span>
+                  <span>12 {k.monthsUnit}</span>
+                  <span>84 {k.monthsUnit}</span>
                 </div>
               </div>
             </div>
@@ -117,22 +120,22 @@ export function KineticFinanceCalculator(props: ThemeProps) {
           <aside className="lg:col-span-5 sticky top-28 space-y-6">
             <div className="bg-primary text-white p-8 rounded-xl shadow-xl relative overflow-hidden">
               <div className="absolute top-0 right-0 w-32 h-32 bg-secondary opacity-20 blur-3xl rounded-full -mr-16 -mt-16" />
-              <h4 className="font-label-caps text-label-caps text-primary-fixed mb-6 uppercase">Estimated Monthly Installment</h4>
+              <h4 className="font-label-caps text-label-caps text-primary-fixed mb-6 uppercase">{k.estimatedMonthlyInstallment}</h4>
               <div className="flex items-baseline gap-2 mb-8">
                 <span className="font-headline-lg text-5xl font-extrabold text-white">{Math.round(monthlyPayment).toLocaleString()}</span>
                 <span className="font-headline-lg text-xl text-primary-fixed">JOD/mo</span>
               </div>
               <div className="space-y-4 pt-6 border-t border-white/10">
                 <div className="flex justify-between items-center">
-                  <span className="text-on-primary-container font-body-md">Total Repayment</span>
+                  <span className="text-on-primary-container font-body-md">{k.totalRepayment}</span>
                   <span className="font-bold text-lg">{Math.round(total).toLocaleString()} JOD</span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-on-primary-container font-body-md">Fixed Interest Rate</span>
+                  <span className="text-on-primary-container font-body-md">{k.fixedInterestRate}</span>
                   <span className="font-bold text-lg text-secondary-fixed-dim">4.50%</span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-on-primary-container font-body-md">Down Payment Amount</span>
+                  <span className="text-on-primary-container font-body-md">{k.downPaymentAmount}</span>
                   <span className="font-bold text-lg">{Math.round(downAmount).toLocaleString()} JOD</span>
                 </div>
               </div>
@@ -148,7 +151,7 @@ export function KineticFinanceCalculator(props: ThemeProps) {
                 </div>
               ) : (
                 <form onSubmit={(e) => onSubmit(e, "financing")} className="space-y-3">
-                  <h3 className="font-headline-lg text-primary text-lg mb-2">Submit Finance Application</h3>
+                  <h3 className="font-headline-lg text-primary text-lg mb-2">{k.submitFinanceApplication}</h3>
                   <div className="grid grid-cols-2 gap-3">
                     <input required value={form.firstName} onChange={(e) => setForm({ ...form, firstName: e.target.value })} placeholder={t.placeholderFirstName} className="w-full bg-white border border-outline-variant rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-secondary outline-none" />
                     <input value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} placeholder={t.placeholderLastName} className="w-full bg-white border border-outline-variant rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-secondary outline-none" />
@@ -171,7 +174,7 @@ export function KineticFinanceCalculator(props: ThemeProps) {
                 className="w-full py-5 bg-surface-container-highest border-2 border-whatsapp-green/30 text-primary font-headline-lg rounded-xl flex items-center justify-center gap-3 hover:bg-white transition-all active:scale-95"
               >
                 <span className="material-symbols-outlined text-whatsapp-green" style={{ fontVariationSettings: "'FILL' 1" }}>whatshot</span>
-                Talk to Specialist
+                {k.talkToSpecialist}
               </a>
             )}
 
@@ -180,16 +183,15 @@ export function KineticFinanceCalculator(props: ThemeProps) {
                 <span className="material-symbols-outlined text-luxury-gold" style={{ fontVariationSettings: "'FILL' 1" }}>verified</span>
               </div>
               <div>
-                <p className="font-bold text-primary">Certified Financial Advisors</p>
-                <p className="text-sm text-on-surface-variant">Our team ensures you get the best rates available.</p>
+                <p className="font-bold text-primary">{k.certifiedAdvisorsTitle}</p>
+                <p className="text-sm text-on-surface-variant">{k.certifiedAdvisorsDesc}</p>
               </div>
             </div>
 
             <div className="p-4 bg-surface-variant/20 rounded-lg">
               <p className="text-[11px] leading-relaxed text-outline text-justify">
-                <strong className="text-on-surface-variant">DISCLAIMER: </strong>
-                {site.legal.financingDisclaimer ??
-                  "The values provided by this calculator are estimates for informational purposes only. Actual interest rates, monthly installments, and terms are subject to credit approval by our partner banking institutions."}
+                <strong className="text-on-surface-variant">{k.disclaimerLabel} </strong>
+                {site.legal.financingDisclaimer ?? k.defaultFinancingDisclaimer}
               </p>
             </div>
           </aside>
@@ -200,26 +202,26 @@ export function KineticFinanceCalculator(props: ThemeProps) {
         <div className="w-full grid grid-cols-1 md:grid-cols-4 gap-gutter px-margin-desktop max-w-screen-2xl mx-auto">
           <div className="space-y-4">
             <span className="font-display-luxury text-display-luxury text-luxury-gold">{profile.dealershipName}</span>
-            <p className="text-on-primary-container font-body-md">{profile.slogan ?? "Driving excellence in the automotive market."}</p>
+            <p className="text-on-primary-container font-body-md">{profile.slogan ?? k.financeFooterSloganDefault}</p>
           </div>
           <div className="flex flex-col gap-4">
-            <h5 className="text-white font-bold uppercase tracking-widest text-xs">Quick Links</h5>
+            <h5 className="text-white font-bold uppercase tracking-widest text-xs">{k.quickLinks}</h5>
             <Link className="text-on-primary-container hover:text-white transition-colors" href="/inventory">{t.nav.inventory}</Link>
             <Link className="text-on-primary-container hover:text-white transition-colors" href="/terms">{t.footerTerms}</Link>
             <Link className="text-on-primary-container hover:text-white transition-colors" href="/privacy">{t.footerPrivacy}</Link>
           </div>
           <div className="flex flex-col gap-4">
-            <h5 className="text-white font-bold uppercase tracking-widest text-xs">Finance</h5>
-            <Link className="text-luxury-gold underline" href="/finance">Calculator</Link>
+            <h5 className="text-white font-bold uppercase tracking-widest text-xs">{t.nav.finance}</h5>
+            <Link className="text-luxury-gold underline" href="/finance">{k.calculatorLinkLabel}</Link>
           </div>
           <div className="flex flex-col gap-4">
-            <h5 className="text-white font-bold uppercase tracking-widest text-xs">Contact</h5>
+            <h5 className="text-white font-bold uppercase tracking-widest text-xs">{t.nav.contact}</h5>
             {profile.address && <p className="text-on-primary-container font-body-md">{profile.address}</p>}
             {profile.phone && <p className="text-on-primary-container font-body-md">{profile.phone}</p>}
           </div>
         </div>
         <div className="border-t border-white/5 mt-12 pt-8 text-center px-margin-desktop">
-          <p className="text-on-primary-container text-sm font-body-md">© {new Date().getFullYear()} {profile.dealershipName}. All Rights Reserved.</p>
+          <p className="text-on-primary-container text-sm font-body-md">© {new Date().getFullYear()} {profile.dealershipName}. {k.allRightsReserved}.</p>
         </div>
       </footer>
     </div>
