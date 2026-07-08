@@ -271,8 +271,18 @@ export function KineticModernEvHome(props: ThemeProps) {
           </div>
           <div className="space-y-4">
             <h4 className="text-white font-bold text-lg">{k.contactUsHeading}</h4>
-            {profile.address && <p className="text-on-primary-container text-sm">{profile.address}</p>}
-            {profile.phone && <p className="text-white font-bold">{profile.phone}</p>}
+            {profile.address && (
+              <p className="text-on-primary-container text-sm">
+                {profile.address.startsWith("http") ? (
+                  <a href={profile.address} target="_blank" rel="noopener noreferrer" className="hover:underline">{t.viewOnMap}</a>
+                ) : (
+                  profile.address
+                )}
+              </p>
+            )}
+            {profile.phones.map((phone) => (
+              <a key={phone} href={`tel:${phone}`} className="block text-white font-bold hover:underline">{phone}</a>
+            ))}
             <Link className="block bg-luxury-gold text-primary w-full py-3 rounded-lg font-bold hover:bg-jod-gold transition-colors text-center" href="/contact">{k.bookTestDrive}</Link>
           </div>
         </div>

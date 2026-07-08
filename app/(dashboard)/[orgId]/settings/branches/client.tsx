@@ -13,6 +13,7 @@ import { Plus, Store, CheckCircle, AlertTriangle } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Doc, Id } from "@/convex/_generated/dataModel";
@@ -42,13 +43,14 @@ export function BranchesClient() {
     name: "",
     address: "",
     phone: "",
+    additionalPhones: "",
     managerId: "none",
     isActive: true,
   });
 
   const handleOpenAdd = () => {
     setEditingBranch(null);
-    setFormData({ name: "", address: "", phone: "", managerId: "none", isActive: true });
+    setFormData({ name: "", address: "", phone: "", additionalPhones: "", managerId: "none", isActive: true });
     setIsDialogOpen(true);
   };
 
@@ -58,6 +60,7 @@ export function BranchesClient() {
       name: branch.name,
       address: branch.address || "",
       phone: branch.phone || "",
+      additionalPhones: (branch.additionalPhones || []).join("\n"),
       managerId: branch.managerId || "none",
       isActive: branch.isActive,
     });
@@ -67,8 +70,12 @@ export function BranchesClient() {
   const handleSave = async () => {
     if (!activeOrgId || !formData.name) return;
     try {
-      const { managerId, ...rest } = formData;
-      const payload = { ...rest, managerId: managerId === "none" ? undefined : (managerId as Id<"users">) };
+      const { managerId, additionalPhones, ...rest } = formData;
+      const payload = {
+        ...rest,
+        additionalPhones: additionalPhones.split("\n").map((phone) => phone.trim()).filter(Boolean),
+        managerId: managerId === "none" ? undefined : (managerId as Id<"users">),
+      };
       if (editingBranch) {
         await updateBranch({
           orgId: activeOrgId,
@@ -212,6 +219,7 @@ export function BranchesClient() {
                 onChange={(e) => setFormData({ ...formData, address: e.target.value })}
                 placeholder="123 Main St"
               />
+              <p className="text-xs text-muted-foreground">{t("AddressMapHint" as any)}</p>
             </div>
             <div className="space-y-2">
               <Label>{t("PhoneOptional" as any)}</Label>
@@ -219,6 +227,15 @@ export function BranchesClient() {
                 value={formData.phone}
                 onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                 placeholder="+1 234 567 890"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>{t("AdditionalPhoneNumbers" as any)}</Label>
+              <Textarea
+                value={formData.additionalPhones}
+                onChange={(e) => setFormData({ ...formData, additionalPhones: e.target.value })}
+                placeholder={t("AdditionalPhoneNumbersPlaceholder" as any)}
+                rows={3}
               />
             </div>
             <div className="space-y-2">

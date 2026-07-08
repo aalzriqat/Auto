@@ -59,6 +59,7 @@ export const upsert = mutation({
     legalCompanyName: v.optional(v.string()),
     dealershipAddress: v.optional(v.string()),
     dealershipPhone: v.optional(v.string()),
+    dealershipPhones: v.optional(v.array(v.string())),
     whatsappPhoneNumberId: v.optional(v.string()),
     whatsappApiToken: v.optional(v.string()),
     whatsappWebhookSecret: v.optional(v.string()),
@@ -95,12 +96,6 @@ export const upsert = mutation({
       // Patch only provided fields (exclude undefined values)
       const patch: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(fields)) {
-        // Convex's argument wire protocol drops keys whose value is
-        // explicitly undefined before the handler ever sees them, so a
-        // client can never make this evaluate false — Object.entries only
-        // yields keys the caller actually provided. Kept as a defensive
-        // guard rather than assuming that behavior stays true forever.
-        /* v8 ignore else */
         if (value !== undefined) {
           patch[key] = value;
         }
@@ -124,6 +119,7 @@ export const upsert = mutation({
         legalCompanyName: fields.legalCompanyName,
         dealershipAddress: fields.dealershipAddress,
         dealershipPhone: fields.dealershipPhone,
+        dealershipPhones: fields.dealershipPhones,
         whatsappPhoneNumberId: fields.whatsappPhoneNumberId,
         whatsappApiToken: fields.whatsappApiToken,
         whatsappWebhookSecret: fields.whatsappWebhookSecret,

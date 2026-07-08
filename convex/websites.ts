@@ -574,7 +574,9 @@ export const saveDraft = mutation({
     logoUrl: v.optional(v.string()),
     heroTitle: v.optional(v.string()),
     heroSubtitle: v.optional(v.string()),
+    heroBadgeText: v.optional(v.string()),
     slogan: v.optional(v.string()),
+    activeFinanceCompanyId: v.optional(v.id("financeCompanies")),
     themeConfig: v.optional(v.any()),
     sections: v.optional(v.array(sectionInputValidator)),
     routing: v.optional(v.array(routingInputValidator)),
@@ -582,6 +584,14 @@ export const saveDraft = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.WEBSITE_MANAGE]);
     await requireFeature(ctx, args.orgId, "websiteBuilder");
+
+    if (args.activeFinanceCompanyId) {
+      const company = await ctx.db.get(args.activeFinanceCompanyId);
+      if (!company || company.orgId !== args.orgId) {
+        throw new ConvexError("Finance company not found.");
+      }
+    }
+
     let settings = await getSettingsByOrg(ctx, args.orgId);
     if (!settings) {
       const settingsId = await ctx.db.insert("websiteSettings", {
@@ -663,7 +673,9 @@ export const saveDraft = mutation({
       "logoUrl",
       "heroTitle",
       "heroSubtitle",
+      "heroBadgeText",
       "slogan",
+      "activeFinanceCompanyId",
       "themeConfig",
     ] as const) {
       if (args[key] !== undefined) patch[key] = args[key];

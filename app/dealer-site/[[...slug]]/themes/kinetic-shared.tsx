@@ -1,4 +1,43 @@
+import { calculateUnifiedMurabaha } from "@/lib/financing";
 import type { Lang, PublicSite, PublicVehicle } from "./theme-props";
+
+/** Generic illustrative terms used when the seller hasn't picked one of their
+ * configured finance companies (Settings > Finance) for the public calculator. */
+export const DEFAULT_FINANCE_TERMS: NonNullable<PublicSite["financeCompany"]> = {
+  name: "",
+  profitRate: 4.5,
+  maxTermMonths: 60,
+  gracePeriodMonths: 0,
+  insuranceRate: 0,
+  adminFees: 0,
+  commission: 0,
+  includesCommissionInDebt: false,
+};
+
+export function estimateMonthlyInstallment({
+  financeCompany,
+  vehiclePrice,
+  downPayment,
+  termMonths,
+}: {
+  financeCompany: PublicSite["financeCompany"];
+  vehiclePrice: number;
+  downPayment: number;
+  termMonths: number;
+}) {
+  const terms = financeCompany ?? DEFAULT_FINANCE_TERMS;
+  return calculateUnifiedMurabaha({
+    vehiclePrice,
+    downPayment,
+    commission: terms.commission,
+    processingFees: terms.adminFees,
+    annualProfitRate: terms.profitRate,
+    annualInsuranceRate: terms.insuranceRate,
+    termMonths,
+    gracePeriodMonths: terms.gracePeriodMonths,
+    includesCommissionInDebt: terms.includesCommissionInDebt,
+  });
+}
 
 export function waLink(phone: string | null | undefined, message: string) {
   const digits = (phone ?? "").replace(/\D/g, "");
@@ -47,16 +86,16 @@ export function KineticBrand({
   className?: string;
 }) {
   if (profile.logoUrl) {
-    const heightClass = size === "lg" ? "h-12" : size === "sm" ? "h-8" : "h-10";
+    const heightClass = size === "lg" ? "h-16" : size === "sm" ? "h-9" : "h-12";
     return (
       <img
         src={profile.logoUrl}
         alt={profile.dealershipName}
-        className={`${heightClass} w-auto max-w-[220px] object-contain ${className ?? ""}`}
+        className={`${heightClass} w-auto max-w-[260px] object-contain ${className ?? ""}`}
       />
     );
   }
-  const textSizeClass = size === "lg" ? "text-2xl md:text-3xl" : size === "sm" ? "text-lg" : "text-xl md:text-2xl";
+  const textSizeClass = size === "lg" ? "text-3xl md:text-4xl" : size === "sm" ? "text-xl" : "text-2xl md:text-3xl";
   const colorClass = light ? "text-white" : "text-luxury-gold dark:text-jod-gold";
   return (
     <span className={`font-display-luxury ${textSizeClass} ${colorClass} truncate max-w-[260px] ${className ?? ""}`}>
@@ -177,7 +216,7 @@ const KINETIC_TEXT = {
   evFooterSloganDefault: ["Redefining how we move, one charge at a time.", "نعيد تعريف طريقة تنقلنا، شحنة تلو الأخرى."],
 
   // Sales home
-  carsAvailableSuffix: ["Cars Available", "سيارة متوفرة"],
+  heroBadgeDefault: ["Quality Inspected · Trusted Dealer", "فحص شامل · وكيل موثوق"],
   salesHeroTitle: ["Find Your Next Car Today", "اعثر على سيارتك القادمة اليوم"],
   salesHeroSubtitle: [
     "The largest selection of premium used and new vehicles. Quality inspected. Finance approved. Ready for delivery.",
@@ -192,9 +231,7 @@ const KINETIC_TEXT = {
   inTenSeconds: ["in 10 seconds", "في 10 ثوانٍ"],
   instantEstimateDesc: ["Get an instant monthly payment estimate. No commitment required.", "احصل على تقدير فوري للقسط الشهري. دون أي التزام."],
   fastApprovalTitle: ["Fast Approval", "موافقة سريعة"],
-  fastApprovalDesc: ["Response within 24 hours", "رد خلال 24 ساعة"],
   lowInterestTitle: ["Low Interest", "فائدة منخفضة"],
-  lowInterestDesc: ["Starting from 4.5% annually", "ابتداءً من 4.5% سنوياً"],
   carPriceLabel: ["Car Price (JOD)", "سعر السيارة (دينار)"],
   downPaymentPercentLabel: ["Down Payment (%)", "الدفعة الأولى (%)"],
   estimatedMonthlyPayment: ["Estimated Monthly Payment", "القسط الشهري المقدر"],

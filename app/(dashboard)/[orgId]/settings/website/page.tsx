@@ -115,6 +115,7 @@ export default function WebsiteSettingsPage() {
   const { activeOrgId } = useOrg();
   const { locale, t } = useLanguage();
   const status = useQuery(api.websites.getStatus, activeOrgId ? { orgId: activeOrgId } : "skip");
+  const financeCompanies = useQuery(api.finance.listCompanies, activeOrgId ? { orgId: activeOrgId } : "skip");
   const startSetup = useMutation(api.websites.startSetup);
   const checkSubdomain = useMutation(api.websites.checkSubdomain);
   const searchDomain = useMutation(api.websites.searchDomain);
@@ -136,6 +137,8 @@ export default function WebsiteSettingsPage() {
   const [secondaryColor, setSecondaryColor] = useState("#f97316");
   const [heroTitle, setHeroTitle] = useState("");
   const [heroSubtitle, setHeroSubtitle] = useState("");
+  const [heroBadgeText, setHeroBadgeText] = useState("");
+  const [activeFinanceCompanyId, setActiveFinanceCompanyId] = useState<string>("none");
   const [sections, setSections] = useState<SectionState>({});
   const [routing, setRouting] = useState<Record<string, { createTask: boolean; notifyByEmail: boolean; notifyByWhatsApp: boolean }>>({});
 
@@ -152,6 +155,8 @@ export default function WebsiteSettingsPage() {
       setSecondaryColor(settings.secondaryColor ?? "#f97316");
       setHeroTitle(settings.heroTitle ?? "");
       setHeroSubtitle(settings.heroSubtitle ?? "");
+      setHeroBadgeText(settings.heroBadgeText ?? "");
+      setActiveFinanceCompanyId(settings.activeFinanceCompanyId ?? "none");
       const platform = status.domains?.find((domain: Doc<"websiteDomains">) => domain.type === "platform_subdomain");
       setSubdomainSlug(platform?.domain?.replace(".autoflowdealer.com", "") ?? "");
     }
@@ -193,6 +198,8 @@ export default function WebsiteSettingsPage() {
       secondaryColor,
       heroTitle: heroTitle.trim() || undefined,
       heroSubtitle: heroSubtitle.trim() || undefined,
+      heroBadgeText: heroBadgeText.trim() || undefined,
+      activeFinanceCompanyId: activeFinanceCompanyId === "none" ? undefined : (activeFinanceCompanyId as Id<"financeCompanies">),
       sections: Object.entries(sections).map(([sectionKey, enabled]) => ({ sectionKey, enabled })),
       routing: WEBSITE_FORM_TYPES.map(([formType]) => ({
         formType,
@@ -579,6 +586,26 @@ export default function WebsiteSettingsPage() {
                 </SelectContent>
               </Select>
               <Textarea value={heroSubtitle} onChange={(event) => setHeroSubtitle(event.target.value)} placeholder={t("WebsiteSloganPlaceholder")} />
+            </div>
+            <div className="space-y-2 lg:col-span-2">
+              <Label>{t("WebsiteHeroBadgeText")}</Label>
+              <Input value={heroBadgeText} onChange={(event) => setHeroBadgeText(event.target.value)} placeholder={t("WebsiteHeroBadgeTextPlaceholder")} />
+              <p className="text-xs text-muted-foreground">{t("WebsiteHeroBadgeTextHint")}</p>
+            </div>
+            <div className="space-y-2 lg:col-span-2">
+              <Label>{t("WebsiteActiveFinanceCompany")}</Label>
+              <Select value={activeFinanceCompanyId} onValueChange={setActiveFinanceCompanyId}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">{t("WebsiteNoFinanceCompany")}</SelectItem>
+                  {(financeCompanies ?? []).filter((company) => company.isActive).map((company) => (
+                    <SelectItem key={company._id} value={company._id}>
+                      {company.name} ({company.profitRate}%)
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">{t("WebsiteActiveFinanceCompanyHint")}</p>
             </div>
             <div className="flex items-center justify-between rounded-md border p-3 lg:col-span-2">
               <div>
