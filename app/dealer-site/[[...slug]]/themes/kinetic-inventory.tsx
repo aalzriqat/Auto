@@ -90,7 +90,10 @@ export function KineticInventoryList(props: ThemeProps) {
   const prices = vehicles.map((v) => v.price).filter((p): p is number => p != null);
   const priceCeiling = prices.length ? Math.max(...prices) : 100000;
   const maxPrice = maxPriceOverride ?? priceCeiling;
-  const makes = useMemo(() => Array.from(new Set(vehicles.map((v) => v.make))).sort(), [vehicles]);
+  const makes = useMemo(
+    () => Array.from(new Set(vehicles.map((v) => v.make))).sort((a, b) => a.localeCompare(b)),
+    [vehicles]
+  );
 
   const filtered = vehicles.filter((v) => {
     if (make !== "all" && v.make !== make) return false;
