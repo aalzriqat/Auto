@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import type { ThemeProps } from "./theme-props";
-import { KineticVehicleImage, waLink } from "./kinetic-shared";
+import { KineticBrand, KineticVehicleImage, useKineticStrings, waLink } from "./kinetic-shared";
 
 export function KineticLuxuryHome(props: ThemeProps) {
   const { site, lang, showLangToggle, isPreviewMode, onToggleLang, t, formatPrice, featuredVehicles, dir } = props;
   const profile = site.profile;
   const cars = featuredVehicles.slice(0, 3);
+  const k = useKineticStrings(lang);
 
   return (
     <div className="theme-kinetic bg-background text-on-background selection:bg-luxury-gold selection:text-white" dir={dir}>
@@ -17,8 +18,8 @@ export function KineticLuxuryHome(props: ThemeProps) {
       <nav className="bg-surface-container-low dark:bg-surface-dim backdrop-blur-xl docked full-width top-0 sticky z-50 shadow-sm">
         <div className="flex justify-between items-center px-gutter py-4 w-full max-w-screen-2xl mx-auto">
           <div className="flex items-center gap-8">
-            <Link className="font-display-luxury text-display-luxury text-luxury-gold dark:text-jod-gold tracking-tighter" href="/">
-              {profile.dealershipName}
+            <Link href="/">
+              <KineticBrand profile={profile} />
             </Link>
             <div className="hidden md:flex gap-6 items-center">
               <Link className="font-label-caps text-label-caps text-secondary dark:text-secondary-fixed-dim border-b-2 border-secondary font-bold pb-1" href="/inventory">{t.nav.inventory}</Link>
@@ -34,7 +35,7 @@ export function KineticLuxuryHome(props: ThemeProps) {
                 target="_blank" rel="noopener noreferrer"
               >
                 <span className="material-symbols-outlined text-[18px]">whatshot</span>
-                WhatsApp Support
+                {k.whatsappSupport}
               </a>
             )}
             {showLangToggle && (
@@ -58,17 +59,17 @@ export function KineticLuxuryHome(props: ThemeProps) {
           </div>
           <div className="relative z-20 h-full flex flex-col justify-center items-center text-center px-margin-mobile md:px-margin-desktop">
             <div className="max-w-4xl space-y-6">
-              <h1 className="font-display-luxury text-white text-[48px] md:text-[80px] leading-tight">{profile.heroTitle ?? "Luxury Redefined"}</h1>
+              <h1 className="font-display-luxury text-white text-[48px] md:text-[80px] leading-tight">{profile.heroTitle ?? k.luxuryHeroTitle}</h1>
               <p className="font-body-md text-white/90 text-lg md:text-xl max-w-2xl mx-auto opacity-80">
-                {profile.heroSubtitle ?? "Experience the pinnacle of automotive excellence. Discover a curated collection of the world's most prestigious marques."}
+                {profile.heroSubtitle ?? k.luxuryHeroSubtitle}
               </p>
               <div className="flex flex-col md:flex-row gap-4 justify-center pt-8">
                 <Link className="px-8 py-4 bg-luxury-gold text-white font-label-caps text-label-caps rounded-sm hover:bg-jod-gold transition-all transform hover:-translate-y-1 shadow-lg flex items-center justify-center gap-2" href="/inventory">
-                  Browse Exclusive Collection
+                  {k.luxuryBrowseCollection}
                   <span className="material-symbols-outlined text-[16px]">arrow_forward</span>
                 </Link>
                 <Link className="px-8 py-4 bg-white/10 backdrop-blur-md border border-white/30 text-white font-label-caps text-label-caps rounded-sm hover:bg-white hover:text-primary transition-all flex items-center justify-center gap-2" href="/contact">
-                  Private Showroom Visit
+                  {k.luxuryPrivateVisit}
                   <span className="material-symbols-outlined text-[16px]">event</span>
                 </Link>
               </div>
@@ -82,10 +83,10 @@ export function KineticLuxuryHome(props: ThemeProps) {
         <section className="bg-primary py-12 border-y border-luxury-gold/20">
           <div className="max-w-screen-2xl mx-auto px-gutter grid grid-cols-2 md:grid-cols-4 gap-8">
             {[
-              ["15+", "Years of Heritage"],
-              ["500+", "Elite Deliveries"],
-              ["24h", "Global Sourcing"],
-              ["100%", "Private Service"],
+              ["15+", k.luxuryStatHeritage],
+              ["500+", k.luxuryStatDeliveries],
+              ["24h", k.luxuryStatSourcing],
+              ["100%", k.luxuryStatService],
             ].map(([value, label]) => (
               <div className="text-center" key={label}>
                 <div className="font-display-luxury text-luxury-gold text-4xl mb-1">{value}</div>
@@ -99,10 +100,10 @@ export function KineticLuxuryHome(props: ThemeProps) {
           <div className="max-w-screen-2xl mx-auto px-gutter">
             <div className="flex flex-col md:flex-row justify-between items-end mb-12 gap-6">
               <div>
-                <span className="font-label-caps text-luxury-gold text-sm tracking-widest uppercase">Featured Inventory</span>
-                <h2 className="font-display-luxury text-primary text-headline-lg mt-2">Curated Masterpieces</h2>
+                <span className="font-label-caps text-luxury-gold text-sm tracking-widest uppercase">{k.featuredInventory}</span>
+                <h2 className="font-display-luxury text-primary text-headline-lg mt-2">{k.curatedMasterpieces}</h2>
               </div>
-              <Link className="font-label-caps text-primary border-b border-primary pb-1 hover:text-luxury-gold hover:border-luxury-gold transition-colors" href="/inventory">View All Vehicles</Link>
+              <Link className="font-label-caps text-primary border-b border-primary pb-1 hover:text-luxury-gold hover:border-luxury-gold transition-colors" href="/inventory">{k.viewAllVehicles}</Link>
             </div>
             {cars.length ? (
               <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
@@ -120,7 +121,9 @@ export function KineticLuxuryHome(props: ThemeProps) {
                         <span className="font-headline-lg text-luxury-gold text-xl">{formatPrice(v.price)}</span>
                       </div>
                       <p className="font-body-md text-on-surface-variant text-sm">
-                        {v.year} • {v.mileage != null ? `${v.mileage.toLocaleString()} km` : "0 km"}{v.trim ? ` • ${v.trim}` : ""}
+                        {v.year}
+                        {v.mileage != null ? ` • ${v.mileage.toLocaleString()} km` : ""}
+                        {v.trim ? ` • ${v.trim}` : ""}
                       </p>
                       <div className="flex gap-4 pt-2">
                         <span className="flex-1 py-3 border border-outline text-primary font-label-caps text-xs group-hover:bg-primary group-hover:text-white transition-all uppercase text-center">{t.askAbout}</span>
@@ -146,18 +149,18 @@ export function KineticLuxuryHome(props: ThemeProps) {
                   />
                 </div>
                 <div className="absolute -bottom-8 -right-8 bg-luxury-gold p-8 rounded-sm shadow-2xl hidden md:block">
-                  <div className="font-display-luxury text-white text-3xl">Est. 2009</div>
-                  <div className="font-label-caps text-white/80 text-[10px] tracking-widest uppercase">Trusted Excellence</div>
+                  <div className="font-display-luxury text-white text-3xl">{k.establishedBadge}</div>
+                  <div className="font-label-caps text-white/80 text-[10px] tracking-widest uppercase">{k.trustedExcellence}</div>
                 </div>
               </div>
               <div className="space-y-8">
-                <span className="font-label-caps text-luxury-gold text-sm tracking-widest uppercase">The {profile.dealershipName} Standard</span>
-                <h2 className="font-display-luxury text-white text-[40px] md:text-[56px] leading-tight">Beyond Acquisition</h2>
+                <span className="font-label-caps text-luxury-gold text-sm tracking-widest uppercase">{k.theStandard} — {profile.dealershipName}</span>
+                <h2 className="font-display-luxury text-white text-[40px] md:text-[56px] leading-tight">{k.beyondAcquisition}</h2>
                 <div className="space-y-6">
                   {[
-                    ["verified_user", "White-Glove Service", "Every vehicle undergoes a 200-point inspection by certified technicians to ensure absolute perfection."],
-                    ["public", "International Sourcing", "If your dream car isn't in our showroom, our global network will locate it and manage the entire import process."],
-                    ["history_edu", "Legacy of Trust", "A decade-long heritage of serving the most discerning clients."],
+                    ["verified_user", k.whiteGloveTitle, k.whiteGloveDesc],
+                    ["public", k.intlSourcingTitle, k.intlSourcingDesc],
+                    ["history_edu", k.legacyTrustTitle, k.legacyTrustDesc],
                   ].map(([icon, title, body]) => (
                     <div className="flex gap-6" key={title}>
                       <span className="material-symbols-outlined text-luxury-gold text-3xl">{icon}</span>
@@ -175,17 +178,17 @@ export function KineticLuxuryHome(props: ThemeProps) {
 
         <section className="py-24 bg-surface-container">
           <div className="max-w-4xl mx-auto px-margin-mobile text-center space-y-8">
-            <h2 className="font-display-luxury text-primary text-4xl">Interested in a Private Consultation?</h2>
-            <p className="font-body-md text-on-surface-variant text-lg">Our luxury specialists are available to discuss your requirements discreetly and professionally.</p>
+            <h2 className="font-display-luxury text-primary text-4xl">{k.privateConsultationTitle}</h2>
+            <p className="font-body-md text-on-surface-variant text-lg">{k.privateConsultationDesc}</p>
             <div className="flex flex-col md:flex-row gap-6 justify-center">
               {profile.phone && (
                 <a className="flex items-center justify-center gap-3 px-10 py-5 bg-whatsapp-green text-white rounded-full font-label-caps text-sm hover:opacity-90 transition-all shadow-lg" href={waLink(profile.phone, `Hi ${profile.dealershipName}, I'd like a private consultation.`)} target="_blank" rel="noopener noreferrer">
                   <span className="material-symbols-outlined">whatshot</span>
-                  Connect via WhatsApp
+                  {k.connectWhatsapp}
                 </a>
               )}
               <Link className="px-10 py-5 bg-primary text-white rounded-full font-label-caps text-sm hover:bg-luxury-gold transition-all shadow-lg text-center" href="/contact">
-                Request a Call Back
+                {k.requestCallBack}
               </Link>
             </div>
           </div>
@@ -196,19 +199,19 @@ export function KineticLuxuryHome(props: ThemeProps) {
         <div className="w-full grid grid-cols-1 md:grid-cols-4 gap-gutter px-margin-desktop max-w-screen-2xl mx-auto">
           <div className="space-y-6">
             <div className="font-display-luxury text-display-luxury text-luxury-gold">{profile.dealershipName}</div>
-            <p className="font-body-md text-on-primary-container text-sm leading-relaxed">{profile.slogan ?? "The destination for premium automotive experiences. Excellence in every detail, from showroom to garage."}</p>
+            <p className="font-body-md text-on-primary-container text-sm leading-relaxed">{profile.slogan ?? k.luxuryFooterSloganDefault}</p>
           </div>
           <div className="space-y-6">
-            <h4 className="font-label-caps text-white uppercase tracking-widest text-sm">Explore</h4>
+            <h4 className="font-label-caps text-white uppercase tracking-widest text-sm">{k.footerExplore}</h4>
             <ul className="space-y-3 font-body-md text-on-primary-container">
-              <li><Link className="hover:text-white transition-colors" href="/inventory">Our Inventory</Link></li>
-              <li><Link className="hover:text-white transition-colors" href="/contact">Luxury Concierge</Link></li>
-              <li><Link className="hover:text-white transition-colors" href="/finance">Finance Options</Link></li>
-              <li><Link className="hover:text-white transition-colors" href="/branches">Showroom Location</Link></li>
+              <li><Link className="hover:text-white transition-colors" href="/inventory">{k.footerOurInventory}</Link></li>
+              <li><Link className="hover:text-white transition-colors" href="/contact">{k.footerLuxuryConcierge}</Link></li>
+              <li><Link className="hover:text-white transition-colors" href="/finance">{k.footerFinanceOptions}</Link></li>
+              <li><Link className="hover:text-white transition-colors" href="/branches">{k.footerShowroomLocation}</Link></li>
             </ul>
           </div>
           <div className="space-y-6">
-            <h4 className="font-label-caps text-white uppercase tracking-widest text-sm">Company</h4>
+            <h4 className="font-label-caps text-white uppercase tracking-widest text-sm">{k.footerCompany}</h4>
             <ul className="space-y-3 font-body-md text-on-primary-container">
               <li><Link className="hover:text-white transition-colors" href="/privacy">{t.footerPrivacy}</Link></li>
               <li><Link className="hover:text-white transition-colors" href="/terms">{t.footerTerms}</Link></li>
@@ -216,7 +219,7 @@ export function KineticLuxuryHome(props: ThemeProps) {
             </ul>
           </div>
           <div className="space-y-6">
-            <h4 className="font-label-caps text-white uppercase tracking-widest text-sm">Showroom</h4>
+            <h4 className="font-label-caps text-white uppercase tracking-widest text-sm">{k.footerShowroom}</h4>
             <div className="font-body-md text-on-primary-container text-sm space-y-4">
               {profile.address && (
                 <p className="flex items-start gap-3"><span className="material-symbols-outlined text-luxury-gold text-lg">location_on</span>{profile.address}</p>
@@ -228,7 +231,7 @@ export function KineticLuxuryHome(props: ThemeProps) {
           </div>
         </div>
         <div className="mt-20 border-t border-white/10 pt-8 text-center px-gutter">
-          <p className="font-body-md text-on-primary-container text-xs opacity-60">© {new Date().getFullYear()} {profile.dealershipName}. All Rights Reserved.</p>
+          <p className="font-body-md text-on-primary-container text-xs opacity-60">© {new Date().getFullYear()} {profile.dealershipName}. {k.allRightsReserved}.</p>
         </div>
       </footer>
 
