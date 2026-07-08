@@ -1,5 +1,30 @@
 export const FACEBOOK_GRAPH_VERSION = "v25.0";
 
+/**
+ * Text-bearing fields to request when fetching a post/reel's content to
+ * match against vehicle inventory. Reels resolve to a Video node (not a
+ * Page Post) and don't support message/story/caption/name/call_to_action/
+ * properties/attachments — the Graph API 400s the *entire* request if any
+ * requested field is invalid for the resolved node type, so these two
+ * lists must stay disjoint by node type rather than merged into one.
+ */
+export const FACEBOOK_REEL_VIDEO_FIELDS = ["description", "title"].join(",");
+
+export const FACEBOOK_PAGE_POST_FIELDS = [
+  "message",
+  "story",
+  "name",
+  "caption",
+  "description",
+  "call_to_action",
+  "properties",
+  "attachments{title,description,name,caption,url,unshimmed_url,subattachments{title,description,name,caption,url,unshimmed_url}}",
+  "child_attachments{title,description,name,caption,url,call_to_action}",
+].join(",");
+
+/** Fields to read back off the parsed JSON response for either node type above. */
+export const FACEBOOK_POST_TEXT_FIELDS = ["message", "story", "name", "caption", "description", "title"] as const;
+
 /** Posts a reply to a specific Facebook Page comment via the Graph API. */
 export async function postCommentReply(
   commentId: string,

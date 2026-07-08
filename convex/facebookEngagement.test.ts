@@ -1,5 +1,5 @@
 import { convexTest } from "convex-test";
-import { expect, test, describe, vi } from "vitest";
+import { expect, test, describe, vi, afterEach } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 
@@ -8,11 +8,14 @@ vi.mock("./rateLimit", () => ({
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
 
-vi.mock("./utils/facebookApi", () => ({
-  postCommentReply: vi.fn().mockResolvedValue({ ok: true }),
-  postDirectMessage: vi.fn().mockResolvedValue({ ok: true }),
-  FACEBOOK_GRAPH_VERSION: "v25.0",
-}));
+vi.mock("./utils/facebookApi", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./utils/facebookApi")>();
+  return {
+    ...actual,
+    postCommentReply: vi.fn().mockResolvedValue({ ok: true }),
+    postDirectMessage: vi.fn().mockResolvedValue({ ok: true }),
+  };
+});
 
 async function seedOrgWithManager(t: ReturnType<typeof convexTest>) {
   const orgId = await t.run(async (ctx) =>
@@ -805,6 +808,10 @@ describe("facebookEngagement.sendFacebookDirectMessage", () => {
 });
 
 describe("facebookEngagement.enrichEventVehicleFromPost", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   test("matches a vehicle from a Reel's caption using the Video-node field list", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const { orgId } = await seedOrgWithManager(t);
@@ -856,6 +863,8 @@ describe("facebookEngagement.enrichEventVehicleFromPost", () => {
     expect(requestedFields).not.toContain("message");
     expect(requestedFields).not.toContain("caption");
     expect(requestedFields).not.toContain("story");
+    expect(requestedFields).toContain("description");
+    expect(requestedFields).toContain("title");
 
     const event = await t.run((ctx) =>
       ctx.db
@@ -864,7 +873,5 @@ describe("facebookEngagement.enrichEventVehicleFromPost", () => {
         .unique()
     );
     expect(event?.vehicleId).toBeDefined();
-
-    vi.unstubAllGlobals();
   });
 });

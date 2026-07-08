@@ -6,7 +6,15 @@ import { notifyManagers, notifyUser } from "./utils/notifications";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireFeature } from "./subscriptions";
-import { postCommentReply, postDirectMessage, fetchFbConversationMessages, FACEBOOK_GRAPH_VERSION } from "./utils/facebookApi";
+import {
+  postCommentReply,
+  postDirectMessage,
+  fetchFbConversationMessages,
+  FACEBOOK_GRAPH_VERSION,
+  FACEBOOK_REEL_VIDEO_FIELDS,
+  FACEBOOK_PAGE_POST_FIELDS,
+  FACEBOOK_POST_TEXT_FIELDS,
+} from "./utils/facebookApi";
 import { matchIntent, detectLocale } from "./utils/smartReplyIntent";
 import { buildSmartReplyText } from "./utils/smartReplyBuilder";
 import { matchVehicleFromText, suggestVehiclesFromText } from "./utils/vehicleTextMatch";
@@ -652,20 +660,7 @@ export const enrichEventVehicleFromPost = internalAction({
     // Reel comments/DMs carry a reel_id, which resolves to a Video node —
     // only "description"/"title" are valid there. Everything else (plain
     // posts, unknown surfaces) is a Page Post node and gets the full list.
-    const isVideoNode = args.sourceSurface === "reel";
-    const fields = isVideoNode
-      ? ["description", "title"].join(",")
-      : [
-          "message",
-          "story",
-          "name",
-          "caption",
-          "description",
-          "call_to_action",
-          "properties",
-          "attachments{title,description,name,caption,url,unshimmed_url,subattachments{title,description,name,caption,url,unshimmed_url}}",
-          "child_attachments{title,description,name,caption,url,call_to_action}",
-        ].join(",");
+    const fields = args.sourceSurface === "reel" ? FACEBOOK_REEL_VIDEO_FIELDS : FACEBOOK_PAGE_POST_FIELDS;
 
     const url = new URL(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${args.postId}`);
     url.searchParams.set("fields", fields);
@@ -676,7 +671,7 @@ export const enrichEventVehicleFromPost = internalAction({
     const json = await res.json();
     const parts: string[] = [];
 
-    for (const f of ["message", "story", "name", "caption", "description", "title"] as const) {
+    for (const f of FACEBOOK_POST_TEXT_FIELDS) {
       if (json[f]) parts.push(json[f]);
     }
 

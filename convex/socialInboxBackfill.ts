@@ -4,7 +4,12 @@ import { internal } from "./_generated/api";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { INSTAGRAM_GRAPH_VERSION } from "./utils/instagramApi";
-import { FACEBOOK_GRAPH_VERSION } from "./utils/facebookApi";
+import {
+  FACEBOOK_GRAPH_VERSION,
+  FACEBOOK_REEL_VIDEO_FIELDS,
+  FACEBOOK_PAGE_POST_FIELDS,
+  FACEBOOK_POST_TEXT_FIELDS,
+} from "./utils/facebookApi";
 import { matchVehicleFromText, suggestVehiclesFromText } from "./utils/vehicleTextMatch";
 import { requireFeature } from "./subscriptions";
 
@@ -336,20 +341,7 @@ export const resyncEvents = action({
                 // requested field is invalid for the resolved node type,
                 // so this needs a narrower field list (mirrors the same
                 // fix in facebookEngagement.enrichEventVehicleFromPost).
-                const isVideoNode = ev.sourceSurface === "reel";
-                const fields = isVideoNode
-                  ? ["description", "title"].join(",")
-                  : [
-                      "message",
-                      "story",
-                      "name",
-                      "caption",
-                      "description",
-                      "call_to_action",
-                      "properties",
-                      "attachments{title,description,name,caption,url,unshimmed_url,subattachments{title,description,name,caption,url,unshimmed_url}}",
-                      "child_attachments{title,description,name,caption,url,call_to_action}",
-                    ].join(",");
+                const fields = ev.sourceSurface === "reel" ? FACEBOOK_REEL_VIDEO_FIELDS : FACEBOOK_PAGE_POST_FIELDS;
                 const res = await fetch(
                   `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${postId}?fields=${fields}&access_token=${fbToken.facebookPageAccessToken}`
                 );
@@ -358,7 +350,7 @@ export const resyncEvents = action({
                   const parts: string[] = [];
 
                   // Post-level text fields
-                  for (const f of ["message", "story", "name", "caption", "description", "title"] as const) {
+                  for (const f of FACEBOOK_POST_TEXT_FIELDS) {
                     if (json[f]) parts.push(json[f]);
                   }
 
