@@ -330,17 +330,26 @@ export const resyncEvents = action({
           if (postId) {
             if (!postTextCache.has(postId)) {
               try {
-                const fields = [
-                  "message",
-                  "story",
-                  "name",
-                  "caption",
-                  "description",
-                  "call_to_action",
-                  "properties",
-                  "attachments{title,description,name,caption,url,unshimmed_url,subattachments{title,description,name,caption,url,unshimmed_url}}",
-                  "child_attachments{title,description,name,caption,url,call_to_action}",
-                ].join(",");
+                // Reels resolve to a Video node, not a Page Post — Video
+                // nodes don't support "message"/"story"/"caption"/"name"
+                // and the Graph API 400s the *entire* request if any
+                // requested field is invalid for the resolved node type,
+                // so this needs a narrower field list (mirrors the same
+                // fix in facebookEngagement.enrichEventVehicleFromPost).
+                const isVideoNode = ev.sourceSurface === "reel";
+                const fields = isVideoNode
+                  ? ["description", "title"].join(",")
+                  : [
+                      "message",
+                      "story",
+                      "name",
+                      "caption",
+                      "description",
+                      "call_to_action",
+                      "properties",
+                      "attachments{title,description,name,caption,url,unshimmed_url,subattachments{title,description,name,caption,url,unshimmed_url}}",
+                      "child_attachments{title,description,name,caption,url,call_to_action}",
+                    ].join(",");
                 const res = await fetch(
                   `https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${postId}?fields=${fields}&access_token=${fbToken.facebookPageAccessToken}`
                 );
@@ -349,7 +358,7 @@ export const resyncEvents = action({
                   const parts: string[] = [];
 
                   // Post-level text fields
-                  for (const f of ["message", "story", "name", "caption", "description"] as const) {
+                  for (const f of ["message", "story", "name", "caption", "description", "title"] as const) {
                     if (json[f]) parts.push(json[f]);
                   }
 

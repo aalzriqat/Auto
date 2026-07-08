@@ -803,3 +803,68 @@ describe("facebookEngagement.sendFacebookDirectMessage", () => {
     ).rejects.toThrow(/no facebook dm conversation/i);
   });
 });
+
+describe("facebookEngagement.enrichEventVehicleFromPost", () => {
+  test("matches a vehicle from a Reel's caption using the Video-node field list", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithManager(t);
+    await seedSettings(t, orgId);
+
+    await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        make: "Leapmotor",
+        model: "T03",
+        year: 2024,
+        mileage: 300,
+        color: "White",
+        fuelType: "Electric",
+        transmission: "Automatic",
+        sellingPrice: 12000,
+        status: "AVAILABLE",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("facebookEvents", {
+        orgId,
+        externalId: "fb_reel_comment_1",
+        kind: "comment",
+        senderFacebookId: "fb_reel_sender",
+        text: "كم سعرها كاش",
+      })
+    );
+
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ description: "Leapmotor T03\n2024 zero\n300 km" }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await t.action(internal.facebookEngagement.enrichEventVehicleFromPost, {
+      orgId,
+      externalId: "fb_reel_comment_1",
+      postId: "reel_video_id_1",
+      text: "كم سعرها كاش",
+      sourceSurface: "reel",
+    });
+
+    // The requested field list must only contain fields valid on a Video
+    // node — Meta 400s the whole request if it includes Post-only fields
+    // like "message"/"story"/"caption" for a reel_id.
+    const requestedUrl = new URL(fetchMock.mock.calls[0][0] as string);
+    const requestedFields = requestedUrl.searchParams.get("fields")?.split(",") ?? [];
+    expect(requestedFields).not.toContain("message");
+    expect(requestedFields).not.toContain("caption");
+    expect(requestedFields).not.toContain("story");
+
+    const event = await t.run((ctx) =>
+      ctx.db
+        .query("facebookEvents")
+        .withIndex("by_org_external", (q) => q.eq("orgId", orgId).eq("externalId", "fb_reel_comment_1"))
+        .unique()
+    );
+    expect(event?.vehicleId).toBeDefined();
+
+    vi.unstubAllGlobals();
+  });
+});

@@ -614,6 +614,11 @@ export const enrichEventVehicleFromPost = internalAction({
     postId: v.optional(v.string()),
     // The comment/DM text itself — tried before fetching the post caption
     text: v.optional(v.string()),
+    // Reels surface a Video node (reel_id), not a Page Post — Video nodes
+    // don't support "message"/"story"/"caption"/"name" and the Graph API
+    // 400s the *entire* request if any requested field is invalid for the
+    // resolved node type, so these need a different, narrower field list.
+    sourceSurface: v.optional(v.union(v.literal("post"), v.literal("reel"), v.literal("story"), v.literal("ad"), v.literal("unknown"))),
   },
   handler: async (ctx, args): Promise<void> => {
     const vehicles = await ctx.runQuery(internal.facebookEngagement.getOrgVehicles, { orgId: args.orgId });
@@ -644,17 +649,23 @@ export const enrichEventVehicleFromPost = internalAction({
     const token = await ctx.runQuery(internal.facebookEngagement.getTokenForOrg, { orgId: args.orgId });
     if (!token) return;
 
-    const fields = [
-      "message",
-      "story",
-      "name",
-      "caption",
-      "description",
-      "call_to_action",
-      "properties",
-      "attachments{title,description,name,caption,url,unshimmed_url,subattachments{title,description,name,caption,url,unshimmed_url}}",
-      "child_attachments{title,description,name,caption,url,call_to_action}",
-    ].join(",");
+    // Reel comments/DMs carry a reel_id, which resolves to a Video node —
+    // only "description"/"title" are valid there. Everything else (plain
+    // posts, unknown surfaces) is a Page Post node and gets the full list.
+    const isVideoNode = args.sourceSurface === "reel";
+    const fields = isVideoNode
+      ? ["description", "title"].join(",")
+      : [
+          "message",
+          "story",
+          "name",
+          "caption",
+          "description",
+          "call_to_action",
+          "properties",
+          "attachments{title,description,name,caption,url,unshimmed_url,subattachments{title,description,name,caption,url,unshimmed_url}}",
+          "child_attachments{title,description,name,caption,url,call_to_action}",
+        ].join(",");
 
     const url = new URL(`https://graph.facebook.com/${FACEBOOK_GRAPH_VERSION}/${args.postId}`);
     url.searchParams.set("fields", fields);
@@ -665,7 +676,7 @@ export const enrichEventVehicleFromPost = internalAction({
     const json = await res.json();
     const parts: string[] = [];
 
-    for (const f of ["message", "story", "name", "caption", "description"] as const) {
+    for (const f of ["message", "story", "name", "caption", "description", "title"] as const) {
       if (json[f]) parts.push(json[f]);
     }
 

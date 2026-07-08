@@ -1581,6 +1581,7 @@ http.route({
                 externalId: String(value.comment_id),
                 postId: fbPostId,
                 text: optionalString(value.message),
+                sourceSurface,
               },
             );
           }
@@ -1652,6 +1653,7 @@ http.route({
                 ),
                 postId: mediaId,
                 text: messageText,
+                sourceSurface,
               },
             );
           }
