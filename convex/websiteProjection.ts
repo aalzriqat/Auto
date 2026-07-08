@@ -21,7 +21,9 @@ export async function websiteSectionMap(
 }
 
 function combinePhones(primary: string | null | undefined, extra: string[] | undefined) {
-  const numbers = [primary, ...(extra ?? [])].filter((phone): phone is string => Boolean(phone && phone.trim()));
+  const numbers = [primary, ...(extra ?? [])]
+    .map((phone) => phone?.trim())
+    .filter((phone): phone is string => Boolean(phone));
   return Array.from(new Set(numbers));
 }
 

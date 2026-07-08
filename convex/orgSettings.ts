@@ -91,6 +91,9 @@ export const upsert = mutation({
       .unique();
 
     const { orgId, ...fields } = args;
+    if (fields.dealershipPhones !== undefined) {
+      fields.dealershipPhones = fields.dealershipPhones.map((phone) => phone.trim()).filter(Boolean);
+    }
 
     if (existing) {
       // Patch only provided fields (exclude undefined values)

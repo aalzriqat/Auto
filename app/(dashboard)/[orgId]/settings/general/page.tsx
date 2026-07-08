@@ -12,6 +12,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { parsePhoneLines, phonesToText } from "@/lib/phones";
 import {
   Select,
   SelectContent,
@@ -90,7 +91,7 @@ export default function GeneralSettingsPage() {
       setLegalCompanyName(settings.legalCompanyName ?? "");
       setDealershipAddress(settings.dealershipAddress ?? "");
       setDealershipPhone(settings.dealershipPhone ?? "");
-      setDealershipPhones((settings.dealershipPhones ?? []).join("\n"));
+      setDealershipPhones(phonesToText(settings.dealershipPhones));
       const pt = settings.enabledPaymentTypes ?? ["CASH", "INSTALLMENT"];
       setCashEnabled(pt.includes("CASH"));
       setInstallmentEnabled(pt.includes("INSTALLMENT"));
@@ -123,7 +124,7 @@ export default function GeneralSettingsPage() {
         legalCompanyName: legalCompanyName || undefined,
         dealershipAddress: dealershipAddress || undefined,
         dealershipPhone: dealershipPhone || undefined,
-        dealershipPhones: dealershipPhones.split("\n").map((phone) => phone.trim()).filter(Boolean),
+        dealershipPhones: parsePhoneLines(dealershipPhones),
       });
       toast.success(t("GeneralSettingsSaved"));
     } catch (error: any) {

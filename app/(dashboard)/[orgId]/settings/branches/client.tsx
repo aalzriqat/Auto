@@ -17,6 +17,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Doc, Id } from "@/convex/_generated/dataModel";
+import { parsePhoneLines, phonesToText } from "@/lib/phones";
 
 export function BranchesClient() {
   const { activeOrgId } = useOrg();
@@ -60,7 +61,7 @@ export function BranchesClient() {
       name: branch.name,
       address: branch.address || "",
       phone: branch.phone || "",
-      additionalPhones: (branch.additionalPhones || []).join("\n"),
+      additionalPhones: phonesToText(branch.additionalPhones),
       managerId: branch.managerId || "none",
       isActive: branch.isActive,
     });
@@ -73,7 +74,7 @@ export function BranchesClient() {
       const { managerId, additionalPhones, ...rest } = formData;
       const payload = {
         ...rest,
-        additionalPhones: additionalPhones.split("\n").map((phone) => phone.trim()).filter(Boolean),
+        additionalPhones: parsePhoneLines(additionalPhones),
         managerId: managerId === "none" ? undefined : (managerId as Id<"users">),
       };
       if (editingBranch) {
