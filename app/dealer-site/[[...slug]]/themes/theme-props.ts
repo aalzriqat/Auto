@@ -15,6 +15,7 @@ export type PublicVehicle = {
   fuelType: string | null;
   exteriorColor: string | null;
   price: number | null;
+  financePrice: number | null;
   status: string;
   imageUrls: string[];
 };
@@ -62,7 +63,6 @@ export type SiteStrings = {
   thankYou: string;
   messageReceived: string;
   sendAnother: string;
-  specialOffers: string;
 };
 
 export type FormState = {
@@ -88,11 +88,13 @@ export type PublicSite = {
     dealershipName: string;
     logoUrl?: string | null;
     phone?: string | null;
+    phones: string[];
     address?: string | null;
     heroTitle?: string;
     heroSubtitle?: string;
+    heroBadgeText?: string | null;
     slogan?: string | null;
-    branches: Array<{ id: string; name: string; address?: string | null; phone?: string | null }>;
+    branches: Array<{ id: string; name: string; address?: string | null; phone?: string | null; phones: string[] }>;
   };
   vehicles: PublicVehicle[];
   legal: {
@@ -101,6 +103,16 @@ export type PublicSite = {
     dataDeletion?: string;
     financingDisclaimer?: string;
   };
+  financeCompany: {
+    name: string;
+    profitRate: number;
+    maxTermMonths: number;
+    gracePeriodMonths: number;
+    insuranceRate: number;
+    adminFees: number;
+    commission: number;
+    includesCommissionInDebt: boolean;
+  } | null;
 };
 
 export type ThemeProps = {

@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Inter, Cairo } from "next/font/google";
+import { Cairo, IBM_Plex_Sans_Arabic, Inter, Montserrat, Playfair_Display } from "next/font/google";
 import { headers } from "next/headers";
 import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
@@ -16,6 +16,22 @@ const inter = Inter({
 const cairo = Cairo({
   variable: "--font-cairo",
   subsets: ["arabic", "latin"],
+});
+
+const ibmPlexSansArabic = IBM_Plex_Sans_Arabic({
+  variable: "--font-ibm-plex-sans-arabic",
+  subsets: ["arabic", "latin"],
+  weight: ["400", "500", "600", "700"],
+});
+
+const montserrat = Montserrat({
+  variable: "--font-montserrat",
+  subsets: ["latin"],
+});
+
+const playfairDisplay = Playfair_Display({
+  variable: "--font-playfair-display",
+  subsets: ["latin"],
 });
 
 export const metadata: Metadata = {
@@ -52,7 +68,7 @@ export default async function RootLayout({
   return (
     <html lang="ar" dir="rtl">
       <body
-        className={`${inter.variable} ${cairo.variable} font-cairo antialiased`}
+        className={`${inter.variable} ${cairo.variable} ${ibmPlexSansArabic.variable} ${montserrat.variable} ${playfairDisplay.variable} font-cairo antialiased`}
       >
         <LanguageProvider>
           <ClerkProviderWithLocale>

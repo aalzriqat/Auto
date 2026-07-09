@@ -34,18 +34,20 @@ export const add = mutation({
     name: v.string(),
     address: v.optional(v.string()),
     phone: v.optional(v.string()),
+    additionalPhones: v.optional(v.array(v.string())),
     managerId: v.optional(v.id("users")),
     isActive: v.boolean(),
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
     await requireFeature(ctx, args.orgId, "multiBranch");
-    
+
     await ctx.db.insert("branches", {
       orgId: args.orgId,
       name: args.name.trim(),
       address: args.address?.trim(),
       phone: args.phone?.trim(),
+      additionalPhones: args.additionalPhones?.map((phone) => phone.trim()).filter(Boolean),
       managerId: args.managerId,
       isActive: args.isActive,
     });
@@ -62,13 +64,14 @@ export const update = mutation({
     name: v.string(),
     address: v.optional(v.string()),
     phone: v.optional(v.string()),
+    additionalPhones: v.optional(v.array(v.string())),
     managerId: v.optional(v.id("users")),
     isActive: v.boolean(),
   },
   handler: async (ctx, args) => {
     await requireOwner(ctx, args.orgId);
     await requireFeature(ctx, args.orgId, "multiBranch");
-    
+
     const branch = await ctx.db.get(args.id);
     if (!branch || branch.orgId !== args.orgId) throw new ConvexError("Branch not found.");
 
@@ -76,6 +79,7 @@ export const update = mutation({
       name: args.name.trim(),
       address: args.address?.trim(),
       phone: args.phone?.trim(),
+      additionalPhones: args.additionalPhones?.map((phone) => phone.trim()).filter(Boolean),
       managerId: args.managerId,
       isActive: args.isActive,
     });

@@ -7,6 +7,8 @@ import { Id } from "./_generated/dataModel";
 import { getValidatedEnv } from "./utils/env";
 import { verifyPaymentWebhook } from "./utils/paymentWebhook";
 import { rateLimiter } from "./rateLimit";
+import { normalizedWebsiteHost } from "./websiteConfig";
+import { isLikelyBot } from "./utils/userAgent";
 
 const http = httpRouter();
 const WEBHOOK_RAW_PAYLOAD_MAX_CHARS = 700_000;
@@ -239,15 +241,16 @@ function facebookSurfaceFromPayload(value: unknown): FacebookSourceSurface {
   if (!value || typeof value !== "object") return "unknown";
   const text = collectTextParts(value).join(" ").toLowerCase();
   const record = value as Record<string, unknown>;
-  if (optionalString(record.reel_id) || text.includes("reel")) return "reel";
-  if (optionalString(record.story_id) || text.includes("story")) return "story";
-  if (optionalString(record.ad_id) || text.includes("ad")) return "ad";
-  if (
-    optionalString(record.post_id) ||
-    optionalString(record.video_id) ||
-    optionalString(record.media_id)
-  )
-    return "post";
+  // DM messaging events carry these under message.referral (or, for m.me
+  // referral-link opens, referral directly) rather than at the top level —
+  // mirrors the same nesting facebookMessageMediaId() already reads from.
+  const message = optionalRecord(record.message);
+  const referral = optionalRecord(record.referral) ?? optionalRecord(message?.referral);
+  const field = (key: string) => optionalString(record[key]) ?? optionalString(referral?.[key]);
+  if (field("reel_id") || text.includes("reel")) return "reel";
+  if (field("story_id") || text.includes("story")) return "story";
+  if (field("ad_id") || text.includes("ad")) return "ad";
+  if (field("post_id") || field("video_id") || field("media_id")) return "post";
   return "unknown";
 }
 
@@ -1581,6 +1584,7 @@ http.route({
                 externalId: String(value.comment_id),
                 postId: fbPostId,
                 text: optionalString(value.message),
+                sourceSurface,
               },
             );
           }
@@ -1652,6 +1656,7 @@ http.route({
                 ),
                 postId: mediaId,
                 text: messageText,
+                sourceSurface,
               },
             );
           }
@@ -1729,6 +1734,185 @@ http.route({
         status: 500,
         headers: { "Content-Type": "application/json" },
       });
+    }
+  }),
+});
+
+// ─── Public site-visitor analytics beacon ──────────────────────────────────
+// Deliberately a plain httpAction (not a mutation/action called via the
+// reactive client) because only the raw Request here exposes the caller's
+// real IP (x-forwarded-for) and User-Agent header — see convex/siteVisitors.ts
+// for why the reactive client protocol can't provide either. Always responds
+// 204 (even on validation/rate-limit failure) since sendBeacon never surfaces
+// errors to the page — there's nothing useful a non-204 status could do here.
+
+const SITE_EVENTS_CORS_HEADERS: Record<string, string> = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
+function siteEventsNoContent(): Response {
+  return new Response(null, { status: 204, headers: SITE_EVENTS_CORS_HEADERS });
+}
+
+type SiteEventBody = {
+  host: string;
+  visitorId: string;
+  sessionId: string;
+  type: "page_view" | "link_click";
+  path: string;
+  linkTarget?: string;
+  linkLabel?: string;
+  referrerUrl?: string;
+  utmSource?: string;
+  utmMedium?: string;
+  utmCampaign?: string;
+  utmTerm?: string;
+  utmContent?: string;
+  clickIdType?: string;
+  clickIdValue?: string;
+  language?: string;
+  timezone?: string;
+  screenWidth?: number;
+  screenHeight?: number;
+  viewportWidth?: number;
+  viewportHeight?: number;
+};
+
+function optionalStringField(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function optionalNumberField(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function parseSiteEventBody(raw: unknown): SiteEventBody | null {
+  if (!raw || typeof raw !== "object") return null;
+  const body = raw as Record<string, unknown>;
+  const host = optionalStringField(body.host);
+  const visitorId = optionalStringField(body.visitorId);
+  const sessionId = optionalStringField(body.sessionId);
+  const path = optionalStringField(body.path);
+  const type = body.type === "page_view" || body.type === "link_click" ? body.type : undefined;
+  if (!host || !visitorId || !sessionId || !path || !type) return null;
+
+  return {
+    host,
+    visitorId,
+    sessionId,
+    type,
+    path,
+    linkTarget: optionalStringField(body.linkTarget),
+    linkLabel: optionalStringField(body.linkLabel),
+    referrerUrl: optionalStringField(body.referrerUrl),
+    utmSource: optionalStringField(body.utmSource),
+    utmMedium: optionalStringField(body.utmMedium),
+    utmCampaign: optionalStringField(body.utmCampaign),
+    utmTerm: optionalStringField(body.utmTerm),
+    utmContent: optionalStringField(body.utmContent),
+    clickIdType: optionalStringField(body.clickIdType),
+    clickIdValue: optionalStringField(body.clickIdValue),
+    language: optionalStringField(body.language),
+    timezone: optionalStringField(body.timezone),
+    screenWidth: optionalNumberField(body.screenWidth),
+    screenHeight: optionalNumberField(body.screenHeight),
+    viewportWidth: optionalNumberField(body.viewportWidth),
+    viewportHeight: optionalNumberField(body.viewportHeight),
+  };
+}
+
+function referrerHostFrom(referrerUrl: string | undefined): string | undefined {
+  if (!referrerUrl) return undefined;
+  try {
+    return new URL(referrerUrl).hostname;
+  } catch {
+    return undefined;
+  }
+}
+
+http.route({
+  path: "/site-events",
+  method: "OPTIONS",
+  handler: httpAction(async () => siteEventsNoContent()),
+});
+
+http.route({
+  path: "/site-events",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    try {
+      const userAgent = request.headers.get("user-agent") ?? undefined;
+      if (isLikelyBot(userAgent)) return siteEventsNoContent();
+
+      const raw = await request.text();
+      if (raw.length > 8192) return siteEventsNoContent();
+
+      let parsedJson: unknown;
+      try {
+        parsedJson = JSON.parse(raw);
+      } catch {
+        return siteEventsNoContent();
+      }
+
+      const body = parseSiteEventBody(parsedJson);
+      if (!body) return siteEventsNoContent();
+
+      const requestHost = normalizedWebsiteHost(body.host);
+      const env = getValidatedEnv();
+      const appHost = normalizedWebsiteHost(new URL(env.NEXT_PUBLIC_APP_URL).host);
+
+      let orgId: Id<"organizations"> | undefined;
+      if (requestHost !== appHost) {
+        const resolved = await ctx.runQuery(internal.websites.resolveOrgIdForHost, { host: requestHost });
+        if (!resolved) return siteEventsNoContent(); // unrecognized host — anti-pollution guard
+        orgId = resolved;
+      }
+
+      const hostLimit = await rateLimiter.limit(ctx, "websiteEventHost", { key: requestHost });
+      if (!hostLimit.ok) return siteEventsNoContent();
+      const visitorLimit = await rateLimiter.limit(ctx, "websiteEventVisitor", { key: body.visitorId });
+      if (!visitorLimit.ok) return siteEventsNoContent();
+
+      const { isNewVisitor, siteVisitorId } = await ctx.runMutation(internal.siteVisitors.recordEvent, {
+        orgId,
+        host: requestHost,
+        visitorId: body.visitorId,
+        sessionId: body.sessionId,
+        type: body.type,
+        path: body.path,
+        linkTarget: body.linkTarget,
+        linkLabel: body.linkLabel,
+        referrerHost: referrerHostFrom(body.referrerUrl),
+        referrerUrl: body.referrerUrl,
+        utmSource: body.utmSource,
+        utmMedium: body.utmMedium,
+        utmCampaign: body.utmCampaign,
+        utmTerm: body.utmTerm,
+        utmContent: body.utmContent,
+        clickIdType: body.clickIdType,
+        clickIdValue: body.clickIdValue,
+        userAgent,
+        language: body.language,
+        timezone: body.timezone,
+        screenWidth: body.screenWidth,
+        screenHeight: body.screenHeight,
+        viewportWidth: body.viewportWidth,
+        viewportHeight: body.viewportHeight,
+      });
+
+      if (isNewVisitor) {
+        const ip = clientIp(request);
+        if (ip !== "unknown") {
+          await ctx.scheduler.runAfter(0, internal.siteVisitors.enrichVisitorGeo, { siteVisitorId, ip });
+        }
+      }
+
+      return siteEventsNoContent();
+    } catch (err) {
+      console.error("[site-events] error:", err);
+      return siteEventsNoContent();
     }
   }),
 });

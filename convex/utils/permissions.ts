@@ -85,6 +85,7 @@ export const PERMISSIONS = {
   WEBSITE_PUBLISH: "website.publish",
   WEBSITE_DOMAIN_MANAGE: "website.domain.manage",
   WEBSITE_LEADS_MANAGE: "website.leads.manage",
+  WEBSITE_ANALYTICS_VIEW: "website.analytics.view",
 
   // Finance / Accounting
   VIEW_FINANCE: "view:finance",
@@ -206,6 +207,7 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.WEBSITE_PUBLISH,
       PERMISSIONS.WEBSITE_DOMAIN_MANAGE,
       PERMISSIONS.WEBSITE_LEADS_MANAGE,
+      PERMISSIONS.WEBSITE_ANALYTICS_VIEW,
       PERMISSIONS.VIEW_COST_PRICE,
       PERMISSIONS.VIEW_COMMISSIONS,
       PERMISSIONS.MANAGE_COMMISSIONS,

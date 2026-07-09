@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
@@ -8,7 +9,7 @@ import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
-import { Info, TrendingUp, TrendingDown } from "lucide-react";
+import { Info, TrendingUp, TrendingDown, Eye, EyeOff } from "lucide-react";
 
 interface VehicleCostBarProps {
   vehicleId: string;
@@ -21,6 +22,7 @@ export function VehicleCostBar({ vehicleId, purchasePrice, salePrice }: VehicleC
   const { t } = useLanguage();
   const formatCurrency = useCurrencyFormatter();
   const { hasPermission, isLoading: permissionsLoading } = usePermissions();
+  const [isRevealed, setIsRevealed] = useState(false);
 
   const canViewExpenses = !permissionsLoading && hasPermission(PERMISSIONS.VIEW_EXPENSES);
 
@@ -42,53 +44,67 @@ export function VehicleCostBar({ vehicleId, purchasePrice, salePrice }: VehicleC
 
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50 dark:bg-slate-900/30 dark:border-slate-700 p-3 text-sm">
-      <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">
-        <Info className="h-3.5 w-3.5" />
-        {t("VehicleCostBreakdown" as any)}
+      <div className="flex items-center justify-between gap-1.5 mb-2">
+        <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wider">
+          <Info className="h-3.5 w-3.5" />
+          {t("VehicleCostBreakdown" as any)}
+        </div>
+        <button
+          type="button"
+          onClick={() => setIsRevealed((v) => !v)}
+          title={t((isRevealed ? "HideCostBreakdown" : "ShowCostBreakdown") as any)}
+          aria-label={t((isRevealed ? "HideCostBreakdown" : "ShowCostBreakdown") as any)}
+          aria-pressed={isRevealed}
+          className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
+        >
+          {isRevealed ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+        </button>
       </div>
 
-      <div className="space-y-1">
-        {hasCostData ? (
-          <>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">{t("PurchasePrice" as any)}</span>
-              <span className="tabular-nums font-medium">{formatCurrency(purchasePrice!)}</span>
-            </div>
+      {isRevealed && (
+        <div className="space-y-1">
+          {hasCostData ? (
+            <>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{t("PurchasePrice" as any)}</span>
+                <span className="tabular-nums font-medium">{formatCurrency(purchasePrice!)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">{t("TotalExpenses" as any)}</span>
+                <span className="tabular-nums font-medium text-amber-600">
+                  {totalExpenses > 0 ? `+ ${formatCurrency(totalExpenses)}` : formatCurrency(0)}
+                </span>
+              </div>
+              <div className="flex justify-between border-t pt-1 mt-1">
+                <span className="font-semibold">{t("TotalCost" as any)}</span>
+                <span className="tabular-nums font-semibold">{formatCurrency(totalCost!)}</span>
+              </div>
+              {grossProfit != null && (
+                <div className="flex justify-between pt-0.5">
+                  <span className="text-muted-foreground">{t("Profit" as any)}</span>
+                  <span
+                    className={`tabular-nums font-semibold flex items-center gap-1 ${
+                      grossProfit >= 0 ? "text-emerald-600" : "text-rose-600"
+                    }`}
+                  >
+                    {grossProfit >= 0
+                      ? <TrendingUp className="h-3 w-3" />
+                      : <TrendingDown className="h-3 w-3" />}
+                    {formatCurrency(Math.abs(grossProfit))}
+                  </span>
+                </div>
+              )}
+            </>
+          ) : (
             <div className="flex justify-between">
               <span className="text-muted-foreground">{t("TotalExpenses" as any)}</span>
               <span className="tabular-nums font-medium text-amber-600">
                 {totalExpenses > 0 ? `+ ${formatCurrency(totalExpenses)}` : formatCurrency(0)}
               </span>
             </div>
-            <div className="flex justify-between border-t pt-1 mt-1">
-              <span className="font-semibold">{t("TotalCost" as any)}</span>
-              <span className="tabular-nums font-semibold">{formatCurrency(totalCost!)}</span>
-            </div>
-            {grossProfit != null && (
-              <div className="flex justify-between pt-0.5">
-                <span className="text-muted-foreground">{t("Profit" as any)}</span>
-                <span
-                  className={`tabular-nums font-semibold flex items-center gap-1 ${
-                    grossProfit >= 0 ? "text-emerald-600" : "text-rose-600"
-                  }`}
-                >
-                  {grossProfit >= 0
-                    ? <TrendingUp className="h-3 w-3" />
-                    : <TrendingDown className="h-3 w-3" />}
-                  {formatCurrency(Math.abs(grossProfit))}
-                </span>
-              </div>
-            )}
-          </>
-        ) : (
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">{t("TotalExpenses" as any)}</span>
-            <span className="tabular-nums font-medium text-amber-600">
-              {totalExpenses > 0 ? `+ ${formatCurrency(totalExpenses)}` : formatCurrency(0)}
-            </span>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

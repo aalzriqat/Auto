@@ -20,6 +20,28 @@ export async function websiteSectionMap(
   return Object.fromEntries(sectionRows.map((sectionRow) => [sectionRow.sectionKey, sectionRow.enabled]));
 }
 
+function combinePhones(primary: string | null | undefined, extra: string[] | undefined) {
+  const numbers = [primary, ...(extra ?? [])].filter((phone): phone is string => Boolean(phone && phone.trim()));
+  return Array.from(new Set(numbers));
+}
+
+async function publicFinanceCompany(ctx: QueryCtx | MutationCtx, websiteSettings: Doc<"websiteSettings">) {
+  if (!websiteSettings.activeFinanceCompanyId) return null;
+  const company = await ctx.db.get(websiteSettings.activeFinanceCompanyId);
+  if (!company || !company.isActive) return null;
+
+  return {
+    name: company.name,
+    profitRate: company.profitRate,
+    maxTermMonths: company.maxTermMonths,
+    gracePeriodMonths: company.gracePeriodMonths,
+    insuranceRate: company.insuranceRate ?? 0,
+    adminFees: company.adminFees ?? 0,
+    commission: company.commission ?? 0,
+    includesCommissionInDebt: company.includesCommissionInDebt ?? false,
+  };
+}
+
 async function publicDealerProfile(
   ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
@@ -41,12 +63,14 @@ async function publicDealerProfile(
   return {
     dealershipName: orgSettings?.dealershipName ?? organization?.name ?? "Dealership",
     phone: orgSettings?.dealershipPhone ?? null,
+    phones: combinePhones(orgSettings?.dealershipPhone, orgSettings?.dealershipPhones),
     address: orgSettings?.dealershipAddress ?? null,
     logoUrl,
     primaryColor: websiteSettings.primaryColor ?? orgSettings?.primaryColor ?? "#0f172a",
     secondaryColor: websiteSettings.secondaryColor ?? "#f97316",
     heroTitle: websiteSettings.heroTitle ?? orgSettings?.dealershipName ?? organization?.name ?? "Find your next vehicle",
     heroSubtitle: websiteSettings.heroSubtitle ?? "Browse public inventory and contact the dealership directly.",
+    heroBadgeText: websiteSettings.heroBadgeText ?? null,
     slogan: websiteSettings.slogan ?? null,
     branches: branchRows
       .filter((branchRow) => branchRow.isActive)
@@ -55,6 +79,7 @@ async function publicDealerProfile(
         name: branchRow.name,
         address: branchRow.address ?? null,
         phone: branchRow.phone ?? null,
+        phones: combinePhones(branchRow.phone, branchRow.additionalPhones),
       })),
   };
 }
@@ -98,6 +123,7 @@ async function projectedVehicleRows(
         fuelType: enabledSections["vehicle.fuelType"] ? vehicleRow.fuelType : null,
         exteriorColor: enabledSections["vehicle.exteriorColor"] ? vehicleRow.color : null,
         price: enabledSections["vehicle.price"] ? vehicleRow.sellingPrice : null,
+        financePrice: vehicleRow.sellingPrice,
         vin: includeVinChassis ? vehicleRow.vin : null,
         status: vehicleRow.status,
         imageUrls: enabledSections["vehicle.photos"] ? safeImageUrls : [],
@@ -132,6 +158,7 @@ export async function websitePublicProjection(
     },
     sections: enabledSections,
     profile: await publicDealerProfile(ctx, orgId, websiteSettings),
+    financeCompany: await publicFinanceCompany(ctx, websiteSettings),
     vehicles: await projectedVehicleRows(ctx, orgId, enabledSections),
     legal: {
       privacyPolicy: "Contact the dealership to request privacy details for this website.",

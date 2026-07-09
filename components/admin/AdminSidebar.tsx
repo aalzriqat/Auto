@@ -1,6 +1,6 @@
 "use client";
 
-import { LayoutDashboard, Building2, Users, Database, History, Inbox, Headset, LogOut, Megaphone, MessageSquarePlus, ScrollText } from "lucide-react";
+import { LayoutDashboard, Building2, Users, Database, History, Inbox, Headset, LogOut, Megaphone, MessageSquarePlus, ScrollText, BarChart3 } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useClerk } from "@clerk/nextjs";
@@ -11,6 +11,7 @@ const navigation = [
   { name: "Organizations", href: "/admin/organizations", icon: Building2 },
   { name: "Users", href: "/admin/users", icon: Users },
   { name: "Data Browser", href: "/admin/data", icon: Database },
+  { name: "Analytics", href: "/admin/analytics", icon: BarChart3 },
   { name: "Notifications", href: "/admin/notifications", icon: Megaphone },
   { name: "Changelog", href: "/admin/changelog", icon: ScrollText },
   { name: "Feedback", href: "/admin/feedback", icon: MessageSquarePlus },

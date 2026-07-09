@@ -1,5 +1,5 @@
 import { ConvexError, v } from "convex/values";
-import { ActionCtx, MutationCtx, QueryCtx, action, internalMutation, mutation, query } from "./_generated/server";
+import { ActionCtx, MutationCtx, QueryCtx, action, internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { domainRegistrarService } from "./domainRegistrar";
@@ -574,7 +574,9 @@ export const saveDraft = mutation({
     logoUrl: v.optional(v.string()),
     heroTitle: v.optional(v.string()),
     heroSubtitle: v.optional(v.string()),
+    heroBadgeText: v.optional(v.string()),
     slogan: v.optional(v.string()),
+    activeFinanceCompanyId: v.optional(v.id("financeCompanies")),
     themeConfig: v.optional(v.any()),
     sections: v.optional(v.array(sectionInputValidator)),
     routing: v.optional(v.array(routingInputValidator)),
@@ -582,6 +584,14 @@ export const saveDraft = mutation({
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.WEBSITE_MANAGE]);
     await requireFeature(ctx, args.orgId, "websiteBuilder");
+
+    if (args.activeFinanceCompanyId) {
+      const company = await ctx.db.get(args.activeFinanceCompanyId);
+      if (!company || company.orgId !== args.orgId) {
+        throw new ConvexError("Finance company not found.");
+      }
+    }
+
     let settings = await getSettingsByOrg(ctx, args.orgId);
     if (!settings) {
       const settingsId = await ctx.db.insert("websiteSettings", {
@@ -663,7 +673,9 @@ export const saveDraft = mutation({
       "logoUrl",
       "heroTitle",
       "heroSubtitle",
+      "heroBadgeText",
       "slogan",
+      "activeFinanceCompanyId",
       "themeConfig",
     ] as const) {
       if (args[key] !== undefined) patch[key] = args[key];
@@ -861,6 +873,22 @@ export const resolveDomain = query({
         publishedAt: snapshot.publishedAt,
       },
     };
+  },
+});
+
+// Used by the public site-analytics httpAction (convex/http.ts) to resolve a
+// host into its owning org without trusting a client-supplied orgId. Unlike
+// resolveDomain, this doesn't gate on publish/feature status — traffic should
+// still be attributable to an org even while its site is in draft.
+export const resolveOrgIdForHost = internalQuery({
+  args: { host: v.string() },
+  handler: async (ctx, args): Promise<Id<"organizations"> | null> => {
+    const host = normalizedWebsiteHost(args.host);
+    const domain = await ctx.db
+      .query("websiteDomains")
+      .withIndex("by_domain", (q) => q.eq("domain", host))
+      .unique();
+    return domain?.orgId ?? null;
   },
 });
 

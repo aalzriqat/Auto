@@ -8,6 +8,7 @@ import { useOrgSettings } from "@/hooks/useOrgSettings";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -61,6 +62,7 @@ export default function GeneralSettingsPage() {
   const [legalCompanyName, setLegalCompanyName] = useState("");
   const [dealershipAddress, setDealershipAddress] = useState("");
   const [dealershipPhone, setDealershipPhone] = useState("");
+  const [dealershipPhones, setDealershipPhones] = useState("");
 
   // Payment types tab state
   const [cashEnabled, setCashEnabled] = useState(true);
@@ -88,6 +90,7 @@ export default function GeneralSettingsPage() {
       setLegalCompanyName(settings.legalCompanyName ?? "");
       setDealershipAddress(settings.dealershipAddress ?? "");
       setDealershipPhone(settings.dealershipPhone ?? "");
+      setDealershipPhones((settings.dealershipPhones ?? []).join("\n"));
       const pt = settings.enabledPaymentTypes ?? ["CASH", "INSTALLMENT"];
       setCashEnabled(pt.includes("CASH"));
       setInstallmentEnabled(pt.includes("INSTALLMENT"));
@@ -120,6 +123,7 @@ export default function GeneralSettingsPage() {
         legalCompanyName: legalCompanyName || undefined,
         dealershipAddress: dealershipAddress || undefined,
         dealershipPhone: dealershipPhone || undefined,
+        dealershipPhones: dealershipPhones.split("\n").map((phone) => phone.trim()).filter(Boolean),
       });
       toast.success(t("GeneralSettingsSaved"));
     } catch (error: any) {
@@ -327,6 +331,15 @@ export default function GeneralSettingsPage() {
                       onChange={(e) => setDealershipPhone(e.target.value)}
                     />
                   </div>
+                  <div className="space-y-2">
+                    <Label>{t("AdditionalPhoneNumbers")}</Label>
+                    <Textarea
+                      placeholder={t("AdditionalPhoneNumbersPlaceholder")}
+                      value={dealershipPhones}
+                      onChange={(e) => setDealershipPhones(e.target.value)}
+                      rows={3}
+                    />
+                  </div>
                   <div className="space-y-2 md:col-span-2">
                     <Label>{t("DealershipAddress")}</Label>
                     <Input
@@ -334,6 +347,7 @@ export default function GeneralSettingsPage() {
                       value={dealershipAddress}
                       onChange={(e) => setDealershipAddress(e.target.value)}
                     />
+                    <p className="text-xs text-muted-foreground">{t("AddressMapHint")}</p>
                   </div>
                 </div>
               </div>

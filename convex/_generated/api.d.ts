@@ -8,11 +8,6 @@
  * @module
  */
 
-import type * as accounting_accountSnapshots from "../accounting/accountSnapshots.js";
-import type * as accounting_postingEngine from "../accounting/postingEngine.js";
-import type * as accounting_postingRules from "../accounting/postingRules.js";
-import type * as accounting_reversals from "../accounting/reversals.js";
-import type * as accounting_workflowHooks from "../accounting/workflowHooks.js";
 import type * as accountingCutover from "../accountingCutover.js";
 import type * as accountingLedger from "../accountingLedger.js";
 import type * as accountingMigration from "../accountingMigration.js";
@@ -20,6 +15,12 @@ import type * as accountingOutbox from "../accountingOutbox.js";
 import type * as accountingPeriods from "../accountingPeriods.js";
 import type * as accountingReports from "../accountingReports.js";
 import type * as accountingSetup from "../accountingSetup.js";
+import type * as accounting_accountSnapshots from "../accounting/accountSnapshots.js";
+import type * as accounting_postingEngine from "../accounting/postingEngine.js";
+import type * as accounting_postingRules from "../accounting/postingRules.js";
+import type * as accounting_reversals from "../accounting/reversals.js";
+import type * as accounting_workflowHooks from "../accounting/workflowHooks.js";
+import type * as adminAnalytics from "../adminAnalytics.js";
 import type * as adminAudit from "../adminAudit.js";
 import type * as adminAuth from "../adminAuth.js";
 import type * as adminBroadcasts from "../adminBroadcasts.js";
@@ -88,6 +89,7 @@ import type * as roles from "../roles.js";
 import type * as sales from "../sales.js";
 import type * as search from "../search.js";
 import type * as seedDocuments from "../seedDocuments.js";
+import type * as siteVisitors from "../siteVisitors.js";
 import type * as smartReply from "../smartReply.js";
 import type * as socialAutoReplyRetry from "../socialAutoReplyRetry.js";
 import type * as socialEngagement from "../socialEngagement.js";
@@ -116,6 +118,7 @@ import type * as utils_errors from "../utils/errors.js";
 import type * as utils_expenseAmortization from "../utils/expenseAmortization.js";
 import type * as utils_facebookApi from "../utils/facebookApi.js";
 import type * as utils_financialGuards from "../utils/financialGuards.js";
+import type * as utils_geoProvider from "../utils/geoProvider.js";
 import type * as utils_idempotency from "../utils/idempotency.js";
 import type * as utils_instagramApi from "../utils/instagramApi.js";
 import type * as utils_leadAssignment from "../utils/leadAssignment.js";
@@ -136,6 +139,8 @@ import type * as utils_socialMobile from "../utils/socialMobile.js";
 import type * as utils_socialMobileReply from "../utils/socialMobileReply.js";
 import type * as utils_storageValidation from "../utils/storageValidation.js";
 import type * as utils_tenancy from "../utils/tenancy.js";
+import type * as utils_trafficSource from "../utils/trafficSource.js";
+import type * as utils_userAgent from "../utils/userAgent.js";
 import type * as utils_validation from "../utils/validation.js";
 import type * as utils_vehicleStatusGuards from "../utils/vehicleStatusGuards.js";
 import type * as utils_vehicleTextMatch from "../utils/vehicleTextMatch.js";
@@ -162,11 +167,6 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
-  "accounting/accountSnapshots": typeof accounting_accountSnapshots;
-  "accounting/postingEngine": typeof accounting_postingEngine;
-  "accounting/postingRules": typeof accounting_postingRules;
-  "accounting/reversals": typeof accounting_reversals;
-  "accounting/workflowHooks": typeof accounting_workflowHooks;
   accountingCutover: typeof accountingCutover;
   accountingLedger: typeof accountingLedger;
   accountingMigration: typeof accountingMigration;
@@ -174,6 +174,12 @@ declare const fullApi: ApiFromModules<{
   accountingPeriods: typeof accountingPeriods;
   accountingReports: typeof accountingReports;
   accountingSetup: typeof accountingSetup;
+  "accounting/accountSnapshots": typeof accounting_accountSnapshots;
+  "accounting/postingEngine": typeof accounting_postingEngine;
+  "accounting/postingRules": typeof accounting_postingRules;
+  "accounting/reversals": typeof accounting_reversals;
+  "accounting/workflowHooks": typeof accounting_workflowHooks;
+  adminAnalytics: typeof adminAnalytics;
   adminAudit: typeof adminAudit;
   adminAuth: typeof adminAuth;
   adminBroadcasts: typeof adminBroadcasts;
@@ -242,6 +248,7 @@ declare const fullApi: ApiFromModules<{
   sales: typeof sales;
   search: typeof search;
   seedDocuments: typeof seedDocuments;
+  siteVisitors: typeof siteVisitors;
   smartReply: typeof smartReply;
   socialAutoReplyRetry: typeof socialAutoReplyRetry;
   socialEngagement: typeof socialEngagement;
@@ -270,6 +277,7 @@ declare const fullApi: ApiFromModules<{
   "utils/expenseAmortization": typeof utils_expenseAmortization;
   "utils/facebookApi": typeof utils_facebookApi;
   "utils/financialGuards": typeof utils_financialGuards;
+  "utils/geoProvider": typeof utils_geoProvider;
   "utils/idempotency": typeof utils_idempotency;
   "utils/instagramApi": typeof utils_instagramApi;
   "utils/leadAssignment": typeof utils_leadAssignment;
@@ -290,6 +298,8 @@ declare const fullApi: ApiFromModules<{
   "utils/socialMobileReply": typeof utils_socialMobileReply;
   "utils/storageValidation": typeof utils_storageValidation;
   "utils/tenancy": typeof utils_tenancy;
+  "utils/trafficSource": typeof utils_trafficSource;
+  "utils/userAgent": typeof utils_userAgent;
   "utils/validation": typeof utils_validation;
   "utils/vehicleStatusGuards": typeof utils_vehicleStatusGuards;
   "utils/vehicleTextMatch": typeof utils_vehicleTextMatch;

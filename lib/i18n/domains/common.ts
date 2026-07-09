@@ -719,6 +719,8 @@ export const commonEn = {
   TotalCost: "Total Cost",
   CostNotAvailable: "Cost not visible",
   Profit: "Profit",
+  ShowCostBreakdown: "Show amounts",
+  HideCostBreakdown: "Hide amounts",
 
   // Feedback widget
   FeedbackInbox: "Feedback Inbox",
@@ -1498,6 +1500,8 @@ export const commonAr = {
   TotalCost: "التكلفة الإجمالية",
   CostNotAvailable: "التكلفة غير مرئية",
   Profit: "الربح",
+  ShowCostBreakdown: "إظهار المبالغ",
+  HideCostBreakdown: "إخفاء المبالغ",
 
   // Feedback widget
   FeedbackInbox: "صندوق التغذية الراجعة",

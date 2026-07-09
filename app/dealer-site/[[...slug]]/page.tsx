@@ -37,6 +37,7 @@ import {
 import { KineticLuxuryTheme, KineticModernEvTheme, KineticSalesTheme } from "./themes/kinetic-themes";
 import { TurnstileWidget } from "./turnstile-widget";
 import { DEFAULT_WEBSITE_TEMPLATE_ID } from "@/lib/website/websiteTemplates";
+import { useSiteVisitorTracking } from "@/hooks/useSiteVisitorTracking";
 
 type PublicVehicle = {
   id: Id<"vehicles">;
@@ -50,6 +51,7 @@ type PublicVehicle = {
   fuelType: string | null;
   exteriorColor: string | null;
   price: number | null;
+  financePrice: number | null;
   status: string;
   imageUrls: string[];
 };
@@ -109,7 +111,6 @@ const STRINGS = {
     thankYou: "Thank you!",
     messageReceived: "We've received your message. Our team will be in touch with you shortly.",
     sendAnother: "Send another message",
-    specialOffers: "Special offers",
   },
   ar: {
     brand: "موقع معرض AutoFlow",
@@ -158,7 +159,6 @@ const STRINGS = {
     thankYou: "شكراً لك!",
     messageReceived: "لقد استلمنا رسالتك. سيتواصل معك فريقنا قريباً.",
     sendAnother: "إرسال رسالة أخرى",
-    specialOffers: "عروض خاصة",
   },
 } as const;
 
@@ -329,6 +329,8 @@ export default function DealerSitePage() {
   const slug = params?.slug ?? [];
   const page = slug[0] ?? "home";
   const detailSlug = page === "inventory" && slug[1] ? slug[1] : null;
+  const trackedPath = page === "home" ? "/" : `/${page}${detailSlug ? `/${detailSlug}` : ""}`;
+  useSiteVisitorTracking({ host, path: trackedPath, enabled: Boolean(site) && !isPreviewMode });
 
   const vehicles: PublicVehicle[] = useMemo(() => site?.vehicles ?? [], [site?.vehicles]);
   const featuredVehicles = vehicles.slice(0, 6);

@@ -1643,6 +1643,9 @@ export default defineSchema({
     name: v.string(),
     address: v.optional(v.string()),
     phone: v.optional(v.string()),
+    // Extra numbers for this branch (mobile lines, additional sales staff, etc.)
+    // shown alongside `phone` on the public dealer website.
+    additionalPhones: v.optional(v.array(v.string())),
     managerId: v.optional(v.id("users")),
     isActive: v.boolean(),
   })
@@ -2019,6 +2022,10 @@ export default defineSchema({
     legalCompanyName: v.optional(v.string()),
     dealershipAddress: v.optional(v.string()),
     dealershipPhone: v.optional(v.string()),
+    // Extra org-wide numbers (sales line, support line, etc.) shown alongside
+    // dealershipPhone on the public dealer website. dealershipPhone stays the
+    // one used for WhatsApp deep links.
+    dealershipPhones: v.optional(v.array(v.string())),
     whatsappPhoneNumberId: v.optional(v.string()),
     whatsappApiToken: v.optional(v.string()),
     whatsappWebhookSecret: v.optional(v.string()),
@@ -2157,7 +2164,14 @@ export default defineSchema({
     logoUrl: v.optional(v.string()),
     heroTitle: v.optional(v.string()),
     heroSubtitle: v.optional(v.string()),
+    // Free-text badge shown as a small pill over the hero (e.g. Kinetic Sales'
+    // hero). Replaces showing a raw "N+ cars available" count.
+    heroBadgeText: v.optional(v.string()),
     slogan: v.optional(v.string()),
+    // Which of the org's finance companies (see `financeCompanies`) the public
+    // site's finance calculator uses for its rate/term. Unset falls back to a
+    // generic illustrative rate.
+    activeFinanceCompanyId: v.optional(v.id("financeCompanies")),
     themeConfig: v.optional(v.any()),
     createdAt: v.number(),
     updatedAt: v.number(),
@@ -2242,6 +2256,75 @@ export default defineSchema({
     .index("by_org_createdAt", ["orgId", "createdAt"])
     .index("by_host_createdAt", ["host", "createdAt"])
     .index("by_reason_createdAt", ["reason", "createdAt"]),
+
+  // orgId is undefined for AutoFlow's own marketing/auth pages (landing, sign-in,
+  // sign-up); it's set for dealer-site storefront traffic. Append-only event log,
+  // no soft-delete triple (same convention as websiteLeadAbuseEvents above).
+  siteVisitorEvents: defineTable({
+    orgId: v.optional(v.id("organizations")),
+    host: v.string(),
+    visitorId: v.string(),
+    sessionId: v.string(),
+    type: v.union(v.literal("page_view"), v.literal("link_click")),
+    path: v.string(),
+    linkTarget: v.optional(v.string()),
+    linkLabel: v.optional(v.string()),
+    referrerHost: v.optional(v.string()),
+    referrerUrl: v.optional(v.string()),
+    utmSource: v.optional(v.string()),
+    utmMedium: v.optional(v.string()),
+    utmCampaign: v.optional(v.string()),
+    utmTerm: v.optional(v.string()),
+    utmContent: v.optional(v.string()),
+    clickIdType: v.optional(v.string()),
+    clickIdValue: v.optional(v.string()),
+    trafficSource: v.string(),
+    userAgent: v.optional(v.string()),
+    language: v.optional(v.string()),
+    timezone: v.optional(v.string()),
+    screenWidth: v.optional(v.number()),
+    screenHeight: v.optional(v.number()),
+    viewportWidth: v.optional(v.number()),
+    viewportHeight: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index("by_org_createdAt", ["orgId", "createdAt"])
+    .index("by_visitor_createdAt", ["visitorId", "createdAt"])
+    .index("by_host_createdAt", ["host", "createdAt"])
+    .index("by_createdAt", ["createdAt"]),
+
+  // One upserted profile row per anonymous (orgId, visitorId) pair. orgId undefined
+  // scopes to AutoFlow's own marketing/auth pages, same convention as above.
+  siteVisitors: defineTable({
+    orgId: v.optional(v.id("organizations")),
+    host: v.string(),
+    visitorId: v.string(),
+    firstSeenAt: v.number(),
+    lastSeenAt: v.number(),
+    visitCount: v.number(),
+    pageViewCount: v.number(),
+    linkClickCount: v.number(),
+    firstTrafficSource: v.string(),
+    firstReferrerHost: v.optional(v.string()),
+    firstUtmSource: v.optional(v.string()),
+    firstUtmMedium: v.optional(v.string()),
+    firstUtmCampaign: v.optional(v.string()),
+    deviceType: v.string(),
+    browserName: v.string(),
+    osName: v.string(),
+    country: v.optional(v.string()),
+    region: v.optional(v.string()),
+    city: v.optional(v.string()),
+    geoLookupStatus: v.optional(
+      v.union(v.literal("pending"), v.literal("done"), v.literal("failed"))
+    ),
+    // Used to detect a "new visit" (new browser session from a known visitor)
+    // vs. another page_view/link_click within the same ongoing session.
+    lastSessionId: v.optional(v.string()),
+  })
+    .index("by_org_visitor", ["orgId", "visitorId"])
+    .index("by_org_firstSeenAt", ["orgId", "firstSeenAt"])
+    .index("by_firstSeenAt", ["firstSeenAt"]),
 
   websiteLeadBlocklist: defineTable({
     orgId: v.id("organizations"),
