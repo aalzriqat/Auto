@@ -18,6 +18,8 @@ import {
 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
+import { usePermissions } from "@/hooks/use-permissions";
+import { PERMISSIONS } from "@/convex/utils/permissions";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -109,6 +111,71 @@ function statusVariant(status?: string) {
   if (status === "active") return "default";
   if (status === "draft") return "secondary";
   return "outline";
+}
+
+function WebsiteTrafficCard({ orgId }: { orgId: Id<"organizations"> }) {
+  const { t } = useLanguage();
+  const { hasPermission } = usePermissions();
+  const canView = hasPermission(PERMISSIONS.WEBSITE_ANALYTICS_VIEW);
+  const overview = useQuery(api.siteVisitors.getOrgVisitorOverview, canView ? { orgId } : "skip");
+
+  if (!canView) return null;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t("WebsiteTrafficTitle")}</CardTitle>
+        <CardDescription>{t("WebsiteTrafficSubtitle")}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <p className="text-xs text-muted-foreground">{t("WebsiteTrafficNewVisitors")}</p>
+            <p className="text-2xl font-semibold">{overview?.newVisitors7d ?? "—"}</p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">{t("WebsiteTrafficPageViews")}</p>
+            <p className="text-2xl font-semibold">{overview?.pageViews7d ?? "—"}</p>
+          </div>
+        </div>
+
+        {overview && overview.topTrafficSources.length === 0 && overview.topPages.length === 0 && (
+          <p className="text-sm text-muted-foreground">{t("WebsiteTrafficNoData")}</p>
+        )}
+
+        {overview && (overview.topTrafficSources.length > 0 || overview.topPages.length > 0) && (
+          <div className="grid gap-4 sm:grid-cols-2">
+            {overview.topTrafficSources.length > 0 && (
+              <div>
+                <p className="text-xs font-medium text-muted-foreground mb-2">{t("WebsiteTrafficTopSources")}</p>
+                <div className="flex flex-col gap-1.5">
+                  {overview.topTrafficSources.map((s) => (
+                    <div key={s.label} className="flex items-center justify-between text-sm">
+                      <span>{s.label}</span>
+                      <span className="text-muted-foreground">{s.count}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {overview.topPages.length > 0 && (
+              <div>
+                <p className="text-xs font-medium text-muted-foreground mb-2">{t("WebsiteTrafficTopPages")}</p>
+                <div className="flex flex-col gap-1.5">
+                  {overview.topPages.map((p) => (
+                    <div key={p.path} className="flex items-center justify-between text-sm">
+                      <span className="font-mono text-xs">{p.path}</span>
+                      <span className="text-muted-foreground">{p.count}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 export default function WebsiteSettingsPage() {
@@ -736,6 +803,8 @@ export default function WebsiteSettingsPage() {
           </Button>
         )}
       </div>
+
+      {setupExists && activeOrgId && <WebsiteTrafficCard orgId={activeOrgId} />}
     </div>
   );
 }

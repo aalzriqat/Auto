@@ -1,5 +1,5 @@
 import { ConvexError, v } from "convex/values";
-import { ActionCtx, MutationCtx, QueryCtx, action, internalMutation, mutation, query } from "./_generated/server";
+import { ActionCtx, MutationCtx, QueryCtx, action, internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { domainRegistrarService } from "./domainRegistrar";
@@ -875,6 +875,22 @@ export const resolveDomain = query({
         publishedAt: snapshot.publishedAt,
       },
     };
+  },
+});
+
+// Used by the public site-analytics httpAction (convex/http.ts) to resolve a
+// host into its owning org without trusting a client-supplied orgId. Unlike
+// resolveDomain, this doesn't gate on publish/feature status — traffic should
+// still be attributable to an org even while its site is in draft.
+export const resolveOrgIdForHost = internalQuery({
+  args: { host: v.string() },
+  handler: async (ctx, args): Promise<Id<"organizations"> | null> => {
+    const host = normalizedWebsiteHost(args.host);
+    const domain = await ctx.db
+      .query("websiteDomains")
+      .withIndex("by_domain", (q) => q.eq("domain", host))
+      .unique();
+    return domain?.orgId ?? null;
   },
 });
 

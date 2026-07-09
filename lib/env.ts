@@ -3,6 +3,10 @@ import { z } from "zod";
 const envSchema = z.object({
   // Next.js client-side variables (must start with NEXT_PUBLIC_)
   NEXT_PUBLIC_CONVEX_URL: z.string().url(),
+  // Base URL for this deployment's Convex httpActions (e.g. the /site-events
+  // visitor-tracking beacon). Distinct from NEXT_PUBLIC_CONVEX_URL (the
+  // reactive client endpoint, *.convex.cloud) — this one is *.convex.site.
+  NEXT_PUBLIC_CONVEX_SITE_URL: z.string().url(),
   NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: z.string().min(1),
   // The public base URL of this deployment (e.g. https://autoflowdealer.com/).
   // Used in server-side email links. Must be set in all non-local environments.
