@@ -45,6 +45,7 @@ import {
   type LucideIcon
 } from "lucide-react";
 import { motion, AnimatePresence, useScroll, useTransform, useMotionValue, useSpring } from "framer-motion";
+import { SiteVisitorTracker } from "@/components/analytics/SiteVisitorTracker";
 
 // Custom type definitions for localization
 interface LocalCopy {
@@ -653,7 +654,8 @@ export default function CreativeMarketingPage() {
       className={`dark relative min-h-screen bg-[#030014] text-white selection:bg-blue-500/30 overflow-hidden font-sans`}
       style={{ direction: isRtl ? "rtl" : "ltr" }}
     >
-      
+      <SiteVisitorTracker path="/" />
+
       {/* 20-Year Exp Interactive Background Canvas */}
       {/* 1. Global mouse follower glow */}
       <div 

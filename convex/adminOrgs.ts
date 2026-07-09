@@ -95,6 +95,8 @@ const ORGANIZATION_DELETION_STEPS: DeletionStep[] = [
   { kind: "orgRows", table: "websitePublishedSections", index: "by_org" },
   { kind: "orgRows", table: "websiteLeadRouting", index: "by_org_settings_form" },
   { kind: "orgRows", table: "websitePublishSnapshots", index: "by_org" },
+  { kind: "orgRows", table: "siteVisitorEvents", index: "by_org_createdAt" },
+  { kind: "orgRows", table: "siteVisitors", index: "by_org_firstSeenAt" },
   { kind: "orgRows", table: "domainSearchLogs", index: "by_org" },
   { kind: "orgRows", table: "oauthStates", index: "by_org" },
   { kind: "orgRows", table: "instagramEvents", index: "by_org" },

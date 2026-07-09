@@ -38,6 +38,7 @@ import { KineticLuxuryTheme, KineticModernEvTheme, KineticSalesTheme } from "./t
 import { TurnstileWidget } from "./turnstile-widget";
 import { DEFAULT_WEBSITE_TEMPLATE_ID } from "@/lib/website/websiteTemplates";
 import type { PublicVehicle } from "./themes/theme-props";
+import { useSiteVisitorTracking } from "@/hooks/useSiteVisitorTracking";
 
 type PublicBranch = {
   id: Id<"branches">;
@@ -312,6 +313,10 @@ export default function DealerSitePage() {
   const slug = params?.slug ?? [];
   const page = slug[0] ?? "home";
   const detailSlug = page === "inventory" && slug[1] ? slug[1] : null;
+  let trackedPath = "/" + page;
+  if (page === "home") trackedPath = "/";
+  else if (detailSlug) trackedPath += "/" + detailSlug;
+  useSiteVisitorTracking({ host, path: trackedPath, enabled: Boolean(site) && !isPreviewMode });
 
   const vehicles: PublicVehicle[] = useMemo(() => site?.vehicles ?? [], [site?.vehicles]);
   const featuredVehicles = vehicles.slice(0, 6);

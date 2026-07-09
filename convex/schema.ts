@@ -2257,6 +2257,75 @@ export default defineSchema({
     .index("by_host_createdAt", ["host", "createdAt"])
     .index("by_reason_createdAt", ["reason", "createdAt"]),
 
+  // orgId is undefined for AutoFlow's own marketing/auth pages (landing, sign-in,
+  // sign-up); it's set for dealer-site storefront traffic. Append-only event log,
+  // no soft-delete triple (same convention as websiteLeadAbuseEvents above).
+  siteVisitorEvents: defineTable({
+    orgId: v.optional(v.id("organizations")),
+    host: v.string(),
+    visitorId: v.string(),
+    sessionId: v.string(),
+    type: v.union(v.literal("page_view"), v.literal("link_click")),
+    path: v.string(),
+    linkTarget: v.optional(v.string()),
+    linkLabel: v.optional(v.string()),
+    referrerHost: v.optional(v.string()),
+    referrerUrl: v.optional(v.string()),
+    utmSource: v.optional(v.string()),
+    utmMedium: v.optional(v.string()),
+    utmCampaign: v.optional(v.string()),
+    utmTerm: v.optional(v.string()),
+    utmContent: v.optional(v.string()),
+    clickIdType: v.optional(v.string()),
+    clickIdValue: v.optional(v.string()),
+    trafficSource: v.string(),
+    userAgent: v.optional(v.string()),
+    language: v.optional(v.string()),
+    timezone: v.optional(v.string()),
+    screenWidth: v.optional(v.number()),
+    screenHeight: v.optional(v.number()),
+    viewportWidth: v.optional(v.number()),
+    viewportHeight: v.optional(v.number()),
+    createdAt: v.number(),
+  })
+    .index("by_org_createdAt", ["orgId", "createdAt"])
+    .index("by_visitor_createdAt", ["visitorId", "createdAt"])
+    .index("by_host_createdAt", ["host", "createdAt"])
+    .index("by_createdAt", ["createdAt"]),
+
+  // One upserted profile row per anonymous (orgId, visitorId) pair. orgId undefined
+  // scopes to AutoFlow's own marketing/auth pages, same convention as above.
+  siteVisitors: defineTable({
+    orgId: v.optional(v.id("organizations")),
+    host: v.string(),
+    visitorId: v.string(),
+    firstSeenAt: v.number(),
+    lastSeenAt: v.number(),
+    visitCount: v.number(),
+    pageViewCount: v.number(),
+    linkClickCount: v.number(),
+    firstTrafficSource: v.string(),
+    firstReferrerHost: v.optional(v.string()),
+    firstUtmSource: v.optional(v.string()),
+    firstUtmMedium: v.optional(v.string()),
+    firstUtmCampaign: v.optional(v.string()),
+    deviceType: v.string(),
+    browserName: v.string(),
+    osName: v.string(),
+    country: v.optional(v.string()),
+    region: v.optional(v.string()),
+    city: v.optional(v.string()),
+    geoLookupStatus: v.optional(
+      v.union(v.literal("pending"), v.literal("done"), v.literal("failed"))
+    ),
+    // Used to detect a "new visit" (new browser session from a known visitor)
+    // vs. another page_view/link_click within the same ongoing session.
+    lastSessionId: v.optional(v.string()),
+  })
+    .index("by_org_visitor", ["orgId", "visitorId"])
+    .index("by_org_firstSeenAt", ["orgId", "firstSeenAt"])
+    .index("by_firstSeenAt", ["firstSeenAt"]),
+
   websiteLeadBlocklist: defineTable({
     orgId: v.id("organizations"),
     host: v.optional(v.string()),

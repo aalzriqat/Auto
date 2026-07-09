@@ -238,4 +238,76 @@ describe("adminOrgs", () => {
     const org = await t.run(async (ctx) => ctx.db.get(orgId));
     expect(org).toBeNull();
   });
+
+  test("hardDeleteOrg cascades site-visitor analytics but leaves platform-scoped rows untouched", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId } = await seedOrgWithOwner(t);
+    await t.run(async (ctx) => ctx.db.insert("users", { clerkId: "dev_2", email: "admin@autoflow.dev" }));
+    const asAdmin = t.withIdentity({ subject: "dev_2" });
+
+    const visitorFields = {
+      host: "bloomcars.autoflowdealer.com",
+      visitorId: "visitor-org-1",
+      firstSeenAt: Date.now(),
+      lastSeenAt: Date.now(),
+      visitCount: 1,
+      pageViewCount: 1,
+      linkClickCount: 0,
+      firstTrafficSource: "Direct",
+      deviceType: "desktop",
+      browserName: "Chrome",
+      osName: "macOS",
+    };
+    await t.run(async (ctx) => {
+      await ctx.db.insert("siteVisitors", { orgId, ...visitorFields });
+      await ctx.db.insert("siteVisitorEvents", {
+        orgId,
+        host: visitorFields.host,
+        visitorId: visitorFields.visitorId,
+        sessionId: "session-1",
+        type: "page_view",
+        path: "/",
+        trafficSource: "Direct",
+        createdAt: Date.now(),
+      });
+      // Platform-scoped (AutoFlow's own marketing site) — must survive this org's deletion.
+      await ctx.db.insert("siteVisitors", {
+        orgId: undefined,
+        ...visitorFields,
+        host: "autoflowdealer.com",
+        visitorId: "visitor-platform-1",
+      });
+      await ctx.db.insert("siteVisitorEvents", {
+        orgId: undefined,
+        host: "autoflowdealer.com",
+        visitorId: "visitor-platform-1",
+        sessionId: "session-2",
+        type: "page_view",
+        path: "/",
+        trafficSource: "Direct",
+        createdAt: Date.now(),
+      });
+    });
+
+    const result = await asAdmin.mutation(api.adminOrgs.hardDeleteOrg, { orgId, confirmName: "Acme Motors" });
+    await runDeletionToCompletion(t, result.requestId);
+
+    const remainingOrgVisitors = await t.run(async (ctx) =>
+      ctx.db.query("siteVisitors").withIndex("by_org_firstSeenAt", (q) => q.eq("orgId", orgId)).collect()
+    );
+    const remainingOrgEvents = await t.run(async (ctx) =>
+      ctx.db.query("siteVisitorEvents").withIndex("by_org_createdAt", (q) => q.eq("orgId", orgId)).collect()
+    );
+    expect(remainingOrgVisitors).toHaveLength(0);
+    expect(remainingOrgEvents).toHaveLength(0);
+
+    const platformVisitors = await t.run(async (ctx) =>
+      ctx.db
+        .query("siteVisitors")
+        .withIndex("by_org_firstSeenAt", (q) => q.eq("orgId", undefined))
+        .collect()
+    );
+    expect(platformVisitors).toHaveLength(1);
+    expect(platformVisitors[0].visitorId).toBe("visitor-platform-1");
+  });
 });
