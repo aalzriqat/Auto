@@ -199,7 +199,7 @@ export default function WebsiteSettingsPage() {
       heroTitle: heroTitle.trim() || undefined,
       heroSubtitle: heroSubtitle.trim() || undefined,
       heroBadgeText: heroBadgeText.trim() || undefined,
-      activeFinanceCompanyId: activeFinanceCompanyId === "none" ? undefined : (activeFinanceCompanyId as Id<"financeCompanies">),
+      activeFinanceCompanyId: activeFinanceCompanyId === "none" ? null : (activeFinanceCompanyId as Id<"financeCompanies">),
       sections: Object.entries(sections).map(([sectionKey, enabled]) => ({ sectionKey, enabled })),
       routing: WEBSITE_FORM_TYPES.map(([formType]) => ({
         formType,

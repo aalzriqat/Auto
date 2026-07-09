@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import type { ThemeProps } from "./theme-props";
 import { TurnstileWidget } from "../turnstile-widget";
-import { KineticBrand, estimateMonthlyInstallment, useKineticStrings, waLink } from "./kinetic-shared";
+import { DEFAULT_FINANCE_TERMS, KineticBrand, estimateMonthlyInstallment, useKineticStrings, waLink } from "./kinetic-shared";
 
 function sliderGradient(value: number, min: number, max: number) {
   const pct = ((value - min) / (max - min)) * 100;
@@ -23,7 +23,7 @@ export function KineticFinanceCalculator(props: ThemeProps) {
   const [months, setMonths] = useState(60);
 
   const financeCompany = site.financeCompany;
-  const maxMonths = financeCompany?.maxTermMonths ?? 84;
+  const maxMonths = financeCompany?.maxTermMonths ?? DEFAULT_FINANCE_TERMS.maxTermMonths;
   const clampedMonths = Math.min(months, maxMonths);
 
   const downAmount = price * (downPercent / 100);

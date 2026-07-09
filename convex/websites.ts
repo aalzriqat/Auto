@@ -576,7 +576,7 @@ export const saveDraft = mutation({
     heroSubtitle: v.optional(v.string()),
     heroBadgeText: v.optional(v.string()),
     slogan: v.optional(v.string()),
-    activeFinanceCompanyId: v.optional(v.id("financeCompanies")),
+    activeFinanceCompanyId: v.optional(v.union(v.id("financeCompanies"), v.null())),
     themeConfig: v.optional(v.any()),
     sections: v.optional(v.array(sectionInputValidator)),
     routing: v.optional(v.array(routingInputValidator)),
@@ -587,7 +587,7 @@ export const saveDraft = mutation({
 
     if (args.activeFinanceCompanyId) {
       const company = await ctx.db.get(args.activeFinanceCompanyId);
-      if (!company || company.orgId !== args.orgId) {
+      if (!company || company.orgId !== args.orgId || !company.isActive) {
         throw new ConvexError("Finance company not found.");
       }
     }
@@ -664,6 +664,9 @@ export const saveDraft = mutation({
     const patch: Record<string, unknown> = { updatedAt: Date.now(), status: settings.status === "disabled" ? "draft" : settings.status };
     if (defaultSubdomain !== undefined) patch.defaultSubdomain = defaultSubdomain;
     if (activeDomainId !== undefined) patch.activeDomainId = activeDomainId;
+    // `null` means "clear the selection" — patching with `undefined` unsets the
+    // field, whereas omitting the key entirely (undefined argument) leaves it untouched.
+    if (args.activeFinanceCompanyId !== undefined) patch.activeFinanceCompanyId = args.activeFinanceCompanyId ?? undefined;
     for (const key of [
       "templateId",
       "defaultLanguage",
@@ -675,7 +678,6 @@ export const saveDraft = mutation({
       "heroSubtitle",
       "heroBadgeText",
       "slogan",
-      "activeFinanceCompanyId",
       "themeConfig",
     ] as const) {
       if (args[key] !== undefined) patch[key] = args[key];

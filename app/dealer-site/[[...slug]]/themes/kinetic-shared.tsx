@@ -98,7 +98,7 @@ export function KineticBrand({
   const textSizeClass = size === "lg" ? "text-4xl md:text-5xl" : size === "sm" ? "text-2xl" : "text-3xl md:text-4xl";
   const colorClass = light ? "text-white" : "text-luxury-gold dark:text-jod-gold";
   return (
-    <span className={`font-display-luxury ${textSizeClass} ${colorClass} truncate max-w-[300px] block ${className ?? ""}`}>
+    <span title={profile.dealershipName} className={`font-display-luxury ${textSizeClass} ${colorClass} truncate max-w-[300px] block ${className ?? ""}`}>
       {profile.dealershipName}
     </span>
   );

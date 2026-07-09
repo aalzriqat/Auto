@@ -37,23 +37,7 @@ import {
 import { KineticLuxuryTheme, KineticModernEvTheme, KineticSalesTheme } from "./themes/kinetic-themes";
 import { TurnstileWidget } from "./turnstile-widget";
 import { DEFAULT_WEBSITE_TEMPLATE_ID } from "@/lib/website/websiteTemplates";
-
-type PublicVehicle = {
-  id: Id<"vehicles">;
-  slug: string;
-  make: string;
-  model: string;
-  year: number;
-  trim: string | null;
-  mileage: number | null;
-  transmission: string | null;
-  fuelType: string | null;
-  exteriorColor: string | null;
-  price: number | null;
-  financePrice: number | null;
-  status: string;
-  imageUrls: string[];
-};
+import type { PublicVehicle } from "./themes/theme-props";
 
 type PublicBranch = {
   id: Id<"branches">;

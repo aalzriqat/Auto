@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import type { PublicSite, PublicVehicle, ThemeProps } from "./theme-props";
-import { KineticBrand, KineticVehicleImage, estimateMonthlyInstallment, telLink, useKineticStrings, vehicleTitle, waLink } from "./kinetic-shared";
+import { DEFAULT_FINANCE_TERMS, KineticBrand, KineticVehicleImage, estimateMonthlyInstallment, telLink, useKineticStrings, vehicleTitle, waLink } from "./kinetic-shared";
 
 function KineticTopNav({ props, activeInventory, activeFinance }: { props: ThemeProps; activeInventory?: boolean; activeFinance?: boolean }) {
   const { site, lang, showLangToggle, onToggleLang, t } = props;
@@ -465,7 +465,7 @@ function KineticFinanceMiniCalculator({
 }) {
   const [downPercent, setDownPercent] = useState(20);
   const [termMonths, setTermMonths] = useState(60);
-  const maxMonths = financeCompany?.maxTermMonths ?? 84;
+  const maxMonths = financeCompany?.maxTermMonths ?? DEFAULT_FINANCE_TERMS.maxTermMonths;
   const clampedTermMonths = Math.min(termMonths, maxMonths);
 
   const downAmount = Math.round(startingPrice * (downPercent / 100));
@@ -482,7 +482,7 @@ function KineticFinanceMiniCalculator({
       <h3 className="font-bold text-xl relative z-10">{k.financeCalculatorLabel}</h3>
       <div className="space-y-4 relative z-10">
         <div>
-          <label className="text-xs text-on-primary-container font-semibold uppercase tracking-wider">{k.downPaymentSuffix} ({downAmount.toLocaleString()} JOD)</label>
+          <label className="text-xs text-on-primary-container font-semibold uppercase tracking-wider">{k.downPaymentSuffix}</label>
           <div className="mt-1 flex items-center justify-between gap-3">
             <span className="font-bold whitespace-nowrap">{downAmount.toLocaleString()} JOD</span>
             <input className="w-1/2 accent-secondary" max={80} min={10} step={5} type="range" value={downPercent} onChange={(e) => setDownPercent(Number(e.target.value))} />
