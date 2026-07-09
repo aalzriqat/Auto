@@ -16,15 +16,15 @@ export function KineticLuxuryHome(props: ThemeProps) {
         <div className="bg-secondary px-4 py-2 text-center text-sm font-bold text-white">{t.previewBanner}</div>
       )}
       <nav className="bg-surface-container-low dark:bg-surface-dim backdrop-blur-xl docked full-width top-0 sticky z-50 shadow-sm">
-        <div className="flex justify-between items-center px-gutter py-5 w-full max-w-screen-2xl mx-auto">
+        <div className="flex justify-between items-center px-gutter py-3 w-full max-w-screen-2xl mx-auto">
           <div className="flex items-center gap-10">
             <Link href="/">
               <KineticBrand profile={profile} size="lg" />
             </Link>
             <div className="hidden md:flex gap-8 items-center">
-              <Link className="font-label-caps text-label-caps text-secondary dark:text-secondary-fixed-dim border-b-2 border-secondary font-bold pb-1" href="/inventory">{t.nav.inventory}</Link>
-              <Link className="font-label-caps text-label-caps text-on-surface-variant dark:text-outline-variant hover:text-primary dark:hover:text-primary-fixed-dim transition-colors" href="/finance">{t.nav.finance}</Link>
-              <Link className="font-label-caps text-label-caps text-on-surface-variant dark:text-outline-variant hover:text-primary dark:hover:text-primary-fixed-dim transition-colors" href="/contact">{t.nav.contact}</Link>
+              <Link className="font-label-caps text-sm text-secondary dark:text-secondary-fixed-dim border-b-2 border-secondary font-bold pb-1" href="/inventory">{t.nav.inventory}</Link>
+              <Link className="font-label-caps text-sm text-on-surface-variant dark:text-outline-variant hover:text-primary dark:hover:text-primary-fixed-dim transition-colors" href="/finance">{t.nav.finance}</Link>
+              <Link className="font-label-caps text-sm text-on-surface-variant dark:text-outline-variant hover:text-primary dark:hover:text-primary-fixed-dim transition-colors" href="/contact">{t.nav.contact}</Link>
             </div>
           </div>
           <div className="flex items-center gap-4">
@@ -198,7 +198,7 @@ export function KineticLuxuryHome(props: ThemeProps) {
       <footer className="bg-primary dark:bg-on-primary-fixed w-full py-section-gap">
         <div className="w-full grid grid-cols-1 md:grid-cols-4 gap-gutter px-margin-desktop max-w-screen-2xl mx-auto">
           <div className="space-y-6">
-            <div className="font-display-luxury text-display-luxury text-luxury-gold">{profile.dealershipName}</div>
+            <KineticBrand profile={profile} size="md" />
             <p className="font-body-md text-on-primary-container text-sm leading-relaxed">{profile.slogan ?? k.luxuryFooterSloganDefault}</p>
           </div>
           <div className="space-y-6">

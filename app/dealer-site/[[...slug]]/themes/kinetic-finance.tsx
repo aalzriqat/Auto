@@ -27,13 +27,12 @@ export function KineticFinanceCalculator(props: ThemeProps) {
   const clampedMonths = Math.min(months, maxMonths);
 
   const downAmount = price * (downPercent / 100);
-  const { monthlyInstallment: monthlyPayment, totalContractValue } = estimateMonthlyInstallment({
+  const { monthlyInstallment: monthlyPayment } = estimateMonthlyInstallment({
     financeCompany,
     vehiclePrice: price,
     downPayment: downAmount,
     termMonths: clampedMonths,
   });
-  const total = totalContractValue + downAmount;
   const profitRate = financeCompany?.profitRate ?? 4.5;
 
   return (
@@ -42,15 +41,15 @@ export function KineticFinanceCalculator(props: ThemeProps) {
         <div className="bg-secondary px-4 py-2 text-center text-sm font-bold text-white">{t.previewBanner}</div>
       )}
       <header className="bg-surface/90 backdrop-blur-xl docked full-width top-0 sticky z-50 shadow-sm">
-        <nav className="flex justify-between items-center px-gutter py-5 w-full max-w-screen-2xl mx-auto">
+        <nav className="flex justify-between items-center px-gutter py-3 w-full max-w-screen-2xl mx-auto">
           <div className="flex items-center gap-10">
             <Link href="/">
               <KineticBrand profile={profile} size="lg" />
             </Link>
             <div className="hidden md:flex gap-8 items-center">
-              <Link className="text-on-surface-variant hover:text-primary transition-colors font-label-caps text-label-caps" href="/inventory">{t.nav.inventory}</Link>
-              <Link className="text-secondary border-b-2 border-secondary font-bold pb-1 font-label-caps text-label-caps" href="/finance">{t.nav.finance}</Link>
-              <Link className="text-on-surface-variant hover:text-primary transition-colors font-label-caps text-label-caps" href="/contact">{t.nav.contact}</Link>
+              <Link className="text-on-surface-variant hover:text-primary transition-colors font-label-caps text-sm" href="/inventory">{t.nav.inventory}</Link>
+              <Link className="text-secondary border-b-2 border-secondary font-bold pb-1 font-label-caps text-sm" href="/finance">{t.nav.finance}</Link>
+              <Link className="text-on-surface-variant hover:text-primary transition-colors font-label-caps text-sm" href="/contact">{t.nav.contact}</Link>
             </div>
           </div>
           {profile.phone && (
@@ -93,7 +92,7 @@ export function KineticFinanceCalculator(props: ThemeProps) {
               <div className="mb-10">
                 <div className="flex justify-between items-center mb-4">
                   <label className="font-label-caps text-label-caps text-on-surface-variant uppercase">{k.downPaymentPercentLabel}</label>
-                  <span className="font-headline-lg text-headline-lg text-2xl text-primary">{downPercent}%</span>
+                  <span className="font-headline-lg text-headline-lg text-2xl text-primary">{Math.round(downAmount).toLocaleString()} JOD</span>
                 </div>
                 <input
                   className="w-full h-2 rounded-lg cursor-pointer appearance-none"
@@ -102,8 +101,8 @@ export function KineticFinanceCalculator(props: ThemeProps) {
                   onChange={(e) => setDownPercent(Number(e.target.value))}
                 />
                 <div className="flex justify-between mt-2 font-label-caps text-[10px] text-outline">
-                  <span>10%</span>
-                  <span>80%</span>
+                  <span>{Math.round(price * 0.1).toLocaleString()} JOD</span>
+                  <span>{Math.round(price * 0.8).toLocaleString()} JOD</span>
                 </div>
               </div>
               <div className="mb-6">
@@ -134,10 +133,6 @@ export function KineticFinanceCalculator(props: ThemeProps) {
                 <span className="font-headline-lg text-xl text-primary-fixed">JOD/mo</span>
               </div>
               <div className="space-y-4 pt-6 border-t border-white/10">
-                <div className="flex justify-between items-center">
-                  <span className="text-on-primary-container font-body-md">{k.totalRepayment}</span>
-                  <span className="font-bold text-lg">{Math.round(total).toLocaleString()} JOD</span>
-                </div>
                 <div className="flex justify-between items-center">
                   <span className="text-on-primary-container font-body-md">{k.fixedInterestRate}</span>
                   <span className="font-bold text-lg text-secondary-fixed-dim">{profitRate.toFixed(2)}%</span>
@@ -193,7 +188,7 @@ export function KineticFinanceCalculator(props: ThemeProps) {
               <div>
                 <p className="font-bold text-primary">{k.certifiedAdvisorsTitle}</p>
                 <p className="text-sm text-on-surface-variant">
-                  {financeCompany ? financeCompany.name : k.certifiedAdvisorsDesc}
+                  {k.certifiedAdvisorsDesc}
                 </p>
               </div>
             </div>
@@ -211,7 +206,7 @@ export function KineticFinanceCalculator(props: ThemeProps) {
       <footer className="bg-primary dark:bg-on-primary-fixed w-full py-section-gap mt-section-gap">
         <div className="w-full grid grid-cols-1 md:grid-cols-4 gap-gutter px-margin-desktop max-w-screen-2xl mx-auto">
           <div className="space-y-4">
-            <span className="font-display-luxury text-display-luxury text-luxury-gold">{profile.dealershipName}</span>
+            <KineticBrand profile={profile} size="md" />
             <p className="text-on-primary-container font-body-md">{profile.slogan ?? k.financeFooterSloganDefault}</p>
           </div>
           <div className="flex flex-col gap-4">

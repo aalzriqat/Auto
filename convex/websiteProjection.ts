@@ -125,6 +125,7 @@ async function projectedVehicleRows(
         fuelType: enabledSections["vehicle.fuelType"] ? vehicleRow.fuelType : null,
         exteriorColor: enabledSections["vehicle.exteriorColor"] ? vehicleRow.color : null,
         price: enabledSections["vehicle.price"] ? vehicleRow.sellingPrice : null,
+        financePrice: vehicleRow.sellingPrice,
         vin: includeVinChassis ? vehicleRow.vin : null,
         status: vehicleRow.status,
         imageUrls: enabledSections["vehicle.photos"] ? safeImageUrls : [],

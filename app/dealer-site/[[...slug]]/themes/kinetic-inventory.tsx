@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import type { PublicSite, PublicVehicle, ThemeProps } from "./theme-props";
-import { KineticBrand, KineticVehicleImage, estimateMonthlyInstallment, telLink, useKineticStrings, vehicleTitle, waLink } from "./kinetic-shared";
+import { DEFAULT_FINANCE_TERMS, KineticBrand, KineticVehicleImage, estimateMonthlyInstallment, telLink, useKineticStrings, vehicleTitle, waLink } from "./kinetic-shared";
 
 function KineticTopNav({ props, activeInventory, activeFinance }: { props: ThemeProps; activeInventory?: boolean; activeFinance?: boolean }) {
   const { site, lang, showLangToggle, onToggleLang, t } = props;
@@ -11,11 +11,11 @@ function KineticTopNav({ props, activeInventory, activeFinance }: { props: Theme
   const k = useKineticStrings(lang);
   const linkClass = (active?: boolean) =>
     active
-      ? "text-secondary border-b-2 border-secondary font-bold pb-1 font-label-caps text-label-caps"
-      : "text-on-surface-variant hover:text-primary transition-colors font-label-caps text-label-caps";
+      ? "text-secondary border-b-2 border-secondary font-bold pb-1 font-label-caps text-sm"
+      : "text-on-surface-variant hover:text-primary transition-colors font-label-caps text-sm";
   return (
     <header className="bg-surface/90 backdrop-blur-xl docked full-width top-0 sticky z-50 shadow-sm">
-      <nav className="flex justify-between items-center px-gutter py-5 w-full max-w-screen-2xl mx-auto">
+      <nav className="flex justify-between items-center px-gutter py-3 w-full max-w-screen-2xl mx-auto">
         <div className="flex items-center gap-10">
           <Link href="/">
             <KineticBrand profile={profile} size="lg" />
@@ -54,7 +54,7 @@ function KineticFooter({ props }: { props: ThemeProps }) {
     <footer className="bg-primary py-section-gap w-full px-margin-desktop text-on-primary">
       <div className="max-w-screen-2xl mx-auto grid grid-cols-1 md:grid-cols-4 gap-gutter">
         <div className="flex flex-col gap-4">
-          <h2 className="font-display-luxury text-[32px] text-luxury-gold">{profile.dealershipName}</h2>
+          <KineticBrand profile={profile} size="md" />
           <p className="text-on-primary-container text-sm leading-relaxed">{profile.slogan ?? k.inventoryFooterSloganDefault}</p>
         </div>
         <div>
@@ -392,7 +392,7 @@ export function KineticVehicleDetail(props: ThemeProps) {
                   </a>
                 )}
               </div>
-              <KineticFinanceMiniCalculator startingPrice={v.price ?? 25000} k={k} financeCompany={site.financeCompany} />
+              <KineticFinanceMiniCalculator startingPrice={v.financePrice ?? v.price ?? 25000} k={k} financeCompany={site.financeCompany} />
               {profile.address && (
                 <div className="bg-surface-container-low p-4 rounded-2xl border border-outline-variant">
                   <h3 className="font-bold mb-3 flex items-center gap-2">
@@ -465,7 +465,7 @@ function KineticFinanceMiniCalculator({
 }) {
   const [downPercent, setDownPercent] = useState(20);
   const [termMonths, setTermMonths] = useState(60);
-  const maxMonths = financeCompany?.maxTermMonths ?? 84;
+  const maxMonths = financeCompany?.maxTermMonths ?? DEFAULT_FINANCE_TERMS.maxTermMonths;
   const clampedTermMonths = Math.min(termMonths, maxMonths);
 
   const downAmount = Math.round(startingPrice * (downPercent / 100));
@@ -482,7 +482,7 @@ function KineticFinanceMiniCalculator({
       <h3 className="font-bold text-xl relative z-10">{k.financeCalculatorLabel}</h3>
       <div className="space-y-4 relative z-10">
         <div>
-          <label className="text-xs text-on-primary-container font-semibold uppercase tracking-wider">{k.downPaymentSuffix} ({downPercent}%)</label>
+          <label className="text-xs text-on-primary-container font-semibold uppercase tracking-wider">{k.downPaymentSuffix}</label>
           <div className="mt-1 flex items-center justify-between gap-3">
             <span className="font-bold whitespace-nowrap">{downAmount.toLocaleString()} JOD</span>
             <input className="w-1/2 accent-secondary" max={80} min={10} step={5} type="range" value={downPercent} onChange={(e) => setDownPercent(Number(e.target.value))} />

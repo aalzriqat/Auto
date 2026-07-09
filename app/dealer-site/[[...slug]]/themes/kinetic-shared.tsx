@@ -86,19 +86,19 @@ export function KineticBrand({
   className?: string;
 }) {
   if (profile.logoUrl) {
-    const heightClass = size === "lg" ? "h-16" : size === "sm" ? "h-9" : "h-12";
+    const heightClass = size === "lg" ? "h-20" : size === "sm" ? "h-11" : "h-14";
     return (
       <img
         src={profile.logoUrl}
         alt={profile.dealershipName}
-        className={`${heightClass} w-auto max-w-[260px] object-contain ${className ?? ""}`}
+        className={`${heightClass} w-auto max-w-[300px] object-contain ${className ?? ""}`}
       />
     );
   }
-  const textSizeClass = size === "lg" ? "text-3xl md:text-4xl" : size === "sm" ? "text-xl" : "text-2xl md:text-3xl";
+  const textSizeClass = size === "lg" ? "text-4xl md:text-5xl" : size === "sm" ? "text-2xl" : "text-3xl md:text-4xl";
   const colorClass = light ? "text-white" : "text-luxury-gold dark:text-jod-gold";
   return (
-    <span className={`font-display-luxury ${textSizeClass} ${colorClass} truncate max-w-[260px] ${className ?? ""}`}>
+    <span title={profile.dealershipName} className={`font-display-luxury ${textSizeClass} ${colorClass} truncate max-w-[300px] block ${className ?? ""}`}>
       {profile.dealershipName}
     </span>
   );
@@ -233,11 +233,11 @@ const KINETIC_TEXT = {
   fastApprovalTitle: ["Fast Approval", "موافقة سريعة"],
   lowInterestTitle: ["Low Interest", "فائدة منخفضة"],
   carPriceLabel: ["Car Price (JOD)", "سعر السيارة (دينار)"],
-  downPaymentPercentLabel: ["Down Payment (%)", "الدفعة الأولى (%)"],
+  downPaymentPercentLabel: ["Down Payment", "الدفعة الأولى"],
   estimatedMonthlyPayment: ["Estimated Monthly Payment", "القسط الشهري المقدر"],
   perMonth: ["/ month*", "/ شهرياً*"],
   applyForFinanceNow: ["Apply for Finance Now", "تقدم بطلب تمويل الآن"],
-  financeTermsNote: ["*Terms and conditions apply. Rates may vary based on credit profile and bank approval.", "*تطبق الشروط والأحكام. قد تختلف الأسعار حسب الملف الائتماني وموافقة البنك."],
+  financeTermsNote: ["*Terms and conditions apply. Rates may vary based on credit profile and bank or financing company approval.", "*تطبق الشروط والأحكام. قد تختلف الأسعار حسب الملف الائتماني وموافقة البنك أو شركة التمويل."],
   readyToDriveDream: ["Ready to drive your dream car?", "جاهز لقيادة سيارة أحلامك؟"],
   chatWithSales: ["Chat with Sales", "تحدث مع المبيعات"],
   salesFooterGetInTouch: ["Get In Touch", "تواصل معنا"],
@@ -277,7 +277,6 @@ const KINETIC_TEXT = {
   vehiclePriceLabel: ["Vehicle Price (JOD)", "سعر المركبة (دينار)"],
   paymentPeriodLabel: ["Payment Period (Months)", "مدة السداد (أشهر)"],
   estimatedMonthlyInstallment: ["Estimated Monthly Installment", "القسط الشهري المقدر"],
-  totalRepayment: ["Total Repayment", "إجمالي السداد"],
   fixedInterestRate: ["Fixed Interest Rate", "معدل الفائدة الثابت"],
   downPaymentAmount: ["Down Payment Amount", "مبلغ الدفعة الأولى"],
   submitFinanceApplication: ["Submit Finance Application", "تقديم طلب التمويل"],
@@ -286,8 +285,8 @@ const KINETIC_TEXT = {
   certifiedAdvisorsDesc: ["Our team ensures you get the best rates available.", "يضمن فريقنا حصولك على أفضل الأسعار المتاحة."],
   disclaimerLabel: ["DISCLAIMER:", "إخلاء مسؤولية:"],
   defaultFinancingDisclaimer: [
-    "The values provided by this calculator are estimates for informational purposes only. Actual interest rates, monthly installments, and terms are subject to credit approval by our partner banking institutions.",
-    "القيم المقدمة من هذه الحاسبة هي تقديرات لأغراض إعلامية فقط. تخضع أسعار الفائدة والأقساط الشهرية والمدد الفعلية لموافقة الائتمان من قبل البنوك الشريكة.",
+    "The values provided by this calculator are estimates for informational purposes only. Actual interest rates, monthly installments, and terms are subject to credit approval by our partner banks or financing companies.",
+    "القيم المقدمة من هذه الحاسبة هي تقديرات لأغراض إعلامية فقط. تخضع أسعار الفائدة والأقساط الشهرية والمدد الفعلية لموافقة الائتمان من قبل البنوك أو شركات التمويل الشريكة.",
   ],
   calculatorLinkLabel: ["Calculator", "الحاسبة"],
   financeFooterSloganDefault: ["Driving excellence in the automotive market.", "نقود التميز في سوق السيارات."],

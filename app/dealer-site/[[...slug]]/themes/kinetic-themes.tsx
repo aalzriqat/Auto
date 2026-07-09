@@ -65,21 +65,21 @@ function FallbackNav({ props }: { props: ThemeProps }) {
   const { site, t } = props;
   return (
     <header className="sticky top-0 z-50 bg-surface/90 shadow-sm backdrop-blur-xl">
-      <nav className="mx-auto flex w-full max-w-screen-2xl items-center justify-between px-gutter py-5">
+      <nav className="mx-auto flex w-full max-w-screen-2xl items-center justify-between px-gutter py-3">
         <Link href="/">
           <KineticBrand profile={site.profile} size="lg" />
         </Link>
         <div className="hidden items-center gap-8 md:flex">
-          <Link className="font-label-caps text-label-caps text-on-surface-variant hover:text-primary" href="/inventory">
+          <Link className="font-label-caps text-sm text-on-surface-variant hover:text-primary" href="/inventory">
             {t.nav.inventory}
           </Link>
-          <Link className="font-label-caps text-label-caps text-on-surface-variant hover:text-primary" href="/finance">
+          <Link className="font-label-caps text-sm text-on-surface-variant hover:text-primary" href="/finance">
             {t.nav.finance}
           </Link>
-          <Link className="font-label-caps text-label-caps text-on-surface-variant hover:text-primary" href="/branches">
+          <Link className="font-label-caps text-sm text-on-surface-variant hover:text-primary" href="/branches">
             {t.nav.branches}
           </Link>
-          <Link className="font-label-caps text-label-caps text-secondary" href="/contact">
+          <Link className="font-label-caps text-sm text-secondary" href="/contact">
             {t.nav.contact}
           </Link>
         </div>
@@ -189,7 +189,7 @@ function FallbackFooter({ site }: { site: PublicSite }) {
   return (
     <footer className="mt-section-gap bg-primary px-margin-desktop py-section-gap text-white">
       <div className="mx-auto max-w-screen-2xl">
-        <h2 className="font-display-luxury text-[32px] text-luxury-gold">{site.profile.dealershipName}</h2>
+        <KineticBrand profile={site.profile} size="md" />
         <p className="mt-3 text-on-primary-container">{site.profile.slogan}</p>
       </div>
     </footer>
