@@ -14,7 +14,7 @@ function resolveLinkTarget(anchor: HTMLAnchorElement): string {
 }
 
 function resolveLinkLabel(el: HTMLElement): string | undefined {
-  const dataLabel = el.getAttribute("data-track-label");
+  const dataLabel = el.dataset.trackLabel;
   if (dataLabel) return dataLabel;
   const text = el.textContent?.trim().replace(/\s+/g, " ");
   return text ? text.slice(0, 200) : undefined;
@@ -46,7 +46,7 @@ export function useSiteVisitorTracking({ host, path, enabled = true }: UseSiteVi
       const linkTarget =
         trackedEl instanceof HTMLAnchorElement
           ? resolveLinkTarget(trackedEl)
-          : (trackedEl.getAttribute("data-track-id") ?? undefined);
+          : trackedEl.dataset.trackId;
       if (!linkTarget) return;
 
       sendTrackingBeacon(

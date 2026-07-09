@@ -36,8 +36,9 @@ export default function AdminAnalyticsPage() {
   }, [orgs]);
 
   const [orgFilter, setOrgFilter] = useState<string>(ALL_ORGS);
-  const scope: "all" | "platform" | Id<"organizations"> =
-    orgFilter === ALL_ORGS ? "all" : orgFilter === PLATFORM ? "platform" : (orgFilter as Id<"organizations">);
+  let scope: "all" | "platform" | Id<"organizations"> = orgFilter as Id<"organizations">;
+  if (orgFilter === ALL_ORGS) scope = "all";
+  else if (orgFilter === PLATFORM) scope = "platform";
 
   const { results: visitors, loadMore, status } = usePaginatedQuery(
     api.adminAnalytics.listVisitors,

@@ -113,7 +113,7 @@ function statusVariant(status?: string) {
   return "outline";
 }
 
-function WebsiteTrafficCard({ orgId }: { orgId: Id<"organizations"> }) {
+function WebsiteTrafficCard({ orgId }: Readonly<{ orgId: Id<"organizations"> }>) {
   const { t } = useLanguage();
   const { hasPermission } = usePermissions();
   const canView = hasPermission(PERMISSIONS.WEBSITE_ANALYTICS_VIEW);
@@ -139,7 +139,7 @@ function WebsiteTrafficCard({ orgId }: { orgId: Id<"organizations"> }) {
           </div>
         </div>
 
-        {overview && overview.topTrafficSources.length === 0 && overview.topPages.length === 0 && (
+        {overview?.topTrafficSources.length === 0 && overview.topPages.length === 0 && (
           <p className="text-sm text-muted-foreground">{t("WebsiteTrafficNoData")}</p>
         )}
 

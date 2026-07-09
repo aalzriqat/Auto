@@ -313,7 +313,9 @@ export default function DealerSitePage() {
   const slug = params?.slug ?? [];
   const page = slug[0] ?? "home";
   const detailSlug = page === "inventory" && slug[1] ? slug[1] : null;
-  const trackedPath = page === "home" ? "/" : `/${page}${detailSlug ? `/${detailSlug}` : ""}`;
+  let trackedPath = "/" + page;
+  if (page === "home") trackedPath = "/";
+  else if (detailSlug) trackedPath += "/" + detailSlug;
   useSiteVisitorTracking({ host, path: trackedPath, enabled: Boolean(site) && !isPreviewMode });
 
   const vehicles: PublicVehicle[] = useMemo(() => site?.vehicles ?? [], [site?.vehicles]);
