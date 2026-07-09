@@ -50,6 +50,7 @@ type PublicVehicle = {
   fuelType: string | null;
   exteriorColor: string | null;
   price: number | null;
+  financePrice: number | null;
   status: string;
   imageUrls: string[];
 };

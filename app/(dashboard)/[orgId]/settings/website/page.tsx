@@ -199,7 +199,7 @@ export default function WebsiteSettingsPage() {
       heroTitle: heroTitle.trim() || undefined,
       heroSubtitle: heroSubtitle.trim() || undefined,
       heroBadgeText: heroBadgeText.trim() || undefined,
-      activeFinanceCompanyId: activeFinanceCompanyId === "none" ? null : (activeFinanceCompanyId as Id<"financeCompanies">),
+      activeFinanceCompanyId: activeFinanceCompanyId === "none" ? undefined : (activeFinanceCompanyId as Id<"financeCompanies">),
       sections: Object.entries(sections).map(([sectionKey, enabled]) => ({ sectionKey, enabled })),
       routing: WEBSITE_FORM_TYPES.map(([formType]) => ({
         formType,
@@ -598,13 +598,11 @@ export default function WebsiteSettingsPage() {
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">{t("WebsiteNoFinanceCompany")}</SelectItem>
-                  {(financeCompanies ?? [])
-                    .filter((company) => company.isActive || company._id === activeFinanceCompanyId)
-                    .map((company) => (
-                      <SelectItem key={company._id} value={company._id} disabled={!company.isActive}>
-                        {company.name} ({company.profitRate}%){!company.isActive ? ` — ${t("Inactive")}` : ""}
-                      </SelectItem>
-                    ))}
+                  {(financeCompanies ?? []).filter((company) => company.isActive).map((company) => (
+                    <SelectItem key={company._id} value={company._id}>
+                      {company.name} ({company.profitRate}%)
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">{t("WebsiteActiveFinanceCompanyHint")}</p>

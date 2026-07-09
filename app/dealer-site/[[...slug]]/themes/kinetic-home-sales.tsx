@@ -28,15 +28,15 @@ export function KineticSalesHome(props: ThemeProps) {
         <div className="bg-secondary px-4 py-2 text-center text-sm font-bold text-white">{t.previewBanner}</div>
       )}
       <nav className="bg-surface/90 backdrop-blur-xl docked full-width top-0 sticky z-50 shadow-sm">
-        <div className="flex justify-between items-center px-gutter py-5 w-full max-w-screen-2xl mx-auto">
+        <div className="flex justify-between items-center px-gutter py-3 w-full max-w-screen-2xl mx-auto">
           <div className="flex items-center gap-10">
             <Link href="/">
               <KineticBrand profile={profile} size="lg" />
             </Link>
             <div className="hidden lg:flex items-center gap-8">
-              <Link className="text-secondary border-b-2 border-secondary font-bold pb-1 font-label-caps text-label-caps" href="/inventory">{t.nav.inventory}</Link>
-              <Link className="text-on-surface-variant hover:text-primary transition-colors font-label-caps text-label-caps" href="/finance">{t.nav.finance}</Link>
-              <Link className="text-on-surface-variant hover:text-primary transition-colors font-label-caps text-label-caps" href="/contact">{t.nav.contact}</Link>
+              <Link className="text-secondary border-b-2 border-secondary font-bold pb-1 font-label-caps text-sm" href="/inventory">{t.nav.inventory}</Link>
+              <Link className="text-on-surface-variant hover:text-primary transition-colors font-label-caps text-sm" href="/finance">{t.nav.finance}</Link>
+              <Link className="text-on-surface-variant hover:text-primary transition-colors font-label-caps text-sm" href="/contact">{t.nav.contact}</Link>
             </div>
           </div>
           <div className="flex items-center gap-4">
@@ -157,9 +157,6 @@ export function KineticSalesHome(props: ThemeProps) {
                 <div className="bg-white/5 border border-white/10 p-4 rounded-xl">
                   <span className="material-symbols-outlined text-secondary text-3xl mb-2">percent</span>
                   <p className="font-bold">{k.lowInterestTitle}</p>
-                  {site.financeCompany && (
-                    <p className="text-xs text-on-primary-container">{site.financeCompany.name}</p>
-                  )}
                 </div>
               </div>
             </div>
@@ -183,7 +180,7 @@ export function KineticSalesHome(props: ThemeProps) {
                           downPercent === pct ? "border-secondary bg-secondary text-white" : "border-outline-variant hover:border-secondary"
                         }`}
                       >
-                        {pct}%
+                        {Math.round(price * (pct / 100)).toLocaleString()} JOD
                       </button>
                     ))}
                   </div>
@@ -226,7 +223,7 @@ export function KineticSalesHome(props: ThemeProps) {
       <footer className="bg-primary py-section-gap">
         <div className="w-full max-w-screen-2xl mx-auto grid grid-cols-1 md:grid-cols-4 gap-gutter px-margin-desktop text-on-primary">
           <div className="space-y-6">
-            <span className="font-display-luxury text-display-luxury text-luxury-gold">{profile.dealershipName}</span>
+            <KineticBrand profile={profile} size="md" />
             <p className="text-on-primary-container text-sm">{profile.slogan ?? k.salesFooterSloganDefault}</p>
           </div>
           <div>

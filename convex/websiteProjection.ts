@@ -21,9 +21,7 @@ export async function websiteSectionMap(
 }
 
 function combinePhones(primary: string | null | undefined, extra: string[] | undefined) {
-  const numbers = [primary, ...(extra ?? [])]
-    .map((phone) => phone?.trim())
-    .filter((phone): phone is string => Boolean(phone));
+  const numbers = [primary, ...(extra ?? [])].filter((phone): phone is string => Boolean(phone && phone.trim()));
   return Array.from(new Set(numbers));
 }
 
@@ -125,6 +123,7 @@ async function projectedVehicleRows(
         fuelType: enabledSections["vehicle.fuelType"] ? vehicleRow.fuelType : null,
         exteriorColor: enabledSections["vehicle.exteriorColor"] ? vehicleRow.color : null,
         price: enabledSections["vehicle.price"] ? vehicleRow.sellingPrice : null,
+        financePrice: vehicleRow.sellingPrice,
         vin: includeVinChassis ? vehicleRow.vin : null,
         status: vehicleRow.status,
         imageUrls: enabledSections["vehicle.photos"] ? safeImageUrls : [],
