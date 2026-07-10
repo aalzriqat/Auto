@@ -19,6 +19,7 @@ const STATUS_TABS: { label: string; value: RequestStatus | undefined }[] = [
   { label: "Open", value: "OPEN" },
   { label: "Matched", value: "MATCHED" },
   { label: "Fulfilled", value: "FULFILLED" },
+  { label: "Expired", value: "EXPIRED" },
   { label: "Spam", value: "SPAM" },
 ];
 

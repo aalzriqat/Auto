@@ -22,6 +22,15 @@ async function getOwnProfile(ctx: QueryCtx | MutationCtx, orgId: Id<"organizatio
     .unique();
 }
 
+async function resolveSiteUrl(ctx: QueryCtx, orgId: Id<"organizations">): Promise<string | null> {
+  if (!(await hasPlanFeature(ctx, orgId, "websiteBuilder"))) return null;
+  const primaryDomain = await ctx.db
+    .query("websiteDomains")
+    .withIndex("by_org_primary", (q) => q.eq("orgId", orgId).eq("isPrimary", true))
+    .first();
+  return primaryDomain?.status === "active" ? `https://${primaryDomain.domain}` : null;
+}
+
 /** Dashboard: the current org's marketplace profile, or null if never configured. */
 export const getMyProfile = query({
   args: { orgId: v.id("organizations") },
@@ -98,26 +107,24 @@ export const listPublicDirectory = query({
           const org = await ctx.db.get(profile.orgId);
           if (!org || org.suspended) return null;
 
-          const orgSettings = await ctx.db
-            .query("orgSettings")
-            .withIndex("by_org", (q) => q.eq("orgId", profile.orgId))
-            .unique();
+          const [orgSettings, activeVehicles, siteUrl] = await Promise.all([
+            ctx.db
+              .query("orgSettings")
+              .withIndex("by_org", (q) => q.eq("orgId", profile.orgId))
+              .unique(),
+            ctx.db
+              .query("vehicles")
+              .withIndex("by_org_status", (q) => q.eq("orgId", profile.orgId).eq("status", "AVAILABLE"))
+              .take(MAX_ACTIVE_VEHICLE_SAMPLE),
+            resolveSiteUrl(ctx, profile.orgId),
+          ]);
 
-          const activeVehicles = await ctx.db
-            .query("vehicles")
-            .withIndex("by_org_status", (q) => q.eq("orgId", profile.orgId).eq("status", "AVAILABLE"))
-            .take(MAX_ACTIVE_VEHICLE_SAMPLE);
-
-          const logoUrl = orgSettings?.logoStorageId ? await ctx.storage.getUrl(orgSettings.logoStorageId) : null;
-
-          let siteUrl: string | null = null;
-          if (await hasPlanFeature(ctx, profile.orgId, "websiteBuilder")) {
-            const primaryDomain = await ctx.db
-              .query("websiteDomains")
-              .withIndex("by_org_primary", (q) => q.eq("orgId", profile.orgId).eq("isPrimary", true))
-              .first();
-            if (primaryDomain?.status === "active") {
-              siteUrl = `https://${primaryDomain.domain}`;
+          let logoUrl: string | null = null;
+          if (orgSettings?.logoStorageId) {
+            try {
+              logoUrl = await ctx.storage.getUrl(orgSettings.logoStorageId);
+            } catch (error) {
+              console.error(error);
             }
           }
 

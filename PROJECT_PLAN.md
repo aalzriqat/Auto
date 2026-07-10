@@ -1231,9 +1231,9 @@ Each phase reuses the established pattern: immutable event table → posting rul
 **Goal:** AutoFlow becomes a two-sided marketplace — buyers submit car requests, AutoFlow fans them out to matching opted-in dealers, dealer replies become attributed leads. Built as a layer on top of the existing dealer-site infrastructure (`websiteDomains`, published inventory, the public-lead pipeline in `websites.ts`), not a rebuild. Distinct from Phase 34 (dealer-initiated acquisition) and Phase 35 (outbound syndication to Dubizzle/OpenSooq/Haraj/YallaMotor) — see the master plan §2 for reconciliation.
 
 > Started 2026-07-10 at the user's explicit request, bypassing the master plan's §0 manual-validation gate (2–3 week concierge test before writing code) — risk accepted knowingly, not an oversight.
-
+>
 > **PR #52** (Phases 56+57, branch `feature/phase-56-marketplace-directory`): https://github.com/aalzriqat/Auto/pull/52 — open, awaiting CI/CodeRabbit/human review. **Standing rule for this epic (set 2026-07-10): open/update a PR after each phase and wait for review comments before starting the next phase** — do not keep stacking phases onto an unreviewed branch.
-
+>
 > ⚠️ **Non-engineering blocker in progress:** AutoFlow is on Meta's WhatsApp test number; Business Verification not yet done. Doesn't block Phase 57/58 engineering (WhatsApp degrades gracefully to in-app/email everywhere), but does block WhatsApp reaching real dealers beyond a small manual allowlist until verification clears. See master plan §0.5/A5b.
 
 ## Phase 56 — Dealer Opt-In + Marketplace Directory ✅
@@ -1241,6 +1241,7 @@ Each phase reuses the established pattern: immutable event table → posting rul
 **Branch:** `feature/phase-56-marketplace-directory` · **Completed:** 2026-07-10
 
 ### Delivered
+
 - [x] `convex/schema.ts` — `marketplaceDealerProfiles` table (opt-in, areas, brandsCarried, whatsappNumber, badges, response-score fields, tier/quota fields for future Phase 63)
 - [x] `convex/utils/permissions.ts` — `marketplace:settings`/`marketplace:respond`/`marketplace:analytics`; settings+respond+analytics → MANAGER, respond → SALES (matches existing WEBSITE_*/VIEW_REPORTS grant pattern)
 - [x] `convex/marketplaceDealers.ts` — `getMyProfile`, `updateProfile` (upsert opt-in/areas/brands/WhatsApp), `listPublicDirectory` (public query; reuses `orgSettings` dealer profile fields + `hasPlanFeature(..., "websiteBuilder")` + `websiteDomains` primary-domain lookup for the site link, live `AVAILABLE` vehicle count — no duplicate listings table per master plan decision A2)
@@ -1251,6 +1252,7 @@ Each phase reuses the established pattern: immutable event table → posting rul
 - [x] Full suite green (888 tests), typecheck clean, lint clean on new files
 
 ### Remaining / not yet done
+
 - [ ] Not merged to `main` — still on the feature branch, awaiting go-ahead
 - [ ] `npx convex deploy` not run — nothing here is live
 - [ ] Changelog entry deliberately not added yet (per standing rule: entries are for shipped/deployed changes)
@@ -1262,6 +1264,7 @@ Each phase reuses the established pattern: immutable event table → posting rul
 **Branch:** `feature/phase-56-marketplace-directory` (continued) · **Completed:** 2026-07-10
 
 ### Delivered
+
 - [x] `convex/schema.ts` — `marketplaceRequests` (no orgId, buyer criteria, computed `buyerIntent`, `consentAcceptedAt`) + `marketplaceRequestMatches` (per-dealer `notifiedAt`/`notifiedVia`, replaces a flat array so response-time scoring works later)
 - [x] `convex/marketplaceRequests.ts` — `submitRequest` (public action: Turnstile + rate limits, reuses `verifyTurnstileToken` exported from `websites.ts`) → `createRequest` (internal mutation: consent-gated, rule-based area/brand matching capped at `MAX_MATCHED_DEALERS=5`, ranked by `avgResponseMinutes`, computes `buyerIntent` COLD/WARM/HOT); `getStatusForBuyer` (public, id+phone); `expireStaleRequests` (daily cron)
 - [x] `convex/adminMarketplace.ts` (new, `requireSuperAdmin`) — `listRequests` (cross-org, joins matches + dealer name/WhatsApp), `markMatchNotified`, `markSpam` — both audit-logged
@@ -1272,6 +1275,7 @@ Each phase reuses the established pattern: immutable event table → posting rul
 - [x] Tests: 28 new (buyerIntent/matching pure functions, full submit→match→notify flow, cap enforcement, consent rejection, suspended-org exclusion, admin permission gating, deep-link encoding) — full suite 906 passed, typecheck clean, lint clean
 
 ### Remaining / not yet done
+
 - [ ] Not merged to `main`, `npx convex deploy` not run
 - [ ] `NEXT_PUBLIC_TURNSTILE_SITE_KEY` must be confirmed set for the public request form to render the Turnstile widget (reuses the same site key as the dealer-site lead forms)
 

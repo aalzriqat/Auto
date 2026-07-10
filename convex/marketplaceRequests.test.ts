@@ -122,7 +122,7 @@ describe("dealerMatchesRequest", () => {
 
 describe("submitRequest", () => {
   test("matches, caps at 5, ranks by response time, and notifies each matched org", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
 
     for (let i = 0; i < 6; i++) {
       await seedDealer(t, {
@@ -152,14 +152,14 @@ describe("submitRequest", () => {
   });
 
   test("rejects submission without consent", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     await expect(
       t.action(api.marketplaceRequests.submitRequest, { ...baseRequestArgs, consentAccepted: false })
     ).rejects.toThrow();
   });
 
   test("excludes suspended orgs even if opted in and matching", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     await seedDealer(t, { name: "Suspended Dealer", areas: ["Amman"], brandsCarried: [], suspended: true });
 
     const result = await t.action(api.marketplaceRequests.submitRequest, baseRequestArgs);
@@ -172,7 +172,7 @@ describe("submitRequest", () => {
 
 describe("getStatusForBuyer", () => {
   test("returns status/count for the correct phone, null otherwise", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     await seedDealer(t, { name: "Dealer", areas: ["Amman"], brandsCarried: [] });
     const result = await t.action(api.marketplaceRequests.submitRequest, baseRequestArgs);
 
@@ -192,7 +192,7 @@ describe("getStatusForBuyer", () => {
 
 describe("expireStaleRequests", () => {
   test("expires OPEN/MATCHED requests past expiresAt, leaves fresh ones alone", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     const staleId = await t.run((ctx) =>
       ctx.db.insert("marketplaceRequests", {
         status: "OPEN",

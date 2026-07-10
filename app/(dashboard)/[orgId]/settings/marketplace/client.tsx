@@ -37,6 +37,7 @@ export function MarketplaceSettingsClient() {
 
   const handleSave = async (overrides?: { isOptedIn?: boolean }) => {
     if (!activeOrgId) return;
+    const previousIsOptedIn = isOptedIn;
     setSaving(true);
     try {
       await updateProfile({
@@ -48,6 +49,7 @@ export function MarketplaceSettingsClient() {
       });
       toast.success(t("MarketplaceSaved" as any));
     } catch (error: any) {
+      if (overrides?.isOptedIn !== undefined) setIsOptedIn(previousIsOptedIn);
       toast.error(error);
     } finally {
       setSaving(false);

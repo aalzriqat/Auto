@@ -47,20 +47,20 @@ async function seedVehicle(
 
 describe("marketplaceDealers", () => {
   test("getMyProfile returns null when never configured", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asOwner } = await seedDealer(t);
     const profile = await asOwner.query(api.marketplaceDealers.getMyProfile, { orgId });
     expect(profile).toBeNull();
   });
 
   test("getMyProfile throws when unauthenticated", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     const { orgId } = await seedDealer(t);
     await expect(t.query(api.marketplaceDealers.getMyProfile, { orgId })).rejects.toThrow();
   });
 
   test("updateProfile inserts a new profile and normalizes areas/brands", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asOwner } = await seedDealer(t);
 
     await asOwner.mutation(api.marketplaceDealers.updateProfile, {
@@ -80,7 +80,7 @@ describe("marketplaceDealers", () => {
   });
 
   test("updateProfile upserts in place rather than duplicating", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asOwner } = await seedDealer(t);
 
     await asOwner.mutation(api.marketplaceDealers.updateProfile, {
@@ -102,8 +102,38 @@ describe("marketplaceDealers", () => {
     expect(rows[0].areas).toEqual(["Irbid"]);
   });
 
+  test("updateProfile restores a soft-deleted profile", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, userId, asOwner } = await seedDealer(t);
+
+    await asOwner.mutation(api.marketplaceDealers.updateProfile, {
+      orgId,
+      isOptedIn: true,
+      areas: ["Amman"],
+      brandsCarried: [],
+    });
+    const created = await t.run((ctx) => ctx.db.query("marketplaceDealerProfiles").collect());
+    await t.run((ctx) =>
+      ctx.db.patch(created[0]._id, { isDeleted: true, deletedAt: Date.now(), deletedBy: userId })
+    );
+
+    await asOwner.mutation(api.marketplaceDealers.updateProfile, {
+      orgId,
+      isOptedIn: true,
+      areas: ["Zarqa"],
+      brandsCarried: ["Kia"],
+    });
+
+    const profile = await asOwner.query(api.marketplaceDealers.getMyProfile, { orgId });
+    expect(profile?.isDeleted).toBe(false);
+    expect(profile?.deletedAt).toBeUndefined();
+    expect(profile?.deletedBy).toBeUndefined();
+    expect(profile?.areas).toEqual(["Zarqa"]);
+    expect(profile?.brandsCarried).toEqual(["Kia"]);
+  });
+
   test("listPublicDirectory only returns opted-in dealers with a live vehicle count", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     const optedIn = await seedDealer(t, { name: "Opted In Dealer" });
     const optedOut = await seedDealer(t, { name: "Opted Out Dealer" });
 
@@ -132,7 +162,7 @@ describe("marketplaceDealers", () => {
   });
 
   test("listPublicDirectory excludes orgs suspended after opting in", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     const dealer = await seedDealer(t, { name: "Later Suspended Dealer" });
 
     await dealer.asOwner.mutation(api.marketplaceDealers.updateProfile, {

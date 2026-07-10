@@ -60,13 +60,13 @@ async function seedRequestWithMatch(t: ReturnType<typeof convexTest>) {
 
 describe("adminMarketplace", () => {
   test("listRequests rejects a non-super-admin caller", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     const { asMember } = await seedRequestWithMatch(t);
     await expect(asMember.query(api.adminMarketplace.listRequests, {})).rejects.toThrow();
   });
 
   test("listRequests enriches matches with dealer name and WhatsApp number", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     const { asAdmin } = await seedRequestWithMatch(t);
 
     const requests = await asAdmin.query(api.adminMarketplace.listRequests, {});
@@ -80,7 +80,7 @@ describe("adminMarketplace", () => {
   });
 
   test("markMatchNotified stamps notifiedAt/notifiedVia and writes an audit log", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     const { asAdmin, matchId, orgId } = await seedRequestWithMatch(t);
 
     await asAdmin.mutation(api.adminMarketplace.markMatchNotified, { matchId });
@@ -95,7 +95,7 @@ describe("adminMarketplace", () => {
   });
 
   test("markSpam sets status to SPAM and rejects a non-super-admin caller", async () => {
-    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     const { asAdmin, asMember, requestId } = await seedRequestWithMatch(t);
 
     await expect(asMember.mutation(api.adminMarketplace.markSpam, { requestId })).rejects.toThrow();

@@ -226,50 +226,51 @@ export default function MarketplaceRequestPage() {
           <form onSubmit={handleSubmit} className="mt-8 space-y-4 bg-white border border-slate-200 rounded-xl p-6">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
-                <label className="text-sm font-medium block mb-1">{t.firstName}</label>
-                <input name="buyerFirstName" required maxLength={80} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+                <label htmlFor="buyerFirstName" className="text-sm font-medium block mb-1">{t.firstName}</label>
+                <input id="buyerFirstName" name="buyerFirstName" required maxLength={80} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
               </div>
               <div>
-                <label className="text-sm font-medium block mb-1">{t.phone}</label>
-                <input name="buyerPhone" required maxLength={24} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+                <label htmlFor="buyerPhone" className="text-sm font-medium block mb-1">{t.phone}</label>
+                <input id="buyerPhone" name="buyerPhone" required maxLength={24} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
               </div>
               <div>
-                <label className="text-sm font-medium block mb-1">{t.whatsapp}</label>
-                <input name="buyerWhatsApp" maxLength={24} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+                <label htmlFor="buyerWhatsApp" className="text-sm font-medium block mb-1">{t.whatsapp}</label>
+                <input id="buyerWhatsApp" name="buyerWhatsApp" maxLength={24} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
               </div>
               <div>
-                <label className="text-sm font-medium block mb-1">{t.city}</label>
-                <input name="buyerCity" required maxLength={60} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+                <label htmlFor="buyerCity" className="text-sm font-medium block mb-1">{t.city}</label>
+                <input id="buyerCity" name="buyerCity" required maxLength={60} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
               </div>
               <div>
-                <label className="text-sm font-medium block mb-1">{t.make}</label>
-                <input name="make" maxLength={60} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+                <label htmlFor="make" className="text-sm font-medium block mb-1">{t.make}</label>
+                <input id="make" name="make" maxLength={60} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
               </div>
               <div>
-                <label className="text-sm font-medium block mb-1">{t.model}</label>
-                <input name="model" maxLength={60} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+                <label htmlFor="model" className="text-sm font-medium block mb-1">{t.model}</label>
+                <input id="model" name="model" maxLength={60} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
               </div>
               <div>
-                <label className="text-sm font-medium block mb-1">{t.yearMin}</label>
-                <input name="yearMin" type="number" min={1980} max={2100} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+                <label htmlFor="yearMin" className="text-sm font-medium block mb-1">{t.yearMin}</label>
+                <input id="yearMin" name="yearMin" type="number" min={1980} max={2100} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
               </div>
               <div>
-                <label className="text-sm font-medium block mb-1">{t.yearMax}</label>
-                <input name="yearMax" type="number" min={1980} max={2100} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+                <label htmlFor="yearMax" className="text-sm font-medium block mb-1">{t.yearMax}</label>
+                <input id="yearMax" name="yearMax" type="number" min={1980} max={2100} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
               </div>
               <div>
-                <label className="text-sm font-medium block mb-1">{t.priceMin}</label>
-                <input name="priceMin" type="number" min={0} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+                <label htmlFor="priceMin" className="text-sm font-medium block mb-1">{t.priceMin}</label>
+                <input id="priceMin" name="priceMin" type="number" min={0} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
               </div>
               <div>
-                <label className="text-sm font-medium block mb-1">{t.priceMax}</label>
-                <input name="priceMax" type="number" min={0} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+                <label htmlFor="priceMax" className="text-sm font-medium block mb-1">{t.priceMax}</label>
+                <input id="priceMax" name="priceMax" type="number" min={0} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
               </div>
             </div>
 
             <div>
-              <label className="text-sm font-medium block mb-1">{t.paymentType}</label>
+              <label htmlFor="paymentType" className="text-sm font-medium block mb-1">{t.paymentType}</label>
               <select
+                id="paymentType"
                 value={paymentType}
                 onChange={(e) => setPaymentType(e.target.value as "CASH" | "FINANCE" | "EITHER")}
                 className="w-full rounded-lg border border-slate-300 px-3 py-2"
@@ -282,14 +283,14 @@ export default function MarketplaceRequestPage() {
 
             {paymentType !== "CASH" && (
               <div>
-                <label className="text-sm font-medium block mb-1">{t.monthlyBudget}</label>
-                <input name="monthlyBudget" type="number" min={0} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
+                <label htmlFor="monthlyBudget" className="text-sm font-medium block mb-1">{t.monthlyBudget}</label>
+                <input id="monthlyBudget" name="monthlyBudget" type="number" min={0} className="w-full rounded-lg border border-slate-300 px-3 py-2" />
               </div>
             )}
 
             <div>
-              <label className="text-sm font-medium block mb-1">{t.timeframe}</label>
-              <select name="buyerTimeframe" defaultValue="THIS_MONTH" className="w-full rounded-lg border border-slate-300 px-3 py-2">
+              <label htmlFor="buyerTimeframe" className="text-sm font-medium block mb-1">{t.timeframe}</label>
+              <select id="buyerTimeframe" name="buyerTimeframe" defaultValue="THIS_MONTH" className="w-full rounded-lg border border-slate-300 px-3 py-2">
                 <option value="ASAP">{t.timeframeAsap}</option>
                 <option value="THIS_WEEK">{t.timeframeWeek}</option>
                 <option value="THIS_MONTH">{t.timeframeMonth}</option>
