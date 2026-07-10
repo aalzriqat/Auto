@@ -181,17 +181,16 @@ function stubFetchForIntake() {
         return new Response(JSON.stringify({}), { status: 200 });
       }
       if (url === "https://fake-media-url.example.com/photo.jpg") {
-        // Convex's action runtime (even under convex-test) marshals fetch
-        // Request/Response objects through its own syscall layer, which
-        // does not carry a Blob's own `type` through that boundary — only
-        // an explicit header survives. Confirmed by direct debugging: a
-        // Blob-only content-type came back as the generic
-        // "text/plain;charset=UTF-8" default on the receiving end even
-        // though the mock returned the correctly-typed Blob.
-        return new Response(new Blob(["fake-photo-bytes"], { type: "image/jpeg" }), {
-          status: 200,
-          headers: { "content-type": "image/jpeg" },
-        });
+        // A Blob response body doesn't survive Convex's action-runtime fetch
+        // marshaling on Node 22 (throws "object.stream is not a function"
+        // inside fetchAndStoreWhatsAppMedia's fetch(meta.url, ...) call,
+        // confirmed by direct debugging under a local Node 22 install — CI
+        // runs Node 22, this dev machine normally runs Node 26, which is why
+        // it passed locally but failed in CI). A plain string body converts
+        // to a Blob just as well via Response.blob() and marshals safely;
+        // the explicit content-type header is required either way since a
+        // string body has no type of its own to derive one from.
+        return new Response("fake-photo-bytes", { status: 200, headers: { "content-type": "image/jpeg" } });
       }
       // Media metadata lookup: graph.facebook.com/{version}/{mediaId}
       return new Response(JSON.stringify({ url: "https://fake-media-url.example.com/photo.jpg" }), { status: 200 });
@@ -327,10 +326,7 @@ describe("handleIntakeMessage", () => {
         const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url;
         if (url.includes("/messages")) return new Response(JSON.stringify({}), { status: 200 });
         if (url === "https://fake-media-url.example.com/doc.pdf") {
-          return new Response(new Blob(["not-an-image"], { type: "application/pdf" }), {
-            status: 200,
-            headers: { "content-type": "application/pdf" },
-          });
+          return new Response("not-an-image", { status: 200, headers: { "content-type": "application/pdf" } });
         }
         return new Response(JSON.stringify({ url: "https://fake-media-url.example.com/doc.pdf" }), { status: 200 });
       })
