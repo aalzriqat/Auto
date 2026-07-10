@@ -109,6 +109,11 @@ export const PERMISSIONS = {
   VERIFY_FINANCE_DOCUMENTS: "verify:finance_documents",
   REGISTER_VEHICLE_HANDOVER: "register:vehicle_handover",
   REGISTER_EXPECTED_PAYMENT: "register:expected_payment",
+
+  // Dealer Network Marketplace
+  MARKETPLACE_SETTINGS: "marketplace:settings",
+  MARKETPLACE_RESPOND: "marketplace:respond",
+  MARKETPLACE_ANALYTICS: "marketplace:analytics",
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -221,6 +226,9 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.VERIFY_FINANCE_DOCUMENTS,
       PERMISSIONS.REGISTER_VEHICLE_HANDOVER,
       PERMISSIONS.REGISTER_EXPECTED_PAYMENT,
+      PERMISSIONS.MARKETPLACE_SETTINGS,
+      PERMISSIONS.MARKETPLACE_RESPOND,
+      PERMISSIONS.MARKETPLACE_ANALYTICS,
     ],
   },
   {
@@ -253,6 +261,7 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.FINALIZE_FINANCED_DEAL,
       PERMISSIONS.REGISTER_VEHICLE_HANDOVER,
       PERMISSIONS.REGISTER_EXPECTED_PAYMENT,
+      PERMISSIONS.MARKETPLACE_RESPOND,
     ],
   },
   {

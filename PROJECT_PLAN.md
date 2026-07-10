@@ -1225,6 +1225,52 @@ Each phase reuses the established pattern: immutable event table → posting rul
 
 ---
 
+## Dealer Network Marketplace — Phases 56–64
+
+**Full plan:** [`docs/dealer_network_marketplace_master_plan.md`](docs/dealer_network_marketplace_master_plan.md) — architecture decisions, GTM plan, and per-phase schema/backend/frontend/tests/acceptance detail.
+**Goal:** AutoFlow becomes a two-sided marketplace — buyers submit car requests, AutoFlow fans them out to matching opted-in dealers, dealer replies become attributed leads. Built as a layer on top of the existing dealer-site infrastructure (`websiteDomains`, published inventory, the public-lead pipeline in `websites.ts`), not a rebuild. Distinct from Phase 34 (dealer-initiated acquisition) and Phase 35 (outbound syndication to Dubizzle/OpenSooq/Haraj/YallaMotor) — see the master plan §2 for reconciliation.
+
+> Started 2026-07-10 at the user's explicit request, bypassing the master plan's §0 manual-validation gate (2–3 week concierge test before writing code) — risk accepted knowingly, not an oversight.
+
+## Phase 56 — Dealer Opt-In + Marketplace Directory ✅
+
+**Branch:** `feature/phase-56-marketplace-directory` · **Completed:** 2026-07-10
+
+### Delivered
+- [x] `convex/schema.ts` — `marketplaceDealerProfiles` table (opt-in, areas, brandsCarried, whatsappNumber, badges, response-score fields, tier/quota fields for future Phase 63)
+- [x] `convex/utils/permissions.ts` — `marketplace:settings`/`marketplace:respond`/`marketplace:analytics`; settings+respond+analytics → MANAGER, respond → SALES (matches existing WEBSITE_*/VIEW_REPORTS grant pattern)
+- [x] `convex/marketplaceDealers.ts` — `getMyProfile`, `updateProfile` (upsert opt-in/areas/brands/WhatsApp), `listPublicDirectory` (public query; reuses `orgSettings` dealer profile fields + `hasPlanFeature(..., "websiteBuilder")` + `websiteDomains` primary-domain lookup for the site link, live `AVAILABLE` vehicle count — no duplicate listings table per master plan decision A2)
+- [x] `app/(dashboard)/[orgId]/settings/marketplace/` — opt-in settings page (owner-gated, matching the existing `/settings/*` convention)
+- [x] `app/marketplace/dealers/page.tsx` — public cross-org directory (bilingual, local lang toggle like `dealer-site`, no `useLanguage()` dependency)
+- [x] `lib/i18n/domains/marketplace.ts` — EN/AR settings strings
+- [x] `convex/marketplaceDealers.test.ts` — 6 tests (upsert semantics, normalization, opted-out/suspended-org exclusion, live vehicle count)
+- [x] Full suite green (888 tests), typecheck clean, lint clean on new files
+
+### Remaining / not yet done
+- [ ] Not merged to `main` — still on the feature branch, awaiting go-ahead
+- [ ] `npx convex deploy` not run — nothing here is live
+- [ ] Changelog entry deliberately not added yet (per standing rule: entries are for shipped/deployed changes)
+
+---
+
+## Phase 57 — Request a Car: Capture + Fan-Out
+
+**Branch:** `feature/phase-57-request-a-car` · **Status:** ⬜ Not started — see master plan for full spec.
+
+---
+
+## Phase 58 — Dealer Response + Lead Attribution
+
+**Branch:** `feature/phase-58-marketplace-response` · **Status:** ⬜ Not started — see master plan for full spec.
+
+---
+
+## Phases 59–64 — Public Browse, Trust, Monetization
+
+**Status:** ⬜ Not started — see master plan §4 Release 2/3 for full spec (public browse/search, verified badges, trust passport, finance-first search + trade-in requests, monetization, WhatsApp-native intake).
+
+---
+
 ## Phase Roadmap Summary
 
 | Phase | Name | Tier | Status |
@@ -1243,6 +1289,15 @@ Each phase reuses the established pattern: immutable event table → posting rul
 | 40 | Mobile PWA | 3 — Enterprise & Scale | 🟨 Push/PWA slice MERGED + DEPLOYED to prod (2026-07-05); VIN scanner/GPS check-in not started |
 | 41 | Accounting Depth | 3 — Enterprise & Scale | 🟨 Code complete, pending UI verification (2026-07-06) |
 | 42 | Open API & Integration Hub | 3 — Enterprise & Scale | ⬜ Not started |
+| 56 | Dealer Opt-In + Marketplace Directory | Dealer Network Marketplace | 🟨 Built + tested on branch (2026-07-10); not merged, convex deploy pending |
+| 57 | Request a Car: Capture + Fan-Out | Dealer Network Marketplace | ⬜ Not started |
+| 58 | Dealer Response + Lead Attribution | Dealer Network Marketplace | ⬜ Not started |
+| 59 | Public Marketplace Browse/Search | Dealer Network Marketplace | ⬜ Not started |
+| 60 | Verified Badges + Response Ranking | Dealer Network Marketplace | ⬜ Not started |
+| 61 | Trust Passport (v1, self-reported) | Dealer Network Marketplace | ⬜ Not started |
+| 62 | Finance-First Search + Trade-In Requests | Dealer Network Marketplace | ⬜ Not started |
+| 63 | Monetization: Lead Packages + Featured | Dealer Network Marketplace | ⬜ Not started |
+| 64 | WhatsApp-Native Dealer Intake | Dealer Network Marketplace | ⬜ Not started |
 | GL 0–9 | Double-Entry Accounting Foundation | Accounting GL Track | ✅ Done |
 | GL 10 | True two-person manual-journal approval | Accounting GL Track | ✅ Done |
 | GL 11 | Fixed-asset lifecycle and depreciation (GL-posted) | Accounting GL Track | ✅ Done |

@@ -2937,4 +2937,42 @@ export default defineSchema({
     .index("by_org_idempotency", ["orgId", "idempotencyKey"])
     .index("by_org_customer", ["orgId", "customerId"])
     .index("by_receivable", ["receivableId"]),
+
+  // ─── Dealer Network Marketplace (Phase 56+) ──────────────────────────────
+  // Cross-org layer: a dealer's marketplace presence is an opt-in flag on top
+  // of their existing dealer-site inventory (see docs/dealer_network_marketplace_master_plan.md
+  // decision A2) — this table does not duplicate `vehicles` or `websiteSettings`.
+  marketplaceDealerProfiles: defineTable({
+    orgId: v.id("organizations"),
+    isOptedIn: v.boolean(),
+    areas: v.array(v.string()),
+    brandsCarried: v.array(v.string()),
+    whatsappNumber: v.optional(v.string()),
+    badges: v.array(
+      v.union(
+        v.literal("VERIFIED_PHONE"),
+        v.literal("VERIFIED_LOCATION"),
+        v.literal("FAST_RESPONSE"),
+        v.literal("FINANCE_AVAILABLE"),
+        v.literal("FOUNDING_DEALER")
+      )
+    ),
+    avgResponseMinutes: v.optional(v.number()),
+    totalResponses: v.number(),
+    totalAccepted: v.number(),
+    tier: v.union(
+      v.literal("FREE_FOUNDING"),
+      v.literal("LEAD_PACKAGE"),
+      v.literal("FEATURED")
+    ),
+    leadQuota: v.optional(v.number()),
+    leadsUsedThisPeriod: v.number(),
+    isDeleted: v.optional(v.boolean()),
+    deletedAt: v.optional(v.number()),
+    deletedBy: v.optional(v.id("users")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_opted_in", ["isOptedIn"]),
 });
