@@ -1152,7 +1152,7 @@ export default function CreativeMarketingPage() {
                       className="w-full px-6 py-5 flex items-center justify-between gap-4 font-bold text-sm sm:text-base text-white/90 text-right cursor-pointer"
                       style={{ direction: isRtl ? "rtl" : "ltr" }}
                     >
-                      <span>{locale === "ar" ? faq.qAr : faq.qEn}</span>
+                      <span>{faq.question[locale]}</span>
                       <ChevronRight className={`w-4 h-4 text-white/60 shrink-0 transition-transform duration-300 ${isOpen ? "rotate-90" : ""}`} />
                     </button>
 
@@ -1165,7 +1165,7 @@ export default function CreativeMarketingPage() {
                           transition={{ duration: 0.25 }}
                         >
                           <div className="px-6 pb-6 text-xs sm:text-sm text-white/65 leading-relaxed text-right border-t border-white/5 pt-4" style={{ direction: isRtl ? "rtl" : "ltr" }}>
-                            {locale === "ar" ? faq.aAr : faq.aEn}
+                            {faq.answer[locale]}
                           </div>
                         </motion.div>
                       )}

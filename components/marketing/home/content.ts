@@ -132,149 +132,106 @@ export interface LocalCopy {
   growSub: string;
 }
 
-export const copy: Record<"en" | "ar", LocalCopy> = {
-  en: {
-    navFeatures: "Features",
-    navCalculator: "Financing Calculator",
-    navWorkflow: "Deal Flow",
-    navReports: "Reports",
-    navPricing: "Pricing",
-    navContact: "Contact",
-    navLogin: "Sign In",
-    navStart: "Get Started",
-    heroTitle1: "The Creative Engine",
-    heroTitle2: "For Elite Car Dealerships",
-    heroSubhead: "Ditch slow spreadsheets. Manage luxury inventory, automate credit approvals, and scale sales pipeline in a fast, unified digital workspace.",
-    heroCTA: "Claim Your Showroom Space",
-    heroDemo: "Explore Interactive Demo",
-    calcTitle: "Showroom Finance Estimator",
-    calcSub: "Empower your clients with credit breakdowns. Adjust vehicle values and downpayments in real-time.",
-    calcVal: "Vehicle Value",
-    calcDown: "Down Payment",
-    calcRate: "Interest Rate (APR)",
-    calcTerm: "Financing Term",
-    calcMonthly: "Monthly Installment",
-    calcPrinc: "Principal Amount",
-    calcInterest: "Total Interest Cost",
-    calcTotalPaid: "Total Paid Balance",
-    calcMonths: "Months",
-    pipeTitle: "Live Deal Flow Automation",
-    pipeSub: "Simulate a client sales cycle. Watch statuses transition instantly across the database pipeline.",
-    pipeBtn: "Step Next Stage",
-    pipeBtnAuto: "Simulate Auto-Run",
-    bentoTitle: "Designed for Velocity. Engineered for Control.",
-    bentoSub: "A complete vehicle dealership operating system combining beautiful interfaces with secure workflows.",
-    bentoCard1Title: "Live Inventory & VIN Auditing",
-    bentoCard1Desc: "Instantly index custom vehicle specifications, track repair statuses, and fetch car profiles in milliseconds.",
-    bentoCard2Title: "Sub-Second Sync Engine",
-    bentoCard2Desc: "Deal data, payments, and sales statuses propagate instantly to all managers via Convex WebSockets.",
-    bentoCard3Title: "Margin & Profit Protection",
-    bentoCard3Desc: "Automatically route profit reductions below targets to manager queues for secure numeric override authorization.",
-    bentoCard4Title: "360° Client Profile Hub",
-    bentoCard4Desc: "Track complete customer interaction logs, financing applications, test-drive waivers, and follow-ups.",
-    roiTitle: "Calculate Your Showroom ROI",
-    roiSub: "See how much time and operational costs you save with AutoFlow every month.",
-    roiSales: "Vehicles Sold Monthly",
-    roiHours: "Hours Saved / Wk",
-    roiHoursSub: "Freed from manual spreadsheet entries",
-    roiSavings: "Annual Profit Gain",
-    roiSavingsSub: "Through workflow efficiency & faster lead closes",
-    pricingTitle: "Elite Dealership Plans",
-    pricingSub: "Zero complexity. One simple price built for high-performance showrooms.",
-    pricingMonthly: "Monthly Billing",
-    pricingAnnual: "Annual Billing (20% Off)",
-    pricingBadge: "Best Value",
-    pricingButton: "Elevate Your Dealership Now",
-    faqTitle: "Frequently Asked Questions",
-    faqSub: "Everything you need to know about migrating your showroom operations.",
-    footerRights: "AUTOFLOW. All rights reserved.",
-    footerPrivacy: "Privacy Policy",
-    footerTerms: "Terms of Service",
-    footerContact: "Contact Us",
-    platformTitle: "One Operating System. Every Department.",
-    platformSub: "From the showroom floor to the back office — inventory, CRM, sales, finance, and reporting all live in a single connected workspace.",
-    rolesTitle: "Granular Access For Every Employee",
-    rolesSub: "Five ready-made role templates, fully customizable — give every employee exactly the access they need, nothing more.",
-    analyticsTitle: "Reports That Actually Run Your Business",
-    analyticsSub: "Six built-in report types turn raw transactions into decisions — filter any date range and export what you need.",
-    opsTitle: "Built To Scale With Your Group",
-    opsSub: "Multi-branch operations, secure approval chains, bulk data tools, and a form builder that bends to your workflow — not the other way around.",
-    financeTitle: "A Real Finance Department, Built In",
-    financeSub: "Double-entry general ledger, bank reconciliation, VAT returns, and installment tracking — no separate accounting software required.",
-    growTitle: "Grow Beyond The Showroom Floor",
-    growSub: "A bilingual public website, a unified social inbox, and internal team chat — everything that touches a customer or a coworker, in one place."
-  },
-  ar: {
-    navFeatures: "الميزات",
-    navCalculator: "حاسبة التمويل",
-    navWorkflow: "دورة العمل",
-    navReports: "التقارير",
-    navPricing: "الأسعار",
-    navContact: "تواصل معنا",
-    navLogin: "دخول",
-    navStart: "ابدأ الآن",
-    heroTitle1: "المحرك الإبداعي",
-    heroTitle2: "لمعارض السيارات النخبة",
-    heroSubhead: "ودع الجداول التقليدية البطيئة. أدر مخزونك الفاخر، وأتمت موافقات التمويل، وضاعف مبيعاتك في منصة سحابية واحدة تمتاز بالسرعة والجمال.",
-    heroCTA: "احجز مساحة معرضك الآن",
-    heroDemo: "استكشف العرض التفاعلي",
-    calcTitle: "حاسبة التمويل التفاعلية",
-    calcSub: "امنح عملائك حسابات فورية لأقساط التمويل. اسحب المؤشرات لتعديل قيمة المركبة والتمويل في الوقت الفعلي.",
-    calcVal: "سعر المركبة",
-    calcDown: "الدفعة الأولى",
-    calcRate: "نسبة الفائدة السنوية",
-    calcTerm: "فترة التمويل",
-    calcMonthly: "القسط الشهري المتوقع",
-    calcPrinc: "مبلغ التمويل الأساسي",
-    calcInterest: "إجمالي الفوائد",
-    calcTotalPaid: "إجمالي المدفوعات",
-    calcMonths: "شهراً",
-    pipeTitle: "أتمتة مراحل الصفقات الحية",
-    pipeSub: "حاكِ دورة حياة العميل بنقرة واحدة. شاهد تحديث حالة الطلبات تلقائياً عبر قاعدة البيانات.",
-    pipeBtn: "المرحلة التالية",
-    pipeBtnAuto: "محاكاة تلقائية",
-    bentoTitle: "هندسة متناهية السرعة والتحكم.",
-    bentoSub: "نظام تشغيل متكامل يجمع بين الواجهات الفخمة وقواعد البيانات الموثوقة والآمنة.",
-    bentoCard1Title: "مخزون حي وفحص رقم الشاصي",
-    bentoCard1Desc: "فهرسة مواصفات السيارات بدقة، وتتبع حالة الصيانة، وتحميل صور المعرض في أقل من 30 مللي ثانية.",
-    bentoCard2Title: "مزامنة لحظية فائقة",
-    bentoCard2Desc: "مزامنة فورية لكل صفقة أو دفعة عبر جميع موظفي المبيعات باستخدام تقنيات Convex المتطورة.",
-    bentoCard3Title: "حماية هوامش أرباح المعرض",
-    bentoCard3Desc: "توجيه طلبات تخفيض هامش الربح تلقائياً لمدير المعرض لاعتمادها أو رفضها بشكل آمن ومحمي.",
-    bentoCard4Title: "ملفات عملاء متكاملة 360°",
-    bentoCard4Desc: "سجل كامل لتعاملات المشتري، وطلبات التمويل النشطة، وحجوزات قيادة المركبات والمهام المعلقة.",
-    roiTitle: "احسب العائد على استثمار معرضك",
-    roiSub: "قدّر أوقات العمل والمبالغ السنوية التي يوفرها معرضك عند استخدام أوتوفلو.",
-    roiSales: "عدد السيارات المباعة شهرياً",
-    roiHours: "ساعات عمل موفرة أسبوعياً",
-    roiHoursSub: "من خلال تقليل مدخلات البيانات اليدوية والتكرارية",
-    roiSavings: "التوفير المالي السنوي",
-    roiSavingsSub: "بفضل رفع سرعة إغلاق الصفقات وتحسين أداء مبيعاتك",
-    pricingTitle: "الاستثمار في التميز",
-    pricingSub: "لا توجد تعقيدات. باقة واحدة تشمل كل شيء، مصممة للمعارض التي لا ترضى بأقل من الكمال.",
-    pricingMonthly: "فاتورة شهرية",
-    pricingAnnual: "فاتورة سنوية (خصم 20%)",
-    pricingBadge: "الأكثر طلباً",
-    pricingButton: "ارتقِ بمعرضك إلى النخبة الآن",
-    faqTitle: "الأسئلة الشائعة",
-    faqSub: "كل ما تود معرفته عن ترحيل بيانات معرضك ونظام أوتوفلو.",
-    footerRights: "أوتوفلو. جميع الحقوق محفوظة.",
-    footerPrivacy: "سياسة الخصوصية",
-    footerTerms: "شروط الخدمة",
-    footerContact: "تواصل معنا",
-    platformTitle: "نظام تشغيل واحد لكل قسم في معرضك",
-    platformSub: "من صالة العرض إلى المكتب الخلفي، يجمع أوتوفلو المخزون وعلاقات العملاء والمبيعات والمحاسبة والتقارير في مساحة عمل واحدة متصلة.",
-    rolesTitle: "صلاحيات دقيقة لكل موظف",
-    rolesSub: "خمسة قوالب أدوار جاهزة وقابلة للتخصيص الكامل، أعطِ كل موظف الصلاحية التي يحتاجها فقط، لا أكثر ولا أقل.",
-    analyticsTitle: "تقارير تدير أعمالك فعلياً",
-    analyticsSub: "ستة أنواع تقارير جاهزة تحوّل بياناتك الخام إلى قرارات، فلترة أي مدى تاريخي وتصدير ما تحتاجه بسهولة.",
-    opsTitle: "مصمم للنمو مع مجموعتك",
-    opsSub: "عمليات متعددة الفروع، سلاسل اعتماد آمنة، أدوات استيراد جماعية، ومُنشئ حقول مرن يتكيف مع أسلوب عملك.",
-    financeTitle: "قسم محاسبة متكامل داخل النظام",
-    financeSub: "دفتر أستاذ عام بقيد مزدوج، تسوية بنكية، إقرارات ضريبة القيمة المضافة، ومتابعة أقساط التمويل، دون الحاجة لأي برنامج محاسبي منفصل.",
-    growTitle: "انطلق خارج صالة العرض",
-    growSub: "موقع إلكتروني عام ثنائي اللغة، صندوق وارد موحّد لمنصات التواصل، ومحادثات داخلية للفريق، كل ما يتعلق بعميل أو زميل عمل، في مكان واحد."
-  }
+type LocaleCode = "en" | "ar";
+type CopyRow = readonly [key: keyof LocalCopy, en: string, ar: string];
+type FaqRow = readonly [questionEn: string, questionAr: string, answerEn: string, answerAr: string];
+
+const FIELD_SEPARATOR = " | ";
+
+function parseMarketingRows(source: string, expectedFieldCount: number): string[][] {
+  return source.trim().split(/\r?\n/).map((line) => {
+    const fields = line.split(FIELD_SEPARATOR);
+
+    if (fields.length !== expectedFieldCount) {
+      throw new Error("Invalid marketing content row.");
+    }
+
+    return fields;
+  });
+}
+
+const copyRows: CopyRow[] = parseMarketingRows(String.raw`
+navFeatures | Features | الميزات
+navCalculator | Financing Calculator | حاسبة التمويل
+navWorkflow | Deal Flow | دورة العمل
+navReports | Reports | التقارير
+navPricing | Pricing | الأسعار
+navContact | Contact | تواصل معنا
+navLogin | Sign In | دخول
+navStart | Get Started | ابدأ الآن
+heroTitle1 | The Creative Engine | المحرك الإبداعي
+heroTitle2 | For Elite Car Dealerships | لمعارض السيارات النخبة
+heroSubhead | Ditch slow spreadsheets. Manage luxury inventory, automate credit approvals, and scale sales pipeline in a fast, unified digital workspace. | ودع الجداول التقليدية البطيئة. أدر مخزونك الفاخر، وأتمت موافقات التمويل، وضاعف مبيعاتك في منصة سحابية واحدة تمتاز بالسرعة والجمال.
+heroCTA | Claim Your Showroom Space | احجز مساحة معرضك الآن
+heroDemo | Explore Interactive Demo | استكشف العرض التفاعلي
+calcTitle | Showroom Finance Estimator | حاسبة التمويل التفاعلية
+calcSub | Empower your clients with credit breakdowns. Adjust vehicle values and downpayments in real-time. | امنح عملائك حسابات فورية لأقساط التمويل. اسحب المؤشرات لتعديل قيمة المركبة والتمويل في الوقت الفعلي.
+calcVal | Vehicle Value | سعر المركبة
+calcDown | Down Payment | الدفعة الأولى
+calcRate | Interest Rate (APR) | نسبة الفائدة السنوية
+calcTerm | Financing Term | فترة التمويل
+calcMonthly | Monthly Installment | القسط الشهري المتوقع
+calcPrinc | Principal Amount | مبلغ التمويل الأساسي
+calcInterest | Total Interest Cost | إجمالي الفوائد
+calcTotalPaid | Total Paid Balance | إجمالي المدفوعات
+calcMonths | Months | شهراً
+pipeTitle | Live Deal Flow Automation | أتمتة مراحل الصفقات الحية
+pipeSub | Simulate a client sales cycle. Watch statuses transition instantly across the database pipeline. | حاكِ دورة حياة العميل بنقرة واحدة. شاهد تحديث حالة الطلبات تلقائياً عبر قاعدة البيانات.
+pipeBtn | Step Next Stage | المرحلة التالية
+pipeBtnAuto | Simulate Auto-Run | محاكاة تلقائية
+bentoTitle | Designed for Velocity. Engineered for Control. | هندسة متناهية السرعة والتحكم.
+bentoSub | A complete vehicle dealership operating system combining beautiful interfaces with secure workflows. | نظام تشغيل متكامل يجمع بين الواجهات الفخمة وقواعد البيانات الموثوقة والآمنة.
+bentoCard1Title | Live Inventory & VIN Auditing | مخزون حي وفحص رقم الشاصي
+bentoCard1Desc | Instantly index custom vehicle specifications, track repair statuses, and fetch car profiles in milliseconds. | فهرسة مواصفات السيارات بدقة، وتتبع حالة الصيانة، وتحميل صور المعرض في أقل من 30 مللي ثانية.
+bentoCard2Title | Sub-Second Sync Engine | مزامنة لحظية فائقة
+bentoCard2Desc | Deal data, payments, and sales statuses propagate instantly to all managers via Convex WebSockets. | مزامنة فورية لكل صفقة أو دفعة عبر جميع موظفي المبيعات باستخدام تقنيات Convex المتطورة.
+bentoCard3Title | Margin & Profit Protection | حماية هوامش أرباح المعرض
+bentoCard3Desc | Automatically route profit reductions below targets to manager queues for secure numeric override authorization. | توجيه طلبات تخفيض هامش الربح تلقائياً لمدير المعرض لاعتمادها أو رفضها بشكل آمن ومحمي.
+bentoCard4Title | 360° Client Profile Hub | ملفات عملاء متكاملة 360°
+bentoCard4Desc | Track complete customer interaction logs, financing applications, test-drive waivers, and follow-ups. | سجل كامل لتعاملات المشتري، وطلبات التمويل النشطة، وحجوزات قيادة المركبات والمهام المعلقة.
+roiTitle | Calculate Your Showroom ROI | احسب العائد على استثمار معرضك
+roiSub | See how much time and operational costs you save with AutoFlow every month. | قدّر أوقات العمل والمبالغ السنوية التي يوفرها معرضك عند استخدام أوتوفلو.
+roiSales | Vehicles Sold Monthly | عدد السيارات المباعة شهرياً
+roiHours | Hours Saved / Wk | ساعات عمل موفرة أسبوعياً
+roiHoursSub | Freed from manual spreadsheet entries | من خلال تقليل مدخلات البيانات اليدوية والتكرارية
+roiSavings | Annual Profit Gain | التوفير المالي السنوي
+roiSavingsSub | Through workflow efficiency & faster lead closes | بفضل رفع سرعة إغلاق الصفقات وتحسين أداء مبيعاتك
+pricingTitle | Elite Dealership Plans | الاستثمار في التميز
+pricingSub | Zero complexity. One simple price built for high-performance showrooms. | لا توجد تعقيدات. باقة واحدة تشمل كل شيء، مصممة للمعارض التي لا ترضى بأقل من الكمال.
+pricingMonthly | Monthly Billing | فاتورة شهرية
+pricingAnnual | Annual Billing (20% Off) | فاتورة سنوية (خصم 20%)
+pricingBadge | Best Value | الأكثر طلباً
+pricingButton | Elevate Your Dealership Now | ارتقِ بمعرضك إلى النخبة الآن
+faqTitle | Frequently Asked Questions | الأسئلة الشائعة
+faqSub | Everything you need to know about migrating your showroom operations. | كل ما تود معرفته عن ترحيل بيانات معرضك ونظام أوتوفلو.
+footerRights | AUTOFLOW. All rights reserved. | أوتوفلو. جميع الحقوق محفوظة.
+footerPrivacy | Privacy Policy | سياسة الخصوصية
+footerTerms | Terms of Service | شروط الخدمة
+footerContact | Contact Us | تواصل معنا
+platformTitle | One Operating System. Every Department. | نظام تشغيل واحد لكل قسم في معرضك
+platformSub | From the showroom floor to the back office — inventory, CRM, sales, finance, and reporting all live in a single connected workspace. | من صالة العرض إلى المكتب الخلفي، يجمع أوتوفلو المخزون وعلاقات العملاء والمبيعات والمحاسبة والتقارير في مساحة عمل واحدة متصلة.
+rolesTitle | Granular Access For Every Employee | صلاحيات دقيقة لكل موظف
+rolesSub | Five ready-made role templates, fully customizable — give every employee exactly the access they need, nothing more. | خمسة قوالب أدوار جاهزة وقابلة للتخصيص الكامل، أعطِ كل موظف الصلاحية التي يحتاجها فقط، لا أكثر ولا أقل.
+analyticsTitle | Reports That Actually Run Your Business | تقارير تدير أعمالك فعلياً
+analyticsSub | Six built-in report types turn raw transactions into decisions — filter any date range and export what you need. | ستة أنواع تقارير جاهزة تحوّل بياناتك الخام إلى قرارات، فلترة أي مدى تاريخي وتصدير ما تحتاجه بسهولة.
+opsTitle | Built To Scale With Your Group | مصمم للنمو مع مجموعتك
+opsSub | Multi-branch operations, secure approval chains, bulk data tools, and a form builder that bends to your workflow — not the other way around. | عمليات متعددة الفروع، سلاسل اعتماد آمنة، أدوات استيراد جماعية، ومُنشئ حقول مرن يتكيف مع أسلوب عملك.
+financeTitle | A Real Finance Department, Built In | قسم محاسبة متكامل داخل النظام
+financeSub | Double-entry general ledger, bank reconciliation, VAT returns, and installment tracking — no separate accounting software required. | دفتر أستاذ عام بقيد مزدوج، تسوية بنكية، إقرارات ضريبة القيمة المضافة، ومتابعة أقساط التمويل، دون الحاجة لأي برنامج محاسبي منفصل.
+growTitle | Grow Beyond The Showroom Floor | انطلق خارج صالة العرض
+growSub | A bilingual public website, a unified social inbox, and internal team chat — everything that touches a customer or a coworker, in one place. | موقع إلكتروني عام ثنائي اللغة، صندوق وارد موحّد لمنصات التواصل، ومحادثات داخلية للفريق، كل ما يتعلق بعميل أو زميل عمل، في مكان واحد.
+`, 3).map(([key, en, ar]) => [key as keyof LocalCopy, en, ar]);
+
+function buildCopy(locale: LocaleCode): LocalCopy {
+  return copyRows.reduce<Partial<LocalCopy>>((localizedCopy, [key, en, ar]) => {
+    localizedCopy[key] = locale === "ar" ? ar : en;
+    return localizedCopy;
+  }, {}) as LocalCopy;
+}
+
+export const copy: Record<LocaleCode, LocalCopy> = {
+  en: buildCopy("en"),
+  ar: buildCopy("ar"),
 };
 
 export const pipelineStages = [
@@ -312,50 +269,30 @@ export const pipelineStages = [
   }
 ] as const;
 
-export const faqs = [
-  {
-    qEn: "Can we transfer our existing vehicle stock and customer list?",
-    qAr: "هل يمكننا نقل قائمة السيارات والعملاء الحالية لدينا بسهولة؟",
-    aEn: "Absolutely. AutoFlow provides clean CSV and JSON templates to batch-import your entire inventory and customer history in minutes. Our tech staff is also available for direct database migrations.",
-    aAr: "بالتأكيد. يوفر أوتوفلو قوالب استيراد مرنة بصيغة CSV و JSON لرفع مخزونك وبيانات العملاء دفعة واحدة خلال دقائق. فريقنا التقني متواجد أيضاً لمساعدتك في نقل البيانات بالكامل."
-  },
-  {
-    qEn: "How do profit protection thresholds and approvals work?",
-    qAr: "كيف تعمل حماية هوامش أرباح الصفقات واعتماد المعاملات؟",
-    aEn: "You set target profit percentages per brand or branch. If a salesperson configurations a deal below these margins, AutoFlow automatically blocks invoicing and pushes a secure approval request to the manager dashboard with SMS notifications.",
-    aAr: "يمكنك تحديد هوامش الربح المستهدفة لكل علامة تجارية أو فرع. إذا حاول موظف المبيعات إدخال صفقة بأرباح أقل، يقوم النظام تلقائياً بتجميدها وإرسال طلب موافقة فوري لهاتف لوحة تحكم المدير لإقرارها أو رفضها."
-  },
-  {
-    qEn: "Is AutoFlow optimized for multi-branch dealerships?",
-    qAr: "هل يدعم أوتوفلو معارض السيارات ذات الفروع المتعددة؟",
-    aEn: "Yes. Our enterprise plan supports granular branch-scoping, permitting salesmen to view local stock while enabling executives to monitor consolidated inventory, sales, and analytics across all regional sites.",
-    aAr: "نعم. يدعم أوتوفلو تقسيم الصلاحيات والمخزون للفروع المتعددة. حيث يمكن للموظف رؤية سيارات فرعه المحلي فقط، بينما يستطيع المسؤول العام تتبع كافة الفروع والتقارير المالية المدمجة بكفاءة."
-  },
-  {
-    qEn: "Can we control exactly what each employee sees and does?",
-    qAr: "هل يمكننا التحكم بدقة بما يراه ويفعله كل موظف؟",
-    aEn: "Yes. AutoFlow ships with five role templates (Owner, Manager, Sales, Reception, Accountant) covering the most common dealership structures, and every permission is individually toggleable per role — so you can lock down cost prices, deletions, or financial views exactly the way you want.",
-    aAr: "نعم. يأتي أوتوفلو بخمسة قوالب أدوار جاهزة (مالك، مدير، مبيعات، استقبال، محاسب) تغطي أكثر الهياكل التنظيمية شيوعاً، وكل صلاحية قابلة للتفعيل أو التعطيل بشكل فردي لكل دور، فتستطيع التحكم بدقة في من يرى سعر التكلفة أو يحذف السجلات أو يصل للبيانات المالية."
-  },
-  {
-    qEn: "Is the Arabic interface a real translation or just a mirrored layout?",
-    qAr: "هل واجهة اللغة العربية ترجمة حقيقية أم مجرد انعكاس للتصميم؟",
-    aEn: "It's a genuine right-to-left experience, not a CSS mirror trick. Every screen, form, and report is fully translated and laid out natively for Arabic, and switching languages is instant — no reload, no broken layouts.",
-    aAr: "هي تجربة عربية حقيقية بترتيب من اليمين لليسار، وليست مجرد انعكاس بصري بواسطة CSS. كل شاشة ونموذج وتقرير مترجم بالكامل ومصمم بشكل أصلي للغة العربية، والتبديل بين اللغتين فوري دون إعادة تحميل أو أي خلل في التصميم."
-  },
-  {
-    qEn: "Can AutoFlow build our dealership's public website?",
-    qAr: "هل يمكن لأوتوفلو بناء الموقع الإلكتروني العام لمعرضنا؟",
-    aEn: "Yes. Every org gets a bilingual, public-facing dealer website synced live to your inventory, with a choice of standard themes plus premium designs — no separate hosting or developer needed.",
-    aAr: "نعم. تحصل كل مؤسسة على موقع إلكتروني عام ثنائي اللغة مرتبط مباشرة بمخزونها الحي، مع تشكيلة من القوالب القياسية والتصاميم المميزة، دون الحاجة لاستضافة منفصلة أو مطور."
-  },
-  {
-    qEn: "Does AutoFlow connect to our Instagram and Facebook pages?",
-    qAr: "هل يتصل أوتوفلو بصفحاتنا على إنستغرام وفيسبوك؟",
-    aEn: "Yes. Connect your pages to auto-post vehicles when they go available, capture every comment and DM into one Social Inbox, auto-reply to common questions, and convert engaged followers straight into leads.",
-    aAr: "نعم. اربط صفحاتك لنشر السيارات تلقائياً عند توفرها، وتجميع كل تعليق ورسالة خاصة في صندوق وارد اجتماعي واحد، مع رد تلقائي على الأسئلة الشائعة وتحويل المتابعين المتفاعلين إلى عملاء محتملين مباشرة."
-  }
-] as const;
+interface LocalizedText {
+  en: string;
+  ar: string;
+}
+
+interface FaqItem {
+  question: LocalizedText;
+  answer: LocalizedText;
+}
+
+const faqRows: FaqRow[] = parseMarketingRows(String.raw`
+Can we transfer our existing vehicle stock and customer list? | هل يمكننا نقل قائمة السيارات والعملاء الحالية لدينا بسهولة؟ | Absolutely. AutoFlow provides clean CSV and JSON templates to batch-import your entire inventory and customer history in minutes. Our tech staff is also available for direct database migrations. | بالتأكيد. يوفر أوتوفلو قوالب استيراد مرنة بصيغة CSV و JSON لرفع مخزونك وبيانات العملاء دفعة واحدة خلال دقائق. فريقنا التقني متواجد أيضاً لمساعدتك في نقل البيانات بالكامل.
+How do profit protection thresholds and approvals work? | كيف تعمل حماية هوامش أرباح الصفقات واعتماد المعاملات؟ | You set target profit percentages per brand or branch. If a salesperson configurations a deal below these margins, AutoFlow automatically blocks invoicing and pushes a secure approval request to the manager dashboard with SMS notifications. | يمكنك تحديد هوامش الربح المستهدفة لكل علامة تجارية أو فرع. إذا حاول موظف المبيعات إدخال صفقة بأرباح أقل، يقوم النظام تلقائياً بتجميدها وإرسال طلب موافقة فوري لهاتف لوحة تحكم المدير لإقرارها أو رفضها.
+Is AutoFlow optimized for multi-branch dealerships? | هل يدعم أوتوفلو معارض السيارات ذات الفروع المتعددة؟ | Yes. Our enterprise plan supports granular branch-scoping, permitting salesmen to view local stock while enabling executives to monitor consolidated inventory, sales, and analytics across all regional sites. | نعم. يدعم أوتوفلو تقسيم الصلاحيات والمخزون للفروع المتعددة. حيث يمكن للموظف رؤية سيارات فرعه المحلي فقط، بينما يستطيع المسؤول العام تتبع كافة الفروع والتقارير المالية المدمجة بكفاءة.
+Can we control exactly what each employee sees and does? | هل يمكننا التحكم بدقة بما يراه ويفعله كل موظف؟ | Yes. AutoFlow ships with five role templates (Owner, Manager, Sales, Reception, Accountant) covering the most common dealership structures, and every permission is individually toggleable per role — so you can lock down cost prices, deletions, or financial views exactly the way you want. | نعم. يأتي أوتوفلو بخمسة قوالب أدوار جاهزة (مالك، مدير، مبيعات، استقبال، محاسب) تغطي أكثر الهياكل التنظيمية شيوعاً، وكل صلاحية قابلة للتفعيل أو التعطيل بشكل فردي لكل دور، فتستطيع التحكم بدقة في من يرى سعر التكلفة أو يحذف السجلات أو يصل للبيانات المالية.
+Is the Arabic interface a real translation or just a mirrored layout? | هل واجهة اللغة العربية ترجمة حقيقية أم مجرد انعكاس للتصميم؟ | It's a genuine right-to-left experience, not a CSS mirror trick. Every screen, form, and report is fully translated and laid out natively for Arabic, and switching languages is instant — no reload, no broken layouts. | هي تجربة عربية حقيقية بترتيب من اليمين لليسار، وليست مجرد انعكاس بصري بواسطة CSS. كل شاشة ونموذج وتقرير مترجم بالكامل ومصمم بشكل أصلي للغة العربية، والتبديل بين اللغتين فوري دون إعادة تحميل أو أي خلل في التصميم.
+Can AutoFlow build our dealership's public website? | هل يمكن لأوتوفلو بناء الموقع الإلكتروني العام لمعرضنا؟ | Yes. Every org gets a bilingual, public-facing dealer website synced live to your inventory, with a choice of standard themes plus premium designs — no separate hosting or developer needed. | نعم. تحصل كل مؤسسة على موقع إلكتروني عام ثنائي اللغة مرتبط مباشرة بمخزونها الحي، مع تشكيلة من القوالب القياسية والتصاميم المميزة، دون الحاجة لاستضافة منفصلة أو مطور.
+Does AutoFlow connect to our Instagram and Facebook pages? | هل يتصل أوتوفلو بصفحاتنا على إنستغرام وفيسبوك؟ | Yes. Connect your pages to auto-post vehicles when they go available, capture every comment and DM into one Social Inbox, auto-reply to common questions, and convert engaged followers straight into leads. | نعم. اربط صفحاتك لنشر السيارات تلقائياً عند توفرها، وتجميع كل تعليق ورسالة خاصة في صندوق وارد اجتماعي واحد، مع رد تلقائي على الأسئلة الشائعة وتحويل المتابعين المتفاعلين إلى عملاء محتملين مباشرة.
+`, 4).map(([questionEn, questionAr, answerEn, answerAr]) => [questionEn, questionAr, answerEn, answerAr]);
+
+export const faqs: FaqItem[] = faqRows.map(([questionEn, questionAr, answerEn, answerAr]) => ({
+  question: { en: questionEn, ar: questionAr },
+  answer: { en: answerEn, ar: answerAr },
+}));
 
 export const platformModules: TitledIconItem[] = [
   { icon: Layers, titleEn: "Vehicles & Inventory", titleAr: "المخزون والمركبات" },
