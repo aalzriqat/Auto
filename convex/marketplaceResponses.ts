@@ -3,7 +3,7 @@ import { mutation, query, MutationCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireTenantAuth } from "./utils/tenancy";
-import { refreshDealerBadges, checkMarketplaceQuota, consumeMarketplaceLead } from "./marketplaceDealers";
+import { refreshDealerBadges, checkMarketplaceQuota, consumeMarketplaceLead, getOwnProfile } from "./marketplaceDealers";
 import { getOrCreateMarketplaceBuyerCustomer } from "./utils/leadAssignment";
 
 const MAX_NOTE_CHARS = 1000;
@@ -123,10 +123,7 @@ export const respond = mutation({
     // profile could theoretically be missing if it was hard-deleted after the
     // request was matched — same lenient fallback as updateResponseScore
     // below, since that's an admin-data edge case, not a dealer-facing one.
-    const profile = await ctx.db
-      .query("marketplaceDealerProfiles")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .unique();
+    const profile = await getOwnProfile(ctx, args.orgId);
     if (profile) {
       const quotaCheck = checkMarketplaceQuota(profile, now);
       if (!quotaCheck.allowed) {

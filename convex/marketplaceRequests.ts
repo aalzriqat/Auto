@@ -6,7 +6,7 @@ import { verifyTurnstileToken, normalizeText, normalizeRequiredText } from "./we
 import { enforceMarketplaceSubmissionRateLimit } from "./rateLimit";
 import { notifyByPermission } from "./utils/notifications";
 import { PERMISSIONS } from "./utils/permissions";
-import { compareDealerRank } from "./marketplaceDealers";
+import { compareDealerRank, listOptedInDealerProfiles } from "./marketplaceDealers";
 
 const MAX_MATCHED_DEALERS = 5;
 const REQUEST_EXPIRES_AFTER_DAYS = 14;
@@ -155,14 +155,10 @@ export const createRequest = internalMutation({
       createdAt: now,
     });
 
-    const candidates = await ctx.db
-      .query("marketplaceDealerProfiles")
-      .withIndex("by_opted_in", (q) => q.eq("isOptedIn", true))
-      .collect();
+    const candidates = await listOptedInDealerProfiles(ctx);
 
     const eligible: Doc<"marketplaceDealerProfiles">[] = [];
     for (const profile of candidates) {
-      if (profile.isDeleted) continue;
       if (!dealerMatchesRequest(profile, { buyerCity, make })) continue;
       const org = await ctx.db.get(profile.orgId);
       if (!org || org.suspended) continue;

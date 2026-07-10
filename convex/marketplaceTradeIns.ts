@@ -9,6 +9,7 @@ import { notifyByPermission } from "./utils/notifications";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireTenantAuth } from "./utils/tenancy";
 import { resolveGeneratedLeadAssignee, getOrCreateMarketplaceBuyerCustomer } from "./utils/leadAssignment";
+import { getOwnProfile } from "./marketplaceDealers";
 
 const MAX_NAME_CHARS = 80;
 const MAX_MAKE_MODEL_CHARS = 60;
@@ -70,10 +71,7 @@ export const createTradeInRequest = internalMutation({
 
     const org = await ctx.db.get(args.orgId);
     if (!org || org.suspended) throw new ConvexError("This dealer is not accepting trade-in requests.");
-    const profile = await ctx.db
-      .query("marketplaceDealerProfiles")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .unique();
+    const profile = await getOwnProfile(ctx, args.orgId);
     if (!profile || !profile.isOptedIn || profile.isDeleted) {
       throw new ConvexError("This dealer is not accepting trade-in requests.");
     }

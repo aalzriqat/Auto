@@ -5,6 +5,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { isSystemOwnerRole } from "./utils/permissions";
 import { notifyManagers } from "./utils/notifications";
 import { getValidatedEnv } from "./utils/env";
+import { listOptedInDealerProfiles } from "./marketplaceDealers";
 import { VEHICLE_IMAGE_CONTENT_TYPES } from "./utils/storageValidation";
 
 // Phase 64 — WhatsApp-native dealer intake (structured, no LLM; master plan
@@ -254,12 +255,9 @@ export const findDealerOrgByPhone = internalQuery({
   handler: async (ctx, args) => {
     const digits = normalizePhoneDigits(args.phone);
     if (!digits) return null;
-    const profiles = await ctx.db
-      .query("marketplaceDealerProfiles")
-      .withIndex("by_opted_in", (q) => q.eq("isOptedIn", true))
-      .take(MAX_CANDIDATE_PROFILES);
+    const profiles = await listOptedInDealerProfiles(ctx, MAX_CANDIDATE_PROFILES);
     const match = profiles.find(
-      (profile) => !profile.isDeleted && profile.whatsappNumber && normalizePhoneDigits(profile.whatsappNumber) === digits
+      (profile) => profile.whatsappNumber && normalizePhoneDigits(profile.whatsappNumber) === digits
     );
     return match?.orgId ?? null;
   },

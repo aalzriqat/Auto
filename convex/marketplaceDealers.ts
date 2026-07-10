@@ -125,16 +125,22 @@ export async function refreshDealerBadges(ctx: MutationCtx, profile: Doc<"market
   }
 }
 
+/** Opted-in, non-deleted dealer profiles — shared by every marketplace flow that fans out across the dealer network (public browse, buyer-request matching, badge recompute, phone-number resolution). Pass a limit to cap a `.take()`, or omit it for `.collect()`. */
+export async function listOptedInDealerProfiles(
+  ctx: QueryCtx | MutationCtx,
+  limit?: number
+): Promise<Doc<"marketplaceDealerProfiles">[]> {
+  const query = ctx.db.query("marketplaceDealerProfiles").withIndex("by_opted_in", (q) => q.eq("isOptedIn", true));
+  const profiles = limit !== undefined ? await query.take(limit) : await query.collect();
+  return profiles.filter((profile) => !profile.isDeleted);
+}
+
 /** Daily cron entrypoint (Phase 60) — recomputes FAST_RESPONSE/FINANCE_AVAILABLE for every opted-in dealer, since both can drift without any single triggering event (rolling average decay, a finance company being deactivated). */
 export const recomputeAllDealerBadges = internalMutation({
   args: {},
   handler: async (ctx) => {
-    const profiles = await ctx.db
-      .query("marketplaceDealerProfiles")
-      .withIndex("by_opted_in", (q) => q.eq("isOptedIn", true))
-      .collect();
+    const profiles = await listOptedInDealerProfiles(ctx);
     for (const profile of profiles) {
-      if (profile.isDeleted) continue;
       await refreshDealerBadges(ctx, profile);
     }
   },
@@ -145,7 +151,8 @@ function normalizeStringList(values: string[], max: number): string[] {
   return Array.from(new Set(cleaned)).slice(0, max);
 }
 
-async function getOwnProfile(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">) {
+/** Fetches the org's own marketplace dealer profile by orgId (not filtered by isOptedIn/isDeleted — callers that need "active and opted in" should check those fields themselves). */
+export async function getOwnProfile(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">) {
   return await ctx.db
     .query("marketplaceDealerProfiles")
     .withIndex("by_org", (q) => q.eq("orgId", orgId))

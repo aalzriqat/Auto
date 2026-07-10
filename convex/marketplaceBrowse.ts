@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { query } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { hasPlanFeature } from "./subscriptions";
+import { listOptedInDealerProfiles } from "./marketplaceDealers";
 import { getSettingsByOrg, activePrimaryDomain } from "./websites";
 import { calculateUnifiedMurabaha } from "../lib/financing";
 
@@ -116,16 +117,12 @@ export const search = query({
     const makeFilter = args.make?.trim().toLowerCase();
     const modelFilter = args.model?.trim().toLowerCase();
 
-    const profiles = await ctx.db
-      .query("marketplaceDealerProfiles")
-      .withIndex("by_opted_in", (q) => q.eq("isOptedIn", true))
-      .take(MAX_CANDIDATE_ORGS);
+    const profiles = await listOptedInDealerProfiles(ctx, MAX_CANDIDATE_ORGS);
 
     const merged: BrowseVehicle[] = [];
 
     for (const profile of profiles) {
       if (merged.length >= MAX_MERGED_VEHICLES) break;
-      if (profile.isDeleted) continue;
       if (cityFilter && !profile.areas.some((area) => area.toLowerCase().includes(cityFilter))) continue;
 
       const orgId = profile.orgId;
