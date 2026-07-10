@@ -1,10 +1,10 @@
 import { ConvexError, v } from "convex/values";
-import { action, internalMutation, mutation, query, ActionCtx, MutationCtx } from "./_generated/server";
+import { action, internalMutation, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { verifyTurnstileToken, normalizeRequiredText, normalizeText } from "./websites";
 import { normalizePhone } from "./marketplaceRequests";
-import { rateLimiter } from "./rateLimit";
+import { enforceMarketplaceSubmissionRateLimit } from "./rateLimit";
 import { notifyByPermission } from "./utils/notifications";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -23,17 +23,6 @@ const conditionValidator = v.union(
   v.literal("FAIR"),
   v.literal("POOR")
 );
-
-async function enforceTradeInRateLimit(
-  ctx: ActionCtx | MutationCtx,
-  name: "marketplaceTradeInFingerprint" | "marketplaceTradeInContact",
-  key: string
-) {
-  const status = await rateLimiter.limit(ctx, name, { key });
-  if (!status.ok) {
-    throw new ConvexError("Too many submissions. Please try again later.");
-  }
-}
 
 const submitTradeInBaseArgs = {
   orgId: v.id("organizations"),
@@ -59,10 +48,10 @@ export const submitTradeInRequest = action({
   handler: async (ctx, args): Promise<{ tradeInRequestId: Id<"marketplaceTradeInRequests"> }> => {
     const clientFingerprint = normalizeRequiredText(args.clientFingerprint, "Client fingerprint", MAX_FINGERPRINT_CHARS);
     await verifyTurnstileToken(args.turnstileToken);
-    await enforceTradeInRateLimit(ctx, "marketplaceTradeInFingerprint", clientFingerprint);
+    await enforceMarketplaceSubmissionRateLimit(ctx, "marketplaceTradeInFingerprint", clientFingerprint);
 
     const normalizedPhone = normalizePhone(args.buyerPhone, "Phone");
-    await enforceTradeInRateLimit(ctx, "marketplaceTradeInContact", normalizedPhone);
+    await enforceMarketplaceSubmissionRateLimit(ctx, "marketplaceTradeInContact", normalizedPhone);
 
     const { turnstileToken: _turnstileToken, ...requestArgs } = args;
     return await ctx.runMutation(internal.marketplaceTradeIns.createTradeInRequest, {

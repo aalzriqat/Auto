@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
@@ -10,7 +10,19 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "@/components/ui/sonner";
-import { MessageCircle, CheckCircle2, Ban, Car, Eye, ShieldCheck, TrendingDown, Zap, Crown, Package } from "lucide-react";
+import {
+  MessageCircle,
+  CheckCircle2,
+  Ban,
+  Car,
+  Eye,
+  ShieldCheck,
+  TrendingDown,
+  Zap,
+  Crown,
+  Package,
+  type LucideIcon,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { buildWhatsAppDeepLink } from "@/lib/whatsappDeepLink";
 
@@ -34,31 +46,43 @@ const STATUS_TABS: { label: string; value: RequestStatus | undefined }[] = [
   { label: "Spam", value: "SPAM" },
 ];
 
-type MatchRow = {
-  matchId: Id<"marketplaceRequestMatches">;
-  dealerName: string;
-  whatsappNumber: string | null;
-  notifiedAt: number | null;
-};
-
-function MatchActionCell({ match, onSend }: { readonly match: MatchRow; readonly onSend: () => void }) {
-  if (match.notifiedAt) {
+/** Shared "done state / send via WhatsApp / no number on file" 3-way cell — used wherever staff can nudge a dealer over WhatsApp (buyer-match notify, weekly report, phone verification), each with its own icon/labels/action. */
+function WhatsAppActionCell({
+  done,
+  doneIcon: DoneIcon = CheckCircle2,
+  doneLabel,
+  hasWhatsApp,
+  actionIcon: ActionIcon = MessageCircle,
+  actionLabel,
+  onSend,
+  fallback = <span className="text-xs text-slate-500">No WhatsApp number on file</span>,
+}: {
+  readonly done: boolean;
+  readonly doneIcon?: LucideIcon;
+  readonly doneLabel: ReactNode;
+  readonly hasWhatsApp: boolean;
+  readonly actionIcon?: LucideIcon;
+  readonly actionLabel: string;
+  readonly onSend: () => void;
+  readonly fallback?: ReactNode;
+}) {
+  if (done) {
     return (
       <span className="flex items-center gap-1 text-emerald-400 text-xs">
-        <CheckCircle2 className="h-3.5 w-3.5" />
-        Sent
+        <DoneIcon className="h-3.5 w-3.5" />
+        {doneLabel}
       </span>
     );
   }
-  if (match.whatsappNumber) {
+  if (hasWhatsApp) {
     return (
       <Button size="sm" variant="outline" onClick={onSend}>
-        <MessageCircle className="h-3.5 w-3.5 me-1" />
-        Send via WhatsApp
+        <ActionIcon className="h-3.5 w-3.5 me-1" />
+        {actionLabel}
       </Button>
     );
   }
-  return <span className="text-xs text-slate-500">No WhatsApp number on file</span>;
+  return fallback;
 }
 
 function buildDealerMessage(request: {
@@ -98,38 +122,6 @@ function buildWeeklyReportMessage(dealerName: string, report: WeeklyReport): str
   return lines.join("\n");
 }
 
-function WeeklyReportActionCell({
-  orgId,
-  whatsappNumber,
-  sentAt,
-  message,
-  onSend,
-}: {
-  readonly orgId: Id<"organizations">;
-  readonly whatsappNumber: string | null;
-  readonly sentAt: number | null;
-  readonly message: string;
-  readonly onSend: (orgId: Id<"organizations">, phone: string, message: string) => void;
-}) {
-  if (sentAt) {
-    return (
-      <span className="flex items-center gap-1 text-emerald-400 text-xs">
-        <CheckCircle2 className="h-3.5 w-3.5" />
-        Sent {new Date(sentAt).toLocaleDateString()}
-      </span>
-    );
-  }
-  if (whatsappNumber) {
-    return (
-      <Button size="sm" variant="outline" onClick={() => onSend(orgId, whatsappNumber, message)}>
-        <MessageCircle className="h-3.5 w-3.5 me-1" />
-        Send via WhatsApp
-      </Button>
-    );
-  }
-  return <span className="text-xs text-slate-500">No WhatsApp number on file</span>;
-}
-
 function WeeklyReportsView() {
   const reports = useQuery(api.adminMarketplace.listWeeklyReports, {});
   const markSent = useMutation(api.adminMarketplace.markWeeklyReportSentViaWhatsApp);
@@ -156,12 +148,12 @@ function WeeklyReportsView() {
         <Card key={row.orgId} className="p-4 bg-slate-900 border-slate-800 space-y-3">
           <div className="flex items-start justify-between gap-3">
             <span className="font-semibold text-slate-100">{row.dealerName}</span>
-            <WeeklyReportActionCell
-              orgId={row.orgId}
-              whatsappNumber={row.whatsappNumber}
-              sentAt={row.sentAt}
-              message={buildWeeklyReportMessage(row.dealerName, row.report)}
-              onSend={handleSend}
+            <WhatsAppActionCell
+              done={Boolean(row.sentAt)}
+              doneLabel={row.sentAt ? `Sent ${new Date(row.sentAt).toLocaleDateString()}` : ""}
+              hasWhatsApp={Boolean(row.whatsappNumber)}
+              actionLabel="Send via WhatsApp"
+              onSend={() => handleSend(row.orgId, row.whatsappNumber!, buildWeeklyReportMessage(row.dealerName, row.report))}
             />
           </div>
           <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm text-slate-400">
@@ -315,17 +307,16 @@ function DealersView() {
                 </Badge>
               )}
             </div>
-            {dealer.phoneVerifiedAt ? (
-              <span className="flex items-center gap-1 text-emerald-400 text-xs">
-                <ShieldCheck className="h-3.5 w-3.5" />
-                Verified {new Date(dealer.phoneVerifiedAt).toLocaleDateString()}
-              </span>
-            ) : dealer.whatsappNumber ? (
-              <Button size="sm" variant="outline" onClick={() => handleVerify(dealer.orgId)}>
-                <ShieldCheck className="h-3.5 w-3.5 me-1" />
-                Mark phone verified
-              </Button>
-            ) : null}
+            <WhatsAppActionCell
+              done={Boolean(dealer.phoneVerifiedAt)}
+              doneIcon={ShieldCheck}
+              doneLabel={dealer.phoneVerifiedAt ? `Verified ${new Date(dealer.phoneVerifiedAt).toLocaleDateString()}` : ""}
+              hasWhatsApp={Boolean(dealer.whatsappNumber)}
+              actionIcon={ShieldCheck}
+              actionLabel="Mark phone verified"
+              onSend={() => handleVerify(dealer.orgId)}
+              fallback={null}
+            />
           </div>
           <p className="text-xs text-slate-500">
             {dealer.totalResponses} response(s)
@@ -447,8 +438,11 @@ export default function AdminMarketplacePage() {
                 {request.matches.map((match) => (
                   <div key={match.matchId} className="flex items-center justify-between gap-3 text-sm">
                     <span className="text-slate-200">{match.dealerName}</span>
-                    <MatchActionCell
-                      match={match}
+                    <WhatsAppActionCell
+                      done={Boolean(match.notifiedAt)}
+                      doneLabel="Sent"
+                      hasWhatsApp={Boolean(match.whatsappNumber)}
+                      actionLabel="Send via WhatsApp"
                       onSend={() =>
                         handleSend(match.matchId, match.whatsappNumber!, buildDealerMessage(request))
                       }

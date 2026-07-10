@@ -19,6 +19,25 @@ import { cn } from "@/lib/utils";
 type ResponseKind = "HAVE_MATCH" | "HAVE_SIMILAR" | "CAN_SOURCE" | "NOT_AVAILABLE";
 type InboxView = "requests" | "tradeins";
 
+/** Shared "run a mutation, toast success/error, reset the saving flag" wrapper for the two inline forms below (respond to a buyer request, make a trade-in offer) — same shape, different mutation. */
+async function submitWithToast(
+  setSaving: (value: boolean) => void,
+  action: () => Promise<unknown>,
+  successMessage: string,
+  onSaved: () => void
+) {
+  setSaving(true);
+  try {
+    await action();
+    toast.success(successMessage);
+    onSaved();
+  } catch (error) {
+    toast.error(error instanceof Error ? error.message : "An unexpected error occurred. Please try again later.");
+  } finally {
+    setSaving(false);
+  }
+}
+
 function ResponseForm({
   orgId,
   requestId,
@@ -43,23 +62,20 @@ function ResponseForm({
   const [saving, setSaving] = useState(false);
 
   async function handleSubmit() {
-    setSaving(true);
-    try {
-      await respond({
-        orgId,
-        requestId,
-        kind,
-        vehicleId: vehicleId ? (vehicleId as Id<"vehicles">) : undefined,
-        offerPriceJod: offerPriceJod ? Number(offerPriceJod) : undefined,
-        note: note.trim() || undefined,
-      });
-      toast.success(t("MarketplaceResponseSaved" as any));
-      onSaved();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "An unexpected error occurred. Please try again later.");
-    } finally {
-      setSaving(false);
-    }
+    await submitWithToast(
+      setSaving,
+      () =>
+        respond({
+          orgId,
+          requestId,
+          kind,
+          vehicleId: vehicleId ? (vehicleId as Id<"vehicles">) : undefined,
+          offerPriceJod: offerPriceJod ? Number(offerPriceJod) : undefined,
+          note: note.trim() || undefined,
+        }),
+      t("MarketplaceResponseSaved" as any),
+      onSaved
+    );
   }
 
   return (
@@ -140,16 +156,12 @@ function TradeInOfferForm({
 
   async function handleSubmit() {
     if (!offerAmountJod) return;
-    setSaving(true);
-    try {
-      await makeOffer({ orgId, tradeInRequestId, offerAmountJod: Number(offerAmountJod) });
-      toast.success(t("MarketplaceTradeInOfferSaved" as any));
-      onSaved();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "An unexpected error occurred. Please try again later.");
-    } finally {
-      setSaving(false);
-    }
+    await submitWithToast(
+      setSaving,
+      () => makeOffer({ orgId, tradeInRequestId, offerAmountJod: Number(offerAmountJod) }),
+      t("MarketplaceTradeInOfferSaved" as any),
+      onSaved
+    );
   }
 
   return (

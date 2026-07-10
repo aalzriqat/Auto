@@ -1,9 +1,9 @@
 import { ConvexError, v } from "convex/values";
-import { ActionCtx, MutationCtx, action, internalMutation, query } from "./_generated/server";
+import { action, internalMutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { verifyTurnstileToken, normalizeText, normalizeRequiredText } from "./websites";
-import { rateLimiter } from "./rateLimit";
+import { enforceMarketplaceSubmissionRateLimit } from "./rateLimit";
 import { notifyByPermission } from "./utils/notifications";
 import { PERMISSIONS } from "./utils/permissions";
 import { compareDealerRank } from "./marketplaceDealers";
@@ -68,17 +68,6 @@ export function dealerMatchesRequest(
   return areaMatch && brandMatch;
 }
 
-async function enforceMarketplaceRateLimit(
-  ctx: ActionCtx | MutationCtx,
-  name: "marketplaceRequestFingerprint" | "marketplaceRequestContact",
-  key: string
-) {
-  const status = await rateLimiter.limit(ctx, name, { key });
-  if (!status.ok) {
-    throw new ConvexError("Too many submissions. Please try again later.");
-  }
-}
-
 const submitRequestBaseArgs = {
   buyerFirstName: v.string(),
   buyerPhone: v.string(),
@@ -107,10 +96,10 @@ export const submitRequest = action({
   handler: async (ctx, args): Promise<{ requestId: Id<"marketplaceRequests">; matchedCount: number }> => {
     const clientFingerprint = normalizeRequiredText(args.clientFingerprint, "Client fingerprint", MAX_FINGERPRINT_CHARS);
     await verifyTurnstileToken(args.turnstileToken);
-    await enforceMarketplaceRateLimit(ctx, "marketplaceRequestFingerprint", clientFingerprint);
+    await enforceMarketplaceSubmissionRateLimit(ctx, "marketplaceRequestFingerprint", clientFingerprint);
 
     const normalizedPhone = normalizePhone(args.buyerPhone, "Phone");
-    await enforceMarketplaceRateLimit(ctx, "marketplaceRequestContact", normalizedPhone);
+    await enforceMarketplaceSubmissionRateLimit(ctx, "marketplaceRequestContact", normalizedPhone);
 
     const { turnstileToken: _turnstileToken, ...requestArgs } = args;
     return await ctx.runMutation(internal.marketplaceRequests.createRequest, {

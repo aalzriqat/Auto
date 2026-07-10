@@ -3,10 +3,10 @@
 import { FormEvent, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { useParams } from "next/navigation";
-import Link from "next/link";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
-import { CheckCircle2, Clock, RefreshCw, Store, XCircle } from "lucide-react";
+import { CheckCircle2, Clock, RefreshCw, XCircle } from "lucide-react";
+import { BuyerLookupShell } from "@/components/marketplace/BuyerLookupShell";
 
 type Lang = "en" | "ar";
 
@@ -116,92 +116,75 @@ export default function MarketplaceTradeInStatusPage() {
   })();
 
   return (
-    <main dir={dir} className="min-h-screen bg-slate-50 text-slate-950">
-      <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto max-w-md px-4 py-4 flex items-center justify-between">
-          <Link href="/marketplace/cars" className="flex items-center gap-2 font-semibold">
-            <Store className="h-5 w-5" />
-            AutoFlow
-          </Link>
-          <button type="button" onClick={() => setLang(lang === "en" ? "ar" : "en")} className="text-sm text-slate-600">
-            {lang === "en" ? "العربية" : "English"}
-          </button>
-        </div>
-      </header>
-
-      <section className="mx-auto max-w-md px-4 py-10">
+    <BuyerLookupShell
+      dir={dir}
+      homeHref="/marketplace/cars"
+      langToggleLabel={lang === "en" ? "العربية" : "English"}
+      onToggleLang={() => setLang(lang === "en" ? "ar" : "en")}
+      aboveTitle={
         <div className="flex items-center gap-2 text-slate-500 mb-2">
           <RefreshCw className="h-5 w-5" />
         </div>
-        <h1 className="text-2xl font-bold">{t.title}</h1>
-        <p className="mt-2 text-slate-600">{t.subtitle}</p>
-
-        <form onSubmit={handleSubmit} className="mt-6 flex gap-2">
-          <input
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            placeholder={t.phone}
-            aria-label={t.phone}
-            required
-            className="flex-1 rounded-lg border border-slate-300 px-3 py-2"
-          />
-          <button type="submit" className="rounded-lg bg-slate-950 text-white px-4 py-2 font-medium">
-            {t.check}
-          </button>
-        </form>
-
-        {submittedPhone && status === null && <p className="mt-6 text-sm text-rose-600">{t.notFound}</p>}
-
-        {status && (
-          <div className="mt-6 rounded-xl border border-slate-200 bg-white p-5 space-y-3">
-            <div className="flex items-center gap-2">
-              {status.status === "ACCEPTED" ? (
-                <CheckCircle2 className="h-5 w-5 text-emerald-600" />
-              ) : status.status === "DECLINED" ? (
-                <XCircle className="h-5 w-5 text-slate-400" />
-              ) : (
-                <Clock className="h-5 w-5 text-slate-400" />
-              )}
-              <p className="font-medium">{statusMessage}</p>
-            </div>
-            <p className="text-sm text-slate-600">
-              {status.currentYear} {status.currentMake} {status.currentModel}
-            </p>
-
-            {status.status === "OFFERED" && status.offerAmountJod != null && !actionDone && (
-              <div className="space-y-3 border-t border-slate-100 pt-3">
-                <p className="text-lg font-bold text-slate-950">
-                  {t.offerLabel}: {status.offerAmountJod.toLocaleString()} JOD
-                </p>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={handleAccept}
-                    className="flex-1 rounded-lg bg-emerald-600 text-white py-2 font-medium hover:bg-emerald-700"
-                  >
-                    {t.accept}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleDecline}
-                    className="flex-1 rounded-lg border border-slate-300 py-2 font-medium text-slate-700 hover:bg-slate-50"
-                  >
-                    {t.decline}
-                  </button>
-                </div>
-                {actionError && <p className="text-sm text-rose-600">{actionError}</p>}
-              </div>
+      }
+      title={t.title}
+      subtitle={t.subtitle}
+      phone={phone}
+      onPhoneChange={setPhone}
+      onSubmit={handleSubmit}
+      phonePlaceholder={t.phone}
+      checkLabel={t.check}
+      notFound={Boolean(submittedPhone && status === null)}
+      notFoundMessage={t.notFound}
+    >
+      {status && (
+        <div className="mt-6 rounded-xl border border-slate-200 bg-white p-5 space-y-3">
+          <div className="flex items-center gap-2">
+            {status.status === "ACCEPTED" ? (
+              <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+            ) : status.status === "DECLINED" ? (
+              <XCircle className="h-5 w-5 text-slate-400" />
+            ) : (
+              <Clock className="h-5 w-5 text-slate-400" />
             )}
-
-            {actionDone === "accepted" && (
-              <p className="text-sm text-emerald-700 font-medium border-t border-slate-100 pt-3">{t.accepted}</p>
-            )}
-            {actionDone === "declined" && (
-              <p className="text-sm text-slate-600 font-medium border-t border-slate-100 pt-3">{t.declined}</p>
-            )}
+            <p className="font-medium">{statusMessage}</p>
           </div>
-        )}
-      </section>
-    </main>
+          <p className="text-sm text-slate-600">
+            {status.currentYear} {status.currentMake} {status.currentModel}
+          </p>
+
+          {status.status === "OFFERED" && status.offerAmountJod != null && !actionDone && (
+            <div className="space-y-3 border-t border-slate-100 pt-3">
+              <p className="text-lg font-bold text-slate-950">
+                {t.offerLabel}: {status.offerAmountJod.toLocaleString()} JOD
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleAccept}
+                  className="flex-1 rounded-lg bg-emerald-600 text-white py-2 font-medium hover:bg-emerald-700"
+                >
+                  {t.accept}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDecline}
+                  className="flex-1 rounded-lg border border-slate-300 py-2 font-medium text-slate-700 hover:bg-slate-50"
+                >
+                  {t.decline}
+                </button>
+              </div>
+              {actionError && <p className="text-sm text-rose-600">{actionError}</p>}
+            </div>
+          )}
+
+          {actionDone === "accepted" && (
+            <p className="text-sm text-emerald-700 font-medium border-t border-slate-100 pt-3">{t.accepted}</p>
+          )}
+          {actionDone === "declined" && (
+            <p className="text-sm text-slate-600 font-medium border-t border-slate-100 pt-3">{t.declined}</p>
+          )}
+        </div>
+      )}
+    </BuyerLookupShell>
   );
 }

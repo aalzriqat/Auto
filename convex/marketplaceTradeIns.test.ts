@@ -6,6 +6,7 @@ import { api, internal } from "./_generated/api";
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
+  enforceMarketplaceSubmissionRateLimit: vi.fn().mockResolvedValue(undefined),
 }));
 
 const ORIGINAL_TURNSTILE_SECRET = process.env.TURNSTILE_SECRET_KEY;
