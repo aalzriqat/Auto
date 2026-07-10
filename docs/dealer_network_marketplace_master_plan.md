@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-10 (revised same day after a review round — see A10/A11, Phase 57 consent/cap, Phase 58B)
 **Owner:** aalzriqat
-**Status:** Phases 56–58 merged to main 2026-07-10 (PR #52, hotfix PR #53, PR #54) · Phases 56–57 deployed to prod, Phase 58's `npx convex deploy` still pending · Phases 58B–64 planned → sequence into PROJECT_PLAN.md as they start
+**Status:** Phases 56–58 merged + deployed to prod 2026-07-10 (PR #52, hotfix PR #53, PR #54) · Phases 58B–64 planned → sequence into PROJECT_PLAN.md as they start
 **Scope:** Turn AutoFlow into a two-sided demand-generation marketplace — buyers submit "I want this car" requests, AutoFlow fans them out to matching dealers, dealers reply and convert into tracked leads with gross-profit attribution. Built as a layer **on top of** the dealer-site infrastructure that already exists, not a rebuild.
 
 > **Non-negotiables (project dev rules, unchanged).** All logic backend-only (Convex). Every mutation/action in `try/catch`, `console.error(raw)`, return `{ success:false, error:"An unexpected error occurred. Please try again later." }`. Optional chaining + fallbacks on all rendered DB data. Zero implicit `any`. Bilingual EN/AR (RTL) for every surface. Soft-delete pattern (`isDeleted/deletedAt/deletedBy`) on every new table. No LLM in Releases 1–3 (matches existing roadmap discipline — AI upgrades route to the deferred backlog, see §5).
@@ -120,7 +120,7 @@ This is a demand-and-supply cold-start problem, not just a build. The plan fails
 
 #### Phase 58 — Dealer response + lead attribution ✅ merged
 
-**Branch:** `feature/phase-58-marketplace-response` (merged to main 2026-07-10 via PR #54, convex deploy pending)
+**Branch:** `feature/phase-58-marketplace-response` (merged to main 2026-07-10 via PR #54, deployed to prod 2026-07-10)
 
 **Follow-up (small, not yet done):** add `marketplaceResponses` (index `by_org`) to `ADMIN_TABLES` in [`convex/adminData.ts`](../convex/adminData.ts) per A11 — same deferred item as `marketplaceDealerProfiles` from Phase 56.
 
@@ -242,7 +242,7 @@ Add to the existing Phases 50–55 AI backlog table, not built here:
 |---|---|---|---|
 | 56 | Dealer opt-in + marketplace directory | 1 — Foundation | ✅ Merged + deployed to prod (PR #52 + hotfix PR #53) |
 | 57 | Request a Car: capture + fan-out (+ consent/cap/intent-tier) | 1 — Foundation | ✅ Merged + deployed to prod (PR #52 + hotfix PR #53) |
-| 58 | Dealer response + lead attribution | 1 — Foundation | 🟨 Merged to main (PR #54); convex deploy pending |
+| 58 | Dealer response + lead attribution | 1 — Foundation | ✅ Merged + deployed to prod (PR #54) |
 | 58B | Weekly dealer proof report | 1 — Foundation | ⬜ Not started |
 | 59 | Public marketplace browse/search | 2 — Public + Trust | ⬜ Not started |
 | 60 | Verified badges + response ranking | 2 — Public + Trust | ⬜ Not started |

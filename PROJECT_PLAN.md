@@ -1286,7 +1286,7 @@ Each phase reuses the established pattern: immutable event table → posting rul
 
 ## Phase 58 — Dealer Response + Lead Attribution ✅
 
-**Branch:** `feature/phase-58-marketplace-response` · **Completed:** 2026-07-10 · **Merged to main 2026-07-10 via PR #54**
+**Branch:** `feature/phase-58-marketplace-response` · **Completed:** 2026-07-10 · **Merged to main 2026-07-10 via PR #54 · Deployed to prod 2026-07-10**
 
 ### Delivered
 
@@ -1302,7 +1302,7 @@ Each phase reuses the established pattern: immutable event table → posting rul
 
 ### Remaining / not yet done
 
-- [ ] `npx convex deploy` not run — nothing from this phase is live in production yet
+- [x] `npx convex deploy` run 2026-07-10 (kindly-hound-172) — live in production
 - [ ] Vehicle picker in the response form re-fetches all AVAILABLE vehicles unpaginated beyond the first 100 — fine at founding-dealer scale, revisit if any org has a large catalog
 
 ---
@@ -1339,7 +1339,7 @@ Each phase reuses the established pattern: immutable event table → posting rul
 | 42 | Open API & Integration Hub | 3 — Enterprise & Scale | ⬜ Not started |
 | 56 | Dealer Opt-In + Marketplace Directory | Dealer Network Marketplace | ✅ Merged + DEPLOYED to prod 2026-07-10 (PR #52 + hotfix PR #53) |
 | 57 | Request a Car: Capture + Fan-Out (+ consent/cap/intent-tier) | Dealer Network Marketplace | ✅ Merged + DEPLOYED to prod 2026-07-10 (PR #52 + hotfix PR #53) |
-| 58 | Dealer Response + Lead Attribution | Dealer Network Marketplace | 🟨 Merged to main (PR #54, 2026-07-10); convex deploy pending |
+| 58 | Dealer Response + Lead Attribution | Dealer Network Marketplace | ✅ Merged + DEPLOYED to prod 2026-07-10 (PR #54) |
 | 58B | Weekly Dealer Proof Report | Dealer Network Marketplace | ⬜ Not started |
 | 59 | Public Marketplace Browse/Search | Dealer Network Marketplace | ⬜ Not started |
 | 60 | Verified Badges + Response Ranking | Dealer Network Marketplace | ⬜ Not started |
