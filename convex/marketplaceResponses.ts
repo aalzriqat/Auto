@@ -28,17 +28,23 @@ export const listForOrg = query({
       .order("desc")
       .take(MAX_LISTED_REQUESTS);
 
+    const responses = await ctx.db
+      .query("marketplaceResponses")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    const responsesByRequest = new Map<Id<"marketplaceRequests">, Doc<"marketplaceResponses">[]>();
+    for (const response of responses) {
+      const list = responsesByRequest.get(response.requestId);
+      if (list) list.push(response);
+      else responsesByRequest.set(response.requestId, [response]);
+    }
+
     const rows = await Promise.all(
       matches.map(async (match) => {
         const request = await ctx.db.get(match.requestId);
         if (!request) return null;
 
-        const responses = await ctx.db
-          .query("marketplaceResponses")
-          .withIndex("by_request", (q) => q.eq("requestId", match.requestId))
-          .collect();
-        const ownResponses = responses
-          .filter((r) => r.orgId === args.orgId)
+        const ownResponses = (responsesByRequest.get(match.requestId) ?? [])
           .sort((a, b) => b.createdAt - a.createdAt);
 
         return {
@@ -101,6 +107,10 @@ export const respond = mutation({
       if (!vehicle || vehicle.orgId !== args.orgId || vehicle.isDeleted) {
         throw new ConvexError("Vehicle not found.");
       }
+    }
+
+    if (args.offerPriceJod !== undefined && args.offerPriceJod < 0) {
+      throw new ConvexError("Offer price must be non-negative.");
     }
 
     const note = args.note?.trim().slice(0, MAX_NOTE_CHARS) || undefined;

@@ -54,8 +54,8 @@ function ResponseForm({
       });
       toast.success(t("MarketplaceResponseSaved" as any));
       onSaved();
-    } catch (error: any) {
-      toast.error(error);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "An unexpected error occurred. Please try again later.");
     } finally {
       setSaving(false);
     }

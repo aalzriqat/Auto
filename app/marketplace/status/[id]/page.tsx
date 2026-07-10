@@ -104,6 +104,7 @@ export default function MarketplaceStatusPage() {
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
             placeholder={t.phone}
+            aria-label={t.phone}
             required
             className="flex-1 rounded-lg border border-slate-300 px-3 py-2"
           />

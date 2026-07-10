@@ -159,7 +159,7 @@ describe("respond", () => {
     ).rejects.toThrow(/not routed/);
   });
 
-  test("rejects a response to a SPAM or EXPIRED request", async () => {
+  test("rejects a response to a SPAM request", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealerOrg(t);
     const requestId = await seedRequest(t, { status: "SPAM" });
@@ -168,6 +168,33 @@ describe("respond", () => {
     await expect(
       asSales.mutation(api.marketplaceResponses.respond, { orgId, requestId, kind: "HAVE_MATCH" })
     ).rejects.toThrow(/no longer open/);
+  });
+
+  test("rejects a response to an EXPIRED request", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, asSales } = await seedDealerOrg(t);
+    const requestId = await seedRequest(t, { status: "EXPIRED" });
+    await seedMatch(t, requestId, orgId);
+
+    await expect(
+      asSales.mutation(api.marketplaceResponses.respond, { orgId, requestId, kind: "HAVE_MATCH" })
+    ).rejects.toThrow(/no longer open/);
+  });
+
+  test("rejects a negative offer price", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, asSales } = await seedDealerOrg(t);
+    const requestId = await seedRequest(t);
+    await seedMatch(t, requestId, orgId);
+
+    await expect(
+      asSales.mutation(api.marketplaceResponses.respond, {
+        orgId,
+        requestId,
+        kind: "HAVE_MATCH",
+        offerPriceJod: -100,
+      })
+    ).rejects.toThrow(/non-negative/);
   });
 });
 
