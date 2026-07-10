@@ -17,7 +17,7 @@ const MAX_MAKE_MODEL_CHARS = 60;
 const MAX_FINGERPRINT_CHARS = 256;
 const MAX_IP_HASH_CHARS = 128;
 
-function normalizePhone(value: string, field: string): string {
+export function normalizePhone(value: string, field: string): string {
   const text = normalizeRequiredText(value, field, MAX_PHONE_CHARS);
   const normalized = text.replace(/[^\d+]/g, "");
   if (!/^\+?\d{7,20}$/.test(normalized)) {

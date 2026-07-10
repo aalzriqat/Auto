@@ -3089,4 +3089,44 @@ export default defineSchema({
     sentAt: v.number(),
     sentBy: v.id("users"),
   }).index("by_org_week", ["orgId", "weekStart"]),
+
+  // Phase 62 — buyer-submitted trade-in request, directed at a single dealer
+  // (whichever listing the buyer was viewing), not fanned out like
+  // marketplaceRequests. An accepted offer creates a lead in that dealer's
+  // existing pipeline — Phase 34 (Purchase Orders) doesn't exist in this
+  // codebase yet, so this deliberately does NOT create a purchase order;
+  // see master plan Phase 62 notes for the reasoning.
+  marketplaceTradeInRequests: defineTable({
+    orgId: v.id("organizations"),
+    buyerFirstName: v.string(),
+    buyerPhone: v.string(),
+    currentMake: v.string(),
+    currentModel: v.string(),
+    currentYear: v.number(),
+    currentMileage: v.number(),
+    condition: v.union(
+      v.literal("EXCELLENT"),
+      v.literal("GOOD"),
+      v.literal("FAIR"),
+      v.literal("POOR")
+    ),
+    notes: v.optional(v.string()),
+    status: v.union(
+      v.literal("PENDING"),
+      v.literal("OFFERED"),
+      v.literal("ACCEPTED"),
+      v.literal("DECLINED")
+    ),
+    offerAmountJod: v.optional(v.number()),
+    offeredAt: v.optional(v.number()),
+    offeredBy: v.optional(v.id("users")),
+    respondedAt: v.optional(v.number()),
+    leadId: v.optional(v.id("leads")),
+    consentAcceptedAt: v.number(),
+    clientFingerprint: v.string(),
+    clientIpHash: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"]),
 });

@@ -3,7 +3,7 @@ import { expect, test, describe } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
-import { computeBadges } from "./marketplaceDealers";
+import { computeBadges, MarketplaceBadge } from "./marketplaceDealers";
 
 async function seedDealer(t: ReturnType<typeof convexTest>, opts?: { name?: string; suspended?: boolean }) {
   const orgId = await t.run(async (ctx) =>
@@ -213,7 +213,7 @@ describe("marketplaceDealers", () => {
 
 describe("computeBadges", () => {
   test("adds FAST_RESPONSE only once the sample size and avg threshold are both met", () => {
-    const base = { badges: [] as const, phoneVerifiedAt: undefined };
+    const base = { badges: [] as MarketplaceBadge[], phoneVerifiedAt: undefined };
 
     expect(computeBadges({ ...base, avgResponseMinutes: 10, totalResponses: 2 }, false)).not.toContain("FAST_RESPONSE");
     expect(computeBadges({ ...base, avgResponseMinutes: 90, totalResponses: 5 }, false)).not.toContain("FAST_RESPONSE");

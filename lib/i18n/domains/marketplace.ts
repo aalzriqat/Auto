@@ -40,6 +40,14 @@ export const marketplaceEn = {
   MarketplaceResponseNoteLabel: "Note to add to the lead (optional)",
   MarketplaceResponseSubmit: "Send reply",
   MarketplaceResponseSaved: "Reply sent — a lead was created in your pipeline.",
+
+  // Phase 62 — trade-in requests tab in the same inbox.
+  MarketplaceTabRequests: "Requests",
+  MarketplaceTabTradeIns: "Trade-Ins",
+  MarketplaceTradeInsEmpty: "No trade-in requests yet.",
+  MarketplaceTradeInMakeOffer: "Make offer",
+  MarketplaceTradeInOfferAmountLabel: "Offer amount (JOD)",
+  MarketplaceTradeInOfferSaved: "Offer sent to the buyer.",
 } as const;
 
 export const marketplaceAr = {
@@ -82,4 +90,12 @@ export const marketplaceAr = {
   MarketplaceResponseNoteLabel: "ملاحظة تُضاف للعميل المحتمل (اختياري)",
   MarketplaceResponseSubmit: "إرسال الرد",
   MarketplaceResponseSaved: "تم إرسال الرد — تمت إضافة عميل محتمل لقائمتك.",
+
+  // Phase 62 — trade-in requests tab in the same inbox.
+  MarketplaceTabRequests: "الطلبات",
+  MarketplaceTabTradeIns: "الاستبدال",
+  MarketplaceTradeInsEmpty: "لا يوجد طلبات استبدال حتى الآن.",
+  MarketplaceTradeInMakeOffer: "تقديم عرض",
+  MarketplaceTradeInOfferAmountLabel: "قيمة العرض (دينار)",
+  MarketplaceTradeInOfferSaved: "تم إرسال العرض إلى الزبون.",
 } as const;

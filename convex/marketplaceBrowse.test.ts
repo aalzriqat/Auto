@@ -21,6 +21,8 @@ async function seedPublishedDealer(
     city: string;
     withFinance?: boolean;
     isOptedIn?: boolean;
+    sellingPrice?: number;
+    financeTerms?: { insuranceRate?: number; adminFees?: number; commission?: number };
     trust?: {
       inspectionStatus?: "SELF_REPORTED" | "PARTNER_VERIFIED";
       accidentDisclosed?: boolean;
@@ -58,7 +60,7 @@ async function seedPublishedDealer(
       color: "White",
       fuelType: "Petrol",
       transmission: "Automatic",
-      sellingPrice: 14000,
+      sellingPrice: opts.sellingPrice ?? 14000,
       status: "AVAILABLE",
       isDeleted: false,
       inspectionStatus: opts.trust?.inspectionStatus,
@@ -77,6 +79,9 @@ async function seedPublishedDealer(
         profitRate: 5,
         maxTermMonths: 60,
         gracePeriodMonths: 0,
+        insuranceRate: opts.financeTerms?.insuranceRate,
+        adminFees: opts.financeTerms?.adminFees,
+        commission: opts.financeTerms?.commission,
         isActive: true,
       })
     );
@@ -193,5 +198,37 @@ describe("marketplaceBrowse.search", () => {
       ownerCount: null,
       dealerGuarantee: null,
     });
+  });
+
+  test("estimates the monthly payment using the same math as lib/financing.ts, and filters by it (Phase 62)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    await seedPublishedDealer(t, {
+      name: "Finance Dealer",
+      subdomainSlug: "financedealer2",
+      city: "Amman",
+      withFinance: true,
+      sellingPrice: 10000,
+      financeTerms: { insuranceRate: 1.5, adminFees: 50, commission: 100 },
+    });
+
+    const result = await t.query(api.marketplaceBrowse.search, {});
+    // Matches lib/financing.test.ts's "standard loan" case: 10000 price, 20%
+    // (2000) down, 5% profit, 1.5% insurance, 50 fees, 100 commission, 60mo
+    // -> totalContractValue 10951.5625 / 60 = 182.526..., rounded to 183.
+    expect(result.vehicles[0].estimatedMonthlyPayment).toBe(183);
+
+    const withinBudget = await t.query(api.marketplaceBrowse.search, { maxMonthlyPayment: 183 });
+    expect(withinBudget.vehicles).toHaveLength(1);
+
+    const tooTight = await t.query(api.marketplaceBrowse.search, { maxMonthlyPayment: 182 });
+    expect(tooTight.vehicles).toHaveLength(0);
+  });
+
+  test("excludes cash-only dealers when a max monthly payment filter is applied (no estimate possible)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    await seedPublishedDealer(t, { name: "Cash Only", subdomainSlug: "cashonly2", city: "Amman", withFinance: false });
+
+    const result = await t.query(api.marketplaceBrowse.search, { maxMonthlyPayment: 1000 });
+    expect(result.vehicles).toHaveLength(0);
   });
 });

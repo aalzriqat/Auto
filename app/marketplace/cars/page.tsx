@@ -16,13 +16,17 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     city: "City",
     priceMin: "Min price (JOD)",
     priceMax: "Max price (JOD)",
+    maxMonthlyPayment: "Max monthly payment (JOD)",
     financeOnly: "Finance available only",
+    fromPerMonth: "from",
+    month: "mo",
     search: "Search",
     reset: "Reset",
     empty: "No vehicles match your filters yet — try widening your search.",
     loading: "Loading vehicles...",
     loadMore: "Load more",
     viewListing: "View listing",
+    tradeIn: "Trade-in offer",
     financeAvailable: "Finance available",
     verifiedPhone: "Verified dealer",
     fastResponse: "Fast responder",
@@ -42,13 +46,17 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     city: "المدينة",
     priceMin: "أقل سعر (دينار)",
     priceMax: "أعلى سعر (دينار)",
+    maxMonthlyPayment: "أقصى قسط شهري (دينار)",
     financeOnly: "التمويل متاح فقط",
+    fromPerMonth: "يبدأ من",
+    month: "شهرياً",
     search: "بحث",
     reset: "إعادة تعيين",
     empty: "لا توجد سيارات مطابقة لبحثك — جرّب توسيع البحث.",
     loading: "جاري تحميل السيارات...",
     loadMore: "تحميل المزيد",
     viewListing: "عرض السيارة",
+    tradeIn: "عرض استبدال",
     financeAvailable: "التمويل متاح",
     verifiedPhone: "معرض موثّق",
     fastResponse: "رد سريع",
@@ -68,6 +76,7 @@ type SearchFilters = {
   city?: string;
   priceMin?: number;
   priceMax?: number;
+  maxMonthlyPayment?: number;
   paymentType?: "FINANCE";
 };
 
@@ -87,6 +96,7 @@ type BrowseVehicle = {
   financePrice: number | null;
   imageUrls: string[];
   financeAvailable: boolean;
+  estimatedMonthlyPayment: number | null;
   inspectionStatus: "NONE" | "SELF_REPORTED" | "PARTNER_VERIFIED";
   accidentDisclosed: boolean | null;
   ownerCount: number | null;
@@ -141,6 +151,9 @@ function VehicleCard({ vehicle, t }: { readonly vehicle: BrowseVehicle; readonly
           )}
         </p>
         {vehicle.price != null && <p className="text-lg font-bold text-slate-950">{vehicle.price.toLocaleString()} JOD</p>}
+        {vehicle.estimatedMonthlyPayment != null && (
+          <p className="text-xs text-slate-500">{t.fromPerMonth} {vehicle.estimatedMonthlyPayment.toLocaleString()} JOD/{t.month}</p>
+        )}
         <div className="flex flex-wrap gap-1.5">
           {vehicle.financeAvailable && (
             <span className="inline-flex w-fit items-center gap-1 rounded-full bg-emerald-50 text-emerald-700 text-[11px] font-medium px-2 py-0.5">
@@ -156,16 +169,24 @@ function VehicleCard({ vehicle, t }: { readonly vehicle: BrowseVehicle; readonly
           )}
         </div>
         <TrustInfoPanel vehicle={vehicle} t={t} />
-        {vehicle.siteUrl && (
-          <a
-            href={`${vehicle.siteUrl}/inventory/${vehicle.slug}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="mt-auto text-center text-sm font-medium rounded-lg bg-slate-950 text-white py-2 hover:bg-slate-800"
+        <div className="mt-auto flex gap-2">
+          {vehicle.siteUrl && (
+            <a
+              href={`${vehicle.siteUrl}/inventory/${vehicle.slug}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex-1 text-center text-sm font-medium rounded-lg bg-slate-950 text-white py-2 hover:bg-slate-800"
+            >
+              {t.viewListing}
+            </a>
+          )}
+          <Link
+            href={`/marketplace/tradein?orgId=${vehicle.orgId}&dealerName=${encodeURIComponent(vehicle.dealershipName)}`}
+            className="flex-1 text-center text-sm font-medium rounded-lg border border-slate-300 py-2 text-slate-700 hover:bg-slate-50"
           >
-            {t.viewListing}
-          </a>
-        )}
+            {t.tradeIn}
+          </Link>
+        </div>
       </div>
     </div>
   );
@@ -237,6 +258,7 @@ export default function MarketplaceCarsPage() {
   const [city, setCity] = useState("");
   const [priceMin, setPriceMin] = useState("");
   const [priceMax, setPriceMax] = useState("");
+  const [maxMonthlyPayment, setMaxMonthlyPayment] = useState("");
   const [financeOnly, setFinanceOnly] = useState(false);
   const [searchKey, setSearchKey] = useState(0);
   const [appliedFilters, setAppliedFilters] = useState<SearchFilters>({});
@@ -250,6 +272,7 @@ export default function MarketplaceCarsPage() {
       city: city.trim() || undefined,
       priceMin: priceMin ? Number(priceMin) : undefined,
       priceMax: priceMax ? Number(priceMax) : undefined,
+      maxMonthlyPayment: maxMonthlyPayment ? Number(maxMonthlyPayment) : undefined,
       paymentType: financeOnly ? "FINANCE" : undefined,
     });
   }
@@ -259,6 +282,7 @@ export default function MarketplaceCarsPage() {
     setCity("");
     setPriceMin("");
     setPriceMax("");
+    setMaxMonthlyPayment("");
     setFinanceOnly(false);
     setSearchKey((key) => key + 1);
     setCursors([undefined]);
@@ -326,6 +350,17 @@ export default function MarketplaceCarsPage() {
               min={0}
               value={priceMax}
               onChange={(e) => setPriceMax(e.target.value)}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            />
+          </div>
+          <div className="col-span-1">
+            <label htmlFor="cars-max-monthly" className="block text-xs font-medium text-slate-600 mb-1">{t.maxMonthlyPayment}</label>
+            <input
+              id="cars-max-monthly"
+              type="number"
+              min={0}
+              value={maxMonthlyPayment}
+              onChange={(e) => setMaxMonthlyPayment(e.target.value)}
               className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
             />
           </div>

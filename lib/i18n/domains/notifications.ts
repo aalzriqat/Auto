@@ -154,6 +154,8 @@ export const notificationsEn = {
 
   Notif_MarketplaceRequestMatched_Title: "New Buyer Request",
   Notif_MarketplaceRequestMatched_Message: "{intentLabel} — buyer wants {vehicleDescription} in {city}. Reply from the AutoFlow marketplace inbox.",
+  Notif_MarketplaceTradeinSubmitted_Title: "New Trade-In Request",
+  Notif_MarketplaceTradeinSubmitted_Message: "Buyer wants to trade in a {vehicleDescription}. Make an offer from the AutoFlow marketplace inbox.",
 
   Notif_AdminOrgSuspended_Title: "Organization Suspended",
   Notif_AdminOrgSuspended_Message: "Your organization was suspended. Reason: {reason}",
@@ -361,6 +363,8 @@ export const notificationsAr = {
 
   Notif_MarketplaceRequestMatched_Title: "طلب مشتري جديد",
   Notif_MarketplaceRequestMatched_Message: "{intentLabel} — الزبون يبحث عن {vehicleDescription} في {city}. رد من صندوق طلبات السوق في AutoFlow.",
+  Notif_MarketplaceTradeinSubmitted_Title: "طلب استبدال جديد",
+  Notif_MarketplaceTradeinSubmitted_Message: "الزبون يرغب باستبدال سيارة {vehicleDescription}. قدّم عرضاً من صندوق طلبات السوق في AutoFlow.",
 
   Notif_AdminOrgSuspended_Title: "تم تعليق المؤسسة",
   Notif_AdminOrgSuspended_Message: "تم تعليق مؤسستك. السبب: {reason}",
