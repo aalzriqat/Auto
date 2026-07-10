@@ -1,6 +1,11 @@
 import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 
+/** Human-readable public URL segment for a vehicle's detail page — always ends in its raw `_id`, so it's reversible without a stored slug column. */
+export function vehicleSlug(vehicle: { year: number; make: string; model: string; _id: string }): string {
+  return `${vehicle.year}-${vehicle.make}-${vehicle.model}-${vehicle._id}`.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+}
+
 async function primaryWebsiteDomain(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">) {
   return await ctx.db
     .query("websiteDomains")
@@ -115,7 +120,7 @@ async function projectedVehicleRows(
 
       return {
         id: vehicleRow._id,
-        slug: `${vehicleRow.year}-${vehicleRow.make}-${vehicleRow.model}-${vehicleRow._id}`.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
+        slug: vehicleSlug(vehicleRow),
         make: vehicleRow.make,
         model: vehicleRow.model,
         year: vehicleRow.year,

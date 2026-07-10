@@ -67,6 +67,7 @@ import type * as instagramEngagement from "../instagramEngagement.js";
 import type * as leads from "../leads.js";
 import type * as liveChat from "../liveChat.js";
 import type * as marketplaceDealers from "../marketplaceDealers.js";
+import type * as marketplaceReports from "../marketplaceReports.js";
 import type * as marketplaceRequests from "../marketplaceRequests.js";
 import type * as marketplaceResponses from "../marketplaceResponses.js";
 import type * as memberships from "../memberships.js";
@@ -230,6 +231,7 @@ declare const fullApi: ApiFromModules<{
   leads: typeof leads;
   liveChat: typeof liveChat;
   marketplaceDealers: typeof marketplaceDealers;
+  marketplaceReports: typeof marketplaceReports;
   marketplaceRequests: typeof marketplaceRequests;
   marketplaceResponses: typeof marketplaceResponses;
   memberships: typeof memberships;

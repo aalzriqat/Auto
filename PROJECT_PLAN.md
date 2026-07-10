@@ -1307,9 +1307,26 @@ Each phase reuses the established pattern: immutable event table → posting rul
 
 ---
 
-## Phase 58B — Weekly Dealer Proof Report
+## Phase 58B — Weekly Dealer Proof Report ✅
 
-**Branch:** `feature/phase-58b-marketplace-weekly-report` · **Status:** ⬜ Not started — see master plan for full spec. Added 2026-07-10 after review (dealer retention needs proof, not just leads).
+**Branch:** `feature/phase-58b-marketplace-weekly-report` · **Completed:** 2026-07-10
+
+### Delivered
+
+- [x] `convex/marketplaceReports.ts` — `listOptedInDealerOrgIds`, `buildWeeklyReportForOrg` (aggregates page views + vehicle detail views from `siteVisitorEvents`, requests matched, responses sent, avg response time, most-viewed vehicle, requests lost to non-response; returns `null` when the org had zero matches/responses in the window so no-activity dealers aren't spammed), `sendWeeklyProofReports` (cron entrypoint, try/catch + `adminSystem.logWebhookEvent`)
+- [x] `convex/crons.ts` — weekly cron `marketplace-weekly-dealer-report` (Mondays 06:00 UTC)
+- [x] `convex/email.ts` — `sendMarketplaceWeeklyReportEmail`, mirrors the existing `sendSubscriptionReminderEmail` pattern. WhatsApp delivery (A5/A5b's `marketplaceWhatsAppSend.ts`) is still deferred behind Business Verification per the master plan, so email is the only channel for now — not a runtime fallback branch, just the one implemented path
+- [x] `convex/websiteProjection.ts` — extracted `vehicleSlug()` as an exported pure helper (was inline) so the report can resolve `/inventory/<slug>` page-view paths back to a vehicle without a stored slug column; reused at its original call site too
+- [x] `convex/adminSystem.ts` + `convex/schema.ts` — added `"marketplace-weekly-report"` to the webhook-log source union (exists in both places; duplicated union is pre-existing, not introduced by this phase)
+- [x] `convex/marketplaceReports.test.ts` — 5 tests: null-when-no-activity, full aggregation (matches/responses/response-time-math/page-views/most-viewed-vehicle), requests-lost-to-non-response scoping, opted-in-org filtering, cron entrypoint runs cleanly with zero dealers
+- [x] **Manual WhatsApp send** (added same day, per user request — mirrors Phase 57's `wa.me` deep-link pattern, and sidesteps A5b's Business Verification/template-approval blocker entirely since it's a human clicking send, not the Cloud API): `computeWeeklyReport`/`currentWeekStart` exported from `marketplaceReports.ts`; new `marketplaceWeeklyReportSends` table (`by_org_week` index) tracks manual sends; `adminMarketplace.ts` gained `listWeeklyReports` (live trailing-7-day stats per opted-in dealer + already-sent-this-week flag) and `markWeeklyReportSentViaWhatsApp`; `app/admin/marketplace/page.tsx` gained a "Weekly Reports" tab alongside "Requests" with a per-dealer "Send via WhatsApp" button
+- [x] Full suite green, typecheck clean, lint clean on new files. SonarCloud findings from the first CI pass fixed: extracted a shared `sendTransactionalEmail` helper in `email.ts` (was 30% duplicated between the subscription-reminder and weekly-report send actions), split `computeWeeklyReport`'s cognitive complexity into 3 helper functions (`computeAvgResponseMinutes`/`countRequestsLost`/`summarizePageViews`), fixed a nested template literal and an optional-chain suggestion. Also fixed the recurring `api.d.ts` accounting_* reorder gotcha by applying CI's own diff
+
+### Remaining / not yet done
+
+- [ ] Not merged, `npx convex deploy` not run
+- [ ] `sendMarketplaceWeeklyReportEmail`'s actual Resend call isn't exercised end-to-end in tests — it goes through the `@convex-dev/rate-limiter` component, which no test in this suite registers via `t.registerComponent` yet (same gap as every other Phase 28 email action; not introduced by this phase)
+- [ ] Automated WhatsApp send via Cloud API (`marketplaceWhatsAppSend.ts`, A5/A5b) still deferred behind Business Verification — the manual `wa.me` path above covers V1
 
 ---
 
@@ -1340,7 +1357,7 @@ Each phase reuses the established pattern: immutable event table → posting rul
 | 56 | Dealer Opt-In + Marketplace Directory | Dealer Network Marketplace | ✅ Merged + DEPLOYED to prod 2026-07-10 (PR #52 + hotfix PR #53) |
 | 57 | Request a Car: Capture + Fan-Out (+ consent/cap/intent-tier) | Dealer Network Marketplace | ✅ Merged + DEPLOYED to prod 2026-07-10 (PR #52 + hotfix PR #53) |
 | 58 | Dealer Response + Lead Attribution | Dealer Network Marketplace | ✅ Merged + DEPLOYED to prod 2026-07-10 (PR #54) |
-| 58B | Weekly Dealer Proof Report | Dealer Network Marketplace | ⬜ Not started |
+| 58B | Weekly Dealer Proof Report | Dealer Network Marketplace | 🟨 Built + tested on branch (2026-07-10); not merged, convex deploy pending |
 | 59 | Public Marketplace Browse/Search | Dealer Network Marketplace | ⬜ Not started |
 | 60 | Verified Badges + Response Ranking | Dealer Network Marketplace | ⬜ Not started |
 | 61 | Trust Passport (v1, self-reported) | Dealer Network Marketplace | ⬜ Not started |
