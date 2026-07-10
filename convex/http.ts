@@ -34,6 +34,12 @@ function webhookProcessingFailedResponse(): Response {
   return new Response("Webhook processing failed", { status: 500 });
 }
 
+/** Shared "429 if this key is over the webhook rate limit" check — every inbound webhook route below applies it with its own key (org id, client IP, or a fixed platform key). */
+async function enforceWebhookRateLimit(ctx: ActionCtx, key: string): Promise<Response | null> {
+  const limitStatus = await rateLimiter.limit(ctx, "webhook", { key });
+  return limitStatus.ok ? null : new Response("Too many requests", { status: 429 });
+}
+
 type VerifiedWebhookSource =
   | "clerk"
   | "whatsapp"
@@ -499,12 +505,8 @@ http.route({
   path: "/clerk-webhook",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
-    const limitStatus = await rateLimiter.limit(ctx, "webhook", {
-      key: clientIp(request),
-    });
-    if (!limitStatus.ok) {
-      return new Response("Too many requests", { status: 429 });
-    }
+    const rateLimited = await enforceWebhookRateLimit(ctx, clientIp(request));
+    if (rateLimited) return rateLimited;
 
     let webhookSecret: string;
     try {
@@ -616,12 +618,8 @@ http.route({
   path: "/resend-inbound",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
-    const limitStatus = await rateLimiter.limit(ctx, "webhook", {
-      key: clientIp(request),
-    });
-    if (!limitStatus.ok) {
-      return new Response("Too many requests", { status: 429 });
-    }
+    const rateLimited = await enforceWebhookRateLimit(ctx, clientIp(request));
+    if (rateLimited) return rateLimited;
 
     let webhookSecret: string;
     let resendApiKey: string | undefined;
@@ -745,10 +743,8 @@ http.route({
       return new Response("Bad request", { status: 400 });
     }
 
-    const limitStatus = await rateLimiter.limit(ctx, "webhook", { key: orgId });
-    if (!limitStatus.ok) {
-      return new Response("Too many requests", { status: 429 });
-    }
+    const rateLimited = await enforceWebhookRateLimit(ctx, orgId);
+    if (rateLimited) return rateLimited;
 
     const settings = await ctx.runQuery(internal.whatsapp.getSettingsByOrg, {
       orgId,
@@ -795,10 +791,8 @@ http.route({
     const orgId = url.searchParams.get("orgId") as Id<"organizations"> | null;
     if (!orgId) return new Response("Bad request", { status: 400 });
 
-    const limitStatus = await rateLimiter.limit(ctx, "webhook", { key: orgId });
-    if (!limitStatus.ok) {
-      return new Response("Too many requests", { status: 429 });
-    }
+    const rateLimited = await enforceWebhookRateLimit(ctx, orgId);
+    if (rateLimited) return rateLimited;
 
     let appSecret: string;
     try {
@@ -913,10 +907,8 @@ http.route({
       return new Response("Webhook secret not set or invalid env", { status: 500 });
     }
 
-    const limitStatus = await rateLimiter.limit(ctx, "webhook", { key: "marketplace-whatsapp" });
-    if (!limitStatus.ok) {
-      return new Response("Too many requests", { status: 429 });
-    }
+    const rateLimited = await enforceWebhookRateLimit(ctx, "marketplace-whatsapp");
+    if (rateLimited) return rateLimited;
 
     return await processMetaMessagingWebhook<MarketplaceWhatsAppMessage>(ctx, {
       request,

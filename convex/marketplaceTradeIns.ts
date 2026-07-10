@@ -8,7 +8,7 @@ import { rateLimiter } from "./rateLimit";
 import { notifyByPermission } from "./utils/notifications";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireTenantAuth } from "./utils/tenancy";
-import { resolveGeneratedLeadAssignee } from "./utils/leadAssignment";
+import { resolveGeneratedLeadAssignee, getOrCreateMarketplaceBuyerCustomer } from "./utils/leadAssignment";
 
 const MAX_NAME_CHARS = 80;
 const MAX_MAKE_MODEL_CHARS = 60;
@@ -197,21 +197,12 @@ export const acceptOffer = mutation({
     if (tradeIn.buyerPhone !== normalizedPhone) throw new ConvexError("Trade-in request not found.");
     if (tradeIn.status !== "OFFERED") throw new ConvexError("This trade-in request has no active offer.");
 
-    let customerId = (
-      await ctx.db
-        .query("customers")
-        .withIndex("by_org_phone", (q) => q.eq("orgId", tradeIn.orgId).eq("phone", tradeIn.buyerPhone))
-        .first()
-    )?._id;
-
-    if (!customerId) {
-      customerId = await ctx.db.insert("customers", {
-        orgId: tradeIn.orgId,
-        firstName: tradeIn.buyerFirstName,
-        lastName: "Marketplace Buyer",
-        phone: tradeIn.buyerPhone,
-      });
-    }
+    const customerId = await getOrCreateMarketplaceBuyerCustomer(
+      ctx,
+      tradeIn.orgId,
+      tradeIn.buyerPhone,
+      tradeIn.buyerFirstName
+    );
 
     const vehicleDescription = `${tradeIn.currentYear} ${tradeIn.currentMake} ${tradeIn.currentModel}`;
     const noteLines = [

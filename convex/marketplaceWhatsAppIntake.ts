@@ -236,6 +236,18 @@ function normalizePhoneDigits(value: string): string {
   return value.replace(/[^\d]/g, "");
 }
 
+function stateFromFlow(flow: Doc<"marketplaceWhatsAppFlows">, photoCount: number): IntakeState {
+  return {
+    step: flow.step,
+    make: flow.make,
+    model: flow.model,
+    year: flow.year,
+    mileage: flow.mileage,
+    sellingPrice: flow.sellingPrice,
+    photoCount,
+  };
+}
+
 /** Resolves an inbound WhatsApp sender to the opted-in marketplace dealer whose profile lists that number, if any. */
 export const findDealerOrgByPhone = internalQuery({
   args: { phone: v.string() },
@@ -282,27 +294,13 @@ export const saveFlowState = internalMutation({
     photoStorageIds: v.array(v.id("_storage")),
   },
   handler: async (ctx, args) => {
-    const now = Date.now();
-    const fields = {
-      step: args.step,
-      make: args.make,
-      model: args.model,
-      year: args.year,
-      mileage: args.mileage,
-      sellingPrice: args.sellingPrice,
-      photoStorageIds: args.photoStorageIds,
-      updatedAt: now,
-    };
-    if (args.flowId) {
-      await ctx.db.patch(args.flowId, fields);
-      return args.flowId;
+    const { flowId, orgId, phone, ...stateFields } = args;
+    const fields = { ...stateFields, updatedAt: Date.now() };
+    if (flowId) {
+      await ctx.db.patch(flowId, fields);
+      return flowId;
     }
-    return await ctx.db.insert("marketplaceWhatsAppFlows", {
-      orgId: args.orgId,
-      phone: args.phone,
-      ...fields,
-      createdAt: now,
-    });
+    return await ctx.db.insert("marketplaceWhatsAppFlows", { orgId, phone, ...fields, createdAt: fields.updatedAt });
   },
 });
 
@@ -442,16 +440,12 @@ async function persistFlowState(
     photoStorageIds: Id<"_storage">[];
   }
 ): Promise<Id<"marketplaceWhatsAppFlows">> {
+  const { photoCount: _photoCount, ...stateFields } = args.state;
   return await ctx.runMutation(internal.marketplaceWhatsAppIntake.saveFlowState, {
     flowId: args.flowId,
     orgId: args.orgId,
     phone: args.phone,
-    step: args.state.step,
-    make: args.state.make,
-    model: args.state.model,
-    year: args.state.year,
-    mileage: args.state.mileage,
-    sellingPrice: args.state.sellingPrice,
+    ...stateFields,
     photoStorageIds: args.photoStorageIds,
   });
 }
@@ -504,15 +498,7 @@ export const handleIntakeMessage = internalAction({
       if (storageId) photoStorageIds = [...photoStorageIds, storageId];
     }
 
-    const currentState: IntakeState = {
-      step: existingFlow.step,
-      make: existingFlow.make,
-      model: existingFlow.model,
-      year: existingFlow.year,
-      mileage: existingFlow.mileage,
-      sellingPrice: existingFlow.sellingPrice,
-      photoCount: photoStorageIds.length,
-    };
+    const currentState: IntakeState = stateFromFlow(existingFlow, photoStorageIds.length);
 
     const transitionInput: IntakeInput =
       args.input.kind === "image" ? { kind: "image" } : args.input.kind === "button" ? { kind: "button", buttonId: args.input.buttonId } : { kind: "text", text: args.input.text };

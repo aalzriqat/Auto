@@ -4,6 +4,7 @@ import { Doc, Id } from "./_generated/dataModel";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireTenantAuth } from "./utils/tenancy";
 import { refreshDealerBadges, checkMarketplaceQuota, consumeMarketplaceLead } from "./marketplaceDealers";
+import { getOrCreateMarketplaceBuyerCustomer } from "./utils/leadAssignment";
 
 const MAX_NOTE_CHARS = 1000;
 const MAX_LISTED_REQUESTS = 100;
@@ -159,22 +160,13 @@ export const respond = mutation({
       await updateResponseScore(ctx, profile, match, now);
     }
 
-    let customerId = (
-      await ctx.db
-        .query("customers")
-        .withIndex("by_org_phone", (q) => q.eq("orgId", args.orgId).eq("phone", request.buyerPhone))
-        .first()
-    )?._id;
-
-    if (!customerId) {
-      customerId = await ctx.db.insert("customers", {
-        orgId: args.orgId,
-        firstName: request.buyerFirstName,
-        lastName: "Marketplace Buyer",
-        phone: request.buyerPhone,
-        whatsapp: request.buyerWhatsApp,
-      });
-    }
+    const customerId = await getOrCreateMarketplaceBuyerCustomer(
+      ctx,
+      args.orgId,
+      request.buyerPhone,
+      request.buyerFirstName,
+      request.buyerWhatsApp
+    );
 
     const vehicleDescription = [request.make, request.model].filter(Boolean).join(" ") || "a vehicle";
     const noteLines = [
