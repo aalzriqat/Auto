@@ -2684,7 +2684,8 @@ export default defineSchema({
       v.literal("upgrade-request"),
       v.literal("social-auto-reply-retry"),
       v.literal("fixed-asset-depreciation"),
-      v.literal("marketplace-weekly-report")
+      v.literal("marketplace-weekly-report"),
+      v.literal("marketplace-whatsapp")
     ),
     status: v.union(v.literal("received"), v.literal("success"), v.literal("error"), v.literal("dead_letter")),
     summary: v.string(),
@@ -3138,4 +3139,42 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_org_status", ["orgId", "status"]),
+
+  // Phase 64 — WhatsApp-native dealer intake (structured, no LLM, master
+  // plan A8). One row per phone number's in-progress guided listing flow —
+  // a dealer texts AutoFlow's platform WhatsApp number and answers one
+  // sequential prompt per message (make/model/year/mileage/price/photos),
+  // then confirms via a button reply. Confirming creates a PENDING
+  // `vehicleEdits` CREATE request (see `marketplaceWhatsAppIntake.ts`) —
+  // reuses the existing approval-workflow pattern rather than inserting a
+  // vehicle directly, so nothing goes live from an inbound message without
+  // a staff review step. Deliberately NOT keyed by orgId in the index below
+  // (a phone number is resolved to an org via `marketplaceDealerProfiles`
+  // at flow-start, then stamped) — the lookup path is always by phone.
+  marketplaceWhatsAppFlows: defineTable({
+    orgId: v.id("organizations"),
+    phone: v.string(),
+    step: v.union(
+      v.literal("AWAITING_MAKE"),
+      v.literal("AWAITING_MODEL"),
+      v.literal("AWAITING_YEAR"),
+      v.literal("AWAITING_MILEAGE"),
+      v.literal("AWAITING_PRICE"),
+      v.literal("AWAITING_PHOTOS"),
+      v.literal("AWAITING_CONFIRM"),
+      v.literal("COMPLETED"),
+      v.literal("CANCELLED")
+    ),
+    make: v.optional(v.string()),
+    model: v.optional(v.string()),
+    year: v.optional(v.number()),
+    mileage: v.optional(v.number()),
+    sellingPrice: v.optional(v.number()),
+    photoStorageIds: v.array(v.id("_storage")),
+    vehicleEditId: v.optional(v.id("vehicleEdits")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_phone", ["phone"])
+    .index("by_org", ["orgId"]),
 });

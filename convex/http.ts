@@ -39,7 +39,8 @@ type VerifiedWebhookSource =
   | "whatsapp"
   | "resend"
   | "instagram"
-  | "facebook";
+  | "facebook"
+  | "marketplace-whatsapp";
 
 async function sha256Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest(
@@ -795,6 +796,164 @@ http.route({
 
     await completeWebhookDelivery(ctx, claim, "success");
 
+    return new Response(null, { status: 200 });
+  }),
+});
+
+// ─── Marketplace WhatsApp intake webhook (Phase 64) ───────────────────────────
+// A single AutoFlow-platform WhatsApp number for the dealer-network
+// marketplace's guided listing flow — distinct from the per-org
+// /whatsapp-webhook above (each org's own number, own secret, own customer
+// inbox). No orgId query param: the sender's phone is resolved to a dealer
+// org internally, via marketplaceDealerProfiles.whatsappNumber, inside
+// marketplaceWhatsAppIntake.ts.
+//   GET  https://<convex-site>/marketplace-whatsapp-webhook  (verification)
+//   POST https://<convex-site>/marketplace-whatsapp-webhook  (incoming messages)
+
+http.route({
+  path: "/marketplace-whatsapp-webhook",
+  method: "GET",
+  handler: httpAction(async (_ctx, request) => {
+    const url = new URL(request.url);
+    const mode = url.searchParams.get("hub.mode");
+    const token = url.searchParams.get("hub.verify_token");
+    const challenge = url.searchParams.get("hub.challenge");
+
+    let env: ReturnType<typeof getValidatedEnv>;
+    try {
+      env = getValidatedEnv();
+    } catch {
+      return new Response("Webhook secret not set or invalid env", { status: 500 });
+    }
+
+    if (
+      mode !== "subscribe" ||
+      !token ||
+      !challenge ||
+      !env.MARKETPLACE_WHATSAPP_WEBHOOK_VERIFY_TOKEN ||
+      token !== env.MARKETPLACE_WHATSAPP_WEBHOOK_VERIFY_TOKEN
+    ) {
+      return new Response("Forbidden", { status: 403 });
+    }
+
+    return new Response(challenge, { status: 200 });
+  }),
+});
+
+type MarketplaceWhatsAppMessage = {
+  messageId?: string;
+  senderPhone?: string;
+  input?:
+    | { kind: "text"; text: string }
+    | { kind: "button"; buttonId: string }
+    | { kind: "image"; mediaId: string };
+};
+
+function parseMarketplaceWhatsAppMessage(message: Record<string, unknown>): MarketplaceWhatsAppMessage {
+  const senderPhone = optionalMetaId(message.from);
+  const messageId = optionalMetaId(message.id);
+  const type = optionalString(message.type);
+
+  if (type === "text") {
+    const text = optionalString(optionalRecord(message.text)?.body);
+    return { messageId, senderPhone, input: text ? { kind: "text", text } : undefined };
+  }
+  if (type === "interactive") {
+    const interactive = optionalRecord(message.interactive);
+    const buttonReply = optionalRecord(interactive?.button_reply);
+    const buttonId = optionalString(buttonReply?.id);
+    return { messageId, senderPhone, input: buttonId ? { kind: "button", buttonId } : undefined };
+  }
+  if (type === "image") {
+    const mediaId = optionalMetaId(optionalRecord(message.image)?.id);
+    return { messageId, senderPhone, input: mediaId ? { kind: "image", mediaId } : undefined };
+  }
+  return { messageId, senderPhone, input: undefined };
+}
+
+http.route({
+  path: "/marketplace-whatsapp-webhook",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    let env: ReturnType<typeof getValidatedEnv>;
+    try {
+      env = getValidatedEnv();
+      if (!env.MARKETPLACE_WHATSAPP_APP_SECRET) throw new ConvexError("MARKETPLACE_WHATSAPP_APP_SECRET not set");
+    } catch {
+      return new Response("Webhook secret not set or invalid env", { status: 500 });
+    }
+
+    const limitStatus = await rateLimiter.limit(ctx, "webhook", { key: "marketplace-whatsapp" });
+    if (!limitStatus.ok) {
+      return new Response("Too many requests", { status: 429 });
+    }
+
+    const rawBody = await request.text();
+    const signature = request.headers.get("x-hub-signature-256");
+    if (!(await verifyHubSignature256(rawBody, signature, env.MARKETPLACE_WHATSAPP_APP_SECRET))) {
+      return new Response("Invalid signature", { status: 401 });
+    }
+
+    let body: Record<string, unknown> | undefined;
+    try {
+      body = optionalRecord(JSON.parse(rawBody));
+    } catch {
+      return new Response("Invalid JSON", { status: 400 });
+    }
+
+    const messages: MarketplaceWhatsAppMessage[] = [];
+    let statusUpdateCount = 0;
+
+    for (const entry of recordArray(body?.entry)) {
+      for (const changeRecord of recordArray(entry.changes)) {
+        const change = optionalRecord(changeRecord.value);
+        statusUpdateCount += recordArray(change?.statuses).length;
+
+        for (const message of recordArray(change?.messages)) {
+          messages.push(parseMarketplaceWhatsAppMessage(message));
+        }
+      }
+    }
+
+    const messageIds = messages
+      .map((message) => message.messageId)
+      .filter((messageId): messageId is string => typeof messageId === "string");
+    const claim = await claimWebhookDelivery(ctx, {
+      source: "marketplace-whatsapp",
+      eventId: messageIds.length > 0 ? messageIds.join(":") : undefined,
+      summary: messages.length > 0
+        ? `Batch with ${messages.length} message(s)`
+        : `Status update batch with ${statusUpdateCount} status update(s)`,
+      rawPayload: rawBody,
+    });
+    if (claim.disposition === "skip_processed") return new Response(null, { status: 200 });
+    if (claim.disposition === "skip_in_flight") return webhookInFlightResponse();
+
+    if (messages.length === 0) {
+      await completeWebhookDelivery(ctx, claim, "success");
+      return new Response(null, { status: 200 });
+    }
+
+    let processingError: string | undefined;
+    for (const message of messages) {
+      if (!message.senderPhone || !message.input) continue;
+
+      try {
+        await ctx.runAction(internal.marketplaceWhatsAppIntake.handleIntakeMessage, {
+          phone: message.senderPhone,
+          input: message.input,
+        });
+      } catch (err) {
+        processingError = err instanceof Error ? err.message : String(err);
+      }
+    }
+
+    if (processingError) {
+      await completeWebhookDelivery(ctx, claim, "error", processingError);
+      return webhookProcessingFailedResponse();
+    }
+
+    await completeWebhookDelivery(ctx, claim, "success");
     return new Response(null, { status: 200 });
   }),
 });

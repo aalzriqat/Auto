@@ -32,6 +32,21 @@ const backendEnvSchema = z.object({
   // /whatsapp-webhook route will accept inbound messages.
   WHATSAPP_APP_SECRET: z.string().optional(),
 
+  // Phase 64 — a single AutoFlow-platform WhatsApp Business number for the
+  // dealer-network marketplace's guided listing intake flow, distinct from
+  // WHATSAPP_APP_SECRET above (that one verifies each *org's own* per-org
+  // number, configured per-org via orgSettings; this is one number shared
+  // by every dealer). Same "explicitly deferred, not built this phase"
+  // posture master plan A5/A5b already established for Phase 57/58's
+  // automated sender: the code path is real and tested, but reaching real
+  // dealers beyond Meta's test-number recipient allowlist is blocked on
+  // Business Verification, same as the rest of this epic's WhatsApp
+  // features. Unset in every environment until that clears.
+  MARKETPLACE_WHATSAPP_PHONE_NUMBER_ID: z.string().optional(),
+  MARKETPLACE_WHATSAPP_API_TOKEN: z.string().optional(),
+  MARKETPLACE_WHATSAPP_APP_SECRET: z.string().optional(),
+  MARKETPLACE_WHATSAPP_WEBHOOK_VERIFY_TOKEN: z.string().optional(),
+
   // Verify token for the Instagram webhook (comments + DMs) handshake. Meta
   // only allows one webhook callback URL per App, so this is a single
   // app-level secret, not per-org like WHATSAPP_WEBHOOK_SECRET. Signature
@@ -119,6 +134,10 @@ export function getValidatedEnv() {
     FACEBOOK_APP_SECRET: process.env.FACEBOOK_APP_SECRET,
     FACEBOOK_WEBHOOK_VERIFY_TOKEN: process.env.FACEBOOK_WEBHOOK_VERIFY_TOKEN,
     WHATSAPP_APP_SECRET: process.env.WHATSAPP_APP_SECRET,
+    MARKETPLACE_WHATSAPP_PHONE_NUMBER_ID: process.env.MARKETPLACE_WHATSAPP_PHONE_NUMBER_ID,
+    MARKETPLACE_WHATSAPP_API_TOKEN: process.env.MARKETPLACE_WHATSAPP_API_TOKEN,
+    MARKETPLACE_WHATSAPP_APP_SECRET: process.env.MARKETPLACE_WHATSAPP_APP_SECRET,
+    MARKETPLACE_WHATSAPP_WEBHOOK_VERIFY_TOKEN: process.env.MARKETPLACE_WHATSAPP_WEBHOOK_VERIFY_TOKEN,
     INSTAGRAM_WEBHOOK_VERIFY_TOKEN: process.env.INSTAGRAM_WEBHOOK_VERIFY_TOKEN,
     LOAD_TEST_SECRET: process.env.LOAD_TEST_SECRET,
     PAYMENT_WEBHOOK_SECRET: process.env.PAYMENT_WEBHOOK_SECRET,
