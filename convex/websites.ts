@@ -270,7 +270,7 @@ function sectionDefaults() {
   }));
 }
 
-async function getSettingsByOrg(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">) {
+export async function getSettingsByOrg(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">) {
   return await ctx.db
     .query("websiteSettings")
     .withIndex("by_org", (q) => q.eq("orgId", orgId))
@@ -283,7 +283,7 @@ async function requireWebsiteSettings(ctx: QueryCtx | MutationCtx, orgId: Id<"or
   return settings;
 }
 
-async function activePrimaryDomain(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">) {
+export async function activePrimaryDomain(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">) {
   return await ctx.db
     .query("websiteDomains")
     .withIndex("by_org_primary", (q) => q.eq("orgId", orgId).eq("isPrimary", true))

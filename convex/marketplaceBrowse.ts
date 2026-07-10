@@ -1,0 +1,142 @@
+import { v } from "convex/values";
+import { query } from "./_generated/server";
+import { Id } from "./_generated/dataModel";
+import { hasPlanFeature } from "./subscriptions";
+import { getSettingsByOrg, activePrimaryDomain } from "./websites";
+
+const MAX_CANDIDATE_ORGS = 100;
+// Bounds the merged cross-org result set — founding-dealer scale, same
+// tradeoff as other marketplace list caps in this epic. Pagination below is
+// a cursor over this bounded, per-request-recomputed merge, not a scan of
+// the raw `vehicles` table (which stays untouched — vehicle data comes from
+// each org's already-published site snapshot, per A2).
+const MAX_MERGED_VEHICLES = 500;
+const DEFAULT_PAGE_SIZE = 24;
+const MAX_PAGE_SIZE = 60;
+
+const paymentTypeValidator = v.optional(v.union(v.literal("CASH"), v.literal("FINANCE")));
+
+type SnapshotVehicle = {
+  id?: string;
+  slug?: string;
+  make?: string;
+  model?: string;
+  year?: number;
+  trim?: string | null;
+  mileage?: number | null;
+  price?: number | null;
+  financePrice?: number | null;
+  imageUrls?: string[];
+  status?: string;
+};
+
+type BrowseVehicle = {
+  orgId: Id<"organizations">;
+  dealershipName: string;
+  siteUrl: string | null;
+  id: string;
+  slug: string;
+  make: string;
+  model: string;
+  year: number;
+  trim: string | null;
+  mileage: number | null;
+  price: number | null;
+  financePrice: number | null;
+  imageUrls: string[];
+  financeAvailable: boolean;
+};
+
+/** Public: cross-org vehicle search, unioning each opted-in dealer's already-published site inventory (master plan A2 — no new listings table). */
+export const search = query({
+  args: {
+    make: v.optional(v.string()),
+    model: v.optional(v.string()),
+    priceMin: v.optional(v.number()),
+    priceMax: v.optional(v.number()),
+    city: v.optional(v.string()),
+    paymentType: paymentTypeValidator,
+    cursor: v.optional(v.string()),
+    numItems: v.optional(v.number()),
+  },
+  handler: async (ctx, args): Promise<{ vehicles: BrowseVehicle[]; continueCursor: string | null; isDone: boolean }> => {
+    const numItems = Math.min(Math.max(args.numItems ?? DEFAULT_PAGE_SIZE, 1), MAX_PAGE_SIZE);
+    const offset = args.cursor ? Number(args.cursor) || 0 : 0;
+    const cityFilter = args.city?.trim().toLowerCase();
+    const makeFilter = args.make?.trim().toLowerCase();
+    const modelFilter = args.model?.trim().toLowerCase();
+
+    const profiles = await ctx.db
+      .query("marketplaceDealerProfiles")
+      .withIndex("by_opted_in", (q) => q.eq("isOptedIn", true))
+      .take(MAX_CANDIDATE_ORGS);
+
+    const merged: BrowseVehicle[] = [];
+
+    for (const profile of profiles) {
+      if (merged.length >= MAX_MERGED_VEHICLES) break;
+      if (profile.isDeleted) continue;
+      if (cityFilter && !profile.areas.some((area) => area.toLowerCase().includes(cityFilter))) continue;
+
+      const orgId = profile.orgId;
+      const org = await ctx.db.get(orgId);
+      if (!org || org.suspended) continue;
+      if (!(await hasPlanFeature(ctx, orgId, "websiteBuilder"))) continue;
+
+      const settings = await getSettingsByOrg(ctx, orgId);
+      if (!settings || settings.status !== "active" || !settings.enabled || !settings.publishedSnapshotId) continue;
+
+      const snapshot = await ctx.db.get(settings.publishedSnapshotId);
+      if (!snapshot || snapshot.orgId !== orgId || snapshot.websiteSettingsId !== settings._id) continue;
+
+      const snapshotData = snapshot.snapshotJson as
+        | { vehicles?: unknown[]; profile?: { dealershipName?: string }; financeCompany?: unknown }
+        | null
+        | undefined;
+      const financeAvailable = Boolean(snapshotData?.financeCompany);
+      if (args.paymentType === "FINANCE" && !financeAvailable) continue;
+
+      const vehicles = Array.isArray(snapshotData?.vehicles) ? (snapshotData.vehicles as SnapshotVehicle[]) : [];
+      if (vehicles.length === 0) continue;
+
+      const domain = await activePrimaryDomain(ctx, orgId);
+      const siteUrl = domain?.status === "active" ? `https://${domain.domain}` : null;
+      const dealershipName = snapshotData?.profile?.dealershipName ?? org.name;
+
+      for (const vehicle of vehicles) {
+        if (!vehicle.id || !vehicle.make || !vehicle.model) continue;
+        if (vehicle.status && vehicle.status !== "AVAILABLE") continue;
+        if (makeFilter && vehicle.make.toLowerCase() !== makeFilter) continue;
+        if (modelFilter && vehicle.model.toLowerCase() !== modelFilter) continue;
+        if (args.priceMin != null && (vehicle.price ?? Infinity) < args.priceMin) continue;
+        if (args.priceMax != null && (vehicle.price ?? -Infinity) > args.priceMax) continue;
+
+        merged.push({
+          orgId,
+          dealershipName,
+          siteUrl,
+          id: vehicle.id,
+          slug: vehicle.slug ?? vehicle.id,
+          make: vehicle.make,
+          model: vehicle.model,
+          year: vehicle.year ?? 0,
+          trim: vehicle.trim ?? null,
+          mileage: vehicle.mileage ?? null,
+          price: vehicle.price ?? null,
+          financePrice: vehicle.financePrice ?? null,
+          imageUrls: vehicle.imageUrls ?? [],
+          financeAvailable,
+        });
+        if (merged.length >= MAX_MERGED_VEHICLES) break;
+      }
+    }
+
+    merged.sort((a, b) => (a.price ?? Number.MAX_SAFE_INTEGER) - (b.price ?? Number.MAX_SAFE_INTEGER));
+
+    const page = merged.slice(offset, offset + numItems);
+    const nextOffset = offset + numItems;
+    const isDone = nextOffset >= merged.length;
+
+    return { vehicles: page, continueCursor: isDone ? null : String(nextOffset), isDone };
+  },
+});
