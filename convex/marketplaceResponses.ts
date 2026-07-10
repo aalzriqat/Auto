@@ -3,7 +3,7 @@ import { mutation, query, MutationCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireTenantAuth } from "./utils/tenancy";
-import { refreshDealerBadges } from "./marketplaceDealers";
+import { refreshDealerBadges, checkMarketplaceQuota, consumeMarketplaceLead } from "./marketplaceDealers";
 
 const MAX_NOTE_CHARS = 1000;
 const MAX_LISTED_REQUESTS = 100;
@@ -114,8 +114,30 @@ export const respond = mutation({
       throw new ConvexError("Offer price must be non-negative.");
     }
 
-    const note = args.note?.trim().slice(0, MAX_NOTE_CHARS) || undefined;
     const now = Date.now();
+
+    // Phase 63 monetization gate — a FREE_FOUNDING dealer past their window,
+    // or a LEAD_PACKAGE dealer who's exhausted this period's quota, can't
+    // send another response until they upgrade. FEATURED is unlimited. A
+    // profile could theoretically be missing if it was hard-deleted after the
+    // request was matched — same lenient fallback as updateResponseScore
+    // below, since that's an admin-data edge case, not a dealer-facing one.
+    const profile = await ctx.db
+      .query("marketplaceDealerProfiles")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .unique();
+    if (profile) {
+      const quotaCheck = checkMarketplaceQuota(profile, now);
+      if (!quotaCheck.allowed) {
+        throw new ConvexError(
+          quotaCheck.reason === "FOUNDING_WINDOW_EXPIRED"
+            ? "Upgrade required: your Founding Dealer window has ended. Upgrade your AutoFlow plan to keep receiving marketplace leads."
+            : "Upgrade required: you've used all the marketplace leads in your current package this period. Upgrade your AutoFlow plan for more."
+        );
+      }
+    }
+
+    const note = args.note?.trim().slice(0, MAX_NOTE_CHARS) || undefined;
 
     await ctx.db.insert("marketplaceResponses", {
       requestId: args.requestId,
@@ -132,7 +154,10 @@ export const respond = mutation({
       await ctx.db.patch(args.requestId, { status: "FULFILLED" });
     }
 
-    await updateResponseScore(ctx, args.orgId, match, now);
+    if (profile) {
+      if (profile.tier === "LEAD_PACKAGE") await consumeMarketplaceLead(ctx, profile, now);
+      await updateResponseScore(ctx, profile, match, now);
+    }
 
     let customerId = (
       await ctx.db
@@ -177,16 +202,10 @@ export const respond = mutation({
 
 async function updateResponseScore(
   ctx: MutationCtx,
-  orgId: Id<"organizations">,
+  profile: Doc<"marketplaceDealerProfiles">,
   match: Doc<"marketplaceRequestMatches">,
   respondedAt: number
 ) {
-  const profile = await ctx.db
-    .query("marketplaceDealerProfiles")
-    .withIndex("by_org", (q) => q.eq("orgId", orgId))
-    .unique();
-  if (!profile) return;
-
   const responseMinutes = Math.max(0, (respondedAt - (match.notifiedAt ?? match.matchedAt)) / 60000);
   const previousTotal = profile.totalResponses;
   const previousAvg = profile.avgResponseMinutes ?? responseMinutes;

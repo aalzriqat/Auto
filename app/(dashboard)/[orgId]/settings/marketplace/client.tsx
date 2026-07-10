@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -9,8 +10,106 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
-import { Handshake } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Handshake, Crown, Package, Clock } from "lucide-react";
 import { toast } from "@/components/ui/sonner";
+
+// Mirrors convex/marketplaceDealers.ts's FOUNDING_WINDOW_MS — used only as a
+// display fallback for profiles created before Phase 63 stamped
+// foundingWindowEndsAt, same lazy-default reasoning as the backend.
+const FOUNDING_WINDOW_MS = 60 * 24 * 60 * 60 * 1000;
+
+function MarketplaceTierCard({
+  profile,
+  activeOrgId,
+}: {
+  readonly profile: {
+    tier: "FREE_FOUNDING" | "LEAD_PACKAGE" | "FEATURED";
+    createdAt: number;
+    foundingWindowEndsAt?: number;
+    leadQuota?: number;
+    leadsUsedThisPeriod: number;
+  };
+  readonly activeOrgId: string;
+}) {
+  const { t } = useLanguage();
+
+  if (profile.tier === "FREE_FOUNDING") {
+    const windowEndsAt = profile.foundingWindowEndsAt ?? profile.createdAt + FOUNDING_WINDOW_MS;
+    const daysLeft = Math.max(0, Math.ceil((windowEndsAt - Date.now()) / (24 * 60 * 60 * 1000)));
+    const expired = windowEndsAt <= Date.now();
+
+    return (
+      <Card>
+        <CardContent className="p-4 flex items-start justify-between gap-4 flex-wrap">
+          <div className="flex items-start gap-3">
+            <Clock className={expired ? "h-5 w-5 text-red-500 shrink-0 mt-0.5" : "h-5 w-5 text-muted-foreground shrink-0 mt-0.5"} />
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium">{t("MarketplaceTierLabel" as any)}</span>
+                <Badge variant="outline">{t("MarketplaceTierFounding" as any)}</Badge>
+              </div>
+              <p className={expired ? "text-xs text-red-600 mt-1" : "text-xs text-muted-foreground mt-1"}>
+                {expired ? t("MarketplaceFoundingExpired" as any) : `${daysLeft} ${t("MarketplaceFoundingDaysLeft" as any)}`}
+              </p>
+            </div>
+          </div>
+          {expired && (
+            <Button asChild size="sm" variant="outline">
+              <Link href={`/${activeOrgId}/settings/billing`}>{t("MarketplaceUpgradeCta" as any)}</Link>
+            </Button>
+          )}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (profile.tier === "LEAD_PACKAGE") {
+    const quota = profile.leadQuota ?? 0;
+    const used = profile.leadsUsedThisPeriod;
+    const exhausted = used >= quota;
+
+    return (
+      <Card>
+        <CardContent className="p-4 flex items-start justify-between gap-4 flex-wrap">
+          <div className="flex items-start gap-3">
+            <Package className={exhausted ? "h-5 w-5 text-red-500 shrink-0 mt-0.5" : "h-5 w-5 text-muted-foreground shrink-0 mt-0.5"} />
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium">{t("MarketplaceTierLabel" as any)}</span>
+                <Badge variant="outline">{t("MarketplaceTierLeadPackage" as any)}</Badge>
+              </div>
+              <p className={exhausted ? "text-xs text-red-600 mt-1" : "text-xs text-muted-foreground mt-1"}>
+                {used}/{quota} {t("MarketplaceLeadQuotaUsed" as any)}
+                {exhausted ? ` — ${t("MarketplaceLeadQuotaExhausted" as any)}` : ""}
+              </p>
+            </div>
+          </div>
+          {exhausted && (
+            <Button asChild size="sm" variant="outline">
+              <Link href={`/${activeOrgId}/settings/billing`}>{t("MarketplaceUpgradeCta" as any)}</Link>
+            </Button>
+          )}
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardContent className="p-4 flex items-start gap-3">
+        <Crown className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium">{t("MarketplaceTierLabel" as any)}</span>
+            <Badge className="bg-amber-100 text-amber-700 border-amber-200">{t("MarketplaceTierFeatured" as any)}</Badge>
+          </div>
+          <p className="text-xs text-muted-foreground mt-1">{t("MarketplaceFeaturedActive" as any)}</p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 export function MarketplaceSettingsClient() {
   const { activeOrgId } = useOrg();
@@ -58,6 +157,8 @@ export function MarketplaceSettingsClient() {
 
   return (
     <div className="flex-1 space-y-4 p-4 md:p-8 pt-6">
+      {activeOrgId && profile && <MarketplaceTierCard profile={profile} activeOrgId={activeOrgId} />}
+
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">

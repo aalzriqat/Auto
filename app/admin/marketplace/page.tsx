@@ -7,10 +7,20 @@ import { Id } from "@/convex/_generated/dataModel";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "@/components/ui/sonner";
-import { MessageCircle, CheckCircle2, Ban, Car, Eye, ShieldCheck, TrendingDown, Zap } from "lucide-react";
+import { MessageCircle, CheckCircle2, Ban, Car, Eye, ShieldCheck, TrendingDown, Zap, Crown, Package } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { buildWhatsAppDeepLink } from "@/lib/whatsappDeepLink";
+
+type MarketplaceTier = "FREE_FOUNDING" | "LEAD_PACKAGE" | "FEATURED";
+
+const TIER_LABELS: Record<MarketplaceTier, string> = {
+  FREE_FOUNDING: "Founding (free)",
+  LEAD_PACKAGE: "Lead Package (paid)",
+  FEATURED: "Featured (paid)",
+};
 
 type PageView = "requests" | "reports" | "dealers";
 type RequestStatus = "OPEN" | "MATCHED" | "FULFILLED" | "EXPIRED" | "SPAM";
@@ -181,6 +191,67 @@ function WeeklyReportsView() {
   );
 }
 
+type DealerRow = {
+  orgId: Id<"organizations">;
+  tier: MarketplaceTier;
+  leadQuota: number | null;
+  leadsUsedThisPeriod: number;
+  foundingWindowEndsAt: number | null;
+};
+
+function TierEditor({ dealer }: { readonly dealer: DealerRow }) {
+  const updateTier = useMutation(api.adminMarketplace.updateMarketplaceTier);
+  const [tier, setTier] = useState<MarketplaceTier>(dealer.tier);
+  const [leadQuota, setLeadQuota] = useState(String(dealer.leadQuota ?? ""));
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      await updateTier({
+        orgId: dealer.orgId,
+        tier,
+        leadQuota: tier === "LEAD_PACKAGE" && leadQuota.trim() ? Number(leadQuota) : undefined,
+      });
+      toast.success("Marketplace tier updated.");
+    } catch (error: any) {
+      toast.error(error?.message?.replace(/^\[.*?\]\s*/, "") || "Failed to update tier — check the dealer's AutoFlow plan includes this feature.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Select value={tier} onValueChange={(value) => setTier(value as MarketplaceTier)}>
+        <SelectTrigger className="w-44 h-8 text-xs">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {(Object.keys(TIER_LABELS) as MarketplaceTier[]).map((value) => (
+            <SelectItem key={value} value={value}>
+              {TIER_LABELS[value]}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {tier === "LEAD_PACKAGE" && (
+        <Input
+          type="number"
+          min={0}
+          className="w-24 h-8 text-xs"
+          placeholder="Quota"
+          value={leadQuota}
+          onChange={(e) => setLeadQuota(e.target.value)}
+        />
+      )}
+      <Button size="sm" variant="outline" disabled={saving} onClick={handleSave}>
+        Save
+      </Button>
+    </div>
+  );
+}
+
 function DealersView() {
   const dealers = useQuery(api.adminMarketplace.listDealerProfiles, {});
   const verifyPhone = useMutation(api.adminMarketplace.verifyDealerPhone);
@@ -198,13 +269,14 @@ function DealersView() {
     <div className="space-y-4">
       <p className="text-sm text-slate-400">
         Confirm a dealer&apos;s WhatsApp number by calling or messaging it directly, then mark it verified here — there&apos;s no
-        automated OTP send yet (blocked on Meta Business Verification, master plan A5b).
+        automated OTP send yet (blocked on Meta Business Verification, master plan A5b). Marketplace tier controls Phase 63
+        monetization — LEAD_PACKAGE/FEATURED require the dealer&apos;s AutoFlow plan to include that feature.
       </p>
       {dealers === undefined && <p className="text-sm text-slate-400">Loading...</p>}
       {dealers?.length === 0 && <p className="text-sm text-slate-400">No opted-in dealers.</p>}
 
       {(dealers ?? []).map((dealer) => (
-        <Card key={dealer.orgId} className="p-4 bg-slate-900 border-slate-800 space-y-2">
+        <Card key={dealer.orgId} className="p-4 bg-slate-900 border-slate-800 space-y-3">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="font-semibold text-slate-100">{dealer.dealershipName}</span>
@@ -213,6 +285,33 @@ function DealersView() {
                 <Badge variant="outline" className="text-[10px] border-amber-600 text-amber-400">
                   <Zap className="h-3 w-3 me-1" />
                   Fast response
+                </Badge>
+              )}
+              {dealer.tier === "FEATURED" && (
+                <Badge variant="outline" className="text-[10px] border-yellow-500 text-yellow-400">
+                  <Crown className="h-3 w-3 me-1" />
+                  Featured
+                </Badge>
+              )}
+              {dealer.tier === "LEAD_PACKAGE" && (
+                <Badge variant="outline" className="text-[10px] border-sky-600 text-sky-400">
+                  <Package className="h-3 w-3 me-1" />
+                  {dealer.leadsUsedThisPeriod}/{dealer.leadQuota ?? 0} leads
+                </Badge>
+              )}
+              {dealer.tier === "FREE_FOUNDING" && dealer.foundingWindowEndsAt != null && (
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "text-[10px]",
+                    dealer.foundingWindowEndsAt < Date.now()
+                      ? "border-red-600 text-red-400"
+                      : "border-slate-600 text-slate-400"
+                  )}
+                >
+                  {dealer.foundingWindowEndsAt < Date.now()
+                    ? "Founding window ended"
+                    : `Founding until ${new Date(dealer.foundingWindowEndsAt).toLocaleDateString()}`}
                 </Badge>
               )}
             </div>
@@ -232,6 +331,7 @@ function DealersView() {
             {dealer.totalResponses} response(s)
             {dealer.avgResponseMinutes != null ? ` · ${Math.round(dealer.avgResponseMinutes)} min avg reply` : ""}
           </p>
+          <TierEditor dealer={dealer} />
         </Card>
       ))}
     </div>

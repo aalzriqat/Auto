@@ -151,6 +151,38 @@ describe("submitRequest", () => {
     expect(notifications.length).toBeGreaterThanOrEqual(5);
   });
 
+  test("a FEATURED dealer wins fan-out priority over faster-but-unfeatured dealers, capped at 5 (Phase 63)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+
+    for (let i = 0; i < 5; i++) {
+      await seedDealer(t, {
+        name: `Fast Dealer ${i}`,
+        areas: ["Amman"],
+        brandsCarried: [],
+        avgResponseMinutes: 5, // faster than the featured dealer below
+      });
+    }
+    const { orgId: featuredOrgId } = await seedDealer(t, {
+      name: "Featured Dealer",
+      areas: ["Amman"],
+      brandsCarried: [],
+      avgResponseMinutes: 500, // slowest of all — would rank last without the featured boost
+    });
+    await t.run((ctx) =>
+      ctx.db
+        .query("marketplaceDealerProfiles")
+        .withIndex("by_org", (q) => q.eq("orgId", featuredOrgId))
+        .unique()
+        .then((profile) => ctx.db.patch(profile!._id, { tier: "FEATURED" }))
+    );
+
+    const result = await t.action(api.marketplaceRequests.submitRequest, baseRequestArgs);
+    expect(result.matchedCount).toBe(5);
+
+    const matches = await t.run((ctx) => ctx.db.query("marketplaceRequestMatches").collect());
+    expect(matches.some((match) => match.orgId === featuredOrgId)).toBe(true);
+  });
+
   test("rejects submission without consent", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     await expect(

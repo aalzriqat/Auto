@@ -34,6 +34,9 @@ export const PLANS = {
       customRoles: false,
       websiteBuilder: false,
       multiBranch: false,
+      marketplace: true,
+      marketplaceLeadPackage: false,
+      marketplaceFeatured: false,
     },
   },
   starter: {
@@ -62,6 +65,9 @@ export const PLANS = {
       customRoles: false,
       websiteBuilder: false,
       multiBranch: false,
+      marketplace: true,
+      marketplaceLeadPackage: false,
+      marketplaceFeatured: false,
     },
   },
   professional: {
@@ -80,6 +86,7 @@ export const PLANS = {
       "Internal messaging",
       "Accounting module & advanced reports",
       "Custom roles & permissions",
+      "Marketplace lead packages",
     ],
     featuresAr: [
       "حتى 150 مركبة",
@@ -89,6 +96,7 @@ export const PLANS = {
       "المراسلة الداخلية",
       "وحدة المحاسبة والتقارير المتقدمة",
       "أدوار وصلاحيات مخصصة",
+      "باقات عملاء منصة السوق",
     ],
     gates: {
       socialInbox: true,
@@ -98,6 +106,9 @@ export const PLANS = {
       customRoles: true,
       websiteBuilder: false,
       multiBranch: false,
+      marketplace: true,
+      marketplaceLeadPackage: true,
+      marketplaceFeatured: false,
     },
   },
   enterprise: {
@@ -113,12 +124,14 @@ export const PLANS = {
       "Website builder (all premium themes)",
       "Multi-branch / multi-org",
       "Priority support",
+      "Featured marketplace placement",
     ],
     featuresAr: [
       "مركبات ومستخدمون غير محدودين",
       "منشئ المواقع (جميع القوالب المميزة)",
       "متعدد الفروع / متعدد المؤسسات",
       "دعم ذو أولوية",
+      "ظهور مميز في منصة السوق",
     ],
     gates: {
       socialInbox: true,
@@ -128,6 +141,9 @@ export const PLANS = {
       customRoles: true,
       websiteBuilder: true,
       multiBranch: true,
+      marketplace: true,
+      marketplaceLeadPackage: true,
+      marketplaceFeatured: true,
     },
   },
 } as const;
@@ -142,7 +158,10 @@ export const planGateValidator = v.union(
   v.literal("accounting"),
   v.literal("customRoles"),
   v.literal("websiteBuilder"),
-  v.literal("multiBranch")
+  v.literal("multiBranch"),
+  v.literal("marketplace"),
+  v.literal("marketplaceLeadPackage"),
+  v.literal("marketplaceFeatured")
 );
 
 const PLAN_GATE_LABELS: Record<PlanGate, string> = {
@@ -153,6 +172,9 @@ const PLAN_GATE_LABELS: Record<PlanGate, string> = {
   customRoles: "custom roles",
   websiteBuilder: "website builder",
   multiBranch: "multi-branch",
+  marketplace: "the dealer marketplace",
+  marketplaceLeadPackage: "marketplace lead packages",
+  marketplaceFeatured: "marketplace featured placement",
 };
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────

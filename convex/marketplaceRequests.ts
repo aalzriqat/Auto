@@ -6,6 +6,7 @@ import { verifyTurnstileToken, normalizeText, normalizeRequiredText } from "./we
 import { rateLimiter } from "./rateLimit";
 import { notifyByPermission } from "./utils/notifications";
 import { PERMISSIONS } from "./utils/permissions";
+import { compareDealerRank } from "./marketplaceDealers";
 
 const MAX_MATCHED_DEALERS = 5;
 const REQUEST_EXPIRES_AFTER_DAYS = 14;
@@ -179,12 +180,10 @@ export const createRequest = internalMutation({
       eligible.push(profile);
     }
 
-    eligible.sort((a, b) => {
-      const scoreA = a.avgResponseMinutes ?? Number.POSITIVE_INFINITY;
-      const scoreB = b.avgResponseMinutes ?? Number.POSITIVE_INFINITY;
-      if (scoreA !== scoreB) return scoreA - scoreB;
-      return a.createdAt - b.createdAt;
-    });
+    // Same ranking as the public directory (Phase 60) and now boosted by
+    // Phase 63's FEATURED tier — a dealer paying for featured placement
+    // should also win fan-out priority, not just directory position.
+    eligible.sort(compareDealerRank);
 
     const matched = eligible.slice(0, MAX_MATCHED_DEALERS);
 

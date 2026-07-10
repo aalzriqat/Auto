@@ -4,7 +4,8 @@ import { requireSuperAdmin } from "./utils/tenancy";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { logAdminAction } from "./adminAudit";
 import { computeWeeklyReport, currentWeekStart } from "./marketplaceReports";
-import { refreshDealerBadges } from "./marketplaceDealers";
+import { refreshDealerBadges, effectiveFoundingWindowEndsAt, FOUNDING_WINDOW_MS } from "./marketplaceDealers";
+import { requireFeature } from "./subscriptions";
 
 const MAX_REQUEST_ROWS = 100;
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -214,6 +215,10 @@ export const listDealerProfiles = query({
             avgResponseMinutes: profile.avgResponseMinutes ?? null,
             totalResponses: profile.totalResponses,
             phoneVerifiedAt: profile.phoneVerifiedAt ?? null,
+            tier: profile.tier,
+            leadQuota: profile.leadQuota ?? null,
+            leadsUsedThisPeriod: profile.leadsUsedThisPeriod,
+            foundingWindowEndsAt: profile.tier === "FREE_FOUNDING" ? effectiveFoundingWindowEndsAt(profile) : null,
           };
         })
     );
@@ -239,6 +244,66 @@ export const verifyDealerPhone = mutation({
 
     await logAdminAction(ctx, admin, {
       action: "marketplaceVerifyDealerPhone",
+      targetTable: "marketplaceDealerProfiles",
+      targetId: profile._id,
+      orgId: args.orgId,
+    });
+  },
+});
+
+const marketplaceTierValidator = v.union(
+  v.literal("FREE_FOUNDING"),
+  v.literal("LEAD_PACKAGE"),
+  v.literal("FEATURED")
+);
+
+/**
+ * Phase 63 — staff moves a dealer off the Founding tier once value is
+ * proven. LEAD_PACKAGE/FEATURED require the dealer's own AutoFlow CRM plan
+ * to include the matching gate (master plan A7 — reuses `subscriptions.ts`'s
+ * existing plan-feature gate rather than a parallel billing system), so this
+ * is a one-two step: the dealer upgrades their AutoFlow plan first (via the
+ * existing billing upgrade-request flow), then staff flips the marketplace
+ * tier here. Resets the lead-quota counter on any tier change so a dealer
+ * moving tiers starts with a clean period.
+ */
+export const updateMarketplaceTier = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    tier: marketplaceTierValidator,
+    leadQuota: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const admin = await requireSuperAdmin(ctx);
+    const profile = await ctx.db
+      .query("marketplaceDealerProfiles")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .unique();
+    if (!profile) throwAppError(AppErrorCode.VALIDATION_FAILED, "Dealer profile not found.");
+
+    if (args.leadQuota !== undefined && args.leadQuota < 0) {
+      throwAppError(AppErrorCode.VALIDATION_FAILED, "Lead quota must be non-negative.");
+    }
+    if (args.tier === "LEAD_PACKAGE") await requireFeature(ctx, args.orgId, "marketplaceLeadPackage");
+    if (args.tier === "FEATURED") await requireFeature(ctx, args.orgId, "marketplaceFeatured");
+
+    const now = Date.now();
+    const tierChanged = args.tier !== profile.tier;
+
+    await ctx.db.patch(profile._id, {
+      tier: args.tier,
+      leadQuota: args.tier === "LEAD_PACKAGE" ? (args.leadQuota ?? profile.leadQuota ?? 0) : profile.leadQuota,
+      leadsUsedThisPeriod: tierChanged ? 0 : profile.leadsUsedThisPeriod,
+      leadPeriodStartedAt: tierChanged ? now : profile.leadPeriodStartedAt,
+      foundingWindowEndsAt:
+        args.tier === "FREE_FOUNDING" && tierChanged
+          ? now + FOUNDING_WINDOW_MS
+          : profile.foundingWindowEndsAt,
+      updatedAt: now,
+    });
+
+    await logAdminAction(ctx, admin, {
+      action: "marketplaceUpdateTier",
       targetTable: "marketplaceDealerProfiles",
       targetId: profile._id,
       orgId: args.orgId,

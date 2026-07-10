@@ -2,6 +2,7 @@ import { convexTest } from "convex-test";
 import { expect, test, describe, beforeEach, afterEach } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
 
 const ORIGINAL_ALLOWLIST = process.env.SUPER_ADMIN_EMAILS;
 
@@ -184,5 +185,96 @@ describe("adminMarketplace", () => {
 
     const auditRows = await t.run((ctx) => ctx.db.query("adminAuditLog").collect());
     expect(auditRows.some((row) => row.action === "marketplaceVerifyDealerPhone")).toBe(true);
+  });
+});
+
+describe("updateMarketplaceTier (Phase 63)", () => {
+  async function setPlan(
+    t: ReturnType<typeof convexTest>,
+    orgId: Id<"organizations">,
+    plan: "free" | "starter" | "professional" | "enterprise"
+  ) {
+    await t.run((ctx) =>
+      ctx.db.insert("subscriptions", { orgId, plan, status: "active", createdAt: Date.now(), updatedAt: Date.now() })
+    );
+  }
+
+  test("rejects a non-super-admin caller", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { asMember, orgId } = await seedRequestWithMatch(t);
+    await expect(
+      asMember.mutation(api.adminMarketplace.updateMarketplaceTier, { orgId, tier: "LEAD_PACKAGE" })
+    ).rejects.toThrow();
+  });
+
+  test("rejects LEAD_PACKAGE when the org's plan doesn't include marketplaceLeadPackage (default free plan)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { asAdmin, orgId } = await seedRequestWithMatch(t);
+
+    await expect(
+      asAdmin.mutation(api.adminMarketplace.updateMarketplaceTier, { orgId, tier: "LEAD_PACKAGE", leadQuota: 20 })
+    ).rejects.toThrow(/Upgrade required/);
+  });
+
+  test("allows LEAD_PACKAGE once the org is on a plan that includes it, and sets leadQuota", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { asAdmin, orgId } = await seedRequestWithMatch(t);
+    await setPlan(t, orgId, "professional");
+
+    await asAdmin.mutation(api.adminMarketplace.updateMarketplaceTier, { orgId, tier: "LEAD_PACKAGE", leadQuota: 20 });
+
+    const profile = await t.run((ctx) =>
+      ctx.db.query("marketplaceDealerProfiles").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique()
+    );
+    expect(profile?.tier).toBe("LEAD_PACKAGE");
+    expect(profile?.leadQuota).toBe(20);
+    expect(profile?.leadsUsedThisPeriod).toBe(0);
+  });
+
+  test("rejects FEATURED on a plan that only includes marketplaceLeadPackage, not marketplaceFeatured", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { asAdmin, orgId } = await seedRequestWithMatch(t);
+    await setPlan(t, orgId, "professional");
+
+    await expect(
+      asAdmin.mutation(api.adminMarketplace.updateMarketplaceTier, { orgId, tier: "FEATURED" })
+    ).rejects.toThrow(/Upgrade required/);
+  });
+
+  test("allows FEATURED once the org is on enterprise", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { asAdmin, orgId } = await seedRequestWithMatch(t);
+    await setPlan(t, orgId, "enterprise");
+
+    await asAdmin.mutation(api.adminMarketplace.updateMarketplaceTier, { orgId, tier: "FEATURED" });
+
+    const profile = await t.run((ctx) =>
+      ctx.db.query("marketplaceDealerProfiles").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique()
+    );
+    expect(profile?.tier).toBe("FEATURED");
+  });
+
+  test("resets leadsUsedThisPeriod when the tier actually changes, and writes an audit log", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { asAdmin, orgId } = await seedRequestWithMatch(t);
+    await setPlan(t, orgId, "enterprise");
+    await t.run((ctx) =>
+      ctx.db
+        .query("marketplaceDealerProfiles")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .unique()
+        .then((profile) => ctx.db.patch(profile!._id, { tier: "LEAD_PACKAGE", leadQuota: 10, leadsUsedThisPeriod: 7 }))
+    );
+
+    await asAdmin.mutation(api.adminMarketplace.updateMarketplaceTier, { orgId, tier: "FEATURED" });
+
+    const profile = await t.run((ctx) =>
+      ctx.db.query("marketplaceDealerProfiles").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique()
+    );
+    expect(profile?.tier).toBe("FEATURED");
+    expect(profile?.leadsUsedThisPeriod).toBe(0);
+
+    const auditRows = await t.run((ctx) => ctx.db.query("adminAuditLog").collect());
+    expect(auditRows.some((row) => row.action === "marketplaceUpdateTier")).toBe(true);
   });
 });

@@ -48,6 +48,18 @@ export const marketplaceEn = {
   MarketplaceTradeInMakeOffer: "Make offer",
   MarketplaceTradeInOfferAmountLabel: "Offer amount (JOD)",
   MarketplaceTradeInOfferSaved: "Offer sent to the buyer.",
+
+  // Phase 63 — monetization: tier status + upgrade prompts.
+  MarketplaceTierLabel: "Marketplace tier",
+  MarketplaceTierFounding: "Founding Dealer — free",
+  MarketplaceTierLeadPackage: "Lead Package",
+  MarketplaceTierFeatured: "Featured placement",
+  MarketplaceFoundingDaysLeft: "day(s) left in your free window",
+  MarketplaceFoundingExpired: "Your free Founding Dealer window has ended — you won't receive new marketplace leads until you upgrade.",
+  MarketplaceLeadQuotaUsed: "leads used this period",
+  MarketplaceLeadQuotaExhausted: "You've used all your leads for this period — upgrade for more.",
+  MarketplaceFeaturedActive: "Your dealership gets priority placement across the marketplace directory and buyer requests.",
+  MarketplaceUpgradeCta: "View upgrade options",
 } as const;
 
 export const marketplaceAr = {
@@ -98,4 +110,16 @@ export const marketplaceAr = {
   MarketplaceTradeInMakeOffer: "تقديم عرض",
   MarketplaceTradeInOfferAmountLabel: "قيمة العرض (دينار)",
   MarketplaceTradeInOfferSaved: "تم إرسال العرض إلى الزبون.",
+
+  // Phase 63 — monetization: tier status + upgrade prompts.
+  MarketplaceTierLabel: "باقة المنصة",
+  MarketplaceTierFounding: "معرض مؤسس — مجاني",
+  MarketplaceTierLeadPackage: "باقة عملاء محتملين",
+  MarketplaceTierFeatured: "ظهور مميز",
+  MarketplaceFoundingDaysLeft: "يوم/أيام متبقية من فترتك المجانية",
+  MarketplaceFoundingExpired: "انتهت فترتك المجانية كمعرض مؤسس — لن تستقبل عملاء محتملين جدد حتى تقوم بالترقية.",
+  MarketplaceLeadQuotaUsed: "عميل محتمل مستخدم هذه الفترة",
+  MarketplaceLeadQuotaExhausted: "لقد استخدمت جميع العملاء المحتملين لهذه الفترة — قم بالترقية للمزيد.",
+  MarketplaceFeaturedActive: "يحصل معرضك على أولوية الظهور في دليل المنصة وطلبات المشترين.",
+  MarketplaceUpgradeCta: "عرض خيارات الترقية",
 } as const;

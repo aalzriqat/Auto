@@ -3,7 +3,7 @@ import { query, mutation, internalMutation, QueryCtx, MutationCtx } from "./_gen
 import { Doc, Id } from "./_generated/dataModel";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireTenantAuth } from "./utils/tenancy";
-import { hasPlanFeature } from "./subscriptions";
+import { hasPlanFeature, requireFeature } from "./subscriptions";
 
 const MAX_AREAS = 20;
 const MAX_BRANDS = 40;
@@ -14,7 +14,14 @@ const MAX_ACTIVE_VEHICLE_SAMPLE = 200;
 const FAST_RESPONSE_MAX_AVG_MINUTES = 60;
 const FAST_RESPONSE_MIN_SAMPLE = 3;
 
+// Phase 63 monetization — see master plan §3 ("free leads for a fixed window
+// (e.g. 60 days)") and Phase 63 spec.
+export const FOUNDING_WINDOW_DAYS = 60;
+export const FOUNDING_WINDOW_MS = FOUNDING_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+export const LEAD_PERIOD_MS = 30 * 24 * 60 * 60 * 1000;
+
 export type MarketplaceBadge = "VERIFIED_PHONE" | "VERIFIED_LOCATION" | "FAST_RESPONSE" | "FINANCE_AVAILABLE" | "FOUNDING_DEALER";
+export type MarketplaceTier = "FREE_FOUNDING" | "LEAD_PACKAGE" | "FEATURED";
 
 async function hasActiveFinanceCompany(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">): Promise<boolean> {
   const companies = await ctx.db
@@ -42,11 +49,15 @@ export function computeBadges(
   return Array.from(computed);
 }
 
-/** Lower ranks first: verified + fast-responding dealers surface above unverified/slow ones, tiebroken by response time then registration order — same ordering signal Phase 57 already uses to pick which dealers get a request. */
+/** Lower ranks first: FEATURED dealers (Phase 63 paid ranking boost) surface above everyone else, then verified/fast-responding dealers above unverified/slow ones, tiebroken by response time then registration order — same ordering signal Phase 57 uses to pick which dealers get a request. */
 export function compareDealerRank(
-  a: Pick<Doc<"marketplaceDealerProfiles">, "badges" | "avgResponseMinutes" | "createdAt">,
-  b: Pick<Doc<"marketplaceDealerProfiles">, "badges" | "avgResponseMinutes" | "createdAt">
+  a: Pick<Doc<"marketplaceDealerProfiles">, "badges" | "avgResponseMinutes" | "createdAt" | "tier">,
+  b: Pick<Doc<"marketplaceDealerProfiles">, "badges" | "avgResponseMinutes" | "createdAt" | "tier">
 ): number {
+  const featuredA = a.tier === "FEATURED" ? 0 : 1;
+  const featuredB = b.tier === "FEATURED" ? 0 : 1;
+  if (featuredA !== featuredB) return featuredA - featuredB;
+
   const fastA = a.badges.includes("FAST_RESPONSE") ? 0 : 1;
   const fastB = b.badges.includes("FAST_RESPONSE") ? 0 : 1;
   if (fastA !== fastB) return fastA - fastB;
@@ -56,6 +67,51 @@ export function compareDealerRank(
   if (scoreA !== scoreB) return scoreA - scoreB;
 
   return a.createdAt - b.createdAt;
+}
+
+/** Pure — derives the FREE_FOUNDING window end even for profiles created before Phase 63 added the stamped field, so no backfill migration is needed. */
+export function effectiveFoundingWindowEndsAt(
+  profile: Pick<Doc<"marketplaceDealerProfiles">, "createdAt" | "foundingWindowEndsAt">
+): number {
+  return profile.foundingWindowEndsAt ?? profile.createdAt + FOUNDING_WINDOW_MS;
+}
+
+export type MarketplaceQuotaCheck =
+  | { allowed: true }
+  | { allowed: false; reason: "FOUNDING_WINDOW_EXPIRED" | "LEAD_QUOTA_EXHAUSTED" };
+
+/** Pure — whether this dealer can send another marketplace response right now. FEATURED is unlimited (paid ranking boost, no cap per master plan Phase 63); LEAD_PACKAGE is capped by leadQuota per rolling 30-day period; FREE_FOUNDING is unlimited until its window closes. */
+export function checkMarketplaceQuota(
+  profile: Pick<
+    Doc<"marketplaceDealerProfiles">,
+    "tier" | "createdAt" | "foundingWindowEndsAt" | "leadQuota" | "leadsUsedThisPeriod" | "leadPeriodStartedAt"
+  >,
+  now: number
+): MarketplaceQuotaCheck {
+  if (profile.tier === "FREE_FOUNDING") {
+    if (now >= effectiveFoundingWindowEndsAt(profile)) return { allowed: false, reason: "FOUNDING_WINDOW_EXPIRED" };
+    return { allowed: true };
+  }
+
+  if (profile.tier === "LEAD_PACKAGE") {
+    const periodStart = profile.leadPeriodStartedAt ?? profile.createdAt;
+    const usedThisPeriod = now - periodStart >= LEAD_PERIOD_MS ? 0 : profile.leadsUsedThisPeriod;
+    if (usedThisPeriod >= (profile.leadQuota ?? 0)) return { allowed: false, reason: "LEAD_QUOTA_EXHAUSTED" };
+    return { allowed: true };
+  }
+
+  return { allowed: true }; // FEATURED
+}
+
+/** Records one consumed lead against a LEAD_PACKAGE dealer's rolling period, resetting the counter first if the period has elapsed. Caller (marketplaceResponses.ts's `respond`) is responsible for calling `checkMarketplaceQuota` first. */
+export async function consumeMarketplaceLead(ctx: MutationCtx, profile: Doc<"marketplaceDealerProfiles">, now: number): Promise<void> {
+  const periodStart = profile.leadPeriodStartedAt ?? profile.createdAt;
+  const periodElapsed = now - periodStart >= LEAD_PERIOD_MS;
+  await ctx.db.patch(profile._id, {
+    leadsUsedThisPeriod: periodElapsed ? 1 : profile.leadsUsedThisPeriod + 1,
+    leadPeriodStartedAt: periodElapsed ? now : periodStart,
+    updatedAt: now,
+  });
 }
 
 /** Recomputes and persists badges for one dealer profile — shared by the daily cron and the immediate post-response/post-verification refresh, so a dealer doesn't wait up to a day to see FAST_RESPONSE/VERIFIED_PHONE reflected. */
@@ -126,6 +182,7 @@ export const updateProfile = mutation({
   },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MARKETPLACE_SETTINGS]);
+    await requireFeature(ctx, args.orgId, "marketplace");
 
     const areas = normalizeStringList(args.areas, MAX_AREAS);
     const brandsCarried = normalizeStringList(args.brandsCarried, MAX_BRANDS);
@@ -159,6 +216,7 @@ export const updateProfile = mutation({
       totalAccepted: 0,
       tier: "FREE_FOUNDING",
       leadsUsedThisPeriod: 0,
+      foundingWindowEndsAt: now + FOUNDING_WINDOW_MS,
       createdAt: now,
       updatedAt: now,
     });

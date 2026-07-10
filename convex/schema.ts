@@ -2995,6 +2995,15 @@ export default defineSchema({
     ),
     leadQuota: v.optional(v.number()),
     leadsUsedThisPeriod: v.number(),
+    // Phase 63: when the FREE_FOUNDING tier's free-leads window closes. Set at
+    // profile creation; left undefined for rows created before Phase 63 —
+    // `marketplaceDealers.ts`'s `effectiveFoundingWindowEndsAt` lazily derives
+    // the same value from `createdAt` so no backfill migration is needed.
+    foundingWindowEndsAt: v.optional(v.number()),
+    // Phase 63: rolling-window start for `leadsUsedThisPeriod` (LEAD_PACKAGE
+    // tier only) — reset lazily once a period elapses, same no-backfill
+    // reasoning as `foundingWindowEndsAt`.
+    leadPeriodStartedAt: v.optional(v.number()),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
     deletedBy: v.optional(v.id("users")),
