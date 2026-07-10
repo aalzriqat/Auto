@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-10 (revised same day after a review round — see A10/A11, Phase 57 consent/cap, Phase 58B)
 **Owner:** aalzriqat
-**Status:** Phases 56–57 merged to main 2026-07-10 (PR #52, convex deploy pending) · Phases 58–64 planned → sequence into PROJECT_PLAN.md as they start
+**Status:** Phases 56–57 merged + deployed to prod 2026-07-10 (PR #52, plus hotfix PR #53 for a legacy-role permissions bug) · Phase 58 built + tested on branch, not yet merged · Phases 58B–64 planned → sequence into PROJECT_PLAN.md as they start
 **Scope:** Turn AutoFlow into a two-sided demand-generation marketplace — buyers submit "I want this car" requests, AutoFlow fans them out to matching dealers, dealers reply and convert into tracked leads with gross-profit attribution. Built as a layer **on top of** the dealer-site infrastructure that already exists, not a rebuild.
 
 > **Non-negotiables (project dev rules, unchanged).** All logic backend-only (Convex). Every mutation/action in `try/catch`, `console.error(raw)`, return `{ success:false, error:"An unexpected error occurred. Please try again later." }`. Optional chaining + fallbacks on all rendered DB data. Zero implicit `any`. Bilingual EN/AR (RTL) for every surface. Soft-delete pattern (`isDeleted/deletedAt/deletedBy`) on every new table. No LLM in Releases 1–3 (matches existing roadmap discipline — AI upgrades route to the deferred backlog, see §5).
@@ -239,7 +239,7 @@ Add to the existing Phases 50–55 AI backlog table, not built here:
 |---|---|---|---|
 | 56 | Dealer opt-in + marketplace directory | 1 — Foundation | 🟨 Merged to main (PR #52); convex deploy pending |
 | 57 | Request a Car: capture + fan-out (+ consent/cap/intent-tier) | 1 — Foundation | 🟨 Merged to main (PR #52); convex deploy pending |
-| 58 | Dealer response + lead attribution | 1 — Foundation | ⬜ Not started |
+| 58 | Dealer response + lead attribution | 1 — Foundation | 🟨 Built + tested on branch; not merged/deployed |
 | 58B | Weekly dealer proof report | 1 — Foundation | ⬜ Not started |
 | 59 | Public marketplace browse/search | 2 — Public + Trust | ⬜ Not started |
 | 60 | Verified badges + response ranking | 2 — Public + Trust | ⬜ Not started |

@@ -55,6 +55,7 @@ export const mainNavigation: NavItem[] = [
   { name: "Accounting", href: "/accounting", icon: BookOpen, permission: "view:finance" },
   { name: "Reports", href: "/reports", icon: LineChart, permission: "view:reports" },
   { name: "Approvals", href: "/approvals", icon: Shield, permission: "manage:users" },
+  { name: "MarketplaceRequests", href: "/marketplace/requests", icon: Handshake, permission: "marketplace:respond" },
 ];
 
 // Every /settings/* route is gated to the OWNER role at the layout level
