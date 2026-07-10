@@ -2,9 +2,10 @@
 useDefault = true
 
 [allowlist]
-description = "Deterministic dedupe tokens and hardcoded test-fixture secrets, not real credentials. Idempotency keys (e.g. \"mj_selfapprove_001\") are client-supplied dedupe tokens for safely-retriable Convex mutations. The whsec_test_secret_*/sk_test_secret_* literals are fixed dummy values used only to compute HMAC signatures in payment-webhook unit tests — never actual Stripe/Tap credentials."
+description = "Deterministic dedupe tokens and hardcoded test-fixture secrets, not real credentials. Idempotency keys (e.g. \"mj_selfapprove_001\") are client-supplied dedupe tokens for safely-retriable Convex mutations. The whsec_test_secret_*/sk_test_secret_* literals are fixed dummy values used only to compute HMAC signatures in payment-webhook unit tests — never actual Stripe/Tap credentials. test_turnstile_secret_* is a fixed dummy TURNSTILE_SECRET_KEY used only so unit tests can stub the Cloudflare Turnstile siteverify call — never a real Turnstile secret."
 regexTarget = "line"
 regexes = [
   '''idempotencyKey:\s*[`"'][A-Za-z0-9_.-]+[`"']''',
   '''[`"'](?:whsec|sk)_test_secret_\d+[`"']''',
+  '''[`"']test_turnstile_secret_\d+[`"']''',
 ]
