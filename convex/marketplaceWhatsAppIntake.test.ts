@@ -181,6 +181,13 @@ function stubFetchForIntake() {
         return new Response(JSON.stringify({}), { status: 200 });
       }
       if (url === "https://fake-media-url.example.com/photo.jpg") {
+        // Convex's action runtime (even under convex-test) marshals fetch
+        // Request/Response objects through its own syscall layer, which
+        // does not carry a Blob's own `type` through that boundary — only
+        // an explicit header survives. Confirmed by direct debugging: a
+        // Blob-only content-type came back as the generic
+        // "text/plain;charset=UTF-8" default on the receiving end even
+        // though the mock returned the correctly-typed Blob.
         return new Response(new Blob(["fake-photo-bytes"], { type: "image/jpeg" }), {
           status: 200,
           headers: { "content-type": "image/jpeg" },

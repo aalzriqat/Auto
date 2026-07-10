@@ -389,7 +389,10 @@ async function fetchAndStoreWhatsAppMedia(ctx: ActionCtx, mediaId: string, apiTo
     const fileRes = await fetch(meta.url, { headers: { Authorization: `Bearer ${apiToken}` } });
     if (!fileRes.ok) return null;
 
-    const contentType = fileRes.headers.get("content-type")?.toLowerCase() ?? "";
+    // Split off any `; charset=...`-style parameter and surrounding
+    // whitespace before matching — real CDN responses aren't guaranteed to
+    // return a bare MIME type.
+    const contentType = fileRes.headers.get("content-type")?.toLowerCase().split(";")[0]?.trim() ?? "";
     if (!(VEHICLE_IMAGE_CONTENT_TYPES as readonly string[]).includes(contentType)) return null;
 
     const blob = await fileRes.blob();
