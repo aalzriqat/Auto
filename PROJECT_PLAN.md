@@ -1232,6 +1232,8 @@ Each phase reuses the established pattern: immutable event table → posting rul
 
 > Started 2026-07-10 at the user's explicit request, bypassing the master plan's §0 manual-validation gate (2–3 week concierge test before writing code) — risk accepted knowingly, not an oversight.
 
+> ⚠️ **Non-engineering blocker in progress:** AutoFlow is on Meta's WhatsApp test number; Business Verification not yet done. Doesn't block Phase 57/58 engineering (WhatsApp degrades gracefully to in-app/email everywhere), but does block WhatsApp reaching real dealers beyond a small manual allowlist until verification clears. See master plan §0.5/A5b.
+
 ## Phase 56 — Dealer Opt-In + Marketplace Directory ✅
 
 **Branch:** `feature/phase-56-marketplace-directory` · **Completed:** 2026-07-10
