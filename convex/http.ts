@@ -373,6 +373,92 @@ async function verifyHubSignature256(
   return diff === 0;
 }
 
+/**
+ * Shared skeleton for a signed WhatsApp Cloud API webhook POST: verify the
+ * signature, parse `entry[].changes[].value.messages[]` into caller-defined
+ * message objects, dedupe/claim the delivery, dispatch each message (letting
+ * the caller's `dispatch` decide what "skip this one" means for its own
+ * route — throwing marks the whole batch for redelivery, returning quietly
+ * does not), and complete the delivery. `/whatsapp-webhook` (per-org) and
+ * `/marketplace-whatsapp-webhook` (platform-wide) both wrap this — same
+ * envelope, different per-message shape and dispatch target.
+ */
+async function processMetaMessagingWebhook<T extends { messageId?: string }>(
+  ctx: ActionCtx,
+  args: {
+    request: Request;
+    appSecret: string;
+    source: VerifiedWebhookSource;
+    parseMessage: (message: Record<string, unknown>, contacts: Record<string, unknown>[]) => T;
+    dispatch: (message: T) => Promise<void>;
+  },
+): Promise<Response> {
+  const rawBody = await args.request.text();
+  const signature = args.request.headers.get("x-hub-signature-256");
+  if (!(await verifyHubSignature256(rawBody, signature, args.appSecret))) {
+    return new Response("Invalid signature", { status: 401 });
+  }
+
+  let body: Record<string, unknown> | undefined;
+  try {
+    body = optionalRecord(JSON.parse(rawBody));
+  } catch {
+    return new Response("Invalid JSON", { status: 400 });
+  }
+
+  const messages: T[] = [];
+  let statusUpdateCount = 0;
+
+  for (const entry of recordArray(body?.entry)) {
+    for (const changeRecord of recordArray(entry.changes)) {
+      const change = optionalRecord(changeRecord.value);
+      const contacts = recordArray(change?.contacts);
+      statusUpdateCount += recordArray(change?.statuses).length;
+
+      for (const message of recordArray(change?.messages)) {
+        messages.push(args.parseMessage(message, contacts));
+      }
+    }
+  }
+
+  const messageIds = messages
+    .map((message) => message.messageId)
+    .filter((messageId): messageId is string => typeof messageId === "string");
+  const claim = await claimWebhookDelivery(ctx, {
+    source: args.source,
+    eventId: messageIds.length > 0 ? messageIds.join(":") : undefined,
+    summary: messages.length > 0
+      ? `Batch with ${messages.length} message(s)`
+      : `Status update batch with ${statusUpdateCount} status update(s)`,
+    rawPayload: rawBody,
+  });
+  if (claim.disposition === "skip_processed") return new Response(null, { status: 200 });
+  if (claim.disposition === "skip_in_flight") return webhookInFlightResponse();
+
+  if (messages.length === 0) {
+    // Delivery receipts and status updates — acknowledge silently
+    await completeWebhookDelivery(ctx, claim, "success");
+    return new Response(null, { status: 200 });
+  }
+
+  let processingError: string | undefined;
+  for (const message of messages) {
+    try {
+      await args.dispatch(message);
+    } catch (err) {
+      processingError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  if (processingError) {
+    await completeWebhookDelivery(ctx, claim, "error", processingError);
+    return webhookProcessingFailedResponse();
+  }
+
+  await completeWebhookDelivery(ctx, claim, "success");
+  return new Response(null, { status: 200 });
+}
+
 http.route({
   path: "/load-test/health",
   method: "GET",
@@ -678,6 +764,29 @@ http.route({
   }),
 });
 
+type WhatsAppMessage = {
+  messageId?: string;
+  senderPhone?: string;
+  senderName?: string;
+  messageText?: string;
+};
+
+function parseWhatsAppMessage(message: Record<string, unknown>, contacts: Record<string, unknown>[]): WhatsAppMessage {
+  const senderPhone = optionalMetaId(message.from);
+  const contact =
+    contacts.find((candidate) => optionalMetaId(candidate.wa_id) === senderPhone) ??
+    contacts[0];
+  const profile = optionalRecord(contact?.profile);
+  const textPayload = optionalRecord(message.text);
+
+  return {
+    messageId: optionalMetaId(message.id),
+    senderPhone,
+    senderName: optionalString(profile?.name),
+    messageText: optionalString(message.type) === "text" ? optionalString(textPayload?.body) : undefined,
+  };
+}
+
 http.route({
   path: "/whatsapp-webhook",
   method: "POST",
@@ -703,100 +812,21 @@ http.route({
       });
     }
 
-    const rawBody = await request.text();
-    const signature = request.headers.get("x-hub-signature-256");
-    if (!(await verifyHubSignature256(rawBody, signature, appSecret))) {
-      return new Response("Invalid signature", { status: 401 });
-    }
-
-    let body: Record<string, unknown> | undefined;
-    try {
-      body = optionalRecord(JSON.parse(rawBody));
-    } catch {
-      return new Response("Invalid JSON", { status: 400 });
-    }
-
-    const whatsappMessages: Array<{
-      messageId?: string;
-      senderPhone?: string;
-      senderName?: string;
-      messageText?: string;
-    }> = [];
-    let statusUpdateCount = 0;
-
-    for (const entry of recordArray(body?.entry)) {
-      for (const changeRecord of recordArray(entry.changes)) {
-        const change = optionalRecord(changeRecord.value);
-        const contacts = recordArray(change?.contacts);
-        statusUpdateCount += recordArray(change?.statuses).length;
-
-        for (const message of recordArray(change?.messages)) {
-          const senderPhone = optionalMetaId(message.from);
-          const contact =
-            contacts.find((candidate) => optionalMetaId(candidate.wa_id) === senderPhone) ??
-            contacts[0];
-          const profile = optionalRecord(contact?.profile);
-          const textPayload = optionalRecord(message.text);
-
-          whatsappMessages.push({
-            messageId: optionalMetaId(message.id),
-            senderPhone,
-            senderName: optionalString(profile?.name),
-            messageText: optionalString(message.type) === "text"
-              ? optionalString(textPayload?.body)
-              : undefined,
-          });
-        }
-      }
-    }
-
-    const messageIds = whatsappMessages
-      .map((message) => message.messageId)
-      .filter((messageId): messageId is string => typeof messageId === "string");
-    const claim = await claimWebhookDelivery(ctx, {
+    return await processMetaMessagingWebhook<WhatsAppMessage>(ctx, {
+      request,
+      appSecret,
       source: "whatsapp",
-      eventId: messageIds.length > 0 ? messageIds.join(":") : undefined,
-      summary: whatsappMessages.length > 0
-        ? `Batch with ${whatsappMessages.length} message(s)`
-        : `Status update batch with ${statusUpdateCount} status update(s)`,
-      rawPayload: rawBody,
-    });
-    if (claim.disposition === "skip_processed") return new Response(null, { status: 200 });
-    if (claim.disposition === "skip_in_flight") return webhookInFlightResponse();
-
-    if (whatsappMessages.length === 0) {
-      // Delivery receipts and status updates — acknowledge silently
-      await completeWebhookDelivery(ctx, claim, "success");
-      return new Response(null, { status: 200 });
-    }
-
-    let processingError: string | undefined;
-    for (const message of whatsappMessages) {
-      if (!message.senderPhone) {
-        processingError = "Message without sender phone";
-        continue;
-      }
-
-      try {
+      parseMessage: parseWhatsAppMessage,
+      dispatch: async (message) => {
+        if (!message.senderPhone) throw new Error("Message without sender phone");
         await ctx.runMutation(internal.whatsapp.handleIncomingMessage, {
           orgId,
           senderPhone: message.senderPhone,
           senderName: message.senderName,
           messageText: message.messageText,
         });
-      } catch (err) {
-        processingError = err instanceof Error ? err.message : String(err);
-      }
-    }
-
-    if (processingError) {
-      await completeWebhookDelivery(ctx, claim, "error", processingError);
-      return webhookProcessingFailedResponse();
-    }
-
-    await completeWebhookDelivery(ctx, claim, "success");
-
-    return new Response(null, { status: 200 });
+      },
+    });
   }),
 });
 
@@ -888,73 +918,19 @@ http.route({
       return new Response("Too many requests", { status: 429 });
     }
 
-    const rawBody = await request.text();
-    const signature = request.headers.get("x-hub-signature-256");
-    if (!(await verifyHubSignature256(rawBody, signature, env.MARKETPLACE_WHATSAPP_APP_SECRET))) {
-      return new Response("Invalid signature", { status: 401 });
-    }
-
-    let body: Record<string, unknown> | undefined;
-    try {
-      body = optionalRecord(JSON.parse(rawBody));
-    } catch {
-      return new Response("Invalid JSON", { status: 400 });
-    }
-
-    const messages: MarketplaceWhatsAppMessage[] = [];
-    let statusUpdateCount = 0;
-
-    for (const entry of recordArray(body?.entry)) {
-      for (const changeRecord of recordArray(entry.changes)) {
-        const change = optionalRecord(changeRecord.value);
-        statusUpdateCount += recordArray(change?.statuses).length;
-
-        for (const message of recordArray(change?.messages)) {
-          messages.push(parseMarketplaceWhatsAppMessage(message));
-        }
-      }
-    }
-
-    const messageIds = messages
-      .map((message) => message.messageId)
-      .filter((messageId): messageId is string => typeof messageId === "string");
-    const claim = await claimWebhookDelivery(ctx, {
+    return await processMetaMessagingWebhook<MarketplaceWhatsAppMessage>(ctx, {
+      request,
+      appSecret: env.MARKETPLACE_WHATSAPP_APP_SECRET,
       source: "marketplace-whatsapp",
-      eventId: messageIds.length > 0 ? messageIds.join(":") : undefined,
-      summary: messages.length > 0
-        ? `Batch with ${messages.length} message(s)`
-        : `Status update batch with ${statusUpdateCount} status update(s)`,
-      rawPayload: rawBody,
-    });
-    if (claim.disposition === "skip_processed") return new Response(null, { status: 200 });
-    if (claim.disposition === "skip_in_flight") return webhookInFlightResponse();
-
-    if (messages.length === 0) {
-      await completeWebhookDelivery(ctx, claim, "success");
-      return new Response(null, { status: 200 });
-    }
-
-    let processingError: string | undefined;
-    for (const message of messages) {
-      if (!message.senderPhone || !message.input) continue;
-
-      try {
+      parseMessage: (message) => parseMarketplaceWhatsAppMessage(message),
+      dispatch: async (message) => {
+        if (!message.senderPhone || !message.input) return;
         await ctx.runAction(internal.marketplaceWhatsAppIntake.handleIntakeMessage, {
           phone: message.senderPhone,
           input: message.input,
         });
-      } catch (err) {
-        processingError = err instanceof Error ? err.message : String(err);
-      }
-    }
-
-    if (processingError) {
-      await completeWebhookDelivery(ctx, claim, "error", processingError);
-      return webhookProcessingFailedResponse();
-    }
-
-    await completeWebhookDelivery(ctx, claim, "success");
-    return new Response(null, { status: 200 });
+      },
+    });
   }),
 });
 

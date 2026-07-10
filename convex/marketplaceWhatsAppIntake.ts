@@ -144,7 +144,9 @@ function errorReply(message: string, state: IntakeState): IntakeReply {
   return { ...prompt, text: `${message}\n\n${prompt.text}` };
 }
 
-function parseText(input: IntakeInput, field: string, maxChars: number): { ok: true; value: string } | { ok: false; error: string } {
+type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string };
+
+function parseText(input: IntakeInput, field: string, maxChars: number): ParseResult<string> {
   if (input.kind !== "text") return { ok: false, error: `Please reply with the car's ${field} as text.` };
   const trimmed = input.text.trim();
   if (!trimmed) return { ok: false, error: `${field} cannot be empty.` };
@@ -152,22 +154,27 @@ function parseText(input: IntakeInput, field: string, maxChars: number): { ok: t
   return { ok: true, value: trimmed };
 }
 
-function parseInteger(input: IntakeInput, field: string, min: number, max: number): { ok: true; value: number } | { ok: false; error: string } {
+/** Shared by year/mileage (whole numbers) and price (may have decimals) — only the bounds and whole-number requirement differ. */
+function parseNumber(input: IntakeInput, field: string, min: number, max: number, wholeNumber: boolean): ParseResult<number> {
   if (input.kind !== "text") return { ok: false, error: `Please reply with the ${field} as a number.` };
   const value = Number(input.text.trim().replace(/,/g, ""));
-  if (!Number.isFinite(value) || !Number.isInteger(value) || value < min || value > max) {
-    return { ok: false, error: `Please send a valid ${field} (a whole number between ${min} and ${max}).` };
+  if (!Number.isFinite(value) || (wholeNumber && !Number.isInteger(value)) || value < min || value > max) {
+    const kind = wholeNumber ? "a whole number" : "a number";
+    return { ok: false, error: `Please send a valid ${field} (${kind} between ${min} and ${max}).` };
   }
   return { ok: true, value };
 }
 
-function parsePrice(input: IntakeInput): { ok: true; value: number } | { ok: false; error: string } {
-  if (input.kind !== "text") return { ok: false, error: "Please reply with the price as a number." };
-  const value = Number(input.text.trim().replace(/,/g, ""));
-  if (!Number.isFinite(value) || value <= 0 || value > MAX_PRICE_JOD) {
-    return { ok: false, error: `Please send a valid price in JOD (between 1 and ${MAX_PRICE_JOD}).` };
-  }
-  return { ok: true, value };
+/** Applies a successful ParseResult's value to the next step, or re-prompts on error — the shared shape of every AWAITING_* -> AWAITING_* transition below. */
+function advanceOnValid<T>(
+  current: IntakeState,
+  result: ParseResult<T>,
+  nextStep: IntakeStep,
+  applyValue: (value: T) => Partial<IntakeState>
+): { state: IntakeState; reply: IntakeReply } {
+  if (!result.ok) return { state: current, reply: errorReply(result.error, current) };
+  const state: IntakeState = { ...current, ...applyValue(result.value), step: nextStep };
+  return { state, reply: promptForStep(state) };
 }
 
 /**
@@ -186,36 +193,16 @@ export function computeNextIntakeState(current: IntakeState, input: IntakeInput)
   }
 
   switch (current.step) {
-    case "AWAITING_MAKE": {
-      const result = parseText(input, "make", MAX_FIELD_CHARS);
-      if (!result.ok) return { state: current, reply: errorReply(result.error, current) };
-      const state: IntakeState = { ...current, make: result.value, step: "AWAITING_MODEL" };
-      return { state, reply: promptForStep(state) };
-    }
-    case "AWAITING_MODEL": {
-      const result = parseText(input, "model", MAX_FIELD_CHARS);
-      if (!result.ok) return { state: current, reply: errorReply(result.error, current) };
-      const state: IntakeState = { ...current, model: result.value, step: "AWAITING_YEAR" };
-      return { state, reply: promptForStep(state) };
-    }
-    case "AWAITING_YEAR": {
-      const result = parseInteger(input, "year", MIN_YEAR, new Date().getFullYear() + 1);
-      if (!result.ok) return { state: current, reply: errorReply(result.error, current) };
-      const state: IntakeState = { ...current, year: result.value, step: "AWAITING_MILEAGE" };
-      return { state, reply: promptForStep(state) };
-    }
-    case "AWAITING_MILEAGE": {
-      const result = parseInteger(input, "mileage", 0, MAX_MILEAGE_KM);
-      if (!result.ok) return { state: current, reply: errorReply(result.error, current) };
-      const state: IntakeState = { ...current, mileage: result.value, step: "AWAITING_PRICE" };
-      return { state, reply: promptForStep(state) };
-    }
-    case "AWAITING_PRICE": {
-      const result = parsePrice(input);
-      if (!result.ok) return { state: current, reply: errorReply(result.error, current) };
-      const state: IntakeState = { ...current, sellingPrice: result.value, step: "AWAITING_PHOTOS" };
-      return { state, reply: promptForStep(state) };
-    }
+    case "AWAITING_MAKE":
+      return advanceOnValid(current, parseText(input, "make", MAX_FIELD_CHARS), "AWAITING_MODEL", (make) => ({ make }));
+    case "AWAITING_MODEL":
+      return advanceOnValid(current, parseText(input, "model", MAX_FIELD_CHARS), "AWAITING_YEAR", (model) => ({ model }));
+    case "AWAITING_YEAR":
+      return advanceOnValid(current, parseNumber(input, "year", MIN_YEAR, new Date().getFullYear() + 1, true), "AWAITING_MILEAGE", (year) => ({ year }));
+    case "AWAITING_MILEAGE":
+      return advanceOnValid(current, parseNumber(input, "mileage", 0, MAX_MILEAGE_KM, true), "AWAITING_PRICE", (mileage) => ({ mileage }));
+    case "AWAITING_PRICE":
+      return advanceOnValid(current, parseNumber(input, "price", 1, MAX_PRICE_JOD, false), "AWAITING_PHOTOS", (sellingPrice) => ({ sellingPrice }));
     case "AWAITING_PHOTOS": {
       if (input.kind === "image") {
         // photoCount is updated by the caller (which actually stores the
@@ -445,6 +432,30 @@ const intakeInputValidator = v.union(
   v.object({ kind: v.literal("image"), mediaId: v.string() })
 );
 
+async function persistFlowState(
+  ctx: ActionCtx,
+  args: {
+    flowId?: Id<"marketplaceWhatsAppFlows">;
+    orgId: Id<"organizations">;
+    phone: string;
+    state: IntakeState;
+    photoStorageIds: Id<"_storage">[];
+  }
+): Promise<Id<"marketplaceWhatsAppFlows">> {
+  return await ctx.runMutation(internal.marketplaceWhatsAppIntake.saveFlowState, {
+    flowId: args.flowId,
+    orgId: args.orgId,
+    phone: args.phone,
+    step: args.state.step,
+    make: args.state.make,
+    model: args.state.model,
+    year: args.state.year,
+    mileage: args.state.mileage,
+    sellingPrice: args.state.sellingPrice,
+    photoStorageIds: args.photoStorageIds,
+  });
+}
+
 /**
  * Orchestrates one inbound WhatsApp message through the intake flow: resolve
  * the dealer's org, load/advance flow state, store any photo, finalize on
@@ -482,12 +493,7 @@ export const handleIntakeMessage = internalAction({
 
     if (!existingFlow) {
       const freshState: IntakeState = { step: "AWAITING_MAKE", photoCount: 0 };
-      await ctx.runMutation(internal.marketplaceWhatsAppIntake.saveFlowState, {
-        orgId,
-        phone: args.phone,
-        step: freshState.step,
-        photoStorageIds: [],
-      });
+      await persistFlowState(ctx, { orgId, phone: args.phone, state: freshState, photoStorageIds: [] });
       await sendIntakeReply(args.phone, promptForStep(freshState), phoneNumberId, apiToken);
       return;
     }
@@ -513,18 +519,7 @@ export const handleIntakeMessage = internalAction({
 
     const { state, reply } = computeNextIntakeState(currentState, transitionInput);
 
-    const flowId: Id<"marketplaceWhatsAppFlows"> = await ctx.runMutation(internal.marketplaceWhatsAppIntake.saveFlowState, {
-      flowId: existingFlow._id,
-      orgId,
-      phone: args.phone,
-      step: state.step,
-      make: state.make,
-      model: state.model,
-      year: state.year,
-      mileage: state.mileage,
-      sellingPrice: state.sellingPrice,
-      photoStorageIds,
-    });
+    const flowId = await persistFlowState(ctx, { flowId: existingFlow._id, orgId, phone: args.phone, state, photoStorageIds });
 
     if (state.step === "COMPLETED") {
       await ctx.runMutation(internal.marketplaceWhatsAppIntake.finalizeFlow, { flowId });
