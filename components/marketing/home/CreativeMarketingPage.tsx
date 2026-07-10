@@ -36,9 +36,59 @@ import {
 import { useFinanceCalculator, usePipelineSimulation, useRoiEstimator } from "./hooks";
 import { FeatureCardGrid } from "./ui";
 
+function localize(locale: string, english: string, arabic: string) {
+  return locale === "ar" ? arabic : english;
+}
+
+function localizeList<T>(locale: string, english: T, arabic: T) {
+  return locale === "ar" ? arabic : english;
+}
+
+function ltrOnly(isRtl: boolean, className: string) {
+  return isRtl ? "" : className;
+}
+
+function pipelineCardClasses(isActive: boolean, isDone: boolean) {
+  if (isActive) {
+    return "bg-blue-500/10 border-blue-500 shadow-[0_0_20px_rgba(59,130,246,0.2)]";
+  }
+
+  if (isDone) {
+    return "bg-white/[0.03] border-blue-500/40 text-white/80";
+  }
+
+  return "bg-white/[0.01] border-white/5 text-white/55";
+}
+
+function pipelineIconClasses(isActive: boolean, isDone: boolean) {
+  if (isActive) {
+    return "bg-blue-500 text-white animate-pulse";
+  }
+
+  if (isDone) {
+    return "bg-blue-500/20 text-blue-400";
+  }
+
+  return "bg-white/5 text-white/50";
+}
+
+function pipelineStatusClasses(isActive: boolean, isDone: boolean) {
+  if (isActive) {
+    return "bg-blue-500/20 text-blue-300";
+  }
+
+  if (isDone) {
+    return "bg-white/5 text-white/60";
+  }
+
+  return "bg-white/5 text-white/40";
+}
+
 export default function CreativeMarketingPage() {
   const { locale, setLocale, isRtl } = useLanguage();
   const t = copy[locale] || copy.en;
+  const currencyLabel = localize(locale, "JOD", "د.أ");
+  const monthlyPeriodLabel = localize(locale, "mo", "شهرياً");
 
   const toggleLanguage = () => {
     setLocale(locale === "en" ? "ar" : "en");
@@ -104,6 +154,7 @@ export default function CreativeMarketingPage() {
   } = useFinanceCalculator();
 
   const { pipelineStage, advancePipelineStage, simulatePipelineAutoRun } = usePipelineSimulation();
+  const currentPipelineStage = pipelineStages[pipelineStage];
 
   const {
     monthlySales,
@@ -153,7 +204,7 @@ export default function CreativeMarketingPage() {
             />
           </Link>
 
-          <nav className={`hidden lg:flex items-center gap-8 text-sm font-semibold text-white/75 uppercase ${isRtl ? "" : "tracking-wider"}`}>
+          <nav className={`hidden lg:flex items-center gap-8 text-sm font-semibold text-white/75 uppercase ${ltrOnly(isRtl, "tracking-wider")}`}>
             <a href="#features" className="hover:text-white transition-colors duration-300 relative group py-2">
               {t.navFeatures}
               <span className="absolute bottom-0 left-0 w-0 h-0.5 bg-blue-500 group-hover:w-full transition-all duration-300" />
@@ -309,7 +360,7 @@ export default function CreativeMarketingPage() {
               </Link>
 
               <a href="#features" className="w-full sm:w-auto">
-                <button className={`w-full sm:w-auto px-8 py-4.5 bg-white/5 border border-white/10 hover:border-white/20 rounded-full text-sm font-semibold text-white/80 hover:text-white backdrop-blur-md transition-all duration-300 cursor-pointer ${isRtl ? "" : "tracking-wide"}`}>
+                <button className={`w-full sm:w-auto px-8 py-4.5 bg-white/5 border border-white/10 hover:border-white/20 rounded-full text-sm font-semibold text-white/80 hover:text-white backdrop-blur-md transition-all duration-300 cursor-pointer ${ltrOnly(isRtl, "tracking-wide")}`}>
                   {t.heroDemo}
                 </button>
               </a>
@@ -395,7 +446,7 @@ export default function CreativeMarketingPage() {
                 const Icon = mod.icon;
                 return (
                   <motion.div
-                    key={idx}
+                    key={mod.titleEn}
                     initial={{ opacity: 0, y: 16 }}
                     whileInView={{ opacity: 1, y: 0 }}
                     viewport={{ once: true }}
@@ -406,7 +457,7 @@ export default function CreativeMarketingPage() {
                       <Icon className="w-4.5 h-4.5 text-blue-400" />
                     </div>
                     <span className="text-[10px] sm:text-[11px] font-bold text-white/70 group-hover:text-white leading-tight transition-colors duration-300">
-                      {locale === "ar" ? mod.titleAr : mod.titleEn}
+                      {localize(locale, mod.titleEn, mod.titleAr)}
                     </span>
                   </motion.div>
                 );
@@ -453,12 +504,12 @@ export default function CreativeMarketingPage() {
                   {/* Mock Inventory List */}
                   <div className="space-y-2.5 my-4">
                     {[
-                      { name: "Toyota Land Cruiser GXR", vin: "JTMHV05J504123456", status: "Available", statusAr: "متوفرة", color: "text-emerald-400 bg-emerald-400/5 border-emerald-400/20", price: locale === "ar" ? "47,500 د.أ" : "47,500 JOD" },
-                      { name: "Hyundai Tucson 2024", vin: "KM8J3CAL2RU123456", status: "Reserved", statusAr: "محجوزة", color: "text-amber-400 bg-amber-400/5 border-amber-400/20", price: locale === "ar" ? "28,900 د.أ" : "28,900 JOD" },
-                      { name: "Porsche 911 Carrera S", vin: "WP0AB2A99NS123456", status: "Sold", statusAr: "مباعة", color: "text-blue-400 bg-blue-400/5 border-blue-400/20", price: locale === "ar" ? "165,000 د.أ" : "165,000 JOD" }
-                    ].map((car, idx) => (
+                      { name: "Toyota Land Cruiser GXR", vin: "JTMHV05J504123456", status: "Available", statusAr: "متوفرة", color: "text-emerald-400 bg-emerald-400/5 border-emerald-400/20", price: `47,500 ${currencyLabel}` },
+                      { name: "Hyundai Tucson 2024", vin: "KM8J3CAL2RU123456", status: "Reserved", statusAr: "محجوزة", color: "text-amber-400 bg-amber-400/5 border-amber-400/20", price: `28,900 ${currencyLabel}` },
+                      { name: "Porsche 911 Carrera S", vin: "WP0AB2A99NS123456", status: "Sold", statusAr: "مباعة", color: "text-blue-400 bg-blue-400/5 border-blue-400/20", price: `165,000 ${currencyLabel}` }
+                    ].map((car) => (
                       <div
-                        key={idx}
+                        key={car.vin}
                         className="flex items-center justify-between p-3 rounded-xl bg-white/[0.02] border border-white/5 hover:bg-white/[0.04] hover:border-white/10 transition-all duration-300"
                       >
                         <div className="flex flex-col text-left" style={{ direction: "ltr" }}>
@@ -468,7 +519,7 @@ export default function CreativeMarketingPage() {
                         <div className="flex items-center gap-3">
                           <span className="text-xs font-extrabold text-white/80">{car.price}</span>
                           <span className={`text-[10px] font-extrabold px-2.5 py-0.5 rounded border ${car.color}`}>
-                            {locale === "ar" ? car.statusAr : car.status}
+                            {localize(locale, car.status, car.statusAr)}
                           </span>
                         </div>
                       </div>
@@ -560,8 +611,8 @@ export default function CreativeMarketingPage() {
 
                 {/* Customer tags list mock */}
                 <div className="flex flex-wrap gap-1.5 my-2">
-                  {["Score: 785", "Capital One Approved", "Active Lease", "3 Visits"].map((tag, i) => (
-                    <span key={i} className="text-[9px] font-bold px-2 py-0.5 rounded bg-white/5 border border-white/5 text-white/70">
+                  {["Score: 785", "Capital One Approved", "Active Lease", "3 Visits"].map((tag) => (
+                    <span key={tag} className="text-[9px] font-bold px-2 py-0.5 rounded bg-white/5 border border-white/5 text-white/70">
                       {tag}
                     </span>
                   ))}
@@ -595,7 +646,7 @@ export default function CreativeMarketingPage() {
                 const colors = roleColorMap[role.color];
                 return (
                   <motion.div
-                    key={idx}
+                    key={role.nameEn}
                     initial={{ opacity: 0, y: 24 }}
                     whileInView={{ opacity: 1, y: 0 }}
                     viewport={{ once: true }}
@@ -610,14 +661,14 @@ export default function CreativeMarketingPage() {
                       <Icon className={`w-5 h-5 ${colors.text}`} />
                     </div>
                     <div className="relative z-10">
-                      <h3 className="text-base font-extrabold text-white">{locale === "ar" ? role.nameAr : role.nameEn}</h3>
-                      <span className={`text-[10px] font-bold uppercase ${colors.text} ${isRtl ? "" : "tracking-wide"}`}>
-                        {locale === "ar" ? role.taglineAr : role.taglineEn}
+                      <h3 className="text-base font-extrabold text-white">{localize(locale, role.nameEn, role.nameAr)}</h3>
+                      <span className={`text-[10px] font-bold uppercase ${colors.text} ${ltrOnly(isRtl, "tracking-wide")}`}>
+                        {localize(locale, role.taglineEn, role.taglineAr)}
                       </span>
                     </div>
                     <ul className="space-y-2 relative z-10">
-                      {(locale === "ar" ? role.bulletsAr : role.bulletsEn).map((bullet, i) => (
-                        <li key={i} className="flex items-start gap-2 text-[11px] text-white/55 leading-snug font-medium">
+                      {localizeList(locale, role.bulletsEn, role.bulletsAr).map((bullet) => (
+                        <li key={bullet} className="flex items-start gap-2 text-[11px] text-white/55 leading-snug font-medium">
                           <Check className={`w-3 h-3 mt-0.5 shrink-0 ${colors.text}`} />
                           <span>{bullet}</span>
                         </li>
@@ -679,7 +730,7 @@ export default function CreativeMarketingPage() {
                   <div className="flex justify-between items-center text-sm">
                     <span className="font-bold text-white/75">{t.calcVal}</span>
                     <span className="font-black text-blue-400 text-lg" style={{ direction: "ltr" }}>
-                      {carPrice.toLocaleString()} {locale === "ar" ? "د.أ" : "JOD"}
+                      {carPrice.toLocaleString()} {currencyLabel}
                     </span>
                   </div>
                   <input
@@ -702,7 +753,7 @@ export default function CreativeMarketingPage() {
                   <div className="flex justify-between items-center text-sm">
                     <span className="font-bold text-white/75">{t.calcDown}</span>
                     <span className="font-black text-blue-400 text-lg" style={{ direction: "ltr" }}>
-                      {downPayment.toLocaleString()} {locale === "ar" ? "د.أ" : "JOD"}
+                      {downPayment.toLocaleString()} {currencyLabel}
                     </span>
                   </div>
                   <input
@@ -770,10 +821,10 @@ export default function CreativeMarketingPage() {
                 <div className="absolute -top-1/4 -right-1/4 w-60 h-60 bg-blue-500/[0.04] rounded-full blur-3xl" />
 
                 <div className="text-center relative z-10">
-                  <span className={`text-[10px] font-extrabold text-white/50 uppercase ${isRtl ? "" : "tracking-widest"}`}>{t.calcMonthly}</span>
+                  <span className={`text-[10px] font-extrabold text-white/50 uppercase ${ltrOnly(isRtl, "tracking-widest")}`}>{t.calcMonthly}</span>
                   <div className="text-4xl sm:text-5xl font-black text-white mt-1 mb-2" style={{ direction: "ltr" }}>
-                    {Math.round(monthlyInstallment).toLocaleString()} <span className="text-xl font-bold">{locale === "ar" ? "د.أ" : "JOD"}</span>
-                    <span className={`text-sm font-light text-white/60 ${isRtl ? "" : "tracking-wider"}`}> / {locale === "ar" ? "شهرياً" : "mo"}</span>
+                    {Math.round(monthlyInstallment).toLocaleString()} <span className="text-xl font-bold">{currencyLabel}</span>
+                    <span className={`text-sm font-light text-white/60 ${ltrOnly(isRtl, "tracking-wider")}`}> / {monthlyPeriodLabel}</span>
                   </div>
                 </div>
 
@@ -806,7 +857,7 @@ export default function CreativeMarketingPage() {
                   {/* Digital percentage display inside circle */}
                   <div className="absolute flex flex-col items-center select-none" style={{ direction: "ltr" }}>
                     <span className="text-lg font-black text-white">{Math.round(principalPercent)}%</span>
-                    <span className={`text-[8px] text-white/50 font-bold uppercase ${isRtl ? "" : "tracking-wider"}`}>{t.calcPrinc}</span>
+                    <span className={`text-[8px] text-white/50 font-bold uppercase ${ltrOnly(isRtl, "tracking-wider")}`}>{t.calcPrinc}</span>
                   </div>
                 </div>
 
@@ -815,19 +866,19 @@ export default function CreativeMarketingPage() {
                   <div className="flex justify-between items-center text-xs">
                     <span className="text-white/60 font-bold">{t.calcPrinc}</span>
                     <span className="text-white font-extrabold" style={{ direction: "ltr" }}>
-                      {principal.toLocaleString()} {locale === "ar" ? "د.أ" : "JOD"}
+                      {principal.toLocaleString()} {currencyLabel}
                     </span>
                   </div>
                   <div className="flex justify-between items-center text-xs">
                     <span className="text-white/60 font-bold">{t.calcInterest}</span>
                     <span className="text-orange-400 font-extrabold" style={{ direction: "ltr" }}>
-                      {Math.round(totalInterest).toLocaleString()} {locale === "ar" ? "د.أ" : "JOD"}
+                      {Math.round(totalInterest).toLocaleString()} {currencyLabel}
                     </span>
                   </div>
                   <div className="flex justify-between items-center text-xs border-t border-white/5 pt-3">
                     <span className="text-white/60 font-bold">{t.calcTotalPaid}</span>
                     <span className="text-white font-black text-sm" style={{ direction: "ltr" }}>
-                      {Math.round(totalPaid).toLocaleString()} {locale === "ar" ? "د.أ" : "JOD"}
+                      {Math.round(totalPaid).toLocaleString()} {currencyLabel}
                     </span>
                   </div>
                 </div>
@@ -863,37 +914,22 @@ export default function CreativeMarketingPage() {
 
                   return (
                     <div
-                      key={idx}
-                      className={`relative p-5 rounded-2xl border transition-all duration-500 text-center select-none ${isActive
-                          ? "bg-blue-500/10 border-blue-500 shadow-[0_0_20px_rgba(59,130,246,0.2)]"
-                          : isDone
-                            ? "bg-white/[0.03] border-blue-500/40 text-white/80"
-                            : "bg-white/[0.01] border-white/5 text-white/55"
-                        }`}
+                      key={stage.labelEn}
+                      className={`relative p-5 rounded-2xl border transition-all duration-500 text-center select-none ${pipelineCardClasses(isActive, isDone)}`}
                     >
                       <div className="absolute top-3 right-3 text-[10px] font-black opacity-35">0{idx + 1}</div>
 
                       <div className="flex justify-center mb-3">
-                        <div className={`w-10 h-10 rounded-full flex items-center justify-center transition-colors duration-500 ${isActive
-                            ? "bg-blue-500 text-white animate-pulse"
-                            : isDone
-                              ? "bg-blue-500/20 text-blue-400"
-                              : "bg-white/5 text-white/50"
-                          }`}>
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center transition-colors duration-500 ${pipelineIconClasses(isActive, isDone)}`}>
                           <Workflow className="w-4 h-4" />
                         </div>
                       </div>
 
                       <div className="text-xs sm:text-sm font-black mb-1">
-                        {locale === "ar" ? stage.labelAr : stage.labelEn}
+                        {localize(locale, stage.labelEn, stage.labelAr)}
                       </div>
-                      <div className={`text-[9px] font-bold px-2 py-0.5 rounded inline-block ${isActive
-                          ? "bg-blue-500/20 text-blue-300"
-                          : isDone
-                            ? "bg-white/5 text-white/60"
-                            : "bg-white/5 text-white/40"
-                        }`}>
-                        {locale === "ar" ? stage.statusAr : stage.statusEn}
+                      <div className={`text-[9px] font-bold px-2 py-0.5 rounded inline-block ${pipelineStatusClasses(isActive, isDone)}`}>
+                        {localize(locale, stage.statusEn, stage.statusAr)}
                       </div>
                     </div>
                   );
@@ -912,10 +948,10 @@ export default function CreativeMarketingPage() {
                   </div>
 
                   <h4 className="text-xl sm:text-2xl font-black text-white">
-                    {locale === "ar" ? pipelineStages[pipelineStage].labelAr : pipelineStages[pipelineStage].labelEn}
+                    {localize(locale, currentPipelineStage.labelEn, currentPipelineStage.labelAr)}
                   </h4>
                   <p className="text-xs sm:text-sm text-white/65 leading-relaxed max-w-xl">
-                    {locale === "ar" ? pipelineStages[pipelineStage].descAr : pipelineStages[pipelineStage].descEn}
+                    {localize(locale, currentPipelineStage.descEn, currentPipelineStage.descAr)}
                   </p>
                 </div>
 
@@ -959,7 +995,7 @@ export default function CreativeMarketingPage() {
                 const barHeights = [40, 70, 55, 85, 60, 95];
                 return (
                   <motion.div
-                    key={idx}
+                    key={report.titleEn}
                     initial={{ opacity: 0, y: 24 }}
                     whileInView={{ opacity: 1, y: 0 }}
                     viewport={{ once: true }}
@@ -971,9 +1007,9 @@ export default function CreativeMarketingPage() {
                         <Icon className="w-5 h-5 text-blue-400" />
                       </div>
                       <div className="flex items-end gap-1 h-8" style={{ direction: "ltr" }}>
-                        {barHeights.map((h, i) => (
+                        {barHeights.map((h) => (
                           <div
-                            key={i}
+                            key={h}
                             className="w-1.5 rounded-full bg-blue-500/20 group-hover:bg-blue-500/50 transition-all duration-500"
                             style={{ height: `${h}%` }}
                           />
@@ -981,8 +1017,8 @@ export default function CreativeMarketingPage() {
                       </div>
                     </div>
                     <div>
-                      <h3 className="text-sm font-bold text-white mb-1.5">{locale === "ar" ? report.titleAr : report.titleEn}</h3>
-                      <p className="text-xs text-white/62 leading-relaxed">{locale === "ar" ? report.descAr : report.descEn}</p>
+                      <h3 className="text-sm font-bold text-white mb-1.5">{localize(locale, report.titleEn, report.titleAr)}</h3>
+                      <p className="text-xs text-white/62 leading-relaxed">{localize(locale, report.descEn, report.descAr)}</p>
                     </div>
                   </motion.div>
                 );
@@ -1008,7 +1044,7 @@ export default function CreativeMarketingPage() {
                 const Icon = feature.icon;
                 return (
                   <motion.div
-                    key={idx}
+                    key={feature.titleEn}
                     initial={{ opacity: 0, y: 24 }}
                     whileInView={{ opacity: 1, y: 0 }}
                     viewport={{ once: true }}
@@ -1019,8 +1055,8 @@ export default function CreativeMarketingPage() {
                       <Icon className="w-5 h-5 text-blue-400" />
                     </div>
                     <div>
-                      <h3 className="text-sm font-bold text-white mb-1.5">{locale === "ar" ? feature.titleAr : feature.titleEn}</h3>
-                      <p className="text-xs text-white/62 leading-relaxed">{locale === "ar" ? feature.descAr : feature.descEn}</p>
+                      <h3 className="text-sm font-bold text-white mb-1.5">{localize(locale, feature.titleEn, feature.titleAr)}</h3>
+                      <p className="text-xs text-white/62 leading-relaxed">{localize(locale, feature.descEn, feature.descAr)}</p>
                     </div>
                   </motion.div>
                 );
@@ -1098,7 +1134,7 @@ export default function CreativeMarketingPage() {
                     <div className="text-2xl sm:text-3xl font-black text-white mb-1">
                       {hoursSavedPerWk}
                     </div>
-                    <div className={`text-[10px] text-blue-400 font-extrabold uppercase mb-1 ${isRtl ? "" : "tracking-wide"}`}>
+                    <div className={`text-[10px] text-blue-400 font-extrabold uppercase mb-1 ${ltrOnly(isRtl, "tracking-wide")}`}>
                       {t.roiHours}
                     </div>
                     <div className="text-[9px] text-white/55 font-bold leading-tight">
@@ -1108,9 +1144,9 @@ export default function CreativeMarketingPage() {
 
                   <div className="bg-white/[0.02] border border-white/5 rounded-2xl p-5">
                     <div className="text-2xl sm:text-3xl font-black text-white mb-1" style={{ direction: "ltr" }}>
-                      {annualSavingsDollars.toLocaleString()} {locale === "ar" ? "د.أ" : "JOD"}
+                      {annualSavingsDollars.toLocaleString()} {currencyLabel}
                     </div>
-                    <div className={`text-[10px] text-blue-400 font-extrabold uppercase mb-1 ${isRtl ? "" : "tracking-wide"}`}>
+                    <div className={`text-[10px] text-blue-400 font-extrabold uppercase mb-1 ${ltrOnly(isRtl, "tracking-wide")}`}>
                       {t.roiSavings}
                     </div>
                     <div className="text-[9px] text-white/55 font-bold leading-tight">
@@ -1144,7 +1180,7 @@ export default function CreativeMarketingPage() {
                 const isOpen = activeFaq === idx;
                 return (
                   <div
-                    key={idx}
+                    key={faq.question.en}
                     className="border border-white/5 bg-white/[0.01] rounded-2xl overflow-hidden transition-all duration-300 hover:border-white/10"
                   >
                     <button
@@ -1194,11 +1230,11 @@ export default function CreativeMarketingPage() {
             />
           </div>
 
-          <p className={`text-white/60 text-sm font-semibold ${isRtl ? "" : "tracking-wider"}`}>
+          <p className={`text-white/60 text-sm font-semibold ${ltrOnly(isRtl, "tracking-wider")}`}>
             © {new Date().getFullYear()} {t.footerRights}
           </p>
 
-          <div className={`flex gap-6 text-sm font-semibold text-white/70 uppercase ${isRtl ? "" : "tracking-wider"}`}>
+          <div className={`flex gap-6 text-sm font-semibold text-white/70 uppercase ${ltrOnly(isRtl, "tracking-wider")}`}>
             <Link href="/privacy" className="hover:text-white transition-colors duration-300">{t.footerPrivacy}</Link>
             <Link href="/terms" className="hover:text-white transition-colors duration-300">{t.footerTerms}</Link>
             <Link href="/contact" className="hover:text-white transition-colors duration-300">{t.footerContact}</Link>

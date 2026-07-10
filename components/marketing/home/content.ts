@@ -150,7 +150,7 @@ function parseMarketingRows(source: string, expectedFieldCount: number): string[
   });
 }
 
-const copyRows: CopyRow[] = parseMarketingRows(String.raw`
+const copyRows: CopyRow[] = parseMarketingRows(`
 navFeatures | Features | الميزات
 navCalculator | Financing Calculator | حاسبة التمويل
 navWorkflow | Deal Flow | دورة العمل
@@ -279,7 +279,7 @@ interface FaqItem {
   answer: LocalizedText;
 }
 
-const faqRows: FaqRow[] = parseMarketingRows(String.raw`
+const faqRows: FaqRow[] = parseMarketingRows(`
 Can we transfer our existing vehicle stock and customer list? | هل يمكننا نقل قائمة السيارات والعملاء الحالية لدينا بسهولة؟ | Absolutely. AutoFlow provides clean CSV and JSON templates to batch-import your entire inventory and customer history in minutes. Our tech staff is also available for direct database migrations. | بالتأكيد. يوفر أوتوفلو قوالب استيراد مرنة بصيغة CSV و JSON لرفع مخزونك وبيانات العملاء دفعة واحدة خلال دقائق. فريقنا التقني متواجد أيضاً لمساعدتك في نقل البيانات بالكامل.
 How do profit protection thresholds and approvals work? | كيف تعمل حماية هوامش أرباح الصفقات واعتماد المعاملات؟ | You set target profit percentages per brand or branch. If a salesperson configurations a deal below these margins, AutoFlow automatically blocks invoicing and pushes a secure approval request to the manager dashboard with SMS notifications. | يمكنك تحديد هوامش الربح المستهدفة لكل علامة تجارية أو فرع. إذا حاول موظف المبيعات إدخال صفقة بأرباح أقل، يقوم النظام تلقائياً بتجميدها وإرسال طلب موافقة فوري لهاتف لوحة تحكم المدير لإقرارها أو رفضها.
 Is AutoFlow optimized for multi-branch dealerships? | هل يدعم أوتوفلو معارض السيارات ذات الفروع المتعددة؟ | Yes. Our enterprise plan supports granular branch-scoping, permitting salesmen to view local stock while enabling executives to monitor consolidated inventory, sales, and analytics across all regional sites. | نعم. يدعم أوتوفلو تقسيم الصلاحيات والمخزون للفروع المتعددة. حيث يمكن للموظف رؤية سيارات فرعه المحلي فقط، بينما يستطيع المسؤول العام تتبع كافة الفروع والتقارير المالية المدمجة بكفاءة.

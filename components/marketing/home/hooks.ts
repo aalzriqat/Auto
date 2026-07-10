@@ -21,18 +21,18 @@ const PIPELINE_STAGE_COUNT = 4;
 const FINANCE_RING_RADIUS = 40;
 
 export function useFinanceCalculator() {
-  const [carPrice, setCarPriceState] = useState(95000);
-  const [downPayment, setDownPaymentState] = useState(20000);
+  const [carPrice, setCarPrice] = useState(95000);
+  const [downPayment, setDownPayment] = useState(20000);
   const [apr, setApr] = useState(5.4);
   const [term, setTerm] = useState(60);
 
-  const setCarPrice = (nextCarPrice: number) => {
-    setCarPriceState(nextCarPrice);
-    setDownPaymentState((currentDownPayment) => Math.min(currentDownPayment, nextCarPrice));
+  const updateCarPrice = (nextCarPrice: number) => {
+    setCarPrice(nextCarPrice);
+    setDownPayment((currentDownPayment) => Math.min(currentDownPayment, nextCarPrice));
   };
 
-  const setDownPayment = (nextDownPayment: number) => {
-    setDownPaymentState(Math.min(nextDownPayment, carPrice));
+  const updateDownPayment = (nextDownPayment: number) => {
+    setDownPayment(Math.min(nextDownPayment, carPrice));
   };
 
   return {
@@ -40,8 +40,8 @@ export function useFinanceCalculator() {
     downPayment,
     apr,
     term,
-    setCarPrice,
-    setDownPayment,
+    setCarPrice: updateCarPrice,
+    setDownPayment: updateDownPayment,
     setApr,
     setTerm,
     ...financeTotals({ carPrice, downPayment, apr, term }),

@@ -1,8 +1,8 @@
 import { motion } from "framer-motion";
 import type { FeatureGridItem } from "./content";
 
-interface FeatureCardGridProps {
-  features: FeatureGridItem[];
+type FeatureCardGridProps = Readonly<{
+  features: readonly FeatureGridItem[];
   locale: string;
   gridClassName: string;
   cardClassName: string;
@@ -10,6 +10,10 @@ interface FeatureCardGridProps {
   titleClassName: string;
   descClassName: string;
   delayStep: number;
+}>;
+
+function localize(locale: string, english: string, arabic: string) {
+  return locale === "ar" ? arabic : english;
 }
 
 export function FeatureCardGrid({
@@ -29,7 +33,7 @@ export function FeatureCardGrid({
 
         return (
           <motion.div
-            key={idx}
+            key={feature.titleEn}
             initial={{ opacity: 0, y: 24 }}
             whileInView={{ opacity: 1, y: 0 }}
             viewport={{ once: true }}
@@ -40,8 +44,8 @@ export function FeatureCardGrid({
               <Icon className="w-5 h-5 text-blue-400" />
             </div>
             <div>
-              <h3 className={titleClassName}>{locale === "ar" ? feature.titleAr : feature.titleEn}</h3>
-              <p className={descClassName}>{locale === "ar" ? feature.descAr : feature.descEn}</p>
+              <h3 className={titleClassName}>{localize(locale, feature.titleEn, feature.titleAr)}</h3>
+              <p className={descClassName}>{localize(locale, feature.descEn, feature.descAr)}</p>
             </div>
           </motion.div>
         );
