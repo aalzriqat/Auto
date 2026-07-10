@@ -19,6 +19,13 @@ import { cn } from "@/lib/utils";
 type ResponseKind = "HAVE_MATCH" | "HAVE_SIMILAR" | "CAN_SOURCE" | "NOT_AVAILABLE";
 type InboxView = "requests" | "tradeins";
 
+/** Shared prop shape for the two inline "act on this row" forms below (respond to a buyer request, make a trade-in offer) — same orgId/entity-id/onSaved contract, different entity table. */
+type MarketplaceActionFormProps<TEntityId> = {
+  orgId: Id<"organizations">;
+  entityId: TEntityId;
+  onSaved: () => void;
+};
+
 /** Shared "run a mutation, toast success/error, reset the saving flag" wrapper for the two inline forms below (respond to a buyer request, make a trade-in offer) — same shape, different mutation. */
 async function submitWithToast(
   setSaving: (value: boolean) => void,
@@ -40,13 +47,9 @@ async function submitWithToast(
 
 function ResponseForm({
   orgId,
-  requestId,
+  entityId: requestId,
   onSaved,
-}: {
-  orgId: Id<"organizations">;
-  requestId: Id<"marketplaceRequests">;
-  onSaved: () => void;
-}) {
+}: MarketplaceActionFormProps<Id<"marketplaceRequests">>) {
   const { t } = useLanguage();
   const respond = useMutation(api.marketplaceResponses.respond);
   const vehiclesPage = useQuery(api.vehicles.list, {
@@ -142,13 +145,9 @@ function ResponseForm({
 
 function TradeInOfferForm({
   orgId,
-  tradeInRequestId,
+  entityId: tradeInRequestId,
   onSaved,
-}: {
-  orgId: Id<"organizations">;
-  tradeInRequestId: Id<"marketplaceTradeInRequests">;
-  onSaved: () => void;
-}) {
+}: MarketplaceActionFormProps<Id<"marketplaceTradeInRequests">>) {
   const { t } = useLanguage();
   const makeOffer = useMutation(api.marketplaceTradeIns.makeOffer);
   const [offerAmountJod, setOfferAmountJod] = useState("");
@@ -231,7 +230,7 @@ function TradeInsTab({ orgId }: { orgId: Id<"organizations"> }) {
           </div>
 
           {openTradeInId === tradeIn._id && (
-            <TradeInOfferForm orgId={orgId} tradeInRequestId={tradeIn._id} onSaved={() => setOpenTradeInId(null)} />
+            <TradeInOfferForm orgId={orgId} entityId={tradeIn._id} onSaved={() => setOpenTradeInId(null)} />
           )}
         </div>
       ))}
@@ -330,7 +329,7 @@ export function MarketplaceRequestsClient() {
               {openRequestId === request.requestId && activeOrgId && (
                 <ResponseForm
                   orgId={activeOrgId}
-                  requestId={request.requestId}
+                  entityId={request.requestId}
                   onSaved={() => setOpenRequestId(null)}
                 />
               )}

@@ -40,6 +40,15 @@ async function enforceWebhookRateLimit(ctx: ActionCtx, key: string): Promise<Res
   return limitStatus.ok ? null : new Response("Too many requests", { status: 429 });
 }
 
+/** Parses + validates a Meta subscription-verification GET request's `hub.mode`/`hub.verify_token`/`hub.challenge` query params — shared by `/whatsapp-webhook` and `/marketplace-whatsapp-webhook`'s GET handlers. Null means malformed (missing param or `hub.mode` isn't "subscribe"); the caller still has to check `token` against its own secret. */
+function parseHubChallengeParams(url: URL): { token: string; challenge: string } | null {
+  const mode = url.searchParams.get("hub.mode");
+  const token = url.searchParams.get("hub.verify_token");
+  const challenge = url.searchParams.get("hub.challenge");
+  if (mode !== "subscribe" || !token || !challenge) return null;
+  return { token, challenge };
+}
+
 type VerifiedWebhookSource =
   | "clerk"
   | "whatsapp"
@@ -735,11 +744,9 @@ http.route({
   handler: httpAction(async (ctx, request) => {
     const url = new URL(request.url);
     const orgId = url.searchParams.get("orgId") as Id<"organizations"> | null;
-    const mode = url.searchParams.get("hub.mode");
-    const token = url.searchParams.get("hub.verify_token");
-    const challenge = url.searchParams.get("hub.challenge");
+    const hub = parseHubChallengeParams(url);
 
-    if (!orgId || mode !== "subscribe" || !token || !challenge) {
+    if (!orgId || !hub) {
       return new Response("Bad request", { status: 400 });
     }
 
@@ -751,12 +758,12 @@ http.route({
     });
     if (
       !settings?.whatsappWebhookSecret ||
-      settings.whatsappWebhookSecret !== token
+      settings.whatsappWebhookSecret !== hub.token
     ) {
       return new Response("Forbidden", { status: 403 });
     }
 
-    return new Response(challenge, { status: 200 });
+    return new Response(hub.challenge, { status: 200 });
   }),
 });
 
@@ -839,9 +846,7 @@ http.route({
   method: "GET",
   handler: httpAction(async (_ctx, request) => {
     const url = new URL(request.url);
-    const mode = url.searchParams.get("hub.mode");
-    const token = url.searchParams.get("hub.verify_token");
-    const challenge = url.searchParams.get("hub.challenge");
+    const hub = parseHubChallengeParams(url);
 
     let env: ReturnType<typeof getValidatedEnv>;
     try {
@@ -851,16 +856,14 @@ http.route({
     }
 
     if (
-      mode !== "subscribe" ||
-      !token ||
-      !challenge ||
+      !hub ||
       !env.MARKETPLACE_WHATSAPP_WEBHOOK_VERIFY_TOKEN ||
-      token !== env.MARKETPLACE_WHATSAPP_WEBHOOK_VERIFY_TOKEN
+      hub.token !== env.MARKETPLACE_WHATSAPP_WEBHOOK_VERIFY_TOKEN
     ) {
       return new Response("Forbidden", { status: 403 });
     }
 
-    return new Response(challenge, { status: 200 });
+    return new Response(hub.challenge, { status: 200 });
   }),
 });
 
