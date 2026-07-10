@@ -32,7 +32,7 @@ const PUBLIC_LEAD_MAX_MESSAGE_CHARS = 2000;
 const PUBLIC_LEAD_MAX_FINGERPRINT_CHARS = 256;
 const PUBLIC_LEAD_MAX_IP_HASH_CHARS = 128;
 const PUBLIC_LEAD_DUPLICATE_WINDOW_MS = 24 * 60 * 60 * 1000;
-const TURNSTILE_ACTION = "turnstile-spin-v1";
+export const TURNSTILE_ACTION = "turnstile-spin-v1";
 
 const OPEN_LEAD_STAGES = new Set([
   "NEW",
@@ -89,11 +89,11 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function hasControlCharacters(value: string): boolean {
+export function hasControlCharacters(value: string): boolean {
   return /[\u0000-\u001F\u007F]/.test(value);
 }
 
-function normalizeText(value: string | undefined, field: string, maxLength: number): string | undefined {
+export function normalizeText(value: string | undefined, field: string, maxLength: number): string | undefined {
   const text = value?.trim().replace(/\s+/g, " ");
   if (!text) return undefined;
   if (text.length > maxLength || hasControlCharacters(text)) {
@@ -102,7 +102,7 @@ function normalizeText(value: string | undefined, field: string, maxLength: numb
   return text;
 }
 
-function normalizeRequiredText(value: string, field: string, maxLength: number): string {
+export function normalizeRequiredText(value: string, field: string, maxLength: number): string {
   const text = normalizeText(value, field, maxLength);
   if (!text) throw new ConvexError(`${field} is required.`);
   return text;
@@ -143,7 +143,7 @@ async function sha256Hex(value: string): Promise<string> {
     .join("");
 }
 
-async function verifyTurnstileToken(token: string): Promise<void> {
+export async function verifyTurnstileToken(token: string): Promise<void> {
   const env = getValidatedEnv();
   if (!env.TURNSTILE_SECRET_KEY) {
     console.error("TURNSTILE_SECRET_KEY is not configured for public website lead intake.");

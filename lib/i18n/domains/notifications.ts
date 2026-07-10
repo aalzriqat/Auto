@@ -152,6 +152,9 @@ export const notificationsEn = {
   Notif_WhatsappLeadCreated_Title: "New WhatsApp Lead",
   Notif_WhatsappLeadCreated_Message: "New WhatsApp message from {senderName}.",
 
+  Notif_MarketplaceRequestMatched_Title: "New Buyer Request",
+  Notif_MarketplaceRequestMatched_Message: "{intentLabel} — buyer wants {vehicleDescription} in {city}. Reply from the AutoFlow marketplace inbox.",
+
   Notif_AdminOrgSuspended_Title: "Organization Suspended",
   Notif_AdminOrgSuspended_Message: "Your organization was suspended. Reason: {reason}",
   Notif_AdminOrgUnsuspended_Title: "Organization Reactivated",
@@ -355,6 +358,9 @@ export const notificationsAr = {
   Notif_SocialPostFailed_Message: "تعذر نشر {vehicleLabel} على {platform}: {error}",
   Notif_WhatsappLeadCreated_Title: "عميل محتمل جديد من واتساب",
   Notif_WhatsappLeadCreated_Message: "رسالة واتساب جديدة من {senderName}.",
+
+  Notif_MarketplaceRequestMatched_Title: "طلب مشتري جديد",
+  Notif_MarketplaceRequestMatched_Message: "{intentLabel} — الزبون يبحث عن {vehicleDescription} في {city}. رد من صندوق طلبات السوق في AutoFlow.",
 
   Notif_AdminOrgSuspended_Title: "تم تعليق المؤسسة",
   Notif_AdminOrgSuspended_Message: "تم تعليق مؤسستك. السبب: {reason}",

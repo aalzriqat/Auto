@@ -1,7 +1,7 @@
 import { MutationCtx } from "../_generated/server";
 import { Id } from "../_generated/dataModel";
 import { internal } from "../_generated/api";
-import { PERMISSIONS, isSystemOwnerRole } from "./permissions";
+import { Permission, PERMISSIONS, isSystemOwnerRole } from "./permissions";
 import { NotificationType, NOTIFICATION_TYPES } from "../../lib/notifications/types";
 import { hasPlanFeature } from "../subscriptions";
 
@@ -130,6 +130,30 @@ export async function notifyManagers(
     const role = await ctx.db.get(membership.roleId);
     if (!role) continue;
     if (role.permissions.includes(PERMISSIONS.MANAGE_USERS)) {
+      await dispatch(ctx, orgId, membership.userId, type, data, opts);
+    }
+  }
+}
+
+/** Notifies every member holding a specific permission — for cases like `marketplace:respond` where the relevant audience is narrower than "all managers" but wider than a single assignee. */
+export async function notifyByPermission(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  permission: Permission,
+  type: NotificationType,
+  data?: NotificationData,
+  opts?: DispatchOpts & { excludeUserId?: Id<"users"> }
+) {
+  const memberships = await ctx.db
+    .query("memberships")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+
+  for (const membership of memberships) {
+    if (opts?.excludeUserId && membership.userId === opts.excludeUserId) continue;
+    const role = await ctx.db.get(membership.roleId);
+    if (!role) continue;
+    if (role.permissions.includes(permission)) {
       await dispatch(ctx, orgId, membership.userId, type, data, opts);
     }
   }
