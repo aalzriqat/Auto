@@ -405,6 +405,89 @@ export const sendSubscriptionReminderEmail = internalAction({
   },
 });
 
+export const sendMarketplaceWeeklyReportEmail = internalAction({
+  args: {
+    toEmail: v.string(),
+    orgName: v.string(),
+    pageViews: v.number(),
+    vehicleDetailViews: v.number(),
+    requestsMatched: v.number(),
+    responsesSent: v.number(),
+    avgResponseMinutes: v.union(v.number(), v.null()),
+    mostViewedVehicle: v.union(
+      v.null(),
+      v.object({ make: v.string(), model: v.string(), year: v.number(), views: v.number() })
+    ),
+    requestsLost: v.number(),
+  },
+  handler: async (ctx, args): Promise<{ success: boolean; error?: string }> => {
+    const status = await rateLimiter.limit(ctx, "email");
+    if (!status.ok) {
+      return { success: false, error: "rate_limited" };
+    }
+    const env = getValidatedEnv();
+    const resendApiKey = env.RESEND_API_KEY;
+    const appUrl = env.NEXT_PUBLIC_APP_URL;
+
+    const safeOrgName = escapeHtml(args.orgName);
+    const subject = `Your AutoFlow Marketplace week: ${args.requestsMatched} matched request${args.requestsMatched === 1 ? "" : "s"}, ${args.responsesSent} repl${args.responsesSent === 1 ? "y" : "ies"}`;
+    const preheader = `${args.pageViews} dealer-site views, ${args.requestsMatched} matched buyer requests this week.`;
+
+    const statRow = (label: string, value: string) =>
+      `<tr><td style="padding:6px 0; color:#6b7280;">${label}</td><td style="padding:6px 0; text-align:right; font-weight:600; color:#111827;">${value}</td></tr>`;
+
+    const rows = [
+      statRow("Dealer-site page views", String(args.pageViews)),
+      statRow("Vehicle detail views", String(args.vehicleDetailViews)),
+      statRow("Buyer requests matched to you", String(args.requestsMatched)),
+      statRow("Responses you sent", String(args.responsesSent)),
+      statRow("Avg. response time", args.avgResponseMinutes != null ? `${Math.round(args.avgResponseMinutes)} min` : "—"),
+      statRow("Requests lost to no response", String(args.requestsLost)),
+    ].join("");
+
+    const mostViewedHtml = args.mostViewedVehicle
+      ? `<p style="margin:20px 0 0; font-size:13px; color:#6b7280;">Most-viewed vehicle: <strong style="color:#111827;">${escapeHtml(`${args.mostViewedVehicle.year} ${args.mostViewedVehicle.make} ${args.mostViewedVehicle.model}`)}</strong> (${args.mostViewedVehicle.views} views)</p>`
+      : "";
+
+    const bodyHtml = `
+      <h1 style="margin:0 0 16px; font-size:20px; font-weight:700; color:#111827;">Your Marketplace week</h1>
+      <p style="margin:0 0 16px;">Hi ${safeOrgName},</p>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="font-size:14px;">${rows}</table>
+      ${mostViewedHtml}
+      ${emailButton(`${appUrl}/marketplace/requests`, "View your requests")}
+    `;
+
+    const emailHtml = wrapEmailHtml(preheader, bodyHtml);
+
+    let result: { success: boolean; error?: string };
+    if (!resendApiKey) {
+      result = { success: true };
+    } else {
+      const resend = new Resend(resendApiKey);
+      try {
+        await resend.emails.send({
+          from: "AutoFlow Marketplace <marketplace@autoflowdealer.com>",
+          to: args.toEmail,
+          subject,
+          html: emailHtml,
+        });
+        result = { success: true };
+      } catch (error) {
+        result = { success: false, error: String(error) };
+      }
+    }
+
+    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+      source: "marketplace-weekly-report",
+      status: result.success ? "success" : "error",
+      summary: `weekly-report -> ${args.toEmail} (${args.orgName})`,
+      error: result.error,
+    });
+
+    return result;
+  },
+});
+
 export const sendTeamInvite = internalAction({
   args: {
     toEmail: v.string(),

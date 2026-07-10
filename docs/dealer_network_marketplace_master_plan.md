@@ -138,10 +138,12 @@ This is a demand-and-supply cold-start problem, not just a build. The plan fails
 **Tests:** response creates exactly one lead with correct attribution; response-score math; a dealer cannot see requests not routed to them (A9).
 **Acceptance:** dealer opens their AutoFlow dashboard inbox (with or without the WhatsApp ping arriving) and taps "I have this car" on a request → a lead appears in their existing Leads table tagged `marketplace`, with zero manual data entry. Where WhatsApp did reach them, the deep link lands on the same reply action.
 
-#### Phase 58B — Weekly dealer proof report
+#### Phase 58B — Weekly dealer proof report ✅ built on branch
 
-**Branch:** `feature/phase-58b-marketplace-weekly-report`
+**Branch:** `feature/phase-58b-marketplace-weekly-report` (built + tested 2026-07-10, not yet merged)
 **Goal:** Give founding dealers a reason to keep paying attention — proof, not promises, every week on WhatsApp.
+
+**Shipped as email-only for now:** the WhatsApp template-send half of this phase (below) is still blocked on A5b (Business Verification); `marketplaceWhatsAppSend.ts` was not built this phase. The cron sends the weekly report by email unconditionally — that's the real fallback in production today, not a tested runtime branch. Swapping in WhatsApp later is a drop-in: try the send, fall back to email on failure/absence.
 
 **Backend:** `marketplaceReports.ts` — weekly cron per opted-in dealer aggregating: dealer-site page views (reuses the existing site-visitor-analytics event log), vehicle detail views, requests matched, responses sent, avg response time, most-viewed vehicle, requests lost to non-response (a `marketplaceRequestMatches` row for that dealer with no corresponding `marketplaceResponses` row before the request's `expiresAt`). Sends via the new platform-level `marketplaceWhatsAppSend.ts` (A5/A5b, not `whatsappSend.ts`) — needs one new approved message **template** (a weekly-summary business-initiated message; unlike Phase 57's dealer-alert flow this **is** outside a 24h reply window, so it needs template approval on top of A5b's number/verification, same category as the existing `autoflow_notification` templates per A8's finding). **Until A5b clears:** falls back to email (already an existing notification channel per Phase 28) so founding dealers still get the proof weekly regardless of WhatsApp status.
 **Frontend:** none required for V1.

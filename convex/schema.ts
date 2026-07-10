@@ -2672,7 +2672,8 @@ export default defineSchema({
       v.literal("support-inbox-notification"),
       v.literal("upgrade-request"),
       v.literal("social-auto-reply-retry"),
-      v.literal("fixed-asset-depreciation")
+      v.literal("fixed-asset-depreciation"),
+      v.literal("marketplace-weekly-report")
     ),
     status: v.union(v.literal("received"), v.literal("success"), v.literal("error"), v.literal("dead_letter")),
     summary: v.string(),

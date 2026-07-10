@@ -40,6 +40,14 @@ crons.cron(
   {}
 );
 
+// Weekly dealer proof report (Phase 58B) — Mondays at 06:00 UTC (09:00 Jordan time).
+crons.cron(
+  "marketplace-weekly-dealer-report",
+  "0 6 * * 1",
+  internal.marketplaceReports.sendWeeklyProofReports,
+  {}
+);
+
 // Retry membership removals whose external Clerk cleanup did not complete.
 crons.interval(
   "membership-offboarding-retries",
