@@ -2968,6 +2968,15 @@ export default defineSchema({
     avgResponseMinutes: v.optional(v.number()),
     totalResponses: v.number(),
     totalAccepted: v.number(),
+    // Phase 60: staff-confirmed WhatsApp reachability. There's no automated
+    // OTP-over-WhatsApp send yet — same Business Verification blocker as the
+    // rest of this epic's WhatsApp features (master plan A5b) — so this is
+    // set manually by AutoFlow staff via the admin console after confirming
+    // the number by phone/WhatsApp, mirroring the manual-first pattern
+    // already used for dealer notifications (Phase 57) and proof reports
+    // (Phase 58B).
+    phoneVerifiedAt: v.optional(v.number()),
+    phoneVerifiedBy: v.optional(v.id("users")),
     tier: v.union(
       v.literal("FREE_FOUNDING"),
       v.literal("LEAD_PACKAGE"),

@@ -4,6 +4,7 @@ import { requireSuperAdmin } from "./utils/tenancy";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { logAdminAction } from "./adminAudit";
 import { computeWeeklyReport, currentWeekStart } from "./marketplaceReports";
+import { refreshDealerBadges } from "./marketplaceDealers";
 
 const MAX_REQUEST_ROWS = 100;
 const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
@@ -183,6 +184,63 @@ export const markWeeklyReportSentViaWhatsApp = mutation({
       action: "marketplaceMarkWeeklyReportSent",
       targetTable: "marketplaceWeeklyReportSends",
       targetId: args.orgId,
+      orgId: args.orgId,
+    });
+  },
+});
+
+/** Opted-in dealers for the admin console's "Dealers" tab (Phase 60) — where staff mark a WhatsApp number phone-verified after confirming it by phone/WhatsApp, since there's no automated OTP send yet (master plan A5b). */
+export const listDealerProfiles = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireSuperAdmin(ctx);
+
+    const profiles = await ctx.db
+      .query("marketplaceDealerProfiles")
+      .withIndex("by_opted_in", (q) => q.eq("isOptedIn", true))
+      .collect();
+
+    const rows = await Promise.all(
+      profiles
+        .filter((profile) => !profile.isDeleted)
+        .map(async (profile) => {
+          const org = await ctx.db.get(profile.orgId);
+          if (!org) return null;
+          return {
+            orgId: profile.orgId,
+            dealershipName: org.name,
+            whatsappNumber: profile.whatsappNumber ?? null,
+            badges: profile.badges,
+            avgResponseMinutes: profile.avgResponseMinutes ?? null,
+            totalResponses: profile.totalResponses,
+            phoneVerifiedAt: profile.phoneVerifiedAt ?? null,
+          };
+        })
+    );
+
+    return rows.filter((row): row is NonNullable<typeof row> => row !== null);
+  },
+});
+
+/** Staff confirms a dealer's WhatsApp number is real and reachable (by calling/messaging it directly) and flags it verified — the manual stand-in for OTP verification until Business Verification clears. */
+export const verifyDealerPhone = mutation({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const admin = await requireSuperAdmin(ctx);
+    const profile = await ctx.db
+      .query("marketplaceDealerProfiles")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .unique();
+    if (!profile) throwAppError(AppErrorCode.VALIDATION_FAILED, "Dealer profile not found.");
+
+    const now = Date.now();
+    await ctx.db.patch(profile._id, { phoneVerifiedAt: now, phoneVerifiedBy: admin._id, updatedAt: now });
+    await refreshDealerBadges(ctx, { ...profile, phoneVerifiedAt: now });
+
+    await logAdminAction(ctx, admin, {
+      action: "marketplaceVerifyDealerPhone",
+      targetTable: "marketplaceDealerProfiles",
+      targetId: profile._id,
       orgId: args.orgId,
     });
   },

@@ -48,6 +48,17 @@ crons.cron(
   {}
 );
 
+// Recompute marketplace dealer badges (Phase 60) — daily; also refreshed
+// immediately on the events that most commonly change them (a response
+// scored, a phone manually verified) so this is a freshness backstop, not
+// the only path.
+crons.cron(
+  "marketplace-recompute-dealer-badges",
+  "30 3 * * *",
+  internal.marketplaceDealers.recomputeAllDealerBadges,
+  {}
+);
+
 // Retry membership removals whose external Clerk cleanup did not complete.
 crons.interval(
   "membership-offboarding-retries",

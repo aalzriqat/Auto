@@ -33,6 +33,7 @@ type SnapshotVehicle = {
 type BrowseVehicle = {
   orgId: Id<"organizations">;
   dealershipName: string;
+  dealerBadges: string[];
   siteUrl: string | null;
   id: string;
   slug: string;
@@ -114,6 +115,7 @@ export const search = query({
         merged.push({
           orgId,
           dealershipName,
+          dealerBadges: profile.badges,
           siteUrl,
           id: vehicle.id,
           slug: vehicle.slug ?? vehicle.id,

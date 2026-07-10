@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useQuery } from "convex/react";
 import Link from "next/link";
 import { api } from "@/convex/_generated/api";
-import { Car, Globe2, MapPin, Search, Store, Wallet } from "lucide-react";
+import { Car, Globe2, MapPin, Search, ShieldCheck, Store, Wallet, Zap } from "lucide-react";
 
 type Lang = "en" | "ar";
 
@@ -24,6 +24,8 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     loadMore: "Load more",
     viewListing: "View listing",
     financeAvailable: "Finance available",
+    verifiedPhone: "Verified dealer",
+    fastResponse: "Fast responder",
     toggleLang: "العربية",
     requestInstead: "Can't find it? Request a car instead",
   },
@@ -42,6 +44,8 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     loadMore: "تحميل المزيد",
     viewListing: "عرض السيارة",
     financeAvailable: "التمويل متاح",
+    verifiedPhone: "معرض موثّق",
+    fastResponse: "رد سريع",
     toggleLang: "English",
     requestInstead: "لم تجد ما تبحث عنه؟ اطلب سيارة بدلاً من ذلك",
   },
@@ -58,6 +62,7 @@ type SearchFilters = {
 type BrowseVehicle = {
   orgId: string;
   dealershipName: string;
+  dealerBadges: string[];
   siteUrl: string | null;
   id: string;
   slug: string;
@@ -91,14 +96,25 @@ function VehicleCard({ vehicle, t }: { readonly vehicle: BrowseVehicle; readonly
         <p className="text-sm text-slate-500 flex items-center gap-1 truncate">
           <MapPin className="h-3.5 w-3.5 shrink-0" />
           {vehicle.dealershipName}
+          {vehicle.dealerBadges.includes("VERIFIED_PHONE") && (
+            <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-emerald-600" aria-label={t.verifiedPhone} />
+          )}
         </p>
         {vehicle.price != null && <p className="text-lg font-bold text-slate-950">{vehicle.price.toLocaleString()} JOD</p>}
-        {vehicle.financeAvailable && (
-          <span className="inline-flex w-fit items-center gap-1 rounded-full bg-emerald-50 text-emerald-700 text-[11px] font-medium px-2 py-0.5">
-            <Wallet className="h-3 w-3" />
-            {t.financeAvailable}
-          </span>
-        )}
+        <div className="flex flex-wrap gap-1.5">
+          {vehicle.financeAvailable && (
+            <span className="inline-flex w-fit items-center gap-1 rounded-full bg-emerald-50 text-emerald-700 text-[11px] font-medium px-2 py-0.5">
+              <Wallet className="h-3 w-3" />
+              {t.financeAvailable}
+            </span>
+          )}
+          {vehicle.dealerBadges.includes("FAST_RESPONSE") && (
+            <span className="inline-flex w-fit items-center gap-1 rounded-full bg-amber-50 text-amber-700 text-[11px] font-medium px-2 py-0.5">
+              <Zap className="h-3 w-3" />
+              {t.fastResponse}
+            </span>
+          )}
+        </div>
         {vehicle.siteUrl && (
           <a
             href={`${vehicle.siteUrl}/inventory/${vehicle.slug}`}

@@ -133,6 +133,24 @@ describe("respond", () => {
     expect(profile?.avgResponseMinutes).toBeLessThanOrEqual(10.1);
   });
 
+  test("awards FAST_RESPONSE once enough quick responses are recorded (Phase 60)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, asSales } = await seedDealerOrg(t);
+
+    for (let i = 0; i < 3; i++) {
+      const requestId = await seedRequest(t, { buyerPhone: `+96279900000${i}` });
+      const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+      await seedMatch(t, requestId, orgId, { matchedAt: fiveMinutesAgo - 60000, notifiedAt: fiveMinutesAgo });
+      await asSales.mutation(api.marketplaceResponses.respond, { orgId, requestId, kind: "HAVE_MATCH" });
+    }
+
+    const profile = await t.run((ctx) =>
+      ctx.db.query("marketplaceDealerProfiles").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique()
+    );
+    expect(profile?.totalResponses).toBe(3);
+    expect(profile?.badges).toContain("FAST_RESPONSE");
+  });
+
   test("marks the request FULFILLED on a positive response but not on NOT_AVAILABLE", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     const { orgId: orgA, asSales: asSalesA } = await seedDealerOrg(t, { name: "Dealer A" });

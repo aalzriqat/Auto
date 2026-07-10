@@ -8,11 +8,11 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "@/components/ui/sonner";
-import { MessageCircle, CheckCircle2, Ban, Car, Eye, TrendingDown } from "lucide-react";
+import { MessageCircle, CheckCircle2, Ban, Car, Eye, ShieldCheck, TrendingDown, Zap } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { buildWhatsAppDeepLink } from "@/lib/whatsappDeepLink";
 
-type PageView = "requests" | "reports";
+type PageView = "requests" | "reports" | "dealers";
 type RequestStatus = "OPEN" | "MATCHED" | "FULFILLED" | "EXPIRED" | "SPAM";
 
 const STATUS_TABS: { label: string; value: RequestStatus | undefined }[] = [
@@ -181,6 +181,63 @@ function WeeklyReportsView() {
   );
 }
 
+function DealersView() {
+  const dealers = useQuery(api.adminMarketplace.listDealerProfiles, {});
+  const verifyPhone = useMutation(api.adminMarketplace.verifyDealerPhone);
+
+  async function handleVerify(orgId: Id<"organizations">) {
+    try {
+      await verifyPhone({ orgId });
+      toast.success("Marked phone verified.");
+    } catch {
+      toast.error("Failed to mark phone verified.");
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-slate-400">
+        Confirm a dealer&apos;s WhatsApp number by calling or messaging it directly, then mark it verified here — there&apos;s no
+        automated OTP send yet (blocked on Meta Business Verification, master plan A5b).
+      </p>
+      {dealers === undefined && <p className="text-sm text-slate-400">Loading...</p>}
+      {dealers?.length === 0 && <p className="text-sm text-slate-400">No opted-in dealers.</p>}
+
+      {(dealers ?? []).map((dealer) => (
+        <Card key={dealer.orgId} className="p-4 bg-slate-900 border-slate-800 space-y-2">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-semibold text-slate-100">{dealer.dealershipName}</span>
+              <span className="text-sm text-slate-400">{dealer.whatsappNumber ?? "No WhatsApp number on file"}</span>
+              {dealer.badges.includes("FAST_RESPONSE") && (
+                <Badge variant="outline" className="text-[10px] border-amber-600 text-amber-400">
+                  <Zap className="h-3 w-3 me-1" />
+                  Fast response
+                </Badge>
+              )}
+            </div>
+            {dealer.phoneVerifiedAt ? (
+              <span className="flex items-center gap-1 text-emerald-400 text-xs">
+                <ShieldCheck className="h-3.5 w-3.5" />
+                Verified {new Date(dealer.phoneVerifiedAt).toLocaleDateString()}
+              </span>
+            ) : dealer.whatsappNumber ? (
+              <Button size="sm" variant="outline" onClick={() => handleVerify(dealer.orgId)}>
+                <ShieldCheck className="h-3.5 w-3.5 me-1" />
+                Mark phone verified
+              </Button>
+            ) : null}
+          </div>
+          <p className="text-xs text-slate-500">
+            {dealer.totalResponses} response(s)
+            {dealer.avgResponseMinutes != null ? ` · ${Math.round(dealer.avgResponseMinutes)} min avg reply` : ""}
+          </p>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
 export default function AdminMarketplacePage() {
   const [view, setView] = useState<PageView>("requests");
   const [statusFilter, setStatusFilter] = useState<RequestStatus | undefined>(undefined);
@@ -222,9 +279,13 @@ export default function AdminMarketplacePage() {
         <Button size="sm" variant={view === "reports" ? "default" : "outline"} onClick={() => setView("reports")}>
           Weekly Reports
         </Button>
+        <Button size="sm" variant={view === "dealers" ? "default" : "outline"} onClick={() => setView("dealers")}>
+          Dealers
+        </Button>
       </div>
 
       {view === "reports" && <WeeklyReportsView />}
+      {view === "dealers" && <DealersView />}
 
       {view === "requests" && (
         <>

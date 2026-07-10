@@ -158,4 +158,31 @@ describe("adminMarketplace", () => {
     const auditRows = await t.run((ctx) => ctx.db.query("adminAuditLog").collect());
     expect(auditRows.some((row) => row.action === "marketplaceMarkWeeklyReportSent")).toBe(true);
   });
+
+  test("listDealerProfiles rejects a non-super-admin caller and lists opted-in dealers", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { asAdmin, asMember, orgId } = await seedRequestWithMatch(t);
+
+    await expect(asMember.query(api.adminMarketplace.listDealerProfiles, {})).rejects.toThrow();
+
+    const dealers = await asAdmin.query(api.adminMarketplace.listDealerProfiles, {});
+    expect(dealers).toHaveLength(1);
+    expect(dealers[0]).toMatchObject({ orgId, whatsappNumber: "+962791111111", phoneVerifiedAt: null });
+  });
+
+  test("verifyDealerPhone stamps phoneVerifiedAt, refreshes badges, and writes an audit log", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { asAdmin, orgId } = await seedRequestWithMatch(t);
+
+    await asAdmin.mutation(api.adminMarketplace.verifyDealerPhone, { orgId });
+
+    const profile = await t.run((ctx) =>
+      ctx.db.query("marketplaceDealerProfiles").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique()
+    );
+    expect(profile?.phoneVerifiedAt).toBeTypeOf("number");
+    expect(profile?.badges).toContain("VERIFIED_PHONE");
+
+    const auditRows = await t.run((ctx) => ctx.db.query("adminAuditLog").collect());
+    expect(auditRows.some((row) => row.action === "marketplaceVerifyDealerPhone")).toBe(true);
+  });
 });

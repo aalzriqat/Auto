@@ -3,6 +3,7 @@ import { mutation, query, MutationCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireTenantAuth } from "./utils/tenancy";
+import { refreshDealerBadges } from "./marketplaceDealers";
 
 const MAX_NOTE_CHARS = 1000;
 const MAX_LISTED_REQUESTS = 100;
@@ -196,4 +197,6 @@ async function updateResponseScore(
     totalResponses: previousTotal + 1,
     updatedAt: Date.now(),
   });
+
+  await refreshDealerBadges(ctx, { ...profile, avgResponseMinutes: newAvg, totalResponses: previousTotal + 1 });
 }

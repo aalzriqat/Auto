@@ -1,6 +1,6 @@
 import { v } from "convex/values";
-import { query, mutation, QueryCtx, MutationCtx } from "./_generated/server";
-import { Id } from "./_generated/dataModel";
+import { query, mutation, internalMutation, QueryCtx, MutationCtx } from "./_generated/server";
+import { Doc, Id } from "./_generated/dataModel";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireTenantAuth } from "./utils/tenancy";
 import { hasPlanFeature } from "./subscriptions";
@@ -9,6 +9,80 @@ const MAX_AREAS = 20;
 const MAX_BRANDS = 40;
 const MAX_DIRECTORY_ROWS = 100;
 const MAX_ACTIVE_VEHICLE_SAMPLE = 200;
+
+// Phase 60 badge thresholds.
+const FAST_RESPONSE_MAX_AVG_MINUTES = 60;
+const FAST_RESPONSE_MIN_SAMPLE = 3;
+
+export type MarketplaceBadge = "VERIFIED_PHONE" | "VERIFIED_LOCATION" | "FAST_RESPONSE" | "FINANCE_AVAILABLE" | "FOUNDING_DEALER";
+
+async function hasActiveFinanceCompany(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">): Promise<boolean> {
+  const companies = await ctx.db
+    .query("financeCompanies")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+  return companies.some((company) => company.isActive);
+}
+
+/** Pure — computes VERIFIED_PHONE/FAST_RESPONSE/FINANCE_AVAILABLE from current profile state; leaves any other pre-existing badges (VERIFIED_LOCATION/FOUNDING_DEALER) untouched since they're not computed by this phase. */
+export function computeBadges(
+  profile: Pick<Doc<"marketplaceDealerProfiles">, "badges" | "avgResponseMinutes" | "totalResponses" | "phoneVerifiedAt">,
+  financeAvailable: boolean
+): MarketplaceBadge[] {
+  const computed = new Set<MarketplaceBadge>(["VERIFIED_LOCATION", "FOUNDING_DEALER"].filter((badge) =>
+    profile.badges.includes(badge as MarketplaceBadge)
+  ) as MarketplaceBadge[]);
+
+  if (profile.phoneVerifiedAt) computed.add("VERIFIED_PHONE");
+  if (profile.totalResponses >= FAST_RESPONSE_MIN_SAMPLE && (profile.avgResponseMinutes ?? Infinity) <= FAST_RESPONSE_MAX_AVG_MINUTES) {
+    computed.add("FAST_RESPONSE");
+  }
+  if (financeAvailable) computed.add("FINANCE_AVAILABLE");
+
+  return Array.from(computed);
+}
+
+/** Lower ranks first: verified + fast-responding dealers surface above unverified/slow ones, tiebroken by response time then registration order — same ordering signal Phase 57 already uses to pick which dealers get a request. */
+export function compareDealerRank(
+  a: Pick<Doc<"marketplaceDealerProfiles">, "badges" | "avgResponseMinutes" | "createdAt">,
+  b: Pick<Doc<"marketplaceDealerProfiles">, "badges" | "avgResponseMinutes" | "createdAt">
+): number {
+  const fastA = a.badges.includes("FAST_RESPONSE") ? 0 : 1;
+  const fastB = b.badges.includes("FAST_RESPONSE") ? 0 : 1;
+  if (fastA !== fastB) return fastA - fastB;
+
+  const scoreA = a.avgResponseMinutes ?? Number.POSITIVE_INFINITY;
+  const scoreB = b.avgResponseMinutes ?? Number.POSITIVE_INFINITY;
+  if (scoreA !== scoreB) return scoreA - scoreB;
+
+  return a.createdAt - b.createdAt;
+}
+
+/** Recomputes and persists badges for one dealer profile — shared by the daily cron and the immediate post-response/post-verification refresh, so a dealer doesn't wait up to a day to see FAST_RESPONSE/VERIFIED_PHONE reflected. */
+export async function refreshDealerBadges(ctx: MutationCtx, profile: Doc<"marketplaceDealerProfiles">): Promise<void> {
+  const financeAvailable = await hasActiveFinanceCompany(ctx, profile.orgId);
+  const nextBadges = computeBadges(profile, financeAvailable);
+  const changed =
+    nextBadges.length !== profile.badges.length || nextBadges.some((badge) => !profile.badges.includes(badge));
+  if (changed) {
+    await ctx.db.patch(profile._id, { badges: nextBadges, updatedAt: Date.now() });
+  }
+}
+
+/** Daily cron entrypoint (Phase 60) — recomputes FAST_RESPONSE/FINANCE_AVAILABLE for every opted-in dealer, since both can drift without any single triggering event (rolling average decay, a finance company being deactivated). */
+export const recomputeAllDealerBadges = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const profiles = await ctx.db
+      .query("marketplaceDealerProfiles")
+      .withIndex("by_opted_in", (q) => q.eq("isOptedIn", true))
+      .collect();
+    for (const profile of profiles) {
+      if (profile.isDeleted) continue;
+      await refreshDealerBadges(ctx, profile);
+    }
+  },
+});
 
 function normalizeStringList(values: string[], max: number): string[] {
   const cleaned = values.map((value) => value.trim()).filter((value) => value.length > 0);
@@ -103,6 +177,7 @@ export const listPublicDirectory = query({
     const rows = await Promise.all(
       profiles
         .filter((profile) => !profile.isDeleted)
+        .sort(compareDealerRank)
         .map(async (profile) => {
           const org = await ctx.db.get(profile.orgId);
           if (!org || org.suspended) return null;
