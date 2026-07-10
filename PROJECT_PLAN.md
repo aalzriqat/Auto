@@ -1235,6 +1235,8 @@ Each phase reuses the established pattern: immutable event table → posting rul
 > **PR #52** (Phases 56+57, branch `feature/phase-56-marketplace-directory`): https://github.com/aalzriqat/Auto/pull/52 — **merged to `main` 2026-07-10** (merge commit `ee520e3`) after CI/CodeRabbit review addressed. **Standing rule for this epic: open/update a PR after each phase and wait for review comments before starting the next phase** — do not keep stacking phases onto an unreviewed branch.
 >
 > ⚠️ **Non-engineering blocker in progress:** AutoFlow is on Meta's WhatsApp test number; Business Verification not yet done. Doesn't block Phase 57/58 engineering (WhatsApp degrades gracefully to in-app/email everywhere), but does block WhatsApp reaching real dealers beyond a small manual allowlist until verification clears. See master plan §0.5/A5b.
+>
+> **PR #53** (hotfix, `fix/backfill-marketplace-permissions`): https://github.com/aalzriqat/Auto/pull/53 — legacy OWNER role rows missing the explicit `isSystemOwnerRole` flag get `FORBIDDEN` on any newly-added permission, marketplace ones included. Deployed to prod and backfill migration run 2026-07-10, fixed across all 3 production orgs. See `feedback_new_permission_needs_backfill` — this pattern recurs on every future permission addition until an org's OWNER role is migrated.
 
 ## Phase 56 — Dealer Opt-In + Marketplace Directory ✅
 
@@ -1254,7 +1256,7 @@ Each phase reuses the established pattern: immutable event table → posting rul
 ### Remaining / not yet done
 
 - [x] Merged to `main` 2026-07-10 (PR #52, merge commit `ee520e3`)
-- [ ] `npx convex deploy` not run — nothing here is live
+- [x] `npx convex deploy` run 2026-07-10 (kindly-hound-172) — live in production
 - [ ] Changelog entry deliberately not added yet (per standing rule: entries are for shipped/deployed changes)
 
 ---
@@ -1277,7 +1279,7 @@ Each phase reuses the established pattern: immutable event table → posting rul
 ### Remaining / not yet done
 
 - [x] Merged to `main` 2026-07-10 (PR #52, merge commit `ee520e3`)
-- [ ] `npx convex deploy` not run
+- [x] `npx convex deploy` run 2026-07-10 (kindly-hound-172) — live in production
 - [ ] `NEXT_PUBLIC_TURNSTILE_SITE_KEY` must be confirmed set for the public request form to render the Turnstile widget (reuses the same site key as the dealer-site lead forms)
 
 ---
@@ -1318,8 +1320,8 @@ Each phase reuses the established pattern: immutable event table → posting rul
 | 40 | Mobile PWA | 3 — Enterprise & Scale | 🟨 Push/PWA slice MERGED + DEPLOYED to prod (2026-07-05); VIN scanner/GPS check-in not started |
 | 41 | Accounting Depth | 3 — Enterprise & Scale | 🟨 Code complete, pending UI verification (2026-07-06) |
 | 42 | Open API & Integration Hub | 3 — Enterprise & Scale | ⬜ Not started |
-| 56 | Dealer Opt-In + Marketplace Directory | Dealer Network Marketplace | 🟨 Merged to main 2026-07-10 (PR #52); convex deploy pending |
-| 57 | Request a Car: Capture + Fan-Out (+ consent/cap/intent-tier) | Dealer Network Marketplace | 🟨 Merged to main 2026-07-10 (PR #52); convex deploy pending |
+| 56 | Dealer Opt-In + Marketplace Directory | Dealer Network Marketplace | ✅ Merged + DEPLOYED to prod 2026-07-10 (PR #52 + hotfix PR #53) |
+| 57 | Request a Car: Capture + Fan-Out (+ consent/cap/intent-tier) | Dealer Network Marketplace | ✅ Merged + DEPLOYED to prod 2026-07-10 (PR #52 + hotfix PR #53) |
 | 58 | Dealer Response + Lead Attribution | Dealer Network Marketplace | ⬜ Not started |
 | 58B | Weekly Dealer Proof Report | Dealer Network Marketplace | ⬜ Not started |
 | 59 | Public Marketplace Browse/Search | Dealer Network Marketplace | ⬜ Not started |
