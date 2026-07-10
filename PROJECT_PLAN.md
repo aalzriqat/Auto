@@ -1265,6 +1265,12 @@ Each phase reuses the established pattern: immutable event table → posting rul
 
 ---
 
+## Phase 58B — Weekly Dealer Proof Report
+
+**Branch:** `feature/phase-58b-marketplace-weekly-report` · **Status:** ⬜ Not started — see master plan for full spec. Added 2026-07-10 after review (dealer retention needs proof, not just leads).
+
+---
+
 ## Phases 59–64 — Public Browse, Trust, Monetization
 
 **Status:** ⬜ Not started — see master plan §4 Release 2/3 for full spec (public browse/search, verified badges, trust passport, finance-first search + trade-in requests, monetization, WhatsApp-native intake).
@@ -1290,8 +1296,9 @@ Each phase reuses the established pattern: immutable event table → posting rul
 | 41 | Accounting Depth | 3 — Enterprise & Scale | 🟨 Code complete, pending UI verification (2026-07-06) |
 | 42 | Open API & Integration Hub | 3 — Enterprise & Scale | ⬜ Not started |
 | 56 | Dealer Opt-In + Marketplace Directory | Dealer Network Marketplace | 🟨 Built + tested on branch (2026-07-10); not merged, convex deploy pending |
-| 57 | Request a Car: Capture + Fan-Out | Dealer Network Marketplace | ⬜ Not started |
+| 57 | Request a Car: Capture + Fan-Out (+ consent/cap/intent-tier) | Dealer Network Marketplace | ⬜ Not started |
 | 58 | Dealer Response + Lead Attribution | Dealer Network Marketplace | ⬜ Not started |
+| 58B | Weekly Dealer Proof Report | Dealer Network Marketplace | ⬜ Not started |
 | 59 | Public Marketplace Browse/Search | Dealer Network Marketplace | ⬜ Not started |
 | 60 | Verified Badges + Response Ranking | Dealer Network Marketplace | ⬜ Not started |
 | 61 | Trust Passport (v1, self-reported) | Dealer Network Marketplace | ⬜ Not started |

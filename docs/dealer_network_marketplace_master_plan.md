@@ -1,8 +1,8 @@
 # AutoFlow Dealer Network — Marketplace Master Plan
 
-**Date:** 2026-07-10
+**Date:** 2026-07-10 (revised same day after a review round — see A10/A11, Phase 57 consent/cap, Phase 58B)
 **Owner:** aalzriqat
-**Status:** Planning → ready to sequence into PROJECT_PLAN.md as Phases 56–64
+**Status:** Phase 56 built on branch (not merged/deployed) · Phases 57–64 planned → sequence into PROJECT_PLAN.md as they start
 **Scope:** Turn AutoFlow into a two-sided demand-generation marketplace — buyers submit "I want this car" requests, AutoFlow fans them out to matching dealers, dealers reply and convert into tracked leads with gross-profit attribution. Built as a layer **on top of** the dealer-site infrastructure that already exists, not a rebuild.
 
 > **Non-negotiables (project dev rules, unchanged).** All logic backend-only (Convex). Every mutation/action in `try/catch`, `console.error(raw)`, return `{ success:false, error:"An unexpected error occurred. Please try again later." }`. Optional chaining + fallbacks on all rendered DB data. Zero implicit `any`. Bilingual EN/AR (RTL) for every surface. Soft-delete pattern (`isDeleted/deletedAt/deletedBy`) on every new table. No LLM in Releases 1–3 (matches existing roadmap discipline — AI upgrades route to the deferred backlog, see §5).
@@ -28,8 +28,10 @@ Do not start Phase 56 until this is run: for 2–3 weeks, manually operate the "
 | A5 | **Dealer notification reuses Phase 28's multi-channel system + existing WhatsApp send infra**, not a new messaging channel. New notification type `MARKETPLACE_REQUEST_MATCHED` through [`convex/utils/notifications.ts`](../convex/utils/notifications.ts) + [`convex/whatsappSend.ts`](../convex/whatsappSend.ts). | WhatsApp delivery is already confirmed working in production (System User token, per [[project_whatsapp_notification_setup]]). No new integration risk. |
 | A6 | **Attribution reuses the Social Command Center spine pattern**, not a bespoke scheme. Widen `leads` (currently free-text `source: v.optional(v.string())` at [schema.ts:756](../convex/schema.ts#L756)) with `sourceChannel: "marketplace"` and `marketplaceRequestId?`. Gross-profit rollups reuse [`reports.ts:304-305`](../convex/reports.ts#L304-L305) verbatim. | Same lesson already learned building the Social Command Center plan: retrofitting attribution later costs ~5×. Do it at write time here too. |
 | A7 | **Monetization reuses the existing plan-feature gate**, not a new billing concept. [`websites.ts:952` `hasPlanFeature(ctx, orgId, "websiteBuilder")`](../convex/websites.ts#L952) is an existing pattern — add `"marketplace"` / `"marketplaceFeatured"` feature keys to the same gate. | `subscriptions.ts` / `subscriptionGates.ts` already exist and are tested. Don't build a parallel billing system for one feature. |
-| A8 | **No LLM in Releases 1–3.** "Turn a WhatsApp voice note into a listing" and "auto-generate car descriptions" are explicitly deferred to the AI backlog (new entry, alongside existing Phases 50–55). Dealer intake in V1 is a guided WhatsApp flow with structured replies, not free-text parsing. | Matches the project's standing no-LLM-budget rule (`project_autoflow_plan`). Rule-based V1 now; LLM upgrade slots in later behind the same interface, per the Social Command Center's A5 precedent. |
+| A8 | **No LLM in Releases 1–3.** "Turn a WhatsApp voice note into a listing" and "auto-generate car descriptions" are explicitly deferred to the AI backlog (new entry, alongside existing Phases 50–55). Dealer intake in V1 is a guided WhatsApp flow with structured replies, not free-text parsing. **Verified:** this is a build-effort choice, not a Meta-approval blocker — the inbound webhook is already subscribed/approved (`convex/http.ts` `/whatsapp-webhook`), and free-form *session replies* within the 24h customer-service window need no new template approval (only new business-initiated templates would). What's actually missing is code: `whatsappSend.ts` only sends pre-approved templates today, and no conversational state machine exists anywhere in the codebase. | Matches the project's standing no-LLM-budget rule (`project_autoflow_plan`). Rule-based V1 now; LLM upgrade slots in later behind the same interface, per the Social Command Center's A5 precedent. |
 | A9 | **New permission group**, not reuse of `requireTenantAuth` alone. A dealer must only ever see requests fanned out to them and their own responses — never the full request pool or other dealers' offers. Added `marketplace:respond`, `marketplace:settings`, `marketplace:analytics` to [`convex/utils/permissions.ts`](../convex/utils/permissions.ts): all three → OWNER (implicit, all permissions) + MANAGER; `respond` only → SALES. | Mirrors the existing split exactly — MANAGER gets the full `WEBSITE_*`/`VIEW_REPORTS`-equivalent set, SALES gets only the day-to-day action (`CREATE_LEADS`-equivalent), not settings/analytics. Confirmed against the live `DEFAULT_ROLE_TEMPLATES` in Phase 56. |
+| A10 | **Buyer consent + capped fan-out are required, not optional.** Every `marketplaceRequests` submission must show explicit consent copy before sharing the buyer's phone with dealers, and matching caps out at `MAX_MATCHED_DEALERS` (5) per request. | Original Phase 57 spec didn't state a cap or consent copy — sharing a buyer's phone number with an unbounded number of third parties with no disclosure is a real privacy/trust problem, not a nice-to-have. Caught in review 2026-07-10. Precedent for the copy pattern already exists: `app/dealer-site/[[...slug]]/page.tsx`'s `contactDisclaimer` string, generalized here to the multi-dealer case. |
+| A11 | **Internal ops tooling extends the existing `/admin` super-admin console — it does not get a new one.** `convex/adminData.ts`'s `ADMIN_TABLES` allowlist is a generic cross-org browse/edit surface keyed on `{table, index: "by_org"}`; add `marketplaceDealerProfiles` now, and `marketplaceResponses` when Phase 58 ships (both are `by_org`-indexed). `marketplaceRequests` has no `orgId` (per A1/A3) so it needs one small new admin-only query that lists/filters without an org index, plus 1–2 admin-only mutations for "assign to dealer" / "mark spam" once Phase 57 exists. | A from-scratch "AutoFlow Marketplace Console" was proposed in review; ~80% of it already exists (`app/admin/`, `convex/admin*.ts`, per CLAUDE.md). Confirmed by reading `adminData.ts` directly — the allowlist pattern is genuinely generic, not per-table bespoke code. |
 
 ---
 
@@ -51,7 +53,7 @@ This is a demand-and-supply cold-start problem, not just a build. The plan fails
 - **Don't pitch software.** Pitch buyers: *"إحنا بنعملك صفحة مجانية للمعرض، وبنوصلك بطلبات زباين بدوروا على سيارات."* Never lead with "use our system."
 - **Launch one area at a time** (e.g. وادي صقرة first), not all of Jordan. Ten dealers in one area creates local pressure on the eleventh ("أغلب المعارض حواليك ظهروا على AutoFlow") — ten dealers spread across the country creates none.
 - **Founding Dealer package** (first 30–50 dealers): free marketplace opt-in, free leads for a fixed window (e.g. 60 days), `FOUNDING_DEALER` badge, priority placement while the badge is active. Time-box it explicitly — "free forever" isn't a plan, it's a cost center with no conversion trigger.
-- **Dealer onboarding must be WhatsApp-only at first**, not a dashboard signup. A staff member (or the dealer's existing WhatsApp) sends business name, location, phone, 5–10 car photos; AutoFlow staff (not the dealer) creates the profile and first listings. "خلص، صفحتك جاهزة" beats "please register and fill in these fields."
+- **Dealer onboarding must be WhatsApp-only at first**, not a dashboard signup. A staff member (or the dealer's existing WhatsApp) sends business name, location, phone, 5–10 car photos; AutoFlow staff (not the dealer) creates the profile and first listings. "خلص، صفحتك جاهزة" beats "please register and fill in these fields." **This needs no new engineering** — staff creates the dealer's org and adds vehicles through the existing Add Vehicle flow using whatever the dealer sent over WhatsApp. The one small gap: opting the dealer into the marketplace without impersonating them requires `marketplaceDealerProfiles` in the `/admin` allowlist (A11) — a one-line follow-up to Phase 56, not a phase of its own.
 - **Buyer acquisition is the harder cold-start side** — the pasted plan under-weights this. Don't assume dealer supply alone creates buyer demand; budget for it explicitly (paid social, WhatsApp groups, referral loop from each fulfilled request) starting alongside Release 1, not after.
 
 ---
@@ -60,10 +62,12 @@ This is a demand-and-supply cold-start problem, not just a build. The plan fails
 
 ### Release 1 — Marketplace foundation (Phases 56–58)
 
-#### Phase 56 — Dealer opt-in + marketplace directory
+#### Phase 56 — Dealer opt-in + marketplace directory ✅ built on branch
 
-**Branch:** `feature/phase-56-marketplace-directory`
+**Branch:** `feature/phase-56-marketplace-directory` (committed 2026-07-10, not merged/deployed)
 **Goal:** An org can opt into the marketplace and appear in a public, cross-org dealer directory — reusing its existing published dealer-site inventory.
+
+**Follow-up (small, not yet done):** add `marketplaceDealerProfiles` (index `by_org`) to `ADMIN_TABLES` in [`convex/adminData.ts`](../convex/adminData.ts) per A11 — unblocks staff opting a dealer in without impersonation, needed for the WhatsApp-relay onboarding flow in §3.
 
 **Schema:**
 - `marketplaceDealerProfiles`: `orgId`, `isOptedIn`, `areas: string[]` (cities served), `brandsCarried: string[]`, `whatsappNumber`, `badges: string[]` (`VERIFIED_PHONE|VERIFIED_LOCATION|FAST_RESPONSE|FINANCE_AVAILABLE|FOUNDING_DEALER`), `responseScore` (`avgResponseMinutes?`, `totalResponses`, `totalAccepted`), `tier: FREE_FOUNDING|LEAD_PACKAGE|FEATURED`, `leadQuota?`, `leadsUsedThisPeriod`, soft-delete. Index `by_org`, `by_opted_in`.
@@ -82,16 +86,18 @@ This is a demand-and-supply cold-start problem, not just a build. The plan fails
 **Goal:** Buyer submits a car request; it fans out to matching opted-in dealers via WhatsApp + in-app notification.
 
 **Schema:**
-- `marketplaceRequests`: no `orgId` (per A1/A3). `createdAt`, `status: OPEN|MATCHED|FULFILLED|EXPIRED|SPAM`, `buyerFirstName`, `buyerPhone`, `buyerWhatsApp?`, `buyerCity`, `make?`, `model?`, `yearMin?`, `yearMax?`, `priceMin?`, `priceMax?`, `paymentType: CASH|FINANCE|EITHER`, `monthlyBudget?`, `matchedOrgIds: Id<"organizations">[]`, `clientFingerprint`, `clientIpHash`, `expiresAt`. Index `by_status`, `by_city`.
+- `marketplaceRequests`: no `orgId` (per A1/A3). `createdAt`, `status: OPEN|MATCHED|FULFILLED|EXPIRED|SPAM`, `buyerFirstName`, `buyerPhone`, `buyerWhatsApp?`, `buyerCity`, `make?`, `model?`, `yearMin?`, `yearMax?`, `priceMin?`, `priceMax?`, `paymentType: CASH|FINANCE|EITHER`, `monthlyBudget?`, `buyerTimeframe: ASAP|THIS_WEEK|THIS_MONTH|JUST_LOOKING`, `buyerIntent: COLD|WARM|HOT` (computed at submission, see below), `consentAcceptedAt: v.number()`, `matchedOrgIds: Id<"organizations">[]` (capped, see below), `clientFingerprint`, `clientIpHash`, `expiresAt`. Index `by_status`, `by_city`.
 
 **Backend:**
-- `marketplaceRequests.ts` — `submitRequest` (public action: Turnstile + `enforcePublicLeadRateLimit` reused from `websites.ts` per A4) → `createRequest` (internal mutation: rule-based match on `areas`/`brandsCarried` from `marketplaceDealerProfiles`, no ML per A8, stamps `matchedOrgIds`).
+- `marketplaceRequests.ts` — `submitRequest` (public action: Turnstile + `enforcePublicLeadRateLimit` reused from `websites.ts` per A4; **rejects if `consentAcceptedAt` wasn't set from an explicit checkbox** per A10) → `createRequest` (internal mutation: rule-based match on `areas`/`brandsCarried` from `marketplaceDealerProfiles`, no ML per A8, stamps up to `MAX_MATCHED_DEALERS = 5` `matchedOrgIds` — ranked by `marketplaceDealerProfiles.responseScore` once Phase 60 ships, by opt-in recency until then; A10).
+- `buyerIntent` computed at submission: `HOT` if `buyerTimeframe` is `ASAP`/`THIS_WEEK` **and** `paymentType`/budget fields are filled in; `WARM` if budget or timeframe is given but not both; `COLD` otherwise. Rule-based, not inferred — shown to dealers in the notification text (e.g. "طلب مؤكد — الزبون ناوي يشتري خلال أسبوع") so a stronger signal reads as a stronger lead.
 - On match: fan-out via `utils/notifications.ts` (new `MARKETPLACE_REQUEST_MATCHED` type) + `whatsappSend.ts` to each matched dealer's `whatsappNumber`.
 - Cron: expire stale `OPEN` requests after N days.
+- Admin: new `adminMarketplace.ts` query (`requireSuperAdmin`) listing `marketplaceRequests` by status — `marketplaceRequests` has no `orgId` so it can't go through the standard `by_org` `ADMIN_TABLES` allowlist path (A11); this is the one genuinely new admin surface this phase needs. Manual "assign to dealer" / "mark spam" mutations ride along here.
 
-**Frontend:** `app/marketplace/request/page.tsx` — public request form, EN/AR, Turnstile-gated.
-**Tests:** matching logic (area + brand overlap), fan-out fires to correct orgs only, rate limiting, expiry cron.
-**Acceptance:** a public request from a buyer in Amman for a brand two opted-in Amman dealers carry produces exactly two WhatsApp notifications and zero to non-matching dealers.
+**Frontend:** `app/marketplace/request/page.tsx` — public request form, EN/AR, Turnstile-gated, **required consent checkbox** with copy: *"بإرسالك الطلب، أنت توافق أن AutoFlow يشارك معلومات طلبك ورقمك مع معارض سيارات مناسبة للتواصل معك."* (EN equivalent for the English locale).
+**Tests:** matching logic (area + brand overlap), fan-out fires to correct orgs only and never exceeds `MAX_MATCHED_DEALERS`, submission rejected without consent, `buyerIntent` computation, rate limiting, expiry cron.
+**Acceptance:** a public request from a buyer in Amman for a brand two opted-in Amman dealers carry produces exactly two WhatsApp notifications and zero to non-matching dealers; submitting without checking consent is rejected client- and server-side.
 
 #### Phase 58 — Dealer response + lead attribution
 
@@ -110,7 +116,17 @@ This is a demand-and-supply cold-start problem, not just a build. The plan fails
 **Tests:** response creates exactly one lead with correct attribution; response-score math; a dealer cannot see requests not routed to them (A9).
 **Acceptance:** dealer taps "I have this car" on a WhatsApp-linked request → a lead appears in their existing Leads table tagged `marketplace`, with zero manual data entry.
 
-**End of Release 1:** the full concierge loop from Section 0 now runs without human intervention — request in, fan-out, dealer reply, attributed lead out.
+#### Phase 58B — Weekly dealer proof report
+
+**Branch:** `feature/phase-58b-marketplace-weekly-report`
+**Goal:** Give founding dealers a reason to keep paying attention — proof, not promises, every week on WhatsApp.
+
+**Backend:** `marketplaceReports.ts` — weekly cron per opted-in dealer aggregating: dealer-site page views (reuses the existing site-visitor-analytics event log), vehicle detail views, requests matched, responses sent, avg response time, most-viewed vehicle, requests lost to non-response (`matchedOrgIds` included but no `marketplaceResponses` row before `expiresAt`). Sends via the existing `whatsappSend.ts` template path (A5) — needs one new approved template (a weekly-summary business-initiated message; unlike Phase 57's dealer-alert flow this **is** outside a 24h reply window, so it does need Meta template approval, same category as the existing `autoflow_notification` templates per A8's finding).
+**Frontend:** none required for V1 — WhatsApp-only, matching the GTM promise; a dashboard mirror is a cheap Phase 60 add-on, not required here.
+**Tests:** aggregation correctness against seeded events/requests/responses; report skipped for dealers with zero activity that week (don't spam an empty report).
+**Acceptance:** an opted-in dealer with at least one request that week receives a WhatsApp summary within a fixed window after the weekly cron fires.
+
+**End of Release 1:** the full concierge loop from Section 0 now runs without human intervention — request in, fan-out, dealer reply, attributed lead out — and dealers get weekly proof it's working.
 
 ---
 
@@ -135,6 +151,8 @@ This is a demand-and-supply cold-start problem, not just a build. The plan fails
 **Frontend:** badge display on directory + browse pages.
 **Tests:** badge computation thresholds; ranking stability.
 **Acceptance:** two otherwise-equal dealers rank by response score, not registration order.
+
+**Considered and deferred: exclusivity/speed mechanic** ("first 3 dealers to respond win exclusivity" / "30-minute priority window for top-ranked dealers"). Rejected for V1 — with 5–10 founding dealers per area, most requests will only reach 1–2 relevant dealers at all, so the mechanic has nothing to create pressure against; it also adds real complexity (claim races between concurrent responses, expiry-window state, what the buyer sees if a window lapses unclaimed). Revisit once a launched area has enough concurrent opted-in dealers per brand/city for "first N respond" to be a meaningful constraint, not a formality.
 
 #### Phase 61 — Trust passport (v1: manual/self-reported)
 
@@ -200,9 +218,10 @@ Add to the existing Phases 50–55 AI backlog table, not built here:
 
 | Phase | Feature | Release | Status |
 |---|---|---|---|
-| 56 | Dealer opt-in + marketplace directory | 1 — Foundation | ⬜ Not started |
-| 57 | Request a Car: capture + fan-out | 1 — Foundation | ⬜ Not started |
+| 56 | Dealer opt-in + marketplace directory | 1 — Foundation | 🟨 Built + tested on branch; not merged/deployed |
+| 57 | Request a Car: capture + fan-out (+ consent/cap/intent-tier) | 1 — Foundation | ⬜ Not started |
 | 58 | Dealer response + lead attribution | 1 — Foundation | ⬜ Not started |
+| 58B | Weekly dealer proof report | 1 — Foundation | ⬜ Not started |
 | 59 | Public marketplace browse/search | 2 — Public + Trust | ⬜ Not started |
 | 60 | Verified badges + response ranking | 2 — Public + Trust | ⬜ Not started |
 | 61 | Trust passport (v1, self-reported) | 2 — Public + Trust | ⬜ Not started |
@@ -210,4 +229,4 @@ Add to the existing Phases 50–55 AI backlog table, not built here:
 | 63 | Monetization: lead packages + featured | 3 — Monetization | ⬜ Not started |
 | 64 | WhatsApp-native dealer intake | 3 — Monetization | ⬜ Not started |
 
-**Critical path:** Section 0 (manual validation) → 56 → 57 → 58 (this alone replicates the manual concierge loop in-product) → GTM ramp starts here in parallel with → 59 → 60 → 61 → 62/63/64.
+**Critical path:** Section 0 (manual validation, waived 2026-07-10 — risk accepted) → 56 (done on branch) → 57 → 58 → 58B (this replicates and then proves the manual concierge loop in-product) → GTM ramp starts here in parallel with → 59 → 60 → 61 → 62/63/64.
