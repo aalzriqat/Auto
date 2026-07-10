@@ -26,6 +26,12 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     financeAvailable: "Finance available",
     verifiedPhone: "Verified dealer",
     fastResponse: "Fast responder",
+    trustSelfReported: "Condition self-reported by dealer",
+    trustPartnerVerified: "Condition partner-verified",
+    trustNoAccidents: "No accidents disclosed",
+    trustAccidentDisclosed: "Accident history disclosed",
+    trustOwnerCount: "previous owner(s)",
+    trustDealerGuarantee: "Dealer guarantee included",
     toggleLang: "العربية",
     requestInstead: "Can't find it? Request a car instead",
   },
@@ -46,6 +52,12 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     financeAvailable: "التمويل متاح",
     verifiedPhone: "معرض موثّق",
     fastResponse: "رد سريع",
+    trustSelfReported: "الحالة موضحة من قبل المعرض",
+    trustPartnerVerified: "الحالة موثّقة من شريك خارجي",
+    trustNoAccidents: "لا يوجد حوادث مصرح عنها",
+    trustAccidentDisclosed: "تم الإفصاح عن تاريخ حوادث",
+    trustOwnerCount: "مالك سابق",
+    trustDealerGuarantee: "يشمل ضمان المعرض",
     toggleLang: "English",
     requestInstead: "لم تجد ما تبحث عنه؟ اطلب سيارة بدلاً من ذلك",
   },
@@ -75,7 +87,35 @@ type BrowseVehicle = {
   financePrice: number | null;
   imageUrls: string[];
   financeAvailable: boolean;
+  inspectionStatus: "NONE" | "SELF_REPORTED" | "PARTNER_VERIFIED";
+  accidentDisclosed: boolean | null;
+  ownerCount: number | null;
+  dealerGuarantee: boolean | null;
 };
+
+/** Phase 61 trust passport — only renders facts the dealer actually reported; every field is optional and falls back to nothing rather than a misleading default (core dev rule: `?.`/`||` fallbacks, no crash on missing data). */
+function TrustInfoPanel({ vehicle, t }: { readonly vehicle: BrowseVehicle; readonly t: Record<string, string> }) {
+  const facts: string[] = [];
+  if (vehicle.inspectionStatus === "SELF_REPORTED") facts.push(t.trustSelfReported);
+  if (vehicle.inspectionStatus === "PARTNER_VERIFIED") facts.push(t.trustPartnerVerified);
+  if (vehicle.accidentDisclosed === false) facts.push(t.trustNoAccidents);
+  if (vehicle.accidentDisclosed === true) facts.push(t.trustAccidentDisclosed);
+  if (vehicle.ownerCount != null) facts.push(`${vehicle.ownerCount} ${t.trustOwnerCount}`);
+  if (vehicle.dealerGuarantee) facts.push(t.trustDealerGuarantee);
+
+  if (facts.length === 0) return null;
+
+  return (
+    <ul className="text-xs text-slate-500 flex flex-col gap-0.5">
+      {facts.map((fact) => (
+        <li key={fact} className="flex items-center gap-1">
+          <ShieldCheck className="h-3 w-3 shrink-0 text-slate-400" />
+          {fact}
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 function VehicleCard({ vehicle, t }: { readonly vehicle: BrowseVehicle; readonly t: Record<string, string> }) {
   return (
@@ -115,6 +155,7 @@ function VehicleCard({ vehicle, t }: { readonly vehicle: BrowseVehicle; readonly
             </span>
           )}
         </div>
+        <TrustInfoPanel vehicle={vehicle} t={t} />
         {vehicle.siteUrl && (
           <a
             href={`${vehicle.siteUrl}/inventory/${vehicle.slug}`}

@@ -15,7 +15,19 @@ const WEBSITE_PERMISSIONS = [
 
 async function seedPublishedDealer(
   t: ReturnType<typeof convexTest>,
-  opts: { name: string; subdomainSlug: string; city: string; withFinance?: boolean; isOptedIn?: boolean }
+  opts: {
+    name: string;
+    subdomainSlug: string;
+    city: string;
+    withFinance?: boolean;
+    isOptedIn?: boolean;
+    trust?: {
+      inspectionStatus?: "SELF_REPORTED" | "PARTNER_VERIFIED";
+      accidentDisclosed?: boolean;
+      ownerCount?: number;
+      dealerGuarantee?: boolean;
+    };
+  }
 ) {
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: opts.name, createdAt: Date.now() }));
   await t.run((ctx) =>
@@ -49,6 +61,10 @@ async function seedPublishedDealer(
       sellingPrice: 14000,
       status: "AVAILABLE",
       isDeleted: false,
+      inspectionStatus: opts.trust?.inspectionStatus,
+      accidentDisclosed: opts.trust?.accidentDisclosed,
+      ownerCount: opts.trust?.ownerCount,
+      dealerGuarantee: opts.trust?.dealerGuarantee,
     })
   );
 
@@ -149,5 +165,33 @@ describe("marketplaceBrowse.search", () => {
     expect(secondPage.vehicles).toHaveLength(1);
     expect(secondPage.isDone).toBe(true);
     expect(secondPage.vehicles[0].orgId).not.toBe(firstPage.vehicles[0].orgId);
+  });
+
+  test("passes through trust-passport fields when disclosed, and safe defaults when not (Phase 61)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    await seedPublishedDealer(t, {
+      name: "Disclosed Dealer",
+      subdomainSlug: "discloseddealer",
+      city: "Amman",
+      trust: { inspectionStatus: "SELF_REPORTED", accidentDisclosed: false, ownerCount: 1, dealerGuarantee: true },
+    });
+    await seedPublishedDealer(t, { name: "Undisclosed Dealer", subdomainSlug: "undiscloseddealer", city: "Amman" });
+
+    const result = await t.query(api.marketplaceBrowse.search, {});
+    const disclosed = result.vehicles.find((v) => v.dealershipName === "Disclosed Dealer");
+    const undisclosed = result.vehicles.find((v) => v.dealershipName === "Undisclosed Dealer");
+
+    expect(disclosed).toMatchObject({
+      inspectionStatus: "SELF_REPORTED",
+      accidentDisclosed: false,
+      ownerCount: 1,
+      dealerGuarantee: true,
+    });
+    expect(undisclosed).toMatchObject({
+      inspectionStatus: "NONE",
+      accidentDisclosed: null,
+      ownerCount: null,
+      dealerGuarantee: null,
+    });
   });
 });

@@ -16,6 +16,8 @@ const MAX_PAGE_SIZE = 60;
 
 const paymentTypeValidator = v.optional(v.union(v.literal("CASH"), v.literal("FINANCE")));
 
+type InspectionStatus = "NONE" | "SELF_REPORTED" | "PARTNER_VERIFIED";
+
 type SnapshotVehicle = {
   id?: string;
   slug?: string;
@@ -28,6 +30,10 @@ type SnapshotVehicle = {
   financePrice?: number | null;
   imageUrls?: string[];
   status?: string;
+  inspectionStatus?: InspectionStatus;
+  accidentDisclosed?: boolean | null;
+  ownerCount?: number | null;
+  dealerGuarantee?: boolean | null;
 };
 
 type BrowseVehicle = {
@@ -46,6 +52,10 @@ type BrowseVehicle = {
   financePrice: number | null;
   imageUrls: string[];
   financeAvailable: boolean;
+  inspectionStatus: InspectionStatus;
+  accidentDisclosed: boolean | null;
+  ownerCount: number | null;
+  dealerGuarantee: boolean | null;
 };
 
 /** Public: cross-org vehicle search, unioning each opted-in dealer's already-published site inventory (master plan A2 — no new listings table). */
@@ -128,6 +138,10 @@ export const search = query({
           financePrice: vehicle.financePrice ?? null,
           imageUrls: vehicle.imageUrls ?? [],
           financeAvailable,
+          inspectionStatus: vehicle.inspectionStatus ?? "NONE",
+          accidentDisclosed: vehicle.accidentDisclosed ?? null,
+          ownerCount: vehicle.ownerCount ?? null,
+          dealerGuarantee: vehicle.dealerGuarantee ?? null,
         });
         if (merged.length >= MAX_MERGED_VEHICLES) break;
       }
