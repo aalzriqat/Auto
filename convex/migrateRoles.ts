@@ -96,3 +96,60 @@ export const backfillFinanceApplicationPermissions = internalMutation({
     return { updatedCount, updates };
   },
 });
+
+/**
+ * One-time backfill for the new Dealer Network Marketplace permissions
+ * (Phase 56/57, PR #52). Same capability-matching approach as
+ * backfillFinanceApplicationPermissions above: any org whose OWNER role
+ * predates this PR still has `isSystemOwnerRole` unset, which makes the
+ * `isSystemOwnerRole()` fallback check in utils/permissions.ts fail closed
+ * against *every* newly-added permission (not just these three) until the
+ * row is explicitly flagged — see that function's own comment. This also
+ * fixes that root cause going forward for the affected org, not just this
+ * one permission set.
+ */
+export const backfillMarketplacePermissions = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const roles = await ctx.db.query("roles").collect();
+    let updatedCount = 0;
+    const updates: string[] = [];
+
+    for (const role of roles) {
+      const has = (p: string) => role.permissions.includes(p);
+      const toAdd = new Set<string>();
+
+      // Manager-capable roles (website management is a reliable MANAGER-only
+      // signal in the default templates, unlike name which orgs can rename).
+      if (has(PERMISSIONS.WEBSITE_MANAGE)) {
+        toAdd.add(PERMISSIONS.MARKETPLACE_SETTINGS);
+        toAdd.add(PERMISSIONS.MARKETPLACE_RESPOND);
+        toAdd.add(PERMISSIONS.MARKETPLACE_ANALYTICS);
+      }
+      // Sales-capable roles only get the day-to-day action, matching the
+      // SALES default template (not settings/analytics).
+      if (has(PERMISSIONS.CREATE_SALES_REQUEST)) {
+        toAdd.add(PERMISSIONS.MARKETPLACE_RESPOND);
+      }
+      // Owners always get full marketplace authority, same reasoning as the
+      // finance-application backfill above.
+      if (isSystemOwnerRole(role) || normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME) {
+        toAdd.add(PERMISSIONS.MARKETPLACE_SETTINGS);
+        toAdd.add(PERMISSIONS.MARKETPLACE_RESPOND);
+        toAdd.add(PERMISSIONS.MARKETPLACE_ANALYTICS);
+      }
+
+      const missing = [...toAdd].filter((p) => !has(p));
+      if (missing.length > 0 || (normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME && !role.isSystemOwnerRole)) {
+        await ctx.db.patch(role._id, {
+          permissions: [...role.permissions, ...missing],
+          ...(normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME ? { isSystemOwnerRole: true } : {}),
+        });
+        updatedCount++;
+        updates.push(`${role.name} (${role.orgId}): +${missing.join(", ")}`);
+      }
+    }
+
+    return { updatedCount, updates };
+  },
+});
