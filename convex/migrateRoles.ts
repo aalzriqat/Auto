@@ -1,4 +1,5 @@
-import { internalMutation } from "./_generated/server";
+import { internalMutation, MutationCtx } from "./_generated/server";
+import { Doc } from "./_generated/dataModel";
 import {
   DEFAULT_ROLE_TEMPLATES,
   PERMISSIONS,
@@ -20,7 +21,7 @@ export const fixExistingRoles = internalMutation({
         // We only want to ensure VIEW_USERS is present for these specific roles
         // Or we can just sync the permissions entirely if they haven't been customized,
         // but for safety, let's just add VIEW_USERS if it's in the template but missing from the DB.
-        
+
         if (template.permissions.includes("view:users") && !role.permissions.includes("view:users")) {
           await ctx.db.patch(role._id, {
             permissions: [...role.permissions, "view:users"],
@@ -29,10 +30,38 @@ export const fixExistingRoles = internalMutation({
         }
       }
     }
-    
+
     return `Fixed ${updatedCount} roles by adding view:users permission.`;
   },
 });
+
+/**
+ * Shared by the capability-matching backfills below: patches a role with
+ * whichever permissions from `toAdd` it's missing, and — for any OWNER-named
+ * row — explicitly sets `isSystemOwnerRole: true` if unset. That flag matters
+ * beyond just the permissions array: `isSystemOwnerRole()`'s fallback check
+ * (see utils/permissions.ts) requires the stored `permissions` array to
+ * contain literally every currently-defined permission, so any row missing
+ * the explicit flag fails closed on every future permission addition, not
+ * just the one this particular backfill is fixing.
+ */
+async function patchRoleIfNeeded(
+  ctx: MutationCtx,
+  role: Doc<"roles">,
+  toAdd: Set<string>,
+  updates: string[]
+): Promise<boolean> {
+  const missing = [...toAdd].filter((p) => !role.permissions.includes(p));
+  const isStaleOwnerRow = normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME && !role.isSystemOwnerRole;
+  if (missing.length === 0 && !isStaleOwnerRow) return false;
+
+  await ctx.db.patch(role._id, {
+    permissions: [...role.permissions, ...missing],
+    ...(normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME ? { isSystemOwnerRole: true } : {}),
+  });
+  updates.push(`${role.name} (${role.orgId}): +${missing.join(", ")}`);
+  return true;
+}
 
 /**
  * One-time backfill for the new finance-application permissions (Phase 9 / PR #2).
@@ -47,6 +76,7 @@ export const backfillFinanceApplicationPermissions = internalMutation({
     const updates: string[] = [];
 
     for (const role of roles) {
+      if (role.isDeleted) continue;
       const has = (p: string) => role.permissions.includes(p);
       const toAdd = new Set<string>();
 
@@ -82,15 +112,57 @@ export const backfillFinanceApplicationPermissions = internalMutation({
         ].forEach((p) => toAdd.add(p));
       }
 
-      const missing = [...toAdd].filter((p) => !has(p));
-      if (missing.length > 0 || (normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME && !role.isSystemOwnerRole)) {
-        await ctx.db.patch(role._id, {
-          permissions: [...role.permissions, ...missing],
-          ...(normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME ? { isSystemOwnerRole: true } : {}),
-        });
-        updatedCount++;
-        updates.push(`${role.name} (${role.orgId}): +${missing.join(", ")}`);
+      if (await patchRoleIfNeeded(ctx, role, toAdd, updates)) updatedCount++;
+    }
+
+    return { updatedCount, updates };
+  },
+});
+
+/**
+ * One-time backfill for the new Dealer Network Marketplace permissions
+ * (Phase 56/57, PR #52). Same capability-matching approach as
+ * backfillFinanceApplicationPermissions above: any org whose OWNER role
+ * predates this PR still has `isSystemOwnerRole` unset, which makes the
+ * `isSystemOwnerRole()` fallback check in utils/permissions.ts fail closed
+ * against *every* newly-added permission (not just these three) until the
+ * row is explicitly flagged — see that function's own comment. This also
+ * fixes that root cause going forward for the affected org, not just this
+ * one permission set.
+ */
+export const backfillMarketplacePermissions = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const roles = await ctx.db.query("roles").collect();
+    let updatedCount = 0;
+    const updates: string[] = [];
+
+    for (const role of roles) {
+      if (role.isDeleted) continue;
+      const has = (p: string) => role.permissions.includes(p);
+      const toAdd = new Set<string>();
+
+      // Manager-capable roles (website management is a reliable MANAGER-only
+      // signal in the default templates, unlike name which orgs can rename).
+      if (has(PERMISSIONS.WEBSITE_MANAGE)) {
+        toAdd.add(PERMISSIONS.MARKETPLACE_SETTINGS);
+        toAdd.add(PERMISSIONS.MARKETPLACE_RESPOND);
+        toAdd.add(PERMISSIONS.MARKETPLACE_ANALYTICS);
       }
+      // Sales-capable roles only get the day-to-day action, matching the
+      // SALES default template (not settings/analytics).
+      if (has(PERMISSIONS.CREATE_SALES_REQUEST)) {
+        toAdd.add(PERMISSIONS.MARKETPLACE_RESPOND);
+      }
+      // Owners always get full marketplace authority, same reasoning as the
+      // finance-application backfill above.
+      if (isSystemOwnerRole(role) || normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME) {
+        toAdd.add(PERMISSIONS.MARKETPLACE_SETTINGS);
+        toAdd.add(PERMISSIONS.MARKETPLACE_RESPOND);
+        toAdd.add(PERMISSIONS.MARKETPLACE_ANALYTICS);
+      }
+
+      if (await patchRoleIfNeeded(ctx, role, toAdd, updates)) updatedCount++;
     }
 
     return { updatedCount, updates };
