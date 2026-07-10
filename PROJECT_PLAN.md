@@ -1330,9 +1330,25 @@ Each phase reuses the established pattern: immutable event table → posting rul
 
 ---
 
-## Phases 59–64 — Public Browse, Trust, Monetization
+## Phases 59–64 — Public Browse, Trust, Monetization ✅ built on branch
 
-**Status:** ⬜ Not started — see master plan §4 Release 2/3 for full spec (public browse/search, verified badges, trust passport, finance-first search + trade-in requests, monetization, WhatsApp-native intake).
+**Branch:** `feature/phase-59-64-marketplace-release2-3` · **Built:** 2026-07-10 · **Batched into one PR** rather than one per phase (CodeRabbit free-plan review-request limit already hit once this session — see `feedback_pr_per_phase_wait_for_review` in project memory) · PR not yet opened as of this writing; see master plan §4 Release 2/3 for full per-phase spec.
+
+### Delivered
+
+- [x] **Phase 59 — Public marketplace browse/search.** `convex/marketplaceBrowse.ts`'s `search` query unions each opted-in dealer's already-published `activePublishedSnapshot` inventory (master plan A2 — no new listings table), with a numeric-offset cursor over a bounded 500-vehicle in-memory merge. `app/marketplace/cars/page.tsx` — public browse page, filters by brand/price/city/payment type.
+- [x] **Phase 60 — Verified badges + response ranking.** `computeBadges`/`refreshDealerBadges`/`compareDealerRank` in `marketplaceDealers.ts`; badges refresh on a daily cron, immediately after a scored response, and immediately after phone verification. `VERIFIED_PHONE` is staff-confirmed via a new admin "Dealers" tab (`adminMarketplace.verifyDealerPhone`), not automated OTP — same manual-first pattern as Phase 57/58B (no Business Verification yet).
+- [x] **Phase 61 — Trust passport (v1, self-reported).** Widened `vehicles` with `inspectionStatus`/`accidentDisclosed`/`ownerCount`/`dealerGuarantee` (all optional). Trust info panel on marketplace vehicle cards. Deliberately does not touch the vehicle create/edit form — out of scope per the master plan's own field list; staff can set these via the generic admin data browser in the interim.
+- [x] **Phase 62 — Finance-first search + trade-in requests.** `marketplaceBrowse.search` estimates monthly payment per vehicle via `lib/financing.ts`, verified to match `lib/financing.test.ts`'s existing cases exactly. New `marketplaceTradeInRequests` table + `marketplaceTradeIns.ts` (submit/offer/accept/decline) + public pages under `app/marketplace/tradein/`. **Phase 34 (Purchase Orders) doesn't exist in this codebase** — confirmed by grep — so an accepted offer creates a `leads` row (same `sourceChannel: "marketplace"` pattern as the rest of this epic) instead of the master plan's originally-specified draft PO; revisit as the integration point if Phase 34 ever ships.
+- [x] **Phase 63 — Monetization: lead packages + featured placement.** `subscriptions.ts` gets `marketplace`/`marketplaceLeadPackage`/`marketplaceFeatured` plan gates (free directory on every plan; lead packages bundled from professional; featured bundled on enterprise). `marketplaceDealerProfiles` widened with `foundingWindowEndsAt` (60-day free window, lazily derived from `createdAt` so no backfill was needed) and `leadPeriodStartedAt` (rolling 30-day quota period). `marketplaceResponses.respond` blocks over-limit dealers with an upgrade-path error. `compareDealerRank` now ranks FEATURED dealers first, feeding both the public directory and Phase 57's fan-out matching (which now reuses `compareDealerRank` instead of a duplicate hand-rolled sort). New `adminMarketplace.updateMarketplaceTier` (staff-only, gated by the org's plan actually including the target tier). Dealer-facing upgrade prompts on the marketplace settings page link to the existing billing page.
+- [x] **Phase 64 — WhatsApp-native dealer intake (structured, no LLM).** New platform-wide `/marketplace-whatsapp-webhook` (distinct from the existing per-org `/whatsapp-webhook`, which turned out to require each dealer's own paid Meta Business API setup — wrong shape for founding-dealer intake). Phone-keyed `marketplaceWhatsAppFlows` state machine collects make → model → year → mileage → price → 1-10 photos → Confirm/Cancel button, one field per message (A8: structured, not free-text/LLM-parsed). New Graph-API media-fetch-to-storage pipeline and session-window sender, gated behind `MARKETPLACE_WHATSAPP_PHONE_NUMBER_ID`/`MARKETPLACE_WHATSAPP_API_TOKEN`/`MARKETPLACE_WHATSAPP_APP_SECRET`/`MARKETPLACE_WHATSAPP_WEBHOOK_VERIFY_TOKEN` env vars (unset everywhere until Business Verification clears — this is the automated sender A5/A5b already named and deferred for Phase 57, built now because Phase 64 has no viable manual-relay fallback). Confirming a flow inserts a PENDING `vehicleEdits` CREATE request — the existing approval-workflow table — not a live vehicle; color/fuelType/transmission (required by the `vehicles` schema, not in this phase's field list) default to a placeholder to keep the flow under its own 2-minute bar.
+- [x] Full suite green (986 tests, 22 skipped, up from 947 before this batch), `pnpm exec tsc --noEmit` clean, Convex's own bundler typecheck clean, lint clean on every new/touched file.
+
+### Remaining / not yet done
+
+- [ ] Push branch, open the PR, poll CI, merge, `npx convex deploy`.
+- [ ] Founding-dealer WhatsApp number Business Verification (external, non-engineering — blocks Phase 64 reaching real dealers beyond Meta's test-number allowlist, same as Phase 57/58's WhatsApp features).
+- [ ] Phase 61's trust-passport fields have no dealer-facing self-service form yet (deliberately out of scope this batch — admin data browser is the interim path).
 
 ---
 
@@ -1358,12 +1374,12 @@ Each phase reuses the established pattern: immutable event table → posting rul
 | 57 | Request a Car: Capture + Fan-Out (+ consent/cap/intent-tier) | Dealer Network Marketplace | ✅ Merged + DEPLOYED to prod 2026-07-10 (PR #52 + hotfix PR #53) |
 | 58 | Dealer Response + Lead Attribution | Dealer Network Marketplace | ✅ Merged + DEPLOYED to prod 2026-07-10 (PR #54) |
 | 58B | Weekly Dealer Proof Report | Dealer Network Marketplace | ✅ Merged + DEPLOYED to prod 2026-07-10 (PR #55) |
-| 59 | Public Marketplace Browse/Search | Dealer Network Marketplace | ⬜ Not started |
-| 60 | Verified Badges + Response Ranking | Dealer Network Marketplace | ⬜ Not started |
-| 61 | Trust Passport (v1, self-reported) | Dealer Network Marketplace | ⬜ Not started |
-| 62 | Finance-First Search + Trade-In Requests | Dealer Network Marketplace | ⬜ Not started |
-| 63 | Monetization: Lead Packages + Featured | Dealer Network Marketplace | ⬜ Not started |
-| 64 | WhatsApp-Native Dealer Intake | Dealer Network Marketplace | ⬜ Not started |
+| 59 | Public Marketplace Browse/Search | Dealer Network Marketplace | ✅ Built + committed 2026-07-10, PR pending |
+| 60 | Verified Badges + Response Ranking | Dealer Network Marketplace | ✅ Built + committed 2026-07-10, PR pending |
+| 61 | Trust Passport (v1, self-reported) | Dealer Network Marketplace | ✅ Built + committed 2026-07-10, PR pending |
+| 62 | Finance-First Search + Trade-In Requests | Dealer Network Marketplace | ✅ Built + committed 2026-07-10, PR pending |
+| 63 | Monetization: Lead Packages + Featured | Dealer Network Marketplace | ✅ Built + committed 2026-07-10, PR pending |
+| 64 | WhatsApp-Native Dealer Intake | Dealer Network Marketplace | ✅ Built + committed 2026-07-10, PR pending |
 | GL 0–9 | Double-Entry Accounting Foundation | Accounting GL Track | ✅ Done |
 | GL 10 | True two-person manual-journal approval | Accounting GL Track | ✅ Done |
 | GL 11 | Fixed-asset lifecycle and depreciation (GL-posted) | Accounting GL Track | ✅ Done |
