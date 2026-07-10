@@ -1232,6 +1232,8 @@ Each phase reuses the established pattern: immutable event table → posting rul
 
 > Started 2026-07-10 at the user's explicit request, bypassing the master plan's §0 manual-validation gate (2–3 week concierge test before writing code) — risk accepted knowingly, not an oversight.
 
+> **PR #52** (Phases 56+57, branch `feature/phase-56-marketplace-directory`): https://github.com/aalzriqat/Auto/pull/52 — open, awaiting CI/CodeRabbit/human review. **Standing rule for this epic (set 2026-07-10): open/update a PR after each phase and wait for review comments before starting the next phase** — do not keep stacking phases onto an unreviewed branch.
+
 > ⚠️ **Non-engineering blocker in progress:** AutoFlow is on Meta's WhatsApp test number; Business Verification not yet done. Doesn't block Phase 57/58 engineering (WhatsApp degrades gracefully to in-app/email everywhere), but does block WhatsApp reaching real dealers beyond a small manual allowlist until verification clears. See master plan §0.5/A5b.
 
 ## Phase 56 — Dealer Opt-In + Marketplace Directory ✅
