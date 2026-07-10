@@ -30,7 +30,7 @@ type MatchRow = {
   notifiedAt: number | null;
 };
 
-function MatchActionCell({ match, onSend }: { match: MatchRow; onSend: () => void }) {
+function MatchActionCell({ match, onSend }: { readonly match: MatchRow; readonly onSend: () => void }) {
   if (match.notifiedAt) {
     return (
       <span className="flex items-center gap-1 text-emerald-400 text-xs">
