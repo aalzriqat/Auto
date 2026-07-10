@@ -116,7 +116,7 @@ export const listPublicDirectory = query({
               .query("websiteDomains")
               .withIndex("by_org_primary", (q) => q.eq("orgId", profile.orgId).eq("isPrimary", true))
               .first();
-            if (primaryDomain && primaryDomain.status === "active") {
+            if (primaryDomain?.status === "active") {
               siteUrl = `https://${primaryDomain.domain}`;
             }
           }

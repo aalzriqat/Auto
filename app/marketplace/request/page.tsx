@@ -130,34 +130,40 @@ export default function MarketplaceRequestPage() {
 
     const formElement = e.currentTarget;
     const formData = new FormData(formElement);
-    const turnstileToken = String(formData.get("cf-turnstile-response") ?? "");
+
+    const formString = (key: string, fallback = "") => {
+      const value = formData.get(key);
+      return typeof value === "string" ? value : fallback;
+    };
+
+    const turnstileToken = formString("cf-turnstile-response");
     if (!turnstileToken) {
       setError(t.verifying);
       return;
     }
 
     const numberOrUndefined = (key: string) => {
-      const raw = formData.get(key);
-      const parsed = raw ? Number(raw) : NaN;
+      const raw = formString(key);
+      const parsed = raw ? Number(raw) : Number.NaN;
       return Number.isFinite(parsed) ? parsed : undefined;
     };
 
     setSubmitting(true);
     try {
       const response = await submitRequest({
-        buyerFirstName: String(formData.get("buyerFirstName") ?? ""),
-        buyerPhone: String(formData.get("buyerPhone") ?? ""),
-        buyerWhatsApp: String(formData.get("buyerWhatsApp") ?? "") || undefined,
-        buyerCity: String(formData.get("buyerCity") ?? ""),
-        make: String(formData.get("make") ?? "") || undefined,
-        model: String(formData.get("model") ?? "") || undefined,
+        buyerFirstName: formString("buyerFirstName"),
+        buyerPhone: formString("buyerPhone"),
+        buyerWhatsApp: formString("buyerWhatsApp") || undefined,
+        buyerCity: formString("buyerCity"),
+        make: formString("make") || undefined,
+        model: formString("model") || undefined,
         yearMin: numberOrUndefined("yearMin"),
         yearMax: numberOrUndefined("yearMax"),
         priceMin: numberOrUndefined("priceMin"),
         priceMax: numberOrUndefined("priceMax"),
         paymentType,
         monthlyBudget: numberOrUndefined("monthlyBudget"),
-        buyerTimeframe: String(formData.get("buyerTimeframe") ?? "THIS_MONTH") as
+        buyerTimeframe: formString("buyerTimeframe", "THIS_MONTH") as
           | "ASAP"
           | "THIS_WEEK"
           | "THIS_MONTH"

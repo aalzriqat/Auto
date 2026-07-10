@@ -22,6 +22,33 @@ const STATUS_TABS: { label: string; value: RequestStatus | undefined }[] = [
   { label: "Spam", value: "SPAM" },
 ];
 
+type MatchRow = {
+  matchId: Id<"marketplaceRequestMatches">;
+  dealerName: string;
+  whatsappNumber: string | null;
+  notifiedAt: number | null;
+};
+
+function MatchActionCell({ match, onSend }: { match: MatchRow; onSend: () => void }) {
+  if (match.notifiedAt) {
+    return (
+      <span className="flex items-center gap-1 text-emerald-400 text-xs">
+        <CheckCircle2 className="h-3.5 w-3.5" />
+        Sent
+      </span>
+    );
+  }
+  if (match.whatsappNumber) {
+    return (
+      <Button size="sm" variant="outline" onClick={onSend}>
+        <MessageCircle className="h-3.5 w-3.5 me-1" />
+        Send via WhatsApp
+      </Button>
+    );
+  }
+  return <span className="text-xs text-slate-500">No WhatsApp number on file</span>;
+}
+
 function buildDealerMessage(request: {
   buyerFirstName: string;
   buyerCity: string;
@@ -125,23 +152,12 @@ export default function AdminMarketplacePage() {
                 {request.matches.map((match) => (
                   <div key={match.matchId} className="flex items-center justify-between gap-3 text-sm">
                     <span className="text-slate-200">{match.dealerName}</span>
-                    {match.notifiedAt ? (
-                      <span className="flex items-center gap-1 text-emerald-400 text-xs">
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                        Sent
-                      </span>
-                    ) : match.whatsappNumber ? (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => handleSend(match.matchId, match.whatsappNumber!, buildDealerMessage(request))}
-                      >
-                        <MessageCircle className="h-3.5 w-3.5 me-1" />
-                        Send via WhatsApp
-                      </Button>
-                    ) : (
-                      <span className="text-xs text-slate-500">No WhatsApp number on file</span>
-                    )}
+                    <MatchActionCell
+                      match={match}
+                      onSend={() =>
+                        handleSend(match.matchId, match.whatsappNumber!, buildDealerMessage(request))
+                      }
+                    />
                   </div>
                 ))}
               </div>

@@ -97,7 +97,7 @@ describe("marketplaceDealers", () => {
     });
 
     const rows = await t.run((ctx) => ctx.db.query("marketplaceDealerProfiles").collect());
-    expect(rows.length).toBe(1);
+    expect(rows).toHaveLength(1);
     expect(rows[0].isOptedIn).toBe(false);
     expect(rows[0].areas).toEqual(["Irbid"]);
   });
