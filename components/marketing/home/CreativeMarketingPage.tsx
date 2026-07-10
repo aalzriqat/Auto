@@ -155,6 +155,7 @@ export default function CreativeMarketingPage() {
 
   const { pipelineStage, advancePipelineStage, simulatePipelineAutoRun } = usePipelineSimulation();
   const currentPipelineStage = pipelineStages[pipelineStage];
+  const stageDetailsLabel = t.pipeStageDetails.replace("{stage}", String(pipelineStage + 1));
 
   const {
     monthlySales,
@@ -735,6 +736,7 @@ export default function CreativeMarketingPage() {
                   </div>
                   <input
                     type="range"
+                    aria-label={t.calcVal}
                     min="15000"
                     max="250000"
                     step="5000"
@@ -758,6 +760,7 @@ export default function CreativeMarketingPage() {
                   </div>
                   <input
                     type="range"
+                    aria-label={t.calcDown}
                     min="0"
                     max={carPrice}
                     step="2000"
@@ -781,6 +784,7 @@ export default function CreativeMarketingPage() {
                   </div>
                   <input
                     type="range"
+                    aria-label={t.calcRate}
                     min="1.9"
                     max="17.9"
                     step="0.1"
@@ -797,7 +801,7 @@ export default function CreativeMarketingPage() {
                 {/* 4. Financing Term Select buttons */}
                 <div className="space-y-3">
                   <span className="text-sm font-bold text-white/75 block">{t.calcTerm}</span>
-                  <div className="grid grid-cols-4 gap-3">
+                  <div className="grid grid-cols-5 gap-3">
                     {[24, 36, 48, 60, 72].map((m) => (
                       <button
                         key={m}
@@ -943,7 +947,7 @@ export default function CreativeMarketingPage() {
                   <div className="inline-flex items-center gap-2 bg-blue-500/10 border border-blue-500/20 px-3.5 py-1 rounded-full">
                     <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />
                     <span className="text-[10px] font-black uppercase text-blue-300 tracking-wider">
-                      Stage {pipelineStage + 1} Details
+                      {stageDetailsLabel}
                     </span>
                   </div>
 
@@ -1114,6 +1118,7 @@ export default function CreativeMarketingPage() {
                   </div>
                   <input
                     type="range"
+                    aria-label={t.roiSales}
                     min="5"
                     max="300"
                     step="5"

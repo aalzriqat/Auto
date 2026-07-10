@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 interface FinanceInputs {
   carPrice: number;
@@ -50,19 +50,37 @@ export function useFinanceCalculator() {
 
 export function usePipelineSimulation() {
   const [pipelineStage, setPipelineStage] = useState(0);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+      }
+    };
+  }, []);
 
   const advancePipelineStage = () => {
     setPipelineStage((currentStage) => (currentStage + 1) % PIPELINE_STAGE_COUNT);
   };
 
   const simulatePipelineAutoRun = () => {
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+
     let nextStage = 0;
     setPipelineStage(0);
 
-    const interval = setInterval(() => {
+    intervalRef.current = setInterval(() => {
       nextStage++;
       if (nextStage >= PIPELINE_STAGE_COUNT) {
-        clearInterval(interval);
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
+
         return;
       }
 
