@@ -1286,7 +1286,7 @@ Each phase reuses the established pattern: immutable event table → posting rul
 
 ## Phase 58 — Dealer Response + Lead Attribution ✅
 
-**Branch:** `feature/phase-58-marketplace-response` · **Completed:** 2026-07-10
+**Branch:** `feature/phase-58-marketplace-response` · **Completed:** 2026-07-10 · **Merged to main 2026-07-10 via PR #54**
 
 ### Delivered
 
@@ -1296,12 +1296,13 @@ Each phase reuses the established pattern: immutable event table → posting rul
 - [x] `app/(dashboard)/[orgId]/marketplace/requests/` — dealer inbox (list + inline reply form with vehicle picker from `api.vehicles.list`), added to main sidebar nav gated on `marketplace:respond`
 - [x] `app/marketplace/status/[id]/page.tsx` — public buyer status page (phone-gated, bilingual, local STRINGS matching the `dealer-site`/other public-page convention)
 - [x] `lib/i18n/domains/marketplace.ts` — EN/AR strings for the inbox + response form
-- [x] `convex/marketplaceResponses.test.ts` — 8 tests (lead creation + attribution, customer dedup by phone, response-score math incl. `matchedAt` fallback, FULFILLED transition, A9 org-isolation rejection, SPAM/EXPIRED rejection, `listForOrg` scoping, `respondedCount`)
-- [x] Full suite green (915 tests), typecheck clean, lint clean on new files
+- [x] `convex/marketplaceResponses.test.ts` — 10 tests (lead creation + attribution, customer dedup by phone, response-score math incl. `matchedAt` fallback, FULFILLED transition, A9 org-isolation rejection, SPAM rejection, EXPIRED rejection, negative-offer-price rejection, `listForOrg` scoping, `respondedCount`)
+- [x] CodeRabbit findings on PR #54 fixed: sanitized error toast (no raw error object rendered), accessible label on the buyer status-page phone input, `offerPriceJod` rejects negative values, `listForOrg` N+1 query replaced with a single `by_org` query grouped in memory
+- [x] Full suite green (939 tests), typecheck clean, lint clean on new files, CodeRabbit re-reviewed clean
 
 ### Remaining / not yet done
 
-- [ ] Not merged, `npx convex deploy` not run
+- [ ] `npx convex deploy` not run — nothing from this phase is live in production yet
 - [ ] Vehicle picker in the response form re-fetches all AVAILABLE vehicles unpaginated beyond the first 100 — fine at founding-dealer scale, revisit if any org has a large catalog
 
 ---
@@ -1338,7 +1339,7 @@ Each phase reuses the established pattern: immutable event table → posting rul
 | 42 | Open API & Integration Hub | 3 — Enterprise & Scale | ⬜ Not started |
 | 56 | Dealer Opt-In + Marketplace Directory | Dealer Network Marketplace | ✅ Merged + DEPLOYED to prod 2026-07-10 (PR #52 + hotfix PR #53) |
 | 57 | Request a Car: Capture + Fan-Out (+ consent/cap/intent-tier) | Dealer Network Marketplace | ✅ Merged + DEPLOYED to prod 2026-07-10 (PR #52 + hotfix PR #53) |
-| 58 | Dealer Response + Lead Attribution | Dealer Network Marketplace | 🟨 Built + tested on branch (2026-07-10); not merged, convex deploy pending |
+| 58 | Dealer Response + Lead Attribution | Dealer Network Marketplace | 🟨 Merged to main (PR #54, 2026-07-10); convex deploy pending |
 | 58B | Weekly Dealer Proof Report | Dealer Network Marketplace | ⬜ Not started |
 | 59 | Public Marketplace Browse/Search | Dealer Network Marketplace | ⬜ Not started |
 | 60 | Verified Badges + Response Ranking | Dealer Network Marketplace | ⬜ Not started |

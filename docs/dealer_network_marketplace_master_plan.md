@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-10 (revised same day after a review round — see A10/A11, Phase 57 consent/cap, Phase 58B)
 **Owner:** aalzriqat
-**Status:** Phases 56–57 merged + deployed to prod 2026-07-10 (PR #52, plus hotfix PR #53 for a legacy-role permissions bug) · Phase 58 built + tested on branch, not yet merged · Phases 58B–64 planned → sequence into PROJECT_PLAN.md as they start
+**Status:** Phases 56–58 merged to main 2026-07-10 (PR #52, hotfix PR #53, PR #54) · Phases 56–57 deployed to prod, Phase 58's `npx convex deploy` still pending · Phases 58B–64 planned → sequence into PROJECT_PLAN.md as they start
 **Scope:** Turn AutoFlow into a two-sided demand-generation marketplace — buyers submit "I want this car" requests, AutoFlow fans them out to matching dealers, dealers reply and convert into tracked leads with gross-profit attribution. Built as a layer **on top of** the dealer-site infrastructure that already exists, not a rebuild.
 
 > **Non-negotiables (project dev rules, unchanged).** All logic backend-only (Convex). Every mutation/action in `try/catch`, `console.error(raw)`, return `{ success:false, error:"An unexpected error occurred. Please try again later." }`. Optional chaining + fallbacks on all rendered DB data. Zero implicit `any`. Bilingual EN/AR (RTL) for every surface. Soft-delete pattern (`isDeleted/deletedAt/deletedBy`) on every new table. No LLM in Releases 1–3 (matches existing roadmap discipline — AI upgrades route to the deferred backlog, see §5).
@@ -25,7 +25,7 @@ AutoFlow is currently on Meta's WhatsApp **test** phone number — Business Veri
 - **Does block reaching real dealers at scale.** Test mode only messages a small manually-added recipient allowlist (confirm the current cap in the Meta App Dashboard — commonly ~5).
 - **Two independent tracks, run in parallel:** (1) start Business Verification with Meta now — it's a paperwork/identity process on their timeline, not engineering; (2) manually allowlist the first handful of founding-dealer numbers in the interim so Phases 57/58 get validated with real people before verification clears.
 
-**Superseded 2026-07-10 (same day) — V1 doesn't wait on either track.** Decided: Phase 57 ships with a **manual `wa.me` deep-link send**, not the Cloud API, as the actual V1 dealer-notification mechanism. `https://wa.me/<phone>?text=<encoded message>` opens WhatsApp Desktop/Web with the chat and message pre-filled — a human (AutoFlow staff, using AutoFlow's own WhatsApp number logged into WhatsApp Desktop) reviews and clicks send. This needs **no Meta Cloud API integration, no template approval, no Business Verification at all** — it's not an API call, it's a URL a browser opens. So this removes the only *external* blocker from Phases 57 and 58 — Phase 57 itself shipped 2026-07-10 (built, tested, on branch); **Phase 58 is still planned/not started**, just no longer gated on Meta. The Cloud API automated sender (still specified in A5/A5b below) becomes a pure future upgrade — build it once Business Verification clears, not before.
+**Superseded 2026-07-10 (same day) — V1 doesn't wait on either track.** Decided: Phase 57 ships with a **manual `wa.me` deep-link send**, not the Cloud API, as the actual V1 dealer-notification mechanism. `https://wa.me/<phone>?text=<encoded message>` opens WhatsApp Desktop/Web with the chat and message pre-filled — a human (AutoFlow staff, using AutoFlow's own WhatsApp number logged into WhatsApp Desktop) reviews and clicks send. This needs **no Meta Cloud API integration, no template approval, no Business Verification at all** — it's not an API call, it's a URL a browser opens. So this removes the only *external* blocker from Phases 57 and 58 — both shipped 2026-07-10 (Phase 57 via PR #52, Phase 58 via PR #54), neither gated on Meta. The Cloud API automated sender (still specified in A5/A5b below) becomes a pure future upgrade — build it once Business Verification clears, not before.
 
 ---
 
@@ -118,9 +118,12 @@ This is a demand-and-supply cold-start problem, not just a build. The plan fails
 **Tests:** matching logic (area + brand overlap), never exceeds `MAX_MATCHED_DEALERS`, submission rejected without consent, `buyerIntent` computation, rate limiting, expiry cron, `buildWhatsAppDeepLink` URL/encoding correctness, `markMatchNotified` permission gating (super-admin only) and idempotency.
 **Acceptance:** a public request from a buyer in Amman for a brand two opted-in Amman dealers carry produces exactly two `marketplaceRequestMatches` rows, and an in-app notification reaches every eligible OWNER/MANAGER/SALES recipient within each of those two matched orgs (not a fixed count — depends on team size) with zero notifications sent to non-matching dealers; submitting without checking consent is rejected client- and server-side; staff can open the admin console and send a real WhatsApp message to a matched dealer with one click, no Meta API involved.
 
-#### Phase 58 — Dealer response + lead attribution
+#### Phase 58 — Dealer response + lead attribution ✅ merged
 
-**Branch:** `feature/phase-58-marketplace-response`
+**Branch:** `feature/phase-58-marketplace-response` (merged to main 2026-07-10 via PR #54, convex deploy pending)
+
+**Follow-up (small, not yet done):** add `marketplaceResponses` (index `by_org`) to `ADMIN_TABLES` in [`convex/adminData.ts`](../convex/adminData.ts) per A11 — same deferred item as `marketplaceDealerProfiles` from Phase 56.
+
 **Goal:** Dealer replies to a request from inside AutoFlow's dashboard inbox (the reliable path — reached via the in-app notification from Phase 57, or the WhatsApp message a staffer sent them manually); reply becomes an attributed lead in their existing pipeline.
 
 **Schema:**
@@ -239,7 +242,7 @@ Add to the existing Phases 50–55 AI backlog table, not built here:
 |---|---|---|---|
 | 56 | Dealer opt-in + marketplace directory | 1 — Foundation | ✅ Merged + deployed to prod (PR #52 + hotfix PR #53) |
 | 57 | Request a Car: capture + fan-out (+ consent/cap/intent-tier) | 1 — Foundation | ✅ Merged + deployed to prod (PR #52 + hotfix PR #53) |
-| 58 | Dealer response + lead attribution | 1 — Foundation | 🟨 Built + tested on branch; not merged/deployed |
+| 58 | Dealer response + lead attribution | 1 — Foundation | 🟨 Merged to main (PR #54); convex deploy pending |
 | 58B | Weekly dealer proof report | 1 — Foundation | ⬜ Not started |
 | 59 | Public marketplace browse/search | 2 — Public + Trust | ⬜ Not started |
 | 60 | Verified badges + response ranking | 2 — Public + Trust | ⬜ Not started |
