@@ -89,11 +89,11 @@ function optionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function hasControlCharacters(value: string): boolean {
+export function hasControlCharacters(value: string): boolean {
   return /[\u0000-\u001F\u007F]/.test(value);
 }
 
-function normalizeText(value: string | undefined, field: string, maxLength: number): string | undefined {
+export function normalizeText(value: string | undefined, field: string, maxLength: number): string | undefined {
   const text = value?.trim().replace(/\s+/g, " ");
   if (!text) return undefined;
   if (text.length > maxLength || hasControlCharacters(text)) {
@@ -102,7 +102,7 @@ function normalizeText(value: string | undefined, field: string, maxLength: numb
   return text;
 }
 
-function normalizeRequiredText(value: string, field: string, maxLength: number): string {
+export function normalizeRequiredText(value: string, field: string, maxLength: number): string {
   const text = normalizeText(value, field, maxLength);
   if (!text) throw new ConvexError(`${field} is required.`);
   return text;
