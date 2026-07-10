@@ -18,6 +18,8 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
   websiteEventVisitor: { kind: "token bucket", rate: 60, period: 60000, capacity: 60 }, // Page-view/click beacons, keyed by anonymous visitorId
   websiteEventHost: { kind: "token bucket", rate: 600, period: 60000, capacity: 600 }, // Page-view/click beacons, keyed by host
   socialPosting: { kind: "token bucket", rate: 10, period: 60000, capacity: 10 }, // Instagram/Facebook posts, keyed by orgId — stays well under Meta's own API limits
+  marketplaceRequestFingerprint: { kind: "token bucket", rate: 5, period: 600000, capacity: 5 }, // Public "Request a Car" intake, keyed by browser fingerprint/IP hash
+  marketplaceRequestContact: { kind: "token bucket", rate: 3, period: 600000, capacity: 3 }, // Normalized buyer phone
   notificationWhatsapp: { kind: "token bucket", rate: 10, period: 60000, capacity: 10 }, // Outbound WhatsApp notification sends
   notificationPush: { kind: "token bucket", rate: 20, period: 60000, capacity: 20 }, // Outbound Web Push dispatch calls (each may fan out to several devices)
   // System-wide circuit breaker for create/standardApi/upload, checked in addition to

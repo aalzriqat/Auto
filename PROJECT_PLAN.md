@@ -1255,9 +1255,23 @@ Each phase reuses the established pattern: immutable event table → posting rul
 
 ---
 
-## Phase 57 — Request a Car: Capture + Fan-Out
+## Phase 57 — Request a Car: Capture + Fan-Out ✅
 
-**Branch:** `feature/phase-57-request-a-car` · **Status:** ⬜ Not started — see master plan for full spec.
+**Branch:** `feature/phase-56-marketplace-directory` (continued) · **Completed:** 2026-07-10
+
+### Delivered
+- [x] `convex/schema.ts` — `marketplaceRequests` (no orgId, buyer criteria, computed `buyerIntent`, `consentAcceptedAt`) + `marketplaceRequestMatches` (per-dealer `notifiedAt`/`notifiedVia`, replaces a flat array so response-time scoring works later)
+- [x] `convex/marketplaceRequests.ts` — `submitRequest` (public action: Turnstile + rate limits, reuses `verifyTurnstileToken` exported from `websites.ts`) → `createRequest` (internal mutation: consent-gated, rule-based area/brand matching capped at `MAX_MATCHED_DEALERS=5`, ranked by `avgResponseMinutes`, computes `buyerIntent` COLD/WARM/HOT); `getStatusForBuyer` (public, id+phone); `expireStaleRequests` (daily cron)
+- [x] `convex/adminMarketplace.ts` (new, `requireSuperAdmin`) — `listRequests` (cross-org, joins matches + dealer name/WhatsApp), `markMatchNotified`, `markSpam` — both audit-logged
+- [x] `convex/utils/notifications.ts` — new `notifyByPermission` helper (notifies every member holding a given permission, not just managers) + `marketplace.request_matched` notification type registered in `lib/notifications/types.ts` + EN/AR templates
+- [x] `app/marketplace/request/page.tsx` — public bilingual request form, Turnstile-gated, required consent checkbox
+- [x] `app/admin/marketplace/page.tsx` — matched-dealer list per request with one-click **manual WhatsApp send** (`lib/whatsappDeepLink.ts`'s `wa.me` deep link — no Meta Cloud API, no Business Verification needed; see master plan §0.5)
+- [x] `convex/rateLimit.ts` — `marketplaceRequestFingerprint`/`marketplaceRequestContact` buckets
+- [x] Tests: 28 new (buyerIntent/matching pure functions, full submit→match→notify flow, cap enforcement, consent rejection, suspended-org exclusion, admin permission gating, deep-link encoding) — full suite 906 passed, typecheck clean, lint clean
+
+### Remaining / not yet done
+- [ ] Not merged to `main`, `npx convex deploy` not run
+- [ ] `NEXT_PUBLIC_TURNSTILE_SITE_KEY` must be confirmed set for the public request form to render the Turnstile widget (reuses the same site key as the dealer-site lead forms)
 
 ---
 
@@ -1298,7 +1312,7 @@ Each phase reuses the established pattern: immutable event table → posting rul
 | 41 | Accounting Depth | 3 — Enterprise & Scale | 🟨 Code complete, pending UI verification (2026-07-06) |
 | 42 | Open API & Integration Hub | 3 — Enterprise & Scale | ⬜ Not started |
 | 56 | Dealer Opt-In + Marketplace Directory | Dealer Network Marketplace | 🟨 Built + tested on branch (2026-07-10); not merged, convex deploy pending |
-| 57 | Request a Car: Capture + Fan-Out (+ consent/cap/intent-tier) | Dealer Network Marketplace | ⬜ Not started |
+| 57 | Request a Car: Capture + Fan-Out (+ consent/cap/intent-tier) | Dealer Network Marketplace | 🟨 Built + tested on branch (2026-07-10); not merged, convex deploy pending |
 | 58 | Dealer Response + Lead Attribution | Dealer Network Marketplace | ⬜ Not started |
 | 58B | Weekly Dealer Proof Report | Dealer Network Marketplace | ⬜ Not started |
 | 59 | Public Marketplace Browse/Search | Dealer Network Marketplace | ⬜ Not started |

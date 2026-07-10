@@ -32,7 +32,7 @@ const PUBLIC_LEAD_MAX_MESSAGE_CHARS = 2000;
 const PUBLIC_LEAD_MAX_FINGERPRINT_CHARS = 256;
 const PUBLIC_LEAD_MAX_IP_HASH_CHARS = 128;
 const PUBLIC_LEAD_DUPLICATE_WINDOW_MS = 24 * 60 * 60 * 1000;
-const TURNSTILE_ACTION = "turnstile-spin-v1";
+export const TURNSTILE_ACTION = "turnstile-spin-v1";
 
 const OPEN_LEAD_STAGES = new Set([
   "NEW",
@@ -143,7 +143,7 @@ async function sha256Hex(value: string): Promise<string> {
     .join("");
 }
 
-async function verifyTurnstileToken(token: string): Promise<void> {
+export async function verifyTurnstileToken(token: string): Promise<void> {
   const env = getValidatedEnv();
   if (!env.TURNSTILE_SECRET_KEY) {
     console.error("TURNSTILE_SECRET_KEY is not configured for public website lead intake.");

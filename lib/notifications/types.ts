@@ -119,6 +119,9 @@ export const NOTIFICATION_TYPES = {
   "social.post_failed": { category: "social", priority: "normal", criticalDefault: false },
   "whatsapp.lead_created": { category: "social", priority: "normal", criticalDefault: false },
 
+  // ─── Dealer Network Marketplace ────────────────────────────────────────
+  "marketplace.request_matched": { category: "sales", priority: "urgent", criticalDefault: true },
+
   // ─── Feedback ─────────────────────────────────────────────────────────
   "feedback.replied": { category: "system", priority: "normal", criticalDefault: true },
   "feedback.resolved": { category: "system", priority: "normal", criticalDefault: true },

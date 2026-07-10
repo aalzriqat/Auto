@@ -2975,4 +2975,58 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_opted_in", ["isOptedIn"]),
+
+  // Buyer intent capture (Phase 57). Deliberately has no `orgId` — a request
+  // isn't owned by any single tenant, it fans out to N matched dealers via
+  // `marketplaceRequestMatches`. See master plan A1/A3.
+  marketplaceRequests: defineTable({
+    status: v.union(
+      v.literal("OPEN"),
+      v.literal("MATCHED"),
+      v.literal("FULFILLED"),
+      v.literal("EXPIRED"),
+      v.literal("SPAM")
+    ),
+    buyerFirstName: v.string(),
+    buyerPhone: v.string(),
+    buyerWhatsApp: v.optional(v.string()),
+    buyerCity: v.string(),
+    make: v.optional(v.string()),
+    model: v.optional(v.string()),
+    yearMin: v.optional(v.number()),
+    yearMax: v.optional(v.number()),
+    priceMin: v.optional(v.number()),
+    priceMax: v.optional(v.number()),
+    paymentType: v.union(v.literal("CASH"), v.literal("FINANCE"), v.literal("EITHER")),
+    monthlyBudget: v.optional(v.number()),
+    buyerTimeframe: v.union(
+      v.literal("ASAP"),
+      v.literal("THIS_WEEK"),
+      v.literal("THIS_MONTH"),
+      v.literal("JUST_LOOKING")
+    ),
+    // Rule-based, computed at submission — see master plan Phase 57 A10/§4.
+    buyerIntent: v.union(v.literal("COLD"), v.literal("WARM"), v.literal("HOT")),
+    consentAcceptedAt: v.number(),
+    clientFingerprint: v.string(),
+    clientIpHash: v.optional(v.string()),
+    expiresAt: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_status", ["status"])
+    .index("by_city", ["buyerCity"]),
+
+  // One row per matched dealer per request — not a flat array on
+  // marketplaceRequests — so notify/respond timestamps are trackable per
+  // dealer for Phase 60's response-time scoring. Capped at
+  // MAX_MATCHED_DEALERS (5) per request per master plan A10.
+  marketplaceRequestMatches: defineTable({
+    requestId: v.id("marketplaceRequests"),
+    orgId: v.id("organizations"),
+    matchedAt: v.number(),
+    notifiedAt: v.optional(v.number()),
+    notifiedVia: v.optional(v.union(v.literal("WHATSAPP_MANUAL"), v.literal("WHATSAPP_AUTO"))),
+  })
+    .index("by_request", ["requestId"])
+    .index("by_org", ["orgId"]),
 });

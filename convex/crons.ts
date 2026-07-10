@@ -32,6 +32,14 @@ crons.cron(
   {}
 );
 
+// Expire stale marketplace buyer requests (Phase 57) past their expiresAt.
+crons.cron(
+  "expire-marketplace-requests",
+  "0 3 * * *",
+  internal.marketplaceRequests.expireStaleRequests,
+  {}
+);
+
 // Retry membership removals whose external Clerk cleanup did not complete.
 crons.interval(
   "membership-offboarding-retries",

@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-10 (revised same day after a review round — see A10/A11, Phase 57 consent/cap, Phase 58B)
 **Owner:** aalzriqat
-**Status:** Phase 56 built on branch (not merged/deployed) · Phases 57–64 planned → sequence into PROJECT_PLAN.md as they start
+**Status:** Phases 56–57 built on branch (not merged/deployed) · Phases 58–64 planned → sequence into PROJECT_PLAN.md as they start
 **Scope:** Turn AutoFlow into a two-sided demand-generation marketplace — buyers submit "I want this car" requests, AutoFlow fans them out to matching dealers, dealers reply and convert into tracked leads with gross-profit attribution. Built as a layer **on top of** the dealer-site infrastructure that already exists, not a rebuild.
 
 > **Non-negotiables (project dev rules, unchanged).** All logic backend-only (Convex). Every mutation/action in `try/catch`, `console.error(raw)`, return `{ success:false, error:"An unexpected error occurred. Please try again later." }`. Optional chaining + fallbacks on all rendered DB data. Zero implicit `any`. Bilingual EN/AR (RTL) for every surface. Soft-delete pattern (`isDeleted/deletedAt/deletedBy`) on every new table. No LLM in Releases 1–3 (matches existing roadmap discipline — AI upgrades route to the deferred backlog, see §5).
@@ -93,9 +93,9 @@ This is a demand-and-supply cold-start problem, not just a build. The plan fails
 **Tests:** opt-in gating, permission checks, directory only shows opted-in + active orgs.
 **Acceptance:** a dealer opts in and appears in `/marketplace/dealers` within one query, showing their real published inventory count.
 
-#### Phase 57 — Request a Car: capture + fan-out
+#### Phase 57 — Request a Car: capture + fan-out ✅ built on branch
 
-**Branch:** `feature/phase-57-request-a-car`
+**Branch:** `feature/phase-56-marketplace-directory` (continued, committed 2026-07-10, not merged/deployed)
 **Goal:** Buyer submits a car request; the system computes which opted-in dealers match and creates an in-app notification for each; AutoFlow staff sees the matched-dealer list in the admin console with a one-click "Send via WhatsApp" per dealer (manual `wa.me` deep link, per §0.5 — no Cloud API dependency).
 
 **Schema:**
@@ -238,7 +238,7 @@ Add to the existing Phases 50–55 AI backlog table, not built here:
 | Phase | Feature | Release | Status |
 |---|---|---|---|
 | 56 | Dealer opt-in + marketplace directory | 1 — Foundation | 🟨 Built + tested on branch; not merged/deployed |
-| 57 | Request a Car: capture + fan-out (+ consent/cap/intent-tier) | 1 — Foundation | ⬜ Not started |
+| 57 | Request a Car: capture + fan-out (+ consent/cap/intent-tier) | 1 — Foundation | 🟨 Built + tested on branch; not merged/deployed |
 | 58 | Dealer response + lead attribution | 1 — Foundation | ⬜ Not started |
 | 58B | Weekly dealer proof report | 1 — Foundation | ⬜ Not started |
 | 59 | Public marketplace browse/search | 2 — Public + Trust | ⬜ Not started |
