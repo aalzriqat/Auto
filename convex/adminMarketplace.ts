@@ -3,8 +3,10 @@ import { mutation, query } from "./_generated/server";
 import { requireSuperAdmin } from "./utils/tenancy";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 import { logAdminAction } from "./adminAudit";
+import { computeWeeklyReport, currentWeekStart } from "./marketplaceReports";
 
 const MAX_REQUEST_ROWS = 100;
+const ONE_WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
 const requestStatusValidator = v.optional(
   v.union(
@@ -101,6 +103,87 @@ export const markSpam = mutation({
       action: "marketplaceMarkSpam",
       targetTable: "marketplaceRequests",
       targetId: args.requestId,
+    });
+  },
+});
+
+/**
+ * Live "Weekly Reports" console view (Phase 58B) — same numbers the Monday
+ * cron emails, computed on demand so staff can manually WhatsApp-send them
+ * any time via the wa.me deep-link pattern (master plan §0.5), same as the
+ * request-matching flow above. Only lists dealers with something to report.
+ */
+export const listWeeklyReports = query({
+  args: {},
+  handler: async (ctx) => {
+    await requireSuperAdmin(ctx);
+
+    const profiles = await ctx.db
+      .query("marketplaceDealerProfiles")
+      .withIndex("by_opted_in", (q) => q.eq("isOptedIn", true))
+      .collect();
+    const since = Date.now() - ONE_WEEK_MS;
+    const weekStart = currentWeekStart();
+
+    const rows = await Promise.all(
+      profiles
+        .filter((profile) => !profile.isDeleted)
+        .map(async (profile) => {
+          const org = await ctx.db.get(profile.orgId);
+          if (!org) return null;
+
+          const report = await computeWeeklyReport(ctx, profile.orgId, since);
+          if (!report) return null;
+
+          const sent = await ctx.db
+            .query("marketplaceWeeklyReportSends")
+            .withIndex("by_org_week", (q) => q.eq("orgId", profile.orgId).eq("weekStart", weekStart))
+            .first();
+
+          return {
+            orgId: profile.orgId,
+            dealerName: org.name,
+            whatsappNumber: profile.whatsappNumber ?? null,
+            report,
+            sentAt: sent?.sentAt ?? null,
+          };
+        })
+    );
+
+    return rows.filter((row): row is NonNullable<typeof row> => row !== null);
+  },
+});
+
+/** Staff clicks "Send via WhatsApp" on a weekly report — mirrors markMatchNotified above. */
+export const markWeeklyReportSentViaWhatsApp = mutation({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const admin = await requireSuperAdmin(ctx);
+    const org = await ctx.db.get(args.orgId);
+    if (!org) throwAppError(AppErrorCode.VALIDATION_FAILED, "Organization not found.");
+
+    const weekStart = currentWeekStart();
+    const existing = await ctx.db
+      .query("marketplaceWeeklyReportSends")
+      .withIndex("by_org_week", (q) => q.eq("orgId", args.orgId).eq("weekStart", weekStart))
+      .first();
+
+    if (existing) {
+      await ctx.db.patch(existing._id, { sentAt: Date.now(), sentBy: admin._id });
+    } else {
+      await ctx.db.insert("marketplaceWeeklyReportSends", {
+        orgId: args.orgId,
+        weekStart,
+        sentAt: Date.now(),
+        sentBy: admin._id,
+      });
+    }
+
+    await logAdminAction(ctx, admin, {
+      action: "marketplaceMarkWeeklyReportSent",
+      targetTable: "marketplaceWeeklyReportSends",
+      targetId: args.orgId,
+      orgId: args.orgId,
     });
   },
 });

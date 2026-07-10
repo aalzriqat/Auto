@@ -104,4 +104,58 @@ describe("adminMarketplace", () => {
     const request = await t.run((ctx) => ctx.db.get(requestId));
     expect(request?.status).toBe("SPAM");
   });
+
+  test("listWeeklyReports only includes opted-in dealers with activity, and rejects a non-super-admin caller", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { asAdmin, asMember, orgId, requestId } = await seedRequestWithMatch(t);
+    const respondingUserId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "sales_1", email: "sales@dealer.com" }));
+    await t.run((ctx) =>
+      ctx.db.insert("marketplaceResponses", {
+        requestId,
+        orgId,
+        respondingUserId,
+        kind: "HAVE_MATCH",
+        createdAt: Date.now(),
+      })
+    );
+
+    await expect(asMember.query(api.adminMarketplace.listWeeklyReports, {})).rejects.toThrow();
+
+    const reports = await asAdmin.query(api.adminMarketplace.listWeeklyReports, {});
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({
+      orgId,
+      dealerName: "Dealer Org",
+      whatsappNumber: "+962791111111",
+      sentAt: null,
+    });
+    expect(reports[0].report.responsesSent).toBe(1);
+  });
+
+  test("markWeeklyReportSentViaWhatsApp records the send and listWeeklyReports reflects it", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { asAdmin, orgId, requestId } = await seedRequestWithMatch(t);
+    const respondingUserId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "sales_1", email: "sales@dealer.com" }));
+    await t.run((ctx) =>
+      ctx.db.insert("marketplaceResponses", {
+        requestId,
+        orgId,
+        respondingUserId,
+        kind: "HAVE_MATCH",
+        createdAt: Date.now(),
+      })
+    );
+
+    await asAdmin.mutation(api.adminMarketplace.markWeeklyReportSentViaWhatsApp, { orgId });
+
+    const sends = await t.run((ctx) => ctx.db.query("marketplaceWeeklyReportSends").collect());
+    expect(sends).toHaveLength(1);
+    expect(sends[0]).toMatchObject({ orgId });
+
+    const reports = await asAdmin.query(api.adminMarketplace.listWeeklyReports, {});
+    expect(reports[0].sentAt).toBeTypeOf("number");
+
+    const auditRows = await t.run((ctx) => ctx.db.query("adminAuditLog").collect());
+    expect(auditRows.some((row) => row.action === "marketplaceMarkWeeklyReportSent")).toBe(true);
+  });
 });

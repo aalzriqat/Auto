@@ -1,6 +1,6 @@
 "use node";
 
-import { internalAction } from "./_generated/server";
+import { ActionCtx, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { v, ConvexError } from "convex/values";
 import { Resend } from "resend";
@@ -339,6 +339,42 @@ export const sendAutoReplyEmail = internalAction({
   },
 });
 
+/** Sends (or mocks, if Resend isn't configured) a plain transactional email and logs the outcome. Shared by sendSubscriptionReminderEmail and sendMarketplaceWeeklyReportEmail — same send-or-mock/try-catch/log shape, only the content differs. */
+async function sendTransactionalEmail(
+  ctx: ActionCtx,
+  args: {
+    resendApiKey: string | undefined;
+    from: string;
+    to: string;
+    subject: string;
+    html: string;
+    logSource: "subscription-reminder" | "marketplace-weekly-report";
+    logSummary: string;
+  }
+): Promise<{ success: boolean; error?: string }> {
+  let result: { success: boolean; error?: string };
+  if (!args.resendApiKey) {
+    result = { success: true };
+  } else {
+    const resend = new Resend(args.resendApiKey);
+    try {
+      await resend.emails.send({ from: args.from, to: args.to, subject: args.subject, html: args.html });
+      result = { success: true };
+    } catch (error) {
+      result = { success: false, error: String(error) };
+    }
+  }
+
+  await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+    source: args.logSource,
+    status: result.success ? "success" : "error",
+    summary: args.logSummary,
+    error: result.error,
+  });
+
+  return result;
+}
+
 export const sendSubscriptionReminderEmail = internalAction({
   args: {
     toEmail: v.string(),
@@ -376,32 +412,15 @@ export const sendSubscriptionReminderEmail = internalAction({
 
     const emailHtml = wrapEmailHtml(preheader, bodyHtml);
 
-    let result: { success: boolean; error?: string };
-    if (!resendApiKey) {
-      result = { success: true };
-    } else {
-      const resend = new Resend(resendApiKey);
-      try {
-        await resend.emails.send({
-          from: "AutoFlow Subscriptions <subscriptions@autoflowdealer.com>",
-          to: args.toEmail,
-          subject,
-          html: emailHtml,
-        });
-        result = { success: true };
-      } catch (error) {
-        result = { success: false, error: String(error) };
-      }
-    }
-
-    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
-      source: "subscription-reminder",
-      status: result.success ? "success" : "error",
-      summary: `${args.kind} -> ${args.toEmail} (${args.orgName})`,
-      error: result.error,
+    return await sendTransactionalEmail(ctx, {
+      resendApiKey,
+      from: "AutoFlow Subscriptions <subscriptions@autoflowdealer.com>",
+      to: args.toEmail,
+      subject,
+      html: emailHtml,
+      logSource: "subscription-reminder",
+      logSummary: `${args.kind} -> ${args.toEmail} (${args.orgName})`,
     });
-
-    return result;
   },
 });
 
@@ -445,9 +464,11 @@ export const sendMarketplaceWeeklyReportEmail = internalAction({
       statRow("Requests lost to no response", String(args.requestsLost)),
     ].join("");
 
-    const mostViewedHtml = args.mostViewedVehicle
-      ? `<p style="margin:20px 0 0; font-size:13px; color:#6b7280;">Most-viewed vehicle: <strong style="color:#111827;">${escapeHtml(`${args.mostViewedVehicle.year} ${args.mostViewedVehicle.make} ${args.mostViewedVehicle.model}`)}</strong> (${args.mostViewedVehicle.views} views)</p>`
-      : "";
+    let mostViewedHtml = "";
+    if (args.mostViewedVehicle) {
+      const vehicleLabel = `${args.mostViewedVehicle.year} ${args.mostViewedVehicle.make} ${args.mostViewedVehicle.model}`;
+      mostViewedHtml = `<p style="margin:20px 0 0; font-size:13px; color:#6b7280;">Most-viewed vehicle: <strong style="color:#111827;">${escapeHtml(vehicleLabel)}</strong> (${args.mostViewedVehicle.views} views)</p>`;
+    }
 
     const bodyHtml = `
       <h1 style="margin:0 0 16px; font-size:20px; font-weight:700; color:#111827;">Your Marketplace week</h1>
@@ -459,32 +480,15 @@ export const sendMarketplaceWeeklyReportEmail = internalAction({
 
     const emailHtml = wrapEmailHtml(preheader, bodyHtml);
 
-    let result: { success: boolean; error?: string };
-    if (!resendApiKey) {
-      result = { success: true };
-    } else {
-      const resend = new Resend(resendApiKey);
-      try {
-        await resend.emails.send({
-          from: "AutoFlow Marketplace <marketplace@autoflowdealer.com>",
-          to: args.toEmail,
-          subject,
-          html: emailHtml,
-        });
-        result = { success: true };
-      } catch (error) {
-        result = { success: false, error: String(error) };
-      }
-    }
-
-    await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
-      source: "marketplace-weekly-report",
-      status: result.success ? "success" : "error",
-      summary: `weekly-report -> ${args.toEmail} (${args.orgName})`,
-      error: result.error,
+    return await sendTransactionalEmail(ctx, {
+      resendApiKey,
+      from: "AutoFlow Marketplace <marketplace@autoflowdealer.com>",
+      to: args.toEmail,
+      subject,
+      html: emailHtml,
+      logSource: "marketplace-weekly-report",
+      logSummary: `weekly-report -> ${args.toEmail} (${args.orgName})`,
     });
-
-    return result;
   },
 });
 

@@ -3057,4 +3057,16 @@ export default defineSchema({
   })
     .index("by_request", ["requestId"])
     .index("by_org", ["orgId"]),
+
+  // Tracks manual WhatsApp sends of the weekly proof report (Phase 58B),
+  // same wa.me deep-link pattern as marketplaceRequestMatches' notifiedAt —
+  // one row per (orgId, weekStart) so the admin console can show "Sent" and
+  // avoid staff double-sending. weekStart is the most recent Monday 00:00 UTC
+  // at send time, not tied to the report's own trailing-7-day stat window.
+  marketplaceWeeklyReportSends: defineTable({
+    orgId: v.id("organizations"),
+    weekStart: v.number(),
+    sentAt: v.number(),
+    sentBy: v.id("users"),
+  }).index("by_org_week", ["orgId", "weekStart"]),
 });
