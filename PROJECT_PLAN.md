@@ -1236,7 +1236,7 @@ Each phase reuses the established pattern: immutable event table → posting rul
 >
 > ⚠️ **Non-engineering blocker in progress:** AutoFlow is on Meta's WhatsApp test number; Business Verification not yet done. Doesn't block Phase 57/58 engineering (WhatsApp degrades gracefully to in-app/email everywhere), but does block WhatsApp reaching real dealers beyond a small manual allowlist until verification clears. See master plan §0.5/A5b.
 >
-> **PR #53** (hotfix, `fix/backfill-marketplace-permissions`): https://github.com/aalzriqat/Auto/pull/53 — legacy OWNER role rows missing the explicit `isSystemOwnerRole` flag get `FORBIDDEN` on any newly-added permission, marketplace ones included. Deployed to prod and backfill migration run 2026-07-10, fixed across all 3 production orgs. See `feedback_new_permission_needs_backfill` — this pattern recurs on every future permission addition until an org's OWNER role is migrated.
+> **PR #53** (hotfix, `fix/backfill-marketplace-permissions`): https://github.com/aalzriqat/Auto/pull/53 — **merged 2026-07-10**. Legacy OWNER role rows missing the explicit `isSystemOwnerRole` flag get `FORBIDDEN` on any newly-added permission, marketplace ones included. Deployed to prod and backfill migration run 2026-07-10, fixed across all 3 production orgs, confirmed working by the user. See `feedback_new_permission_needs_backfill` — this pattern recurs on every future permission addition until an org's OWNER role is migrated.
 
 ## Phase 56 — Dealer Opt-In + Marketplace Directory ✅
 
