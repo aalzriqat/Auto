@@ -1309,7 +1309,7 @@ Each phase reuses the established pattern: immutable event table → posting rul
 
 ## Phase 58B — Weekly Dealer Proof Report ✅
 
-**Branch:** `feature/phase-58b-marketplace-weekly-report` · **Completed:** 2026-07-10
+**Branch:** `feature/phase-58b-marketplace-weekly-report` · **Completed:** 2026-07-10 · **Merged to main 2026-07-10 via PR #55** (CodeRabbit hit its free-plan review-limit window; merged on all-other-checks-green + a manual diff review instead of waiting)
 
 ### Delivered
 
@@ -1324,7 +1324,7 @@ Each phase reuses the established pattern: immutable event table → posting rul
 
 ### Remaining / not yet done
 
-- [ ] Not merged, `npx convex deploy` not run
+- [x] `npx convex deploy` run 2026-07-10 (kindly-hound-172) — live in production
 - [ ] `sendMarketplaceWeeklyReportEmail`'s actual Resend call isn't exercised end-to-end in tests — it goes through the `@convex-dev/rate-limiter` component, which no test in this suite registers via `t.registerComponent` yet (same gap as every other Phase 28 email action; not introduced by this phase)
 - [ ] Automated WhatsApp send via Cloud API (`marketplaceWhatsAppSend.ts`, A5/A5b) still deferred behind Business Verification — the manual `wa.me` path above covers V1
 
@@ -1357,7 +1357,7 @@ Each phase reuses the established pattern: immutable event table → posting rul
 | 56 | Dealer Opt-In + Marketplace Directory | Dealer Network Marketplace | ✅ Merged + DEPLOYED to prod 2026-07-10 (PR #52 + hotfix PR #53) |
 | 57 | Request a Car: Capture + Fan-Out (+ consent/cap/intent-tier) | Dealer Network Marketplace | ✅ Merged + DEPLOYED to prod 2026-07-10 (PR #52 + hotfix PR #53) |
 | 58 | Dealer Response + Lead Attribution | Dealer Network Marketplace | ✅ Merged + DEPLOYED to prod 2026-07-10 (PR #54) |
-| 58B | Weekly Dealer Proof Report | Dealer Network Marketplace | 🟨 Built + tested on branch (2026-07-10); not merged, convex deploy pending |
+| 58B | Weekly Dealer Proof Report | Dealer Network Marketplace | ✅ Merged + DEPLOYED to prod 2026-07-10 (PR #55) |
 | 59 | Public Marketplace Browse/Search | Dealer Network Marketplace | ⬜ Not started |
 | 60 | Verified Badges + Response Ranking | Dealer Network Marketplace | ⬜ Not started |
 | 61 | Trust Passport (v1, self-reported) | Dealer Network Marketplace | ⬜ Not started |
