@@ -68,6 +68,7 @@ import type * as leads from "../leads.js";
 import type * as liveChat from "../liveChat.js";
 import type * as marketplaceDealers from "../marketplaceDealers.js";
 import type * as marketplaceRequests from "../marketplaceRequests.js";
+import type * as marketplaceResponses from "../marketplaceResponses.js";
 import type * as memberships from "../memberships.js";
 import type * as migrateRoles from "../migrateRoles.js";
 import type * as migrations from "../migrations.js";
@@ -230,6 +231,7 @@ declare const fullApi: ApiFromModules<{
   liveChat: typeof liveChat;
   marketplaceDealers: typeof marketplaceDealers;
   marketplaceRequests: typeof marketplaceRequests;
+  marketplaceResponses: typeof marketplaceResponses;
   memberships: typeof memberships;
   migrateRoles: typeof migrateRoles;
   migrations: typeof migrations;

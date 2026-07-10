@@ -230,10 +230,19 @@ export const getStatusForBuyer = query({
       .withIndex("by_request", (q) => q.eq("requestId", args.requestId))
       .collect();
 
+    const responses = await ctx.db
+      .query("marketplaceResponses")
+      .withIndex("by_request", (q) => q.eq("requestId", args.requestId))
+      .collect();
+    const respondedOrgIds = new Set(
+      responses.filter((r) => r.kind !== "NOT_AVAILABLE").map((r) => r.orgId)
+    );
+
     return {
       status: request.status,
       createdAt: request.createdAt,
       matchedCount: matches.length,
+      respondedCount: respondedOrgIds.size,
     };
   },
 });

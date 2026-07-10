@@ -781,6 +781,13 @@ export default defineSchema({
     assignedUserId: v.optional(v.id("users")),
     vehicleId: v.optional(v.id("vehicles")),
     source: v.string(),
+    // Structured attribution alongside the free-text `source` above — see
+    // docs/dealer_network_marketplace_master_plan.md Phase 58. Only
+    // "marketplace" is a defined value today; kept a loose string (not a
+    // union) so future sources (e.g. the Social Command Center spine) don't
+    // require a schema migration to add a literal.
+    sourceChannel: v.optional(v.string()),
+    marketplaceRequestId: v.optional(v.id("marketplaceRequests")),
     stage: v.union(
       v.literal("NEW"),
       v.literal("CONTACTED"),
@@ -3026,6 +3033,26 @@ export default defineSchema({
     matchedAt: v.number(),
     notifiedAt: v.optional(v.number()),
     notifiedVia: v.optional(v.union(v.literal("WHATSAPP_MANUAL"), v.literal("WHATSAPP_AUTO"))),
+  })
+    .index("by_request", ["requestId"])
+    .index("by_org", ["orgId"]),
+
+  // A matched dealer's reply to a buyer request (Phase 58). Reused across
+  // both the dealer-facing inbox and the public buyer-status page.
+  marketplaceResponses: defineTable({
+    requestId: v.id("marketplaceRequests"),
+    orgId: v.id("organizations"),
+    respondingUserId: v.id("users"),
+    kind: v.union(
+      v.literal("HAVE_MATCH"),
+      v.literal("HAVE_SIMILAR"),
+      v.literal("CAN_SOURCE"),
+      v.literal("NOT_AVAILABLE")
+    ),
+    vehicleId: v.optional(v.id("vehicles")),
+    offerPriceJod: v.optional(v.number()),
+    note: v.optional(v.string()),
+    createdAt: v.number(),
   })
     .index("by_request", ["requestId"])
     .index("by_org", ["orgId"]),
