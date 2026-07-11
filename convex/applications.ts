@@ -219,6 +219,13 @@ export const list = query({
         const company = app.companyId ? await ctx.db.get(app.companyId) : null;
         const salesperson = await ctx.db.get(app.salespersonId);
         const quote = await ctx.db.get(app.quoteId);
+        const deposits =
+          app.status === "REJECTED" || app.status === "CANCELLED"
+            ? await ctx.db
+                .query("deposits")
+                .withIndex("by_quote", (q) => q.eq("quoteId", app.quoteId))
+                .take(50)
+            : [];
 
         return {
           ...app,
@@ -228,6 +235,9 @@ export const list = query({
           salespersonName: salesperson && "name" in salesperson ? salesperson.name : "Unknown",
           financedAmount: quote?.totalFinancedAmount || 0,
           monthlyInstallment: quote?.monthlyInstallment || 0,
+          hasPendingDepositResolution: deposits.some(
+            (deposit) => deposit.isDeleted !== true && deposit.status === "HELD"
+          ),
         };
       })
     );
@@ -252,6 +262,10 @@ export const get = query({
     const company = app.companyId ? await ctx.db.get(app.companyId) : null;
     const salesperson = await ctx.db.get(app.salespersonId);
     const quote = await ctx.db.get(app.quoteId);
+    const deposits = await ctx.db
+      .query("deposits")
+      .withIndex("by_quote", (q) => q.eq("quoteId", app.quoteId))
+      .take(50);
 
     return {
       ...app,
@@ -260,6 +274,7 @@ export const get = query({
       company,
       salesperson,
       quote,
+      deposits: deposits.filter((deposit) => deposit.isDeleted !== true),
     };
   },
 });
@@ -542,7 +557,7 @@ export const updateStatus = mutation({
     });
 
     if (args.status === "REJECTED" && app.status !== "REJECTED") {
-      await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId });
+      await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId, actorId: auth.user._id });
     }
   },
 });
@@ -580,8 +595,13 @@ export const cancelApplication = mutation({
           throw new ConvexError("Application not found");
         }
 
+        if (app.status === "CANCELLED") {
+          await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId, actorId: auth.user._id });
+          return;
+        }
+
         if (!CANCELLABLE_STATUSES.includes(app.status)) {
-          throw new ConvexError("This application has already been cancelled.");
+          throw new ConvexError("This application cannot be cancelled.");
         }
 
         // Reversing an already-APPROVED decision is more sensitive than voiding
@@ -671,7 +691,7 @@ export const cancelApplication = mutation({
             }
           }
         } else {
-          await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId });
+          await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId, actorId: auth.user._id });
         }
 
         await ctx.db.patch(args.applicationId, {

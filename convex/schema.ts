@@ -678,6 +678,7 @@ export default defineSchema({
     expiredAt: v.optional(v.number()),
   })
     .index("by_org_vehicle", ["orgId", "vehicleId"])
+    .index("by_org_vehicle_status", ["orgId", "vehicleId", "status"])
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_customer", ["orgId", "customerId"])
     .index("by_status_expiresAt", ["status", "expiresAt"]),

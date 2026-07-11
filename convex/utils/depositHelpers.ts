@@ -224,24 +224,77 @@ export async function resolveDepositsForQuote(
   return { total: resolvedTotal, appliedDeposits };
 }
 
-/**
- * Releases the vehicle hold for a quote whose application was rejected or
- * cancelled, but leaves the deposit's own `status` as HELD — a manager still
- * has to manually refund or forfeit it, mirroring how a real cash refund
- * needs a person to confirm it rather than happening automatically.
- */
-export async function releaseHoldForApplicationQuote(
+async function releaseQuoteDepositHolds(
   ctx: MutationCtx,
-  args: { quoteId: Id<"quotes"> }
+  quoteId: Id<"quotes">
 ): Promise<void> {
   const deposits = await ctx.db
     .query("deposits")
-    .withIndex("by_quote", (q) => q.eq("quoteId", args.quoteId))
-    .collect();
+    .withIndex("by_quote", (q) => q.eq("quoteId", quoteId))
+    .take(50);
 
   for (const deposit of deposits) {
     if (!deposit.holdActive) continue;
     await ctx.db.patch(deposit._id, { holdActive: false });
     await releaseAllVehiclesForDeposit(ctx, deposit);
   }
+}
+
+async function releaseReservationDepositHold(
+  ctx: MutationCtx,
+  args: { orgId: Id<"organizations">; reservation: Doc<"vehicleReservations"> }
+): Promise<void> {
+  if (!args.reservation.depositId) return;
+
+  const deposit = await ctx.db.get(args.reservation.depositId);
+  if (deposit && deposit.orgId === args.orgId && deposit.status === "HELD" && deposit.holdActive) {
+    await ctx.db.patch(args.reservation.depositId, { holdActive: false });
+  }
+}
+
+async function releaseMatchingReservationHoldsForQuote(
+  ctx: MutationCtx,
+  args: { quote: Doc<"quotes">; actorId: Id<"users"> }
+): Promise<void> {
+  const { quote } = args;
+  const quoteVehicleItems = quote.vehicleItems ?? [{ vehicleId: quote.vehicleId }];
+  const now = Date.now();
+
+  for (const item of quoteVehicleItems) {
+    const reservations = await ctx.db
+      .query("vehicleReservations")
+      .withIndex("by_org_vehicle_status", (q) =>
+        q.eq("orgId", quote.orgId).eq("vehicleId", item.vehicleId).eq("status", "ACTIVE")
+      )
+      .take(50);
+
+    const matchingReservations = reservations.filter((reservation) => reservation.customerId === quote.customerId);
+
+    for (const reservation of matchingReservations) {
+      await releaseReservationDepositHold(ctx, { orgId: quote.orgId, reservation });
+      await ctx.db.patch(reservation._id, {
+        status: "RELEASED",
+        releasedAt: now,
+        releasedBy: args.actorId,
+      });
+      await syncVehicleHoldStatus(ctx, reservation.vehicleId, args.actorId);
+    }
+  }
+}
+
+/**
+ * Releases vehicle holds for a quote whose application was rejected or
+ * cancelled. Deposit rows stay HELD so a manager still manually refunds or
+ * forfeits real money, but those deposits and same-customer reservations stop
+ * contributing to RESERVED inventory.
+ */
+export async function releaseHoldForApplicationQuote(
+  ctx: MutationCtx,
+  args: { quoteId: Id<"quotes">; actorId: Id<"users"> }
+): Promise<void> {
+  const quote = await ctx.db.get(args.quoteId);
+  if (!quote) return;
+
+  await releaseQuoteDepositHolds(ctx, args.quoteId);
+  await releaseMatchingReservationHoldsForQuote(ctx, { quote, actorId: args.actorId });
 }

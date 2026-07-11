@@ -13,7 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { format } from "date-fns";
 import { toast } from "@/components/ui/sonner";
 import { Separator } from "@/components/ui/separator";
-import { Upload, CheckCircle, XCircle, Clock, Eye, X, Download, History, Ban } from "lucide-react";
+import { Upload, CheckCircle, XCircle, Clock, Eye, X, Download, History, Ban, HandCoins, Undo2 } from "lucide-react";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { useCurrency } from "@/hooks/useCurrency";
@@ -43,6 +43,7 @@ export function ApplicationDetailsDialog({
   const canConfirmFinanceDisbursement = hasPermission(PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT);
   const canRegisterHandover = hasPermission(PERMISSIONS.REGISTER_VEHICLE_HANDOVER);
   const canRegisterExpectedPayment = hasPermission(PERMISSIONS.REGISTER_EXPECTED_PAYMENT);
+  const canResolveDeposits = hasPermission(PERMISSIONS.APPROVE_REQUESTS);
   const [previewFile, setPreviewFile] = useState<{ url: string; name: string } | null>(null);
   const [isCancelDialogOpen, setIsCancelDialogOpen] = useState(false);
   const [isDisbursementDialogOpen, setIsDisbursementDialogOpen] = useState(false);
@@ -51,6 +52,7 @@ export function ApplicationDetailsDialog({
   const [isRegisteringHandover, setIsRegisteringHandover] = useState(false);
   const [isPaymentDialogOpen, setIsPaymentDialogOpen] = useState(false);
   const [isRegisteringPayment, setIsRegisteringPayment] = useState(false);
+  const [resolvingDepositId, setResolvingDepositId] = useState<Id<"deposits"> | null>(null);
   const [cancelReason, setCancelReason] = useState("");
   const finalizeDealIdempotencyKeyRef = useRef<string | null>(null);
   const cancelApplicationIdempotencyKeyRef = useRef<string | null>(null);
@@ -66,6 +68,7 @@ export function ApplicationDetailsDialog({
   const confirmDisbursement = useMutation(api.applications.confirmDisbursement);
   const registerVehicleHandover = useMutation(api.applications.registerVehicleHandover);
   const registerExpectedPayment = useMutation(api.applications.registerExpectedPayment);
+  const releaseDeposit = useMutation(api.deposits.release);
   const updateDocStatus = useMutation(api.documents.updateDocumentStatus);
   const generateUploadUrl = useMutation(api.documents.generateUploadUrl);
   const saveDocumentFile = useMutation(api.documents.saveDocumentFile);
@@ -143,6 +146,26 @@ export function ApplicationDetailsDialog({
       onOpenChange(false);
     } catch {
       toast.error(t("UnexpectedError" as any));
+    }
+  };
+
+  const handleResolveDeposit = async (
+    depositId: Id<"deposits">,
+    resolution: "REFUNDED" | "FORFEITED"
+  ) => {
+    if (!activeOrgId) return;
+    setResolvingDepositId(depositId);
+    try {
+      await releaseDeposit({ orgId: activeOrgId, depositId, resolution });
+      toast.success(
+        resolution === "REFUNDED"
+          ? t("DepositRefundedSuccess")
+          : t("DepositForfeitedSuccess")
+      );
+    } catch {
+      toast.error(t("UnexpectedError" as any));
+    } finally {
+      setResolvingDepositId(null);
     }
   };
 
@@ -232,8 +255,21 @@ export function ApplicationDetailsDialog({
       setIsConfirmingDisbursement(false);
     }
   };
+  const applicationDeposits = app.deposits ?? [];
+  const pendingDeposits = applicationDeposits.filter((deposit) => deposit.status === "HELD");
+  const showDepositResolution =
+    (app.status === "REJECTED" || app.status === "CANCELLED") && pendingDeposits.length > 0;
+  const showApplicationDeposits =
+    (app.status === "REJECTED" || app.status === "CANCELLED") && applicationDeposits.length > 0;
+  const depositStatusLabel = (status: string) =>
+    status === "HELD" ? t("DepositStatusHeld") :
+      status === "REFUNDED" ? t("DepositStatusRefunded") :
+        status === "FORFEITED" ? t("DepositStatusForfeited") :
+          status === "APPLIED" ? t("DepositStatusApplied") :
+            status;
   const appStatusLabel =
-    app.status === "PENDING_DOCS" ? t("PendingDocs" as any) :
+    showDepositResolution ? t("DepositPending") :
+      app.status === "PENDING_DOCS" ? t("PendingDocs" as any) :
       app.status === "UNDER_REVIEW" ? t("UnderReview" as any) :
         app.status === "APPROVED" ? t("Approved" as any) :
           app.status === "REJECTED" ? t("Rejected" as any) :
@@ -263,9 +299,13 @@ export function ApplicationDetailsDialog({
                 {t("SubmittedOn" as any)} {format(app.createdAt, "PP")}
               </p>
             </div>
-            <Badge className="text-sm px-3 py-1">
+            <Badge
+              variant={showDepositResolution ? "outline" : "default"}
+              className={`text-sm px-3 py-1 ${showDepositResolution ? "border-amber-500/60 bg-amber-500/10 text-amber-700" : ""}`}
+            >
               {appStatusLabel}
-            </Badge>          </div>
+            </Badge>
+          </div>
         </DialogHeader>
 
         <div className="grid grid-cols-2 gap-6 my-4">
@@ -430,6 +470,70 @@ export function ApplicationDetailsDialog({
                     <Ban className="h-4 w-4 me-2" />
                     {t("CancelApplication" as any)}
                   </Button>
+                )}
+
+                {showApplicationDeposits && (
+                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 space-y-3">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-amber-700">
+                      <HandCoins className="h-4 w-4" />
+                      {showDepositResolution ? t("DepositPending") : t("ApplicationDeposits")}
+                    </div>
+
+                    <div className="space-y-2">
+                      {applicationDeposits.map((deposit) => {
+                        const isHeld = deposit.status === "HELD";
+
+                        return (
+                          <div key={deposit._id} className="rounded-md border bg-background p-2 text-sm space-y-2">
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <p className="font-medium">{currency.format(deposit.amount)}</p>
+                                {deposit.method && (
+                                  <p className="text-xs text-muted-foreground">{deposit.method}</p>
+                                )}
+                              </div>
+                              <span
+                                className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${isHeld
+                                    ? "bg-amber-100 text-amber-800"
+                                    : deposit.status === "REFUNDED"
+                                      ? "bg-blue-100 text-blue-800"
+                                      : deposit.status === "FORFEITED"
+                                        ? "bg-slate-100 text-slate-800"
+                                        : "bg-emerald-100 text-emerald-800"
+                                  }`}
+                              >
+                                {depositStatusLabel(deposit.status)}
+                              </span>
+                            </div>
+
+                            {isHeld && canResolveDeposits && (
+                              <div className="grid grid-cols-2 gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  disabled={resolvingDepositId === deposit._id}
+                                  onClick={() => handleResolveDeposit(deposit._id, "REFUNDED")}
+                                >
+                                  <Undo2 className="h-3.5 w-3.5 me-1.5" />
+                                  {t("Refund")}
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="text-destructive hover:text-destructive"
+                                  disabled={resolvingDepositId === deposit._id}
+                                  onClick={() => handleResolveDeposit(deposit._id, "FORFEITED")}
+                                >
+                                  <XCircle className="h-3.5 w-3.5 me-1.5" />
+                                  {t("Forfeit")}
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                 )}
               </div>
             </div>
