@@ -1330,9 +1330,9 @@ Each phase reuses the established pattern: immutable event table → posting rul
 
 ---
 
-## Phases 59–64 — Public Browse, Trust, Monetization ✅ built on branch
+## Phases 59–64 — Public Browse, Trust, Monetization ✅ MERGED + DEPLOYED
 
-**Branch:** `feature/phase-59-64-marketplace-release2-3` · **Built:** 2026-07-10 · **Batched into one PR** rather than one per phase (CodeRabbit free-plan review-request limit already hit once this session — see `feedback_pr_per_phase_wait_for_review` in project memory) · PR not yet opened as of this writing; see master plan §4 Release 2/3 for full per-phase spec.
+**Branch:** `feature/phase-59-64-marketplace-release2-3` · **Built:** 2026-07-10 · **Merged:** PR #56 → main (merge commit `d597a19`) 2026-07-11 · **Deployed to prod** (`kindly-hound-172`) 2026-07-11 · **Batched into one PR** rather than one per phase (CodeRabbit free-plan review-request limit — see `feedback_pr_per_phase_wait_for_review` in project memory); the marketing home-page refactor (PR #57) was merged into this branch first, so PR #56 shipped both together. SonarCloud passed at 2.65%; the only red checks at merge were the known cypress/e2e/playwright Clerk-auth-timing / TestSprite-billing flakes. See master plan §4 Release 2/3 for full per-phase spec.
 
 ### Delivered
 
@@ -1374,12 +1374,12 @@ Each phase reuses the established pattern: immutable event table → posting rul
 | 57 | Request a Car: Capture + Fan-Out (+ consent/cap/intent-tier) | Dealer Network Marketplace | ✅ Merged + DEPLOYED to prod 2026-07-10 (PR #52 + hotfix PR #53) |
 | 58 | Dealer Response + Lead Attribution | Dealer Network Marketplace | ✅ Merged + DEPLOYED to prod 2026-07-10 (PR #54) |
 | 58B | Weekly Dealer Proof Report | Dealer Network Marketplace | ✅ Merged + DEPLOYED to prod 2026-07-10 (PR #55) |
-| 59 | Public Marketplace Browse/Search | Dealer Network Marketplace | ✅ Built + committed 2026-07-10, PR pending |
-| 60 | Verified Badges + Response Ranking | Dealer Network Marketplace | ✅ Built + committed 2026-07-10, PR pending |
-| 61 | Trust Passport (v1, self-reported) | Dealer Network Marketplace | ✅ Built + committed 2026-07-10, PR pending |
-| 62 | Finance-First Search + Trade-In Requests | Dealer Network Marketplace | ✅ Built + committed 2026-07-10, PR pending |
-| 63 | Monetization: Lead Packages + Featured | Dealer Network Marketplace | ✅ Built + committed 2026-07-10, PR pending |
-| 64 | WhatsApp-Native Dealer Intake | Dealer Network Marketplace | ✅ Built + committed 2026-07-10, PR pending |
+| 59 | Public Marketplace Browse/Search | Dealer Network Marketplace | ✅ Merged (PR #56) + deployed to prod 2026-07-11 |
+| 60 | Verified Badges + Response Ranking | Dealer Network Marketplace | ✅ Merged (PR #56) + deployed to prod 2026-07-11 |
+| 61 | Trust Passport (v1, self-reported) | Dealer Network Marketplace | ✅ Merged (PR #56) + deployed to prod 2026-07-11 |
+| 62 | Finance-First Search + Trade-In Requests | Dealer Network Marketplace | ✅ Merged (PR #56) + deployed to prod 2026-07-11 |
+| 63 | Monetization: Lead Packages + Featured | Dealer Network Marketplace | ✅ Merged (PR #56) + deployed to prod 2026-07-11 |
+| 64 | WhatsApp-Native Dealer Intake | Dealer Network Marketplace | ✅ Merged (PR #56) + deployed to prod 2026-07-11 |
 | GL 0–9 | Double-Entry Accounting Foundation | Accounting GL Track | ✅ Done |
 | GL 10 | True two-person manual-journal approval | Accounting GL Track | ✅ Done |
 | GL 11 | Fixed-asset lifecycle and depreciation (GL-posted) | Accounting GL Track | ✅ Done |

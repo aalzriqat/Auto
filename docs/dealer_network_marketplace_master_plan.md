@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-10 (revised same day after a review round — see A10/A11, Phase 57 consent/cap, Phase 58B; Phases 59–64 built same day on `feature/phase-59-64-marketplace-release2-3`)
 **Owner:** aalzriqat
-**Status:** Phases 56–58B merged + deployed to prod 2026-07-10 (PR #52, hotfix PR #53, PR #54, PR #55) · Phases 59–64 (Release 2 + 3) built + committed 2026-07-10, PR pending
+**Status:** Phases 56–58B merged + deployed to prod 2026-07-10 (PR #52, hotfix PR #53, PR #54, PR #55) · Phases 59–64 (Release 2 + 3) merged (PR #56, merge commit `d597a19`) + deployed to prod (`kindly-hound-172`) 2026-07-11. **Dealer Network Marketplace epic (Phases 56–64) is now complete.**
 **Scope:** Turn AutoFlow into a two-sided demand-generation marketplace — buyers submit "I want this car" requests, AutoFlow fans them out to matching dealers, dealers reply and convert into tracked leads with gross-profit attribution. Built as a layer **on top of** the dealer-site infrastructure that already exists, not a rebuild.
 
 > **Non-negotiables (project dev rules, unchanged).** All logic backend-only (Convex). Every mutation/action in `try/catch`, `console.error(raw)`, return `{ success:false, error:"An unexpected error occurred. Please try again later." }`. Optional chaining + fallbacks on all rendered DB data. Zero implicit `any`. Bilingual EN/AR (RTL) for every surface. Soft-delete pattern (`isDeleted/deletedAt/deletedBy`) on every new table. No LLM in Releases 1–3 (matches existing roadmap discipline — AI upgrades route to the deferred backlog, see §5).
@@ -252,13 +252,13 @@ Add to the existing Phases 50–55 AI backlog table, not built here:
 | 57 | Request a Car: capture + fan-out (+ consent/cap/intent-tier) | 1 — Foundation | ✅ Merged + deployed to prod (PR #52 + hotfix PR #53) |
 | 58 | Dealer response + lead attribution | 1 — Foundation | ✅ Merged + deployed to prod (PR #54) |
 | 58B | Weekly dealer proof report | 1 — Foundation | ✅ Merged + deployed to prod (PR #55) |
-| 59 | Public marketplace browse/search | 2 — Public + Trust | ✅ Built + committed 2026-07-10, PR pending |
-| 60 | Verified badges + response ranking | 2 — Public + Trust | ✅ Built + committed 2026-07-10, PR pending |
-| 61 | Trust passport (v1, self-reported) | 2 — Public + Trust | ✅ Built + committed 2026-07-10, PR pending |
-| 62 | Finance-first search + trade-in requests | 3 — Monetization | ✅ Built + committed 2026-07-10, PR pending |
-| 63 | Monetization: lead packages + featured | 3 — Monetization | ✅ Built + committed 2026-07-10, PR pending |
-| 64 | WhatsApp-native dealer intake | 3 — Monetization | ✅ Built + committed 2026-07-10, PR pending |
+| 59 | Public marketplace browse/search | 2 — Public + Trust | ✅ Merged (PR #56) + deployed to prod 2026-07-11 |
+| 60 | Verified badges + response ranking | 2 — Public + Trust | ✅ Merged (PR #56) + deployed to prod 2026-07-11 |
+| 61 | Trust passport (v1, self-reported) | 2 — Public + Trust | ✅ Merged (PR #56) + deployed to prod 2026-07-11 |
+| 62 | Finance-first search + trade-in requests | 3 — Monetization | ✅ Merged (PR #56) + deployed to prod 2026-07-11 |
+| 63 | Monetization: lead packages + featured | 3 — Monetization | ✅ Merged (PR #56) + deployed to prod 2026-07-11 |
+| 64 | WhatsApp-native dealer intake | 3 — Monetization | ✅ Merged (PR #56) + deployed to prod 2026-07-11 |
 
 **Critical path:** Section 0 (manual validation, waived 2026-07-10 — risk accepted) → 56 (done on branch) → 57 → 58 → 58B (this replicates and then proves the manual concierge loop in-product) → GTM ramp starts here in parallel with → 59 → 60 → 61 → 62/63/64 (all built same day on `feature/phase-59-64-marketplace-release2-3`, batched into one PR per CodeRabbit free-plan review-request limits — see `feedback_pr_per_phase_wait_for_review` in project memory).
 
-**End of Release 3, as built:** all six phases (59–64) are code-complete, fully tested (`pnpm test` green), and typechecked (`pnpm exec tsc --noEmit` and Convex's own bundler typecheck both clean) on `feature/phase-59-64-marketplace-release2-3`. Not yet: pushed to GitHub, opened as a PR, merged, or deployed to prod — see this branch's PR once opened for status.
+**End of Release 3, shipped:** all six phases (59–64) are merged (PR #56 → main, merge commit `d597a19`, 2026-07-11) and deployed to prod (`kindly-hound-172`, 2026-07-11 — added the `marketplaceTradeInRequests` and `marketplaceWhatsAppFlows` table indexes). The **Dealer Network Marketplace epic (Phases 56–64) is complete**; remaining non-engineering items (founding-dealer WhatsApp Business Verification, trust-passport self-service form) are tracked in PROJECT_PLAN.md.
