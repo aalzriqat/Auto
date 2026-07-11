@@ -408,6 +408,10 @@ export const create = mutation({
     sourceCost: v.optional(v.number()),
     notes: v.optional(v.string()),
     imageIds: v.optional(v.array(v.id("_storage"))),
+    inspectionStatus: v.optional(v.union(v.literal("NONE"), v.literal("SELF_REPORTED"))),
+    accidentDisclosed: v.optional(v.boolean()),
+    ownerCount: v.optional(v.number()),
+    dealerGuarantee: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
@@ -488,6 +492,10 @@ export const create = mutation({
       sourceCost: isSourced ? args.sourceCost : undefined,
       notes: args.notes,
       imageIds: args.imageIds,
+      inspectionStatus: args.inspectionStatus,
+      accidentDisclosed: args.accidentDisclosed,
+      ownerCount: args.ownerCount,
+      dealerGuarantee: args.dealerGuarantee,
       createdAt: Date.now(),
       addedBy: user._id,
       updatedBy: user._id,
@@ -544,6 +552,10 @@ export const update = mutation({
     sourceCost: v.optional(v.number()),
     notes: v.optional(v.string()),
     imageIds: v.optional(v.array(v.id("_storage"))),
+    inspectionStatus: v.optional(v.union(v.literal("NONE"), v.literal("SELF_REPORTED"))),
+    accidentDisclosed: v.optional(v.boolean()),
+    ownerCount: v.optional(v.number()),
+    dealerGuarantee: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);

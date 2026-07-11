@@ -33,6 +33,10 @@ type VehicleEditPayload = {
   sourceCost?: number;
   notes?: string;
   imageIds?: Id<"_storage">[];
+  inspectionStatus?: "NONE" | "SELF_REPORTED";
+  accidentDisclosed?: boolean;
+  ownerCount?: number;
+  dealerGuarantee?: boolean;
 };
 
 type NormalizedVehicleEditPayload = Omit<VehicleEditPayload, "status"> & {
@@ -68,6 +72,10 @@ export const requestCreate = mutation({
       sourceCost: v.optional(v.number()),
       notes: v.optional(v.string()),
       imageIds: v.optional(v.array(v.id("_storage"))),
+      inspectionStatus: v.optional(v.union(v.literal("NONE"), v.literal("SELF_REPORTED"))),
+      accidentDisclosed: v.optional(v.boolean()),
+      ownerCount: v.optional(v.number()),
+      dealerGuarantee: v.optional(v.boolean()),
     }), // The vehicle creation payload
   },
   handler: async (ctx, args) => {
@@ -139,6 +147,10 @@ export const requestUpdate = mutation({
       sourceCost: v.optional(v.number()),
       notes: v.optional(v.string()),
       imageIds: v.optional(v.array(v.id("_storage"))),
+      inspectionStatus: v.optional(v.union(v.literal("NONE"), v.literal("SELF_REPORTED"))),
+      accidentDisclosed: v.optional(v.boolean()),
+      ownerCount: v.optional(v.number()),
+      dealerGuarantee: v.optional(v.boolean()),
     }), // The vehicle update payload (patch)
   },
   handler: async (ctx, args) => {

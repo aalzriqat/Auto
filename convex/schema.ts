@@ -581,11 +581,10 @@ export default defineSchema({
     sourceCost: v.optional(v.number()),
     notes: v.optional(v.string()),
     imageIds: v.optional(v.array(v.id("_storage"))),
-    // Phase 61 — trust passport (v1: self-reported, widen-only). No dealer
-    // self-service form yet; set via the existing admin data browser
-    // (convex/adminData.ts ADMIN_TABLES already lists "vehicles") until a
-    // dedicated intake surface is built — same manual-first pattern as
-    // Phase 57/58B/60's WhatsApp-adjacent features in this epic.
+    // Phase 61 — trust passport (widen-only). Dealer self-service form (vehicle
+    // create/edit) only ever writes NONE/SELF_REPORTED — PARTNER_VERIFIED is
+    // reserved for a future partner-API integration and is set via the admin
+    // data browser (convex/adminData.ts ADMIN_TABLES) until that exists.
     inspectionStatus: v.optional(
       v.union(v.literal("NONE"), v.literal("SELF_REPORTED"), v.literal("PARTNER_VERIFIED"))
     ),
@@ -729,6 +728,10 @@ export default defineSchema({
       sourceCost: v.optional(v.number()),
       notes: v.optional(v.string()),
       imageIds: v.optional(v.array(v.id("_storage"))),
+      inspectionStatus: v.optional(v.union(v.literal("NONE"), v.literal("SELF_REPORTED"))),
+      accidentDisclosed: v.optional(v.boolean()),
+      ownerCount: v.optional(v.number()),
+      dealerGuarantee: v.optional(v.boolean()),
     }), // The partial vehicle data
     status: v.union(v.literal("PENDING"), v.literal("APPROVED"), v.literal("REJECTED")),
     resolvedBy: v.optional(v.id("users")),
