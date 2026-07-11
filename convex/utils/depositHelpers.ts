@@ -228,13 +228,10 @@ async function releaseQuoteDepositHolds(
   ctx: MutationCtx,
   quoteId: Id<"quotes">
 ): Promise<void> {
-  const deposits = await ctx.db
+  for await (const deposit of ctx.db
     .query("deposits")
-    .withIndex("by_quote", (q) => q.eq("quoteId", quoteId))
-    .take(50);
-
-  for (const deposit of deposits) {
-    if (!deposit.holdActive) continue;
+    .withIndex("by_quote", (q) => q.eq("quoteId", quoteId))) {
+    if (deposit.isDeleted === true || !deposit.holdActive) continue;
     await ctx.db.patch(deposit._id, { holdActive: false });
     await releaseAllVehiclesForDeposit(ctx, deposit);
   }
@@ -247,7 +244,13 @@ async function releaseReservationDepositHold(
   if (!args.reservation.depositId) return;
 
   const deposit = await ctx.db.get(args.reservation.depositId);
-  if (deposit && deposit.orgId === args.orgId && deposit.status === "HELD" && deposit.holdActive) {
+  if (
+    deposit &&
+    deposit.isDeleted !== true &&
+    deposit.orgId === args.orgId &&
+    deposit.status === "HELD" &&
+    deposit.holdActive
+  ) {
     await ctx.db.patch(args.reservation.depositId, { holdActive: false });
   }
 }

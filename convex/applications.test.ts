@@ -220,6 +220,66 @@ describe("applications hold release and deposit resolution", () => {
     });
   });
 
+  test("rejected applications detect and expose held deposits beyond the first 50 quote deposits", async () => {
+    const { t, orgId, userId, customerId, vehicleId, asUser } = await setup();
+
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 20000,
+      downPayment: 3000,
+      termMonths: 48,
+    });
+    const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
+
+    await asUser.mutation(api.applications.updateStatus, {
+      orgId,
+      applicationId,
+      status: "REJECTED",
+    });
+
+    const heldDepositId = await t.run(async (ctx) => {
+      const now = Date.now();
+      for (let index = 0; index < 50; index += 1) {
+        await ctx.db.insert("deposits", {
+          orgId,
+          vehicleId,
+          customerId,
+          quoteId,
+          amount: 1,
+          status: "REFUNDED",
+          holdActive: false,
+          createdBy: userId,
+          createdAt: now + index,
+        });
+      }
+
+      return await ctx.db.insert("deposits", {
+        orgId,
+        vehicleId,
+        customerId,
+        quoteId,
+        amount: 1,
+        status: "HELD",
+        holdActive: false,
+        createdBy: userId,
+        createdAt: now + 51,
+      });
+    });
+
+    const list = await asUser.query(api.applications.list, {
+      orgId,
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+    const details = await asUser.query(api.applications.get, { orgId, applicationId });
+
+    const row = list.page.find((application) => application._id === applicationId);
+    expect(row?.hasPendingDepositResolution).toBe(true);
+    expect(details?.deposits).toHaveLength(51);
+    expect(details?.deposits.some((deposit) => deposit._id === heldDepositId)).toBe(true);
+  });
+
   test("cancelling a submitted application releases a same-customer reservation without a deposit", async () => {
     const { t, orgId, userId, customerId, vehicleId, asUser } = await setup();
 
@@ -259,6 +319,47 @@ describe("applications hold release and deposit resolution", () => {
       expect(reservation?.releasedBy).toBe(userId);
       expect(vehicle?.status).toBe("AVAILABLE");
       expect(deposits).toHaveLength(0);
+    });
+  });
+
+  test("cancelling a submitted application releases a same-customer reservation deposit hold", async () => {
+    const { t, orgId, userId, customerId, vehicleId, asUser } = await setup();
+
+    const reservationId = await asUser.mutation(api.vehicles.createReservation, {
+      orgId,
+      vehicleId,
+      customerId,
+      depositAmount: 750,
+    });
+
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 20000,
+      downPayment: 3000,
+      termMonths: 48,
+    });
+    const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
+
+    await asUser.mutation(api.applications.cancelApplication, {
+      orgId,
+      applicationId,
+      reason: "Customer changed vehicles",
+    });
+
+    await t.run(async (ctx) => {
+      const reservation = await ctx.db.get(reservationId);
+      const vehicle = await ctx.db.get(vehicleId);
+      const deposit = reservation?.depositId ? await ctx.db.get(reservation.depositId) : null;
+
+      expect(reservation?.status).toBe("RELEASED");
+      expect(reservation?.releasedBy).toBe(userId);
+      expect(deposit).toMatchObject({
+        status: "HELD",
+        holdActive: false,
+      });
+      expect(vehicle?.status).toBe("AVAILABLE");
     });
   });
 

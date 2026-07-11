@@ -23,6 +23,8 @@ import { ApplicationDetailsDialog } from "@/components/applications/ApplicationD
 import { useTableControls } from "@/hooks/useTableControls";
 import { SortableColumnHeader } from "@/components/ui/sortable-column-header";
 
+type ApplicationBadgeVariant = "default" | "secondary" | "destructive" | "outline";
+
 export function ApplicationClient() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
@@ -34,17 +36,35 @@ export function ApplicationClient() {
   const [statusFilter, setStatusFilter] = useState("ALL");
   const statusValueFor = (app: { status: string; hasPendingDepositResolution?: boolean }) =>
     app.hasPendingDepositResolution ? "DEPOSIT_PENDING" : app.status;
-  const statusLabelForValue = (status: string) =>
-    status === "DEPOSIT_PENDING" ? t("DepositPending") :
-      status === "PENDING_DOCS" ? t("PendingDocs") :
-        status === "UNDER_REVIEW" ? t("UnderReview") :
-          status === "APPROVED" ? t("Approved") :
-            status === "REJECTED" ? t("Rejected") :
-              status === "CLOSED" ? t("Closed") :
-                status === "CANCELLED" ? t("Cancelled") :
-                  status;
+  const statusLabelForValue = (status: string) => {
+    switch (status) {
+      case "DEPOSIT_PENDING":
+        return t("DepositPending");
+      case "PENDING_DOCS":
+        return t("PendingDocs");
+      case "UNDER_REVIEW":
+        return t("UnderReview");
+      case "APPROVED":
+        return t("Approved");
+      case "REJECTED":
+        return t("Rejected");
+      case "CLOSED":
+        return t("Closed");
+      case "CANCELLED":
+        return t("Cancelled");
+      default:
+        return status;
+    }
+  };
   const statusLabelFor = (app: { status: string; hasPendingDepositResolution?: boolean }) =>
     statusLabelForValue(statusValueFor(app));
+  const badgeVariantFor = (app: { status: string; hasPendingDepositResolution?: boolean }): ApplicationBadgeVariant => {
+    if (statusValueFor(app) === "DEPOSIT_PENDING") return "outline";
+    if (app.status === "APPROVED") return "default";
+    if (app.status === "REJECTED" || app.status === "CANCELLED") return "destructive";
+    if (app.status === "UNDER_REVIEW") return "secondary";
+    return "outline";
+  };
 
   const {
     search: searchQuery,
@@ -139,12 +159,7 @@ export function ApplicationClient() {
                       <TableCell>{app.financedAmount.toLocaleString()} {t("JOD" as any)}</TableCell>
                       <TableCell>
                         <Badge
-                          variant={
-                            statusValueFor(app) === "DEPOSIT_PENDING" ? "outline" :
-                            app.status === "APPROVED" ? "default" :
-                            app.status === "REJECTED" || app.status === "CANCELLED" ? "destructive" :
-                            app.status === "UNDER_REVIEW" ? "secondary" : "outline"
-                          }
+                          variant={badgeVariantFor(app)}
                           className={statusValueFor(app) === "DEPOSIT_PENDING" ? "border-amber-500/60 bg-amber-500/10 text-amber-700" : ""}
                         >
                           {statusLabelFor(app)}

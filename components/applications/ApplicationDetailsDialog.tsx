@@ -6,7 +6,7 @@ import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
@@ -21,6 +21,13 @@ import { scaleForCurrency } from "@/components/accounting/AccountingTabShared";
 import { DisbursementConfirmationDialog } from "./DisbursementConfirmationDialog";
 import { VehicleHandoverDialog } from "./VehicleHandoverDialog";
 import { RegisterExpectedPaymentDialog, type ExpectedPaymentMethod } from "./RegisterExpectedPaymentDialog";
+
+type DepositResolution = "REFUNDED" | "FORFEITED";
+type PendingDepositResolution = {
+  depositId: Id<"deposits">;
+  amount: number;
+  resolution: DepositResolution;
+} | null;
 
 export function ApplicationDetailsDialog({
   applicationId,
@@ -53,6 +60,7 @@ export function ApplicationDetailsDialog({
   const [isPaymentDialogOpen, setIsPaymentDialogOpen] = useState(false);
   const [isRegisteringPayment, setIsRegisteringPayment] = useState(false);
   const [resolvingDepositId, setResolvingDepositId] = useState<Id<"deposits"> | null>(null);
+  const [pendingDepositResolution, setPendingDepositResolution] = useState<PendingDepositResolution>(null);
   const [cancelReason, setCancelReason] = useState("");
   const finalizeDealIdempotencyKeyRef = useRef<string | null>(null);
   const cancelApplicationIdempotencyKeyRef = useRef<string | null>(null);
@@ -151,7 +159,7 @@ export function ApplicationDetailsDialog({
 
   const handleResolveDeposit = async (
     depositId: Id<"deposits">,
-    resolution: "REFUNDED" | "FORFEITED"
+    resolution: DepositResolution
   ) => {
     if (!activeOrgId) return;
     setResolvingDepositId(depositId);
@@ -162,6 +170,7 @@ export function ApplicationDetailsDialog({
           ? t("DepositRefundedSuccess")
           : t("DepositForfeitedSuccess")
       );
+      setPendingDepositResolution(null);
     } catch {
       toast.error(t("UnexpectedError" as any));
     } finally {
@@ -261,21 +270,57 @@ export function ApplicationDetailsDialog({
     (app.status === "REJECTED" || app.status === "CANCELLED") && pendingDeposits.length > 0;
   const showApplicationDeposits =
     (app.status === "REJECTED" || app.status === "CANCELLED") && applicationDeposits.length > 0;
-  const depositStatusLabel = (status: string) =>
-    status === "HELD" ? t("DepositStatusHeld") :
-      status === "REFUNDED" ? t("DepositStatusRefunded") :
-        status === "FORFEITED" ? t("DepositStatusForfeited") :
-          status === "APPLIED" ? t("DepositStatusApplied") :
-            status;
-  const appStatusLabel =
-    showDepositResolution ? t("DepositPending") :
-      app.status === "PENDING_DOCS" ? t("PendingDocs" as any) :
-      app.status === "UNDER_REVIEW" ? t("UnderReview" as any) :
-        app.status === "APPROVED" ? t("Approved" as any) :
-          app.status === "REJECTED" ? t("Rejected" as any) :
-            app.status === "CLOSED" ? t("Closed" as any) :
-              app.status === "CANCELLED" ? t("Cancelled" as any) :
-                app.status;
+  const depositStatusLabel = (status: string) => {
+    switch (status) {
+      case "HELD":
+        return t("DepositStatusHeld");
+      case "REFUNDED":
+        return t("DepositStatusRefunded");
+      case "FORFEITED":
+        return t("DepositStatusForfeited");
+      case "APPLIED":
+        return t("DepositStatusApplied");
+      default:
+        return status;
+    }
+  };
+  const depositStatusClassName = (status: string) => {
+    switch (status) {
+      case "HELD":
+        return "bg-amber-100 text-amber-800";
+      case "REFUNDED":
+        return "bg-blue-100 text-blue-800";
+      case "FORFEITED":
+        return "bg-slate-100 text-slate-800";
+      default:
+        return "bg-emerald-100 text-emerald-800";
+    }
+  };
+  const appStatusLabel = (() => {
+    if (showDepositResolution) return t("DepositPending");
+    switch (app.status) {
+      case "PENDING_DOCS":
+        return t("PendingDocs" as any);
+      case "UNDER_REVIEW":
+        return t("UnderReview" as any);
+      case "APPROVED":
+        return t("Approved" as any);
+      case "REJECTED":
+        return t("Rejected" as any);
+      case "CLOSED":
+        return t("Closed" as any);
+      case "CANCELLED":
+        return t("Cancelled" as any);
+      default:
+        return app.status;
+    }
+  })();
+  const pendingResolutionLabel =
+    pendingDepositResolution?.resolution === "REFUNDED" ? t("Refund") : t("Forfeit");
+  const pendingResolutionConfirmLabel =
+    pendingDepositResolution?.resolution === "REFUNDED" ? t("ConfirmRefund") : t("ConfirmForfeit");
+  const isResolvingPendingDeposit =
+    pendingDepositResolution !== null && resolvingDepositId === pendingDepositResolution.depositId;
   const isCancellable = app.status !== "CANCELLED";
   // Mirror the backend permission tiers exactly:
   // - DRAFT/PENDING_DOCS/UNDER_REVIEW/REJECTED: requires CREATE_FINANCE_APPLICATION
@@ -493,14 +538,7 @@ export function ApplicationDetailsDialog({
                                 )}
                               </div>
                               <span
-                                className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${isHeld
-                                    ? "bg-amber-100 text-amber-800"
-                                    : deposit.status === "REFUNDED"
-                                      ? "bg-blue-100 text-blue-800"
-                                      : deposit.status === "FORFEITED"
-                                        ? "bg-slate-100 text-slate-800"
-                                        : "bg-emerald-100 text-emerald-800"
-                                  }`}
+                                className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${depositStatusClassName(deposit.status)}`}
                               >
                                 {depositStatusLabel(deposit.status)}
                               </span>
@@ -512,7 +550,13 @@ export function ApplicationDetailsDialog({
                                   size="sm"
                                   variant="outline"
                                   disabled={resolvingDepositId === deposit._id}
-                                  onClick={() => handleResolveDeposit(deposit._id, "REFUNDED")}
+                                  onClick={() =>
+                                    setPendingDepositResolution({
+                                      depositId: deposit._id,
+                                      amount: deposit.amount,
+                                      resolution: "REFUNDED",
+                                    })
+                                  }
                                 >
                                   <Undo2 className="h-3.5 w-3.5 me-1.5" />
                                   {t("Refund")}
@@ -522,7 +566,13 @@ export function ApplicationDetailsDialog({
                                   variant="outline"
                                   className="text-destructive hover:text-destructive"
                                   disabled={resolvingDepositId === deposit._id}
-                                  onClick={() => handleResolveDeposit(deposit._id, "FORFEITED")}
+                                  onClick={() =>
+                                    setPendingDepositResolution({
+                                      depositId: deposit._id,
+                                      amount: deposit.amount,
+                                      resolution: "FORFEITED",
+                                    })
+                                  }
                                 >
                                   <XCircle className="h-3.5 w-3.5 me-1.5" />
                                   {t("Forfeit")}
@@ -662,6 +712,56 @@ export function ApplicationDetailsDialog({
         </div>
       </DialogContent>
     </Dialog>
+
+      {/* Deposit Resolution Confirmation Dialog */}
+      <Dialog
+        open={pendingDepositResolution !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen && !isResolvingPendingDeposit) setPendingDepositResolution(null);
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t("ConfirmDepositResolution")}</DialogTitle>
+            <DialogDescription>{t("DepositResolutionConfirmDesc")}</DialogDescription>
+          </DialogHeader>
+          {pendingDepositResolution && (
+            <div className="rounded-md border bg-muted/40 p-3 text-sm space-y-2">
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-muted-foreground">{t("DepositResolutionAmount")}</span>
+                <span className="font-medium">{currency.format(pendingDepositResolution.amount)}</span>
+              </div>
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-muted-foreground">{t("DepositResolutionOutcome")}</span>
+                <span className="font-medium">{pendingResolutionLabel}</span>
+              </div>
+            </div>
+          )}
+          <DialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              disabled={isResolvingPendingDeposit}
+              onClick={() => setPendingDepositResolution(null)}
+            >
+              {t("Cancel")}
+            </Button>
+            {pendingDepositResolution && (
+              <Button
+                variant={pendingDepositResolution.resolution === "FORFEITED" ? "destructive" : "default"}
+                disabled={isResolvingPendingDeposit}
+                onClick={() =>
+                  handleResolveDeposit(
+                    pendingDepositResolution.depositId,
+                    pendingDepositResolution.resolution
+                  )
+                }
+              >
+                {pendingResolutionConfirmLabel}
+              </Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Cancel Application Confirmation Dialog */}
       <Dialog open={isCancelDialogOpen} onOpenChange={setIsCancelDialogOpen}>
