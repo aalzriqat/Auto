@@ -264,7 +264,7 @@ export function PrestigeTheme(props: ThemeProps) {
               ) : (
                 <form
                   style={{ marginTop: 32, background: "#111", border: "1px solid #1e1e1e", borderRadius: 4, padding: 24 }}
-                  onSubmit={(e) => { setSelectedVehicleId(detailVehicle.id); onSubmit(e, "vehicle_inquiry"); }}
+                  onSubmit={(e) => { setSelectedVehicleId(detailVehicle.id); onSubmit(e, "vehicle_inquiry", { vehicleId: detailVehicle.id }); }}
                 >
                   <h2 style={{ fontWeight: 700, color: "#fff", marginBottom: 16 }}>{t.askAbout}</h2>
                   <PrestigeFormFields form={form} setForm={setForm} t={t} isSubmitting={isSubmitting} submitLabel={t.sendInquiry} primary={primary} turnstileSiteKey={turnstileSiteKey} />

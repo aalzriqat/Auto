@@ -237,7 +237,7 @@ export function AvantTheme(props: ThemeProps) {
                 <form
                   className="av-form-card"
                   style={{ marginTop: 28 }}
-                  onSubmit={(e) => { setSelectedVehicleId(detailVehicle.id); onSubmit(e, "vehicle_inquiry"); }}
+                  onSubmit={(e) => { setSelectedVehicleId(detailVehicle.id); onSubmit(e, "vehicle_inquiry", { vehicleId: detailVehicle.id }); }}
                 >
                   <h2 style={{ fontWeight: 700, marginBottom: 16 }}>{t.askAbout}</h2>
                   <AvantFormFields form={form} setForm={setForm} t={t} isSubmitting={isSubmitting} submitLabel={t.sendInquiry} primary={primary} turnstileSiteKey={turnstileSiteKey} />

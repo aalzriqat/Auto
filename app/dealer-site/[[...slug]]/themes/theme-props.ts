@@ -74,6 +74,10 @@ export type FormState = {
   message: string;
 };
 
+export type SubmitLeadOptions = {
+  vehicleId?: Id<"vehicles">;
+};
+
 export type PublicSite = {
   settings: {
     status?: string;
@@ -131,7 +135,7 @@ export type ThemeProps = {
   isSubmitting: boolean;
   formSuccess: string | null;
   setFormSuccess: (s: string | null) => void;
-  onSubmit: (e: FormEvent<HTMLFormElement>, formType: string) => void;
+  onSubmit: (e: FormEvent<HTMLFormElement>, formType: string, options?: SubmitLeadOptions) => void;
   turnstileSiteKey?: string;
   onToggleLang: () => void;
   mobileNavOpen: boolean;
