@@ -678,6 +678,7 @@ export default defineSchema({
     expiredAt: v.optional(v.number()),
   })
     .index("by_org_vehicle", ["orgId", "vehicleId"])
+    .index("by_org_vehicle_status", ["orgId", "vehicleId", "status"])
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_customer", ["orgId", "customerId"])
     .index("by_status_expiresAt", ["status", "expiresAt"]),
@@ -1335,6 +1336,7 @@ export default defineSchema({
   })
     .index("by_org", ["orgId"])
     .index("by_quote", ["quoteId"])
+    .index("by_quote_status", ["quoteId", "status"])
     .index("by_reservation", ["reservationId"])
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_customer", ["orgId", "customerId"])

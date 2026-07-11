@@ -1,5 +1,5 @@
 import { v, ConvexError } from "convex/values";
-import { MutationCtx, mutation, query } from "./_generated/server";
+import { MutationCtx, QueryCtx, mutation, query } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -78,6 +78,27 @@ async function getActiveReceivableAllocations(
     .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", receivableDocumentId))
     .filter((q) => q.eq(q.field("status"), "ACTIVE"))
     .collect();
+}
+
+async function hasHeldQuoteDeposit(ctx: QueryCtx, quoteId: Id<"quotes">): Promise<boolean> {
+  for await (const deposit of ctx.db
+    .query("deposits")
+    .withIndex("by_quote_status", (q) => q.eq("quoteId", quoteId).eq("status", "HELD"))) {
+    if (deposit.isDeleted !== true) return true;
+  }
+  return false;
+}
+
+async function getQuoteDeposits(ctx: QueryCtx, quoteId: Id<"quotes">): Promise<Array<Doc<"deposits">>> {
+  const deposits: Array<Doc<"deposits">> = [];
+  for await (const deposit of ctx.db
+    .query("deposits")
+    .withIndex("by_quote", (q) => q.eq("quoteId", quoteId))) {
+    if (deposit.isDeleted !== true) {
+      deposits.push(deposit);
+    }
+  }
+  return deposits;
 }
 
 async function transferFinancedAmountFromCustomerReceivable(
@@ -219,6 +240,10 @@ export const list = query({
         const company = app.companyId ? await ctx.db.get(app.companyId) : null;
         const salesperson = await ctx.db.get(app.salespersonId);
         const quote = await ctx.db.get(app.quoteId);
+        const hasPendingDepositResolution =
+          app.status === "REJECTED" || app.status === "CANCELLED"
+            ? await hasHeldQuoteDeposit(ctx, app.quoteId)
+            : false;
 
         return {
           ...app,
@@ -228,6 +253,7 @@ export const list = query({
           salespersonName: salesperson && "name" in salesperson ? salesperson.name : "Unknown",
           financedAmount: quote?.totalFinancedAmount || 0,
           monthlyInstallment: quote?.monthlyInstallment || 0,
+          hasPendingDepositResolution,
         };
       })
     );
@@ -252,6 +278,7 @@ export const get = query({
     const company = app.companyId ? await ctx.db.get(app.companyId) : null;
     const salesperson = await ctx.db.get(app.salespersonId);
     const quote = await ctx.db.get(app.quoteId);
+    const deposits = await getQuoteDeposits(ctx, app.quoteId);
 
     return {
       ...app,
@@ -260,6 +287,7 @@ export const get = query({
       company,
       salesperson,
       quote,
+      deposits,
     };
   },
 });
@@ -542,7 +570,7 @@ export const updateStatus = mutation({
     });
 
     if (args.status === "REJECTED" && app.status !== "REJECTED") {
-      await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId });
+      await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId, actorId: auth.user._id });
     }
   },
 });
@@ -580,8 +608,13 @@ export const cancelApplication = mutation({
           throw new ConvexError("Application not found");
         }
 
+        if (app.status === "CANCELLED") {
+          await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId, actorId: auth.user._id });
+          return;
+        }
+
         if (!CANCELLABLE_STATUSES.includes(app.status)) {
-          throw new ConvexError("This application has already been cancelled.");
+          throw new ConvexError("This application cannot be cancelled.");
         }
 
         // Reversing an already-APPROVED decision is more sensitive than voiding
@@ -671,7 +704,7 @@ export const cancelApplication = mutation({
             }
           }
         } else {
-          await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId });
+          await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId, actorId: auth.user._id });
         }
 
         await ctx.db.patch(args.applicationId, {
