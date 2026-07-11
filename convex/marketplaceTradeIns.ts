@@ -2,9 +2,8 @@ import { ConvexError, v } from "convex/values";
 import { action, internalMutation, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
-import { verifyTurnstileToken, normalizeRequiredText, normalizeText } from "./websites";
-import { normalizePhone } from "./marketplaceRequests";
-import { enforceMarketplaceSubmissionRateLimit } from "./rateLimit";
+import { normalizeRequiredText, normalizeText } from "./websites";
+import { normalizePhone, verifyPublicSubmission } from "./marketplaceRequests";
 import { notifyByPermission } from "./utils/notifications";
 import { PERMISSIONS } from "./utils/permissions";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -47,14 +46,12 @@ export const submitTradeInRequest = action({
     turnstileToken: v.string(),
   },
   handler: async (ctx, args): Promise<{ tradeInRequestId: Id<"marketplaceTradeInRequests"> }> => {
-    const clientFingerprint = normalizeRequiredText(args.clientFingerprint, "Client fingerprint", MAX_FINGERPRINT_CHARS);
-    await verifyTurnstileToken(args.turnstileToken);
-    await enforceMarketplaceSubmissionRateLimit(ctx, "marketplaceTradeInFingerprint", clientFingerprint);
-
-    const normalizedPhone = normalizePhone(args.buyerPhone, "Phone");
-    await enforceMarketplaceSubmissionRateLimit(ctx, "marketplaceTradeInContact", normalizedPhone);
-
-    const { turnstileToken: _turnstileToken, ...requestArgs } = args;
+    const { requestArgs, clientFingerprint } = await verifyPublicSubmission(
+      ctx,
+      args,
+      "marketplaceTradeInFingerprint",
+      "marketplaceTradeInContact",
+    );
     return await ctx.runMutation(internal.marketplaceTradeIns.createTradeInRequest, {
       ...requestArgs,
       clientFingerprint,
