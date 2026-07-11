@@ -1,9 +1,9 @@
 import { ConvexError, v } from "convex/values";
-import { action, internalMutation, query } from "./_generated/server";
+import { ActionCtx, action, internalMutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { verifyTurnstileToken, normalizeText, normalizeRequiredText } from "./websites";
-import { enforceMarketplaceSubmissionRateLimit } from "./rateLimit";
+import { enforceMarketplaceSubmissionRateLimit, MarketplaceSubmissionRateLimitName } from "./rateLimit";
 import { notifyByPermission } from "./utils/notifications";
 import { PERMISSIONS } from "./utils/permissions";
 import { compareDealerRank, listOptedInDealerProfiles } from "./marketplaceDealers";
@@ -25,6 +25,33 @@ export function normalizePhone(value: string, field: string): string {
     throw new ConvexError(`${field} is invalid.`);
   }
   return normalized;
+}
+
+/**
+ * Shared gate for the two public buyer-intake actions (`submitRequest`,
+ * `submitTradeInRequest`): normalize the fingerprint, verify Turnstile, then
+ * rate-limit on both fingerprint and phone before any DB write. Returns the
+ * args with `turnstileToken` stripped (ready to hand to the internal create
+ * mutation) plus the normalized fingerprint. The two rate-limit buckets differ
+ * per flow, so the caller passes them in.
+ */
+export async function verifyPublicSubmission<
+  T extends { turnstileToken: string; clientFingerprint: string; buyerPhone: string },
+>(
+  ctx: ActionCtx,
+  args: T,
+  fingerprintLimit: MarketplaceSubmissionRateLimitName,
+  contactLimit: MarketplaceSubmissionRateLimitName,
+): Promise<{ requestArgs: Omit<T, "turnstileToken">; clientFingerprint: string }> {
+  const clientFingerprint = normalizeRequiredText(args.clientFingerprint, "Client fingerprint", MAX_FINGERPRINT_CHARS);
+  await verifyTurnstileToken(args.turnstileToken);
+  await enforceMarketplaceSubmissionRateLimit(ctx, fingerprintLimit, clientFingerprint);
+
+  const normalizedPhone = normalizePhone(args.buyerPhone, "Phone");
+  await enforceMarketplaceSubmissionRateLimit(ctx, contactLimit, normalizedPhone);
+
+  const { turnstileToken: _turnstileToken, ...requestArgs } = args;
+  return { requestArgs, clientFingerprint };
 }
 
 const buyerTimeframeValidator = v.union(
@@ -94,14 +121,12 @@ export const submitRequest = action({
     turnstileToken: v.string(),
   },
   handler: async (ctx, args): Promise<{ requestId: Id<"marketplaceRequests">; matchedCount: number }> => {
-    const clientFingerprint = normalizeRequiredText(args.clientFingerprint, "Client fingerprint", MAX_FINGERPRINT_CHARS);
-    await verifyTurnstileToken(args.turnstileToken);
-    await enforceMarketplaceSubmissionRateLimit(ctx, "marketplaceRequestFingerprint", clientFingerprint);
-
-    const normalizedPhone = normalizePhone(args.buyerPhone, "Phone");
-    await enforceMarketplaceSubmissionRateLimit(ctx, "marketplaceRequestContact", normalizedPhone);
-
-    const { turnstileToken: _turnstileToken, ...requestArgs } = args;
+    const { requestArgs, clientFingerprint } = await verifyPublicSubmission(
+      ctx,
+      args,
+      "marketplaceRequestFingerprint",
+      "marketplaceRequestContact",
+    );
     return await ctx.runMutation(internal.marketplaceRequests.createRequest, {
       ...requestArgs,
       clientFingerprint,
