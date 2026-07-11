@@ -100,3 +100,20 @@ export async function resolveGeneratedLeadAssignee(
 
   return await nextGeneratedLeadAssignee(ctx, orgId);
 }
+
+/** Finds or creates the buyer's customer record for a marketplace conversion (trade-in acceptance, request response). Shared so the two call sites don't drift on the "Marketplace Buyer" placeholder lastName. */
+export async function getOrCreateMarketplaceBuyerCustomer(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  phone: string,
+  firstName: string,
+  whatsapp?: string
+): Promise<Id<"customers">> {
+  const existing = await ctx.db
+    .query("customers")
+    .withIndex("by_org_phone", (q) => q.eq("orgId", orgId).eq("phone", phone))
+    .first();
+  if (existing) return existing._id;
+
+  return await ctx.db.insert("customers", { orgId, firstName, lastName: "Marketplace Buyer", phone, whatsapp });
+}

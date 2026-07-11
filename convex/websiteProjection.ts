@@ -134,6 +134,10 @@ async function projectedVehicleRows(
         vin: includeVinChassis ? vehicleRow.vin : null,
         status: vehicleRow.status,
         imageUrls: enabledSections["vehicle.photos"] ? safeImageUrls : [],
+        inspectionStatus: vehicleRow.inspectionStatus ?? "NONE",
+        accidentDisclosed: vehicleRow.accidentDisclosed ?? null,
+        ownerCount: vehicleRow.ownerCount ?? null,
+        dealerGuarantee: vehicleRow.dealerGuarantee ?? null,
       };
     })
   );

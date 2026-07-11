@@ -34,12 +34,28 @@ function webhookProcessingFailedResponse(): Response {
   return new Response("Webhook processing failed", { status: 500 });
 }
 
+/** Shared "429 if this key is over the webhook rate limit" check — every inbound webhook route below applies it with its own key (org id, client IP, or a fixed platform key). */
+async function enforceWebhookRateLimit(ctx: ActionCtx, key: string): Promise<Response | null> {
+  const limitStatus = await rateLimiter.limit(ctx, "webhook", { key });
+  return limitStatus.ok ? null : new Response("Too many requests", { status: 429 });
+}
+
+/** Parses + validates a Meta subscription-verification GET request's `hub.mode`/`hub.verify_token`/`hub.challenge` query params — shared by `/whatsapp-webhook` and `/marketplace-whatsapp-webhook`'s GET handlers. Null means malformed (missing param or `hub.mode` isn't "subscribe"); the caller still has to check `token` against its own secret. */
+function parseHubChallengeParams(url: URL): { token: string; challenge: string } | null {
+  const mode = url.searchParams.get("hub.mode");
+  const token = url.searchParams.get("hub.verify_token");
+  const challenge = url.searchParams.get("hub.challenge");
+  if (mode !== "subscribe" || !token || !challenge) return null;
+  return { token, challenge };
+}
+
 type VerifiedWebhookSource =
   | "clerk"
   | "whatsapp"
   | "resend"
   | "instagram"
-  | "facebook";
+  | "facebook"
+  | "marketplace-whatsapp";
 
 async function sha256Hex(value: string): Promise<string> {
   const digest = await crypto.subtle.digest(
@@ -372,6 +388,92 @@ async function verifyHubSignature256(
   return diff === 0;
 }
 
+/**
+ * Shared skeleton for a signed WhatsApp Cloud API webhook POST: verify the
+ * signature, parse `entry[].changes[].value.messages[]` into caller-defined
+ * message objects, dedupe/claim the delivery, dispatch each message (letting
+ * the caller's `dispatch` decide what "skip this one" means for its own
+ * route — throwing marks the whole batch for redelivery, returning quietly
+ * does not), and complete the delivery. `/whatsapp-webhook` (per-org) and
+ * `/marketplace-whatsapp-webhook` (platform-wide) both wrap this — same
+ * envelope, different per-message shape and dispatch target.
+ */
+async function processMetaMessagingWebhook<T extends { messageId?: string }>(
+  ctx: ActionCtx,
+  args: {
+    request: Request;
+    appSecret: string;
+    source: VerifiedWebhookSource;
+    parseMessage: (message: Record<string, unknown>, contacts: Record<string, unknown>[]) => T;
+    dispatch: (message: T) => Promise<void>;
+  },
+): Promise<Response> {
+  const rawBody = await args.request.text();
+  const signature = args.request.headers.get("x-hub-signature-256");
+  if (!(await verifyHubSignature256(rawBody, signature, args.appSecret))) {
+    return new Response("Invalid signature", { status: 401 });
+  }
+
+  let body: Record<string, unknown> | undefined;
+  try {
+    body = optionalRecord(JSON.parse(rawBody));
+  } catch {
+    return new Response("Invalid JSON", { status: 400 });
+  }
+
+  const messages: T[] = [];
+  let statusUpdateCount = 0;
+
+  for (const entry of recordArray(body?.entry)) {
+    for (const changeRecord of recordArray(entry.changes)) {
+      const change = optionalRecord(changeRecord.value);
+      const contacts = recordArray(change?.contacts);
+      statusUpdateCount += recordArray(change?.statuses).length;
+
+      for (const message of recordArray(change?.messages)) {
+        messages.push(args.parseMessage(message, contacts));
+      }
+    }
+  }
+
+  const messageIds = messages
+    .map((message) => message.messageId)
+    .filter((messageId): messageId is string => typeof messageId === "string");
+  const claim = await claimWebhookDelivery(ctx, {
+    source: args.source,
+    eventId: messageIds.length > 0 ? messageIds.join(":") : undefined,
+    summary: messages.length > 0
+      ? `Batch with ${messages.length} message(s)`
+      : `Status update batch with ${statusUpdateCount} status update(s)`,
+    rawPayload: rawBody,
+  });
+  if (claim.disposition === "skip_processed") return new Response(null, { status: 200 });
+  if (claim.disposition === "skip_in_flight") return webhookInFlightResponse();
+
+  if (messages.length === 0) {
+    // Delivery receipts and status updates — acknowledge silently
+    await completeWebhookDelivery(ctx, claim, "success");
+    return new Response(null, { status: 200 });
+  }
+
+  let processingError: string | undefined;
+  for (const message of messages) {
+    try {
+      await args.dispatch(message);
+    } catch (err) {
+      processingError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  if (processingError) {
+    await completeWebhookDelivery(ctx, claim, "error", processingError);
+    return webhookProcessingFailedResponse();
+  }
+
+  await completeWebhookDelivery(ctx, claim, "success");
+  return new Response(null, { status: 200 });
+}
+
 http.route({
   path: "/load-test/health",
   method: "GET",
@@ -412,12 +514,8 @@ http.route({
   path: "/clerk-webhook",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
-    const limitStatus = await rateLimiter.limit(ctx, "webhook", {
-      key: clientIp(request),
-    });
-    if (!limitStatus.ok) {
-      return new Response("Too many requests", { status: 429 });
-    }
+    const rateLimited = await enforceWebhookRateLimit(ctx, clientIp(request));
+    if (rateLimited) return rateLimited;
 
     let webhookSecret: string;
     try {
@@ -529,12 +627,8 @@ http.route({
   path: "/resend-inbound",
   method: "POST",
   handler: httpAction(async (ctx, request) => {
-    const limitStatus = await rateLimiter.limit(ctx, "webhook", {
-      key: clientIp(request),
-    });
-    if (!limitStatus.ok) {
-      return new Response("Too many requests", { status: 429 });
-    }
+    const rateLimited = await enforceWebhookRateLimit(ctx, clientIp(request));
+    if (rateLimited) return rateLimited;
 
     let webhookSecret: string;
     let resendApiKey: string | undefined;
@@ -650,32 +744,51 @@ http.route({
   handler: httpAction(async (ctx, request) => {
     const url = new URL(request.url);
     const orgId = url.searchParams.get("orgId") as Id<"organizations"> | null;
-    const mode = url.searchParams.get("hub.mode");
-    const token = url.searchParams.get("hub.verify_token");
-    const challenge = url.searchParams.get("hub.challenge");
+    const hub = parseHubChallengeParams(url);
 
-    if (!orgId || mode !== "subscribe" || !token || !challenge) {
+    if (!orgId || !hub) {
       return new Response("Bad request", { status: 400 });
     }
 
-    const limitStatus = await rateLimiter.limit(ctx, "webhook", { key: orgId });
-    if (!limitStatus.ok) {
-      return new Response("Too many requests", { status: 429 });
-    }
+    const rateLimited = await enforceWebhookRateLimit(ctx, orgId);
+    if (rateLimited) return rateLimited;
 
     const settings = await ctx.runQuery(internal.whatsapp.getSettingsByOrg, {
       orgId,
     });
     if (
       !settings?.whatsappWebhookSecret ||
-      settings.whatsappWebhookSecret !== token
+      settings.whatsappWebhookSecret !== hub.token
     ) {
       return new Response("Forbidden", { status: 403 });
     }
 
-    return new Response(challenge, { status: 200 });
+    return new Response(hub.challenge, { status: 200 });
   }),
 });
+
+type WhatsAppMessage = {
+  messageId?: string;
+  senderPhone?: string;
+  senderName?: string;
+  messageText?: string;
+};
+
+function parseWhatsAppMessage(message: Record<string, unknown>, contacts: Record<string, unknown>[]): WhatsAppMessage {
+  const senderPhone = optionalMetaId(message.from);
+  const contact =
+    contacts.find((candidate) => optionalMetaId(candidate.wa_id) === senderPhone) ??
+    contacts[0];
+  const profile = optionalRecord(contact?.profile);
+  const textPayload = optionalRecord(message.text);
+
+  return {
+    messageId: optionalMetaId(message.id),
+    senderPhone,
+    senderName: optionalString(profile?.name),
+    messageText: optionalString(message.type) === "text" ? optionalString(textPayload?.body) : undefined,
+  };
+}
 
 http.route({
   path: "/whatsapp-webhook",
@@ -685,10 +798,8 @@ http.route({
     const orgId = url.searchParams.get("orgId") as Id<"organizations"> | null;
     if (!orgId) return new Response("Bad request", { status: 400 });
 
-    const limitStatus = await rateLimiter.limit(ctx, "webhook", { key: orgId });
-    if (!limitStatus.ok) {
-      return new Response("Too many requests", { status: 429 });
-    }
+    const rateLimited = await enforceWebhookRateLimit(ctx, orgId);
+    if (rateLimited) return rateLimited;
 
     let appSecret: string;
     try {
@@ -702,100 +813,119 @@ http.route({
       });
     }
 
-    const rawBody = await request.text();
-    const signature = request.headers.get("x-hub-signature-256");
-    if (!(await verifyHubSignature256(rawBody, signature, appSecret))) {
-      return new Response("Invalid signature", { status: 401 });
-    }
-
-    let body: Record<string, unknown> | undefined;
-    try {
-      body = optionalRecord(JSON.parse(rawBody));
-    } catch {
-      return new Response("Invalid JSON", { status: 400 });
-    }
-
-    const whatsappMessages: Array<{
-      messageId?: string;
-      senderPhone?: string;
-      senderName?: string;
-      messageText?: string;
-    }> = [];
-    let statusUpdateCount = 0;
-
-    for (const entry of recordArray(body?.entry)) {
-      for (const changeRecord of recordArray(entry.changes)) {
-        const change = optionalRecord(changeRecord.value);
-        const contacts = recordArray(change?.contacts);
-        statusUpdateCount += recordArray(change?.statuses).length;
-
-        for (const message of recordArray(change?.messages)) {
-          const senderPhone = optionalMetaId(message.from);
-          const contact =
-            contacts.find((candidate) => optionalMetaId(candidate.wa_id) === senderPhone) ??
-            contacts[0];
-          const profile = optionalRecord(contact?.profile);
-          const textPayload = optionalRecord(message.text);
-
-          whatsappMessages.push({
-            messageId: optionalMetaId(message.id),
-            senderPhone,
-            senderName: optionalString(profile?.name),
-            messageText: optionalString(message.type) === "text"
-              ? optionalString(textPayload?.body)
-              : undefined,
-          });
-        }
-      }
-    }
-
-    const messageIds = whatsappMessages
-      .map((message) => message.messageId)
-      .filter((messageId): messageId is string => typeof messageId === "string");
-    const claim = await claimWebhookDelivery(ctx, {
+    return await processMetaMessagingWebhook<WhatsAppMessage>(ctx, {
+      request,
+      appSecret,
       source: "whatsapp",
-      eventId: messageIds.length > 0 ? messageIds.join(":") : undefined,
-      summary: whatsappMessages.length > 0
-        ? `Batch with ${whatsappMessages.length} message(s)`
-        : `Status update batch with ${statusUpdateCount} status update(s)`,
-      rawPayload: rawBody,
-    });
-    if (claim.disposition === "skip_processed") return new Response(null, { status: 200 });
-    if (claim.disposition === "skip_in_flight") return webhookInFlightResponse();
-
-    if (whatsappMessages.length === 0) {
-      // Delivery receipts and status updates — acknowledge silently
-      await completeWebhookDelivery(ctx, claim, "success");
-      return new Response(null, { status: 200 });
-    }
-
-    let processingError: string | undefined;
-    for (const message of whatsappMessages) {
-      if (!message.senderPhone) {
-        processingError = "Message without sender phone";
-        continue;
-      }
-
-      try {
+      parseMessage: parseWhatsAppMessage,
+      dispatch: async (message) => {
+        if (!message.senderPhone) throw new Error("Message without sender phone");
         await ctx.runMutation(internal.whatsapp.handleIncomingMessage, {
           orgId,
           senderPhone: message.senderPhone,
           senderName: message.senderName,
           messageText: message.messageText,
         });
-      } catch (err) {
-        processingError = err instanceof Error ? err.message : String(err);
-      }
+      },
+    });
+  }),
+});
+
+// ─── Marketplace WhatsApp intake webhook (Phase 64) ───────────────────────────
+// A single AutoFlow-platform WhatsApp number for the dealer-network
+// marketplace's guided listing flow — distinct from the per-org
+// /whatsapp-webhook above (each org's own number, own secret, own customer
+// inbox). No orgId query param: the sender's phone is resolved to a dealer
+// org internally, via marketplaceDealerProfiles.whatsappNumber, inside
+// marketplaceWhatsAppIntake.ts.
+//   GET  https://<convex-site>/marketplace-whatsapp-webhook  (verification)
+//   POST https://<convex-site>/marketplace-whatsapp-webhook  (incoming messages)
+
+http.route({
+  path: "/marketplace-whatsapp-webhook",
+  method: "GET",
+  handler: httpAction(async (_ctx, request) => {
+    const url = new URL(request.url);
+    const hub = parseHubChallengeParams(url);
+
+    let env: ReturnType<typeof getValidatedEnv>;
+    try {
+      env = getValidatedEnv();
+    } catch {
+      return new Response("Webhook secret not set or invalid env", { status: 500 });
     }
 
-    if (processingError) {
-      await completeWebhookDelivery(ctx, claim, "error", processingError);
-      return webhookProcessingFailedResponse();
+    if (
+      !hub ||
+      !env.MARKETPLACE_WHATSAPP_WEBHOOK_VERIFY_TOKEN ||
+      hub.token !== env.MARKETPLACE_WHATSAPP_WEBHOOK_VERIFY_TOKEN
+    ) {
+      return new Response("Forbidden", { status: 403 });
     }
 
-    await completeWebhookDelivery(ctx, claim, "success");
+    return new Response(hub.challenge, { status: 200 });
+  }),
+});
 
-    return new Response(null, { status: 200 });
+type MarketplaceWhatsAppMessage = {
+  messageId?: string;
+  senderPhone?: string;
+  input?:
+    | { kind: "text"; text: string }
+    | { kind: "button"; buttonId: string }
+    | { kind: "image"; mediaId: string };
+};
+
+function parseMarketplaceWhatsAppMessage(message: Record<string, unknown>): MarketplaceWhatsAppMessage {
+  const senderPhone = optionalMetaId(message.from);
+  const messageId = optionalMetaId(message.id);
+  const type = optionalString(message.type);
+
+  if (type === "text") {
+    const text = optionalString(optionalRecord(message.text)?.body);
+    return { messageId, senderPhone, input: text ? { kind: "text", text } : undefined };
+  }
+  if (type === "interactive") {
+    const interactive = optionalRecord(message.interactive);
+    const buttonReply = optionalRecord(interactive?.button_reply);
+    const buttonId = optionalString(buttonReply?.id);
+    return { messageId, senderPhone, input: buttonId ? { kind: "button", buttonId } : undefined };
+  }
+  if (type === "image") {
+    const mediaId = optionalMetaId(optionalRecord(message.image)?.id);
+    return { messageId, senderPhone, input: mediaId ? { kind: "image", mediaId } : undefined };
+  }
+  return { messageId, senderPhone, input: undefined };
+}
+
+http.route({
+  path: "/marketplace-whatsapp-webhook",
+  method: "POST",
+  handler: httpAction(async (ctx, request) => {
+    let env: ReturnType<typeof getValidatedEnv>;
+    try {
+      env = getValidatedEnv();
+      if (!env.MARKETPLACE_WHATSAPP_APP_SECRET) throw new ConvexError("MARKETPLACE_WHATSAPP_APP_SECRET not set");
+    } catch {
+      return new Response("Webhook secret not set or invalid env", { status: 500 });
+    }
+
+    const rateLimited = await enforceWebhookRateLimit(ctx, "marketplace-whatsapp");
+    if (rateLimited) return rateLimited;
+
+    return await processMetaMessagingWebhook<MarketplaceWhatsAppMessage>(ctx, {
+      request,
+      appSecret: env.MARKETPLACE_WHATSAPP_APP_SECRET,
+      source: "marketplace-whatsapp",
+      parseMessage: (message) => parseMarketplaceWhatsAppMessage(message),
+      dispatch: async (message) => {
+        if (!message.senderPhone || !message.input) return;
+        await ctx.runAction(internal.marketplaceWhatsAppIntake.handleIntakeMessage, {
+          phone: message.senderPhone,
+          input: message.input,
+        });
+      },
+    });
   }),
 });
 

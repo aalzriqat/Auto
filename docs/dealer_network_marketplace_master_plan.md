@@ -1,8 +1,8 @@
 # AutoFlow Dealer Network — Marketplace Master Plan
 
-**Date:** 2026-07-10 (revised same day after a review round — see A10/A11, Phase 57 consent/cap, Phase 58B)
+**Date:** 2026-07-10 (revised same day after a review round — see A10/A11, Phase 57 consent/cap, Phase 58B; Phases 59–64 built same day on `feature/phase-59-64-marketplace-release2-3`)
 **Owner:** aalzriqat
-**Status:** Phases 56–58B merged + deployed to prod 2026-07-10 (PR #52, hotfix PR #53, PR #54, PR #55) · Phases 59–64 planned → sequence into PROJECT_PLAN.md as they start
+**Status:** Phases 56–58B merged + deployed to prod 2026-07-10 (PR #52, hotfix PR #53, PR #54, PR #55) · Phases 59–64 (Release 2 + 3) built + committed 2026-07-10, PR pending
 **Scope:** Turn AutoFlow into a two-sided demand-generation marketplace — buyers submit "I want this car" requests, AutoFlow fans them out to matching dealers, dealers reply and convert into tracked leads with gross-profit attribution. Built as a layer **on top of** the dealer-site infrastructure that already exists, not a rebuild.
 
 > **Non-negotiables (project dev rules, unchanged).** All logic backend-only (Convex). Every mutation/action in `try/catch`, `console.error(raw)`, return `{ success:false, error:"An unexpected error occurred. Please try again later." }`. Optional chaining + fallbacks on all rendered DB data. Zero implicit `any`. Bilingual EN/AR (RTL) for every surface. Soft-delete pattern (`isDeleted/deletedAt/deletedBy`) on every new table. No LLM in Releases 1–3 (matches existing roadmap discipline — AI upgrades route to the deferred backlog, see §5).
@@ -156,9 +156,9 @@ This is a demand-and-supply cold-start problem, not just a build. The plan fails
 
 ### Release 2 — Public marketplace + trust (Phases 59–61)
 
-#### Phase 59 — Public marketplace browse/search
+#### Phase 59 — Public marketplace browse/search ✅ built on branch
 
-**Branch:** `feature/phase-59-marketplace-browse`
+**Branch:** `feature/phase-59-64-marketplace-release2-3` (all of Release 2 + 3 batched into one branch/PR per CodeRabbit free-plan review-request limits)
 **Goal:** Buyers can browse cross-org inventory, not only submit blind requests.
 
 **Backend:** `marketplaceBrowse.ts` — `search` (public query: unions each opted-in org's *existing* `activePublishedSnapshot` inventory per A2, filtered by make/model/price/city/payment type; no new listings table). Pagination via cursor, not full scan.
@@ -166,9 +166,9 @@ This is a demand-and-supply cold-start problem, not just a build. The plan fails
 **Tests:** union-query correctness against multiple orgs' snapshots; filter correctness; excludes non-opted-in orgs.
 **Acceptance:** a buyer filters by city + budget and sees real vehicles from ≥2 different dealers on one page.
 
-#### Phase 60 — Verified badges + response ranking
+#### Phase 60 — Verified badges + response ranking ✅ built on branch
 
-**Branch:** `feature/phase-60-marketplace-badges`
+**Branch:** `feature/phase-59-64-marketplace-release2-3`
 **Goal:** Rank/label dealers so buyers (and the matching algorithm) trust the network.
 
 **Backend:** `marketplaceDealers.ts` — badge computation job (`VERIFIED_PHONE` on confirmed WhatsApp OTP, `FAST_RESPONSE` on rolling `avgResponseMinutes` threshold, `FINANCE_AVAILABLE` from org's existing finance-company settings). Ranking feeds both directory sort order and Phase 57's matching priority.
@@ -178,9 +178,9 @@ This is a demand-and-supply cold-start problem, not just a build. The plan fails
 
 **Considered and deferred: exclusivity/speed mechanic** ("first 3 dealers to respond win exclusivity" / "30-minute priority window for top-ranked dealers"). Rejected for V1 — with 5–10 founding dealers per area, most requests will only reach 1–2 relevant dealers at all, so the mechanic has nothing to create pressure against; it also adds real complexity (claim races between concurrent responses, expiry-window state, what the buyer sees if a window lapses unclaimed). Revisit once a launched area has enough concurrent opted-in dealers per brand/city for "first N respond" to be a meaningful constraint, not a formality.
 
-#### Phase 61 — Trust passport (v1: manual/self-reported)
+#### Phase 61 — Trust passport (v1: manual/self-reported) ✅ built on branch
 
-**Branch:** `feature/phase-61-trust-passport`
+**Branch:** `feature/phase-59-64-marketplace-release2-3`
 **Goal:** Add inspection/history disclosure fields to vehicles shown in the marketplace — self-reported first, partner-API-backed later.
 
 **Schema:** widen `vehicles` (already has VIN checksum from Phase 20): `inspectionStatus?: NONE|SELF_REPORTED|PARTNER_VERIFIED`, `accidentDisclosed?: boolean`, `ownerCount?`, `dealerGuarantee?: boolean`. All optional, widen-only.
@@ -195,18 +195,20 @@ This is a demand-and-supply cold-start problem, not just a build. The plan fails
 
 ### Release 3 — Monetization + depth (Phases 62–64)
 
-#### Phase 62 — Finance-first search + trade-in requests
+#### Phase 62 — Finance-first search + trade-in requests ✅ built on branch
 
-**Branch:** `feature/phase-62-marketplace-finance-tradein`
+**Branch:** `feature/phase-59-64-marketplace-release2-3`
 **Goal:** Let buyers search/request by monthly payment, and request trade-in offers.
 
 **Backend:** reuse `lib/financing.ts` to compute estimated monthly payment on every marketplace vehicle card (same calculator already used in the sales wizard). `marketplaceTradeInRequests` table (buyer's current car details) → dealer offers → accepted offer creates a draft Phase 34 Purchase Order (per §2 reconciliation), not a parallel acquisition flow.
 **Tests:** financing estimate matches existing `lib/financing.test.ts` cases; trade-in → PO handoff.
 **Acceptance:** buyer searches by "≤300 JD/month" and sees correctly estimated cars; accepted trade-in offer shows up in the dealer's Phase 34 acquisition list.
 
-#### Phase 63 — Monetization: lead packages + featured placement
+**Revised during build — Phase 34 (Purchase Orders) doesn't exist in this codebase** (confirmed by grep: zero `purchaseOrders` matches, and `PROJECT_PLAN.md`'s Phase 34 section is entirely unchecked). Building a minimal `purchaseOrders` table risked conflicting with whatever a real future Phase 34 builds, and would make this a parallel acquisition flow — exactly what this section says not to do. **Actual implementation:** an accepted trade-in offer creates a `leads` row instead, same `sourceChannel: "marketplace"` pattern as every other marketplace conversion in this epic, with trade-in + offer details captured in the lead's notes. Revisit as the integration point if Phase 34 ever gets built.
 
-**Branch:** `feature/phase-63-marketplace-monetization`
+#### Phase 63 — Monetization: lead packages + featured placement ✅ built on branch
+
+**Branch:** `feature/phase-59-64-marketplace-release2-3`
 **Goal:** Convert opted-in dealers off the Founding tier once value is proven.
 
 **Backend:** extend `hasPlanFeature`/`subscriptions.ts` gate (per A7) with `marketplace` (free directory) vs `marketplaceLeadPackage` (paid quota, enforced via `leadQuota`/`leadsUsedThisPeriod` on `marketplaceDealerProfiles`) vs `marketplaceFeatured` (paid ranking boost).
@@ -214,13 +216,17 @@ This is a demand-and-supply cold-start problem, not just a build. The plan fails
 **Tests:** quota enforcement blocks further response creation once exhausted; featured boost affects Phase 60 ranking.
 **Acceptance:** a Founding dealer past their window sees a clear upgrade path instead of a silent feature cutoff.
 
-#### Phase 64 — WhatsApp-native dealer intake (structured, no LLM)
+**As built:** `marketplace`/`marketplaceLeadPackage`/`marketplaceFeatured` gates added to every plan in `subscriptions.ts` (`marketplace: true` everywhere — free directory access is never paywalled; `marketplaceLeadPackage` bundled from professional up; `marketplaceFeatured` bundled on enterprise only). `marketplaceDealerProfiles` widened with `foundingWindowEndsAt` (60-day FREE_FOUNDING window, lazily derived from `createdAt` for pre-Phase-63 rows so no backfill migration was needed) and `leadPeriodStartedAt` (rolling 30-day lead-quota period, also lazily reset). `marketplaceResponses.respond` now blocks once a dealer is over their limit with an "Upgrade required" error. `compareDealerRank` ranks FEATURED dealers first — and `marketplaceRequests.ts`'s fan-out matching now reuses `compareDealerRank` instead of a duplicate hand-rolled sort, so the boost applies to both the public directory and buyer-request routing. Staff set a dealer's tier via a new `adminMarketplace.updateMarketplaceTier` mutation (gated by the org's plan actually including that tier). Dealer-facing upgrade prompts link to the existing billing page rather than a new request-upgrade flow.
 
-**Branch:** `feature/phase-64-marketplace-whatsapp-intake`
+#### Phase 64 — WhatsApp-native dealer intake (structured, no LLM) ✅ built on branch
+
+**Branch:** `feature/phase-59-64-marketplace-release2-3`
 **Goal:** Let a dealer publish a car by replying to a guided WhatsApp flow (photos + structured prompts), not a web form — lowest-friction inventory intake.
 **Backend:** WhatsApp webhook-driven guided flow (reuses existing `convex/whatsapp.ts` inbound handling) collecting make/model/year/price/mileage/photos via sequential prompts → creates a draft `vehicles` row for dealer confirmation in the existing dashboard. **No free-text/voice parsing (A8)** — structured button/reply flow only.
 **Tests:** flow state machine; draft vehicle requires dealer confirmation before publish (no auto-publish from an inbound message).
 **Acceptance:** a dealer lists a car entirely from WhatsApp in under 2 minutes, with a review step before it goes live.
+
+**Revised during build — the existing `/whatsapp-webhook` doesn't fit this phase.** Research before building confirmed it's per-org (each dealer's own Meta Business API number, gated behind the paid `whatsapp` plan feature, configured for their own customer inbox) — the wrong shape for a low-friction founding-dealer intake channel, and reusing it would mean a dealer messaging their own number. A guided flow also can't fall back to Phase 57/58's manual wa.me-link pattern (no human can relay a live multi-step conversation in real time without defeating the point). **Actual implementation:** a new platform-wide `/marketplace-whatsapp-webhook` route parsing text/interactive-button/image message types, a phone-keyed `marketplaceWhatsAppFlows` state table (one field collected per message: make → model → year → mileage → price → 1-10 photos → Confirm/Cancel button), a Graph-API media-fetch-to-Convex-storage pipeline, and a session-window message sender — all gated behind new `MARKETPLACE_WHATSAPP_PHONE_NUMBER_ID`/`MARKETPLACE_WHATSAPP_API_TOKEN`/`MARKETPLACE_WHATSAPP_APP_SECRET`/`MARKETPLACE_WHATSAPP_WEBHOOK_VERIFY_TOKEN` env vars. This is exactly the automated sender A5/A5b already named and explicitly deferred for Phase 57 — Phase 64 is the phase that actually needs it built, since (unlike Phase 57/58) it has no viable manual-relay substitute. Unset in every environment until Meta Business Verification clears, same posture as the rest of this epic's WhatsApp features — the code is real and fully tested (mocked webhook payloads + mocked Graph API calls), reaching real dealers is what's blocked. Confirming a flow inserts a PENDING `vehicleEdits` CREATE request (the existing approval-workflow table) rather than a live `vehicles` row — color/fuelType/transmission (required by the `vehicles` schema but not in this phase's field list) get a "Not specified" placeholder to keep the flow under its own 2-minute acceptance bar; staff fill them in during the normal post-approval edit flow.
 
 **End of Release 3:** the marketplace is monetized, finance-aware, and has the lowest-friction dealer intake path available — closing the loop back to the GTM promise in §3 ("send us photos on WhatsApp, we publish it").
 
@@ -246,11 +252,13 @@ Add to the existing Phases 50–55 AI backlog table, not built here:
 | 57 | Request a Car: capture + fan-out (+ consent/cap/intent-tier) | 1 — Foundation | ✅ Merged + deployed to prod (PR #52 + hotfix PR #53) |
 | 58 | Dealer response + lead attribution | 1 — Foundation | ✅ Merged + deployed to prod (PR #54) |
 | 58B | Weekly dealer proof report | 1 — Foundation | ✅ Merged + deployed to prod (PR #55) |
-| 59 | Public marketplace browse/search | 2 — Public + Trust | ⬜ Not started |
-| 60 | Verified badges + response ranking | 2 — Public + Trust | ⬜ Not started |
-| 61 | Trust passport (v1, self-reported) | 2 — Public + Trust | ⬜ Not started |
-| 62 | Finance-first search + trade-in requests | 3 — Monetization | ⬜ Not started |
-| 63 | Monetization: lead packages + featured | 3 — Monetization | ⬜ Not started |
-| 64 | WhatsApp-native dealer intake | 3 — Monetization | ⬜ Not started |
+| 59 | Public marketplace browse/search | 2 — Public + Trust | ✅ Built + committed 2026-07-10, PR pending |
+| 60 | Verified badges + response ranking | 2 — Public + Trust | ✅ Built + committed 2026-07-10, PR pending |
+| 61 | Trust passport (v1, self-reported) | 2 — Public + Trust | ✅ Built + committed 2026-07-10, PR pending |
+| 62 | Finance-first search + trade-in requests | 3 — Monetization | ✅ Built + committed 2026-07-10, PR pending |
+| 63 | Monetization: lead packages + featured | 3 — Monetization | ✅ Built + committed 2026-07-10, PR pending |
+| 64 | WhatsApp-native dealer intake | 3 — Monetization | ✅ Built + committed 2026-07-10, PR pending |
 
-**Critical path:** Section 0 (manual validation, waived 2026-07-10 — risk accepted) → 56 (done on branch) → 57 → 58 → 58B (this replicates and then proves the manual concierge loop in-product) → GTM ramp starts here in parallel with → 59 → 60 → 61 → 62/63/64.
+**Critical path:** Section 0 (manual validation, waived 2026-07-10 — risk accepted) → 56 (done on branch) → 57 → 58 → 58B (this replicates and then proves the manual concierge loop in-product) → GTM ramp starts here in parallel with → 59 → 60 → 61 → 62/63/64 (all built same day on `feature/phase-59-64-marketplace-release2-3`, batched into one PR per CodeRabbit free-plan review-request limits — see `feedback_pr_per_phase_wait_for_review` in project memory).
+
+**End of Release 3, as built:** all six phases (59–64) are code-complete, fully tested (`pnpm test` green), and typechecked (`pnpm exec tsc --noEmit` and Convex's own bundler typecheck both clean) on `feature/phase-59-64-marketplace-release2-3`. Not yet: pushed to GitHub, opened as a PR, merged, or deployed to prod — see this branch's PR once opened for status.

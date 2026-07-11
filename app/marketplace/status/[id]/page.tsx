@@ -3,10 +3,10 @@
 import { FormEvent, useState } from "react";
 import { useQuery } from "convex/react";
 import { useParams } from "next/navigation";
-import Link from "next/link";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
-import { CheckCircle2, Clock, Store } from "lucide-react";
+import { CheckCircle2, Clock } from "lucide-react";
+import { BuyerLookupShell } from "@/components/marketplace/BuyerLookupShell";
 
 type Lang = "en" | "ar";
 
@@ -82,58 +82,37 @@ export default function MarketplaceStatusPage() {
   })();
 
   return (
-    <main dir={dir} className="min-h-screen bg-slate-50 text-slate-950">
-      <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto max-w-md px-4 py-4 flex items-center justify-between">
-          <Link href="/marketplace/dealers" className="flex items-center gap-2 font-semibold">
-            <Store className="h-5 w-5" />
-            AutoFlow
-          </Link>
-          <button type="button" onClick={() => setLang(lang === "en" ? "ar" : "en")} className="text-sm text-slate-600">
-            {lang === "en" ? "العربية" : "English"}
-          </button>
-        </div>
-      </header>
-
-      <section className="mx-auto max-w-md px-4 py-10">
-        <h1 className="text-2xl font-bold">{t.title}</h1>
-        <p className="mt-2 text-slate-600">{t.subtitle}</p>
-
-        <form onSubmit={handleSubmit} className="mt-6 flex gap-2">
-          <input
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            placeholder={t.phone}
-            aria-label={t.phone}
-            required
-            className="flex-1 rounded-lg border border-slate-300 px-3 py-2"
-          />
-          <button type="submit" className="rounded-lg bg-slate-950 text-white px-4 py-2 font-medium">
-            {t.check}
-          </button>
-        </form>
-
-        {submittedPhone && status === null && (
-          <p className="mt-6 text-sm text-rose-600">{t.notFound}</p>
-        )}
-
-        {status && (
-          <div className="mt-6 rounded-xl border border-slate-200 bg-white p-5 space-y-3">
-            <div className="flex items-center gap-2">
-              {status.status === "FULFILLED" ? (
-                <CheckCircle2 className="h-5 w-5 text-emerald-600" />
-              ) : (
-                <Clock className="h-5 w-5 text-slate-400" />
-              )}
-              <p className="font-medium">{statusMessage}</p>
-            </div>
-            <div className="flex gap-4 text-sm text-slate-600">
-              <span>{status.matchedCount} {t.matchedCount}</span>
-              <span>{status.respondedCount} {t.respondedCount}</span>
-            </div>
+    <BuyerLookupShell
+      dir={dir}
+      homeHref="/marketplace/dealers"
+      langToggleLabel={lang === "en" ? "العربية" : "English"}
+      onToggleLang={() => setLang(lang === "en" ? "ar" : "en")}
+      title={t.title}
+      subtitle={t.subtitle}
+      phone={phone}
+      onPhoneChange={setPhone}
+      onSubmit={handleSubmit}
+      phonePlaceholder={t.phone}
+      checkLabel={t.check}
+      notFound={Boolean(submittedPhone && status === null)}
+      notFoundMessage={t.notFound}
+    >
+      {status && (
+        <div className="mt-6 rounded-xl border border-slate-200 bg-white p-5 space-y-3">
+          <div className="flex items-center gap-2">
+            {status.status === "FULFILLED" ? (
+              <CheckCircle2 className="h-5 w-5 text-emerald-600" />
+            ) : (
+              <Clock className="h-5 w-5 text-slate-400" />
+            )}
+            <p className="font-medium">{statusMessage}</p>
           </div>
-        )}
-      </section>
-    </main>
+          <div className="flex gap-4 text-sm text-slate-600">
+            <span>{status.matchedCount} {t.matchedCount}</span>
+            <span>{status.respondedCount} {t.respondedCount}</span>
+          </div>
+        </div>
+      )}
+    </BuyerLookupShell>
   );
 }

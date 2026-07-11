@@ -1,6 +1,7 @@
+import { ConvexError } from "convex/values";
 import { RateLimiter } from "@convex-dev/rate-limiter";
 import { components } from "./_generated/api";
-import type { MutationCtx } from "./_generated/server";
+import type { ActionCtx, MutationCtx } from "./_generated/server";
 
 export const rateLimiter = new RateLimiter(components.rateLimiter, {
   email: { kind: "token bucket", rate: 5, period: 60000, capacity: 5 }, // 5 emails per minute
@@ -20,6 +21,8 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
   socialPosting: { kind: "token bucket", rate: 10, period: 60000, capacity: 10 }, // Instagram/Facebook posts, keyed by orgId — stays well under Meta's own API limits
   marketplaceRequestFingerprint: { kind: "token bucket", rate: 5, period: 600000, capacity: 5 }, // Public "Request a Car" intake, keyed by browser fingerprint/IP hash
   marketplaceRequestContact: { kind: "token bucket", rate: 3, period: 600000, capacity: 3 }, // Normalized buyer phone
+  marketplaceTradeInFingerprint: { kind: "token bucket", rate: 5, period: 600000, capacity: 5 }, // Public trade-in intake, keyed by browser fingerprint/IP hash
+  marketplaceTradeInContact: { kind: "token bucket", rate: 3, period: 600000, capacity: 3 }, // Normalized buyer phone
   notificationWhatsapp: { kind: "token bucket", rate: 10, period: 60000, capacity: 10 }, // Outbound WhatsApp notification sends
   notificationPush: { kind: "token bucket", rate: 20, period: 60000, capacity: 20 }, // Outbound Web Push dispatch calls (each may fan out to several devices)
   // System-wide circuit breaker for create/standardApi/upload, checked in addition to
@@ -32,6 +35,24 @@ export const rateLimiter = new RateLimiter(components.rateLimiter, {
 });
 
 export type TenantWriteLimitName = "create" | "standardApi" | "upload";
+
+export type MarketplaceSubmissionRateLimitName =
+  | "marketplaceRequestFingerprint"
+  | "marketplaceRequestContact"
+  | "marketplaceTradeInFingerprint"
+  | "marketplaceTradeInContact";
+
+/** Shared "reject with a generic message if this key is over its submission rate limit" guard for the marketplace's public buyer-intake actions (buyer requests, trade-in requests) — same shape, different bucket per flow. */
+export async function enforceMarketplaceSubmissionRateLimit(
+  ctx: ActionCtx | MutationCtx,
+  name: MarketplaceSubmissionRateLimitName,
+  key: string
+): Promise<void> {
+  const status = await rateLimiter.limit(ctx, name, { key });
+  if (!status.ok) {
+    throw new ConvexError("Too many submissions. Please try again later.");
+  }
+}
 
 /**
  * Two-tier write rate limit: a per-org bucket (fairness between tenants) plus the

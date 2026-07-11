@@ -18,6 +18,7 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     empty: "No dealers are listed yet — check back soon.",
     loading: "Loading dealers...",
     toggleLang: "العربية",
+    browseCars: "Browse all cars",
   },
   ar: {
     title: "شبكة المعارض",
@@ -28,6 +29,7 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     empty: "لا يوجد معارض مُدرجة بعد — تحقق لاحقاً.",
     loading: "جاري تحميل المعارض...",
     toggleLang: "English",
+    browseCars: "تصفّح كل السيارات",
   },
 };
 
@@ -65,6 +67,9 @@ export default function MarketplaceDealersPage() {
       <section className="mx-auto max-w-6xl px-4 py-10">
         <h1 className="text-2xl sm:text-3xl font-bold">{t.title}</h1>
         <p className="mt-2 text-slate-600">{t.subtitle}</p>
+        <Link href="/marketplace/cars" className="mt-3 inline-block text-sm text-slate-600 hover:text-slate-950 underline">
+          {t.browseCars}
+        </Link>
 
         {dealers === undefined && (
           <p className="mt-8 text-slate-500">{t.loading}</p>

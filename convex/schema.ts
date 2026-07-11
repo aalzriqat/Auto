@@ -581,6 +581,17 @@ export default defineSchema({
     sourceCost: v.optional(v.number()),
     notes: v.optional(v.string()),
     imageIds: v.optional(v.array(v.id("_storage"))),
+    // Phase 61 — trust passport (v1: self-reported, widen-only). No dealer
+    // self-service form yet; set via the existing admin data browser
+    // (convex/adminData.ts ADMIN_TABLES already lists "vehicles") until a
+    // dedicated intake surface is built — same manual-first pattern as
+    // Phase 57/58B/60's WhatsApp-adjacent features in this epic.
+    inspectionStatus: v.optional(
+      v.union(v.literal("NONE"), v.literal("SELF_REPORTED"), v.literal("PARTNER_VERIFIED"))
+    ),
+    accidentDisclosed: v.optional(v.boolean()),
+    ownerCount: v.optional(v.number()),
+    dealerGuarantee: v.optional(v.boolean()),
     createdAt: v.optional(v.number()),
     addedBy: v.optional(v.id("users")),
     updatedBy: v.optional(v.id("users")),
@@ -2673,7 +2684,8 @@ export default defineSchema({
       v.literal("upgrade-request"),
       v.literal("social-auto-reply-retry"),
       v.literal("fixed-asset-depreciation"),
-      v.literal("marketplace-weekly-report")
+      v.literal("marketplace-weekly-report"),
+      v.literal("marketplace-whatsapp")
     ),
     status: v.union(v.literal("received"), v.literal("success"), v.literal("error"), v.literal("dead_letter")),
     summary: v.string(),
@@ -2968,6 +2980,15 @@ export default defineSchema({
     avgResponseMinutes: v.optional(v.number()),
     totalResponses: v.number(),
     totalAccepted: v.number(),
+    // Phase 60: staff-confirmed WhatsApp reachability. There's no automated
+    // OTP-over-WhatsApp send yet — same Business Verification blocker as the
+    // rest of this epic's WhatsApp features (master plan A5b) — so this is
+    // set manually by AutoFlow staff via the admin console after confirming
+    // the number by phone/WhatsApp, mirroring the manual-first pattern
+    // already used for dealer notifications (Phase 57) and proof reports
+    // (Phase 58B).
+    phoneVerifiedAt: v.optional(v.number()),
+    phoneVerifiedBy: v.optional(v.id("users")),
     tier: v.union(
       v.literal("FREE_FOUNDING"),
       v.literal("LEAD_PACKAGE"),
@@ -2975,6 +2996,15 @@ export default defineSchema({
     ),
     leadQuota: v.optional(v.number()),
     leadsUsedThisPeriod: v.number(),
+    // Phase 63: when the FREE_FOUNDING tier's free-leads window closes. Set at
+    // profile creation; left undefined for rows created before Phase 63 —
+    // `marketplaceDealers.ts`'s `effectiveFoundingWindowEndsAt` lazily derives
+    // the same value from `createdAt` so no backfill migration is needed.
+    foundingWindowEndsAt: v.optional(v.number()),
+    // Phase 63: rolling-window start for `leadsUsedThisPeriod` (LEAD_PACKAGE
+    // tier only) — reset lazily once a period elapses, same no-backfill
+    // reasoning as `foundingWindowEndsAt`.
+    leadPeriodStartedAt: v.optional(v.number()),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
     deletedBy: v.optional(v.id("users")),
@@ -3069,4 +3099,82 @@ export default defineSchema({
     sentAt: v.number(),
     sentBy: v.id("users"),
   }).index("by_org_week", ["orgId", "weekStart"]),
+
+  // Phase 62 — buyer-submitted trade-in request, directed at a single dealer
+  // (whichever listing the buyer was viewing), not fanned out like
+  // marketplaceRequests. An accepted offer creates a lead in that dealer's
+  // existing pipeline — Phase 34 (Purchase Orders) doesn't exist in this
+  // codebase yet, so this deliberately does NOT create a purchase order;
+  // see master plan Phase 62 notes for the reasoning.
+  marketplaceTradeInRequests: defineTable({
+    orgId: v.id("organizations"),
+    buyerFirstName: v.string(),
+    buyerPhone: v.string(),
+    currentMake: v.string(),
+    currentModel: v.string(),
+    currentYear: v.number(),
+    currentMileage: v.number(),
+    condition: v.union(
+      v.literal("EXCELLENT"),
+      v.literal("GOOD"),
+      v.literal("FAIR"),
+      v.literal("POOR")
+    ),
+    notes: v.optional(v.string()),
+    status: v.union(
+      v.literal("PENDING"),
+      v.literal("OFFERED"),
+      v.literal("ACCEPTED"),
+      v.literal("DECLINED")
+    ),
+    offerAmountJod: v.optional(v.number()),
+    offeredAt: v.optional(v.number()),
+    offeredBy: v.optional(v.id("users")),
+    respondedAt: v.optional(v.number()),
+    leadId: v.optional(v.id("leads")),
+    consentAcceptedAt: v.number(),
+    clientFingerprint: v.string(),
+    clientIpHash: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_org_status", ["orgId", "status"]),
+
+  // Phase 64 — WhatsApp-native dealer intake (structured, no LLM, master
+  // plan A8). One row per phone number's in-progress guided listing flow —
+  // a dealer texts AutoFlow's platform WhatsApp number and answers one
+  // sequential prompt per message (make/model/year/mileage/price/photos),
+  // then confirms via a button reply. Confirming creates a PENDING
+  // `vehicleEdits` CREATE request (see `marketplaceWhatsAppIntake.ts`) —
+  // reuses the existing approval-workflow pattern rather than inserting a
+  // vehicle directly, so nothing goes live from an inbound message without
+  // a staff review step. Deliberately NOT keyed by orgId in the index below
+  // (a phone number is resolved to an org via `marketplaceDealerProfiles`
+  // at flow-start, then stamped) — the lookup path is always by phone.
+  marketplaceWhatsAppFlows: defineTable({
+    orgId: v.id("organizations"),
+    phone: v.string(),
+    step: v.union(
+      v.literal("AWAITING_MAKE"),
+      v.literal("AWAITING_MODEL"),
+      v.literal("AWAITING_YEAR"),
+      v.literal("AWAITING_MILEAGE"),
+      v.literal("AWAITING_PRICE"),
+      v.literal("AWAITING_PHOTOS"),
+      v.literal("AWAITING_CONFIRM"),
+      v.literal("COMPLETED"),
+      v.literal("CANCELLED")
+    ),
+    make: v.optional(v.string()),
+    model: v.optional(v.string()),
+    year: v.optional(v.number()),
+    mileage: v.optional(v.number()),
+    sellingPrice: v.optional(v.number()),
+    photoStorageIds: v.array(v.id("_storage")),
+    vehicleEditId: v.optional(v.id("vehicleEdits")),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_phone", ["phone"])
+    .index("by_org", ["orgId"]),
 });

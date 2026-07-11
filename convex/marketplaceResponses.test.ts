@@ -133,6 +133,24 @@ describe("respond", () => {
     expect(profile?.avgResponseMinutes).toBeLessThanOrEqual(10.1);
   });
 
+  test("awards FAST_RESPONSE once enough quick responses are recorded (Phase 60)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, asSales } = await seedDealerOrg(t);
+
+    for (let i = 0; i < 3; i++) {
+      const requestId = await seedRequest(t, { buyerPhone: `+96279900000${i}` });
+      const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
+      await seedMatch(t, requestId, orgId, { matchedAt: fiveMinutesAgo - 60000, notifiedAt: fiveMinutesAgo });
+      await asSales.mutation(api.marketplaceResponses.respond, { orgId, requestId, kind: "HAVE_MATCH" });
+    }
+
+    const profile = await t.run((ctx) =>
+      ctx.db.query("marketplaceDealerProfiles").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique()
+    );
+    expect(profile?.totalResponses).toBe(3);
+    expect(profile?.badges).toContain("FAST_RESPONSE");
+  });
+
   test("marks the request FULFILLED on a positive response but not on NOT_AVAILABLE", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     const { orgId: orgA, asSales: asSalesA } = await seedDealerOrg(t, { name: "Dealer A" });
@@ -195,6 +213,90 @@ describe("respond", () => {
         offerPriceJod: -100,
       })
     ).rejects.toThrow(/non-negative/);
+  });
+
+  test("blocks a response once a FREE_FOUNDING dealer's window has expired (Phase 63)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, asSales } = await seedDealerOrg(t);
+    const requestId = await seedRequest(t);
+    await seedMatch(t, requestId, orgId);
+    await t.run((ctx) =>
+      ctx.db
+        .query("marketplaceDealerProfiles")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .unique()
+        .then((profile) => ctx.db.patch(profile!._id, { foundingWindowEndsAt: Date.now() - 1000 }))
+    );
+
+    await expect(
+      asSales.mutation(api.marketplaceResponses.respond, { orgId, requestId, kind: "HAVE_MATCH" })
+    ).rejects.toThrow(/Upgrade required/);
+  });
+
+  test("blocks a response once a LEAD_PACKAGE dealer's quota is exhausted (Phase 63)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, asSales } = await seedDealerOrg(t);
+    const requestId = await seedRequest(t);
+    await seedMatch(t, requestId, orgId);
+    await t.run((ctx) =>
+      ctx.db
+        .query("marketplaceDealerProfiles")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .unique()
+        .then((profile) =>
+          ctx.db.patch(profile!._id, { tier: "LEAD_PACKAGE", leadQuota: 1, leadsUsedThisPeriod: 1, leadPeriodStartedAt: Date.now() })
+        )
+    );
+
+    await expect(
+      asSales.mutation(api.marketplaceResponses.respond, { orgId, requestId, kind: "HAVE_MATCH" })
+    ).rejects.toThrow(/Upgrade required/);
+  });
+
+  test("consumes one lead from a LEAD_PACKAGE dealer's quota on a successful response (Phase 63)", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, asSales } = await seedDealerOrg(t);
+    const requestId = await seedRequest(t);
+    await seedMatch(t, requestId, orgId);
+    await t.run((ctx) =>
+      ctx.db
+        .query("marketplaceDealerProfiles")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .unique()
+        .then((profile) =>
+          ctx.db.patch(profile!._id, { tier: "LEAD_PACKAGE", leadQuota: 5, leadsUsedThisPeriod: 0, leadPeriodStartedAt: Date.now() })
+        )
+    );
+
+    await asSales.mutation(api.marketplaceResponses.respond, { orgId, requestId, kind: "HAVE_MATCH" });
+
+    const profile = await t.run((ctx) =>
+      ctx.db.query("marketplaceDealerProfiles").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique()
+    );
+    expect(profile?.leadsUsedThisPeriod).toBe(1);
+  });
+
+  test("does not consume quota for a FEATURED dealer and allows unlimited responses", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, asSales } = await seedDealerOrg(t);
+    await t.run((ctx) =>
+      ctx.db
+        .query("marketplaceDealerProfiles")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .unique()
+        .then((profile) => ctx.db.patch(profile!._id, { tier: "FEATURED" }))
+    );
+
+    for (let i = 0; i < 3; i++) {
+      const requestId = await seedRequest(t, { buyerPhone: `+96279900111${i}` });
+      await seedMatch(t, requestId, orgId);
+      await asSales.mutation(api.marketplaceResponses.respond, { orgId, requestId, kind: "HAVE_MATCH" });
+    }
+
+    const profile = await t.run((ctx) =>
+      ctx.db.query("marketplaceDealerProfiles").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique()
+    );
+    expect(profile?.leadsUsedThisPeriod).toBe(0);
   });
 });
 

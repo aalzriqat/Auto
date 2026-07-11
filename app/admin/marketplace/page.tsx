@@ -1,18 +1,40 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Id } from "@/convex/_generated/dataModel";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "@/components/ui/sonner";
-import { MessageCircle, CheckCircle2, Ban, Car, Eye, TrendingDown } from "lucide-react";
+import {
+  MessageCircle,
+  CheckCircle2,
+  Ban,
+  Car,
+  Eye,
+  ShieldCheck,
+  TrendingDown,
+  Zap,
+  Crown,
+  Package,
+  type LucideIcon,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { buildWhatsAppDeepLink } from "@/lib/whatsappDeepLink";
 
-type PageView = "requests" | "reports";
+type MarketplaceTier = "FREE_FOUNDING" | "LEAD_PACKAGE" | "FEATURED";
+
+const TIER_LABELS: Record<MarketplaceTier, string> = {
+  FREE_FOUNDING: "Founding (free)",
+  LEAD_PACKAGE: "Lead Package (paid)",
+  FEATURED: "Featured (paid)",
+};
+
+type PageView = "requests" | "reports" | "dealers";
 type RequestStatus = "OPEN" | "MATCHED" | "FULFILLED" | "EXPIRED" | "SPAM";
 
 const STATUS_TABS: { label: string; value: RequestStatus | undefined }[] = [
@@ -24,31 +46,43 @@ const STATUS_TABS: { label: string; value: RequestStatus | undefined }[] = [
   { label: "Spam", value: "SPAM" },
 ];
 
-type MatchRow = {
-  matchId: Id<"marketplaceRequestMatches">;
-  dealerName: string;
-  whatsappNumber: string | null;
-  notifiedAt: number | null;
-};
-
-function MatchActionCell({ match, onSend }: { readonly match: MatchRow; readonly onSend: () => void }) {
-  if (match.notifiedAt) {
+/** Shared "done state / send via WhatsApp / no number on file" 3-way cell — used wherever staff can nudge a dealer over WhatsApp (buyer-match notify, weekly report, phone verification), each with its own icon/labels/action. */
+function WhatsAppActionCell({
+  done,
+  doneIcon: DoneIcon = CheckCircle2,
+  doneLabel,
+  hasWhatsApp,
+  actionIcon: ActionIcon = MessageCircle,
+  actionLabel,
+  onSend,
+  fallback = <span className="text-xs text-slate-500">No WhatsApp number on file</span>,
+}: {
+  readonly done: boolean;
+  readonly doneIcon?: LucideIcon;
+  readonly doneLabel: ReactNode;
+  readonly hasWhatsApp: boolean;
+  readonly actionIcon?: LucideIcon;
+  readonly actionLabel: string;
+  readonly onSend: () => void;
+  readonly fallback?: ReactNode;
+}) {
+  if (done) {
     return (
       <span className="flex items-center gap-1 text-emerald-400 text-xs">
-        <CheckCircle2 className="h-3.5 w-3.5" />
-        Sent
+        <DoneIcon className="h-3.5 w-3.5" />
+        {doneLabel}
       </span>
     );
   }
-  if (match.whatsappNumber) {
+  if (hasWhatsApp) {
     return (
       <Button size="sm" variant="outline" onClick={onSend}>
-        <MessageCircle className="h-3.5 w-3.5 me-1" />
-        Send via WhatsApp
+        <ActionIcon className="h-3.5 w-3.5 me-1" />
+        {actionLabel}
       </Button>
     );
   }
-  return <span className="text-xs text-slate-500">No WhatsApp number on file</span>;
+  return fallback;
 }
 
 function buildDealerMessage(request: {
@@ -88,38 +122,6 @@ function buildWeeklyReportMessage(dealerName: string, report: WeeklyReport): str
   return lines.join("\n");
 }
 
-function WeeklyReportActionCell({
-  orgId,
-  whatsappNumber,
-  sentAt,
-  message,
-  onSend,
-}: {
-  readonly orgId: Id<"organizations">;
-  readonly whatsappNumber: string | null;
-  readonly sentAt: number | null;
-  readonly message: string;
-  readonly onSend: (orgId: Id<"organizations">, phone: string, message: string) => void;
-}) {
-  if (sentAt) {
-    return (
-      <span className="flex items-center gap-1 text-emerald-400 text-xs">
-        <CheckCircle2 className="h-3.5 w-3.5" />
-        Sent {new Date(sentAt).toLocaleDateString()}
-      </span>
-    );
-  }
-  if (whatsappNumber) {
-    return (
-      <Button size="sm" variant="outline" onClick={() => onSend(orgId, whatsappNumber, message)}>
-        <MessageCircle className="h-3.5 w-3.5 me-1" />
-        Send via WhatsApp
-      </Button>
-    );
-  }
-  return <span className="text-xs text-slate-500">No WhatsApp number on file</span>;
-}
-
 function WeeklyReportsView() {
   const reports = useQuery(api.adminMarketplace.listWeeklyReports, {});
   const markSent = useMutation(api.adminMarketplace.markWeeklyReportSentViaWhatsApp);
@@ -146,12 +148,12 @@ function WeeklyReportsView() {
         <Card key={row.orgId} className="p-4 bg-slate-900 border-slate-800 space-y-3">
           <div className="flex items-start justify-between gap-3">
             <span className="font-semibold text-slate-100">{row.dealerName}</span>
-            <WeeklyReportActionCell
-              orgId={row.orgId}
-              whatsappNumber={row.whatsappNumber}
-              sentAt={row.sentAt}
-              message={buildWeeklyReportMessage(row.dealerName, row.report)}
-              onSend={handleSend}
+            <WhatsAppActionCell
+              done={Boolean(row.sentAt)}
+              doneLabel={row.sentAt ? `Sent ${new Date(row.sentAt).toLocaleDateString()}` : ""}
+              hasWhatsApp={Boolean(row.whatsappNumber)}
+              actionLabel="Send via WhatsApp"
+              onSend={() => handleSend(row.orgId, row.whatsappNumber!, buildWeeklyReportMessage(row.dealerName, row.report))}
             />
           </div>
           <div className="flex flex-wrap gap-x-5 gap-y-1 text-sm text-slate-400">
@@ -175,6 +177,152 @@ function WeeklyReportsView() {
               {row.report.mostViewedVehicle.model} ({row.report.mostViewedVehicle.views} views)
             </p>
           )}
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+type DealerRow = {
+  orgId: Id<"organizations">;
+  tier: MarketplaceTier;
+  leadQuota: number | null;
+  leadsUsedThisPeriod: number;
+  foundingWindowEndsAt: number | null;
+};
+
+function TierEditor({ dealer }: { readonly dealer: DealerRow }) {
+  const updateTier = useMutation(api.adminMarketplace.updateMarketplaceTier);
+  const [tier, setTier] = useState<MarketplaceTier>(dealer.tier);
+  const [leadQuota, setLeadQuota] = useState(String(dealer.leadQuota ?? ""));
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      await updateTier({
+        orgId: dealer.orgId,
+        tier,
+        leadQuota: tier === "LEAD_PACKAGE" && leadQuota.trim() ? Number(leadQuota) : undefined,
+      });
+      toast.success("Marketplace tier updated.");
+    } catch (error: any) {
+      toast.error(error?.message?.replace(/^\[.*?\]\s*/, "") || "Failed to update tier — check the dealer's AutoFlow plan includes this feature.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Select value={tier} onValueChange={(value) => setTier(value as MarketplaceTier)}>
+        <SelectTrigger className="w-44 h-8 text-xs">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {(Object.keys(TIER_LABELS) as MarketplaceTier[]).map((value) => (
+            <SelectItem key={value} value={value}>
+              {TIER_LABELS[value]}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {tier === "LEAD_PACKAGE" && (
+        <Input
+          type="number"
+          min={0}
+          className="w-24 h-8 text-xs"
+          placeholder="Quota"
+          value={leadQuota}
+          onChange={(e) => setLeadQuota(e.target.value)}
+        />
+      )}
+      <Button size="sm" variant="outline" disabled={saving} onClick={handleSave}>
+        Save
+      </Button>
+    </div>
+  );
+}
+
+function DealersView() {
+  const dealers = useQuery(api.adminMarketplace.listDealerProfiles, {});
+  const verifyPhone = useMutation(api.adminMarketplace.verifyDealerPhone);
+
+  async function handleVerify(orgId: Id<"organizations">) {
+    try {
+      await verifyPhone({ orgId });
+      toast.success("Marked phone verified.");
+    } catch {
+      toast.error("Failed to mark phone verified.");
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-slate-400">
+        Confirm a dealer&apos;s WhatsApp number by calling or messaging it directly, then mark it verified here — there&apos;s no
+        automated OTP send yet (blocked on Meta Business Verification, master plan A5b). Marketplace tier controls Phase 63
+        monetization — LEAD_PACKAGE/FEATURED require the dealer&apos;s AutoFlow plan to include that feature.
+      </p>
+      {dealers === undefined && <p className="text-sm text-slate-400">Loading...</p>}
+      {dealers?.length === 0 && <p className="text-sm text-slate-400">No opted-in dealers.</p>}
+
+      {(dealers ?? []).map((dealer) => (
+        <Card key={dealer.orgId} className="p-4 bg-slate-900 border-slate-800 space-y-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-semibold text-slate-100">{dealer.dealershipName}</span>
+              <span className="text-sm text-slate-400">{dealer.whatsappNumber ?? "No WhatsApp number on file"}</span>
+              {dealer.badges.includes("FAST_RESPONSE") && (
+                <Badge variant="outline" className="text-[10px] border-amber-600 text-amber-400">
+                  <Zap className="h-3 w-3 me-1" />
+                  Fast response
+                </Badge>
+              )}
+              {dealer.tier === "FEATURED" && (
+                <Badge variant="outline" className="text-[10px] border-yellow-500 text-yellow-400">
+                  <Crown className="h-3 w-3 me-1" />
+                  Featured
+                </Badge>
+              )}
+              {dealer.tier === "LEAD_PACKAGE" && (
+                <Badge variant="outline" className="text-[10px] border-sky-600 text-sky-400">
+                  <Package className="h-3 w-3 me-1" />
+                  {dealer.leadsUsedThisPeriod}/{dealer.leadQuota ?? 0} leads
+                </Badge>
+              )}
+              {dealer.tier === "FREE_FOUNDING" && dealer.foundingWindowEndsAt != null && (
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "text-[10px]",
+                    dealer.foundingWindowEndsAt < Date.now()
+                      ? "border-red-600 text-red-400"
+                      : "border-slate-600 text-slate-400"
+                  )}
+                >
+                  {dealer.foundingWindowEndsAt < Date.now()
+                    ? "Founding window ended"
+                    : `Founding until ${new Date(dealer.foundingWindowEndsAt).toLocaleDateString()}`}
+                </Badge>
+              )}
+            </div>
+            <WhatsAppActionCell
+              done={Boolean(dealer.phoneVerifiedAt)}
+              doneIcon={ShieldCheck}
+              doneLabel={dealer.phoneVerifiedAt ? `Verified ${new Date(dealer.phoneVerifiedAt).toLocaleDateString()}` : ""}
+              hasWhatsApp={Boolean(dealer.whatsappNumber)}
+              actionIcon={ShieldCheck}
+              actionLabel="Mark phone verified"
+              onSend={() => handleVerify(dealer.orgId)}
+              fallback={null}
+            />
+          </div>
+          <p className="text-xs text-slate-500">
+            {dealer.totalResponses} response(s)
+            {dealer.avgResponseMinutes != null ? ` · ${Math.round(dealer.avgResponseMinutes)} min avg reply` : ""}
+          </p>
+          <TierEditor dealer={dealer} />
         </Card>
       ))}
     </div>
@@ -222,9 +370,13 @@ export default function AdminMarketplacePage() {
         <Button size="sm" variant={view === "reports" ? "default" : "outline"} onClick={() => setView("reports")}>
           Weekly Reports
         </Button>
+        <Button size="sm" variant={view === "dealers" ? "default" : "outline"} onClick={() => setView("dealers")}>
+          Dealers
+        </Button>
       </div>
 
       {view === "reports" && <WeeklyReportsView />}
+      {view === "dealers" && <DealersView />}
 
       {view === "requests" && (
         <>
@@ -286,8 +438,11 @@ export default function AdminMarketplacePage() {
                 {request.matches.map((match) => (
                   <div key={match.matchId} className="flex items-center justify-between gap-3 text-sm">
                     <span className="text-slate-200">{match.dealerName}</span>
-                    <MatchActionCell
-                      match={match}
+                    <WhatsAppActionCell
+                      done={Boolean(match.notifiedAt)}
+                      doneLabel="Sent"
+                      hasWhatsApp={Boolean(match.whatsappNumber)}
+                      actionLabel="Send via WhatsApp"
                       onSend={() =>
                         handleSend(match.matchId, match.whatsappNumber!, buildDealerMessage(request))
                       }

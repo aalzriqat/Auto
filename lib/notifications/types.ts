@@ -121,6 +121,7 @@ export const NOTIFICATION_TYPES = {
 
   // ─── Dealer Network Marketplace ────────────────────────────────────────
   "marketplace.request_matched": { category: "sales", priority: "urgent", criticalDefault: true },
+  "marketplace.tradein_submitted": { category: "sales", priority: "urgent", criticalDefault: true },
 
   // ─── Feedback ─────────────────────────────────────────────────────────
   "feedback.replied": { category: "system", priority: "normal", criticalDefault: true },

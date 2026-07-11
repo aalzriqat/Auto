@@ -13,20 +13,43 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "@/components/ui/sonner";
-import { Car, CheckCircle2, Handshake, MapPin } from "lucide-react";
+import { Car, CheckCircle2, Handshake, MapPin, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type ResponseKind = "HAVE_MATCH" | "HAVE_SIMILAR" | "CAN_SOURCE" | "NOT_AVAILABLE";
+type InboxView = "requests" | "tradeins";
+
+/** Shared prop shape for the two inline "act on this row" forms below (respond to a buyer request, make a trade-in offer) — same orgId/entity-id/onSaved contract, different entity table. */
+type MarketplaceActionFormProps<TEntityId> = {
+  orgId: Id<"organizations">;
+  entityId: TEntityId;
+  onSaved: () => void;
+};
+
+/** Shared "run a mutation, toast success/error, reset the saving flag" wrapper for the two inline forms below (respond to a buyer request, make a trade-in offer) — same shape, different mutation. */
+async function submitWithToast(
+  setSaving: (value: boolean) => void,
+  action: () => Promise<unknown>,
+  successMessage: string,
+  onSaved: () => void
+) {
+  setSaving(true);
+  try {
+    await action();
+    toast.success(successMessage);
+    onSaved();
+  } catch (error) {
+    toast.error(error instanceof Error ? error.message : "An unexpected error occurred. Please try again later.");
+  } finally {
+    setSaving(false);
+  }
+}
 
 function ResponseForm({
   orgId,
-  requestId,
+  entityId: requestId,
   onSaved,
-}: {
-  orgId: Id<"organizations">;
-  requestId: Id<"marketplaceRequests">;
-  onSaved: () => void;
-}) {
+}: MarketplaceActionFormProps<Id<"marketplaceRequests">>) {
   const { t } = useLanguage();
   const respond = useMutation(api.marketplaceResponses.respond);
   const vehiclesPage = useQuery(api.vehicles.list, {
@@ -42,23 +65,20 @@ function ResponseForm({
   const [saving, setSaving] = useState(false);
 
   async function handleSubmit() {
-    setSaving(true);
-    try {
-      await respond({
-        orgId,
-        requestId,
-        kind,
-        vehicleId: vehicleId ? (vehicleId as Id<"vehicles">) : undefined,
-        offerPriceJod: offerPriceJod ? Number(offerPriceJod) : undefined,
-        note: note.trim() || undefined,
-      });
-      toast.success(t("MarketplaceResponseSaved" as any));
-      onSaved();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "An unexpected error occurred. Please try again later.");
-    } finally {
-      setSaving(false);
-    }
+    await submitWithToast(
+      setSaving,
+      () =>
+        respond({
+          orgId,
+          requestId,
+          kind,
+          vehicleId: vehicleId ? (vehicleId as Id<"vehicles">) : undefined,
+          offerPriceJod: offerPriceJod ? Number(offerPriceJod) : undefined,
+          note: note.trim() || undefined,
+        }),
+      t("MarketplaceResponseSaved" as any),
+      onSaved
+    );
   }
 
   return (
@@ -123,9 +143,105 @@ function ResponseForm({
   );
 }
 
+function TradeInOfferForm({
+  orgId,
+  entityId: tradeInRequestId,
+  onSaved,
+}: MarketplaceActionFormProps<Id<"marketplaceTradeInRequests">>) {
+  const { t } = useLanguage();
+  const makeOffer = useMutation(api.marketplaceTradeIns.makeOffer);
+  const [offerAmountJod, setOfferAmountJod] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  async function handleSubmit() {
+    if (!offerAmountJod) return;
+    await submitWithToast(
+      setSaving,
+      () => makeOffer({ orgId, tradeInRequestId, offerAmountJod: Number(offerAmountJod) }),
+      t("MarketplaceTradeInOfferSaved" as any),
+      onSaved
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2 border-t border-border pt-3 mt-3">
+      <Input
+        type="number"
+        min={0}
+        value={offerAmountJod}
+        onChange={(e) => setOfferAmountJod(e.target.value)}
+        placeholder={t("MarketplaceTradeInOfferAmountLabel" as any)}
+        className="max-w-[180px]"
+      />
+      <Button type="button" size="sm" onClick={handleSubmit} disabled={saving || !offerAmountJod}>
+        {t("MarketplaceTradeInMakeOffer" as any)}
+      </Button>
+    </div>
+  );
+}
+
+function TradeInsTab({ orgId }: { orgId: Id<"organizations"> }) {
+  const { t } = useLanguage();
+  const tradeIns = useQuery(api.marketplaceTradeIns.listForOrg, { orgId });
+  const [openTradeInId, setOpenTradeInId] = useState<string | null>(null);
+
+  return (
+    <div className="space-y-4">
+      {tradeIns?.length === 0 && (
+        <p className="text-sm text-muted-foreground">{t("MarketplaceTradeInsEmpty" as any)}</p>
+      )}
+      {(tradeIns ?? []).map((tradeIn) => (
+        <div key={tradeIn._id} className="rounded-xl border border-border p-4">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-semibold">{tradeIn.buyerFirstName}</span>
+                <Badge variant="outline" className="text-[10px]">{tradeIn.condition}</Badge>
+              </div>
+              <p className="text-sm text-muted-foreground mt-1 flex items-center gap-1 flex-wrap">
+                <RefreshCw className="h-3.5 w-3.5 shrink-0" />
+                {tradeIn.currentYear} {tradeIn.currentMake} {tradeIn.currentModel}
+                <span className="mx-1">·</span>
+                {tradeIn.currentMileage.toLocaleString()} km
+              </p>
+            </div>
+
+            {tradeIn.status !== "PENDING" ? (
+              <Badge
+                variant="outline"
+                className={cn(
+                  "gap-1",
+                  tradeIn.status === "ACCEPTED" && "text-emerald-700 border-emerald-600",
+                  tradeIn.status === "DECLINED" && "text-muted-foreground"
+                )}
+              >
+                {tradeIn.status === "OFFERED" && `${tradeIn.offerAmountJod?.toLocaleString()} JOD`}
+                {tradeIn.status !== "OFFERED" && tradeIn.status}
+              </Badge>
+            ) : (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setOpenTradeInId(openTradeInId === tradeIn._id ? null : tradeIn._id)}
+              >
+                {t("MarketplaceTradeInMakeOffer" as any)}
+              </Button>
+            )}
+          </div>
+
+          {openTradeInId === tradeIn._id && (
+            <TradeInOfferForm orgId={orgId} entityId={tradeIn._id} onSaved={() => setOpenTradeInId(null)} />
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function MarketplaceRequestsClient() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
+  const [view, setView] = useState<InboxView>("requests");
   const requests = useQuery(
     api.marketplaceResponses.listForOrg,
     activeOrgId ? { orgId: activeOrgId } : "skip"
@@ -148,13 +264,23 @@ export function MarketplaceRequestsClient() {
             {t("MarketplaceRequestsTitle" as any)}
           </CardTitle>
           <CardDescription>{t("MarketplaceRequestsDesc" as any)}</CardDescription>
+          <div className="flex gap-2 pt-2">
+            <Button size="sm" variant={view === "requests" ? "default" : "outline"} onClick={() => setView("requests")}>
+              {t("MarketplaceTabRequests" as any)}
+            </Button>
+            <Button size="sm" variant={view === "tradeins" ? "default" : "outline"} onClick={() => setView("tradeins")}>
+              {t("MarketplaceTabTradeIns" as any)}
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="space-y-4">
-          {requests?.length === 0 && (
+          {view === "tradeins" && activeOrgId && <TradeInsTab orgId={activeOrgId} />}
+
+          {view === "requests" && requests?.length === 0 && (
             <p className="text-sm text-muted-foreground">{t("MarketplaceRequestsEmpty" as any)}</p>
           )}
 
-          {(requests ?? []).map((request) => (
+          {view === "requests" && (requests ?? []).map((request) => (
             <div key={request.requestId} className="rounded-xl border border-border p-4">
               <div className="flex items-start justify-between gap-3 flex-wrap">
                 <div>
@@ -203,7 +329,7 @@ export function MarketplaceRequestsClient() {
               {openRequestId === request.requestId && activeOrgId && (
                 <ResponseForm
                   orgId={activeOrgId}
-                  requestId={request.requestId}
+                  entityId={request.requestId}
                   onSaved={() => setOpenRequestId(null)}
                 />
               )}
