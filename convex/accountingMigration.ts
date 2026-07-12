@@ -18,6 +18,7 @@ import { ensurePartnerEquityAccounts, ensureClaimAccounts } from "./chartOfAccou
 import { toMinorUnits } from "./utils/money";
 import { requireFeature } from "./subscriptions";
 import { auditLog } from "./financialAudit";
+import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 
 // ─── Snapshot / classification helpers ───────────────────────────────────────
 
@@ -35,6 +36,9 @@ interface LegacyTransactionRow {
 
 function mapCategoryToEventType(category: string, type: string): string | null {
   if (category === "VEHICLE_SALE") return "SALE_COMPLETED";
+  // Only created going forward by vehicles.create (vehicle acquisition
+  // capitalization) — legacy rows predating that never exist with this category.
+  if (category === "VEHICLE_PURCHASE") return "VEHICLE_ACQUIRED";
   if (category === "DEPOSIT") return type === "IN" ? "DEPOSIT_RECEIVED" : "DEPOSIT_REFUNDED";
   if (category === "COLLECTION_PAYMENT") return "COLLECTION_PAYMENT";
   if (category === "EXPENSE") return "EXPENSE_POSTED";
@@ -318,11 +322,14 @@ export const migrateUnpostedTransactions = mutation({
         } else if (eventType === "CLAIM_SETTLED") {
           payload.claimId = tx._id.toString();
           payload.paymentMethod = "CASH";
+        } else if (eventType === "VEHICLE_ACQUIRED") {
+          payload.costMinor = amountMinor;
+          payload.paymentMethod = "CASH";
         }
 
         await postAccountingEvent(ctx, {
           orgId: args.orgId,
-          eventType: eventType as "EXPENSE_POSTED" | "COLLECTION_PAYMENT" | "DEPOSIT_RECEIVED" | "DEPOSIT_REFUNDED" | "SALE_COMPLETED" | "PARTNER_DREW" | "CAPITAL_CONTRIBUTED" | "CLAIM_SETTLED",
+          eventType: eventType as "EXPENSE_POSTED" | "COLLECTION_PAYMENT" | "DEPOSIT_RECEIVED" | "DEPOSIT_REFUNDED" | "SALE_COMPLETED" | "PARTNER_DREW" | "CAPITAL_CONTRIBUTED" | "CLAIM_SETTLED" | "VEHICLE_ACQUIRED",
           sourceType: "transactions",
           sourceId: tx._id.toString(),
           eventVersion: 1,
@@ -444,6 +451,113 @@ export const backfillClaimMinorUnits = mutation({
 
     await auditLogForMigration(ctx, args.orgId, user._id, "claims", claims.length, migrated);
     return { scanned: claims.length, migrated };
+  },
+});
+
+// ─── Vehicle inventory opening-balance backfill ────────────────────────────────
+//
+// Vehicles already in stock when inventory capitalization shipped never had
+// their acquisition cost debited to Vehicle Inventory. This posts a one-time
+// catch-up entry per vehicle so today's Balance Sheet stops understating
+// inventory — see ruleVehicleInventoryOpeningBalance for why it credits
+// Retained Earnings rather than cash/bank (the cash already left the business
+// in the past; crediting the current cash/bank account for it would just
+// introduce a new error at the bank-reconciliation end instead).
+//
+// Deliberately scoped to vehicles NOT yet sold: an already-sold vehicle's
+// historical COGS/revenue effect is a prior-period restatement question for
+// an accountant to resolve via manual journal, not something to guess at here.
+
+export const backfillVehicleInventoryOpeningBalances = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    limit: v.optional(v.number()),
+    dryRun: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+
+    const dryRun = args.dryRun !== false;
+    const rawLimit = args.limit ?? 100;
+    if (!Number.isSafeInteger(rawLimit) || rawLimit < 1) {
+      throw new Error("limit must be a positive integer.");
+    }
+    const limit = Math.min(rawLimit, 500);
+
+    const currency = await getOrgCurrency(ctx, args.orgId);
+    // RETAINED_EARNINGS may predate the current chart on very old orgs —
+    // self-heal it the same way the Phase 12 equity migration does.
+    if (!dryRun) {
+      await ensurePartnerEquityAccounts(ctx, args.orgId, user._id);
+    }
+
+    const vehicles = (
+      await ctx.db
+        .query("vehicles")
+        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+        .take(limit * 10)
+    ).filter((v) => !v.isDeleted && v.status !== "SOLD" && v.sourceType !== "SOURCED");
+
+    const results: Array<{ vehicleId: string; action: string; amountMinor?: number; reason?: string }> = [];
+
+    for (const vehicle of vehicles) {
+      if (results.filter((r) => r.action !== "SKIP").length >= limit) break;
+
+      const alreadyPosted = await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", args.orgId).eq("sourceType", "vehicles").eq("sourceId", vehicle._id.toString())
+        )
+        .filter((q) =>
+          q.or(q.eq(q.field("eventType"), "VEHICLE_ACQUIRED"), q.eq(q.field("eventType"), "VEHICLE_INVENTORY_OPENING_BALANCE"))
+        )
+        .first();
+      if (alreadyPosted) {
+        results.push({ vehicleId: vehicle._id.toString(), action: "SKIP", reason: "already_posted" });
+        continue;
+      }
+
+      const cost = await computeVehicleCapitalizedCost(ctx, vehicle);
+      if (cost <= 0) {
+        results.push({ vehicleId: vehicle._id.toString(), action: "SKIP", reason: "zero_cost" });
+        continue;
+      }
+      const amountMinor = toMinorUnits(cost, currency);
+
+      if (dryRun) {
+        results.push({ vehicleId: vehicle._id.toString(), action: "WOULD_POST", amountMinor });
+        continue;
+      }
+
+      try {
+        const now = Date.now();
+        await postAccountingEvent(ctx, {
+          orgId: args.orgId,
+          eventType: "VEHICLE_INVENTORY_OPENING_BALANCE",
+          sourceType: "vehicles",
+          sourceId: vehicle._id.toString(),
+          eventVersion: 1,
+          accountingDate: now,
+          occurredAt: now,
+          currency,
+          idempotencyKey: `vehicle_inventory_opening_${vehicle._id}`,
+          payload: { vehicleId: vehicle._id.toString(), amountMinor, currency },
+          actorId: user._id,
+        });
+        results.push({ vehicleId: vehicle._id.toString(), action: "POSTED", amountMinor });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        results.push({ vehicleId: vehicle._id.toString(), action: "FAILED", reason: message });
+      }
+    }
+
+    const posted = results.filter((r) => r.action === "POSTED").length;
+    const wouldPost = results.filter((r) => r.action === "WOULD_POST").length;
+    const skipped = results.filter((r) => r.action === "SKIP").length;
+    const failed = results.filter((r) => r.action === "FAILED").length;
+
+    return { dryRun, posted, wouldPost, skipped, failed, results };
   },
 });
 

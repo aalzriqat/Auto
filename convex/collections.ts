@@ -15,7 +15,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { getActorName, notifyManagers, notifyUser } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
-import { hookCollectionPayment, hookCollectionRefund, hookExpensePosted, getOrgCurrency } from "./accounting/workflowHooks";
+import { hookCollectionPayment, hookCollectionRefund, hookExpensePosted, hookReceivableCreated, getOrgCurrency } from "./accounting/workflowHooks";
 import { reverseAccountingEvent } from "./accounting/reversals";
 import { getOpenPeriodForDate } from "./accountingPeriods";
 import { enqueuePendingReversal, cancelPendingPostByKey } from "./accountingOutbox";
@@ -621,6 +621,22 @@ export const createReceivable = mutation({
       await ensureCanonicalReceivableForLegacy(ctx, receivable, user._id, currency);
     }
 
+    // A sale-linked receivable's AR was already recognized by SALE_COMPLETED
+    // at sale completion — posting a second origin entry here would double-book
+    // it. Every other manual receivable (damage claims, ad-hoc charges, etc.)
+    // has no prior GL recognition, so it needs its own DR AR / CR Other Income.
+    if (!args.saleId) {
+      await hookReceivableCreated(ctx, {
+        orgId: args.orgId,
+        receivableId,
+        customerId: args.customerId,
+        amountMinor: toMinorUnits(roundMoney(args.amount, currency), currency),
+        currency,
+        actorId: user._id,
+        occurredAt: now,
+      });
+    }
+
     const actorName = await getActorName(ctx);
     await notifyManagers(ctx, args.orgId, "collection.receivable_created", {
       actorName,
@@ -702,6 +718,21 @@ export const createInstallmentPlan = mutation({
       if (receivable) {
         await ensureCanonicalReceivableForLegacy(ctx, receivable, user._id, currency);
       }
+
+      // Same reasoning as createReceivable: skip when sale-linked, since that
+      // AR was already recognized by SALE_COMPLETED.
+      if (!args.saleId) {
+        await hookReceivableCreated(ctx, {
+          orgId: args.orgId,
+          receivableId: id,
+          customerId: args.customerId,
+          amountMinor: toMinorUnits(amount, currency),
+          currency,
+          actorId: user._id,
+          occurredAt: now,
+        });
+      }
+
       ids.push(id);
     }
 

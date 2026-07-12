@@ -30,6 +30,7 @@ export const SYSTEM_KEYS = {
   PARTNER_CAPITAL: "PARTNER_CAPITAL",
   PARTNER_DRAWINGS: "PARTNER_DRAWINGS",
   CLAIM_WRITE_OFF_EXPENSE: "CLAIM_WRITE_OFF_EXPENSE",
+  MISCELLANEOUS_INCOME: "MISCELLANEOUS_INCOME",
 } as const;
 
 export type SystemKey = typeof SYSTEM_KEYS[keyof typeof SYSTEM_KEYS];
@@ -300,6 +301,21 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     isControlAccount: false,
     allowManualPosting: false,
     systemKey: SYSTEM_KEYS.GAIN_ON_DISPOSAL,
+  },
+  {
+    // Default credit side for manually created receivables (collections.createReceivable /
+    // createInstallmentPlan) that aren't tied to a vehicle sale — e.g. damage
+    // claims, ad-hoc customer charges. Manual-posting is allowed so an
+    // accountant can reclassify a specific entry into a more precise revenue
+    // account via journal entry once its true nature is known.
+    code: "4400",
+    name: "Other Income",
+    nameAr: "إيرادات أخرى",
+    type: "OTHER_INCOME",
+    normalBalance: "CREDIT",
+    isControlAccount: false,
+    allowManualPosting: true,
+    systemKey: SYSTEM_KEYS.MISCELLANEOUS_INCOME,
   },
 
   // ── COGS ─────────────────────────────────────────────────────────────────

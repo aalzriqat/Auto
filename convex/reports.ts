@@ -9,6 +9,7 @@ import {
   recognizedAmountInRange,
   PREPAID_LOOKBACK_MS,
 } from "./utils/expenseAmortization";
+import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 
 export const getSalesAndProfitReport = query({
   args: {
@@ -64,13 +65,25 @@ export const getSalesAndProfitReport = query({
       })
     );
 
+    // Single authoritative cost basis — same function the GL (SALE_COMPLETED
+    // costMinor) and commission calculation use, so this report can no longer
+    // disagree with them about a vehicle's margin. vehicleExpenses stays a
+    // broader "all expenses logged against this vehicle" figure for display
+    // (it can include non-capitalizable categories like marketing), separate
+    // from the authoritative cost/profit below.
+    const capitalizedCostByVehicle = new Map<string, number>();
+    await Promise.all(
+      Array.from(vehicleMap.values()).map(async (vehicle) => {
+        capitalizedCostByVehicle.set(vehicle._id, await computeVehicleCapitalizedCost(ctx, vehicle));
+      })
+    );
+
     const enrichedSales = salesInDateRange.map((sale) => {
       const vehicle = vehicleMap.get(sale.vehicleId);
       const expenses = expensesByVehicle.get(sale.vehicleId) ?? [];
 
       const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
-      const vehicleBaseCost = vehicle?.landedCostTotal ?? vehicle?.purchasePrice ?? vehicle?.sellingPrice ?? 0;
-      const cost = vehicleBaseCost + totalExpenses;
+      const cost = capitalizedCostByVehicle.get(sale.vehicleId) ?? 0;
       const profit = sale.salePrice - cost;
 
       totalRevenue += sale.salePrice;
@@ -83,7 +96,7 @@ export const getSalesAndProfitReport = query({
         vehicleModel: vehicle?.model,
         vehicleYear: vehicle?.year,
         vehicleVin: vehicle?.vin,
-        vehicleCost: vehicleBaseCost,
+        vehicleCost: cost,
         vehicleExpenses: totalExpenses,
         totalCost: cost,
         netProfit: profit,
@@ -306,17 +319,12 @@ export const getSalespersonPerformance = query({
       vehicles.filter((v): v is NonNullable<typeof v> => v !== null).map(v => [v._id, v])
     );
 
-    // Fetch expenses only for vehicles in this date range
-    const expensesByVehicle = new Map<string, any[]>();
+    // Single authoritative cost basis — same function the GL and commission
+    // calculation use (see getSalesAndProfitReport above).
+    const capitalizedCostByVehicle = new Map<string, number>();
     await Promise.all(
-      vehicleIds.map(async (vehicleId) => {
-        const exps = await ctx.db
-          .query("expenses")
-          .withIndex("by_org_vehicle", (q) =>
-            q.eq("orgId", args.orgId).eq("vehicleId", vehicleId)
-          )
-          .collect();
-        expensesByVehicle.set(vehicleId, exps);
+      Array.from(vehicleMap.values()).map(async (vehicle) => {
+        capitalizedCostByVehicle.set(vehicle._id, await computeVehicleCapitalizedCost(ctx, vehicle));
       })
     );
 
@@ -334,10 +342,7 @@ export const getSalespersonPerformance = query({
       const userName = (user && "name" in user ? user.name : null) ?? "Unknown";
 
       for (const sale of userSales) {
-        const vehicle = vehicleMap.get(sale.vehicleId);
-        const expenses = expensesByVehicle.get(sale.vehicleId) ?? [];
-        const totalExpenses = expenses.reduce((sum, exp) => sum + exp.amount, 0);
-        const cost = (vehicle?.landedCostTotal ?? vehicle?.purchasePrice ?? 0) + totalExpenses;
+        const cost = capitalizedCostByVehicle.get(sale.vehicleId) ?? 0;
         const profit = sale.salePrice - cost;
 
         totalRevenue += sale.salePrice;

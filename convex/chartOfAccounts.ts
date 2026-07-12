@@ -268,6 +268,19 @@ export async function ensureVatReceivableAccount(
   await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.VAT_RECEIVABLE, "1130");
 }
 
+/**
+ * Self-heal for the 4400 Other Income account: the default credit side for
+ * manually created receivables (collections.createReceivable /
+ * createInstallmentPlan) not tied to a vehicle sale. Scoped to that hook only.
+ */
+export async function ensureMiscIncomeAccount(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.MISCELLANEOUS_INCOME, "4400");
+}
+
 // ─── Queries ──────────────────────────────────────────────────────────────────
 
 export const list = query({

@@ -9,7 +9,9 @@ import { validateInput } from "./utils/validation";
 import { CreateVehicleSchema, UpdateVehicleSchema } from "./validations/vehicles";
 import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socialAutoPost";
 import { internal } from "./_generated/api";
-import { getOrgCurrency } from "./accounting/workflowHooks";
+import { getOrgCurrency, hookVehicleAcquired, hookVehicleLandedCostCapitalized } from "./accounting/workflowHooks";
+import { toMinorUnits } from "./utils/money";
+import { paymentMethodValidator, normalizePaymentMethod } from "./utils/paymentMethods";
 import { syncVehicleHoldStatus, getDefaultReservationExpiry } from "./utils/depositHelpers";
 import {
   amountToMinorOrThrow,
@@ -26,6 +28,7 @@ import {
   assertDirectVehicleCreateStatus,
   assertDirectVehicleStatusTransition,
   normalizeVehicleStatus,
+  trustPassportFieldValidators,
   type VehicleLifecycleStatus,
 } from "./utils/vehicleStatusGuards";
 
@@ -408,6 +411,9 @@ export const create = mutation({
     sourceCost: v.optional(v.number()),
     notes: v.optional(v.string()),
     imageIds: v.optional(v.array(v.id("_storage"))),
+    /** How the dealer paid for the vehicle — drives the GL credit side (Cash/Bank/Cheque/Card). Ignored for SOURCED vehicles, which never capitalize into inventory. */
+    purchasePaymentMethod: v.optional(paymentMethodValidator),
+    ...trustPassportFieldValidators,
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
@@ -488,11 +494,42 @@ export const create = mutation({
       sourceCost: isSourced ? args.sourceCost : undefined,
       notes: args.notes,
       imageIds: args.imageIds,
+      inspectionStatus: args.inspectionStatus,
+      accidentDisclosed: args.accidentDisclosed,
+      ownerCount: args.ownerCount,
+      dealerGuarantee: args.dealerGuarantee,
       createdAt: Date.now(),
       addedBy: user._id,
       updatedBy: user._id,
       updatedAt: Date.now(),
     });
+
+    // Sourced/drop-ship vehicles never sit in physical inventory (their cost
+    // is only ever recognized as COGS/AP-Suppliers at sale time), so only
+    // owned stock capitalizes into Vehicle Inventory here.
+    if (!isSourced && effectivePurchasePrice != null && effectivePurchasePrice > 0) {
+      const now = Date.now();
+      await ctx.db.insert("transactions", {
+        orgId: args.orgId,
+        type: "OUT",
+        amount: effectivePurchasePrice,
+        date: now,
+        category: "VEHICLE_PURCHASE",
+        description: `Purchase of vehicle ${args.year} ${args.make.trim()} ${args.model.trim()} (VIN: ${normalizedVin})`,
+        vehicleId: id,
+      });
+
+      const currency = await getOrgCurrency(ctx, args.orgId);
+      await hookVehicleAcquired(ctx, {
+        orgId: args.orgId,
+        vehicleId: id,
+        costMinor: toMinorUnits(effectivePurchasePrice, currency),
+        currency,
+        paymentMethod: normalizePaymentMethod(args.purchasePaymentMethod),
+        actorId: user._id,
+        occurredAt: now,
+      });
+    }
 
     const { orgId: _, ...payloadArgs } = args;
     await ctx.db.insert("vehicleEdits", {
@@ -520,6 +557,35 @@ export const create = mutation({
 });
 
 /**
+ * True once this vehicle's acquisition cost has been capitalized into Vehicle
+ * Inventory (posted or still sitting in the pending-post outbox) — mirrors
+ * expenses.ts's hasExpenseAccountingExposure. Once true, purchasePrice/
+ * sourceCost are locked: correcting a mis-entered cost after the GL already
+ * captured it needs a deliberate adjustment, not a silent field edit that
+ * would leave the journal permanently out of sync with the vehicle record.
+ */
+async function hasVehicleAcquisitionAccountingExposure(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">
+): Promise<boolean> {
+  const postedEvent = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_source", (q) =>
+      q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId.toString())
+    )
+    .filter((q) => q.eq(q.field("eventType"), "VEHICLE_ACQUIRED"))
+    .first();
+  if (postedEvent) return true;
+
+  const pendingPost = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", `vehicle_acquired_${vehicleId}`))
+    .first();
+  return pendingPost !== null;
+}
+
+/**
  * Updates an existing vehicle's details.
  */
 export const update = mutation({
@@ -544,6 +610,7 @@ export const update = mutation({
     sourceCost: v.optional(v.number()),
     notes: v.optional(v.string()),
     imageIds: v.optional(v.array(v.id("_storage"))),
+    ...trustPassportFieldValidators,
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
@@ -617,6 +684,12 @@ export const update = mutation({
       }
     }
 
+    if (("purchasePrice" in patch || "sourceCost" in patch) && await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, args.vehicleId)) {
+      throw new ConvexError(
+        "This vehicle's acquisition cost has already been posted to accounting. Use a correction journal entry instead of editing purchasePrice/sourceCost directly."
+      );
+    }
+
     if (Object.keys(patch).length > 0) {
       if (typeof patch.sellingPrice === "number") {
         await insertPriceHistory(ctx, args.orgId, args.vehicleId, vehicle.sellingPrice, patch.sellingPrice, user._id);
@@ -671,6 +744,8 @@ export const upsertLandedCosts = mutation({
       label: v.string(),
       amount: v.number(),
     })),
+    /** How the landed costs were paid — drives the GL credit side. Ignored for SOURCED vehicles (never capitalized). */
+    paymentMethod: v.optional(paymentMethodValidator),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
@@ -678,6 +753,9 @@ export const upsertLandedCosts = mutation({
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
       throw new ConvexError("Vehicle not found in this organization.");
+    }
+    if (vehicle.status === "SOLD") {
+      throw new ConvexError("Cannot edit landed costs on a sold vehicle — its inventory has already been relieved.");
     }
 
     const items = args.items
@@ -690,6 +768,7 @@ export const upsertLandedCosts = mutation({
       .query("vehicleLandedCosts")
       .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
       .unique();
+    const previousTotal = existing?.total ?? 0;
 
     if (existing) {
       await ctx.db.patch(existing._id, { items, total, updatedAt: now, updatedBy: user._id });
@@ -709,6 +788,24 @@ export const upsertLandedCosts = mutation({
       updatedAt: now,
       updatedBy: user._id,
     });
+
+    // Sourced/drop-ship vehicles never sit in physical inventory — their cost
+    // basis is sourceCost only, so landed costs entered against one (kept for
+    // informational tracking) never capitalize into the GL.
+    const delta = total - previousTotal;
+    if (vehicle.sourceType !== "SOURCED" && delta !== 0) {
+      const currency = await getOrgCurrency(ctx, args.orgId);
+      await hookVehicleLandedCostCapitalized(ctx, {
+        orgId: args.orgId,
+        vehicleId: args.vehicleId,
+        editToken: now.toString(),
+        deltaMinor: toMinorUnits(delta, currency),
+        currency,
+        paymentMethod: normalizePaymentMethod(args.paymentMethod),
+        actorId: user._id,
+        occurredAt: now,
+      });
+    }
 
     return { total };
   },

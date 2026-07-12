@@ -15,6 +15,7 @@ import { cancelPendingPostByKey } from "./accountingOutbox";
 import { requireFeature } from "./subscriptions";
 import { toMinorUnits } from "./utils/money";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
+import { CAPITALIZABLE_EXPENSE_CATEGORIES } from "./utils/vehicleCost";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -84,6 +85,18 @@ async function recordPaidExpenseSideEffects(
     });
   }
 
+  // Reconditioning costs (repair/maintenance/detailing/transport-in) on a
+  // vehicle still in stock capitalize into Vehicle Inventory instead of
+  // hitting the P&L immediately — see computeVehicleCapitalizedCost, the
+  // single cost basis this must stay consistent with. Sourced vehicles never
+  // sit in physical inventory, and a vehicle already SOLD has had its
+  // inventory relieved, so both fall back to a normal period expense.
+  let capitalizeToInventory = false;
+  if (args.expense.vehicleId && CAPITALIZABLE_EXPENSE_CATEGORIES.has(args.expense.category)) {
+    const vehicle = await ctx.db.get(args.expense.vehicleId);
+    capitalizeToInventory = !!vehicle && vehicle.sourceType !== "SOURCED" && vehicle.status !== "SOLD";
+  }
+
   const currency = await getOrgCurrency(ctx, args.expense.orgId);
   await hookExpensePosted(ctx, {
     orgId: args.expense.orgId,
@@ -95,6 +108,8 @@ async function recordPaidExpenseSideEffects(
     paymentMethod: normalizePaymentMethod(args.expense.paymentMethod),
     actorId: args.actorId,
     occurredAt: args.expense.date,
+    vehicleId: args.expense.vehicleId,
+    capitalizeToInventory,
   });
 }
 

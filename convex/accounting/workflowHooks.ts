@@ -15,7 +15,7 @@ import { postAccountingEvent, PostCommand } from "./postingEngine";
 import { EventType } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate } from "../accountingPeriods";
-import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount } from "../chartOfAccounts";
+import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount } from "../chartOfAccounts";
 import {
   enqueuePendingPost,
   enqueuePendingReversal,
@@ -400,6 +400,8 @@ export async function hookExpensePosted(
     paymentMethod?: string;
     actorId: Id<"users">;
     occurredAt: number;
+    vehicleId?: Id<"vehicles">;
+    capitalizeToInventory?: boolean;
   }
 ) {
   if (args.taxMinor && args.taxMinor > 0) {
@@ -421,6 +423,113 @@ export async function hookExpensePosted(
       currency: args.currency,
       category: args.category,
       paymentMethod: args.paymentMethod,
+      vehicleId: args.vehicleId?.toString(),
+      capitalizeToInventory: args.capitalizeToInventory,
+    },
+  });
+}
+
+// ─── Vehicle inventory capitalization ─────────────────────────────────────────
+
+export async function hookVehicleAcquired(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    costMinor: number;
+    currency: string;
+    paymentMethod?: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "VEHICLE_ACQUIRED",
+    sourceType: "vehicles",
+    sourceId: args.vehicleId.toString(),
+    idempotencyKey: `vehicle_acquired_${args.vehicleId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      vehicleId: args.vehicleId.toString(),
+      costMinor: args.costMinor,
+      currency: args.currency,
+      paymentMethod: args.paymentMethod,
+    },
+  });
+}
+
+/**
+ * Each landed-cost edit is its own economic event (upsertLandedCosts replaces
+ * the whole items list every save), so the idempotency/source key includes
+ * `editToken` — a caller-supplied per-edit discriminator (the landed-cost
+ * row's updatedAt after the patch) rather than being derived from vehicleId
+ * alone, which would collide across edits.
+ */
+export async function hookVehicleLandedCostCapitalized(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    editToken: string;
+    deltaMinor: number;
+    currency: string;
+    paymentMethod?: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "VEHICLE_LANDED_COST_CAPITALIZED",
+    sourceType: "vehicleLandedCosts",
+    sourceId: `${args.vehicleId}_${args.editToken}`,
+    idempotencyKey: `landed_cost_${args.vehicleId}_${args.editToken}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      vehicleId: args.vehicleId.toString(),
+      deltaMinor: args.deltaMinor,
+      currency: args.currency,
+      paymentMethod: args.paymentMethod,
+    },
+  });
+}
+
+// ─── Manual receivables ────────────────────────────────────────────────────────
+
+export async function hookReceivableCreated(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    receivableId: Id<"receivables">;
+    customerId: Id<"customers">;
+    amountMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  if (await isChartInitialized(ctx, args.orgId)) {
+    await ensureMiscIncomeAccount(ctx, args.orgId, args.actorId);
+  }
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "RECEIVABLE_CREATED",
+    sourceType: "receivables",
+    sourceId: args.receivableId.toString(),
+    idempotencyKey: `receivable_created_${args.receivableId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      receivableId: args.receivableId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      customerId: args.customerId.toString(),
     },
   });
 }
