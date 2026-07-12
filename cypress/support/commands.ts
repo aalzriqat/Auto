@@ -65,6 +65,35 @@ function waitForPostPasswordState(
   return state as unknown as Cypress.Chainable<PostPasswordState>;
 }
 
+function findVerificationSubmitButton(
+  $body: JQuery<HTMLElement>,
+): JQuery<HTMLElement> {
+  return $body
+    .find("button")
+    .filter((_, element) =>
+      /^(Continue|Verify)\b/i.test(element.textContent?.trim() ?? ""),
+    )
+    .filter(":enabled:visible")
+    .first();
+}
+
+function clickVerificationSubmitButton(): void {
+  cy.get("body").then(($body) => {
+    const button = findVerificationSubmitButton($body);
+    if (button.length > 0) {
+      cy.wrap(button).click();
+    }
+  });
+}
+
+function clickVerificationSubmitIfStillSigningIn(): void {
+  cy.location("pathname", { timeout: 5_000 }).then((pathname) => {
+    if (pathname.startsWith("/sign-in")) {
+      clickVerificationSubmitButton();
+    }
+  });
+}
+
 function completeVerificationIfNeeded(): void {
   waitForPostPasswordState().then((state) => {
     if (state !== "verification") return;
@@ -83,22 +112,7 @@ function completeVerificationIfNeeded(): void {
           .type(verificationCode, { log: false });
       });
 
-    cy.location("pathname", { timeout: 5_000 }).then((pathname) => {
-      if (!pathname.startsWith("/sign-in")) return;
-
-      cy.get("body").then(($body) => {
-        const button = $body
-          .find("button")
-          .filter((_, element) =>
-            /^(Continue|Verify)\b/i.test(element.textContent?.trim() ?? ""),
-          )
-          .filter(":enabled:visible")
-          .first();
-        if (button.length > 0) {
-          cy.wrap(button).click();
-        }
-      });
-    });
+    clickVerificationSubmitIfStillSigningIn();
   });
 }
 
