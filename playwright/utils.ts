@@ -65,7 +65,9 @@ export async function createVehicle(
   await page.getByRole("button", { name: "Add Vehicle", exact: true }).click();
 
   const dialog = page.getByRole("dialog");
-  await expect(dialog.getByText("Add Vehicle")).toBeVisible();
+  await expect(
+    dialog.getByRole("heading", { name: "Add Vehicle" }),
+  ).toBeVisible();
 
   await dialog.getByLabel("Make").fill(make);
   await dialog.getByLabel("Model").fill(model);
@@ -98,7 +100,9 @@ export async function createCustomer(
   await page.getByRole("button", { name: "Add Customer", exact: true }).click();
 
   const dialog = page.getByRole("dialog");
-  await expect(dialog.getByText("Add Customer")).toBeVisible();
+  await expect(
+    dialog.getByRole("heading", { name: "Add Customer" }),
+  ).toBeVisible();
 
   await dialog.getByLabel("First Name").fill(firstName);
   await dialog.getByLabel("Last Name").fill(lastName);
