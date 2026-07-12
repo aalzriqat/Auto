@@ -477,9 +477,9 @@ export async function hookVehicleLandedCostCapitalized(
     orgId: Id<"organizations">;
     vehicleId: Id<"vehicles">;
     editToken: string;
-    deltaMinor: number;
+    /** Per-account signed deltas — see VehicleLandedCostCapitalizedPayload. */
+    accountDeltas: Array<{ paymentMethod?: string; deltaMinor: number }>;
     currency: string;
-    paymentMethod?: string;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -495,9 +495,13 @@ export async function hookVehicleLandedCostCapitalized(
     actorId: args.actorId,
     payload: {
       vehicleId: args.vehicleId.toString(),
-      deltaMinor: args.deltaMinor,
+      // Net total kept at the top level too — accountingMigration.ts's
+      // backfill reads this scalar to exclude already-posted landed-cost
+      // amounts from its opening-balance calculation without needing to
+      // know about the per-account breakdown.
+      deltaMinor: args.accountDeltas.reduce((sum, d) => sum + d.deltaMinor, 0),
+      accountDeltas: args.accountDeltas,
       currency: args.currency,
-      paymentMethod: args.paymentMethod,
     },
   });
 }

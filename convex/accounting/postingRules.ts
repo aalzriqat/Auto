@@ -606,31 +606,47 @@ export function ruleVehicleAcquired(p: VehicleAcquiredPayload): RuleResult {
 
 export interface VehicleLandedCostCapitalizedPayload {
   vehicleId: string;
-  /** Signed change since the landed-cost record was last saved (can be negative on a downward edit). */
-  deltaMinor: number;
   currency: string;
-  paymentMethod?: string;
+  /**
+   * Signed change per settlement account since the landed-cost record was
+   * last saved (upsertLandedCosts replaces the whole items list on every
+   * save, so the caller diffs old-vs-new items grouped by paymentMethod
+   * rather than passing one aggregate delta) — a positive entry capitalizes
+   * more cost into inventory paid from that account, a negative entry
+   * reverses a previously capitalized amount from that SAME account (not
+   * whatever account happens to be selected on this call).
+   */
+  accountDeltas: Array<{ paymentMethod?: string; deltaMinor: number }>;
 }
 
 /**
- * upsertLandedCosts replaces the whole items list on every save, so the
- * caller passes the signed delta between the old and new total. A positive
- * delta capitalizes more cost into inventory (paid out); a negative delta
- * reverses a previously capitalized amount (e.g. an item was removed/corrected).
+ * See VehicleLandedCostCapitalizedPayload — one Vehicle Inventory line for
+ * the net change plus one cash/bank line per settlement account actually
+ * affected, so a reduction reverses against the account it was originally
+ * paid from even when other accounts were used for other items on the same
+ * vehicle.
  */
 export function ruleVehicleLandedCostCapitalized(p: VehicleLandedCostCapitalizedPayload): RuleResult {
-  // Outbound payment — see ruleVehicleAcquired for why CHEQUE routes to the bank.
-  const cashKey = p.paymentMethod === "CHEQUE" ? SYSTEM_KEYS.BANK_ACCOUNT : cashAccountKey(p.paymentMethod);
-  const amountMinor = Math.abs(p.deltaMinor);
-  const lines: LineSpec[] = p.deltaMinor > 0
-    ? [
-        line(SYSTEM_KEYS.VEHICLE_INVENTORY, amountMinor, 0, "Landed cost capitalized", { vehicleId: p.vehicleId }),
-        line(cashKey, 0, amountMinor, "Landed cost paid", { vehicleId: p.vehicleId }),
-      ]
-    : [
-        line(cashKey, amountMinor, 0, "Landed cost reversed", { vehicleId: p.vehicleId }),
-        line(SYSTEM_KEYS.VEHICLE_INVENTORY, 0, amountMinor, "Landed cost correction", { vehicleId: p.vehicleId }),
-      ];
+  const lines: LineSpec[] = [];
+  let netDeltaMinor = 0;
+  for (const { paymentMethod, deltaMinor } of p.accountDeltas) {
+    if (deltaMinor === 0) continue;
+    // Outbound payment — see ruleVehicleAcquired for why CHEQUE routes to the bank.
+    const cashKey = paymentMethod === "CHEQUE" ? SYSTEM_KEYS.BANK_ACCOUNT : cashAccountKey(paymentMethod);
+    const amountMinor = Math.abs(deltaMinor);
+    lines.push(
+      deltaMinor > 0
+        ? line(cashKey, 0, amountMinor, "Landed cost paid", { vehicleId: p.vehicleId })
+        : line(cashKey, amountMinor, 0, "Landed cost reversed", { vehicleId: p.vehicleId })
+    );
+    netDeltaMinor += deltaMinor;
+  }
+  const netAmountMinor = Math.abs(netDeltaMinor);
+  if (netDeltaMinor > 0) {
+    lines.unshift(line(SYSTEM_KEYS.VEHICLE_INVENTORY, netAmountMinor, 0, "Landed cost capitalized", { vehicleId: p.vehicleId }));
+  } else if (netDeltaMinor < 0) {
+    lines.push(line(SYSTEM_KEYS.VEHICLE_INVENTORY, 0, netAmountMinor, "Landed cost correction", { vehicleId: p.vehicleId }));
+  }
   return { lines, memo: "Vehicle landed cost adjusted", category: "SYSTEM" };
 }
 

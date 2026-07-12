@@ -368,7 +368,10 @@ describe("Fix #2 — landed costs post their delta to Vehicle Inventory", () => 
     });
 
     await asOwner.mutation(api.vehicles.upsertLandedCosts, {
-      orgId, vehicleId, items: [{ label: "Transport", amount: 300 }, { label: "Detailing", amount: 200 }],
+      orgId, vehicleId, items: [
+        { label: "Transport", amount: 300, paymentMethod: "CASH" },
+        { label: "Detailing", amount: 200, paymentMethod: "CASH" },
+      ],
     });
 
     const inventory = await accountBySystemKey(t, orgId, "VEHICLE_INVENTORY");
@@ -386,7 +389,7 @@ describe("Fix #2 — landed costs post their delta to Vehicle Inventory", () => 
 
     // Edit down to 150 total — delta is -350, should reverse (credit inventory).
     await asOwner.mutation(api.vehicles.upsertLandedCosts, {
-      orgId, vehicleId, items: [{ label: "Transport", amount: 150 }],
+      orgId, vehicleId, items: [{ label: "Transport", amount: 150, paymentMethod: "CASH" }],
     });
 
     const events2 = await t.run((ctx) =>
@@ -401,6 +404,97 @@ describe("Fix #2 — landed costs post their delta to Vehicle Inventory", () => 
       ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", secondEvent.journalEntryId!)).collect()
     );
     expect(lines2.find((l) => l.accountId === inventory._id)?.creditMinor).toBe(350_000);
+  });
+
+  test("Fix #14 — removing an item reverses against the account IT was paid from, not another item's account", async () => {
+    const { t, orgId, asOwner } = await seedDealer("f2c");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+
+    await asOwner.mutation(api.vehicles.upsertLandedCosts, {
+      orgId, vehicleId, items: [
+        { label: "Transport", amount: 300, paymentMethod: "BANK_TRANSFER" },
+        { label: "Detailing", amount: 200, paymentMethod: "CASH" },
+      ],
+    });
+
+    const inventory = await accountBySystemKey(t, orgId, "VEHICLE_INVENTORY");
+    const bank = await accountBySystemKey(t, orgId, "BANK_ACCOUNT");
+    const cash = await accountBySystemKey(t, orgId, "CASH_ON_HAND");
+    const firstEvent = await t.run((ctx) =>
+      ctx.db.query("accountingEvents").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicleLandedCosts")).first()
+    );
+    const firstLines = await t.run((ctx) =>
+      ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", firstEvent!.journalEntryId!)).collect()
+    );
+    expect(firstLines.find((l) => l.accountId === inventory._id)?.debitMinor).toBe(500_000);
+    expect(firstLines.find((l) => l.accountId === bank._id)?.creditMinor).toBe(300_000);
+    expect(firstLines.find((l) => l.accountId === cash._id)?.creditMinor).toBe(200_000);
+
+    // Remove the BANK_TRANSFER item entirely — the reversal must hit Bank
+    // Account specifically, even though the only item left is CASH-paid.
+    await asOwner.mutation(api.vehicles.upsertLandedCosts, {
+      orgId, vehicleId, items: [{ label: "Detailing", amount: 200, paymentMethod: "CASH" }],
+    });
+
+    const events = await t.run((ctx) =>
+      ctx.db.query("accountingEvents").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicleLandedCosts")).collect()
+    );
+    const secondEvent = events.find((e) => e._id !== firstEvent!._id)!;
+    const secondLines = await t.run((ctx) =>
+      ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", secondEvent.journalEntryId!)).collect()
+    );
+    expect(secondLines.find((l) => l.accountId === bank._id)?.debitMinor).toBe(300_000);
+    expect(secondLines.find((l) => l.accountId === inventory._id)?.creditMinor).toBe(300_000);
+    // Cash must NOT be touched by this reversal — the item paid from it never changed.
+    expect(secondLines.some((l) => l.accountId === cash._id)).toBe(false);
+  });
+
+  test("Fix #14 — reclassifying an item to a different account posts even when the net total is unchanged", async () => {
+    const { t, orgId, asOwner } = await seedDealer("f2d");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+
+    await asOwner.mutation(api.vehicles.upsertLandedCosts, {
+      orgId, vehicleId, items: [{ label: "Transport", amount: 300, paymentMethod: "CASH" }],
+    });
+    const firstEvent = await t.run((ctx) =>
+      ctx.db.query("accountingEvents").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicleLandedCosts")).first()
+    );
+
+    // Same amount, different account — net total delta is zero, but this is
+    // a real reclassification the GL must reflect.
+    await asOwner.mutation(api.vehicles.upsertLandedCosts, {
+      orgId, vehicleId, items: [{ label: "Transport", amount: 300, paymentMethod: "BANK_TRANSFER" }],
+    });
+
+    const bank = await accountBySystemKey(t, orgId, "BANK_ACCOUNT");
+    const cash = await accountBySystemKey(t, orgId, "CASH_ON_HAND");
+    const events = await t.run((ctx) =>
+      ctx.db.query("accountingEvents").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicleLandedCosts")).collect()
+    );
+    expect(events).toHaveLength(2);
+    const secondEvent = events.find((e) => e._id !== firstEvent!._id)!;
+    const reclassLines = await t.run((ctx) =>
+      ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", secondEvent.journalEntryId!)).collect()
+    );
+    expect(reclassLines.find((l) => l.accountId === cash._id)?.debitMinor).toBe(300_000);
+    expect(reclassLines.find((l) => l.accountId === bank._id)?.creditMinor).toBe(300_000);
+  });
+
+  test("requires an explicit payment method per item on a non-SOURCED vehicle", async () => {
+    const { orgId, asOwner } = await seedDealer("f2e");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+
+    await expect(
+      asOwner.mutation(api.vehicles.upsertLandedCosts, {
+        orgId, vehicleId, items: [{ label: "Transport", amount: 300 }],
+      })
+    ).rejects.toThrow(/[Pp]ayment method is required/);
   });
 
   test("blocked once the vehicle is sold", async () => {
@@ -469,7 +563,7 @@ describe("Fix #4 — one authoritative cost basis for COGS and commission", () =
       orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
     });
     await asOwner.mutation(api.vehicles.upsertLandedCosts, {
-      orgId, vehicleId, items: [{ label: "Transport", amount: 300 }],
+      orgId, vehicleId, items: [{ label: "Transport", amount: 300, paymentMethod: "CASH" }],
     });
     await asOwner.mutation(api.expenses.create, {
       orgId, vehicleId, title: "Detailing", amount: 200, date: Date.UTC(2025, 2, 1),
@@ -802,7 +896,7 @@ describe("Review issue #2 — outbound cheque purchases credit Bank Account, not
       orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
     });
     await asOwner.mutation(api.vehicles.upsertLandedCosts, {
-      orgId, vehicleId, items: [{ label: "Transport", amount: 300 }], paymentMethod: "CHEQUE",
+      orgId, vehicleId, items: [{ label: "Transport", amount: 300, paymentMethod: "CHEQUE" }],
     });
 
     const bank = await accountBySystemKey(t, orgId, "BANK_ACCOUNT");

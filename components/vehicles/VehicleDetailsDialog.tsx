@@ -112,8 +112,7 @@ export function VehicleDetailsDialog({
   const createReservation = useMutation(api.vehicles.createReservation);
   const releaseReservation = useMutation(api.vehicles.releaseReservation);
   const [releasingDepositId, setReleasingDepositId] = useState<string | null>(null);
-  const [landedCostItems, setLandedCostItems] = useState<{ label: string; amount: number }[]>([]);
-  const [landedCostPaymentMethod, setLandedCostPaymentMethod] = useState<PaymentMethod>("CASH");
+  const [landedCostItems, setLandedCostItems] = useState<{ label: string; amount: number; paymentMethod: PaymentMethod }[]>([]);
   const [savingLandedCosts, setSavingLandedCosts] = useState(false);
   const [reservationCustomerId, setReservationCustomerId] = useState("");
   const [reservationDeposit, setReservationDeposit] = useState("");
@@ -131,18 +130,16 @@ export function VehicleDetailsDialog({
 
   useEffect(() => {
     if (landedCosts) {
-      setLandedCostItems(landedCosts.items);
+      // Rows saved before per-item payment methods existed have none —
+      // display them as CASH (the same default upsertLandedCosts used to
+      // apply for the whole edit) rather than leaving the picker empty.
+      setLandedCostItems(
+        landedCosts.items.map((item) => ({ ...item, paymentMethod: item.paymentMethod ?? "CASH" }))
+      );
     } else if (landedCosts === null) {
       setLandedCostItems([]);
     }
   }, [landedCosts]);
-
-  // This state survives dialog reuse across vehicles — without resetting it,
-  // a BANK_TRANSFER selection for one vehicle could silently apply to the
-  // next vehicle's landed-cost delta.
-  useEffect(() => {
-    if (open) setLandedCostPaymentMethod("CASH");
-  }, [open, vehicle?._id]);
 
   const formatMoney = (value: number) => `${value.toLocaleString()} JOD`;
 
@@ -161,7 +158,6 @@ export function VehicleDetailsDialog({
         orgId: activeOrgId,
         vehicleId: vehicle._id,
         items: landedCostItems,
-        paymentMethod: landedCostPaymentMethod,
       });
       toast.success(t("LandedCostSaved" as any));
     } catch (error: any) {
@@ -739,7 +735,7 @@ export function VehicleDetailsDialog({
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => setLandedCostItems((items) => [...items, { label: "", amount: 0 }])}
+                    onClick={() => setLandedCostItems((items) => [...items, { label: "", amount: 0, paymentMethod: "CASH" }])}
                   >
                     <Plus className="h-4 w-4 me-2" />
                     {t("AddCostItem" as any)}
@@ -753,7 +749,7 @@ export function VehicleDetailsDialog({
               ) : (
                 <div className="space-y-3">
                   {landedCostItems.map((item, index) => (
-                    <div key={index} className="grid grid-cols-[1fr_160px_auto] gap-2 items-end">
+                    <div key={index} className="grid grid-cols-[1fr_140px_160px_auto] gap-2 items-end">
                       <div className="space-y-1">
                         <Label>{t("CostItemLabel" as any)}</Label>
                         <Input
@@ -784,6 +780,20 @@ export function VehicleDetailsDialog({
                           }
                         />
                       </div>
+                      <div className="space-y-1">
+                        <Label>{t("PaymentMethodLabel" as any)}</Label>
+                        <PaymentMethodSelect
+                          t={t as any}
+                          value={item.paymentMethod}
+                          onValueChange={(method) =>
+                            setLandedCostItems((items) =>
+                              items.map((current, currentIndex) =>
+                                currentIndex === index ? { ...current, paymentMethod: method } : current
+                              )
+                            )
+                          }
+                        />
+                      </div>
                       {canEditVehicles && (
                         <Button
                           type="button"
@@ -803,14 +813,6 @@ export function VehicleDetailsDialog({
                   </div>
                   {canEditVehicles && (
                     <div className="flex items-end justify-end gap-2">
-                      <div className="space-y-1 w-48">
-                        <Label>{t("PaymentMethodLabel" as any)}</Label>
-                        <PaymentMethodSelect
-                          t={t as any}
-                          value={landedCostPaymentMethod}
-                          onValueChange={setLandedCostPaymentMethod}
-                        />
-                      </div>
                       <Button onClick={handleSaveLandedCosts} disabled={savingLandedCosts}>
                         <Save className="h-4 w-4 me-2" />
                         {t("SaveLandedCost" as any)}

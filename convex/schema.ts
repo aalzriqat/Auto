@@ -612,6 +612,13 @@ export default defineSchema({
     items: v.array(v.object({
       label: v.string(),
       amount: v.number(),
+      // Which account this specific line was paid from — persisted per item
+      // (not one picker for the whole edit) so a later reduction/removal
+      // reverses against the account it actually came from, not whatever's
+      // selected on that later call. Optional/backward compatible: rows
+      // written before this field existed have none, treated as CASH (the
+      // old normalizePaymentMethod default) wherever it's read.
+      paymentMethod: v.optional(paymentMethodValidator),
     })),
     total: v.number(),
     updatedAt: v.number(),

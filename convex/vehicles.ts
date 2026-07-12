@@ -11,7 +11,7 @@ import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socia
 import { internal } from "./_generated/api";
 import { getOrgCurrency, hookVehicleAcquired, hookVehicleLandedCostCapitalized, hookVehicleAcquisitionCostCorrected } from "./accounting/workflowHooks";
 import { toMinorUnits } from "./utils/money";
-import { paymentMethodValidator, acquisitionPaymentMethodValidator, normalizePaymentMethod, type AcquisitionPaymentMethod } from "./utils/paymentMethods";
+import { paymentMethodValidator, acquisitionPaymentMethodValidator, normalizePaymentMethod, type AcquisitionPaymentMethod, type PaymentMethod } from "./utils/paymentMethods";
 import { syncVehicleHoldStatus, getDefaultReservationExpiry } from "./utils/depositHelpers";
 import {
   amountToMinorOrThrow,
@@ -893,9 +893,9 @@ export const upsertLandedCosts = mutation({
     items: v.array(v.object({
       label: v.string(),
       amount: v.number(),
+      /** How this specific item was paid — drives which account it capitalizes against and which account a later reduction/removal reverses against. Required for a non-zero item on a non-SOURCED vehicle. */
+      paymentMethod: v.optional(paymentMethodValidator),
     })),
-    /** How the landed costs were paid — drives the GL credit side. Ignored for SOURCED vehicles (never capitalized). */
-    paymentMethod: v.optional(paymentMethodValidator),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
@@ -909,8 +909,18 @@ export const upsertLandedCosts = mutation({
     }
 
     const items = args.items
-      .map((item) => ({ label: item.label.trim(), amount: item.amount }))
+      .map((item) => ({ label: item.label.trim(), amount: item.amount, paymentMethod: item.paymentMethod }))
       .filter((item) => item.label.length > 0);
+    // Sourced/drop-ship vehicles never sit in physical inventory — their cost
+    // basis is sourceCost only, so landed costs entered against one (kept for
+    // informational tracking) never capitalize into the GL, and there's no
+    // account to silently default for them.
+    if (vehicle.sourceType !== "SOURCED") {
+      const missingMethod = items.find((item) => item.amount !== 0 && !item.paymentMethod);
+      if (missingMethod) {
+        throw new ConvexError(`Payment method is required for landed cost item "${missingMethod.label}".`);
+      }
+    }
     const total = items.reduce((sum, item) => sum + item.amount, 0);
     const now = Date.now();
 
@@ -918,7 +928,7 @@ export const upsertLandedCosts = mutation({
       .query("vehicleLandedCosts")
       .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
       .unique();
-    const previousTotal = existing?.total ?? 0;
+    const previousItems = existing?.items ?? [];
 
     if (existing) {
       await ctx.db.patch(existing._id, { items, total, updatedAt: now, updatedBy: user._id });
@@ -939,25 +949,45 @@ export const upsertLandedCosts = mutation({
       updatedBy: user._id,
     });
 
-    // Sourced/drop-ship vehicles never sit in physical inventory — their cost
-    // basis is sourceCost only, so landed costs entered against one (kept for
-    // informational tracking) never capitalize into the GL.
-    const delta = total - previousTotal;
-    if (vehicle.sourceType !== "SOURCED" && delta !== 0) {
+    if (vehicle.sourceType !== "SOURCED") {
       const currency = await getOrgCurrency(ctx, args.orgId);
-      await hookVehicleLandedCostCapitalized(ctx, {
-        orgId: args.orgId,
-        vehicleId: args.vehicleId,
-        // A durable unique token, not a timestamp — two edits to the same
-        // vehicle's landed costs landing in the same millisecond must not
-        // collide on idempotencyKey and suppress a legitimate GL posting.
-        editToken: crypto.randomUUID(),
-        deltaMinor: toMinorUnits(delta, currency),
-        currency,
-        paymentMethod: normalizePaymentMethod(args.paymentMethod),
-        actorId: user._id,
-        occurredAt: now,
-      });
+      // Group old vs. new items by settlement account and diff per account —
+      // not just old-total vs. new-total — so moving an item between accounts
+      // (or removing one paid from a different account than the others) posts
+      // against the accounts actually affected, even when the net total is
+      // unchanged.
+      const sumsByMethod = (list: ReadonlyArray<{ amount: number; paymentMethod?: PaymentMethod }>) => {
+        const sums = new Map<string, number>();
+        for (const item of list) {
+          const key = item.paymentMethod ?? normalizePaymentMethod(undefined);
+          sums.set(key, (sums.get(key) ?? 0) + item.amount);
+        }
+        return sums;
+      };
+      const oldSums = sumsByMethod(previousItems);
+      const newSums = sumsByMethod(items);
+      const allMethods = new Set([...oldSums.keys(), ...newSums.keys()]);
+      const accountDeltas = Array.from(allMethods)
+        .map((paymentMethod) => ({
+          paymentMethod,
+          deltaMinor: toMinorUnits((newSums.get(paymentMethod) ?? 0) - (oldSums.get(paymentMethod) ?? 0), currency),
+        }))
+        .filter((d) => d.deltaMinor !== 0);
+
+      if (accountDeltas.length > 0) {
+        await hookVehicleLandedCostCapitalized(ctx, {
+          orgId: args.orgId,
+          vehicleId: args.vehicleId,
+          // A durable unique token, not a timestamp — two edits to the same
+          // vehicle's landed costs landing in the same millisecond must not
+          // collide on idempotencyKey and suppress a legitimate GL posting.
+          editToken: crypto.randomUUID(),
+          accountDeltas,
+          currency,
+          actorId: user._id,
+          occurredAt: now,
+        });
+      }
     }
 
     return { total };
