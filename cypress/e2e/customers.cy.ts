@@ -7,6 +7,9 @@ describe("customers", () => {
 
   it("can create a new customer and see it in the list", () => {
     createCustomer().then(({ firstName, lastName }) => {
+      cy.findByPlaceholderText(/Search by name/i)
+        .clear()
+        .type(lastName);
       expectVisibleTableCell(new RegExp(`${firstName}\\s+${lastName}`));
     });
   });
