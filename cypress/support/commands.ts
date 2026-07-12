@@ -21,7 +21,21 @@ declare global {
  * localStorage snapshot into every restored session otherwise.
  */
 const orgRoutePattern = /^\/[^/]+\/(dashboard|sales|leads|accounting)$/;
+const e2eLocalStorage = {
+  "autoflow-locale": "en",
+  dealer_website_onboarding_seen_v1: "1",
+  feature_spotlight_seen_v3: "1",
+  global_search_onboarding_seen_v1: "1",
+  messenger_onboarding_seen_v1: "1",
+};
+
 type PostPasswordState = "org" | "verification" | "onboarding";
+
+function seedE2ELocalStorage(win: Window): void {
+  Object.entries(e2eLocalStorage).forEach(([key, value]) => {
+    win.localStorage.setItem(key, value);
+  });
+}
 
 function verificationCodeFor(): string {
   const configuredCode = Cypress.env("E2E_LOGIN_VERIFICATION_CODE") as
@@ -153,7 +167,7 @@ Cypress.Commands.add("login", () => {
     () => {
       cy.visit("/sign-in", {
         onBeforeLoad(win) {
-          win.localStorage.setItem("autoflow-locale", "en");
+          seedE2ELocalStorage(win);
         },
       });
       cy.get("#identifier-field", { timeout: 15_000 })
@@ -183,10 +197,13 @@ Cypress.Commands.add("login", () => {
     },
     {
       validate() {
-        cy.window()
-          .its("localStorage")
-          .invoke("getItem", "autoflow-locale")
-          .should("eq", "en");
+        cy.window().then((win) => {
+          seedE2ELocalStorage(win);
+          expect(win.localStorage.getItem("autoflow-locale")).to.eq("en");
+          expect(win.localStorage.getItem("feature_spotlight_seen_v3")).to.eq(
+            "1",
+          );
+        });
       },
     },
   );
