@@ -40,6 +40,22 @@ jobs:
         run: |
           set -euo pipefail
 
+          retry_convex() {
+            local attempt delay
+            delay=2
+            for attempt in 1 2 3 4 5; do
+              if "$@"; then
+                return 0
+              fi
+              if [ "$attempt" = "5" ]; then
+                return 1
+              fi
+              echo "Convex command failed on attempt $attempt/5; retrying in ${delay}s..." >&2
+              sleep "$delay"
+              delay=$((delay * 2))
+            done
+          }
+
           CLERK_ISSUER_DOMAIN="$(node -e '
             const key = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY || "";
             const match = key.match(/^pk_(?:test|live)_(.+)$/);
@@ -57,9 +73,9 @@ jobs:
             --typecheck disable \
             --cmd 'echo "NEXT_PUBLIC_CONVEX_URL=$NEXT_PUBLIC_CONVEX_URL" >> "$GITHUB_ENV"' \
             --cmd-url-env-var-name NEXT_PUBLIC_CONVEX_URL || true
-          pnpm exec convex env set CLERK_JWT_ISSUER_DOMAIN "$CLERK_ISSUER_DOMAIN"
-          pnpm exec convex env set CLERK_DEV_JWT_ISSUER_DOMAIN "$CLERK_ISSUER_DOMAIN"
-          pnpm exec convex deploy \
+          retry_convex pnpm exec convex env set CLERK_JWT_ISSUER_DOMAIN "$CLERK_ISSUER_DOMAIN"
+          retry_convex pnpm exec convex env set CLERK_DEV_JWT_ISSUER_DOMAIN "$CLERK_ISSUER_DOMAIN"
+          retry_convex pnpm exec convex deploy \
             --typecheck enable \
             --cmd 'echo "NEXT_PUBLIC_CONVEX_URL=$NEXT_PUBLIC_CONVEX_URL" >> "$GITHUB_ENV"' \
             --cmd-url-env-var-name NEXT_PUBLIC_CONVEX_URL
