@@ -7,9 +7,9 @@ describe("customers", () => {
 
   it("can create a new customer and see it in the list", () => {
     createCustomer().then(({ firstName, lastName }) => {
-      cy.findAllByText(`${firstName} ${lastName}`).should(($matches) => {
-        expect($matches.filter(":visible").length).to.be.greaterThan(0);
-      });
+      cy.contains("td", new RegExp(`${firstName}\\s+${lastName}`)).should(
+        "be.visible",
+      );
     });
   });
 });
