@@ -97,6 +97,16 @@ async function recordPaidExpenseSideEffects(
     capitalizeToInventory = !!vehicle && vehicle.sourceType !== "SOURCED" && vehicle.status !== "SOLD";
   }
 
+  // Recorded once, permanently, at this exact moment — computeVehicleCapitalizedCost
+  // reads this instead of re-deriving it later, so this decision (and the net
+  // amount actually capitalized, excluding VAT) can never drift from what the
+  // GL actually posted. See the schema comment on expenses.accountingTreatment.
+  const netAmount = args.expense.amount - (args.expense.taxAmount ?? 0);
+  await ctx.db.patch(args.expense._id, {
+    accountingTreatment: capitalizeToInventory ? "CAPITALIZED_INVENTORY" : "PERIOD_EXPENSE",
+    capitalizedAmount: capitalizeToInventory ? netAmount : undefined,
+  });
+
   const currency = await getOrgCurrency(ctx, args.expense.orgId);
   await hookExpensePosted(ctx, {
     orgId: args.expense.orgId,

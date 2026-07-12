@@ -74,6 +74,7 @@ export const NOTIFICATION_TYPES = {
   "deposit.expired": { category: "finance", priority: "urgent", criticalDefault: true },
   "claim.updated": { category: "finance", priority: "normal", criticalDefault: false },
   "fixedAsset.changed": { category: "finance", priority: "normal", criticalDefault: false },
+  "vehicle.cost_corrected": { category: "finance", priority: "urgent", criticalDefault: true },
   "partnerEquity.changed": { category: "finance", priority: "normal", criticalDefault: false },
   "approval.requested": { category: "finance", priority: "urgent", criticalDefault: true },
   "approval.responded": { category: "finance", priority: "urgent", criticalDefault: true },

@@ -14,6 +14,8 @@ import {
   type VehicleLifecycleStatus,
 } from "./utils/vehicleStatusGuards";
 import { assertVehicleImagesAllowed } from "./utils/storageValidation";
+import { paymentMethodValidator, type PaymentMethod } from "./utils/paymentMethods";
+import { postVehicleAcquisitionIfOwned } from "./vehicles";
 
 type VehicleEditPayload = {
   vin?: string;
@@ -26,6 +28,7 @@ type VehicleEditPayload = {
   fuelType?: string;
   transmission?: string;
   purchasePrice?: number;
+  purchasePaymentMethod?: PaymentMethod;
   minimumProfit?: number;
   sellingPrice?: number;
   status?: string;
@@ -77,6 +80,7 @@ export const requestCreate = mutation({
       fuelType: v.optional(v.string()),
       transmission: v.optional(v.string()),
       purchasePrice: v.optional(v.number()),
+      purchasePaymentMethod: v.optional(paymentMethodValidator),
       minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),
       status: v.optional(v.string()),
@@ -111,6 +115,15 @@ export const requestCreate = mutation({
       if (payload.sourceCost === undefined || payload.sourceCost === null) {
         throw new ConvexError("Sourced vehicles require a supplier cost.");
       }
+    }
+
+    if (
+      payload.sourceType !== "SOURCED" &&
+      payload.purchasePrice != null &&
+      payload.purchasePrice > 0 &&
+      !payload.purchasePaymentMethod
+    ) {
+      throw new ConvexError("Payment method is required when a purchase price is entered.");
     }
 
     const requestId = await ctx.db.insert("vehicleEdits", {
@@ -283,12 +296,34 @@ export const resolve = mutation({
         const payload = normalizeVehicleEditPayload(request.payload);
         assertDirectVehicleCreateStatus(payload.status);
         await assertVehicleImagesAllowed(ctx, payload.imageIds);
-        await ctx.db.insert("vehicles", {
-          ...(payload as any),
+
+        const isSourced = payload.sourceType === "SOURCED";
+        // Mirrors vehicles.create: sourced vehicles carry their cost in
+        // sourceCost, not purchasePrice, but the vehicle record still stores
+        // purchasePrice so downstream reads stay consistent either way.
+        const effectivePurchasePrice = isSourced
+          ? (payload.sourceCost ?? payload.purchasePrice)
+          : payload.purchasePrice;
+        const { purchasePaymentMethod, ...vehicleFields } = payload;
+
+        const vehicleId = await ctx.db.insert("vehicles", {
+          ...(vehicleFields as any),
+          purchasePrice: effectivePurchasePrice,
           orgId: args.orgId,
           addedBy: request.requestedBy,
           updatedBy: user._id, // Manager who approved it
           updatedAt: Date.now(),
+        });
+
+        await postVehicleAcquisitionIfOwned(ctx, {
+          orgId: args.orgId,
+          vehicleId,
+          isSourced,
+          purchasePrice: effectivePurchasePrice,
+          purchasePaymentMethod,
+          vehicleLabel: `${payload.year ?? ""} ${payload.make ?? ""} ${payload.model ?? ""}`.trim(),
+          vin: payload.vin ?? vehicleId.toString(),
+          actorId: user._id,
         });
       } else if (request.type === "UPDATE" && request.vehicleId) {
         const previousVehicle = await ctx.db.get(request.vehicleId);

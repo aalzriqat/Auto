@@ -539,6 +539,7 @@ describe("inventory intelligence", () => {
       orgId,
       ...baseVehicle,
       purchasePrice: 8000,
+      purchasePaymentMethod: "CASH",
       sellingPrice: 15000,
     });
     await asUser.mutation(api.vehicles.upsertLandedCosts, {

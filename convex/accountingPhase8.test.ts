@@ -494,6 +494,7 @@ describe("Phase 8 — payment intent settlement", () => {
       title: "Payment-link receivable",
       amount: 1_000,
       dueDate: Date.now() + 86_400_000,
+      creditSystemKey: "MISCELLANEOUS_INCOME",
     });
 
     const intentId = await asUser.mutation(api.paymentIntents.create, {
@@ -543,6 +544,7 @@ describe("Phase 8 — payment intent settlement", () => {
       title: "Overpay blocked",
       amount: 300,
       dueDate: Date.now() + 86_400_000,
+      creditSystemKey: "MISCELLANEOUS_INCOME",
     });
 
     await expect(

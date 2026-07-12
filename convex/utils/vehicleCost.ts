@@ -40,9 +40,14 @@ export async function computeVehicleCapitalizedCost(
     .query("expenses")
     .withIndex("by_org_vehicle", (q) => q.eq("orgId", vehicle.orgId).eq("vehicleId", vehicle._id))
     .collect();
+  // Reads the decision recordPaidExpenseSideEffects recorded at posting time
+  // (accountingTreatment/capitalizedAmount), not a fresh category/status
+  // inference — a post-sale repair is permanently PERIOD_EXPENSE even if this
+  // runs long after the sale, and capitalizedAmount already excludes VAT so it
+  // matches exactly what was debited to Vehicle Inventory in the GL.
   const capitalizedExpenses = expenses
-    .filter((e) => !e.isDeleted && e.status !== "PENDING" && CAPITALIZABLE_EXPENSE_CATEGORIES.has(e.category))
-    .reduce((sum, e) => sum + e.amount, 0);
+    .filter((e) => !e.isDeleted && e.accountingTreatment === "CAPITALIZED_INVENTORY")
+    .reduce((sum, e) => sum + (e.capitalizedAmount ?? 0), 0);
 
   return base + landed + capitalizedExpenses;
 }

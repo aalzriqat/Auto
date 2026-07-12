@@ -12,7 +12,7 @@
 import { Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 import { postAccountingEvent, PostCommand } from "./postingEngine";
-import { EventType } from "./postingRules";
+import { EventType, ReceivableCreditKey } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate } from "../accountingPeriods";
 import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount } from "../chartOfAccounts";
@@ -499,6 +499,64 @@ export async function hookVehicleLandedCostCapitalized(
   });
 }
 
+export async function hookVehicleAcquisitionCostCorrected(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    correctionToken: string;
+    deltaMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "VEHICLE_ACQUISITION_COST_CORRECTED",
+    sourceType: "vehicleCostCorrections",
+    sourceId: `${args.vehicleId}_${args.correctionToken}`,
+    idempotencyKey: `vehicle_cost_corrected_${args.vehicleId}_${args.correctionToken}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      vehicleId: args.vehicleId.toString(),
+      deltaMinor: args.deltaMinor,
+      currency: args.currency,
+    },
+  });
+}
+
+export async function hookVehiclePrepExpenseReclassified(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    expenseId: Id<"expenses">;
+    vehicleId: Id<"vehicles">;
+    amountMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "VEHICLE_PREP_EXPENSE_RECLASSIFIED",
+    sourceType: "expenses",
+    sourceId: args.expenseId.toString(),
+    idempotencyKey: `vehicle_prep_expense_reclassified_${args.expenseId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      vehicleId: args.vehicleId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+    },
+  });
+}
+
 // ─── Manual receivables ────────────────────────────────────────────────────────
 
 export async function hookReceivableCreated(
@@ -511,9 +569,10 @@ export async function hookReceivableCreated(
     currency: string;
     actorId: Id<"users">;
     occurredAt: number;
+    creditSystemKey: ReceivableCreditKey;
   }
 ) {
-  if (await isChartInitialized(ctx, args.orgId)) {
+  if (args.creditSystemKey === "MISCELLANEOUS_INCOME" && (await isChartInitialized(ctx, args.orgId))) {
     await ensureMiscIncomeAccount(ctx, args.orgId, args.actorId);
   }
   await postDomainEvent(ctx, {
@@ -530,6 +589,7 @@ export async function hookReceivableCreated(
       amountMinor: args.amountMinor,
       currency: args.currency,
       customerId: args.customerId.toString(),
+      creditSystemKey: args.creditSystemKey,
     },
   });
 }

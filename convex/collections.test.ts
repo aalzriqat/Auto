@@ -63,6 +63,7 @@ describe("Collections", () => {
       title: "Installment 1",
       amount: 1000,
       dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      creditSystemKey: "MISCELLANEOUS_INCOME",
     });
 
     await asFinance.mutation(api.collections.recordPayment, {
@@ -121,6 +122,7 @@ describe("Collections", () => {
       title: "Post-dated cheque",
       amount: 500,
       dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      creditSystemKey: "MISCELLANEOUS_INCOME",
     });
     const chequeId = await asFinance.mutation(api.collections.registerCheque, {
       orgId,
@@ -201,6 +203,7 @@ describe("Collections", () => {
       title: "Cheque with invalid return fee",
       amount: 500,
       dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      creditSystemKey: "MISCELLANEOUS_INCOME",
     });
     const chequeId = await asFinance.mutation(api.collections.registerCheque, {
       orgId,
@@ -318,6 +321,7 @@ describe("Collections", () => {
       title: "Cancelled installment",
       amount: 600,
       dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      creditSystemKey: "MISCELLANEOUS_INCOME",
     });
     const requestId = await asFinance.mutation(api.collections.requestApproval, {
       orgId,
@@ -356,6 +360,7 @@ describe("Collections", () => {
       title: "Bank transfer installment",
       amount: 500,
       dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      creditSystemKey: "MISCELLANEOUS_INCOME",
     });
     await asFinance.mutation(api.collections.recordPayment, {
       orgId,
@@ -417,6 +422,7 @@ describe("Collections", () => {
       title: "Paid installment",
       amount: 1000,
       dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      creditSystemKey: "MISCELLANEOUS_INCOME",
     });
     await asFinance.mutation(api.collections.recordPayment, {
       orgId,
@@ -452,6 +458,7 @@ describe("Collections", () => {
       title: "Card payment installment",
       amount: 300,
       dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      creditSystemKey: "MISCELLANEOUS_INCOME",
     });
     await asFinance.mutation(api.collections.recordPayment, {
       orgId,
@@ -526,6 +533,7 @@ describe("Collections", () => {
       title: "Cheque refund installment",
       amount: 600,
       dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      creditSystemKey: "MISCELLANEOUS_INCOME",
     });
     await asFinance.mutation(api.collections.recordPayment, {
       orgId,
@@ -580,6 +588,7 @@ describe("Collections", () => {
       title: "Cheque-linked installment",
       amount: 1000,
       dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      creditSystemKey: "MISCELLANEOUS_INCOME",
     });
     await asFinance.mutation(api.collections.registerCheque, {
       orgId,
@@ -618,6 +627,7 @@ describe("Collections", () => {
       title: "Late installment",
       amount: 400,
       dueDate: Date.now() - 24 * 60 * 60 * 1000,
+      creditSystemKey: "MISCELLANEOUS_INCOME",
     });
     const requestId = await asFinance.mutation(api.collections.requestApproval, {
       orgId,

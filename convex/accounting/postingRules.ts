@@ -34,6 +34,8 @@ export type EventType =
   | "VEHICLE_ACQUIRED"
   | "VEHICLE_LANDED_COST_CAPITALIZED"
   | "VEHICLE_INVENTORY_OPENING_BALANCE"
+  | "VEHICLE_ACQUISITION_COST_CORRECTED"
+  | "VEHICLE_PREP_EXPENSE_RECLASSIFIED"
   | "RECEIVABLE_CREATED"
   | "JOURNAL_REVERSAL";
 
@@ -48,7 +50,8 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "CAPITAL_CONTRIBUTED", "PARTNER_DREW", "PROFIT_DISTRIBUTED",
   "CLAIM_SETTLED", "CLAIM_WRITTEN_OFF",
   "CASH_DRAWER_DEPOSITED",
-  "VEHICLE_ACQUIRED", "VEHICLE_LANDED_COST_CAPITALIZED", "VEHICLE_INVENTORY_OPENING_BALANCE", "RECEIVABLE_CREATED",
+  "VEHICLE_ACQUIRED", "VEHICLE_LANDED_COST_CAPITALIZED", "VEHICLE_INVENTORY_OPENING_BALANCE",
+  "VEHICLE_ACQUISITION_COST_CORRECTED", "VEHICLE_PREP_EXPENSE_RECLASSIFIED", "RECEIVABLE_CREATED",
   // JOURNAL_REVERSAL is intentionally excluded: it is written directly by
   // reverseAccountingEvent() in reversals.ts and never goes through postAccountingEvent().
 ]);
@@ -558,9 +561,15 @@ export interface VehicleAcquiredPayload {
   paymentMethod?: string;
 }
 
-/** Vehicle purchase: debit Vehicle Inventory, credit whatever paid for it. Only ever fired for owned (non-sourced) stock. */
+/**
+ * Vehicle purchase: debit Vehicle Inventory, credit whatever paid for it. Only
+ * ever fired for owned (non-sourced) stock. Outbound payment — same reasoning
+ * as ruleAssetCapitalized/rulePartnerDrew: a cheque the dealership writes to
+ * buy the vehicle clears from the bank, it doesn't sit in CHEQUES_IN_HAND
+ * (which holds cheques received *from* customers).
+ */
 export function ruleVehicleAcquired(p: VehicleAcquiredPayload): RuleResult {
-  const cashKey = cashAccountKey(p.paymentMethod);
+  const cashKey = p.paymentMethod === "CHEQUE" ? SYSTEM_KEYS.BANK_ACCOUNT : cashAccountKey(p.paymentMethod);
   return {
     lines: [
       line(SYSTEM_KEYS.VEHICLE_INVENTORY, p.costMinor, 0, "Vehicle acquired", { vehicleId: p.vehicleId }),
@@ -586,7 +595,8 @@ export interface VehicleLandedCostCapitalizedPayload {
  * reverses a previously capitalized amount (e.g. an item was removed/corrected).
  */
 export function ruleVehicleLandedCostCapitalized(p: VehicleLandedCostCapitalizedPayload): RuleResult {
-  const cashKey = cashAccountKey(p.paymentMethod);
+  // Outbound payment — see ruleVehicleAcquired for why CHEQUE routes to the bank.
+  const cashKey = p.paymentMethod === "CHEQUE" ? SYSTEM_KEYS.BANK_ACCOUNT : cashAccountKey(p.paymentMethod);
   const amountMinor = Math.abs(p.deltaMinor);
   const lines: LineSpec[] = p.deltaMinor > 0
     ? [
@@ -625,28 +635,104 @@ export function ruleVehicleInventoryOpeningBalance(p: VehicleInventoryOpeningBal
   };
 }
 
+export interface VehicleAcquisitionCostCorrectedPayload {
+  vehicleId: string;
+  /** Signed change: new cost minus previous cost. */
+  deltaMinor: number;
+  currency: string;
+}
+
+/**
+ * Corrects a vehicle's acquisition cost after VEHICLE_ACQUIRED has already
+ * posted (vehicles.correctAcquisitionCost) — e.g. the purchase price was
+ * mis-entered. Since the correction doesn't necessarily correspond to any new
+ * cash actually moving today, it credits/debits Retained Earnings rather than
+ * cash/bank, the same reasoning as ruleVehicleInventoryOpeningBalance. Also
+ * updates the vehicle's own purchasePrice (done by the caller), so
+ * computeVehicleCapitalizedCost, commission, and reports stop reading the
+ * stale figure instead of only the GL being corrected.
+ */
+export function ruleVehicleAcquisitionCostCorrected(p: VehicleAcquisitionCostCorrectedPayload): RuleResult {
+  const amountMinor = Math.abs(p.deltaMinor);
+  const lines: LineSpec[] = p.deltaMinor > 0
+    ? [
+        line(SYSTEM_KEYS.VEHICLE_INVENTORY, amountMinor, 0, "Acquisition cost corrected upward", { vehicleId: p.vehicleId }),
+        line(SYSTEM_KEYS.RETAINED_EARNINGS, 0, amountMinor, "Acquisition cost correction", { vehicleId: p.vehicleId }),
+      ]
+    : [
+        line(SYSTEM_KEYS.RETAINED_EARNINGS, amountMinor, 0, "Acquisition cost correction", { vehicleId: p.vehicleId }),
+        line(SYSTEM_KEYS.VEHICLE_INVENTORY, 0, amountMinor, "Acquisition cost corrected downward", { vehicleId: p.vehicleId }),
+      ];
+  return { lines, memo: "Vehicle acquisition cost corrected", category: "ADJUSTMENT" };
+}
+
+export interface VehiclePrepExpenseReclassifiedPayload {
+  vehicleId: string;
+  amountMinor: number;
+  currency: string;
+}
+
+/**
+ * Migration-only reclassification: a prep expense (repair/maintenance/etc.)
+ * that was posted to GENERAL_EXPENSE before inventory capitalization shipped,
+ * for a vehicle still in stock. Moves the net amount out of the P&L and into
+ * Vehicle Inventory — unlike ruleVehicleInventoryOpeningBalance this credits
+ * General Expense (reversing the original mis-posting), not Retained
+ * Earnings, since the amount already has a real GL home to come out of. Only
+ * safe to run for expenses in a still-open accounting period — see
+ * accountingMigration.ts's backfillVehicleInventoryOpeningBalances.
+ */
+export function ruleVehiclePrepExpenseReclassified(p: VehiclePrepExpenseReclassifiedPayload): RuleResult {
+  return {
+    lines: [
+      line(SYSTEM_KEYS.VEHICLE_INVENTORY, p.amountMinor, 0, "Prep expense reclassified to inventory", { vehicleId: p.vehicleId }),
+      line(SYSTEM_KEYS.GENERAL_EXPENSE, 0, p.amountMinor, "Reclassified out of general expense", { vehicleId: p.vehicleId }),
+    ],
+    memo: "Vehicle prep expense reclassified (migration backfill)",
+    category: "ADJUSTMENT",
+  };
+}
+
 // ─── Manual receivables ────────────────────────────────────────────────────────
+
+/** The finite set of credit-side accounts a manual receivable is allowed to originate against — see ruleReceivableCreated. */
+export type ReceivableCreditKey = "MISCELLANEOUS_INCOME" | "CUSTOMER_DEPOSITS_LIABILITY" | "GENERAL_EXPENSE";
 
 export interface ReceivableCreatedPayload {
   receivableId: string;
   amountMinor: number;
   currency: string;
   customerId: string;
+  /**
+   * Which account the receivable originates against — never silently assumed.
+   * collections.ts derives CUSTOMER_DEPOSITS_LIABILITY automatically for the
+   * two sourceTypes that are unambiguously "not yet earned" (CUSTOMER_DEPOSIT,
+   * RESERVATION_PAYMENT); every other sourceType requires the caller to pick
+   * one explicitly, since e.g. "internal installment" or "bank financed
+   * balance" could equally be real income, a reimbursed cost, or a liability.
+   */
+  creditSystemKey: ReceivableCreditKey;
 }
 
 /**
  * Origin entry for a manually created receivable (collections.createReceivable /
  * createInstallmentPlan) that isn't tied to a vehicle sale — those already get
- * their AR from SALE_COMPLETED. Credits Other Income by default; an accountant
- * can reclassify the credit side into a more specific account via journal
- * entry once the receivable's true nature (damage claim, financing charge,
- * etc.) is known.
+ * their AR from SALE_COMPLETED. The credit side is whatever the caller
+ * determined this receivable actually represents (see creditSystemKey) —
+ * never a blind default, since a receivable can just as easily be a customer
+ * deposit liability or a cost reimbursement as genuine other income.
  */
 export function ruleReceivableCreated(p: ReceivableCreatedPayload): RuleResult {
+  const creditLabel =
+    p.creditSystemKey === "CUSTOMER_DEPOSITS_LIABILITY"
+      ? "Customer deposit liability"
+      : p.creditSystemKey === "GENERAL_EXPENSE"
+        ? "Cost reimbursement (reduces expense)"
+        : "Other income";
   return {
     lines: [
       line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, p.amountMinor, 0, "Manual receivable created", { customerId: p.customerId }),
-      line(SYSTEM_KEYS.MISCELLANEOUS_INCOME, 0, p.amountMinor, "Other income (reclassify if needed)", { customerId: p.customerId }),
+      line(SYSTEM_KEYS[p.creditSystemKey], 0, p.amountMinor, creditLabel, { customerId: p.customerId }),
     ],
     memo: "Manual receivable created",
     category: "SYSTEM",
@@ -907,6 +993,8 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "VEHICLE_ACQUIRED": return ruleVehicleAcquired(payload as unknown as VehicleAcquiredPayload);
     case "VEHICLE_LANDED_COST_CAPITALIZED": return ruleVehicleLandedCostCapitalized(payload as unknown as VehicleLandedCostCapitalizedPayload);
     case "VEHICLE_INVENTORY_OPENING_BALANCE": return ruleVehicleInventoryOpeningBalance(payload as unknown as VehicleInventoryOpeningBalancePayload);
+    case "VEHICLE_ACQUISITION_COST_CORRECTED": return ruleVehicleAcquisitionCostCorrected(payload as unknown as VehicleAcquisitionCostCorrectedPayload);
+    case "VEHICLE_PREP_EXPENSE_RECLASSIFIED": return ruleVehiclePrepExpenseReclassified(payload as unknown as VehiclePrepExpenseReclassifiedPayload);
     case "RECEIVABLE_CREATED": return ruleReceivableCreated(payload as unknown as ReceivableCreatedPayload);
     default:
       throw new Error(`No posting rule defined for event type: ${eventType}`);

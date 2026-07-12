@@ -15,6 +15,12 @@ export const vehicleSchema = z.object({
   fuelType: z.string().min(1, "Fuel Type is required"),
   transmission: z.string().min(1, "Transmission is required"),
   purchasePrice: z.coerce.number().min(0).optional(),
+  // Drives the GL credit side (Cash/Bank/Cheque/Card) for the acquisition
+  // posting. Only meaningful on new-vehicle creation (the update mutation
+  // doesn't accept it, since purchasePrice locks once posted) — VehicleDialog
+  // enforces it's set whenever purchasePrice is entered on that path, rather
+  // than baking a create-only rule into this shared create/edit schema.
+  purchasePaymentMethod: z.enum(["CASH", "BANK_TRANSFER", "CHEQUE", "CARD"]).optional(),
   minimumProfit: z.coerce.number().min(0).optional(),
   sellingPrice: z.coerce.number().min(0),
   status: z.enum(["AVAILABLE", "RESERVED", "SOLD", "IN_INSPECTION", "IN_REPAIR", "ARCHIVED", "SOURCING"]).optional(),

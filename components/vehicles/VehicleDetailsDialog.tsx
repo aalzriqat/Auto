@@ -56,6 +56,7 @@ import { VehicleMarketingTab } from "@/components/vehicles/VehicleMarketingTab";
 import { EmptyState } from "@/components/ui/empty-state";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
+import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 
 interface VehicleDetailsDialogProps {
   vehicle: Doc<"vehicles"> | null;
@@ -112,6 +113,7 @@ export function VehicleDetailsDialog({
   const releaseReservation = useMutation(api.vehicles.releaseReservation);
   const [releasingDepositId, setReleasingDepositId] = useState<string | null>(null);
   const [landedCostItems, setLandedCostItems] = useState<{ label: string; amount: number }[]>([]);
+  const [landedCostPaymentMethod, setLandedCostPaymentMethod] = useState<PaymentMethod>("CASH");
   const [savingLandedCosts, setSavingLandedCosts] = useState(false);
   const [reservationCustomerId, setReservationCustomerId] = useState("");
   const [reservationDeposit, setReservationDeposit] = useState("");
@@ -152,6 +154,7 @@ export function VehicleDetailsDialog({
         orgId: activeOrgId,
         vehicleId: vehicle._id,
         items: landedCostItems,
+        paymentMethod: landedCostPaymentMethod,
       });
       toast.success(t("LandedCostSaved" as any));
     } catch (error: any) {
@@ -792,7 +795,15 @@ export function VehicleDetailsDialog({
                     <span className="font-bold">{formatMoney(landedCostItems.reduce((sum, item) => sum + item.amount, 0))}</span>
                   </div>
                   {canEditVehicles && (
-                    <div className="flex justify-end">
+                    <div className="flex items-end justify-end gap-2">
+                      <div className="space-y-1 w-48">
+                        <Label>{t("PaymentMethodLabel" as any)}</Label>
+                        <PaymentMethodSelect
+                          t={t as any}
+                          value={landedCostPaymentMethod}
+                          onValueChange={setLandedCostPaymentMethod}
+                        />
+                      </div>
                       <Button onClick={handleSaveLandedCosts} disabled={savingLandedCosts}>
                         <Save className="h-4 w-4 me-2" />
                         {t("SaveLandedCost" as any)}

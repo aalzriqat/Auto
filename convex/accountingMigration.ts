@@ -13,12 +13,13 @@ import { QueryCtx, MutationCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { postAccountingEvent } from "./accounting/postingEngine";
-import { getOrgCurrency } from "./accounting/workflowHooks";
+import { getOrgCurrency, hookVehiclePrepExpenseReclassified } from "./accounting/workflowHooks";
 import { ensurePartnerEquityAccounts, ensureClaimAccounts } from "./chartOfAccounts";
 import { toMinorUnits } from "./utils/money";
 import { requireFeature } from "./subscriptions";
 import { auditLog } from "./financialAudit";
-import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
+import { computeVehicleCapitalizedCost, CAPITALIZABLE_EXPENSE_CATEGORIES } from "./utils/vehicleCost";
+import { getOpenPeriodForDate } from "./accountingPeriods";
 
 // ─── Snapshot / classification helpers ───────────────────────────────────────
 
@@ -467,6 +468,24 @@ export const backfillClaimMinorUnits = mutation({
 // Deliberately scoped to vehicles NOT yet sold: an already-sold vehicle's
 // historical COGS/revenue effect is a prior-period restatement question for
 // an accountant to resolve via manual journal, not something to guess at here.
+//
+// The opening-balance amount is NOT simply computeVehicleCapitalizedCost(),
+// because some of a vehicle's capitalizable prep expenses (repair/maintenance/
+// detailing/transport) may have already been posted historically to
+// GENERAL_EXPENSE, before capitalization existed. Blindly adding the full
+// cost to inventory/retained earnings would leave that amount double-counted:
+// once in the historical P&L, once in this backfill. Each capitalizable
+// expense is classified individually:
+//   - already flagged CAPITALIZED_INVENTORY (posted under the current regime)
+//     → already correctly in inventory via its own entry; excluded entirely.
+//   - flagged PERIOD_EXPENSE, or non-capitalizable, or PENDING → not a gap.
+//   - never classified (predates this feature) and never posted to the GL at
+//     all → safe to fold into the same opening-balance entry as the base cost.
+//   - never classified but already posted to GENERAL_EXPENSE historically →
+//     reclassified via its own Dr Inventory / Cr General Expense entry
+//     (VEHICLE_PREP_EXPENSE_RECLASSIFIED) if its accounting date falls in a
+//     still-open period; otherwise left untouched and flagged for an
+//     accountant to handle as a prior-period adjustment.
 
 export const backfillVehicleInventoryOpeningBalances = mutation({
   args: {
@@ -499,7 +518,14 @@ export const backfillVehicleInventoryOpeningBalances = mutation({
         .take(limit * 10)
     ).filter((v) => !v.isDeleted && v.status !== "SOLD" && v.sourceType !== "SOURCED");
 
-    const results: Array<{ vehicleId: string; action: string; amountMinor?: number; reason?: string }> = [];
+    const results: Array<{
+      vehicleId: string;
+      action: "POSTED" | "WOULD_POST" | "NEEDS_REVIEW" | "SKIP" | "FAILED";
+      amountMinor?: number;
+      reclassifiedExpenseIds?: string[];
+      manualReviewExpenseIds?: string[];
+      reason?: string;
+    }> = [];
 
     for (const vehicle of vehicles) {
       if (results.filter((r) => r.action !== "SKIP").length >= limit) break;
@@ -518,34 +544,140 @@ export const backfillVehicleInventoryOpeningBalances = mutation({
         continue;
       }
 
-      const cost = await computeVehicleCapitalizedCost(ctx, vehicle);
-      if (cost <= 0) {
+      let uncapitalizedBase = (vehicle.purchasePrice ?? 0) + (vehicle.landedCostTotal ?? 0);
+      const reclassifications: Array<{ expenseId: Id<"expenses">; date: number; amountMinor: number; netAmount: number }> = [];
+      // Never touched the GL at all — folded straight into the opening-balance
+      // amount below (not a separate GL entry), but still needs its own
+      // accountingTreatment/capitalizedAmount patched once posted, same as the
+      // reclassified ones, so computeVehicleCapitalizedCost counts it going forward.
+      const baseFoldedExpenses: Array<{ expenseId: Id<"expenses">; netAmount: number }> = [];
+      const manualReviewExpenseIds: string[] = [];
+
+      const expenses = await ctx.db
+        .query("expenses")
+        .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", vehicle._id))
+        .collect();
+
+      for (const expense of expenses) {
+        if (expense.isDeleted) continue;
+        if (expense.status === "PENDING") continue;
+        if (expense.accountingTreatment) continue; // already classified — either already in inventory or correctly expensed
+        if (!CAPITALIZABLE_EXPENSE_CATEGORIES.has(expense.category)) continue;
+
+        const netAmount = expense.amount - (expense.taxAmount ?? 0);
+
+        const postedEvent = await ctx.db
+          .query("accountingEvents")
+          .withIndex("by_org_source", (q) =>
+            q.eq("orgId", args.orgId).eq("sourceType", "expenses").eq("sourceId", expense._id.toString())
+          )
+          .filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED"))
+          .filter((q) => q.eq(q.field("status"), "POSTED"))
+          .first();
+        const pendingPost = postedEvent
+          ? null
+          : await ctx.db
+              .query("pendingAccountingEvents")
+              .withIndex("by_org_idempotency", (q) => q.eq("orgId", args.orgId).eq("idempotencyKey", `expense_posted_${expense._id}`))
+              .first();
+
+        if (!postedEvent && !pendingPost) {
+          // Never touched the GL at all — no conflicting historical entry to
+          // double-count against.
+          uncapitalizedBase += netAmount;
+          baseFoldedExpenses.push({ expenseId: expense._id, netAmount });
+          continue;
+        }
+        if (!postedEvent && pendingPost) {
+          // Still queued in the outbox with a pre-capitalization payload — its
+          // eventual posting is unpredictable from here, so don't guess.
+          manualReviewExpenseIds.push(expense._id.toString());
+          continue;
+        }
+
+        const period = await getOpenPeriodForDate(ctx, args.orgId, expense.date);
+        if (!period) {
+          manualReviewExpenseIds.push(expense._id.toString());
+          continue;
+        }
+        reclassifications.push({
+          expenseId: expense._id,
+          date: expense.date,
+          amountMinor: toMinorUnits(netAmount, currency),
+          netAmount,
+        });
+      }
+
+      const baseAmountMinor = toMinorUnits(uncapitalizedBase, currency);
+      const hasPostableWork = baseAmountMinor > 0 || reclassifications.length > 0;
+      if (!hasPostableWork && manualReviewExpenseIds.length === 0) {
         results.push({ vehicleId: vehicle._id.toString(), action: "SKIP", reason: "zero_cost" });
         continue;
       }
-      const amountMinor = toMinorUnits(cost, currency);
+      if (!hasPostableWork) {
+        results.push({ vehicleId: vehicle._id.toString(), action: "NEEDS_REVIEW", manualReviewExpenseIds });
+        continue;
+      }
 
       if (dryRun) {
-        results.push({ vehicleId: vehicle._id.toString(), action: "WOULD_POST", amountMinor });
+        results.push({
+          vehicleId: vehicle._id.toString(),
+          action: "WOULD_POST",
+          amountMinor: baseAmountMinor,
+          reclassifiedExpenseIds: reclassifications.map((r) => r.expenseId.toString()),
+          manualReviewExpenseIds,
+        });
         continue;
       }
 
       try {
         const now = Date.now();
-        await postAccountingEvent(ctx, {
-          orgId: args.orgId,
-          eventType: "VEHICLE_INVENTORY_OPENING_BALANCE",
-          sourceType: "vehicles",
-          sourceId: vehicle._id.toString(),
-          eventVersion: 1,
-          accountingDate: now,
-          occurredAt: now,
-          currency,
-          idempotencyKey: `vehicle_inventory_opening_${vehicle._id}`,
-          payload: { vehicleId: vehicle._id.toString(), amountMinor, currency },
-          actorId: user._id,
+        if (baseAmountMinor > 0) {
+          await postAccountingEvent(ctx, {
+            orgId: args.orgId,
+            eventType: "VEHICLE_INVENTORY_OPENING_BALANCE",
+            sourceType: "vehicles",
+            sourceId: vehicle._id.toString(),
+            eventVersion: 1,
+            accountingDate: now,
+            occurredAt: now,
+            currency,
+            idempotencyKey: `vehicle_inventory_opening_${vehicle._id}`,
+            payload: { vehicleId: vehicle._id.toString(), amountMinor: baseAmountMinor, currency },
+            actorId: user._id,
+          });
+          for (const be of baseFoldedExpenses) {
+            await ctx.db.patch(be.expenseId, {
+              accountingTreatment: "CAPITALIZED_INVENTORY",
+              capitalizedAmount: be.netAmount,
+            });
+          }
+        }
+        for (const r of reclassifications) {
+          await hookVehiclePrepExpenseReclassified(ctx, {
+            orgId: args.orgId,
+            expenseId: r.expenseId,
+            vehicleId: vehicle._id,
+            amountMinor: r.amountMinor,
+            currency,
+            actorId: user._id,
+            occurredAt: r.date,
+          });
+          // Mark it capitalized going forward so computeVehicleCapitalizedCost
+          // (COGS at sale, commission, both profit reports) stays in sync with
+          // what's now actually sitting in the Vehicle Inventory GL account.
+          await ctx.db.patch(r.expenseId, {
+            accountingTreatment: "CAPITALIZED_INVENTORY",
+            capitalizedAmount: r.netAmount,
+          });
+        }
+        results.push({
+          vehicleId: vehicle._id.toString(),
+          action: "POSTED",
+          amountMinor: baseAmountMinor,
+          reclassifiedExpenseIds: reclassifications.map((r) => r.expenseId.toString()),
+          manualReviewExpenseIds,
         });
-        results.push({ vehicleId: vehicle._id.toString(), action: "POSTED", amountMinor });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         results.push({ vehicleId: vehicle._id.toString(), action: "FAILED", reason: message });
@@ -554,10 +686,11 @@ export const backfillVehicleInventoryOpeningBalances = mutation({
 
     const posted = results.filter((r) => r.action === "POSTED").length;
     const wouldPost = results.filter((r) => r.action === "WOULD_POST").length;
+    const needsReview = results.filter((r) => r.action === "NEEDS_REVIEW").length;
     const skipped = results.filter((r) => r.action === "SKIP").length;
     const failed = results.filter((r) => r.action === "FAILED").length;
 
-    return { dryRun, posted, wouldPost, skipped, failed, results };
+    return { dryRun, posted, wouldPost, needsReview, skipped, failed, results };
   },
 });
 

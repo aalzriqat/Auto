@@ -245,6 +245,7 @@ describe("Phase 0 financial safety controls", () => {
       title: "Installment",
       amount: 1000,
       dueDate: Date.now() + 86_400_000,
+      creditSystemKey: "MISCELLANEOUS_INCOME",
     });
 
     const firstPaymentId = await asUser.mutation(api.collections.recordPayment, {
@@ -284,6 +285,7 @@ describe("Phase 0 financial safety controls", () => {
       title: "Cheque receivable",
       amount: 800,
       dueDate: Date.now() + 86_400_000,
+      creditSystemKey: "MISCELLANEOUS_INCOME",
     });
     const chequeId = await asUser.mutation(api.collections.registerCheque, {
       orgId,
@@ -486,6 +488,7 @@ describe("Phase 0 financial safety controls", () => {
       title: "Cash payment",
       amount: 250,
       dueDate: Date.now() + 86_400_000,
+      creditSystemKey: "MISCELLANEOUS_INCOME",
     });
     await asUser.mutation(api.collections.recordPayment, {
       orgId,

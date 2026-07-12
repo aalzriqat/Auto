@@ -36,6 +36,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 
 import { vehicleSchema, VehicleFormValues, VehicleDialogProps } from "./vehicle.schema";
 import { CustomFieldsSection, useSaveCustomFieldValues } from "@/components/custom-fields/CustomFieldsSection";
@@ -73,6 +74,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
       fuelType: "Gasoline",
       transmission: "Automatic",
       purchasePrice: 0,
+      purchasePaymentMethod: undefined,
       minimumProfit: 0,
       sellingPrice: 0,
       status: "AVAILABLE",
@@ -128,6 +130,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
         fuelType: "Gasoline",
         transmission: "Automatic",
         purchasePrice: 0,
+        purchasePaymentMethod: undefined,
         minimumProfit: 0,
         sellingPrice: 0,
         status: "AVAILABLE",
@@ -266,9 +269,24 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
 
   const onSubmit = async (values: VehicleFormValues) => {
     if (!activeOrgId) return;
+
+    // Only relevant when creating a new vehicle — update()/requestUpdate()
+    // don't accept this field at all (purchasePrice locks once GL-posted).
+    if (
+      !vehicle &&
+      values.sourceType !== "SOURCED" &&
+      (values.purchasePrice ?? 0) > 0 &&
+      !values.purchasePaymentMethod
+    ) {
+      form.setError("purchasePaymentMethod", {
+        message: t("PurchasePaymentMethodRequired" as any) || "Payment method is required when a purchase price is entered",
+      });
+      return;
+    }
+
     setIsSubmitting(true);
     try {
-      const { imageIds: _formImageIds, inspectionStatus, ...restValues } = values;
+      const { imageIds: _formImageIds, inspectionStatus, purchasePaymentMethod, ...restValues } = values;
       // PARTNER_VERIFIED is display-only here (locked Select) — none of the
       // backend mutations accept it, so never resubmit it as-is.
       const trustPassportFields =
@@ -302,6 +320,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
           const newId = await createVehicle({
             orgId: activeOrgId,
             ...restValues,
+            purchasePaymentMethod,
             ...trustPassportFields,
             imageIds: imageIds as Id<"_storage">[],
           });
@@ -312,6 +331,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
             orgId: activeOrgId,
             payload: {
               ...restValues,
+              purchasePaymentMethod,
               ...trustPassportFields,
               imageIds: imageIds as Id<"_storage">[],
             },
@@ -604,6 +624,28 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                       <FormLabel>{t("PurchasePrice" as any) || "Purchase Price"} (JOD)</FormLabel>
                       <FormControl>
                         <Input type="number" {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              )}
+              {/* Only meaningful at creation — drives the one-time acquisition GL
+                  posting; editing an existing vehicle's purchasePrice (before it's
+                  posted) doesn't repost anything, so there's nothing for this to drive. */}
+              {!isSourced && !vehicle && (
+                <FormField
+                  control={form.control}
+                  name="purchasePaymentMethod"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("PaymentMethodLabel" as any)}</FormLabel>
+                      <FormControl>
+                        <PaymentMethodSelect
+                          t={t as any}
+                          value={field.value as PaymentMethod}
+                          onValueChange={field.onChange}
+                        />
                       </FormControl>
                       <FormMessage />
                     </FormItem>

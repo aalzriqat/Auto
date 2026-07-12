@@ -16,6 +16,7 @@ import { getActorName, notifyManagers, notifyUser } from "./utils/notifications"
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
 import { hookCollectionPayment, hookCollectionRefund, hookExpensePosted, hookReceivableCreated, getOrgCurrency } from "./accounting/workflowHooks";
+import { ReceivableCreditKey } from "./accounting/postingRules";
 import { reverseAccountingEvent } from "./accounting/reversals";
 import { getOpenPeriodForDate } from "./accountingPeriods";
 import { enqueuePendingReversal, cancelPendingPostByKey } from "./accountingOutbox";
@@ -58,6 +59,34 @@ const paymentMethodValidator = v.union(
   v.literal("REFUND"),
   v.literal("OTHER")
 );
+
+const receivableCreditKeyValidator = v.union(
+  v.literal("MISCELLANEOUS_INCOME"),
+  v.literal("CUSTOMER_DEPOSITS_LIABILITY"),
+  v.literal("GENERAL_EXPENSE")
+);
+
+/**
+ * A manual receivable isn't automatically "other income" — it could just as
+ * easily be an unearned customer deposit/reservation hold (a liability, not
+ * revenue) or a reimbursement that offsets a cost already expensed. The two
+ * sourceTypes that are unambiguous get derived automatically; everything else
+ * (INTERNAL_INSTALLMENT, BANK_FINANCED_BALANCE, BANK_TRANSFER, PAYMENT_LINK,
+ * CHEQUE, OTHER) requires the caller to pick explicitly rather than silently
+ * defaulting to income.
+ */
+function resolveReceivableCreditKey(
+  sourceType: Doc<"receivables">["sourceType"],
+  explicit: ReceivableCreditKey | undefined
+): ReceivableCreditKey {
+  if (explicit) return explicit;
+  if (sourceType === "CUSTOMER_DEPOSIT" || sourceType === "RESERVATION_PAYMENT") {
+    return "CUSTOMER_DEPOSITS_LIABILITY";
+  }
+  throw new ConvexError(
+    "This receivable's credit account isn't obvious from its source type — specify creditSystemKey (Other Income, Customer Deposits Liability, or a cost reimbursement)."
+  );
+}
 
 const chequeStatusValidator = v.union(
   v.literal("HELD"),
@@ -584,11 +613,15 @@ export const createReceivable = mutation({
     amount: v.number(),
     dueDate: v.number(),
     notes: v.optional(v.string()),
+    creditSystemKey: v.optional(receivableCreditKeyValidator),
   },
   handler: async (ctx, args) => {
     const { user, membership } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     assertPositiveAmount(args.amount);
     if (!args.title.trim()) throw new ConvexError("Receivable title is required.");
+    const creditSystemKey = args.saleId
+      ? undefined
+      : resolveReceivableCreditKey(args.sourceType, args.creditSystemKey);
 
     await validateOrgCustomer(ctx, args.orgId, args.customerId);
     await validateOptionalLinks(ctx, args.orgId, args);
@@ -625,7 +658,7 @@ export const createReceivable = mutation({
     // at sale completion — posting a second origin entry here would double-book
     // it. Every other manual receivable (damage claims, ad-hoc charges, etc.)
     // has no prior GL recognition, so it needs its own DR AR / CR Other Income.
-    if (!args.saleId) {
+    if (creditSystemKey) {
       await hookReceivableCreated(ctx, {
         orgId: args.orgId,
         receivableId,
@@ -634,6 +667,7 @@ export const createReceivable = mutation({
         currency,
         actorId: user._id,
         occurredAt: now,
+        creditSystemKey,
       });
     }
 
@@ -663,6 +697,7 @@ export const createInstallmentPlan = mutation({
     intervalMonths: v.optional(v.number()),
     sourceType: v.optional(receivableSourceValidator),
     notes: v.optional(v.string()),
+    creditSystemKey: v.optional(receivableCreditKeyValidator),
   },
   handler: async (ctx, args) => {
     const { user, membership } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -675,6 +710,9 @@ export const createInstallmentPlan = mutation({
       throw new ConvexError("Installment interval must be between 1 and 12 months.");
     }
     if (!args.title.trim()) throw new ConvexError("Payment plan title is required.");
+    const creditSystemKey = args.saleId
+      ? undefined
+      : resolveReceivableCreditKey(args.sourceType ?? "INTERNAL_INSTALLMENT", args.creditSystemKey);
 
     await validateOrgCustomer(ctx, args.orgId, args.customerId);
     await validateOptionalLinks(ctx, args.orgId, args);
@@ -721,7 +759,7 @@ export const createInstallmentPlan = mutation({
 
       // Same reasoning as createReceivable: skip when sale-linked, since that
       // AR was already recognized by SALE_COMPLETED.
-      if (!args.saleId) {
+      if (creditSystemKey) {
         await hookReceivableCreated(ctx, {
           orgId: args.orgId,
           receivableId: id,
@@ -730,6 +768,7 @@ export const createInstallmentPlan = mutation({
           currency,
           actorId: user._id,
           occurredAt: now,
+          creditSystemKey,
         });
       }
 

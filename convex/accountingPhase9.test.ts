@@ -342,6 +342,7 @@ describe("Phase 9 — cheque GL posting", () => {
     const receivableId = await asUser.mutation(api.collections.createReceivable, {
       orgId, customerId, sourceType: "CHEQUE", title: "Cheque receivable",
       amount: 1000, dueDate: Date.now() + 86_400_000,
+      creditSystemKey: "MISCELLANEOUS_INCOME",
     });
     const chequeId = await asUser.mutation(api.collections.registerCheque, {
       orgId, receivableId, customerId, bank: "ABC Bank", chequeNumber: "CHQ-001",
