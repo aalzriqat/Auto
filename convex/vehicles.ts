@@ -1,5 +1,5 @@
 import { v, ConvexError } from "convex/values";
-import { MutationCtx, internalMutation, mutation, query } from "./_generated/server";
+import { MutationCtx, QueryCtx, internalMutation, mutation, query } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
@@ -602,7 +602,7 @@ export const create = mutation({
  * would leave the journal permanently out of sync with the vehicle record.
  */
 async function hasPostedVehicleAcquisition(
-  ctx: MutationCtx,
+  ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   vehicleId: Id<"vehicles">
 ): Promise<boolean> {
@@ -616,8 +616,16 @@ async function hasPostedVehicleAcquisition(
   return postedEvent !== null;
 }
 
-async function hasVehicleAcquisitionAccountingExposure(
-  ctx: MutationCtx,
+/**
+ * True once a vehicle's acquisition is either posted to the GL or durably
+ * queued in the accounting outbox — reused by the legacy transaction
+ * migration tool (accountingMigration.ts) so it can recognize a
+ * VEHICLE_PURCHASE transaction row as already accounted for via its
+ * companion VEHICLE_ACQUIRED event (sourced from "vehicles", not
+ * "transactions") instead of posting a second, duplicate event.
+ */
+export async function hasVehicleAcquisitionAccountingExposure(
+  ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   vehicleId: Id<"vehicles">
 ): Promise<boolean> {

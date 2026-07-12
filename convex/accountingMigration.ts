@@ -20,6 +20,7 @@ import { requireFeature } from "./subscriptions";
 import { auditLog } from "./financialAudit";
 import { computeVehicleCapitalizedCost, CAPITALIZABLE_EXPENSE_CATEGORIES } from "./utils/vehicleCost";
 import { getOpenPeriodForDate } from "./accountingPeriods";
+import { hasVehicleAcquisitionAccountingExposure } from "./vehicles";
 
 // ─── Snapshot / classification helpers ───────────────────────────────────────
 
@@ -70,6 +71,15 @@ async function classifyLegacyTransaction(
 
   const eventType = mapCategoryToEventType(tx.category, tx.type);
 
+  // VEHICLE_ACQUIRED never posts sourced from "transactions" — vehicles.ts's
+  // postVehicleAcquisitionIfOwned posts it sourced from "vehicles" (see
+  // hasVehicleAcquisitionAccountingExposure) in the same mutation that wrote
+  // this legacy row, so the lookup above can never find it there.
+  const alreadyAccountedViaVehicle =
+    eventType === "VEHICLE_ACQUIRED" && tx.vehicleId
+      ? await hasVehicleAcquisitionAccountingExposure(ctx, orgId, tx.vehicleId)
+      : false;
+
   return {
     id: tx._id.toString(),
     type: tx.type,
@@ -79,7 +89,7 @@ async function classifyLegacyTransaction(
     description: tx.description,
     vehicleId: tx.vehicleId?.toString(),
     // Only consider an event as posted if it is in POSTED status with a journal entry linked
-    hasJournalEntry: !!(existing && existing.status === "POSTED" && existing.journalEntryId),
+    hasJournalEntry: !!(existing && existing.status === "POSTED" && existing.journalEntryId) || alreadyAccountedViaVehicle,
     eventType,
   };
 }
@@ -288,6 +298,16 @@ export const migrateUnpostedTransactions = mutation({
 
       if (!eventType) {
         results.push({ transactionId: tx._id.toString(), action: "SKIP", eventType: null, reason: "no_rule_for_category" });
+        continue;
+      }
+
+      // VEHICLE_ACQUIRED for a VEHICLE_PURCHASE row posts sourced from
+      // "vehicles" (see postVehicleAcquisitionIfOwned), not "transactions" —
+      // the `existing` lookup above can never see it. Without this check
+      // this loop would post a genuine duplicate VEHICLE_ACQUIRED event,
+      // double-debiting Vehicle Inventory.
+      if (eventType === "VEHICLE_ACQUIRED" && tx.vehicleId && await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, tx.vehicleId)) {
+        results.push({ transactionId: tx._id.toString(), action: "SKIP", eventType, reason: "already_posted_via_vehicle" });
         continue;
       }
 
