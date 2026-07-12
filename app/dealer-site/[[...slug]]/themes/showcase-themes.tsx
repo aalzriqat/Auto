@@ -2040,8 +2040,7 @@ function VehicleDetailLeadPanel({
       copy={copy}
       turnstileTheme={design.darkTurnstile ? "dark" : "light"}
       onSubmit={(event) => {
-        props.setSelectedVehicleId(vehicle.id);
-        props.onSubmit(event, "vehicle_inquiry");
+        props.onSubmit(event, "vehicle_inquiry", { vehicleId: vehicle.id });
       }}
     />
   );

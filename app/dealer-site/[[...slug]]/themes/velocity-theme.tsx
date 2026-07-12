@@ -251,7 +251,7 @@ export function VelocityTheme(props: ThemeProps) {
               ) : (
                 <form
                   style={{ marginTop: 32, border: "1px solid #e2e8f0", borderRadius: 10, padding: 24, borderLeft: `4px solid ${primary}` }}
-                  onSubmit={(e) => { setSelectedVehicleId(detailVehicle.id); onSubmit(e, "vehicle_inquiry"); }}
+                  onSubmit={(e) => { setSelectedVehicleId(detailVehicle.id); onSubmit(e, "vehicle_inquiry", { vehicleId: detailVehicle.id }); }}
                 >
                   <h2 style={{ fontWeight: 700, marginBottom: 16 }}>{t.askAbout}</h2>
                   <VelocityFormFields form={form} setForm={setForm} t={t} isSubmitting={isSubmitting} submitLabel={t.sendInquiry} primary={primary} turnstileSiteKey={turnstileSiteKey} />

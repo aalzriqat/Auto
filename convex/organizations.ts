@@ -1,12 +1,57 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query, internalQuery, MutationCtx } from "./_generated/server";
-import { Id } from "./_generated/dataModel";
-import { requireAuth, requireTenantAuth, requireOwner } from "./utils/tenancy";
+import { Doc, Id } from "./_generated/dataModel";
+import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS, DEFAULT_ROLE_TEMPLATES, SYSTEM_OWNER_ROLE_NAME } from "./utils/permissions";
 import { notifyManagers, getActorName } from "./utils/notifications";
 import { throwAppError, AppErrorCode } from "./utils/errors";
 
 const ACTIVE_DELETION_STATUSES = ["PENDING_REVIEW", "APPROVED", "RUNNING"] as const;
+type AuthIdentity = NonNullable<Awaited<ReturnType<MutationCtx["auth"]["getUserIdentity"]>>>;
+
+function placeholderEmailForSubject(subject: string): string {
+  const safeSubject = subject.replace(/[^a-zA-Z0-9._+-]/g, "_");
+  return `no-email-${safeSubject}@autoflow.local`;
+}
+
+function nameFromIdentity(identity: AuthIdentity): string | undefined {
+  return identity.name ?? identity.givenName ?? identity.preferredUsername ?? identity.email;
+}
+
+async function requireOrCreateAuthenticatedUser(ctx: MutationCtx): Promise<Doc<"users">> {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity) {
+    throwAppError(AppErrorCode.UNAUTHENTICATED, "Unauthenticated: You must be logged in.");
+  }
+
+  const existingUser = await ctx.db
+    .query("users")
+    .withIndex("by_clerkId", (q) => q.eq("clerkId", identity.subject))
+    .unique();
+
+  if (existingUser) {
+    if (existingUser.disabled) {
+      throwAppError(AppErrorCode.FORBIDDEN, "Forbidden: This account has been disabled.");
+    }
+    return existingUser;
+  }
+
+  const email = typeof identity.email === "string" && identity.email.trim()
+    ? identity.email.trim().toLowerCase()
+    : placeholderEmailForSubject(identity.subject);
+
+  const userId = await ctx.db.insert("users", {
+    clerkId: identity.subject,
+    email,
+    name: nameFromIdentity(identity),
+    imageUrl: identity.pictureUrl,
+  });
+  const user = await ctx.db.get(userId);
+  if (!user) {
+    throwAppError(AppErrorCode.USER_NOT_FOUND, "User not found in the database. Please contact support.");
+  }
+  return user;
+}
 
 async function findActiveDeletionRequest(ctx: MutationCtx, orgId: Id<"organizations">) {
   for (const status of ACTIVE_DELETION_STATUSES) {
@@ -40,7 +85,7 @@ export const create = mutation({
     name: v.string(),
   },
   handler: async (ctx, args) => {
-    const user = await requireAuth(ctx);
+    const user = await requireOrCreateAuthenticatedUser(ctx);
 
     const orgId = await ctx.db.insert("organizations", {
       name: args.name.trim(),

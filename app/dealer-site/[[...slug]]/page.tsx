@@ -151,6 +151,10 @@ type TurnstileWindow = Window & {
   turnstile?: { reset: (container?: HTMLElement | string) => void };
 };
 
+type SubmitLeadOptions = {
+  vehicleId?: Id<"vehicles">;
+};
+
 type StoredHeadLink = {
   rel: string;
   href: string | null;
@@ -159,6 +163,38 @@ type StoredHeadLink = {
 
 const PUBLIC_LEAD_FINGERPRINT_KEY = "autoflow_public_lead_fingerprint";
 const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
+
+function formUnavailableMessage(lang: Lang) {
+  return lang === "ar"
+    ? "طلبات الموقع غير متاحة مؤقتاً. يرجى التواصل مع المعرض مباشرة."
+    : "Online requests are temporarily unavailable. Please contact the dealership directly.";
+}
+
+function missingContactMethodMessage(lang: Lang) {
+  return lang === "ar"
+    ? "يرجى إدخال بريد إلكتروني أو رقم هاتف أو واتساب."
+    : "Please provide an email, phone, or WhatsApp number.";
+}
+
+const EXPECTED_PUBLIC_SUBMISSION_ERRORS = [
+  "Please complete the verification challenge.",
+  "Request verification is unavailable. Please try again later.",
+  "Request verification failed. Please try again.",
+  "Too many submissions. Please try again later.",
+  "Unsupported website form.",
+  "Website not found.",
+  "Website is not active.",
+  "Name is required.",
+  "Name is invalid.",
+  "Last name is invalid.",
+  "Email is invalid.",
+  "Phone is invalid.",
+  "WhatsApp is invalid.",
+  "Message is invalid.",
+  "This request cannot be accepted.",
+  "This form is not enabled.",
+  "Vehicle not found.",
+] as const;
 const PREMIUM_THEME_COMPONENTS = {
   prestige: PrestigeTheme,
   velocity: VelocityTheme,
@@ -208,6 +244,29 @@ function publicLeadFingerprint() {
     timezone,
     `${window.screen.width}x${window.screen.height}`,
   ].join(":");
+}
+
+function errorText(error: unknown) {
+  if (error && typeof error === "object" && "data" in error) {
+    const data = (error as { data?: unknown }).data;
+    if (typeof data === "string") return data;
+    if (data && typeof data === "object" && "message" in data) {
+      const message = (data as { message?: unknown }).message;
+      if (typeof message === "string") return message;
+    }
+  }
+  return error instanceof Error ? error.message : "";
+}
+
+function publicSubmissionErrorMessage(error: unknown, lang: Lang) {
+  const message = errorText(error);
+  if (message.includes("Provide an email, phone, or WhatsApp number.")) {
+    return missingContactMethodMessage(lang);
+  }
+  return (
+    EXPECTED_PUBLIC_SUBMISSION_ERRORS.find((expectedMessage) => message.includes(expectedMessage)) ??
+    "An unexpected error occurred. Please try again later."
+  );
 }
 
 function resetTurnstile(formElement: HTMLFormElement) {
@@ -346,10 +405,23 @@ export default function DealerSitePage() {
   const siteOrigin = publicSiteOrigin(host);
   const templateId = site?.settings?.templateId ?? DEFAULT_WEBSITE_TEMPLATE_ID;
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>, formType: string) {
+  async function handleSubmit(event: FormEvent<HTMLFormElement>, formType: string, options: SubmitLeadOptions = {}) {
     event.preventDefault();
     if (isPreviewMode) { toast.error(t.previewNoSubmit); return; }
-    if (!host) return;
+    if (![form.email, form.phone, form.whatsapp].some((value) => value.trim())) {
+      toast.error(missingContactMethodMessage(lang));
+      return;
+    }
+    if (!host) {
+      console.error("Dealer website lead submission attempted without a resolved host.");
+      toast.error(formUnavailableMessage(lang));
+      return;
+    }
+    if (!turnstileSiteKey) {
+      console.error("NEXT_PUBLIC_TURNSTILE_SITE_KEY is not configured for dealer website lead forms.");
+      toast.error(formUnavailableMessage(lang));
+      return;
+    }
     const formElement = event.currentTarget;
     const token = new FormData(formElement).get("cf-turnstile-response");
     const turnstileToken = typeof token === "string" ? token : "";
@@ -359,9 +431,10 @@ export default function DealerSitePage() {
     }
     setIsSubmitting(true);
     try {
+      const submittedVehicleId = options.vehicleId ?? selectedVehicleId;
       await submitLead({
         host, formType,
-        vehicleId: selectedVehicleId,
+        vehicleId: submittedVehicleId,
         firstName: form.firstName,
         lastName: form.lastName || undefined,
         email: form.email || undefined,
@@ -377,7 +450,7 @@ export default function DealerSitePage() {
       setFormSuccess(formType);
     } catch (error) {
       console.error("Website lead submission failed", error);
-      toast.error("An unexpected error occurred. Please try again later.");
+      toast.error(publicSubmissionErrorMessage(error, lang));
     } finally {
       resetTurnstile(formElement);
       setIsSubmitting(false);
@@ -647,8 +720,7 @@ export default function DealerSitePage() {
                 <form
                   className="mt-8 space-y-3 rounded-md border p-4"
                   onSubmit={(event) => {
-                    setSelectedVehicleId(detailVehicle.id);
-                    void handleSubmit(event, "vehicle_inquiry");
+                    void handleSubmit(event, "vehicle_inquiry", { vehicleId: detailVehicle.id });
                   }}
                 >
                   <h2 className="font-bold">{t.askAbout}</h2>
