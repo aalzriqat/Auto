@@ -49,6 +49,51 @@ export function gotoOrgRoute(path: string): Cypress.Chainable<string> {
     });
 }
 
+export function expectVisibleTableCell(
+  textOrPattern: string | RegExp,
+): Cypress.Chainable<JQuery<HTMLBodyElement>> {
+  const matches =
+    typeof textOrPattern === "string"
+      ? (text: string) => text.includes(textOrPattern)
+      : (text: string) => textOrPattern.test(text);
+
+  function findLoadedCell(
+    attempt = 0,
+  ): Cypress.Chainable<JQuery<HTMLBodyElement>> {
+    return cy.get("body").then(($body): void => {
+      const matchingCells = $body.find("td").filter((_, cell) => {
+        const normalizedText = Cypress.$(cell).text().replace(/\s+/g, " ");
+        return matches(normalizedText);
+      });
+
+      if (matchingCells.length > 0) {
+        const rect = matchingCells[0].getBoundingClientRect();
+
+        expect(rect.width).to.be.greaterThan(0);
+        expect(rect.height).to.be.greaterThan(0);
+        return;
+      }
+
+      const loadMoreButton = $body.find("button").filter((_, button) => {
+        const $button = Cypress.$(button);
+        return /load more/i.test($button.text()) && !$button.is(":disabled");
+      });
+
+      if (loadMoreButton.length > 0 && attempt < 20) {
+        cy.wrap(loadMoreButton.first()).click();
+        findLoadedCell(attempt + 1);
+        return;
+      }
+
+      throw new Error(
+        `Could not find a visible table cell matching ${textOrPattern.toString()}`,
+      );
+    });
+  }
+
+  return findLoadedCell();
+}
+
 /**
  * Creates a vehicle through the real UI (not the API) so the sales/leads
  * specs always have a fresh, distinctively-named vehicle to select without
