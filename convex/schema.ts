@@ -628,6 +628,14 @@ export default defineSchema({
     previousCost: v.number(),
     newCost: v.number(),
     reason: v.string(),
+    // Drives the GL counter-account (see ruleVehicleAcquisitionCostCorrected)
+    // — optional/backward compatible for corrections that predate this field.
+    correctionType: v.optional(v.union(
+      v.literal("PRIOR_PERIOD_RESTATEMENT"),
+      v.literal("SUPPLIER_INVOICE_ERROR"),
+      v.literal("CASH_REFUND"),
+      v.literal("VENDOR_CREDIT"),
+    )),
     correctedBy: v.id("users"),
     createdAt: v.number(),
   }).index("by_org_vehicle", ["orgId", "vehicleId"]),

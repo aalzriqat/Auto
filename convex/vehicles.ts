@@ -979,6 +979,15 @@ export const correctAcquisitionCost = mutation({
     vehicleId: v.id("vehicles"),
     newCost: v.number(),
     reason: v.string(),
+    /** Drives the GL counter-account — see ruleVehicleAcquisitionCostCorrected. */
+    correctionType: v.union(
+      v.literal("PRIOR_PERIOD_RESTATEMENT"),
+      v.literal("SUPPLIER_INVOICE_ERROR"),
+      v.literal("CASH_REFUND"),
+      v.literal("VENDOR_CREDIT"),
+    ),
+    /** Required when correctionType is CASH_REFUND — which cash/bank account actually moved. Ignored otherwise. */
+    paymentMethod: v.optional(paymentMethodValidator),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -987,6 +996,9 @@ export const correctAcquisitionCost = mutation({
     if (!reason) throw new ConvexError("A reason is required to correct a vehicle's acquisition cost.");
     if (!Number.isFinite(args.newCost) || args.newCost < 0) {
       throw new ConvexError("New cost must be a non-negative number.");
+    }
+    if (args.correctionType === "CASH_REFUND" && !args.paymentMethod) {
+      throw new ConvexError("A payment method is required for a cash-refund correction.");
     }
 
     const vehicle = await ctx.db.get(args.vehicleId);
@@ -1034,6 +1046,7 @@ export const correctAcquisitionCost = mutation({
       previousCost,
       newCost: args.newCost,
       reason,
+      correctionType: args.correctionType,
       correctedBy: user._id,
       createdAt: now,
     });
@@ -1046,6 +1059,8 @@ export const correctAcquisitionCost = mutation({
       correctionToken: correctionId.toString(),
       deltaMinor: toMinorUnits(delta, currency),
       currency,
+      correctionType: args.correctionType,
+      paymentMethod: args.paymentMethod,
       actorId: user._id,
       occurredAt: now,
     });

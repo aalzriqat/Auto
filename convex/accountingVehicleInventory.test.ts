@@ -899,6 +899,7 @@ describe("Review issue #5 — vehicle acquisition cost correction", () => {
 
     await asOwner.mutation(api.vehicles.correctAcquisitionCost, {
       orgId, vehicleId, newCost: 12000, reason: "Original invoice was mis-entered",
+      correctionType: "PRIOR_PERIOD_RESTATEMENT",
     });
 
     const vehicle = await t.run((ctx) => ctx.db.get(vehicleId));
@@ -921,6 +922,7 @@ describe("Review issue #5 — vehicle acquisition cost correction", () => {
     expect(correction?.previousCost).toBe(10000);
     expect(correction?.newCost).toBe(12000);
     expect(correction?.reason).toBe("Original invoice was mis-entered");
+    expect(correction?.correctionType).toBe("PRIOR_PERIOD_RESTATEMENT");
   });
 
   test("rejects a correction before the acquisition cost has ever posted", async () => {
@@ -928,8 +930,60 @@ describe("Review issue #5 — vehicle acquisition cost correction", () => {
     const vehicleId = await asOwner.mutation(api.vehicles.create, { orgId, ...baseVehicle });
 
     await expect(
-      asOwner.mutation(api.vehicles.correctAcquisitionCost, { orgId, vehicleId, newCost: 5000, reason: "test" })
+      asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+        orgId, vehicleId, newCost: 5000, reason: "test", correctionType: "PRIOR_PERIOD_RESTATEMENT",
+      })
     ).rejects.toThrow(/hasn't posted/);
+  });
+
+  test("SUPPLIER_INVOICE_ERROR and VENDOR_CREDIT route through AP-Suppliers instead of Retained Earnings", async () => {
+    const { t, orgId, asOwner } = await seedDealer("ri5c");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+
+    await asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId, vehicleId, newCost: 9500, reason: "Vendor issued a credit for a shipping error",
+      correctionType: "VENDOR_CREDIT",
+    });
+
+    const inventory = await accountBySystemKey(t, orgId, "VEHICLE_INVENTORY");
+    const ap = await accountBySystemKey(t, orgId, "ACCOUNTS_PAYABLE_SUPPLIERS");
+    const retainedEarnings = await accountBySystemKey(t, orgId, "RETAINED_EARNINGS");
+    const event = await t.run((ctx) =>
+      ctx.db.query("accountingEvents").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicleCostCorrections")).first()
+    );
+    const lines = await t.run((ctx) => ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", event!.journalEntryId!)).collect());
+    expect(lines.find((l) => l.accountId === ap._id)?.debitMinor).toBe(500_000);
+    expect(lines.find((l) => l.accountId === inventory._id)?.creditMinor).toBe(500_000);
+    expect(lines.some((l) => l.accountId === retainedEarnings._id)).toBe(false);
+  });
+
+  test("CASH_REFUND routes through the selected cash/bank account and requires a payment method", async () => {
+    const { t, orgId, asOwner } = await seedDealer("ri5d");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+
+    await expect(
+      asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+        orgId, vehicleId, newCost: 9000, reason: "Supplier refunded the overcharge", correctionType: "CASH_REFUND",
+      })
+    ).rejects.toThrow(/payment method is required/i);
+
+    await asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId, vehicleId, newCost: 9000, reason: "Supplier refunded the overcharge",
+      correctionType: "CASH_REFUND", paymentMethod: "BANK_TRANSFER",
+    });
+
+    const inventory = await accountBySystemKey(t, orgId, "VEHICLE_INVENTORY");
+    const bank = await accountBySystemKey(t, orgId, "BANK_ACCOUNT");
+    const event = await t.run((ctx) =>
+      ctx.db.query("accountingEvents").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicleCostCorrections")).first()
+    );
+    const lines = await t.run((ctx) => ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", event!.journalEntryId!)).collect());
+    expect(lines.find((l) => l.accountId === bank._id)?.debitMinor).toBe(1_000_000);
+    expect(lines.find((l) => l.accountId === inventory._id)?.creditMinor).toBe(1_000_000);
   });
 });
 

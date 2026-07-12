@@ -12,7 +12,7 @@
 import { Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 import { postAccountingEvent, PostCommand } from "./postingEngine";
-import { EventType, ReceivableCreditKey } from "./postingRules";
+import { EventType, ReceivableCreditKey, AcquisitionCorrectionType } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate } from "../accountingPeriods";
 import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount } from "../chartOfAccounts";
@@ -510,6 +510,8 @@ export async function hookVehicleAcquisitionCostCorrected(
     correctionToken: string;
     deltaMinor: number;
     currency: string;
+    correctionType?: AcquisitionCorrectionType;
+    paymentMethod?: string;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -527,6 +529,8 @@ export async function hookVehicleAcquisitionCostCorrected(
       vehicleId: args.vehicleId.toString(),
       deltaMinor: args.deltaMinor,
       currency: args.currency,
+      correctionType: args.correctionType,
+      paymentMethod: args.paymentMethod,
     },
   });
 }

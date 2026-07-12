@@ -659,32 +659,63 @@ export function ruleVehicleInventoryOpeningBalance(p: VehicleInventoryOpeningBal
   };
 }
 
+export type AcquisitionCorrectionType =
+  | "PRIOR_PERIOD_RESTATEMENT"
+  | "SUPPLIER_INVOICE_ERROR"
+  | "CASH_REFUND"
+  | "VENDOR_CREDIT";
+
 export interface VehicleAcquisitionCostCorrectedPayload {
   vehicleId: string;
   /** Signed change: new cost minus previous cost. */
   deltaMinor: number;
   currency: string;
+  /** Drives the counter-account below — defaults to PRIOR_PERIOD_RESTATEMENT (the only behavior that existed before this field). */
+  correctionType?: AcquisitionCorrectionType;
+  /** Only meaningful (and required by the caller) when correctionType is CASH_REFUND. */
+  paymentMethod?: string;
 }
 
 /**
  * Corrects a vehicle's acquisition cost after VEHICLE_ACQUIRED has already
  * posted (vehicles.correctAcquisitionCost) — e.g. the purchase price was
- * mis-entered. Since the correction doesn't necessarily correspond to any new
- * cash actually moving today, it credits/debits Retained Earnings rather than
- * cash/bank, the same reasoning as ruleVehicleInventoryOpeningBalance. Also
- * updates the vehicle's own purchasePrice (done by the caller), so
+ * mis-entered. The counter-account depends on WHY the correction happened,
+ * not just that it happened:
+ *   - PRIOR_PERIOD_RESTATEMENT: no cash moves today for a correction to a
+ *     genuinely past transaction — Retained Earnings, same reasoning as
+ *     ruleVehicleInventoryOpeningBalance. The only behavior this rule had
+ *     before correctionType existed, so it's also the default.
+ *   - SUPPLIER_INVOICE_ERROR / VENDOR_CREDIT: the dealership still owes (or
+ *     is owed) the supplier for the difference — routes through AP-Suppliers,
+ *     the same account a credit-purchase or sourced vehicle uses, so it nets
+ *     against whatever payable already exists there.
+ *   - CASH_REFUND: real cash actually changed hands — routes to the
+ *     caller-selected cash/bank account, same reasoning as ruleVehicleAcquired.
+ * Also updates the vehicle's own purchasePrice (done by the caller), so
  * computeVehicleCapitalizedCost, commission, and reports stop reading the
  * stale figure instead of only the GL being corrected.
  */
 export function ruleVehicleAcquisitionCostCorrected(p: VehicleAcquisitionCostCorrectedPayload): RuleResult {
   const amountMinor = Math.abs(p.deltaMinor);
+  const counterKey = ((): SystemKey => {
+    switch (p.correctionType) {
+      case "SUPPLIER_INVOICE_ERROR":
+      case "VENDOR_CREDIT":
+        return SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS;
+      case "CASH_REFUND":
+        return p.paymentMethod === "CHEQUE" ? SYSTEM_KEYS.BANK_ACCOUNT : cashAccountKey(p.paymentMethod);
+      case "PRIOR_PERIOD_RESTATEMENT":
+      default:
+        return SYSTEM_KEYS.RETAINED_EARNINGS;
+    }
+  })();
   const lines: LineSpec[] = p.deltaMinor > 0
     ? [
         line(SYSTEM_KEYS.VEHICLE_INVENTORY, amountMinor, 0, "Acquisition cost corrected upward", { vehicleId: p.vehicleId }),
-        line(SYSTEM_KEYS.RETAINED_EARNINGS, 0, amountMinor, "Acquisition cost correction", { vehicleId: p.vehicleId }),
+        line(counterKey, 0, amountMinor, "Acquisition cost correction", { vehicleId: p.vehicleId }),
       ]
     : [
-        line(SYSTEM_KEYS.RETAINED_EARNINGS, amountMinor, 0, "Acquisition cost correction", { vehicleId: p.vehicleId }),
+        line(counterKey, amountMinor, 0, "Acquisition cost correction", { vehicleId: p.vehicleId }),
         line(SYSTEM_KEYS.VEHICLE_INVENTORY, 0, amountMinor, "Acquisition cost corrected downward", { vehicleId: p.vehicleId }),
       ];
   return { lines, memo: "Vehicle acquisition cost corrected", category: "ADJUSTMENT" };
