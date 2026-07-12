@@ -1,6 +1,7 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
 import { paymentMethodValidator } from "./utils/paymentMethods";
+import { trustPassportFieldValidators } from "./utils/vehicleStatusGuards";
 
 const organizationDeletionRequestStatus = v.union(
   v.literal("PENDING_REVIEW"),
@@ -728,10 +729,7 @@ export default defineSchema({
       sourceCost: v.optional(v.number()),
       notes: v.optional(v.string()),
       imageIds: v.optional(v.array(v.id("_storage"))),
-      inspectionStatus: v.optional(v.union(v.literal("NONE"), v.literal("SELF_REPORTED"))),
-      accidentDisclosed: v.optional(v.boolean()),
-      ownerCount: v.optional(v.number()),
-      dealerGuarantee: v.optional(v.boolean()),
+      ...trustPassportFieldValidators,
     }), // The partial vehicle data
     status: v.union(v.literal("PENDING"), v.literal("APPROVED"), v.literal("REJECTED")),
     resolvedBy: v.optional(v.id("users")),

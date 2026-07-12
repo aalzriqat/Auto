@@ -10,6 +10,7 @@ import {
   assertDirectVehicleCreateStatus,
   assertDirectVehicleStatusTransition,
   normalizeVehicleStatus,
+  trustPassportFieldValidators,
   type VehicleLifecycleStatus,
 } from "./utils/vehicleStatusGuards";
 import { assertVehicleImagesAllowed } from "./utils/storageValidation";
@@ -72,10 +73,7 @@ export const requestCreate = mutation({
       sourceCost: v.optional(v.number()),
       notes: v.optional(v.string()),
       imageIds: v.optional(v.array(v.id("_storage"))),
-      inspectionStatus: v.optional(v.union(v.literal("NONE"), v.literal("SELF_REPORTED"))),
-      accidentDisclosed: v.optional(v.boolean()),
-      ownerCount: v.optional(v.number()),
-      dealerGuarantee: v.optional(v.boolean()),
+      ...trustPassportFieldValidators,
     }), // The vehicle creation payload
   },
   handler: async (ctx, args) => {
@@ -147,10 +145,7 @@ export const requestUpdate = mutation({
       sourceCost: v.optional(v.number()),
       notes: v.optional(v.string()),
       imageIds: v.optional(v.array(v.id("_storage"))),
-      inspectionStatus: v.optional(v.union(v.literal("NONE"), v.literal("SELF_REPORTED"))),
-      accidentDisclosed: v.optional(v.boolean()),
-      ownerCount: v.optional(v.number()),
-      dealerGuarantee: v.optional(v.boolean()),
+      ...trustPassportFieldValidators,
     }), // The vehicle update payload (patch)
   },
   handler: async (ctx, args) => {
