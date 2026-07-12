@@ -22,9 +22,7 @@ test.describe("leads", () => {
     await page.keyboard.type(lastName);
     await dialog.getByRole("button", { name: customerName }).click();
 
-    await dialog
-      .getByRole("button", { name: "Create Lead", exact: true })
-      .click();
+    await dialog.getByRole("button", { name: "Add Lead", exact: true }).click();
 
     await expect(page.getByText("Lead added successfully")).toBeVisible();
   });
