@@ -51,6 +51,18 @@ function normalizeVehicleEditPayload(payload: VehicleEditPayload): NormalizedVeh
   return { ...rest, status: normalizedStatus };
 }
 
+// The direct vehicles.create/update mutations reject a non-integer or
+// negative ownerCount via CreateVehicleSchema/UpdateVehicleSchema's zod
+// validation; this request/approval path bypasses that schema entirely, so
+// an approved request could otherwise persist invalid data straight onto
+// the vehicle.
+function assertValidOwnerCount(ownerCount: number | undefined) {
+  if (ownerCount === undefined) return;
+  if (!Number.isInteger(ownerCount) || ownerCount < 0) {
+    throw new ConvexError("Owner count must be a non-negative integer.");
+  }
+}
+
 export const requestCreate = mutation({
   args: {
     orgId: v.id("organizations"),
@@ -90,6 +102,7 @@ export const requestCreate = mutation({
     }
     assertDirectVehicleCreateStatus(payload.status);
     await assertVehicleImagesAllowed(ctx, payload.imageIds);
+    assertValidOwnerCount(payload.ownerCount);
 
     if (payload.sourceType === "SOURCED") {
       if (!payload.sourcedFromName?.trim()) {
@@ -167,6 +180,7 @@ export const requestUpdate = mutation({
     const payload = normalizeVehicleEditPayload(args.payload);
     assertDirectVehicleStatusTransition(vehicle.status, payload.status);
     await assertVehicleImagesAllowed(ctx, payload.imageIds);
+    assertValidOwnerCount(payload.ownerCount);
 
     const filteredPayload: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(payload)) {

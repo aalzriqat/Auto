@@ -1016,6 +1016,23 @@ describe("vehicles trust passport (Phase 61 self-service form)", () => {
       expect(vehicle?.ownerCount).toBe(1);
       expect(vehicle?.dealerGuarantee).toBe(true);
     });
+
+    await asUser.mutation(api.vehicles.update, {
+      orgId,
+      vehicleId,
+      inspectionStatus: "NONE",
+      accidentDisclosed: false,
+      ownerCount: 0,
+      dealerGuarantee: false,
+    });
+
+    await t.run(async (ctx) => {
+      const vehicle = await ctx.db.get(vehicleId);
+      expect(vehicle?.inspectionStatus).toBe("NONE");
+      expect(vehicle?.accidentDisclosed).toBe(false);
+      expect(vehicle?.ownerCount).toBe(0);
+      expect(vehicle?.dealerGuarantee).toBe(false);
+    });
   });
 
   test("update rejects PARTNER_VERIFIED so the form can never self-assign it", async () => {
@@ -1029,6 +1046,33 @@ describe("vehicles trust passport (Phase 61 self-service form)", () => {
         inspectionStatus: "PARTNER_VERIFIED" as any,
       })
     ).rejects.toThrow();
+  });
+
+  test("requestCreate/requestUpdate reject a negative or non-integer ownerCount", async () => {
+    const { orgId, asUser } = await setup();
+    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+
+    await expect(
+      asUser.mutation(api.vehicleEdits.requestCreate, {
+        orgId,
+        payload: { ...baseVehicle, ownerCount: -1 },
+      })
+    ).rejects.toThrow(/owner count/i);
+
+    await expect(
+      asUser.mutation(api.vehicleEdits.requestCreate, {
+        orgId,
+        payload: { ...baseVehicle, ownerCount: 1.5 },
+      })
+    ).rejects.toThrow(/owner count/i);
+
+    await expect(
+      asUser.mutation(api.vehicleEdits.requestUpdate, {
+        orgId,
+        vehicleId,
+        payload: { ownerCount: -1 },
+      })
+    ).rejects.toThrow(/owner count/i);
   });
 
   test("a vehicle create request carries trust passport fields through approval", async () => {
