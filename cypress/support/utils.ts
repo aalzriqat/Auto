@@ -1,18 +1,24 @@
 /// <reference types="cypress" />
 
+let testDataCounter = 0;
+
+function nextTestDataCounter(): number {
+  testDataCounter += 1;
+  if (testDataCounter > 9_999) testDataCounter = 1;
+  return testDataCounter;
+}
+
 /** Unique-ish suffix for test data so repeated CI runs don't collide. */
 export function testDataSuffix(): string {
-  return `${Date.now()}-${Math.floor(Math.random() * 10_000)}`;
+  return `${Date.now()}-${nextTestDataCounter()}`;
 }
 
 /** 17-character, VIN-safe test identifier: only allowed letters/digits, unique enough for CI. */
 function testVin(): string {
   const timePart = Date.now().toString().slice(-10);
-  const randomPart = Math.floor(Math.random() * 10_000)
-    .toString()
-    .padStart(4, "0");
+  const counterPart = nextTestDataCounter().toString().padStart(4, "0");
 
-  return `E2E${timePart}${randomPart}`;
+  return `E2E${timePart}${counterPart}`;
 }
 
 /**
