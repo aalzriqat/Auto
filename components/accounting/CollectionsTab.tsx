@@ -666,10 +666,22 @@ function ReceivableDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
   const [dueDate, setDueDate] = useState(todayInput);
   const [installmentCount, setInstallmentCount] = useState("12");
   const [notes, setNotes] = useState("");
+  const [creditSystemKey, setCreditSystemKey] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
+
+  // These two sourceTypes are unambiguously an unearned customer hold, not
+  // revenue — the backend derives the credit account automatically for them.
+  // Every other sourceType could be real income, a cost reimbursement, or a
+  // liability, so the accountant must pick explicitly (see
+  // collections.resolveReceivableCreditKey).
+  const creditKeyIsAutoDerived = sourceType === "CUSTOMER_DEPOSIT" || sourceType === "RESERVATION_PAYMENT";
 
   async function submit() {
     if (!activeOrgId || !customerId) return;
+    if (!creditKeyIsAutoDerived && !creditSystemKey) {
+      toast.error(t("CollectionCreditAccountRequired" as any) || "Select what this receivable represents before saving.");
+      return;
+    }
     setSubmitting(true);
     try {
       const common = {
@@ -678,6 +690,9 @@ function ReceivableDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
         vehicleId: vehicleId ? vehicleId as Id<"vehicles"> : undefined,
         title: title.trim(),
         notes: notes || undefined,
+        creditSystemKey: creditKeyIsAutoDerived
+          ? undefined
+          : (creditSystemKey as "MISCELLANEOUS_INCOME" | "CUSTOMER_DEPOSITS_LIABILITY" | "GENERAL_EXPENSE"),
       };
       if (mode === "single") {
         await createReceivable({
@@ -700,6 +715,7 @@ function ReceivableDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
       setTitle("");
       setAmount("");
       setNotes("");
+      setCreditSystemKey("");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : String(error));
     } finally {
@@ -736,11 +752,23 @@ function ReceivableDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
           <Input type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} placeholder={mode === "single" ? t("Amount" as any) : t("TotalAmount" as any)} />
           <Input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />
           {mode === "plan" && <Input type="number" min="1" max="120" value={installmentCount} onChange={(event) => setInstallmentCount(event.target.value)} placeholder={t("Installments" as any)} />}
+          {!creditKeyIsAutoDerived && (
+            <Select value={creditSystemKey} onValueChange={setCreditSystemKey}>
+              <SelectTrigger className="sm:col-span-2">
+                <SelectValue placeholder={t("CollectionCreditAccountPlaceholder" as any) || "What does this represent? (required)"} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="MISCELLANEOUS_INCOME">{t("CollectionCreditAccount_MISCELLANEOUS_INCOME" as any) || "Other income"}</SelectItem>
+                <SelectItem value="CUSTOMER_DEPOSITS_LIABILITY">{t("CollectionCreditAccount_CUSTOMER_DEPOSITS_LIABILITY" as any) || "Customer deposit liability (not yet earned)"}</SelectItem>
+                <SelectItem value="GENERAL_EXPENSE">{t("CollectionCreditAccount_GENERAL_EXPENSE" as any) || "Reimbursement (reduces an expense)"}</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
           <Textarea className="sm:col-span-2" value={notes} onChange={(event) => setNotes(event.target.value)} placeholder={t("NotesLabel" as any)} />
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>{t("Cancel" as any)}</Button>
-          <Button onClick={submit} disabled={submitting || !customerId || !title || !amount}>{submitting ? t("Saving" as any) : t("Save" as any)}</Button>
+          <Button onClick={submit} disabled={submitting || !customerId || !title || !amount || (!creditKeyIsAutoDerived && !creditSystemKey)}>{submitting ? t("Saving" as any) : t("Save" as any)}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

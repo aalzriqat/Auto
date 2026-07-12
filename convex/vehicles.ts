@@ -9,7 +9,9 @@ import { validateInput } from "./utils/validation";
 import { CreateVehicleSchema, UpdateVehicleSchema } from "./validations/vehicles";
 import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socialAutoPost";
 import { internal } from "./_generated/api";
-import { getOrgCurrency } from "./accounting/workflowHooks";
+import { getOrgCurrency, hookVehicleAcquired, hookVehicleLandedCostCapitalized, hookVehicleAcquisitionCostCorrected } from "./accounting/workflowHooks";
+import { toMinorUnits } from "./utils/money";
+import { paymentMethodValidator, normalizePaymentMethod, type PaymentMethod } from "./utils/paymentMethods";
 import { syncVehicleHoldStatus, getDefaultReservationExpiry } from "./utils/depositHelpers";
 import {
   amountToMinorOrThrow,
@@ -65,6 +67,52 @@ function randomHex(bytesLength: number): string {
 
 function generateImportVinPlaceholder(): string {
   return `IMPORT-${Date.now()}-${randomHex(3)}`;
+}
+
+/**
+ * Posts the VEHICLE_ACQUIRED GL entry (+ legacy VEHICLE_PURCHASE transaction
+ * row) for owned stock with a purchase price — shared by the direct
+ * vehicles.create mutation and vehicleEdits.resolve's CREATE-approval branch,
+ * so a vehicle created via the request/approval workflow gets the exact same
+ * accounting treatment as one created directly. Sourced/drop-ship vehicles
+ * never sit in physical inventory, so this is a no-op for those.
+ */
+export async function postVehicleAcquisitionIfOwned(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    isSourced: boolean;
+    purchasePrice: number | undefined;
+    purchasePaymentMethod?: PaymentMethod;
+    vehicleLabel: string;
+    vin: string;
+    actorId: Id<"users">;
+  }
+): Promise<void> {
+  if (args.isSourced || args.purchasePrice == null || args.purchasePrice <= 0) return;
+
+  const now = Date.now();
+  await ctx.db.insert("transactions", {
+    orgId: args.orgId,
+    type: "OUT",
+    amount: args.purchasePrice,
+    date: now,
+    category: "VEHICLE_PURCHASE",
+    description: `Purchase of vehicle ${args.vehicleLabel} (VIN: ${args.vin})`,
+    vehicleId: args.vehicleId,
+  });
+
+  const currency = await getOrgCurrency(ctx, args.orgId);
+  await hookVehicleAcquired(ctx, {
+    orgId: args.orgId,
+    vehicleId: args.vehicleId,
+    costMinor: toMinorUnits(args.purchasePrice, currency),
+    currency,
+    paymentMethod: normalizePaymentMethod(args.purchasePaymentMethod),
+    actorId: args.actorId,
+    occurredAt: now,
+  });
 }
 
 async function insertPriceHistory(
@@ -409,6 +457,8 @@ export const create = mutation({
     sourceCost: v.optional(v.number()),
     notes: v.optional(v.string()),
     imageIds: v.optional(v.array(v.id("_storage"))),
+    /** How the dealer paid for the vehicle — drives the GL credit side (Cash/Bank/Cheque/Card). Ignored for SOURCED vehicles, which never capitalize into inventory. */
+    purchasePaymentMethod: v.optional(paymentMethodValidator),
     ...trustPassportFieldValidators,
   },
   handler: async (ctx, args) => {
@@ -441,6 +491,13 @@ export const create = mutation({
       if (args.sourceCost === undefined || args.sourceCost === null) {
         throw new ConvexError("Sourced vehicles require a supplier cost (sourceCost).");
       }
+    }
+
+    // A purchase price with no declared payment method would silently post as
+    // CASH (normalizePaymentMethod's default) even when the dealer actually
+    // paid by bank transfer, cheque, or card — require an explicit choice.
+    if (!isSourced && args.purchasePrice != null && args.purchasePrice > 0 && !args.purchasePaymentMethod) {
+      throw new ConvexError("Payment method is required when a purchase price is entered.");
     }
 
     // VIN is optional for sourced vehicles (car doesn't exist yet); generate a
@@ -500,6 +557,17 @@ export const create = mutation({
       updatedAt: Date.now(),
     });
 
+    await postVehicleAcquisitionIfOwned(ctx, {
+      orgId: args.orgId,
+      vehicleId: id,
+      isSourced,
+      purchasePrice: effectivePurchasePrice,
+      purchasePaymentMethod: args.purchasePaymentMethod,
+      vehicleLabel: `${args.year} ${args.make.trim()} ${args.model.trim()}`,
+      vin: normalizedVin,
+      actorId: user._id,
+    });
+
     const { orgId: _, ...payloadArgs } = args;
     await ctx.db.insert("vehicleEdits", {
       orgId: args.orgId,
@@ -524,6 +592,43 @@ export const create = mutation({
     return id;
   },
 });
+
+/**
+ * True once this vehicle's acquisition cost has been capitalized into Vehicle
+ * Inventory (posted or still sitting in the pending-post outbox) — mirrors
+ * expenses.ts's hasExpenseAccountingExposure. Once true, purchasePrice/
+ * sourceCost are locked: correcting a mis-entered cost after the GL already
+ * captured it needs a deliberate adjustment, not a silent field edit that
+ * would leave the journal permanently out of sync with the vehicle record.
+ */
+async function hasPostedVehicleAcquisition(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">
+): Promise<boolean> {
+  const postedEvent = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_source", (q) =>
+      q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId.toString())
+    )
+    .filter((q) => q.eq(q.field("eventType"), "VEHICLE_ACQUIRED"))
+    .first();
+  return postedEvent !== null;
+}
+
+async function hasVehicleAcquisitionAccountingExposure(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">
+): Promise<boolean> {
+  if (await hasPostedVehicleAcquisition(ctx, orgId, vehicleId)) return true;
+
+  const pendingPost = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", `vehicle_acquired_${vehicleId}`))
+    .first();
+  return pendingPost !== null;
+}
 
 /**
  * Updates an existing vehicle's details.
@@ -624,6 +729,12 @@ export const update = mutation({
       }
     }
 
+    if (("purchasePrice" in patch || "sourceCost" in patch) && await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, args.vehicleId)) {
+      throw new ConvexError(
+        "This vehicle's acquisition cost has already been posted to accounting. Use a correction journal entry instead of editing purchasePrice/sourceCost directly."
+      );
+    }
+
     if (Object.keys(patch).length > 0) {
       if (typeof patch.sellingPrice === "number") {
         await insertPriceHistory(ctx, args.orgId, args.vehicleId, vehicle.sellingPrice, patch.sellingPrice, user._id);
@@ -678,6 +789,8 @@ export const upsertLandedCosts = mutation({
       label: v.string(),
       amount: v.number(),
     })),
+    /** How the landed costs were paid — drives the GL credit side. Ignored for SOURCED vehicles (never capitalized). */
+    paymentMethod: v.optional(paymentMethodValidator),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
@@ -685,6 +798,9 @@ export const upsertLandedCosts = mutation({
     const vehicle = await ctx.db.get(args.vehicleId);
     if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
       throw new ConvexError("Vehicle not found in this organization.");
+    }
+    if (vehicle.status === "SOLD") {
+      throw new ConvexError("Cannot edit landed costs on a sold vehicle — its inventory has already been relieved.");
     }
 
     const items = args.items
@@ -697,6 +813,7 @@ export const upsertLandedCosts = mutation({
       .query("vehicleLandedCosts")
       .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
       .unique();
+    const previousTotal = existing?.total ?? 0;
 
     if (existing) {
       await ctx.db.patch(existing._id, { items, total, updatedAt: now, updatedBy: user._id });
@@ -717,7 +834,127 @@ export const upsertLandedCosts = mutation({
       updatedBy: user._id,
     });
 
+    // Sourced/drop-ship vehicles never sit in physical inventory — their cost
+    // basis is sourceCost only, so landed costs entered against one (kept for
+    // informational tracking) never capitalize into the GL.
+    const delta = total - previousTotal;
+    if (vehicle.sourceType !== "SOURCED" && delta !== 0) {
+      const currency = await getOrgCurrency(ctx, args.orgId);
+      await hookVehicleLandedCostCapitalized(ctx, {
+        orgId: args.orgId,
+        vehicleId: args.vehicleId,
+        // A durable unique token, not a timestamp — two edits to the same
+        // vehicle's landed costs landing in the same millisecond must not
+        // collide on idempotencyKey and suppress a legitimate GL posting.
+        editToken: crypto.randomUUID(),
+        deltaMinor: toMinorUnits(delta, currency),
+        currency,
+        paymentMethod: normalizePaymentMethod(args.paymentMethod),
+        actorId: user._id,
+        occurredAt: now,
+      });
+    }
+
     return { total };
+  },
+});
+
+/**
+ * Corrects a vehicle's acquisition cost after VEHICLE_ACQUIRED has already
+ * posted and purchasePrice/sourceCost is locked (see the lock in update()
+ * above). Unlike a plain manual journal entry, this keeps the vehicle's own
+ * cost record (which computeVehicleCapitalizedCost, commission, and both
+ * profit reports read) in sync with the GL, and preserves the original value
+ * in vehicleCostCorrections for audit history. Gated on MANAGE_FINANCE (not
+ * EDIT_VEHICLES) since it's a financial correction, not an inventory edit.
+ */
+export const correctAcquisitionCost = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    newCost: v.number(),
+    reason: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+
+    const reason = args.reason.trim();
+    if (!reason) throw new ConvexError("A reason is required to correct a vehicle's acquisition cost.");
+    if (!Number.isFinite(args.newCost) || args.newCost < 0) {
+      throw new ConvexError("New cost must be a non-negative number.");
+    }
+
+    const vehicle = await ctx.db.get(args.vehicleId);
+    if (!vehicle || vehicle.isDeleted || vehicle.orgId !== args.orgId) {
+      throw new ConvexError("Vehicle not found in this organization.");
+    }
+    if (vehicle.sourceType === "SOURCED") {
+      throw new ConvexError(
+        "Sourced vehicles never capitalize into inventory — correct sourceCost via a supplier-payable adjustment instead."
+      );
+    }
+    if (vehicle.status === "SOLD") {
+      throw new ConvexError(
+        "This vehicle has already sold — its inventory cost has been relieved to COGS. A prior-period cost correction needs a manual journal entry, not this endpoint."
+      );
+    }
+    // Requires a *posted* acquisition, not merely pending: a correction posts
+    // a delta on top of the ledger's existing balance, so the base entry
+    // must already be settled — correcting against a still-pending base
+    // could post before it, or interleave unpredictably with it.
+    if (!(await hasPostedVehicleAcquisition(ctx, args.orgId, args.vehicleId))) {
+      throw new ConvexError(
+        "This vehicle's acquisition cost hasn't posted to accounting yet — edit purchasePrice directly instead."
+      );
+    }
+
+    const previousCost = vehicle.purchasePrice ?? 0;
+    const delta = args.newCost - previousCost;
+    if (delta === 0) {
+      throw new ConvexError("New cost matches the current cost — nothing to correct.");
+    }
+
+    const currency = await getOrgCurrency(ctx, args.orgId);
+    const now = Date.now();
+
+    await ctx.db.patch(args.vehicleId, {
+      purchasePrice: args.newCost,
+      updatedAt: now,
+      updatedBy: user._id,
+    });
+
+    const correctionId = await ctx.db.insert("vehicleCostCorrections", {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      previousCost,
+      newCost: args.newCost,
+      reason,
+      correctedBy: user._id,
+      createdAt: now,
+    });
+
+    await hookVehicleAcquisitionCostCorrected(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      // The correction record's own _id, not a timestamp — two corrections
+      // landing in the same millisecond must not collide on idempotencyKey.
+      correctionToken: correctionId.toString(),
+      deltaMinor: toMinorUnits(delta, currency),
+      currency,
+      actorId: user._id,
+      occurredAt: now,
+    });
+
+    const actorName = await getActorName(ctx);
+    await notifyManagers(
+      ctx,
+      args.orgId,
+      "vehicle.cost_corrected",
+      { actorName, vehicleLabel: `${vehicle.year} ${vehicle.make} ${vehicle.model}` },
+      { link: `/${args.orgId}/vehicles?highlightId=${args.vehicleId}` }
+    );
+
+    return { previousCost, newCost: args.newCost };
   },
 });
 

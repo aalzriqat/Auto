@@ -17,6 +17,7 @@ import {
   getOrgCurrency,
 } from "../accounting/workflowHooks";
 import { toMinorUnits } from "./money";
+import { computeVehicleCapitalizedCost } from "./vehicleCost";
 import {
   allocatePaymentToReceivable,
   createCanonicalPayment,
@@ -134,9 +135,12 @@ async function prepareSaleCompletion(
     .unique();
 
   const commissionMode = orgSettings?.commissionMode ?? "AUTO_MEMBER";
-  const grossProfit = vehicle.purchasePrice != null
-    ? Math.max(0, args.salePrice - vehicle.purchasePrice)
-    : args.salePrice;
+  // Same cost basis the GL uses for COGS (purchase + landed costs + capitalized
+  // reconditioning expenses) — previously this only subtracted purchasePrice,
+  // so commission, the GL, and the operational reports could each show a
+  // different margin for the same sale.
+  const vehicleCost = await computeVehicleCapitalizedCost(ctx, vehicle);
+  const grossProfit = Math.max(0, args.salePrice - vehicleCost);
 
   let commissionAmount: number | undefined;
   if (commissionMode === "AUTO_MEMBER") {
@@ -242,11 +246,13 @@ async function applySaleCompletionSideEffects(
   });
 
   const isSourced = prepared.vehicle.sourceType === "SOURCED";
-  // For sourced vehicles use sourceCost as the authoritative cost so the GL
-  // AP-Suppliers credit and the supplier payable both use the same figure.
-  // For owned vehicles fall back to purchasePrice as before.
-  const costAmount = isSourced ? prepared.vehicle.sourceCost : prepared.vehicle.purchasePrice;
-  const costMinor = costAmount != null ? toMinorUnits(costAmount, prepared.currency) : undefined;
+  // Single authoritative cost basis (see computeVehicleCapitalizedCost): for
+  // sourced vehicles this is sourceCost; for owned stock it's purchase price
+  // plus everything capitalized into Vehicle Inventory along the way (landed
+  // costs, reconditioning expenses) — the exact amount that was debited to
+  // VEHICLE_INVENTORY, so this credit fully relieves it at sale.
+  const costAmount = await computeVehicleCapitalizedCost(ctx, prepared.vehicle);
+  const costMinor = costAmount > 0 ? toMinorUnits(costAmount, prepared.currency) : undefined;
 
   await hookSaleCompleted(ctx, {
     orgId: args.orgId,
@@ -306,7 +312,7 @@ async function applySaleCompletionSideEffects(
 
   // For sourced vehicles, record the outstanding payable to the supplier dealer.
   // The GL entry (DR COGS / CR AP-Suppliers) was already posted by hookSaleCompleted.
-  if (isSourced && costAmount != null && costAmount > 0) {
+  if (isSourced && costAmount > 0) {
     const now = Date.now();
     await ctx.db.insert("vehicleSupplierPayables", {
       orgId: args.orgId,

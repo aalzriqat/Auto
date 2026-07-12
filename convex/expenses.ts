@@ -15,6 +15,7 @@ import { cancelPendingPostByKey } from "./accountingOutbox";
 import { requireFeature } from "./subscriptions";
 import { toMinorUnits } from "./utils/money";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
+import { CAPITALIZABLE_EXPENSE_CATEGORIES } from "./utils/vehicleCost";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -84,6 +85,34 @@ async function recordPaidExpenseSideEffects(
     });
   }
 
+  // Reconditioning costs (repair/maintenance/detailing/transport-in) on a
+  // vehicle still in stock capitalize into Vehicle Inventory instead of
+  // hitting the P&L immediately — see computeVehicleCapitalizedCost, the
+  // single cost basis this must stay consistent with. Sourced vehicles never
+  // sit in physical inventory, and a vehicle already SOLD has had its
+  // inventory relieved, so both fall back to a normal period expense.
+  //
+  // Recorded once, permanently, at this exact moment — computeVehicleCapitalizedCost
+  // reads this instead of re-deriving it later, so this decision (and the net
+  // amount actually capitalized, excluding VAT) can never drift from what the
+  // GL actually posted. See the schema comment on expenses.accountingTreatment.
+  // A retry (e.g. after the vehicle sells) must NOT re-derive: the GL event
+  // below is idempotent and won't re-post, so flipping the treatment here
+  // would desync the expense's cost basis from what's already in the ledger.
+  let capitalizeToInventory = args.expense.accountingTreatment === "CAPITALIZED_INVENTORY";
+  if (args.expense.accountingTreatment === undefined) {
+    if (args.expense.vehicleId && CAPITALIZABLE_EXPENSE_CATEGORIES.has(args.expense.category)) {
+      const vehicle = await ctx.db.get(args.expense.vehicleId);
+      capitalizeToInventory = !!vehicle && vehicle.sourceType !== "SOURCED" && vehicle.status !== "SOLD";
+    }
+
+    const netAmount = args.expense.amount - (args.expense.taxAmount ?? 0);
+    await ctx.db.patch(args.expense._id, {
+      accountingTreatment: capitalizeToInventory ? "CAPITALIZED_INVENTORY" : "PERIOD_EXPENSE",
+      capitalizedAmount: capitalizeToInventory ? netAmount : undefined,
+    });
+  }
+
   const currency = await getOrgCurrency(ctx, args.expense.orgId);
   await hookExpensePosted(ctx, {
     orgId: args.expense.orgId,
@@ -95,6 +124,8 @@ async function recordPaidExpenseSideEffects(
     paymentMethod: normalizePaymentMethod(args.expense.paymentMethod),
     actorId: args.actorId,
     occurredAt: args.expense.date,
+    vehicleId: args.expense.vehicleId,
+    capitalizeToInventory,
   });
 }
 

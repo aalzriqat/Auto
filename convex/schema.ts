@@ -618,6 +618,20 @@ export default defineSchema({
     updatedBy: v.id("users"),
   }).index("by_org_vehicle", ["orgId", "vehicleId"]),
 
+  // Audit trail for vehicles.correctAcquisitionCost — preserves the original
+  // value whenever a vehicle's already-posted acquisition cost is corrected,
+  // since the GL adjustment alone (VEHICLE_ACQUISITION_COST_CORRECTED) doesn't
+  // by itself explain why purchasePrice changed after the fact.
+  vehicleCostCorrections: defineTable({
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    previousCost: v.number(),
+    newCost: v.number(),
+    reason: v.string(),
+    correctedBy: v.id("users"),
+    createdAt: v.number(),
+  }).index("by_org_vehicle", ["orgId", "vehicleId"]),
+
   vehicleSupplierPayables: defineTable({
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
@@ -721,6 +735,7 @@ export default defineSchema({
       fuelType: v.optional(v.string()),
       transmission: v.optional(v.string()),
       purchasePrice: v.optional(v.number()),
+      purchasePaymentMethod: v.optional(paymentMethodValidator),
       minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),
       status: v.optional(v.string()),
@@ -900,6 +915,17 @@ export default defineSchema({
     vendor: v.optional(v.string()),
     payerId: v.optional(v.id("users")),
     notes: v.optional(v.string()),
+    // Set once, at posting time (recordPaidExpenseSideEffects), from the same
+    // capitalizeToInventory decision that drove the GL posting — never
+    // re-derived from category/vehicle-status later, so a vehicle sold after
+    // this expense was capitalized can't retroactively change history, and a
+    // post-sale repair correctly expensed to GL can't retroactively get pulled
+    // into a vehicle's cost basis. capitalizedAmount is the exact net-of-VAT
+    // amount actually debited to Vehicle Inventory (see computeVehicleCapitalizedCost).
+    accountingTreatment: v.optional(
+      v.union(v.literal("CAPITALIZED_INVENTORY"), v.literal("PERIOD_EXPENSE"))
+    ),
+    capitalizedAmount: v.optional(v.number()),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
     deletedBy: v.optional(v.string()),

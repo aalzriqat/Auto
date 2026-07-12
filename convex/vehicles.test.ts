@@ -533,18 +533,19 @@ describe("inventory intelligence", () => {
     ).rejects.toThrow(/edit:vehicles/);
   });
 
-  test("reports use landed cost total before purchase price", async () => {
+  test("reports combine purchase price and landed costs (not one or the other)", async () => {
     const { t, orgId, userId, asUser } = await setup();
     const vehicleId = await asUser.mutation(api.vehicles.create, {
       orgId,
       ...baseVehicle,
       purchasePrice: 8000,
+      purchasePaymentMethod: "CASH",
       sellingPrice: 15000,
     });
     await asUser.mutation(api.vehicles.upsertLandedCosts, {
       orgId,
       vehicleId,
-      items: [{ label: "Landed", amount: 12000 }],
+      items: [{ label: "Landed", amount: 2000 }],
     });
     const customerId = await t.run((ctx) =>
       ctx.db.insert("customers", { orgId, firstName: "Test", lastName: "Buyer" })
@@ -568,8 +569,9 @@ describe("inventory intelligence", () => {
       endDate: saleDate + 1000,
     });
 
-    expect(report.sales[0].vehicleCost).toBe(12000);
-    expect(report.sales[0].netProfit).toBe(3000);
+    // 8000 purchase + 2000 landed = 10000 cost basis, not one replacing the other.
+    expect(report.sales[0].vehicleCost).toBe(10000);
+    expect(report.sales[0].netProfit).toBe(5000);
   });
 
   test("price history is inserted only when selling price changes", async () => {

@@ -12,10 +12,10 @@
 import { Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 import { postAccountingEvent, PostCommand } from "./postingEngine";
-import { EventType } from "./postingRules";
+import { EventType, ReceivableCreditKey } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate } from "../accountingPeriods";
-import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount } from "../chartOfAccounts";
+import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount } from "../chartOfAccounts";
 import {
   enqueuePendingPost,
   enqueuePendingReversal,
@@ -400,6 +400,8 @@ export async function hookExpensePosted(
     paymentMethod?: string;
     actorId: Id<"users">;
     occurredAt: number;
+    vehicleId?: Id<"vehicles">;
+    capitalizeToInventory?: boolean;
   }
 ) {
   if (args.taxMinor && args.taxMinor > 0) {
@@ -421,6 +423,173 @@ export async function hookExpensePosted(
       currency: args.currency,
       category: args.category,
       paymentMethod: args.paymentMethod,
+      vehicleId: args.vehicleId?.toString(),
+      capitalizeToInventory: args.capitalizeToInventory,
+    },
+  });
+}
+
+// ─── Vehicle inventory capitalization ─────────────────────────────────────────
+
+export async function hookVehicleAcquired(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    costMinor: number;
+    currency: string;
+    paymentMethod?: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "VEHICLE_ACQUIRED",
+    sourceType: "vehicles",
+    sourceId: args.vehicleId.toString(),
+    idempotencyKey: `vehicle_acquired_${args.vehicleId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      vehicleId: args.vehicleId.toString(),
+      costMinor: args.costMinor,
+      currency: args.currency,
+      paymentMethod: args.paymentMethod,
+    },
+  });
+}
+
+/**
+ * Each landed-cost edit is its own economic event (upsertLandedCosts replaces
+ * the whole items list every save), so the idempotency/source key includes
+ * `editToken` — a caller-supplied per-edit discriminator (the landed-cost
+ * row's updatedAt after the patch) rather than being derived from vehicleId
+ * alone, which would collide across edits.
+ */
+export async function hookVehicleLandedCostCapitalized(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    editToken: string;
+    deltaMinor: number;
+    currency: string;
+    paymentMethod?: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "VEHICLE_LANDED_COST_CAPITALIZED",
+    sourceType: "vehicleLandedCosts",
+    sourceId: `${args.vehicleId}_${args.editToken}`,
+    idempotencyKey: `landed_cost_${args.vehicleId}_${args.editToken}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      vehicleId: args.vehicleId.toString(),
+      deltaMinor: args.deltaMinor,
+      currency: args.currency,
+      paymentMethod: args.paymentMethod,
+    },
+  });
+}
+
+export async function hookVehicleAcquisitionCostCorrected(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    correctionToken: string;
+    deltaMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "VEHICLE_ACQUISITION_COST_CORRECTED",
+    sourceType: "vehicleCostCorrections",
+    sourceId: `${args.vehicleId}_${args.correctionToken}`,
+    idempotencyKey: `vehicle_cost_corrected_${args.vehicleId}_${args.correctionToken}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      vehicleId: args.vehicleId.toString(),
+      deltaMinor: args.deltaMinor,
+      currency: args.currency,
+    },
+  });
+}
+
+export async function hookVehiclePrepExpenseReclassified(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    expenseId: Id<"expenses">;
+    vehicleId: Id<"vehicles">;
+    amountMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "VEHICLE_PREP_EXPENSE_RECLASSIFIED",
+    sourceType: "expenses",
+    sourceId: args.expenseId.toString(),
+    idempotencyKey: `vehicle_prep_expense_reclassified_${args.expenseId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      vehicleId: args.vehicleId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+    },
+  });
+}
+
+// ─── Manual receivables ────────────────────────────────────────────────────────
+
+export async function hookReceivableCreated(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    receivableId: Id<"receivables">;
+    customerId: Id<"customers">;
+    amountMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+    creditSystemKey: ReceivableCreditKey;
+  }
+) {
+  if (args.creditSystemKey === "MISCELLANEOUS_INCOME" && (await isChartInitialized(ctx, args.orgId))) {
+    await ensureMiscIncomeAccount(ctx, args.orgId, args.actorId);
+  }
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "RECEIVABLE_CREATED",
+    sourceType: "receivables",
+    sourceId: args.receivableId.toString(),
+    idempotencyKey: `receivable_created_${args.receivableId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      receivableId: args.receivableId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      customerId: args.customerId.toString(),
+      creditSystemKey: args.creditSystemKey,
     },
   });
 }
@@ -547,6 +716,20 @@ export const hookDepositVoided = makeReversalHook<{ depositId: Id<"deposits"> }>
   sourceId: (a) => a.depositId.toString(),
   reversalKey: (a) => `deposit_voided_${a.depositId}`,
   pendingPostKey: (a) => `deposit_received_${a.depositId}`,
+});
+
+/**
+ * Reverses the RECEIVABLE_CREATED entry when a manual receivable is
+ * cancelled before any payment is collected. Safe to call for sale-linked
+ * receivables too — those never had a RECEIVABLE_CREATED event posted (their
+ * AR is recognized by SALE_COMPLETED instead), so this is a no-op for them.
+ */
+export const hookReceivableCancelled = makeReversalHook<{ receivableId: Id<"receivables"> }>({
+  eventType: "RECEIVABLE_CREATED",
+  sourceType: "receivables",
+  sourceId: (a) => a.receivableId.toString(),
+  reversalKey: (a) => `receivable_cancelled_${a.receivableId}`,
+  pendingPostKey: (a) => `receivable_created_${a.receivableId}`,
 });
 
 export async function hookFinanceDisbursed(
