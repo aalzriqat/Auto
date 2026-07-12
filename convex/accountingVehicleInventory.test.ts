@@ -175,6 +175,96 @@ describe("Fix #1 — vehicle acquisition capitalizes into Vehicle Inventory", ()
   });
 });
 
+describe("Fix #11 — flipping a SOURCED vehicle to owned stock capitalizes it", () => {
+  test("SOURCED→STOCK via update() debits Vehicle Inventory using the mirrored sourceCost", async () => {
+    const { t, orgId, asOwner } = await seedDealer("f11a");
+
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "SRC3D9AN0000011AX", sourceType: "SOURCED",
+      sourcedFromName: "Other Dealer", sourceCost: 9000,
+    });
+
+    // Never capitalized while SOURCED.
+    const eventBeforeFlip = await t.run((ctx) =>
+      ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId))
+        .first()
+    );
+    expect(eventBeforeFlip).toBeNull();
+
+    await asOwner.mutation(api.vehicles.update, {
+      orgId, vehicleId, sourceType: "STOCK", purchasePaymentMethod: "CASH",
+    });
+
+    const inventory = await accountBySystemKey(t, orgId, "VEHICLE_INVENTORY");
+    const cash = await accountBySystemKey(t, orgId, "CASH_ON_HAND");
+    const { lines } = await linesForEvent(t, orgId, "vehicles", vehicleId, "VEHICLE_ACQUIRED");
+    const invLine = lines.find((l) => l.accountId === inventory._id)!;
+    const cashLine = lines.find((l) => l.accountId === cash._id)!;
+    expect(invLine.debitMinor).toBe(9_000_000); // sourceCost mirrored into purchasePrice at creation
+    expect(cashLine.creditMinor).toBe(9_000_000);
+
+    const legacyTx = await t.run((ctx) =>
+      ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId)).filter((q) => q.eq(q.field("category"), "VEHICLE_PURCHASE")).first()
+    );
+    expect(legacyTx?.amount).toBe(9000);
+
+    // A second no-op update (no sourceType/purchasePrice change) must not re-post.
+    await asOwner.mutation(api.vehicles.update, { orgId, vehicleId, notes: "inspected" });
+    const eventsAfterNoOp = await t.run((ctx) =>
+      ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId))
+        .collect()
+    );
+    expect(eventsAfterNoOp).toHaveLength(1);
+  });
+
+  test("SOURCED→STOCK via update() requires an explicit payment method", async () => {
+    const { orgId, asOwner } = await seedDealer("f11b");
+
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "SRC3D9AN0000012AX", sourceType: "SOURCED",
+      sourcedFromName: "Other Dealer", sourceCost: 9000,
+    });
+
+    await expect(
+      asOwner.mutation(api.vehicles.update, { orgId, vehicleId, sourceType: "STOCK" })
+    ).rejects.toThrow(/[Pp]ayment method is required/);
+  });
+
+  test("a STOCK vehicle created without a purchase price capitalizes once one is set via update()", async () => {
+    const { t, orgId, asOwner } = await seedDealer("f11c");
+
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "STK3D9AN0000013AX",
+    });
+
+    let event = await t.run((ctx) =>
+      ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId))
+        .first()
+    );
+    expect(event).toBeNull();
+
+    await asOwner.mutation(api.vehicles.update, {
+      orgId, vehicleId, purchasePrice: 7500, purchasePaymentMethod: "BANK_TRANSFER",
+    });
+
+    event = await t.run((ctx) =>
+      ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId))
+        .filter((q) => q.eq(q.field("eventType"), "VEHICLE_ACQUIRED"))
+        .first()
+    );
+    expect(event).not.toBeNull();
+    expect(event!.status).toBe("POSTED");
+  });
+});
+
 describe("Fix #2 — landed costs post their delta to Vehicle Inventory", () => {
   test("increasing landed costs debits inventory; decreasing them reverses the delta", async () => {
     const { t, orgId, asOwner } = await seedDealer("f2a");

@@ -663,6 +663,8 @@ export const update = mutation({
     sourceCost: v.optional(v.number()),
     notes: v.optional(v.string()),
     imageIds: v.optional(v.array(v.id("_storage"))),
+    /** How the dealer paid — required if this update capitalizes an acquisition that hasn't posted yet (e.g. a SOURCED→STOCK flip, or a purchase price set for the first time). Ignored otherwise. */
+    purchasePaymentMethod: v.optional(paymentMethodValidator),
     ...trustPassportFieldValidators,
   },
   handler: async (ctx, args) => {
@@ -713,7 +715,9 @@ export const update = mutation({
       }
     }
 
-    const { orgId: _, vehicleId: __, ...updates } = args;
+    // purchasePaymentMethod is a transient input for the acquisition posting
+    // below, not a persisted vehicle field — exclude it from the patch.
+    const { orgId: _, vehicleId: __, purchasePaymentMethod: ___, ...updates } = args;
     const patch: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(updates)) {
       if (value !== undefined) {
@@ -737,10 +741,35 @@ export const update = mutation({
       }
     }
 
-    if (("purchasePrice" in patch || "sourceCost" in patch) && await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, args.vehicleId)) {
+    // A SOURCED vehicle flipping to owned stock (or a STOCK vehicle whose
+    // purchase price is set for the first time here) needs the exact same
+    // capitalization create() does for a directly-created owned vehicle —
+    // otherwise a later sale relieves Vehicle Inventory for a cost that was
+    // never debited into it. Computed once up front since both this guard
+    // and the edit-lock guard below need to know whether it's already posted.
+    const mayAffectAcquisition =
+      "purchasePrice" in patch || "sourceCost" in patch ||
+      ("sourceType" in patch && patch.sourceType !== "SOURCED");
+    const acquisitionAlreadyExposed = mayAffectAcquisition
+      ? await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, args.vehicleId)
+      : false;
+
+    if (("purchasePrice" in patch || "sourceCost" in patch) && acquisitionAlreadyExposed) {
       throw new ConvexError(
         "This vehicle's acquisition cost has already been posted to accounting. Use a correction journal entry instead of editing purchasePrice/sourceCost directly."
       );
+    }
+
+    const acquisitionSourceType = (patch.sourceType as "STOCK" | "SOURCED" | undefined) ?? vehicle.sourceType;
+    const acquisitionPurchasePrice: number | undefined =
+      "purchasePrice" in patch ? (patch.purchasePrice as number) : vehicle.purchasePrice;
+    const needsAcquisitionPosting =
+      mayAffectAcquisition &&
+      acquisitionSourceType !== "SOURCED" &&
+      acquisitionPurchasePrice != null && acquisitionPurchasePrice > 0 &&
+      !acquisitionAlreadyExposed;
+    if (needsAcquisitionPosting && !args.purchasePaymentMethod) {
+      throw new ConvexError("Payment method is required to post this vehicle's acquisition cost to accounting.");
     }
 
     if (Object.keys(patch).length > 0) {
@@ -763,6 +792,20 @@ export const update = mutation({
       patch.updatedBy = user._id;
       patch.updatedAt = Date.now();
       await ctx.db.patch(args.vehicleId, patch);
+
+      if (needsAcquisitionPosting) {
+        await postVehicleAcquisitionIfOwned(ctx, {
+          orgId: args.orgId,
+          vehicleId: args.vehicleId,
+          isSourced: false,
+          purchasePrice: acquisitionPurchasePrice,
+          purchasePaymentMethod: args.purchasePaymentMethod,
+          vehicleLabel: `${(patch.year as number | undefined) ?? vehicle.year} ${(patch.make as string | undefined) ?? vehicle.make} ${(patch.model as string | undefined) ?? vehicle.model}`,
+          vin: ((patch.vin as string | undefined) ?? vehicle.vin) || "",
+          actorId: user._id,
+        });
+      }
+
       const actorName = await getActorName(ctx);
       await notifyManagers(
         ctx,
