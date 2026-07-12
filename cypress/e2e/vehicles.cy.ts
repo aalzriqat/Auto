@@ -7,7 +7,8 @@ describe("vehicles", () => {
 
   it("can add a new vehicle to inventory and see it in the list", () => {
     createVehicle().then(({ model }) => {
-      cy.findByPlaceholderText(/Search/i)
+      cy.get('input[placeholder^="Search"]:not([readonly])')
+        .first()
         .clear()
         .type(model);
       expectVisibleTableCell(model);
