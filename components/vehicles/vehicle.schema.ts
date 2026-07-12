@@ -23,6 +23,15 @@ export const vehicleSchema = z.object({
   sourceCost: z.coerce.number().min(0).optional(),
   notes: z.string().optional(),
   imageIds: z.array(z.string()).optional(),
+  // The dealer-facing form only lets the user pick NONE/SELF_REPORTED —
+  // PARTNER_VERIFIED is included here purely so the form can read/display an
+  // existing partner-verified vehicle's status; the update/requestUpdate
+  // mutations reject PARTNER_VERIFIED outright, and VehicleDialog strips this
+  // field from the submitted payload whenever it's locked at that value.
+  inspectionStatus: z.enum(["NONE", "SELF_REPORTED", "PARTNER_VERIFIED"]).optional(),
+  accidentDisclosed: z.boolean().optional(),
+  ownerCount: z.coerce.number().int().min(0, "Owner count cannot be negative").optional(),
+  dealerGuarantee: z.boolean().optional(),
 });
 
 export type VehicleFormValues = z.infer<typeof vehicleSchema>;

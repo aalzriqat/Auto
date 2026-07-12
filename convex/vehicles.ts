@@ -26,6 +26,7 @@ import {
   assertDirectVehicleCreateStatus,
   assertDirectVehicleStatusTransition,
   normalizeVehicleStatus,
+  trustPassportFieldValidators,
   type VehicleLifecycleStatus,
 } from "./utils/vehicleStatusGuards";
 
@@ -408,6 +409,7 @@ export const create = mutation({
     sourceCost: v.optional(v.number()),
     notes: v.optional(v.string()),
     imageIds: v.optional(v.array(v.id("_storage"))),
+    ...trustPassportFieldValidators,
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.CREATE_VEHICLES]);
@@ -488,6 +490,10 @@ export const create = mutation({
       sourceCost: isSourced ? args.sourceCost : undefined,
       notes: args.notes,
       imageIds: args.imageIds,
+      inspectionStatus: args.inspectionStatus,
+      accidentDisclosed: args.accidentDisclosed,
+      ownerCount: args.ownerCount,
+      dealerGuarantee: args.dealerGuarantee,
       createdAt: Date.now(),
       addedBy: user._id,
       updatedBy: user._id,
@@ -544,6 +550,7 @@ export const update = mutation({
     sourceCost: v.optional(v.number()),
     notes: v.optional(v.string()),
     imageIds: v.optional(v.array(v.id("_storage"))),
+    ...trustPassportFieldValidators,
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);

@@ -189,6 +189,8 @@ This is a demand-and-supply cold-start problem, not just a build. The plan fails
 **Acceptance:** a vehicle with disclosed fields visibly differs from one without, no crash on missing data.
 **Explicitly out of scope for v1:** any paid third-party report integration (Carseer or similar) — that's a partnership + cost decision, not an engineering task; revisit after Release 2 proves demand.
 
+**Dealer self-service form (added 2026-07-12):** a "Trust Passport" section in `VehicleDialog.tsx` (the same create/edit form every other vehicle field goes through, including the `vehicleEdits` approval workflow for non-privileged roles). The `inspectionStatus` Select only ever lets a dealer choose `NONE`/`SELF_REPORTED` — `PARTNER_VERIFIED` isn't offered as a selectable option and is rejected server-side by `vehicles.create`/`update` and `vehicleEdits.requestCreate`/`requestUpdate`'s argument validators if attempted; a vehicle that already has `PARTNER_VERIFIED` (set via the admin data browser, or a future partner-API integration) shows a locked/disabled Select instead so the value can't be silently downgraded by an unrelated edit.
+
 **End of Release 2:** AutoFlow is a real, browsable, ranked marketplace — not just a request inbox.
 
 ---

@@ -1,4 +1,17 @@
-import { ConvexError } from "convex/values";
+import { ConvexError, v } from "convex/values";
+
+// Phase 61 trust-passport fields — shared across the vehicles table schema,
+// the direct create/update mutations, and the vehicleEdits request/approval
+// payloads, so the validator shape only needs to change in one place.
+// PARTNER_VERIFIED is deliberately excluded here: it's reserved for a future
+// partner-API integration and is never accepted from these dealer-facing
+// entry points (see vehicles table schema for the full 3-literal union).
+export const trustPassportFieldValidators = {
+  inspectionStatus: v.optional(v.union(v.literal("NONE"), v.literal("SELF_REPORTED"))),
+  accidentDisclosed: v.optional(v.boolean()),
+  ownerCount: v.optional(v.number()),
+  dealerGuarantee: v.optional(v.boolean()),
+};
 
 export const vehicleLifecycleStatuses = [
   "AVAILABLE",

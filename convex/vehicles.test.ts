@@ -961,3 +961,195 @@ describe("inventory intelligence", () => {
     });
   });
 });
+
+describe("vehicles trust passport (Phase 61 self-service form)", () => {
+  test("create persists self-reported trust passport fields", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      orgId,
+      ...baseVehicle,
+      inspectionStatus: "SELF_REPORTED",
+      accidentDisclosed: false,
+      ownerCount: 2,
+      dealerGuarantee: true,
+    });
+
+    await t.run(async (ctx) => {
+      const vehicle = await ctx.db.get(vehicleId);
+      expect(vehicle?.inspectionStatus).toBe("SELF_REPORTED");
+      expect(vehicle?.accidentDisclosed).toBe(false);
+      expect(vehicle?.ownerCount).toBe(2);
+      expect(vehicle?.dealerGuarantee).toBe(true);
+    });
+  });
+
+  test("create rejects PARTNER_VERIFIED — reserved for a future partner-API integration", async () => {
+    const { orgId, asUser } = await setup();
+
+    await expect(
+      asUser.mutation(api.vehicles.create, {
+        orgId,
+        ...baseVehicle,
+        inspectionStatus: "PARTNER_VERIFIED" as any,
+      })
+    ).rejects.toThrow();
+  });
+
+  test("update can set and later clear trust passport fields", async () => {
+    const { t, orgId, asUser } = await setup();
+    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+
+    await asUser.mutation(api.vehicles.update, {
+      orgId,
+      vehicleId,
+      inspectionStatus: "SELF_REPORTED",
+      accidentDisclosed: true,
+      ownerCount: 1,
+      dealerGuarantee: true,
+    });
+
+    await t.run(async (ctx) => {
+      const vehicle = await ctx.db.get(vehicleId);
+      expect(vehicle?.inspectionStatus).toBe("SELF_REPORTED");
+      expect(vehicle?.accidentDisclosed).toBe(true);
+      expect(vehicle?.ownerCount).toBe(1);
+      expect(vehicle?.dealerGuarantee).toBe(true);
+    });
+
+    await asUser.mutation(api.vehicles.update, {
+      orgId,
+      vehicleId,
+      inspectionStatus: "NONE",
+      accidentDisclosed: false,
+      ownerCount: 0,
+      dealerGuarantee: false,
+    });
+
+    await t.run(async (ctx) => {
+      const vehicle = await ctx.db.get(vehicleId);
+      expect(vehicle?.inspectionStatus).toBe("NONE");
+      expect(vehicle?.accidentDisclosed).toBe(false);
+      expect(vehicle?.ownerCount).toBe(0);
+      expect(vehicle?.dealerGuarantee).toBe(false);
+    });
+  });
+
+  test("update rejects PARTNER_VERIFIED so the form can never self-assign it", async () => {
+    const { orgId, asUser } = await setup();
+    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+
+    await expect(
+      asUser.mutation(api.vehicles.update, {
+        orgId,
+        vehicleId,
+        inspectionStatus: "PARTNER_VERIFIED" as any,
+      })
+    ).rejects.toThrow();
+  });
+
+  test("requestCreate/requestUpdate reject a negative or non-integer ownerCount", async () => {
+    const { orgId, asUser } = await setup();
+    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+
+    await expect(
+      asUser.mutation(api.vehicleEdits.requestCreate, {
+        orgId,
+        payload: { ...baseVehicle, ownerCount: -1 },
+      })
+    ).rejects.toThrow(/owner count/i);
+
+    await expect(
+      asUser.mutation(api.vehicleEdits.requestCreate, {
+        orgId,
+        payload: { ...baseVehicle, ownerCount: 1.5 },
+      })
+    ).rejects.toThrow(/owner count/i);
+
+    await expect(
+      asUser.mutation(api.vehicleEdits.requestUpdate, {
+        orgId,
+        vehicleId,
+        payload: { ownerCount: -1 },
+      })
+    ).rejects.toThrow(/owner count/i);
+  });
+
+  test("create/update reject a negative or non-integer ownerCount", async () => {
+    const { orgId, asUser } = await setup();
+
+    await expect(
+      asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle, ownerCount: -1 })
+    ).rejects.toThrow();
+
+    await expect(
+      asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle, ownerCount: 1.5 })
+    ).rejects.toThrow();
+
+    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+
+    await expect(
+      asUser.mutation(api.vehicles.update, { orgId, vehicleId, ownerCount: -1 })
+    ).rejects.toThrow();
+
+    await expect(
+      asUser.mutation(api.vehicles.update, { orgId, vehicleId, ownerCount: 1.5 })
+    ).rejects.toThrow();
+  });
+
+  test("a vehicle create request carries trust passport fields through approval", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    const requestId = await asUser.mutation(api.vehicleEdits.requestCreate, {
+      orgId,
+      payload: {
+        ...baseVehicle,
+        inspectionStatus: "SELF_REPORTED",
+        accidentDisclosed: false,
+        ownerCount: 3,
+        dealerGuarantee: true,
+      },
+    });
+
+    await asUser.mutation(api.vehicleEdits.resolve, { orgId, requestId, status: "APPROVED" });
+
+    await t.run(async (ctx) => {
+      const vehicle = await ctx.db
+        .query("vehicles")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .first();
+      expect(vehicle?.inspectionStatus).toBe("SELF_REPORTED");
+      expect(vehicle?.accidentDisclosed).toBe(false);
+      expect(vehicle?.ownerCount).toBe(3);
+      expect(vehicle?.dealerGuarantee).toBe(true);
+    });
+  });
+
+  test("a vehicle update request carries trust passport field changes through approval", async () => {
+    const { t, orgId, asUser } = await setup();
+    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+
+    await asUser.mutation(api.vehicleEdits.requestUpdate, {
+      orgId,
+      vehicleId,
+      payload: { inspectionStatus: "SELF_REPORTED", ownerCount: 4, dealerGuarantee: true },
+    });
+
+    const requestId = await t.run(async (ctx) => {
+      const req = await ctx.db
+        .query("vehicleEdits")
+        .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
+        .first();
+      return req!._id;
+    });
+
+    await asUser.mutation(api.vehicleEdits.resolve, { orgId, requestId, status: "APPROVED" });
+
+    await t.run(async (ctx) => {
+      const vehicle = await ctx.db.get(vehicleId);
+      expect(vehicle?.inspectionStatus).toBe("SELF_REPORTED");
+      expect(vehicle?.ownerCount).toBe(4);
+      expect(vehicle?.dealerGuarantee).toBe(true);
+    });
+  });
+});

@@ -10,6 +10,7 @@ import {
   assertDirectVehicleCreateStatus,
   assertDirectVehicleStatusTransition,
   normalizeVehicleStatus,
+  trustPassportFieldValidators,
   type VehicleLifecycleStatus,
 } from "./utils/vehicleStatusGuards";
 import { assertVehicleImagesAllowed } from "./utils/storageValidation";
@@ -33,6 +34,10 @@ type VehicleEditPayload = {
   sourceCost?: number;
   notes?: string;
   imageIds?: Id<"_storage">[];
+  inspectionStatus?: "NONE" | "SELF_REPORTED";
+  accidentDisclosed?: boolean;
+  ownerCount?: number;
+  dealerGuarantee?: boolean;
 };
 
 type NormalizedVehicleEditPayload = Omit<VehicleEditPayload, "status"> & {
@@ -44,6 +49,18 @@ function normalizeVehicleEditPayload(payload: VehicleEditPayload): NormalizedVeh
   const { status: _status, ...rest } = payload;
   if (!normalizedStatus) return rest;
   return { ...rest, status: normalizedStatus };
+}
+
+// The direct vehicles.create/update mutations reject a non-integer or
+// negative ownerCount via CreateVehicleSchema/UpdateVehicleSchema's zod
+// validation; this request/approval path bypasses that schema entirely, so
+// an approved request could otherwise persist invalid data straight onto
+// the vehicle.
+function assertValidOwnerCount(ownerCount: number | undefined) {
+  if (ownerCount === undefined) return;
+  if (!Number.isInteger(ownerCount) || ownerCount < 0) {
+    throw new ConvexError("Owner count must be a non-negative integer.");
+  }
 }
 
 export const requestCreate = mutation({
@@ -68,6 +85,7 @@ export const requestCreate = mutation({
       sourceCost: v.optional(v.number()),
       notes: v.optional(v.string()),
       imageIds: v.optional(v.array(v.id("_storage"))),
+      ...trustPassportFieldValidators,
     }), // The vehicle creation payload
   },
   handler: async (ctx, args) => {
@@ -84,6 +102,7 @@ export const requestCreate = mutation({
     }
     assertDirectVehicleCreateStatus(payload.status);
     await assertVehicleImagesAllowed(ctx, payload.imageIds);
+    assertValidOwnerCount(payload.ownerCount);
 
     if (payload.sourceType === "SOURCED") {
       if (!payload.sourcedFromName?.trim()) {
@@ -139,6 +158,7 @@ export const requestUpdate = mutation({
       sourceCost: v.optional(v.number()),
       notes: v.optional(v.string()),
       imageIds: v.optional(v.array(v.id("_storage"))),
+      ...trustPassportFieldValidators,
     }), // The vehicle update payload (patch)
   },
   handler: async (ctx, args) => {
@@ -160,6 +180,7 @@ export const requestUpdate = mutation({
     const payload = normalizeVehicleEditPayload(args.payload);
     assertDirectVehicleStatusTransition(vehicle.status, payload.status);
     await assertVehicleImagesAllowed(ctx, payload.imageIds);
+    assertValidOwnerCount(payload.ownerCount);
 
     const filteredPayload: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(payload)) {
