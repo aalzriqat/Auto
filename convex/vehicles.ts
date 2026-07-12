@@ -601,7 +601,7 @@ export const create = mutation({
  * captured it needs a deliberate adjustment, not a silent field edit that
  * would leave the journal permanently out of sync with the vehicle record.
  */
-async function hasVehicleAcquisitionAccountingExposure(
+async function hasPostedVehicleAcquisition(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
   vehicleId: Id<"vehicles">
@@ -613,7 +613,15 @@ async function hasVehicleAcquisitionAccountingExposure(
     )
     .filter((q) => q.eq(q.field("eventType"), "VEHICLE_ACQUIRED"))
     .first();
-  if (postedEvent) return true;
+  return postedEvent !== null;
+}
+
+async function hasVehicleAcquisitionAccountingExposure(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  vehicleId: Id<"vehicles">
+): Promise<boolean> {
+  if (await hasPostedVehicleAcquisition(ctx, orgId, vehicleId)) return true;
 
   const pendingPost = await ctx.db
     .query("pendingAccountingEvents")
@@ -835,7 +843,10 @@ export const upsertLandedCosts = mutation({
       await hookVehicleLandedCostCapitalized(ctx, {
         orgId: args.orgId,
         vehicleId: args.vehicleId,
-        editToken: now.toString(),
+        // A durable unique token, not a timestamp — two edits to the same
+        // vehicle's landed costs landing in the same millisecond must not
+        // collide on idempotencyKey and suppress a legitimate GL posting.
+        editToken: crypto.randomUUID(),
         deltaMinor: toMinorUnits(delta, currency),
         currency,
         paymentMethod: normalizePaymentMethod(args.paymentMethod),
@@ -882,7 +893,16 @@ export const correctAcquisitionCost = mutation({
         "Sourced vehicles never capitalize into inventory — correct sourceCost via a supplier-payable adjustment instead."
       );
     }
-    if (!(await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, args.vehicleId))) {
+    if (vehicle.status === "SOLD") {
+      throw new ConvexError(
+        "This vehicle has already sold — its inventory cost has been relieved to COGS. A prior-period cost correction needs a manual journal entry, not this endpoint."
+      );
+    }
+    // Requires a *posted* acquisition, not merely pending: a correction posts
+    // a delta on top of the ledger's existing balance, so the base entry
+    // must already be settled — correcting against a still-pending base
+    // could post before it, or interleave unpredictably with it.
+    if (!(await hasPostedVehicleAcquisition(ctx, args.orgId, args.vehicleId))) {
       throw new ConvexError(
         "This vehicle's acquisition cost hasn't posted to accounting yet — edit purchasePrice directly instead."
       );
@@ -903,7 +923,7 @@ export const correctAcquisitionCost = mutation({
       updatedBy: user._id,
     });
 
-    await ctx.db.insert("vehicleCostCorrections", {
+    const correctionId = await ctx.db.insert("vehicleCostCorrections", {
       orgId: args.orgId,
       vehicleId: args.vehicleId,
       previousCost,
@@ -916,7 +936,9 @@ export const correctAcquisitionCost = mutation({
     await hookVehicleAcquisitionCostCorrected(ctx, {
       orgId: args.orgId,
       vehicleId: args.vehicleId,
-      correctionToken: now.toString(),
+      // The correction record's own _id, not a timestamp — two corrections
+      // landing in the same millisecond must not collide on idempotencyKey.
+      correctionToken: correctionId.toString(),
       deltaMinor: toMinorUnits(delta, currency),
       currency,
       actorId: user._id,

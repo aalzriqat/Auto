@@ -39,6 +39,7 @@ export async function computeVehicleCapitalizedCost(
   const expenses = await ctx.db
     .query("expenses")
     .withIndex("by_org_vehicle", (q) => q.eq("orgId", vehicle.orgId).eq("vehicleId", vehicle._id))
+    .filter((q) => q.neq(q.field("isDeleted"), true))
     .collect();
   // Reads the decision recordPaidExpenseSideEffects recorded at posting time
   // (accountingTreatment/capitalizedAmount), not a fresh category/status
@@ -46,7 +47,7 @@ export async function computeVehicleCapitalizedCost(
   // runs long after the sale, and capitalizedAmount already excludes VAT so it
   // matches exactly what was debited to Vehicle Inventory in the GL.
   const capitalizedExpenses = expenses
-    .filter((e) => !e.isDeleted && e.accountingTreatment === "CAPITALIZED_INVENTORY")
+    .filter((e) => e.accountingTreatment === "CAPITALIZED_INVENTORY")
     .reduce((sum, e) => sum + (e.capitalizedAmount ?? 0), 0);
 
   return base + landed + capitalizedExpenses;

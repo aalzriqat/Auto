@@ -137,6 +137,13 @@ export function VehicleDetailsDialog({
     }
   }, [landedCosts]);
 
+  // This state survives dialog reuse across vehicles — without resetting it,
+  // a BANK_TRANSFER selection for one vehicle could silently apply to the
+  // next vehicle's landed-cost delta.
+  useEffect(() => {
+    if (open) setLandedCostPaymentMethod("CASH");
+  }, [open, vehicle?._id]);
+
   const formatMoney = (value: number) => `${value.toLocaleString()} JOD`;
 
   const getReservationStatusLabel = (status: "ACTIVE" | "RELEASED" | "CONVERTED" | "EXPIRED") => {

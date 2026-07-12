@@ -15,7 +15,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { postAccountingEvent } from "./accounting/postingEngine";
 import { getOrgCurrency, hookVehiclePrepExpenseReclassified } from "./accounting/workflowHooks";
 import { ensurePartnerEquityAccounts, ensureClaimAccounts } from "./chartOfAccounts";
-import { toMinorUnits } from "./utils/money";
+import { toMinorUnits, fromMinorUnits } from "./utils/money";
 import { requireFeature } from "./subscriptions";
 import { auditLog } from "./financialAudit";
 import { computeVehicleCapitalizedCost, CAPITALIZABLE_EXPENSE_CATEGORIES } from "./utils/vehicleCost";
@@ -518,6 +518,26 @@ export const backfillVehicleInventoryOpeningBalances = mutation({
         .take(limit * 10)
     ).filter((v) => !v.isDeleted && v.status !== "SOLD" && v.sourceType !== "SOURCED");
 
+    // A vehicle's landedCostTotal can already include amounts a separate,
+    // already-posted VEHICLE_LANDED_COST_CAPITALIZED event covered (landed
+    // costs post independently of the base VEHICLE_ACQUIRED event) — fetched
+    // once here rather than per vehicle so a large backfill run doesn't
+    // re-scan the same event list once per vehicle.
+    const postedLandedCostDeltaByVehicle = new Map<string, number>();
+    const postedLandedCostEvents = await ctx.db
+      .query("accountingEvents")
+      .withIndex("by_org_eventType", (q) => q.eq("orgId", args.orgId).eq("eventType", "VEHICLE_LANDED_COST_CAPITALIZED"))
+      .filter((q) => q.eq(q.field("status"), "POSTED"))
+      .collect();
+    for (const event of postedLandedCostEvents) {
+      const payload = event.payload as { vehicleId?: string; deltaMinor?: number } | undefined;
+      if (!payload?.vehicleId || typeof payload.deltaMinor !== "number") continue;
+      postedLandedCostDeltaByVehicle.set(
+        payload.vehicleId,
+        (postedLandedCostDeltaByVehicle.get(payload.vehicleId) ?? 0) + payload.deltaMinor
+      );
+    }
+
     const results: Array<{
       vehicleId: string;
       action: "POSTED" | "WOULD_POST" | "NEEDS_REVIEW" | "SKIP" | "FAILED";
@@ -544,7 +564,26 @@ export const backfillVehicleInventoryOpeningBalances = mutation({
         continue;
       }
 
-      let uncapitalizedBase = (vehicle.purchasePrice ?? 0) + (vehicle.landedCostTotal ?? 0);
+      // A pending (outbox-queued) VEHICLE_ACQUIRED would otherwise post
+      // after this backfill's opening balance, double-capitalizing the
+      // vehicle. Its eventual posting is unpredictable from here, so skip
+      // rather than guess.
+      const pendingAcquisition = await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", args.orgId).eq("idempotencyKey", `vehicle_acquired_${vehicle._id}`)
+        )
+        .first();
+      if (pendingAcquisition) {
+        results.push({ vehicleId: vehicle._id.toString(), action: "SKIP", reason: "acquisition_pending" });
+        continue;
+      }
+
+      const postedLandedCostDeltaMinor = postedLandedCostDeltaByVehicle.get(vehicle._id.toString()) ?? 0;
+      const alreadyPostedLandedCost =
+        postedLandedCostDeltaMinor !== 0 ? fromMinorUnits(postedLandedCostDeltaMinor, currency) : 0;
+      let uncapitalizedBase =
+        (vehicle.purchasePrice ?? 0) + (vehicle.landedCostTotal ?? 0) - alreadyPostedLandedCost;
       const reclassifications: Array<{ expenseId: Id<"expenses">; date: number; amountMinor: number; netAmount: number }> = [];
       // Never touched the GL at all — folded straight into the opening-balance
       // amount below (not a separate GL entry), but still needs its own
