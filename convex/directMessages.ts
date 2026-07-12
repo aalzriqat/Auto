@@ -1,3 +1,4 @@
+import type { MutationCtx } from "./_generated/server";
 import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
@@ -9,11 +10,24 @@ import { notifyUser } from "./utils/notifications";
 
 function ensureMember(
   userId: Id<"users">,
-  conversation: Doc<"dmConversations">
+  conversation: Doc<"dmConversations">,
 ) {
   if (!conversation.memberIds.includes(userId)) {
     throw new Error("Not a member of this conversation.");
   }
+}
+
+async function latestMessageCreationTime(
+  ctx: MutationCtx,
+  conversationId: Id<"dmConversations">,
+) {
+  const latestMessage = await ctx.db
+    .query("dmMessages")
+    .withIndex("by_conversation", (q) => q.eq("conversationId", conversationId))
+    .order("desc")
+    .first();
+
+  return latestMessage?._creationTime ?? 0;
 }
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
@@ -38,7 +52,7 @@ export const listConversations = query({
         const state = await ctx.db
           .query("dmParticipantState")
           .withIndex("by_conversation_user", (q) =>
-            q.eq("conversationId", conv._id).eq("userId", user._id)
+            q.eq("conversationId", conv._id).eq("userId", user._id),
           )
           .unique();
 
@@ -54,7 +68,7 @@ export const listConversations = query({
             return u
               ? { _id: u._id, name: u.name ?? u.email, imageUrl: u.imageUrl }
               : null;
-          })
+          }),
         );
 
         return {
@@ -64,7 +78,7 @@ export const listConversations = query({
           isMuted: state?.isMuted ?? false,
           lastDeliveredAt: state?.lastDeliveredAt ?? 0,
         };
-      })
+      }),
     );
 
     return results;
@@ -89,7 +103,7 @@ export const getUnreadCount = query({
       const state = await ctx.db
         .query("dmParticipantState")
         .withIndex("by_conversation_user", (q) =>
-          q.eq("conversationId", conv._id).eq("userId", user._id)
+          q.eq("conversationId", conv._id).eq("userId", user._id),
         )
         .unique();
 
@@ -121,7 +135,7 @@ export const listMessages = query({
     const page = await ctx.db
       .query("dmMessages")
       .withIndex("by_conversation", (q) =>
-        q.eq("conversationId", args.conversationId)
+        q.eq("conversationId", args.conversationId),
       )
       .order("desc")
       .paginate(args.paginationOpts);
@@ -135,7 +149,7 @@ export const listMessages = query({
           senderName: sender?.name ?? sender?.email ?? "Unknown",
           senderImageUrl: sender?.imageUrl,
         };
-      })
+      }),
     );
 
     // Get all participant states + member info for read-receipt display
@@ -144,37 +158,50 @@ export const listMessages = query({
         const state = await ctx.db
           .query("dmParticipantState")
           .withIndex("by_conversation_user", (q) =>
-            q.eq("conversationId", args.conversationId).eq("userId", uid)
+            q.eq("conversationId", args.conversationId).eq("userId", uid),
           )
           .unique();
         const u = await ctx.db.get(uid);
         return {
           userId: uid,
-          lastDeliveredAt: Math.max(state?.lastDeliveredAt ?? 0, state?.lastReadAt ?? 0),
+          lastDeliveredAt: Math.max(
+            state?.lastDeliveredAt ?? 0,
+            state?.lastReadAt ?? 0,
+          ),
           lastReadAt: state?.lastReadAt ?? 0,
           name: u?.name ?? u?.email ?? "?",
           imageUrl: u?.imageUrl,
         };
-      })
+      }),
     );
 
-    const otherStates = memberInfoAndStates.filter((s) => s.userId !== user._id);
+    const otherStates = memberInfoAndStates.filter(
+      (s) => s.userId !== user._id,
+    );
 
     // Compute per-message status + seenBy list (for group read-receipt avatars)
     const messagesWithStatus = messagesWithSenders.map((msg) => {
-      if (msg.senderId !== user._id) return {
-        ...msg,
-        status: "received" as const,
-        seenBy: [] as { userId: Id<"users">; name: string; imageUrl?: string }[],
-      };
+      if (msg.senderId !== user._id)
+        return {
+          ...msg,
+          status: "received" as const,
+          seenBy: [] as {
+            userId: Id<"users">;
+            name: string;
+            imageUrl?: string;
+          }[],
+        };
 
       const msgTime = msg._creationTime;
       const seenBy = otherStates
         .filter((s) => s.lastReadAt >= msgTime)
         .map((s) => ({ userId: s.userId, name: s.name, imageUrl: s.imageUrl }));
-      const deliveredBy = otherStates.filter((s) => s.lastDeliveredAt >= msgTime);
+      const deliveredBy = otherStates.filter(
+        (s) => s.lastDeliveredAt >= msgTime,
+      );
 
-      const allSeen = otherStates.length > 0 && seenBy.length === otherStates.length;
+      const allSeen =
+        otherStates.length > 0 && seenBy.length === otherStates.length;
       const someDelivered = deliveredBy.length > 0;
 
       const status = allSeen
@@ -206,13 +233,13 @@ export const getConversation = query({
         return u
           ? { _id: u._id, name: u.name ?? u.email, imageUrl: u.imageUrl }
           : null;
-      })
+      }),
     );
 
     const myState = await ctx.db
       .query("dmParticipantState")
       .withIndex("by_conversation_user", (q) =>
-        q.eq("conversationId", args.conversationId).eq("userId", user._id)
+        q.eq("conversationId", args.conversationId).eq("userId", user._id),
       )
       .unique();
     const hasUnread =
@@ -229,7 +256,7 @@ export const getConversation = query({
           const state = await ctx.db
             .query("dmParticipantState")
             .withIndex("by_conversation_user", (q) =>
-              q.eq("conversationId", args.conversationId).eq("userId", uid)
+              q.eq("conversationId", args.conversationId).eq("userId", uid),
             )
             .unique();
           const u = await ctx.db.get(uid);
@@ -238,7 +265,7 @@ export const getConversation = query({
           return isTyping
             ? { userId: uid, name: u?.name ?? u?.email ?? "Someone" }
             : null;
-        })
+        }),
     );
 
     return {
@@ -277,7 +304,7 @@ export const getOrgMembers = query({
             imageUrl: u.imageUrl,
             roleName: role?.name ?? "",
           };
-        })
+        }),
     );
 
     return members.filter(Boolean);
@@ -300,7 +327,7 @@ export const getOrCreateDm = mutation({
     const otherMembership = await ctx.db
       .query("memberships")
       .withIndex("by_org_user", (q) =>
-        q.eq("orgId", args.orgId).eq("userId", args.otherUserId)
+        q.eq("orgId", args.orgId).eq("userId", args.otherUserId),
       )
       .unique();
     if (!otherMembership) throw new Error("User is not a member of this org.");
@@ -316,7 +343,7 @@ export const getOrCreateDm = mutation({
       (c) =>
         c.memberIds.length === 2 &&
         c.memberIds.includes(user._id) &&
-        c.memberIds.includes(args.otherUserId)
+        c.memberIds.includes(args.otherUserId),
     );
 
     if (found) return found._id;
@@ -365,7 +392,7 @@ export const createGroup = mutation({
       const m = await ctx.db
         .query("memberships")
         .withIndex("by_org_user", (q) =>
-          q.eq("orgId", args.orgId).eq("userId", uid)
+          q.eq("orgId", args.orgId).eq("userId", uid),
         )
         .unique();
       if (!m) throw new Error("One or more users are not members of this org.");
@@ -426,7 +453,8 @@ export const sendMessage = mutation({
     // Update conversation preview
     await ctx.db.patch(args.conversationId, {
       lastMessageAt: now,
-      lastMessageBody: trimmed.length > 80 ? trimmed.slice(0, 80) + "…" : trimmed,
+      lastMessageBody:
+        trimmed.length > 80 ? trimmed.slice(0, 80) + "…" : trimmed,
       lastMessageSenderId: user._id,
     });
 
@@ -434,12 +462,16 @@ export const sendMessage = mutation({
     const myState = await ctx.db
       .query("dmParticipantState")
       .withIndex("by_conversation_user", (q) =>
-        q.eq("conversationId", args.conversationId).eq("userId", user._id)
+        q.eq("conversationId", args.conversationId).eq("userId", user._id),
       )
       .unique();
 
     if (myState) {
-      await ctx.db.patch(myState._id, { lastDeliveredAt: now, lastReadAt: now, typingAt: undefined });
+      await ctx.db.patch(myState._id, {
+        lastDeliveredAt: now,
+        lastReadAt: now,
+        typingAt: undefined,
+      });
     }
 
     // Notify every other member (in-app always; email/WhatsApp/push per their
@@ -452,7 +484,7 @@ export const sendMessage = mutation({
       const recipientState = await ctx.db
         .query("dmParticipantState")
         .withIndex("by_conversation_user", (q) =>
-          q.eq("conversationId", args.conversationId).eq("userId", recipientId)
+          q.eq("conversationId", args.conversationId).eq("userId", recipientId),
         )
         .unique();
       if (recipientState?.isMuted) continue;
@@ -463,7 +495,7 @@ export const sendMessage = mutation({
         recipientId,
         "message.received",
         { senderName, preview },
-        { link: `/${conv.orgId}/messages` }
+        { link: `/${conv.orgId}/messages` },
       );
     }
 
@@ -486,11 +518,15 @@ export const markDelivered = mutation({
     const state = await ctx.db
       .query("dmParticipantState")
       .withIndex("by_conversation_user", (q) =>
-        q.eq("conversationId", args.conversationId).eq("userId", user._id)
+        q.eq("conversationId", args.conversationId).eq("userId", user._id),
       )
       .unique();
 
-    const deliveredAt = conv.lastMessageAt;
+    const deliveredAt = Math.max(
+      Date.now(),
+      conv.lastMessageAt,
+      await latestMessageCreationTime(ctx, args.conversationId),
+    );
     if (state) {
       if ((state.lastDeliveredAt ?? 0) >= deliveredAt) return;
       await ctx.db.patch(state._id, { lastDeliveredAt: deliveredAt });
@@ -518,14 +554,21 @@ export const markRead = mutation({
     const state = await ctx.db
       .query("dmParticipantState")
       .withIndex("by_conversation_user", (q) =>
-        q.eq("conversationId", args.conversationId).eq("userId", user._id)
+        q.eq("conversationId", args.conversationId).eq("userId", user._id),
       )
       .unique();
 
-    const now = Date.now();
-    const deliveredAt = Math.max(now, conv.lastMessageAt);
+    const now = Math.max(
+      Date.now(),
+      conv.lastMessageAt,
+      await latestMessageCreationTime(ctx, args.conversationId),
+    );
+    const deliveredAt = now;
     if (state) {
-      await ctx.db.patch(state._id, { lastDeliveredAt: deliveredAt, lastReadAt: now });
+      await ctx.db.patch(state._id, {
+        lastDeliveredAt: deliveredAt,
+        lastReadAt: now,
+      });
     } else {
       await ctx.db.insert("dmParticipantState", {
         conversationId: args.conversationId,
@@ -552,7 +595,7 @@ export const setTyping = mutation({
     const state = await ctx.db
       .query("dmParticipantState")
       .withIndex("by_conversation_user", (q) =>
-        q.eq("conversationId", args.conversationId).eq("userId", user._id)
+        q.eq("conversationId", args.conversationId).eq("userId", user._id),
       )
       .unique();
 
@@ -584,7 +627,7 @@ export const setMuted = mutation({
     const state = await ctx.db
       .query("dmParticipantState")
       .withIndex("by_conversation_user", (q) =>
-        q.eq("conversationId", args.conversationId).eq("userId", user._id)
+        q.eq("conversationId", args.conversationId).eq("userId", user._id),
       )
       .unique();
 
