@@ -152,6 +152,10 @@ export const markPaid = mutation({
           taxMinor: args.taxAmount ? toMinorUnits(args.taxAmount, currency) : undefined,
           currency,
           paymentMethod,
+          // A payable with no linked sale was created at ACQUISITION time for
+          // an owned vehicle bought ON_ACCOUNT (AP credited against Vehicle
+          // Inventory, not COGS) — see vehicles.postVehicleAcquisitionIfOwned.
+          costOrigin: payable.saleId == null ? "VEHICLE_INVENTORY" : "COGS",
           actorId: user._id,
           occurredAt: now,
         });

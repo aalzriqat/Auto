@@ -14,8 +14,8 @@ import {
   type VehicleLifecycleStatus,
 } from "./utils/vehicleStatusGuards";
 import { assertVehicleImagesAllowed } from "./utils/storageValidation";
-import { paymentMethodValidator, type PaymentMethod } from "./utils/paymentMethods";
-import { postVehicleAcquisitionIfOwned } from "./vehicles";
+import { acquisitionPaymentMethodValidator, type AcquisitionPaymentMethod } from "./utils/paymentMethods";
+import { postVehicleAcquisitionIfOwned, hasVehicleAcquisitionAccountingExposure } from "./vehicles";
 
 type VehicleEditPayload = {
   vin?: string;
@@ -28,7 +28,7 @@ type VehicleEditPayload = {
   fuelType?: string;
   transmission?: string;
   purchasePrice?: number;
-  purchasePaymentMethod?: PaymentMethod;
+  purchasePaymentMethod?: AcquisitionPaymentMethod;
   minimumProfit?: number;
   sellingPrice?: number;
   status?: string;
@@ -80,7 +80,7 @@ export const requestCreate = mutation({
       fuelType: v.optional(v.string()),
       transmission: v.optional(v.string()),
       purchasePrice: v.optional(v.number()),
-      purchasePaymentMethod: v.optional(paymentMethodValidator),
+      purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
       minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),
       status: v.optional(v.string()),
@@ -125,6 +125,13 @@ export const requestCreate = mutation({
     ) {
       throw new ConvexError("Payment method is required when a purchase price is entered.");
     }
+    if (
+      payload.sourceType !== "SOURCED" &&
+      payload.purchasePaymentMethod === "ON_ACCOUNT" &&
+      !payload.sourcedFromName?.trim()
+    ) {
+      throw new ConvexError("A supplier name (sourcedFromName) is required for a vehicle purchased on account.");
+    }
 
     const requestId = await ctx.db.insert("vehicleEdits", {
       orgId: args.orgId,
@@ -163,6 +170,7 @@ export const requestUpdate = mutation({
       fuelType: v.optional(v.string()),
       transmission: v.optional(v.string()),
       purchasePrice: v.optional(v.number()),
+      purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
       minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),
       status: v.optional(v.string()),
@@ -194,6 +202,31 @@ export const requestUpdate = mutation({
     assertDirectVehicleStatusTransition(vehicle.status, payload.status);
     await assertVehicleImagesAllowed(ctx, payload.imageIds);
     assertValidOwnerCount(payload.ownerCount);
+
+    // Mirrors vehicles.update's acquisition-posting guard: a SOURCED→STOCK
+    // flip (or a purchase price set for the first time) requested here must
+    // carry a payment method too, or the manager who approves it has no way
+    // to say how it was paid.
+    const effectiveSourceTypeForRequest = payload.sourceType ?? vehicle.sourceType;
+    const effectivePurchasePriceForRequest = "purchasePrice" in payload ? payload.purchasePrice : vehicle.purchasePrice;
+    const mayRequestAffectAcquisition =
+      "purchasePrice" in payload || "sourceCost" in payload ||
+      (payload.sourceType !== undefined && payload.sourceType !== "SOURCED");
+    if (
+      mayRequestAffectAcquisition &&
+      effectiveSourceTypeForRequest !== "SOURCED" &&
+      effectivePurchasePriceForRequest != null && effectivePurchasePriceForRequest > 0 &&
+      !(await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, args.vehicleId)) &&
+      !payload.purchasePaymentMethod
+    ) {
+      throw new ConvexError("Payment method is required to post this vehicle's acquisition cost to accounting.");
+    }
+    if (
+      payload.purchasePaymentMethod === "ON_ACCOUNT" &&
+      !(payload.sourcedFromName ?? vehicle.sourcedFromName)?.trim()
+    ) {
+      throw new ConvexError("A supplier name (sourcedFromName) is required for a vehicle purchased on account.");
+    }
 
     const filteredPayload: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(payload)) {
@@ -321,6 +354,7 @@ export const resolve = mutation({
           isSourced,
           purchasePrice: effectivePurchasePrice,
           purchasePaymentMethod,
+          supplierName: payload.sourcedFromName,
           vehicleLabel: `${payload.year ?? ""} ${payload.make ?? ""} ${payload.model ?? ""}`.trim(),
           vin: payload.vin ?? vehicleId.toString(),
           actorId: user._id,
@@ -348,11 +382,51 @@ export const resolve = mutation({
           });
         }
 
+        // Mirrors vehicles.update's two acquisition-accounting guards, missing
+        // here entirely before: (1) purchasePrice/sourceCost can't be silently
+        // edited once the acquisition has already posted, (2) a SOURCED→STOCK
+        // flip (or a purchase price set here for the first time) must actually
+        // post VEHICLE_ACQUIRED, not just patch the vehicle row.
+        const mayResolveAffectAcquisition =
+          "purchasePrice" in payload || "sourceCost" in payload ||
+          (payload.sourceType !== undefined && payload.sourceType !== "SOURCED");
+        const resolveAcquisitionAlreadyExposed = mayResolveAffectAcquisition
+          ? await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, request.vehicleId)
+          : false;
+        if (("purchasePrice" in payload || "sourceCost" in payload) && resolveAcquisitionAlreadyExposed) {
+          throw new ConvexError(
+            "This vehicle's acquisition cost has already been posted to accounting. Use a correction journal entry instead of editing purchasePrice/sourceCost directly."
+          );
+        }
+        const resolveAcquisitionSourceType = payload.sourceType ?? previousVehicle.sourceType;
+        const resolveAcquisitionPurchasePrice = "purchasePrice" in payload ? payload.purchasePrice : previousVehicle.purchasePrice;
+        const resolveNeedsAcquisitionPosting =
+          mayResolveAffectAcquisition &&
+          resolveAcquisitionSourceType !== "SOURCED" &&
+          resolveAcquisitionPurchasePrice != null && resolveAcquisitionPurchasePrice > 0 &&
+          !resolveAcquisitionAlreadyExposed;
+
+        const { purchasePaymentMethod: resolvePurchasePaymentMethod, ...vehiclePatchFields } = payload;
+
         await ctx.db.patch(request.vehicleId, {
-          ...(payload as any),
+          ...(vehiclePatchFields as any),
           updatedBy: user._id, // Manager who approved it
           updatedAt: Date.now(),
         });
+
+        if (resolveNeedsAcquisitionPosting) {
+          await postVehicleAcquisitionIfOwned(ctx, {
+            orgId: args.orgId,
+            vehicleId: request.vehicleId,
+            isSourced: false,
+            purchasePrice: resolveAcquisitionPurchasePrice,
+            purchasePaymentMethod: resolvePurchasePaymentMethod,
+            supplierName: payload.sourcedFromName ?? previousVehicle.sourcedFromName,
+            vehicleLabel: `${payload.year ?? previousVehicle.year} ${payload.make ?? previousVehicle.make} ${payload.model ?? previousVehicle.model}`,
+            vin: payload.vin ?? previousVehicle.vin ?? "",
+            actorId: user._id,
+          });
+        }
 
         if (payload.status === "AVAILABLE" && previousVehicle && previousVehicle.status !== "AVAILABLE") {
           const updatedVehicle = await ctx.db.get(request.vehicleId);

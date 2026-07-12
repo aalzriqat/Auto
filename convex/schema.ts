@@ -1,6 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-import { paymentMethodValidator } from "./utils/paymentMethods";
+import { paymentMethodValidator, acquisitionPaymentMethodValidator } from "./utils/paymentMethods";
 import { trustPassportFieldValidators } from "./utils/vehicleStatusGuards";
 
 const organizationDeletionRequestStatus = v.union(
@@ -735,7 +735,7 @@ export default defineSchema({
       fuelType: v.optional(v.string()),
       transmission: v.optional(v.string()),
       purchasePrice: v.optional(v.number()),
-      purchasePaymentMethod: v.optional(paymentMethodValidator),
+      purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
       minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),
       status: v.optional(v.string()),

@@ -11,7 +11,7 @@ import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socia
 import { internal } from "./_generated/api";
 import { getOrgCurrency, hookVehicleAcquired, hookVehicleLandedCostCapitalized, hookVehicleAcquisitionCostCorrected } from "./accounting/workflowHooks";
 import { toMinorUnits } from "./utils/money";
-import { paymentMethodValidator, normalizePaymentMethod, type PaymentMethod } from "./utils/paymentMethods";
+import { paymentMethodValidator, acquisitionPaymentMethodValidator, normalizePaymentMethod, type AcquisitionPaymentMethod } from "./utils/paymentMethods";
 import { syncVehicleHoldStatus, getDefaultReservationExpiry } from "./utils/depositHelpers";
 import {
   amountToMinorOrThrow,
@@ -72,10 +72,17 @@ function generateImportVinPlaceholder(): string {
 /**
  * Posts the VEHICLE_ACQUIRED GL entry (+ legacy VEHICLE_PURCHASE transaction
  * row) for owned stock with a purchase price — shared by the direct
- * vehicles.create mutation and vehicleEdits.resolve's CREATE-approval branch,
- * so a vehicle created via the request/approval workflow gets the exact same
- * accounting treatment as one created directly. Sourced/drop-ship vehicles
- * never sit in physical inventory, so this is a no-op for those.
+ * vehicles.create mutation, vehicles.update (a SOURCED→STOCK flip or a price
+ * set for the first time), and vehicleEdits.resolve's CREATE-approval branch,
+ * so a vehicle acquired via any of those paths gets the exact same accounting
+ * treatment. Sourced/drop-ship vehicles never sit in physical inventory, so
+ * this is a no-op for those.
+ *
+ * ON_ACCOUNT means no cash moved: instead of the legacy cash-transaction row,
+ * this creates a vehicleSupplierPayables row (no saleId — settled independently
+ * of any future sale, via the same sourcingPayables.markPaid a sourced
+ * vehicle's payable uses) and credits AP-Suppliers in the GL instead of a
+ * cash/bank account.
  */
 export async function postVehicleAcquisitionIfOwned(
   ctx: MutationCtx,
@@ -84,7 +91,9 @@ export async function postVehicleAcquisitionIfOwned(
     vehicleId: Id<"vehicles">;
     isSourced: boolean;
     purchasePrice: number | undefined;
-    purchasePaymentMethod?: PaymentMethod;
+    purchasePaymentMethod?: AcquisitionPaymentMethod;
+    /** Required when purchasePaymentMethod is "ON_ACCOUNT" — who the payable is owed to. */
+    supplierName?: string;
     vehicleLabel: string;
     vin: string;
     actorId: Id<"users">;
@@ -92,7 +101,41 @@ export async function postVehicleAcquisitionIfOwned(
 ): Promise<void> {
   if (args.isSourced || args.purchasePrice == null || args.purchasePrice <= 0) return;
 
+  const isOnAccount = args.purchasePaymentMethod === "ON_ACCOUNT";
+  if (isOnAccount && !args.supplierName?.trim()) {
+    throw new ConvexError("A supplier name is required for a vehicle purchased on account.");
+  }
+
   const now = Date.now();
+  const currency = await getOrgCurrency(ctx, args.orgId);
+
+  if (isOnAccount) {
+    // No cash actually moved — the legacy transactions table only records
+    // real cash movements (a SOURCED vehicle's supplier payable, which never
+    // touches this table either, is the existing precedent).
+    await hookVehicleAcquired(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      costMinor: toMinorUnits(args.purchasePrice, currency),
+      currency,
+      paymentMethod: "ON_ACCOUNT",
+      actorId: args.actorId,
+      occurredAt: now,
+    });
+    await ctx.db.insert("vehicleSupplierPayables", {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      sourcedFromName: args.supplierName!.trim(),
+      amountDue: args.purchasePrice,
+      currency,
+      status: "PENDING",
+      createdBy: args.actorId,
+      createdAt: now,
+      updatedAt: now,
+    });
+    return;
+  }
+
   await ctx.db.insert("transactions", {
     orgId: args.orgId,
     type: "OUT",
@@ -103,13 +146,13 @@ export async function postVehicleAcquisitionIfOwned(
     vehicleId: args.vehicleId,
   });
 
-  const currency = await getOrgCurrency(ctx, args.orgId);
   await hookVehicleAcquired(ctx, {
     orgId: args.orgId,
     vehicleId: args.vehicleId,
     costMinor: toMinorUnits(args.purchasePrice, currency),
     currency,
-    paymentMethod: normalizePaymentMethod(args.purchasePaymentMethod),
+    // Excludes "ON_ACCOUNT" — handled in the early-return branch above.
+    paymentMethod: normalizePaymentMethod(args.purchasePaymentMethod as Exclude<AcquisitionPaymentMethod, "ON_ACCOUNT"> | undefined),
     actorId: args.actorId,
     occurredAt: now,
   });
@@ -457,8 +500,8 @@ export const create = mutation({
     sourceCost: v.optional(v.number()),
     notes: v.optional(v.string()),
     imageIds: v.optional(v.array(v.id("_storage"))),
-    /** How the dealer paid for the vehicle — drives the GL credit side (Cash/Bank/Cheque/Card). Ignored for SOURCED vehicles, which never capitalize into inventory. */
-    purchasePaymentMethod: v.optional(paymentMethodValidator),
+    /** How the dealer paid for the vehicle — drives the GL credit side (Cash/Bank/Cheque/Card/AP-Suppliers for ON_ACCOUNT). Ignored for SOURCED vehicles, which never capitalize into inventory. */
+    purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
     ...trustPassportFieldValidators,
   },
   handler: async (ctx, args) => {
@@ -498,6 +541,12 @@ export const create = mutation({
     // paid by bank transfer, cheque, or card — require an explicit choice.
     if (!isSourced && args.purchasePrice != null && args.purchasePrice > 0 && !args.purchasePaymentMethod) {
       throw new ConvexError("Payment method is required when a purchase price is entered.");
+    }
+    // Reuses sourcedFromName as the generic "who is this owed to" field —
+    // same requirement SOURCED vehicles already have for the same reason
+    // (downstream AP-Suppliers/supplier-payable creation needs a name).
+    if (!isSourced && args.purchasePaymentMethod === "ON_ACCOUNT" && !args.sourcedFromName?.trim()) {
+      throw new ConvexError("A supplier name (sourcedFromName) is required for a vehicle purchased on account.");
     }
 
     // VIN is optional for sourced vehicles (car doesn't exist yet); generate a
@@ -563,6 +612,7 @@ export const create = mutation({
       isSourced,
       purchasePrice: effectivePurchasePrice,
       purchasePaymentMethod: args.purchasePaymentMethod,
+      supplierName: args.sourcedFromName,
       vehicleLabel: `${args.year} ${args.make.trim()} ${args.model.trim()}`,
       vin: normalizedVin,
       actorId: user._id,
@@ -664,7 +714,7 @@ export const update = mutation({
     notes: v.optional(v.string()),
     imageIds: v.optional(v.array(v.id("_storage"))),
     /** How the dealer paid — required if this update capitalizes an acquisition that hasn't posted yet (e.g. a SOURCED→STOCK flip, or a purchase price set for the first time). Ignored otherwise. */
-    purchasePaymentMethod: v.optional(paymentMethodValidator),
+    purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
     ...trustPassportFieldValidators,
   },
   handler: async (ctx, args) => {
@@ -771,6 +821,9 @@ export const update = mutation({
     if (needsAcquisitionPosting && !args.purchasePaymentMethod) {
       throw new ConvexError("Payment method is required to post this vehicle's acquisition cost to accounting.");
     }
+    if (needsAcquisitionPosting && args.purchasePaymentMethod === "ON_ACCOUNT" && !(args.sourcedFromName ?? vehicle.sourcedFromName)?.trim()) {
+      throw new ConvexError("A supplier name (sourcedFromName) is required for a vehicle purchased on account.");
+    }
 
     if (Object.keys(patch).length > 0) {
       if (typeof patch.sellingPrice === "number") {
@@ -800,6 +853,7 @@ export const update = mutation({
           isSourced: false,
           purchasePrice: acquisitionPurchasePrice,
           purchasePaymentMethod: args.purchasePaymentMethod,
+          supplierName: args.sourcedFromName ?? vehicle.sourcedFromName,
           vehicleLabel: `${(patch.year as number | undefined) ?? vehicle.year} ${(patch.make as string | undefined) ?? vehicle.make} ${(patch.model as string | undefined) ?? vehicle.model}`,
           vin: ((patch.vin as string | undefined) ?? vehicle.vin) || "",
           actorId: user._id,

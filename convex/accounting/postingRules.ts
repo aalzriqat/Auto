@@ -158,6 +158,15 @@ export interface SupplierPaymentSettledPayload {
   taxMinor?: number;
   currency: string;
   paymentMethod?: string;
+  /**
+   * Which account AP-Suppliers was originally credited against for this
+   * payable — a sourced/drop-ship vehicle credits AP against COST_OF_VEHICLES_SOLD
+   * at sale time (ruleSaleCompleted), while an owned vehicle bought ON_ACCOUNT
+   * credits it against VEHICLE_INVENTORY at acquisition time (ruleVehicleAcquired).
+   * Defaults to "COGS" (the only case that existed before ON_ACCOUNT) so every
+   * pre-existing caller keeps its current behavior unchanged.
+   */
+  costOrigin?: "COGS" | "VEHICLE_INVENTORY";
 }
 
 export interface CollectionPaymentPayload {
@@ -323,8 +332,12 @@ export function ruleSupplierPaymentSettled(p: SupplierPaymentSettledPayload): Ru
     line(cashKey, 0, p.amountMinor, "Cash paid to supplier"),
   ];
   if (p.taxMinor && p.taxMinor > 0) {
+    // Reclassify out of whichever account AP was actually credited against
+    // originally — crediting COST_OF_VEHICLES_SOLD for an ON_ACCOUNT owned
+    // purchase would understate COGS for a vehicle that hasn't even sold yet.
+    const costAccount = p.costOrigin === "VEHICLE_INVENTORY" ? SYSTEM_KEYS.VEHICLE_INVENTORY : SYSTEM_KEYS.COST_OF_VEHICLES_SOLD;
     lines.push(line(SYSTEM_KEYS.VAT_RECEIVABLE, p.taxMinor, 0, "Input VAT reclassified from cost"));
-    lines.push(line(SYSTEM_KEYS.COST_OF_VEHICLES_SOLD, 0, p.taxMinor, "Cost reduced by reclaimable VAT"));
+    lines.push(line(costAccount, 0, p.taxMinor, "Cost reduced by reclaimable VAT"));
   }
   return {
     lines,
@@ -567,13 +580,24 @@ export interface VehicleAcquiredPayload {
  * as ruleAssetCapitalized/rulePartnerDrew: a cheque the dealership writes to
  * buy the vehicle clears from the bank, it doesn't sit in CHEQUES_IN_HAND
  * (which holds cheques received *from* customers).
+ *
+ * ON_ACCOUNT means no cash moved yet — the dealership owes the supplier for
+ * an owned vehicle it already took into stock, so this credits AP-Suppliers
+ * instead (the same account SOURCED vehicles use, just recorded at
+ * acquisition time here rather than at sale time — see
+ * vehicles.postVehicleAcquisitionIfOwned, which also creates the matching
+ * vehicleSupplierPayables row). Settled later via sourcingPayables.markPaid,
+ * same as a sourced-vehicle payable.
  */
 export function ruleVehicleAcquired(p: VehicleAcquiredPayload): RuleResult {
-  const cashKey = p.paymentMethod === "CHEQUE" ? SYSTEM_KEYS.BANK_ACCOUNT : cashAccountKey(p.paymentMethod);
+  const isOnAccount = p.paymentMethod === "ON_ACCOUNT";
+  const creditKey = isOnAccount
+    ? SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS
+    : p.paymentMethod === "CHEQUE" ? SYSTEM_KEYS.BANK_ACCOUNT : cashAccountKey(p.paymentMethod);
   return {
     lines: [
       line(SYSTEM_KEYS.VEHICLE_INVENTORY, p.costMinor, 0, "Vehicle acquired", { vehicleId: p.vehicleId }),
-      line(cashKey, 0, p.costMinor, "Payment for vehicle", { vehicleId: p.vehicleId }),
+      line(creditKey, 0, p.costMinor, isOnAccount ? "Supplier payable created" : "Payment for vehicle", { vehicleId: p.vehicleId }),
     ],
     memo: "Vehicle acquired for inventory",
     category: "SYSTEM",

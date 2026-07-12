@@ -53,9 +53,22 @@ async function seedDealerWithPayable(amountDue = 5000) {
       color: "White", fuelType: "Gasoline", transmission: "Automatic", sellingPrice: 20000, status: "SOLD",
     })
   );
+  const customerId = await t.run((ctx) =>
+    ctx.db.insert("customers", { orgId, firstName: "Jane", lastName: "Doe" })
+  );
+  // saleId matters now: it's how markPaid tells a sale-originated payable
+  // (VAT reclass hits COST_OF_VEHICLES_SOLD) apart from an acquisition-time
+  // ON_ACCOUNT payable (VAT reclass hits VEHICLE_INVENTORY instead) — see
+  // sourcingPayables.markPaid's costOrigin derivation.
+  const saleId = await t.run((ctx) =>
+    ctx.db.insert("sales", {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 20000, saleDate: Date.now(), status: "COMPLETED",
+    })
+  );
   const payableId = await t.run((ctx) =>
     ctx.db.insert("vehicleSupplierPayables", {
-      orgId, vehicleId, sourcedFromName: "Sister Dealer Co", amountDue, currency: "JOD",
+      orgId, vehicleId, saleId, sourcedFromName: "Sister Dealer Co", amountDue, currency: "JOD",
       status: "PENDING", createdBy: userId, createdAt: Date.now(), updatedAt: Date.now(),
     })
   );
