@@ -76,7 +76,11 @@ export function expectVisibleTableCell(
 
       const loadMoreButton = $body.find("button").filter((_, button) => {
         const $button = Cypress.$(button);
-        return /load more/i.test($button.text()) && !$button.is(":disabled");
+        return (
+          /load more/i.test($button.text()) &&
+          $button.is(":visible") &&
+          !$button.is(":disabled")
+        );
       });
 
       if (loadMoreButton.length > 0 && attempt < 20) {
