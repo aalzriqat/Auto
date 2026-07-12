@@ -12,7 +12,9 @@ describe("expenses", () => {
       cy.findByRole("button", { name: "Record Expense" }).click();
 
       cy.findByRole("dialog").within(() => {
-        cy.findByText("Record Expense").should("be.visible");
+        cy.findByRole("heading", { name: "Record Expense" }).should(
+          "be.visible",
+        );
 
         // Date/category/status/payment-method all have valid defaults
         // (today / OTHER / PAID / CASH) — only title and amount are required.

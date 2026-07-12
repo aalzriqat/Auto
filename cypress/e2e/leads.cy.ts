@@ -13,7 +13,7 @@ describe("leads", () => {
         cy.findByRole("button", { name: "Add Lead" }).click();
 
         cy.findByRole("dialog").within(() => {
-          cy.findByText("Add Lead").should("be.visible");
+          cy.findByRole("heading", { name: "Add Lead" }).should("be.visible");
 
           // Customer is a custom SearchableSelect (components/ui/searchable-select.tsx):
           // a plain button trigger that opens a popover with an auto-focused
