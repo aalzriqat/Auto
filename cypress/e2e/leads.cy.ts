@@ -23,7 +23,7 @@ describe("leads", () => {
           cy.focused().type(lastName);
           cy.findByRole("button", { name: new RegExp(customerName) }).click();
 
-          cy.findByRole("button", { name: "Create Lead" }).click();
+          cy.findByRole("button", { name: /^(Add Lead|Create Lead)$/ }).click();
         });
 
         cy.findByText("Lead added successfully").should("be.visible");
