@@ -468,6 +468,109 @@ describe("Opening-balance backfill for pre-existing inventory", () => {
     });
     expect(result.posted).toBe(0);
   });
+
+  test("cursor-based pagination reaches vehicles beyond the first page instead of re-scanning it forever", async () => {
+    const { t, orgId, asOwner } = await seedDealer("bf9a");
+
+    const vehicleId1 = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, vin: "PAGE0000000000001", make: "Toyota", model: "Camry", year: 2019,
+        mileage: 1000, color: "White", fuelType: "Gasoline", transmission: "Automatic",
+        purchasePrice: 5000, sellingPrice: 8000, status: "AVAILABLE", sourceType: "STOCK",
+      })
+    );
+    const vehicleId2 = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, vin: "PAGE0000000000002", make: "Honda", model: "Civic", year: 2020,
+        mileage: 2000, color: "Black", fuelType: "Gasoline", transmission: "Automatic",
+        purchasePrice: 6000, sellingPrice: 9000, status: "AVAILABLE", sourceType: "STOCK",
+      })
+    );
+
+    const first = await asOwner.mutation(api.accountingMigration.backfillVehicleInventoryOpeningBalances, {
+      orgId, dryRun: false, limit: 1,
+    });
+    expect(first.posted).toBe(1);
+    expect(first.isDone).toBe(false);
+    expect(first.nextCursor).toBeTruthy();
+
+    // Re-running with limit: 1 and NO cursor is the pre-fix bug: it would
+    // always re-scan the same first vehicle and could never reach the second.
+    const second = await asOwner.mutation(api.accountingMigration.backfillVehicleInventoryOpeningBalances, {
+      orgId, dryRun: false, limit: 1, cursor: first.nextCursor,
+    });
+    expect(second.posted).toBe(1);
+    expect(second.isDone).toBe(true);
+
+    const events = await t.run((ctx) =>
+      ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_eventType", (q) => q.eq("orgId", orgId).eq("eventType", "VEHICLE_INVENTORY_OPENING_BALANCE"))
+        .collect()
+    );
+    const postedVehicleIds = new Set(events.map((e) => e.sourceId));
+    expect(postedVehicleIds.has(vehicleId1)).toBe(true);
+    expect(postedVehicleIds.has(vehicleId2)).toBe(true);
+  });
+
+  test("a vehicle whose reclassification fails rolls back its own opening-balance post instead of leaking partial state", async () => {
+    const { t, orgId, asOwner, userId } = await seedDealer("bf10a");
+
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, vin: "ATOMIC0000000001", make: "Toyota", model: "Camry", year: 2019,
+        mileage: 40000, color: "Silver", fuelType: "Gasoline", transmission: "Automatic",
+        purchasePrice: 8000, sellingPrice: 12000, status: "AVAILABLE", sourceType: "STOCK",
+      })
+    );
+    const expenseId = await t.run((ctx) =>
+      ctx.db.insert("expenses", {
+        orgId, vehicleId, title: "Old repair", amount: 300, date: Date.UTC(2025, 1, 1),
+        category: "REPAIR", status: "PAID",
+      })
+    );
+    await t.run((ctx) =>
+      postAccountingEvent(ctx, {
+        orgId, eventType: "EXPENSE_POSTED", sourceType: "expenses", sourceId: expenseId.toString(),
+        eventVersion: 1, accountingDate: Date.UTC(2025, 1, 1), occurredAt: Date.UTC(2025, 1, 1),
+        currency: "JOD", idempotencyKey: `expense_posted_${expenseId}`,
+        payload: { expenseId: expenseId.toString(), amountMinor: 300_000, currency: "JOD", category: "REPAIR", paymentMethod: "CASH" },
+        actorId: userId,
+      })
+    );
+
+    // Force the reclassification step (which runs AFTER the base opening-balance
+    // post inside the same per-vehicle sub-transaction) to throw, by planting a
+    // REVERSED event under the idempotency key hookVehiclePrepExpenseReclassified
+    // will use — postAccountingEvent's own idempotency check throws on that.
+    await t.run((ctx) =>
+      ctx.db.insert("accountingEvents", {
+        orgId, eventType: "VEHICLE_PREP_EXPENSE_RECLASSIFIED", sourceType: "expenses",
+        sourceId: expenseId.toString(), eventVersion: 1,
+        idempotencyKey: `vehicle_prep_expense_reclassified_${expenseId}`,
+        occurredAt: Date.now(), accountingDate: Date.now(), currency: "JOD", payload: {},
+        status: "REVERSED", createdBy: userId, createdAt: Date.now(),
+      })
+    );
+
+    const result = await asOwner.mutation(api.accountingMigration.backfillVehicleInventoryOpeningBalances, {
+      orgId, dryRun: false,
+    });
+    expect(result.failed).toBe(1);
+    expect(result.results[0].action).toBe("FAILED");
+
+    // The base VEHICLE_INVENTORY_OPENING_BALANCE post from the same failed
+    // sub-transaction must have rolled back too — not left sitting in the GL
+    // with no valid companion reclassification, and not silently marked
+    // already_posted with no journal entry on a future retry.
+    const openingEvent = await t.run((ctx) =>
+      ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId))
+        .first()
+    );
+    expect(openingEvent).toBeNull();
+  });
 });
 
 describe("Review issue #1 — payment method required whenever a purchase price is entered", () => {
