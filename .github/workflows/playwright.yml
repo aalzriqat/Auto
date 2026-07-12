@@ -5,9 +5,9 @@ name: E2E Tests (Playwright)
 # during these runs never sends a real email.
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
   workflow_dispatch:
 
 jobs:
@@ -16,45 +16,76 @@ jobs:
     timeout-minutes: 30
 
     steps:
-    - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      with:
-        persist-credentials: false
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
 
-    - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
-      with:
-        version: 10.28.1
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 10.28.1
 
-    - name: Use Node.js
-      uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
-      with:
-        node-version: '22.21.1'
-        cache: 'pnpm'
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+          cache: "pnpm"
 
-    - name: Install dependencies
-      run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
 
-    - name: Install Playwright browsers
-      run: pnpm exec playwright install --with-deps chromium
+      - name: Install Playwright browsers
+        run: pnpm exec playwright install --with-deps chromium
 
-    - name: Run Playwright tests
-      # playwright.config.ts's webServer builds and starts the production
-      # server itself and waits for it to be ready, so no separate
-      # build/start/wait-for-server steps are needed here.
-      run: pnpm exec playwright test
-      env:
-        NEXT_PUBLIC_CONVEX_URL: ${{ secrets.NEXT_PUBLIC_CONVEX_URL }}
-        NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
-        CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
-        NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
-        E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
-        E2E_LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
-        E2E_LOGIN_VERIFICATION_CODE: ${{ secrets.E2E_LOGIN_VERIFICATION_CODE }}
-        CI: true
+      - name: Prepare Convex E2E backend
+        run: |
+          set -euo pipefail
 
-    - name: Upload Playwright report
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-      if: always()
-      with:
-        name: playwright-report
-        path: playwright-report/
-        retention-days: 14
+          CLERK_ISSUER_DOMAIN="$(node -e '
+            const key = process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY || "";
+            const match = key.match(/^pk_(?:test|live)_(.+)$/);
+            if (!match) {
+              throw new Error("NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY must be a Clerk publishable key.");
+            }
+            const frontendApi = Buffer.from(match[1], "base64").toString("utf8").trim().replace(/\$$/, "");
+            if (!frontendApi) {
+              throw new Error("Unable to derive Clerk issuer from publishable key.");
+            }
+            process.stdout.write(frontendApi.startsWith("http") ? frontendApi : `https://${frontendApi}`);
+          ')"
+
+          pnpm exec convex deploy \
+            --typecheck disable \
+            --cmd 'echo "NEXT_PUBLIC_CONVEX_URL=$NEXT_PUBLIC_CONVEX_URL" >> "$GITHUB_ENV"' \
+            --cmd-url-env-var-name NEXT_PUBLIC_CONVEX_URL || true
+          pnpm exec convex env set CLERK_JWT_ISSUER_DOMAIN "$CLERK_ISSUER_DOMAIN"
+          pnpm exec convex env set CLERK_DEV_JWT_ISSUER_DOMAIN "$CLERK_ISSUER_DOMAIN"
+          pnpm exec convex deploy \
+            --typecheck enable \
+            --cmd 'echo "NEXT_PUBLIC_CONVEX_URL=$NEXT_PUBLIC_CONVEX_URL" >> "$GITHUB_ENV"' \
+            --cmd-url-env-var-name NEXT_PUBLIC_CONVEX_URL
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+
+      - name: Run Playwright tests
+        # playwright.config.ts's webServer builds and starts the production
+        # server itself and waits for it to be ready, so no separate
+        # build/start/wait-for-server steps are needed here.
+        run: pnpm exec playwright test
+        env:
+          NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+          E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
+          E2E_LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
+          E2E_LOGIN_VERIFICATION_CODE: ${{ secrets.E2E_LOGIN_VERIFICATION_CODE }}
+          CI: true
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 14

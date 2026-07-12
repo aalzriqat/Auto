@@ -24,11 +24,15 @@ const orgRoutePattern = /^\/[^/]+\/(dashboard|sales|leads|accounting)$/;
 type PostPasswordState = "org" | "verification" | "onboarding";
 
 function verificationCodeFor(): string {
-  const configuredCode = Cypress.env("E2E_LOGIN_VERIFICATION_CODE") as string | undefined;
+  const configuredCode = Cypress.env("E2E_LOGIN_VERIFICATION_CODE") as
+    | string
+    | undefined;
   return configuredCode || "424242";
 }
 
-function waitForPostPasswordState(attempt = 0): Cypress.Chainable<PostPasswordState> {
+function waitForPostPasswordState(
+  attempt = 0,
+): Cypress.Chainable<PostPasswordState> {
   if (attempt > 60) {
     throw new Error("Timed out waiting for Clerk sign-in to finish.");
   }
@@ -42,13 +46,20 @@ function waitForPostPasswordState(attempt = 0): Cypress.Chainable<PostPasswordSt
     }
     if (pathname === "/dashboard") {
       return cy.get("body", { log: false }).then(($body) => {
-        if ($body.find("#orgName").length > 0 || $body.text().includes("Welcome to AutoFlow")) {
+        if (
+          $body.find("#orgName").length > 0 ||
+          $body.text().includes("Welcome to AutoFlow")
+        ) {
           return "onboarding";
         }
-        return cy.wait(500, { log: false }).then(() => waitForPostPasswordState(attempt + 1));
+        return cy
+          .wait(500, { log: false })
+          .then(() => waitForPostPasswordState(attempt + 1));
       });
     }
-    return cy.wait(500, { log: false }).then(() => waitForPostPasswordState(attempt + 1));
+    return cy
+      .wait(500, { log: false })
+      .then(() => waitForPostPasswordState(attempt + 1));
   });
 
   return state as unknown as Cypress.Chainable<PostPasswordState>;
@@ -59,16 +70,34 @@ function completeVerificationIfNeeded(): void {
     if (state !== "verification") return;
 
     const verificationCode = verificationCodeFor();
-    cy.findByRole("textbox", { name: /verification code/i, timeout: 15_000 }).type(verificationCode, { log: false });
-    cy.get("body").then(($body) => {
-      const button = $body
-        .find("button")
-        .filter((_, element) => /^(Continue|Verify)$/.test(element.textContent?.trim() ?? ""))
-        .filter(":enabled:visible")
-        .first();
-      if (button.length > 0) {
-        cy.wrap(button).click();
-      }
+    cy.get(
+      'input[autocomplete="one-time-code"], input[inputmode="numeric"], input[name*="code"], input[type="tel"]',
+      { timeout: 15_000 },
+    )
+      .should(($inputs) => {
+        expect($inputs.filter(":visible").length).to.be.greaterThan(0);
+      })
+      .then(($inputs) => {
+        cy.wrap($inputs.filter(":visible").first())
+          .click()
+          .type(verificationCode, { log: false });
+      });
+
+    cy.location("pathname", { timeout: 5_000 }).then((pathname) => {
+      if (!pathname.startsWith("/sign-in")) return;
+
+      cy.get("body").then(($body) => {
+        const button = $body
+          .find("button")
+          .filter((_, element) =>
+            /^(Continue|Verify)\b/i.test(element.textContent?.trim() ?? ""),
+          )
+          .filter(":enabled:visible")
+          .first();
+        if (button.length > 0) {
+          cy.wrap(button).click();
+        }
+      });
     });
   });
 }
@@ -77,7 +106,9 @@ function completeOnboardingIfNeeded(): void {
   waitForPostPasswordState().then((state) => {
     if (state !== "onboarding") return;
 
-    cy.findByLabelText("Dealership Name", { timeout: 15_000 }).type(`AutoFlow Cypress QA ${Date.now()}`);
+    cy.findByLabelText("Dealership Name", { timeout: 15_000 }).type(
+      `AutoFlow Cypress QA ${Date.now()}`,
+    );
     cy.findByRole("button", { name: /^Continue/ }).click();
 
     cy.findByRole("heading", { name: "Currency" }).should("be.visible");
@@ -98,7 +129,9 @@ Cypress.Commands.add("login", () => {
   const user = Cypress.env("E2E_LOGIN_USER") as string | undefined;
   const password = Cypress.env("E2E_LOGIN_PASSWORD") as string | undefined;
   if (!user || !password) {
-    throw new Error("CYPRESS_E2E_LOGIN_USER and CYPRESS_E2E_LOGIN_PASSWORD must be set to run the E2E suite.");
+    throw new Error(
+      "CYPRESS_E2E_LOGIN_USER and CYPRESS_E2E_LOGIN_PASSWORD must be set to run the E2E suite.",
+    );
   }
 
   cy.session(
@@ -109,7 +142,9 @@ Cypress.Commands.add("login", () => {
           win.localStorage.setItem("autoflow-locale", "en");
         },
       });
-      cy.get("#identifier-field", { timeout: 15_000 }).should("be.visible").type(user);
+      cy.get("#identifier-field", { timeout: 15_000 })
+        .should("be.visible")
+        .type(user);
       // Clerk shows the password field on the same screen for some
       // identifiers (combined form) but only after clicking "Continue" for
       // others (two-step form) — handle both rather than assuming one.
@@ -118,20 +153,28 @@ Cypress.Commands.add("login", () => {
           cy.contains("button", "Continue").click();
         }
       });
-      cy.get("#password-field", { timeout: 15_000 }).should("be.visible").type(password, { log: false });
+      cy.get("#password-field", { timeout: 15_000 })
+        .should("be.visible")
+        .type(password, { log: false });
       cy.contains("button", "Continue").click();
       completeVerificationIfNeeded();
       completeOnboardingIfNeeded();
       // Matched against pathname specifically (not the full URL string) — a
       // regex without a leading anchor can accidentally match "host:port" as
       // the orgId segment against the bare Clerk-fallback /dashboard URL.
-      cy.location("pathname", { timeout: 30_000 }).should("match", orgRoutePattern);
+      cy.location("pathname", { timeout: 30_000 }).should(
+        "match",
+        orgRoutePattern,
+      );
     },
     {
       validate() {
-        cy.window().its("localStorage").invoke("getItem", "autoflow-locale").should("eq", "en");
+        cy.window()
+          .its("localStorage")
+          .invoke("getItem", "autoflow-locale")
+          .should("eq", "en");
       },
-    }
+    },
   );
 });
 
