@@ -32,6 +32,12 @@ export const CreateVehicleSchema = z.object({
   sourceCost: z.number().min(0, "Supplier cost cannot be negative").optional(),
   notes: z.string().max(2000, "Notes cannot exceed 2000 characters").optional(),
   imageIds: z.array(z.string()).optional(),
+  // Dealer self-service only ever sends NONE/SELF_REPORTED — PARTNER_VERIFIED
+  // is reserved for a future partner-API integration, set via the admin data browser.
+  inspectionStatus: z.enum(["NONE", "SELF_REPORTED"]).optional(),
+  accidentDisclosed: z.boolean().optional(),
+  ownerCount: z.number().int().min(0, "Owner count cannot be negative").optional(),
+  dealerGuarantee: z.boolean().optional(),
 });
 
 export const UpdateVehicleSchema = CreateVehicleSchema.partial().extend({

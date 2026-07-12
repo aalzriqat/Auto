@@ -1076,6 +1076,28 @@ describe("vehicles trust passport (Phase 61 self-service form)", () => {
     ).rejects.toThrow(/owner count/i);
   });
 
+  test("create/update reject a negative or non-integer ownerCount", async () => {
+    const { orgId, asUser } = await setup();
+
+    await expect(
+      asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle, ownerCount: -1 })
+    ).rejects.toThrow();
+
+    await expect(
+      asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle, ownerCount: 1.5 })
+    ).rejects.toThrow();
+
+    const vehicleId = await asUser.mutation(api.vehicles.create, { orgId, ...baseVehicle });
+
+    await expect(
+      asUser.mutation(api.vehicles.update, { orgId, vehicleId, ownerCount: -1 })
+    ).rejects.toThrow();
+
+    await expect(
+      asUser.mutation(api.vehicles.update, { orgId, vehicleId, ownerCount: 1.5 })
+    ).rejects.toThrow();
+  });
+
   test("a vehicle create request carries trust passport fields through approval", async () => {
     const { t, orgId, asUser } = await setup();
 

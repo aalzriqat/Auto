@@ -26,6 +26,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { Upload, X, Search, Loader2 } from "lucide-react";
 import {
@@ -80,6 +81,10 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
       sourceCost: 0,
       notes: "",
       imageIds: [],
+      inspectionStatus: "NONE",
+      accidentDisclosed: undefined,
+      ownerCount: undefined,
+      dealerGuarantee: false,
     },
   });
 
@@ -104,6 +109,10 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
         sourceCost: (vehicle as any).sourceCost ?? 0,
         notes: vehicle.notes || "",
         imageIds: vehicle.imageIds || [],
+        inspectionStatus: (vehicle as any).inspectionStatus ?? "NONE",
+        accidentDisclosed: (vehicle as any).accidentDisclosed,
+        ownerCount: (vehicle as any).ownerCount,
+        dealerGuarantee: (vehicle as any).dealerGuarantee ?? false,
       });
       setImageIds(vehicle.imageIds || []);
       setImageUrls((vehicle as any).imageUrls || []);
@@ -127,6 +136,10 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
         sourceCost: 0,
         notes: "",
         imageIds: [],
+        inspectionStatus: "NONE",
+        accidentDisclosed: undefined,
+        ownerCount: undefined,
+        dealerGuarantee: false,
       });
       setImageIds([]);
       setImageUrls([]);
@@ -255,7 +268,11 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
     if (!activeOrgId) return;
     setIsSubmitting(true);
     try {
-      const { imageIds: _formImageIds, ...restValues } = values;
+      const { imageIds: _formImageIds, inspectionStatus, ...restValues } = values;
+      // PARTNER_VERIFIED is display-only here (locked Select) — none of the
+      // backend mutations accept it, so never resubmit it as-is.
+      const trustPassportFields =
+        inspectionStatus === "PARTNER_VERIFIED" ? {} : { inspectionStatus };
 
       if (vehicle) {
         if (canEdit) {
@@ -263,6 +280,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
             orgId: activeOrgId,
             vehicleId: vehicle._id,
             ...restValues,
+            ...trustPassportFields,
             imageIds: imageIds as Id<"_storage">[],
           });
           await saveCustomFields(activeOrgId, "vehicle", vehicle._id, customFieldValues);
@@ -273,6 +291,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
             vehicleId: vehicle._id,
             payload: {
               ...restValues,
+              ...trustPassportFields,
               imageIds: imageIds as Id<"_storage">[],
             },
           });
@@ -283,6 +302,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
           const newId = await createVehicle({
             orgId: activeOrgId,
             ...restValues,
+            ...trustPassportFields,
             imageIds: imageIds as Id<"_storage">[],
           });
           if (newId) await saveCustomFields(activeOrgId, "vehicle", newId, customFieldValues);
@@ -292,6 +312,7 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
             orgId: activeOrgId,
             payload: {
               ...restValues,
+              ...trustPassportFields,
               imageIds: imageIds as Id<"_storage">[],
             },
           });
@@ -628,6 +649,114 @@ export function VehicleDialog({ open, onOpenChange, vehicle, canCreate = false, 
                   </FormItem>
                 )}
               />
+            </div>
+
+            <div className="space-y-4 rounded-lg border p-4">
+              <div>
+                <h4 className="text-sm font-medium">{t("TrustPassport" as any) || "Trust Passport"}</h4>
+                <p className="text-xs text-muted-foreground">
+                  {t("TrustPassportDesc" as any) || "Optional disclosures shown to marketplace buyers."}
+                </p>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <FormField
+                  control={form.control}
+                  name="inspectionStatus"
+                  render={({ field }) => {
+                    const isLocked = field.value === "PARTNER_VERIFIED";
+                    return (
+                      <FormItem>
+                        <FormLabel>{t("InspectionStatus" as any) || "Inspection Status"}</FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value ?? "NONE"} disabled={isLocked}>
+                          <FormControl>
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            <SelectItem value="NONE">{t("InspectionStatusNone" as any) || "Not disclosed"}</SelectItem>
+                            <SelectItem value="SELF_REPORTED">
+                              {t("InspectionStatusSelfReported" as any) || "Self-reported by our team"}
+                            </SelectItem>
+                            {isLocked && (
+                              <SelectItem value="PARTNER_VERIFIED" disabled>
+                                {t("InspectionStatusPartnerVerifiedLocked" as any) || "Partner-verified (locked)"}
+                              </SelectItem>
+                            )}
+                          </SelectContent>
+                        </Select>
+                        {isLocked && (
+                          <p className="text-xs text-muted-foreground">
+                            {t("InspectionStatusLockedHint" as any) ||
+                              "Set by AutoFlow's verification process — contact support to change."}
+                          </p>
+                        )}
+                        <FormMessage />
+                      </FormItem>
+                    );
+                  }}
+                />
+                <FormField
+                  control={form.control}
+                  name="accidentDisclosed"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("AccidentHistory" as any) || "Accident History"}</FormLabel>
+                      <Select
+                        onValueChange={(v) => field.onChange(v === "unset" ? undefined : v === "yes")}
+                        value={field.value === undefined ? "unset" : field.value ? "yes" : "no"}
+                      >
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="unset">{t("AccidentHistoryUnset" as any) || "Not disclosed"}</SelectItem>
+                          <SelectItem value="no">{t("AccidentHistoryNo" as any) || "No accidents"}</SelectItem>
+                          <SelectItem value="yes">{t("AccidentHistoryYes" as any) || "Accident disclosed"}</SelectItem>
+                        </SelectContent>
+                      </Select>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="ownerCount"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("OwnerCount" as any) || "Number of Previous Owners"}</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="number"
+                          min="0"
+                          step="1"
+                          value={field.value ?? ""}
+                          onChange={(e) =>
+                            field.onChange(e.target.value === "" ? undefined : parseInt(e.target.value, 10))
+                          }
+                        />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="dealerGuarantee"
+                  render={({ field }) => (
+                    <FormItem className="flex flex-row items-center gap-2 space-y-0 pt-6">
+                      <FormControl>
+                        <Checkbox id="dealerGuarantee" checked={field.value ?? false} onCheckedChange={field.onChange} />
+                      </FormControl>
+                      <FormLabel htmlFor="dealerGuarantee" className="font-normal cursor-pointer">
+                        {t("DealerGuarantee" as any) || "We guarantee this vehicle's condition to buyers"}
+                      </FormLabel>
+                    </FormItem>
+                  )}
+                />
+              </div>
             </div>
 
             {activeOrgId && (
