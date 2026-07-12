@@ -5,6 +5,16 @@ export function testDataSuffix(): string {
   return `${Date.now()}-${crypto.getRandomValues(new Uint32Array(1))[0] % 10_000}`;
 }
 
+/** 17-character, VIN-safe test identifier: only allowed letters/digits, unique enough for CI. */
+function testVin(): string {
+  const timePart = Date.now().toString().slice(-10);
+  const randomPart = (crypto.getRandomValues(new Uint32Array(1))[0] % 10_000)
+    .toString()
+    .padStart(4, "0");
+
+  return `E2E${timePart}${randomPart}`;
+}
+
 /**
  * Every authenticated route is scoped under /{orgId}/... and the QA fixture's
  * orgId isn't known ahead of time, so resolve it once by landing on the
@@ -41,9 +51,10 @@ export function gotoOrgRoute(path: string): Cypress.Chainable<string> {
  */
 export function createVehicle(
   modelOverride?: string,
-): Cypress.Chainable<{ make: string; model: string }> {
+): Cypress.Chainable<{ make: string; model: string; vin: string }> {
   const model = modelOverride ?? `E2E-${testDataSuffix()}`;
   const make = "Playwright";
+  const vin = testVin();
 
   return gotoOrgRoute("vehicles").then(() => {
     cy.findByRole("button", { name: "Add Vehicle" }).click();
@@ -52,6 +63,7 @@ export function createVehicle(
       .findByRole("dialog")
       .within(() => {
         cy.findByRole("heading", { name: "Add Vehicle" }).should("be.visible");
+        cy.findByLabelText(/^VIN\b/).type(vin);
         cy.findByLabelText(/^Make\b/).type(make);
         cy.findByLabelText(/^Model\b/).type(model);
         cy.findByLabelText(/^Year\b/)
@@ -72,7 +84,7 @@ export function createVehicle(
             /Vehicle added successfully|Creation request submitted for approval/,
           )
           .should("be.visible")
-          .then(() => ({ make, model }));
+          .then(() => ({ make, model, vin }));
       });
   });
 }
