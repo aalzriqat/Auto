@@ -67,10 +67,12 @@ export function createVehicle(
         }).click();
       })
       .then(() => {
-        cy.findByText(
-          /Vehicle added successfully|Creation request submitted for approval/,
-        ).should("be.visible");
-        return { make, model };
+        return cy
+          .findByText(
+            /Vehicle added successfully|Creation request submitted for approval/,
+          )
+          .should("be.visible")
+          .then(() => ({ make, model }));
       });
   });
 }
@@ -94,8 +96,10 @@ export function createCustomer(
         cy.findByRole("button", { name: "Add Customer" }).click();
       })
       .then(() => {
-        cy.findByText("Customer added successfully").should("be.visible");
-        return { firstName, lastName };
+        return cy
+          .findByText("Customer added successfully")
+          .should("be.visible")
+          .then(() => ({ firstName, lastName }));
       });
   });
 }
