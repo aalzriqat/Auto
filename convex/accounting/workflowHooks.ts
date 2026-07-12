@@ -718,6 +718,20 @@ export const hookDepositVoided = makeReversalHook<{ depositId: Id<"deposits"> }>
   pendingPostKey: (a) => `deposit_received_${a.depositId}`,
 });
 
+/**
+ * Reverses the RECEIVABLE_CREATED entry when a manual receivable is
+ * cancelled before any payment is collected. Safe to call for sale-linked
+ * receivables too — those never had a RECEIVABLE_CREATED event posted (their
+ * AR is recognized by SALE_COMPLETED instead), so this is a no-op for them.
+ */
+export const hookReceivableCancelled = makeReversalHook<{ receivableId: Id<"receivables"> }>({
+  eventType: "RECEIVABLE_CREATED",
+  sourceType: "receivables",
+  sourceId: (a) => a.receivableId.toString(),
+  reversalKey: (a) => `receivable_cancelled_${a.receivableId}`,
+  pendingPostKey: (a) => `receivable_created_${a.receivableId}`,
+});
+
 export async function hookFinanceDisbursed(
   ctx: MutationCtx,
   args: {

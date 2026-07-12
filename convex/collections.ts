@@ -15,7 +15,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { getActorName, notifyManagers, notifyUser } from "./utils/notifications";
 import { runWithIdempotency } from "./utils/idempotency";
 import { assertDifferentActors } from "./utils/financialGuards";
-import { hookCollectionPayment, hookCollectionRefund, hookExpensePosted, hookReceivableCreated, getOrgCurrency } from "./accounting/workflowHooks";
+import { hookCollectionPayment, hookCollectionRefund, hookExpensePosted, hookReceivableCreated, hookReceivableCancelled, getOrgCurrency } from "./accounting/workflowHooks";
 import { ReceivableCreditKey } from "./accounting/postingRules";
 import { reverseAccountingEvent } from "./accounting/reversals";
 import { getOpenPeriodForDate } from "./accountingPeriods";
@@ -1637,6 +1637,18 @@ export const respondToApproval = mutation({
               currency
             );
             await ctx.db.patch(cancelledDocId, { status: "CANCELLED" });
+            // Reverse the RECEIVABLE_CREATED entry (or cancel its pending post)
+            // so AR and the credit account it hit (income/deposit liability/
+            // expense reimbursement) don't stay overstated once the receivable
+            // is gone operationally. No-op for sale-linked receivables, which
+            // never post a RECEIVABLE_CREATED event in the first place.
+            await hookReceivableCancelled(ctx, {
+              orgId: args.orgId,
+              receivableId: receivable._id,
+              reason: args.decisionNotes ?? "Receivable cancelled",
+              actorId: user._id,
+              reversalDate: now,
+            });
           } else if (request.requestType === "REFUND") {
             const refundAmount = roundMoney(request.requestedAmount ?? 0, currency);
             assertPositiveAmount(refundAmount, "Refund amount");

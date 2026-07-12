@@ -346,6 +346,161 @@ describe("Collections", () => {
         ? await ctx.db.get(receivable.canonicalReceivableDocumentId)
         : null;
       expect(canonicalReceivable?.status).toBe("CANCELLED");
+
+      // No chart of accounts in this suite, so RECEIVABLE_CREATED sat in the
+      // outbox as PENDING rather than posting — cancelling the receivable
+      // must cancel that pending post too, or it would post AR/income for a
+      // receivable that no longer exists once the outbox next drains.
+      const stillPending = await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", orgId).eq("idempotencyKey", `receivable_created_${receivableId}`)
+        )
+        .first();
+      expect(stillPending).toBeNull();
+    });
+  });
+
+  test("approved_cancel_reverses_a_posted_receivable_created_event", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, asFinance, asApprover } = await seedFinanceMember(t);
+
+    // Unlike the other tests in this file, this one needs an actual posted
+    // GL entry (not just an outbox entry) to verify the reversal — so it
+    // initializes a chart of accounts and opens a period first. The
+    // "accounting" feature gate requires a paid plan.
+    await t.run((ctx) =>
+      ctx.db.insert("subscriptions", {
+        orgId, plan: "professional", status: "active", createdAt: Date.now(), updatedAt: Date.now(),
+      })
+    );
+    await asFinance.mutation(api.chartOfAccounts.initialize, { orgId });
+    await asFinance.mutation(api.accountingPeriods.create, {
+      orgId,
+      startDate: Date.UTC(2020, 0, 1),
+      endDate: Date.UTC(2035, 11, 31, 23, 59, 59, 999),
+      fiscalYear: 2025,
+      periodNumber: 1,
+    });
+    const period = (await asFinance.query(api.accountingPeriods.list, { orgId }))[0];
+    await asFinance.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+
+    const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      orgId,
+      customerId,
+      sourceType: "INTERNAL_INSTALLMENT",
+      title: "Cancelled installment (posted)",
+      amount: 750,
+      dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+      creditSystemKey: "MISCELLANEOUS_INCOME",
+    });
+
+    const postedBefore = await t.run((ctx) =>
+      ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", "receivables").eq("sourceId", receivableId.toString())
+        )
+        .filter((q) => q.eq(q.field("eventType"), "RECEIVABLE_CREATED"))
+        .first()
+    );
+    expect(postedBefore?.status).toBe("POSTED");
+
+    const requestId = await asFinance.mutation(api.collections.requestApproval, {
+      orgId,
+      receivableId,
+      requestType: "CANCEL_RECEIVABLE",
+      reason: "Deal fell through",
+    });
+    await asApprover.mutation(api.collections.respondToApproval, {
+      orgId,
+      requestId,
+      status: "APPROVED",
+    });
+
+    await t.run(async (ctx) => {
+      const receivable = await ctx.db.get(receivableId);
+      expect(receivable?.status).toBe("CANCELLED");
+
+      const original = await ctx.db.get(postedBefore!._id);
+      expect(original?.status).toBe("REVERSED");
+      expect(original?.reversedByEventId).toBeTruthy();
+
+      const reversalEvent = await ctx.db.get(original!.reversedByEventId!);
+      expect(reversalEvent?.status).toBe("POSTED");
+      const reversalLines = await ctx.db
+        .query("journalLines")
+        .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", reversalEvent!.journalEntryId!))
+        .collect();
+      const originalLines = await ctx.db
+        .query("journalLines")
+        .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", original!.journalEntryId!))
+        .collect();
+      // The reversal must swap debit/credit for every original line so AR
+      // and the credit account (Other Income here) both net back to zero.
+      for (const originalLine of originalLines) {
+        const matching = reversalLines.find((l) => l.accountId === originalLine.accountId);
+        expect(matching?.debitMinor).toBe(originalLine.creditMinor);
+        expect(matching?.creditMinor).toBe(originalLine.debitMinor);
+      }
+    });
+  });
+
+  test("approved_cancel_of_a_sale_linked_receivable_is_a_no_op_for_the_gl", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, customerId, asFinance, asApprover, userId } = await seedFinanceMember(t);
+
+    // A sale-linked receivable never posts its own RECEIVABLE_CREATED (the
+    // sale's SALE_COMPLETED already recognized the AR) — cancelling it must
+    // not error even though there is nothing to reverse or cancel.
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, vin: "SALELINKEDVEH0001", make: "Honda", model: "Civic", year: 2022,
+        mileage: 5000, color: "White", fuelType: "Gasoline", transmission: "Automatic",
+        sellingPrice: 10000, status: "SOLD", sourceType: "STOCK",
+      })
+    );
+    const saleId = await t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId, vehicleId, customerId, salespersonId: userId,
+        salePrice: 10000, saleDate: Date.now(), status: "COMPLETED",
+      })
+    );
+
+    const receivableId = await asFinance.mutation(api.collections.createReceivable, {
+      orgId,
+      customerId,
+      saleId,
+      sourceType: "INTERNAL_INSTALLMENT",
+      title: "Sale-linked balance",
+      amount: 400,
+      dueDate: Date.now() + 7 * 24 * 60 * 60 * 1000,
+    });
+
+    const noEventPosted = await t.run((ctx) =>
+      ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", "receivables").eq("sourceId", receivableId.toString())
+        )
+        .first()
+    );
+    expect(noEventPosted).toBeNull();
+
+    const requestId = await asFinance.mutation(api.collections.requestApproval, {
+      orgId,
+      receivableId,
+      requestType: "CANCEL_RECEIVABLE",
+      reason: "Deal fell through",
+    });
+
+    await expect(
+      asApprover.mutation(api.collections.respondToApproval, { orgId, requestId, status: "APPROVED" })
+    ).resolves.not.toThrow();
+
+    await t.run(async (ctx) => {
+      const receivable = await ctx.db.get(receivableId);
+      expect(receivable?.status).toBe("CANCELLED");
     });
   });
 
