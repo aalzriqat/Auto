@@ -24,12 +24,10 @@ export function gotoOrgRoute(path: string): Cypress.Chainable<string> {
 
       const orgId = match[1];
       const targetPath = `/${orgId}/${path}`;
-      if (pathname !== targetPath) {
-        cy.get(`a[href="${targetPath}"]`, { timeout: 15_000 }).first().click();
-      }
 
       return cy
-        .location("pathname", { timeout: 30_000 })
+        .visit(targetPath)
+        .then(() => cy.location("pathname", { timeout: 30_000 }))
         .should("eq", targetPath)
         .then(() => orgId);
     });
