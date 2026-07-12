@@ -52,6 +52,9 @@ export function gotoOrgRoute(path: string): Cypress.Chainable<string> {
 export function expectVisibleTableCell(
   textOrPattern: string | RegExp,
 ): Cypress.Chainable<JQuery<HTMLBodyElement>> {
+  const maxAttempts = 60;
+  const maxLoadMoreClicks = 20;
+  const retryDelayMs = 250;
   const matches =
     typeof textOrPattern === "string"
       ? (text: string) => text.includes(textOrPattern)
@@ -59,6 +62,7 @@ export function expectVisibleTableCell(
 
   function findLoadedCell(
     attempt = 0,
+    loadMoreClicks = 0,
   ): Cypress.Chainable<JQuery<HTMLBodyElement>> {
     return cy.get("body").then(($body): void => {
       const matchingCells = $body.find("td").filter((_, cell) => {
@@ -83,9 +87,16 @@ export function expectVisibleTableCell(
         );
       });
 
-      if (loadMoreButton.length > 0 && attempt < 20) {
+      if (loadMoreButton.length > 0 && loadMoreClicks < maxLoadMoreClicks) {
         cy.wrap(loadMoreButton.first()).click();
-        findLoadedCell(attempt + 1);
+        cy.wait(retryDelayMs);
+        findLoadedCell(attempt + 1, loadMoreClicks + 1);
+        return;
+      }
+
+      if (attempt < maxAttempts) {
+        cy.wait(retryDelayMs);
+        findLoadedCell(attempt + 1, loadMoreClicks);
         return;
       }
 
@@ -139,6 +150,7 @@ export function createVehicle(
             /Vehicle added successfully|Creation request submitted for approval/,
           )
           .should("be.visible")
+          .then(() => cy.findByRole("dialog").should("not.exist"))
           .then(() => ({ make, model, vin }));
       });
   });
@@ -166,6 +178,7 @@ export function createCustomer(
         return cy
           .findByText("Customer added successfully")
           .should("be.visible")
+          .then(() => cy.findByRole("dialog").should("not.exist"))
           .then(() => ({ firstName, lastName }));
       });
   });
