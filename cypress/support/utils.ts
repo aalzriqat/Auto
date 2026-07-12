@@ -63,7 +63,7 @@ export function createVehicle(
       .findByRole("dialog")
       .within(() => {
         cy.findByRole("heading", { name: "Add Vehicle" }).should("be.visible");
-        cy.findByLabelText(/^VIN\b/).type(vin);
+        cy.findByPlaceholderText("17-character VIN").type(vin);
         cy.findByLabelText(/^Make\b/).type(make);
         cy.findByLabelText(/^Model\b/).type(model);
         cy.findByLabelText(/^Year\b/)
