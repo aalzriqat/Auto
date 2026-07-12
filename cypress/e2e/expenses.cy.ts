@@ -16,8 +16,8 @@ describe("expenses", () => {
 
         // Date/category/status/payment-method all have valid defaults
         // (today / OTHER / PAID / CASH) — only title and amount are required.
-        cy.findByLabelText("Title / Description").type(title);
-        cy.findByLabelText("Amount ($)").type("42");
+        cy.findByLabelText(/^Title \/ Description\b/).type(title);
+        cy.findByLabelText(/^Amount \(\$\)/).type("42");
 
         cy.findByRole("button", { name: "Record Expense" }).click();
       });

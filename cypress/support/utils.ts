@@ -52,12 +52,16 @@ export function createVehicle(
       .findByRole("dialog")
       .within(() => {
         cy.findByRole("heading", { name: "Add Vehicle" }).should("be.visible");
-        cy.findByLabelText("Make").type(make);
-        cy.findByLabelText("Model").type(model);
-        cy.findByLabelText("Year").clear().type("2024");
-        cy.findByLabelText("Color").type("Black");
-        cy.findByLabelText("Mileage").clear().type("100");
-        cy.findByLabelText("Selling Price (JOD)").type("15000");
+        cy.findByLabelText(/^Make\b/).type(make);
+        cy.findByLabelText(/^Model\b/).type(model);
+        cy.findByLabelText(/^Year\b/)
+          .clear()
+          .type("2024");
+        cy.findByLabelText(/^Color\b/).type("Black");
+        cy.findByLabelText(/^Mileage\b/)
+          .clear()
+          .type("100");
+        cy.findByLabelText(/^Selling Price \(JOD\)/).type("15000");
         cy.findByRole("button", {
           name: /^(Add Vehicle|Submit for Approval)$/,
         }).click();
@@ -85,8 +89,8 @@ export function createCustomer(
       .findByRole("dialog")
       .within(() => {
         cy.findByRole("heading", { name: "Add Customer" }).should("be.visible");
-        cy.findByLabelText("First Name").type(firstName);
-        cy.findByLabelText("Last Name").type(lastName);
+        cy.findByLabelText(/^First Name\b/).type(firstName);
+        cy.findByLabelText(/^Last Name\b/).type(lastName);
         cy.findByRole("button", { name: "Add Customer" }).click();
       })
       .then(() => {

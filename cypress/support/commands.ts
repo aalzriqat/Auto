@@ -134,7 +134,7 @@ function completeOnboardingIfNeeded(): void {
   waitForPostPasswordState().then((state) => {
     if (state !== "onboarding") return;
 
-    cy.findByLabelText("Dealership Name", { timeout: 15_000 }).type(
+    cy.findByLabelText(/^Dealership Name\b/, { timeout: 15_000 }).type(
       `AutoFlow Cypress QA ${Date.now()}`,
     );
     cy.findByRole("button", { name: /^Continue/ }).click();

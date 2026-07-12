@@ -26,8 +26,8 @@ describe("sales", () => {
         // Step 2 — customer (inline create form uses hard-coded English
         // labels, not t(), so these are stable regardless of app locale)
         cy.findByRole("button", { name: "Create a new customer" }).click();
-        cy.findByLabelText("First Name").type("Cypress");
-        cy.findByLabelText("Last Name").type(lastName);
+        cy.findByLabelText(/^First Name\b/).type("Cypress");
+        cy.findByLabelText(/^Last Name\b/).type(lastName);
         cy.findByRole("button", { name: "Create & Select" }).click();
         cy.findByRole("button", { name: "Next" }).click();
 
