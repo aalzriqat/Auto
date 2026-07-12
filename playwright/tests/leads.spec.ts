@@ -18,7 +18,7 @@ test.describe("leads", () => {
     // a plain button trigger that opens a popover with an auto-focused search
     // input and a list of plain <button> results — no ARIA combobox/option
     // roles, so type into whatever's focused rather than locating the input.
-    await dialog.getByRole("button", { name: "Select a customer" }).click();
+    await dialog.getByRole("button", { name: "Select customer" }).click();
     await page.keyboard.type(lastName);
     await dialog.getByRole("button", { name: customerName }).click();
 

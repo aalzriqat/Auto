@@ -48,6 +48,34 @@ export function testDataSuffix(): string {
   return `${Date.now()}-${randomInt(0, 10_000)}`;
 }
 
+/** 17-character, VIN-safe test identifier: only allowed letters/digits, unique enough for CI. */
+function testVin(): string {
+  const timePart = Date.now().toString().slice(-10);
+  const randomPart = randomInt(0, 10_000).toString().padStart(4, "0");
+
+  return `E2E${timePart}${randomPart}`;
+}
+
+export async function searchCurrentTable(
+  page: Page,
+  searchTerm: string,
+): Promise<void> {
+  const searchInput = page
+    .locator('main input[placeholder^="Search"]:not([readonly])')
+    .first();
+  await expect(searchInput).toBeVisible();
+  await searchInput.fill(searchTerm);
+}
+
+export async function expectVisibleTableCell(
+  page: Page,
+  textOrPattern: string | RegExp,
+): Promise<void> {
+  await expect(
+    page.locator("td").filter({ hasText: textOrPattern }).first(),
+  ).toBeVisible();
+}
+
 /**
  * Creates a vehicle through the real UI (not the API) so the sales/leads
  * specs always have a fresh, distinctively-named vehicle to select without
@@ -57,9 +85,10 @@ export function testDataSuffix(): string {
 export async function createVehicle(
   page: Page,
   opts?: { model?: string },
-): Promise<{ make: string; model: string }> {
+): Promise<{ make: string; model: string; vin: string }> {
   const model = opts?.model ?? `E2E-${testDataSuffix()}`;
   const make = "Playwright";
+  const vin = testVin();
 
   await gotoOrgRoute(page, "vehicles");
   await page.getByRole("button", { name: "Add Vehicle", exact: true }).click();
@@ -69,6 +98,7 @@ export async function createVehicle(
     dialog.getByRole("heading", { name: "Add Vehicle" }),
   ).toBeVisible();
 
+  await dialog.getByPlaceholder("17-character VIN").fill(vin);
   await dialog.getByLabel("Make").fill(make);
   await dialog.getByLabel("Model").fill(model);
   await dialog.getByLabel("Year").fill("2024");
@@ -84,8 +114,9 @@ export async function createVehicle(
       /Vehicle added successfully|Creation request submitted for approval/,
     ),
   ).toBeVisible();
+  await expect(dialog).not.toBeVisible();
 
-  return { make, model };
+  return { make, model, vin };
 }
 
 /** Creates a customer through the real UI. Returns the name used so callers can search for it later. */
