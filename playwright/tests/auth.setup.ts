@@ -2,6 +2,14 @@ import { test as setup, expect, type Page } from "@playwright/test";
 
 const authFile = "playwright/.auth/user.json";
 const orgRoutePattern = /^\/[^/]+\/(dashboard|sales|leads|accounting)(\?.*)?$/;
+const e2eLocalStorage = {
+  "autoflow-locale": "en",
+  dealer_website_onboarding_seen_v1: "1",
+  feature_spotlight_seen_v3: "1",
+  global_search_onboarding_seen_v1: "1",
+  messenger_onboarding_seen_v1: "1",
+} as const;
+const e2eLocalStorageEntries = Object.entries(e2eLocalStorage);
 
 function isOrgRoute(url: URL): boolean {
   return orgRoutePattern.test(url.pathname + url.search);
@@ -13,6 +21,12 @@ function isSignInRoute(url: URL): boolean {
 
 function verificationCodeFor(): string {
   return process.env.E2E_LOGIN_VERIFICATION_CODE || "424242";
+}
+
+function seedE2ELocalStorage(entries: [string, string][]): void {
+  entries.forEach(([key, value]) => {
+    window.localStorage.setItem(key, value);
+  });
 }
 
 async function waitUntilNotSignIn(
@@ -138,9 +152,7 @@ setup("authenticate", async ({ page }) => {
   }
   const verificationCode = verificationCodeFor();
 
-  await page.addInitScript(() => {
-    window.localStorage.setItem("autoflow-locale", "en");
-  });
+  await page.addInitScript(seedE2ELocalStorage, e2eLocalStorageEntries);
 
   await page.goto("/sign-in");
 
@@ -175,5 +187,6 @@ setup("authenticate", async ({ page }) => {
 
   await expect(page.getByRole("banner")).toBeVisible();
 
+  await page.evaluate(seedE2ELocalStorage, e2eLocalStorageEntries);
   await page.context().storageState({ path: authFile });
 });
