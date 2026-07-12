@@ -2,13 +2,13 @@
 
 /** Unique-ish suffix for test data so repeated CI runs don't collide. */
 export function testDataSuffix(): string {
-  return `${Date.now()}-${crypto.getRandomValues(new Uint32Array(1))[0] % 10_000}`;
+  return `${Date.now()}-${Math.floor(Math.random() * 10_000)}`;
 }
 
 /** 17-character, VIN-safe test identifier: only allowed letters/digits, unique enough for CI. */
 function testVin(): string {
   const timePart = Date.now().toString().slice(-10);
-  const randomPart = (crypto.getRandomValues(new Uint32Array(1))[0] % 10_000)
+  const randomPart = Math.floor(Math.random() * 10_000)
     .toString()
     .padStart(4, "0");
 
