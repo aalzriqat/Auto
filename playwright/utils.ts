@@ -8,9 +8,18 @@ import { randomInt } from "node:crypto";
  * role-dependent entry point and reading it back out of the URL.
  */
 export async function resolveOrgId(page: Page): Promise<string> {
+  const currentOrgRoute = new URL(page.url()).pathname.match(
+    /^\/([^/]+)\/(dashboard|sales|leads|accounting|vehicles|customers|expenses)$/,
+  );
+  if (currentOrgRoute) return currentOrgRoute[1];
+
   await page.goto("/dashboard");
   await page.waitForURL(/\/[^/]+\/(dashboard|sales|leads|accounting)(\?.*)?$/);
-  const match = page.url().match(/\/([^/]+)\/(dashboard|sales|leads|accounting)/);
+  await expect(page.getByRole("banner")).toBeVisible();
+
+  const match = page
+    .url()
+    .match(/\/([^/]+)\/(dashboard|sales|leads|accounting)/);
   if (!match) {
     throw new Error(`Could not resolve orgId from URL: ${page.url()}`);
   }
@@ -19,7 +28,19 @@ export async function resolveOrgId(page: Page): Promise<string> {
 
 export async function gotoOrgRoute(page: Page, path: string): Promise<void> {
   const orgId = await resolveOrgId(page);
-  await page.goto(`/${orgId}/${path}`);
+  const targetPath = `/${orgId}/${path}`;
+  if (new URL(page.url()).pathname === targetPath) return;
+
+  const navLink = page.locator(`a[href="${targetPath}"]`).first();
+  if (await navLink.isVisible({ timeout: 5_000 }).catch(() => false)) {
+    await navLink.click();
+  } else {
+    await page.goto(targetPath);
+  }
+
+  await expect(page).toHaveURL((url) => url.pathname === targetPath, {
+    timeout: 30_000,
+  });
 }
 
 /** Unique-ish suffix for test data so repeated CI runs don't collide. */
@@ -33,7 +54,10 @@ export function testDataSuffix(): string {
  * depleting or depending on whatever real inventory exists in the shared QA
  * org. Returns the model string used, so callers can search for it later.
  */
-export async function createVehicle(page: Page, opts?: { model?: string }): Promise<{ make: string; model: string }> {
+export async function createVehicle(
+  page: Page,
+  opts?: { model?: string },
+): Promise<{ make: string; model: string }> {
   const model = opts?.model ?? `E2E-${testDataSuffix()}`;
   const make = "Playwright";
 
@@ -50,14 +74,23 @@ export async function createVehicle(page: Page, opts?: { model?: string }): Prom
   await dialog.getByLabel("Mileage").fill("100");
   await dialog.getByLabel("Selling Price (JOD)").fill("15000");
 
-  await dialog.getByRole("button", { name: /^(Add Vehicle|Submit for Approval)$/ }).click();
-  await expect(page.getByText(/Vehicle added successfully|Creation request submitted for approval/)).toBeVisible();
+  await dialog
+    .getByRole("button", { name: /^(Add Vehicle|Submit for Approval)$/ })
+    .click();
+  await expect(
+    page.getByText(
+      /Vehicle added successfully|Creation request submitted for approval/,
+    ),
+  ).toBeVisible();
 
   return { make, model };
 }
 
 /** Creates a customer through the real UI. Returns the name used so callers can search for it later. */
-export async function createCustomer(page: Page, opts?: { lastName?: string }): Promise<{ firstName: string; lastName: string }> {
+export async function createCustomer(
+  page: Page,
+  opts?: { lastName?: string },
+): Promise<{ firstName: string; lastName: string }> {
   const firstName = "Playwright";
   const lastName = opts?.lastName ?? `Tester-${testDataSuffix()}`;
 
@@ -70,7 +103,9 @@ export async function createCustomer(page: Page, opts?: { lastName?: string }): 
   await dialog.getByLabel("First Name").fill(firstName);
   await dialog.getByLabel("Last Name").fill(lastName);
 
-  await dialog.getByRole("button", { name: "Add Customer", exact: true }).click();
+  await dialog
+    .getByRole("button", { name: "Add Customer", exact: true })
+    .click();
   await expect(page.getByText("Customer added successfully")).toBeVisible();
 
   return { firstName, lastName };
