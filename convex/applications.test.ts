@@ -2,6 +2,7 @@ import { convexTest } from "convex-test";
 import { expect, test, describe } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import { transferFinancedAmountFromCustomerReceivable } from "./applications";
 
 const MODULES = import.meta.glob("./**/*.ts");
 
@@ -125,6 +126,290 @@ describe("applications.finalizeDeal", () => {
   });
 });
 
+describe("applications.createFromQuote validation", () => {
+  test("rejects missing, mismatched, multi-vehicle, deleted-vehicle, and wrong-company quotes", async () => {
+    const { t, orgId, userId, customerId, vehicleId, asUser } = await setup();
+    const otherOrg = await t.run(async (ctx) => {
+      const otherOrgId = await ctx.db.insert("organizations", { name: "Other App Dealer", createdAt: Date.now() });
+      const otherCustomerId = await ctx.db.insert("customers", {
+        orgId: otherOrgId,
+        firstName: "Other",
+        lastName: "Customer",
+      });
+      const otherCompanyId = await ctx.db.insert("financeCompanies", {
+        orgId: otherOrgId,
+        name: "Other Finance",
+        profitRate: 6,
+        maxTermMonths: 60,
+        gracePeriodMonths: 0,
+        isActive: true,
+      });
+      const otherQuoteId = await ctx.db.insert("quotes", {
+        orgId: otherOrgId,
+        customerId: otherCustomerId,
+        vehicleId,
+        vehiclePrice: 20_000,
+        downPayment: 3_000,
+        termMonths: 48,
+        status: "DRAFT",
+        createdBy: userId,
+        createdAt: Date.now(),
+      });
+      return { otherCustomerId, otherCompanyId, otherQuoteId };
+    });
+
+    await expect(
+      asUser.mutation(api.applications.createFromQuote, { orgId, quoteId: otherOrg.otherQuoteId })
+    ).rejects.toThrow(/quote not found/i);
+
+    const mismatchedCustomerQuoteId = await t.run((ctx) =>
+      ctx.db.insert("quotes", {
+        orgId,
+        customerId: otherOrg.otherCustomerId,
+        vehicleId,
+        vehiclePrice: 20_000,
+        downPayment: 3_000,
+        termMonths: 48,
+        status: "DRAFT",
+        createdBy: userId,
+        createdAt: Date.now(),
+      })
+    );
+    await expect(
+      asUser.mutation(api.applications.createFromQuote, { orgId, quoteId: mismatchedCustomerQuoteId })
+    ).rejects.toThrow(/quote customer not found/i);
+
+    const secondVehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId,
+        vin: "1HGCM82633A333333",
+        make: "Kia",
+        model: "Sorento",
+        year: 2024,
+        color: "White",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        mileage: 500,
+        sellingPrice: 24_000,
+        status: "AVAILABLE",
+      })
+    );
+    const multiVehicleQuoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehicleItems: [
+        { vehicleId, unitPrice: 20_000 },
+        { vehicleId: secondVehicleId, unitPrice: 24_000 },
+      ],
+      vehiclePrice: 44_000,
+      downPayment: 3_000,
+      termMonths: 48,
+    });
+    await expect(
+      asUser.mutation(api.applications.createFromQuote, { orgId, quoteId: multiVehicleQuoteId })
+    ).rejects.toThrow(/exactly one vehicle/i);
+
+    const deletedVehicleQuoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId: secondVehicleId,
+      vehiclePrice: 24_000,
+      downPayment: 3_000,
+      termMonths: 48,
+    });
+    await t.run((ctx) => ctx.db.patch(secondVehicleId, { isDeleted: true }));
+    await expect(
+      asUser.mutation(api.applications.createFromQuote, { orgId, quoteId: deletedVehicleQuoteId })
+    ).rejects.toThrow(/quote vehicle not found/i);
+
+    const wrongCompanyQuoteId = await t.run((ctx) =>
+      ctx.db.insert("quotes", {
+        orgId,
+        customerId,
+        vehicleId,
+        companyId: otherOrg.otherCompanyId,
+        mode: "CONFIGURED_FINANCE_COMPANY",
+        vehiclePrice: 20_000,
+        downPayment: 3_000,
+        termMonths: 48,
+        status: "DRAFT",
+        createdBy: userId,
+        createdAt: Date.now(),
+      })
+    );
+    await expect(
+      asUser.mutation(api.applications.createFromQuote, { orgId, quoteId: wrongCompanyQuoteId })
+    ).rejects.toThrow(/quote finance company not found/i);
+  });
+
+  test("rejects duplicate and active vehicle applications", async () => {
+    const { orgId, customerId, vehicleId, asUser } = await setup();
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 20_000,
+      downPayment: 3_000,
+      termMonths: 48,
+    });
+    await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
+    await expect(
+      asUser.mutation(api.applications.createFromQuote, { orgId, quoteId })
+    ).rejects.toThrow(/already exists/i);
+
+    const secondQuoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 20_000,
+      downPayment: 3_000,
+      termMonths: 48,
+    });
+    await expect(
+      asUser.mutation(api.applications.createFromQuote, { orgId, quoteId: secondQuoteId })
+    ).rejects.toThrow(/active finance application/i);
+  });
+});
+
+describe("applications receivable transfer guards", () => {
+  test("transferFinancedAmountFromCustomerReceivable rejects missing or corrupt customer receivables", async () => {
+    const { t, orgId, userId, customerId, vehicleId } = await setup();
+    const saleWithoutReceivableId = await t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId,
+        vehicleId,
+        customerId,
+        salespersonId: userId,
+        salePrice: 20_000,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+      })
+    );
+
+    await expect(
+      t.run((ctx) =>
+        transferFinancedAmountFromCustomerReceivable(ctx, {
+          orgId,
+          saleId: saleWithoutReceivableId,
+          saleAmountMinor: 20_000_000,
+          financedAmountMinor: 17_000_000,
+        })
+      )
+    ).rejects.toThrow(/missing its canonical customer receivable/i);
+
+    const otherOrgReceivableId = await t.run(async (ctx) => {
+      const otherOrgId = await ctx.db.insert("organizations", { name: "Other Receivable Org", createdAt: Date.now() });
+      return await ctx.db.insert("receivableDocuments", {
+        orgId: otherOrgId,
+        documentType: "INVOICE",
+        documentNumber: "REC-OTHER",
+        payerType: "CUSTOMER",
+        customerId,
+        sourceType: "sales",
+        sourceId: saleWithoutReceivableId,
+        originalAmountMinor: 20_000_000,
+        currency: "JOD",
+        scale: 3,
+        issueDate: Date.now(),
+        dueDate: Date.now(),
+        status: "OPEN",
+        createdAt: Date.now(),
+        createdBy: userId,
+      });
+    });
+    const saleWithWrongReceivableId = await t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId,
+        vehicleId,
+        customerId,
+        salespersonId: userId,
+        salePrice: 20_000,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+        canonicalReceivableDocumentId: otherOrgReceivableId,
+      })
+    );
+    await expect(
+      t.run((ctx) =>
+        transferFinancedAmountFromCustomerReceivable(ctx, {
+          orgId,
+          saleId: saleWithWrongReceivableId,
+          saleAmountMinor: 20_000_000,
+          financedAmountMinor: 17_000_000,
+        })
+      )
+    ).rejects.toThrow(/sale customer receivable not found/i);
+
+    const overAllocatedSaleId = await t.run(async (ctx) => {
+      const receivableDocumentId = await ctx.db.insert("receivableDocuments", {
+        orgId,
+        documentType: "INVOICE",
+        documentNumber: "REC-OVER-ALLOCATED",
+        payerType: "CUSTOMER",
+        customerId,
+        sourceType: "sales",
+        sourceId: "sale-over-allocated",
+        originalAmountMinor: 20_000_000,
+        currency: "JOD",
+        scale: 3,
+        issueDate: Date.now(),
+        dueDate: Date.now(),
+        status: "PARTIALLY_PAID",
+        createdAt: Date.now(),
+        createdBy: userId,
+      });
+      const paymentId = await ctx.db.insert("canonicalPayments", {
+        orgId,
+        direction: "IN",
+        payerType: "CUSTOMER",
+        customerId,
+        method: "CASH",
+        amountMinor: 5_000_000,
+        currency: "JOD",
+        scale: 3,
+        status: "SETTLED",
+        idempotencyKey: "over-allocated-transfer-payment",
+        createdBy: userId,
+        createdAt: Date.now(),
+      });
+      await ctx.db.insert("paymentAllocations", {
+        orgId,
+        paymentId,
+        receivableDocumentId,
+        amountMinor: 4_000_000,
+        currency: "JOD",
+        scale: 3,
+        allocationDate: Date.now(),
+        status: "ACTIVE",
+        createdBy: userId,
+        createdAt: Date.now(),
+      });
+      return await ctx.db.insert("sales", {
+        orgId,
+        vehicleId,
+        customerId,
+        salespersonId: userId,
+        salePrice: 20_000,
+        saleDate: Date.now(),
+        status: "COMPLETED",
+        canonicalReceivableDocumentId: receivableDocumentId,
+      });
+    });
+
+    await expect(
+      t.run((ctx) =>
+        transferFinancedAmountFromCustomerReceivable(ctx, {
+          orgId,
+          saleId: overAllocatedSaleId,
+          saleAmountMinor: 20_000_000,
+          financedAmountMinor: 17_000_000,
+        })
+      )
+    ).rejects.toThrow(/allocations exceed/i);
+  });
+});
+
 describe("applications.updateStatus permissions", () => {
   test("review and rejection require review finance application permission", async () => {
     const { t, orgId, customerId, vehicleId, asUser } = await setup();
@@ -176,6 +461,128 @@ describe("applications.updateStatus permissions", () => {
         status: "REJECTED",
       })
     ).rejects.toThrow(/missing required permissions/i);
+  });
+
+  test("requires finance application visibility before changing status", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const limitedUserId = await t.run((ctx) =>
+      ctx.db.insert("users", {
+        clerkId: "user_app_limited",
+        email: "app.limited@test.com",
+        name: "Limited App User",
+      })
+    );
+    const limitedRoleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "Limited", permissions: ["view:sales"] })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: limitedUserId, roleId: limitedRoleId }));
+    const asLimited = t.withIdentity({ subject: "user_app_limited", clerkId: "user_app_limited" });
+
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 20000,
+      downPayment: 3000,
+      termMonths: 48,
+    });
+    const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
+
+    await expect(
+      asLimited.mutation(api.applications.updateStatus, {
+        orgId,
+        applicationId,
+        status: "UNDER_REVIEW",
+      })
+    ).rejects.toThrow(/missing required permissions/i);
+  });
+
+  test("rejects missing applications, invalid transitions, self-approval, and missing approval quote", async () => {
+    const { t, orgId, userId, customerId, vehicleId, asUser, asApprover } = await setup();
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 20000,
+      downPayment: 3000,
+      termMonths: 48,
+    });
+    const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
+    const otherApplicationId = await t.run(async (ctx) => {
+      const otherOrgId = await ctx.db.insert("organizations", { name: "Other Application Org", createdAt: Date.now() });
+      return await ctx.db.insert("financeApplications", {
+        orgId: otherOrgId,
+        quoteId,
+        customerId,
+        vehicleId,
+        salespersonId: userId,
+        status: "PENDING_DOCS",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+    });
+
+    await expect(
+      asUser.mutation(api.applications.updateStatus, {
+        orgId,
+        applicationId: otherApplicationId,
+        status: "UNDER_REVIEW",
+      })
+    ).rejects.toThrow(/application not found/i);
+
+    await expect(
+      asUser.mutation(api.applications.updateStatus, {
+        orgId,
+        applicationId,
+        status: "APPROVED",
+      })
+    ).rejects.toThrow(/invalid finance application status transition/i);
+
+    await asUser.mutation(api.applications.updateStatus, {
+      orgId,
+      applicationId,
+      status: "UNDER_REVIEW",
+    });
+    await expect(
+      asUser.mutation(api.applications.updateStatus, {
+        orgId,
+        applicationId,
+        status: "APPROVED",
+      })
+    ).rejects.toThrow(/cannot approve your own application/i);
+
+    await t.run((ctx) => ctx.db.delete(quoteId));
+    await expect(
+      asApprover.mutation(api.applications.updateStatus, {
+        orgId,
+        applicationId,
+        status: "APPROVED",
+      })
+    ).rejects.toThrow(/application quote not found/i);
+  });
+
+  test("closing an approved application through status update requires finalization permission", async () => {
+    const { orgId, customerId, vehicleId, asUser, asApprover } = await setup();
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 20000,
+      downPayment: 3000,
+      termMonths: 48,
+    });
+    const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
+    await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
+    await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
+
+    await asUser.mutation(api.applications.updateStatus, {
+      orgId,
+      applicationId,
+      status: "CLOSED",
+    });
+
+    const app = await asUser.query(api.applications.get, { orgId, applicationId });
+    expect(app?.status).toBe("CLOSED");
   });
 });
 
@@ -278,6 +685,33 @@ describe("applications hold release and deposit resolution", () => {
     expect(row?.hasPendingDepositResolution).toBe(true);
     expect(details?.deposits).toHaveLength(51);
     expect(details?.deposits.some((deposit) => deposit._id === heldDepositId)).toBe(true);
+  });
+
+  test("rejected application list can be filtered and reports no pending deposit resolution when none are held", async () => {
+    const { orgId, customerId, vehicleId, asUser } = await setup();
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 20000,
+      downPayment: 3000,
+      termMonths: 48,
+    });
+    const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
+    await asUser.mutation(api.applications.updateStatus, {
+      orgId,
+      applicationId,
+      status: "REJECTED",
+    });
+
+    const list = await asUser.query(api.applications.list, {
+      orgId,
+      status: "REJECTED",
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+
+    expect(list.page.map((application) => application._id)).toEqual([applicationId]);
+    expect(list.page[0].hasPendingDepositResolution).toBe(false);
   });
 
   test("cancelling a submitted application releases a same-customer reservation without a deposit", async () => {
@@ -396,6 +830,107 @@ describe("applications hold release and deposit resolution", () => {
       expect(reservation?.status).toBe("RELEASED");
       expect(reservation?.releasedBy).toBe(userId);
       expect(vehicle?.status).toBe("AVAILABLE");
+    });
+  });
+
+  test("cancellation rejects missing applications, approved apps without approval rights, and disbursed closed deals", async () => {
+    const { t, orgId, userId, customerId, vehicleId, asUser } = await setup();
+    const otherApplicationId = await t.run(async (ctx) => {
+      const otherOrgId = await ctx.db.insert("organizations", { name: "Other Cancel Org", createdAt: Date.now() });
+      return await ctx.db.insert("financeApplications", {
+        orgId: otherOrgId,
+        quoteId: await ctx.db.insert("quotes", {
+          orgId: otherOrgId,
+          customerId,
+          vehicleId,
+          vehiclePrice: 20000,
+          downPayment: 3000,
+          termMonths: 48,
+          status: "DRAFT",
+          createdBy: userId,
+          createdAt: Date.now(),
+        }),
+        customerId,
+        vehicleId,
+        salespersonId: userId,
+        status: "PENDING_DOCS",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+    });
+    await expect(
+      asUser.mutation(api.applications.cancelApplication, { orgId, applicationId: otherApplicationId })
+    ).rejects.toThrow(/application not found/i);
+
+    const limitedUserId = await t.run((ctx) =>
+      ctx.db.insert("users", {
+        clerkId: "user_app_cancel_limited",
+        email: "app.cancel.limited@test.com",
+        name: "Cancel Limited",
+      })
+    );
+    const limitedRoleId = await t.run((ctx) =>
+      ctx.db.insert("roles", {
+        orgId,
+        name: "Cancel Limited",
+        permissions: ["create:finance_application", "view:sales"],
+      })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: limitedUserId, roleId: limitedRoleId }));
+    const asLimited = t.withIdentity({ subject: "user_app_cancel_limited", clerkId: "user_app_cancel_limited" });
+
+    const approvedQuoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 20000,
+      downPayment: 3000,
+      termMonths: 48,
+    });
+    const approvedApplicationId = await asUser.mutation(api.applications.createFromQuote, {
+      orgId,
+      quoteId: approvedQuoteId,
+    });
+    await t.run((ctx) => ctx.db.patch(approvedApplicationId, { status: "APPROVED" }));
+    await expect(
+      asLimited.mutation(api.applications.cancelApplication, {
+        orgId,
+        applicationId: approvedApplicationId,
+      })
+    ).rejects.toThrow(/missing required permissions/i);
+
+    await t.run((ctx) =>
+      ctx.db.patch(approvedApplicationId, {
+        status: "CLOSED",
+        disbursedAt: Date.now(),
+      })
+    );
+    await expect(
+      asUser.mutation(api.applications.cancelApplication, {
+        orgId,
+        applicationId: approvedApplicationId,
+      })
+    ).rejects.toThrow(/disbursement has already been confirmed/i);
+  });
+
+  test("cancelling a closed deal with commission reverses the commission accrual", async () => {
+    const { t, orgId, applicationId, asUser } = await setupFinalizedFinancedDeal();
+    await t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      if (!app?.finalizedSaleId) throw new Error("Expected finalized sale");
+      await ctx.db.patch(app.finalizedSaleId, { commissionAmount: 250 });
+    });
+
+    await asUser.mutation(api.applications.cancelApplication, {
+      orgId,
+      applicationId,
+      reason: "Commission reversal coverage",
+    });
+
+    await t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      const sale = app?.finalizedSaleId ? await ctx.db.get(app.finalizedSaleId) : null;
+      expect(sale?.status).toBe("CANCELLED");
     });
   });
 });
@@ -544,6 +1079,18 @@ describe("applications finance-company canonical receivable", () => {
     });
   });
 
+  test("confirmDisbursement rejects amounts that differ from the financed deal total", async () => {
+    const { orgId, applicationId, asUser } = await setupFinalizedFinancedDeal();
+
+    await expect(
+      asUser.mutation(api.applications.confirmDisbursement, {
+        orgId,
+        applicationId,
+        disbursedAmountMinor: 16_999_999,
+      })
+    ).rejects.toThrow(/does not match the financed amount/i);
+  });
+
   test("voiding a finalized (undisbursed) deal cancels the finance-company receivable", async () => {
     const { t, orgId, applicationId, depositId, asUser, getFinanceReceivable, getCustomerReceivable } =
       await setupFinalizedFinancedDeal();
@@ -572,6 +1119,183 @@ describe("applications finance-company canonical receivable", () => {
       expect(allocations.length).toBeGreaterThan(0);
       expect(allocations.every((allocation) => allocation.status === "REVERSED")).toBe(true);
     });
+  });
+});
+
+describe("applications logs, expected payment, and finalization guards", () => {
+  test("getLog returns Unknown when the status actor no longer exists", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 20000,
+      downPayment: 3000,
+      termMonths: 48,
+    });
+    const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
+    const deletedActorId = await t.run((ctx) =>
+      ctx.db.insert("users", {
+        clerkId: "deleted_log_actor",
+        email: "deleted.log.actor@test.com",
+        name: "Deleted Log Actor",
+      })
+    );
+    await t.run(async (ctx) => {
+      await ctx.db.insert("applicationStatusLog", {
+        orgId,
+        applicationId,
+        fromStatus: "PENDING_DOCS",
+        toStatus: "UNDER_REVIEW",
+        changedBy: deletedActorId,
+        changedAt: Date.now(),
+      });
+      await ctx.db.delete(deletedActorId);
+    });
+
+    const log = await asUser.query(api.applications.getLog, { orgId, applicationId });
+    expect(log.some((entry) => entry.changedByName === "Unknown")).toBe(true);
+  });
+
+  test("registerExpectedPayment requires cheque details and finalization requires handover and payment metadata", async () => {
+    const { orgId, customerId, vehicleId, asUser, asApprover } = await setup();
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 20000,
+      downPayment: 3000,
+      termMonths: 48,
+    });
+    const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
+    await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
+    await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
+
+    await expect(
+      asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId })
+    ).rejects.toThrow(/register the vehicle handover/i);
+
+    await asUser.mutation(api.applications.registerVehicleHandover, { orgId, applicationId });
+    await expect(
+      asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId })
+    ).rejects.toThrow(/register how and when the payment is expected/i);
+
+    await expect(
+      asUser.mutation(api.applications.registerExpectedPayment, {
+        orgId,
+        applicationId,
+        method: "CHEQUE",
+        expectedDate: Date.now(),
+        chequeDetails: { bank: " ", chequeNumber: "CHQ-MISSING-BANK" },
+      })
+    ).rejects.toThrow(/bank and cheque number/i);
+  });
+
+  test("finalizeDeal rejects quote mismatches and returns an existing closed sale idempotently", async () => {
+    const { t, orgId, applicationId, asUser } = await setupFinalizedFinancedDeal();
+    const closedSaleId = await t.run(async (ctx) => {
+      const app = await ctx.db.get(applicationId);
+      return app?.finalizedSaleId;
+    });
+    await expect(asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId })).resolves.toBe(closedSaleId);
+
+    const mismatched = await setup();
+    const quoteId = await mismatched.asUser.mutation(api.quotes.saveQuote, {
+      orgId: mismatched.orgId,
+      customerId: mismatched.customerId,
+      vehicleId: mismatched.vehicleId,
+      vehiclePrice: 20000,
+      downPayment: 3000,
+      termMonths: 48,
+    });
+    const applicationIdToMismatch = await mismatched.asUser.mutation(api.applications.createFromQuote, {
+      orgId: mismatched.orgId,
+      quoteId,
+    });
+    await mismatched.asUser.mutation(api.applications.updateStatus, {
+      orgId: mismatched.orgId,
+      applicationId: applicationIdToMismatch,
+      status: "UNDER_REVIEW",
+    });
+    await mismatched.asApprover.mutation(api.applications.updateStatus, {
+      orgId: mismatched.orgId,
+      applicationId: applicationIdToMismatch,
+      status: "APPROVED",
+    });
+    await mismatched.asUser.mutation(api.applications.registerVehicleHandover, {
+      orgId: mismatched.orgId,
+      applicationId: applicationIdToMismatch,
+    });
+    await mismatched.asUser.mutation(api.applications.registerExpectedPayment, {
+      orgId: mismatched.orgId,
+      applicationId: applicationIdToMismatch,
+      method: "CASH",
+      expectedDate: Date.now(),
+    });
+    await mismatched.t.run(async (ctx) => {
+      const otherCustomerId = await ctx.db.insert("customers", {
+        orgId: mismatched.orgId,
+        firstName: "Other",
+        lastName: "Quote Customer",
+      });
+      await ctx.db.patch(quoteId, { customerId: otherCustomerId });
+    });
+
+    await expect(
+      mismatched.asUser.mutation(api.applications.finalizeDeal, {
+        orgId: mismatched.orgId,
+        applicationId: applicationIdToMismatch,
+      })
+    ).rejects.toThrow(/quote does not match/i);
+  });
+
+  test("finalizeDeal rejects finance company mismatch between application and quote", async () => {
+    const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
+    const companyIds = await t.run(async (ctx) => {
+      const firstCompanyId = await ctx.db.insert("financeCompanies", {
+        orgId,
+        name: "First Finance",
+        profitRate: 5,
+        maxTermMonths: 60,
+        gracePeriodMonths: 0,
+        isActive: true,
+      });
+      const secondCompanyId = await ctx.db.insert("financeCompanies", {
+        orgId,
+        name: "Second Finance",
+        profitRate: 6,
+        maxTermMonths: 60,
+        gracePeriodMonths: 0,
+        isActive: true,
+      });
+      return { firstCompanyId, secondCompanyId };
+    });
+    const quoteId = await asUser.mutation(api.quotes.saveQuote, {
+      orgId,
+      customerId,
+      vehicleId,
+      vehiclePrice: 20000,
+      downPayment: 3000,
+      termMonths: 48,
+      mode: "CONFIGURED_FINANCE_COMPANY",
+      companyId: companyIds.firstCompanyId,
+      totalFinancedAmount: 17000,
+    });
+    const applicationId = await asUser.mutation(api.applications.createFromQuote, { orgId, quoteId });
+    await asUser.mutation(api.applications.updateStatus, { orgId, applicationId, status: "UNDER_REVIEW" });
+    await asApprover.mutation(api.applications.updateStatus, { orgId, applicationId, status: "APPROVED" });
+    await asUser.mutation(api.applications.registerVehicleHandover, { orgId, applicationId });
+    await asUser.mutation(api.applications.registerExpectedPayment, {
+      orgId,
+      applicationId,
+      method: "BANK_TRANSFER",
+      expectedDate: Date.now(),
+    });
+    await t.run((ctx) => ctx.db.patch(quoteId, { companyId: companyIds.secondCompanyId }));
+
+    await expect(
+      asUser.mutation(api.applications.finalizeDeal, { orgId, applicationId })
+    ).rejects.toThrow(/finance company does not match/i);
   });
 });
 

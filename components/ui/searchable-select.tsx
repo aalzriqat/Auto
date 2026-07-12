@@ -20,6 +20,7 @@ interface SearchableSelectProps {
   noneLabel?: string;
   disabled?: boolean;
   className?: string;
+  onSearchChange?: (search: string) => void;
 }
 
 export function SearchableSelect({
@@ -31,6 +32,7 @@ export function SearchableSelect({
   noneLabel,
   disabled,
   className,
+  onSearchChange,
 }: SearchableSelectProps) {
   const value = valueProp ?? "";
   const [open, setOpen] = useState(false);
@@ -77,12 +79,18 @@ export function SearchableSelect({
       setTimeout(() => searchRef.current?.focus(), 10);
     } else {
       setSearch("");
+      onSearchChange?.("");
     }
-  }, [open]);
+  }, [onSearchChange, open]);
 
   function handleSelect(val: string) {
     onValueChange(val);
     setOpen(false);
+  }
+
+  function handleSearchChange(nextSearch: string) {
+    setSearch(nextSearch);
+    onSearchChange?.(nextSearch);
   }
 
   return (
@@ -119,7 +127,7 @@ export function SearchableSelect({
               <input
                 ref={searchRef}
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={(e) => handleSearchChange(e.target.value)}
                 placeholder={searchPlaceholder}
                 className="w-full rounded-sm border border-border bg-background ps-8 pe-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-ring"
               />

@@ -87,6 +87,34 @@ describe("Phase 5 — trial balance", () => {
     expect(tb.rows).toHaveLength(0);
     expect(tb.isBalanced).toBe(true);
   });
+
+  test("bounded trial balance scans posted lines inside the requested date window", async () => {
+    const { orgId, asUser } = await seedReportingDealer();
+    const now = Date.now();
+
+    await asUser.mutation(api.accountingLedger.post, {
+      orgId,
+      eventType: "EXPENSE_POSTED",
+      sourceType: "expenses",
+      sourceId: "exp_tb_bounded_001",
+      eventVersion: 1,
+      accountingDate: now,
+      occurredAt: now,
+      currency: "JOD",
+      idempotencyKey: "exp_tb_bounded_001_key",
+      payload: { expenseId: "exp_tb_bounded_001", amountMinor: 65000, currency: "JOD" },
+    });
+
+    const tb = await asUser.query(api.accountingReports.trialBalance, {
+      orgId,
+      fromDate: now - 1_000,
+      toDate: now + 1_000,
+    });
+
+    expect(tb.isBalanced).toBe(true);
+    expect(tb.totalDebits).toBe(65000);
+    expect(tb.totalCredits).toBe(65000);
+  });
 });
 
 describe("Phase 5 — income statement", () => {
@@ -206,6 +234,42 @@ describe("Phase 5 — AR aging", () => {
     expect(aging.rows).toHaveLength(0);
     expect(aging.totalOutstandingMinor).toBe(0);
   });
+
+  test("aging report buckets current, 30, 60, 90, and over-90 day receivables", async () => {
+    const { t, orgId, asUser } = await seedReportingDealer();
+    const now = Date.now();
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Bucket", lastName: "Customer" })
+    );
+    const receivables = [
+      { sourceId: "aging_current", amount: 10_000, dueDate: now + 86400_000, bucket: "current" },
+      { sourceId: "aging_30", amount: 20_000, dueDate: now - 15 * 86400_000, bucket: "days30" },
+      { sourceId: "aging_60", amount: 30_000, dueDate: now - 45 * 86400_000, bucket: "days60" },
+      { sourceId: "aging_90", amount: 40_000, dueDate: now - 75 * 86400_000, bucket: "days90" },
+      { sourceId: "aging_over_90", amount: 50_000, dueDate: now - 100 * 86400_000, bucket: "over90" },
+    ] as const;
+
+    for (const receivable of receivables) {
+      await asUser.mutation(api.subledger.createReceivable, {
+        orgId,
+        documentType: "INVOICE",
+        payerType: "CUSTOMER",
+        customerId,
+        sourceType: "sales",
+        sourceId: receivable.sourceId,
+        originalAmountMinor: receivable.amount,
+        currency: "JOD",
+        issueDate: now - 110 * 86400_000,
+        dueDate: receivable.dueDate,
+      });
+    }
+
+    const aging = await asUser.query(api.accountingReports.arAging, { orgId, asOfDate: now });
+    for (const receivable of receivables) {
+      expect(aging.buckets[receivable.bucket]).toBe(receivable.amount);
+    }
+    expect(aging.totalOutstandingMinor).toBe(150_000);
+  });
 });
 
 describe("Phase 5 — subledger reconciliation", () => {
@@ -214,5 +278,81 @@ describe("Phase 5 — subledger reconciliation", () => {
     const recon = await asUser.query(api.accountingReports.subledgerReconciliation, { orgId });
     expect(recon.isReconciled).toBe(true);
     expect(recon.discrepancyMinor).toBe(0);
+  });
+
+  test("partial receivable allocations reduce subledger outstanding for reconciliation", async () => {
+    const { t, orgId, userId, asUser } = await seedReportingDealer();
+    const now = Date.now();
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Recon", lastName: "Customer" })
+    );
+    const receivableDocumentId = await asUser.mutation(api.subledger.createReceivable, {
+      orgId,
+      documentType: "INVOICE",
+      payerType: "CUSTOMER",
+      customerId,
+      sourceType: "sales",
+      sourceId: "sale_recon_partial",
+      originalAmountMinor: 100_000,
+      currency: "JOD",
+      issueDate: now,
+      dueDate: now + 30 * 86400_000,
+    });
+    const paymentId = await asUser.mutation(api.subledger.recordPayment, {
+      orgId,
+      direction: "IN",
+      customerId,
+      method: "CASH",
+      amountMinor: 25_000,
+      currency: "JOD",
+      idempotencyKey: "payment_recon_partial",
+    });
+    await asUser.mutation(api.subledger.allocate, {
+      orgId,
+      paymentId,
+      receivableDocumentId,
+      amountMinor: 25_000,
+    });
+
+    await t.run(async (ctx) => {
+      const arAccount = await ctx.db
+        .query("chartOfAccounts")
+        .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", "ACCOUNTS_RECEIVABLE_CUSTOMERS"))
+        .unique();
+      if (!arAccount) throw new Error("AR account was not initialized");
+      const journalEntryId = await ctx.db.insert("journalEntries", {
+        orgId,
+        journalNumber: "JRN-RECON-PARTIAL",
+        accountingDate: now,
+        sourceType: "sales",
+        sourceId: "sale_recon_partial",
+        category: "SYSTEM",
+        memo: "Partial reconciliation fixture",
+        status: "POSTED",
+        currency: "JOD",
+        postedBy: userId,
+        postedAt: now,
+        createdAt: now,
+      });
+      await ctx.db.insert("journalLines", {
+        orgId,
+        journalEntryId,
+        lineNumber: 1,
+        accountId: arAccount._id,
+        debitMinor: 75_000,
+        creditMinor: 0,
+        currency: "JOD",
+        scale: 3,
+        accountingDate: now,
+      });
+    });
+
+    const recon = await asUser.query(api.accountingReports.subledgerReconciliation, {
+      orgId,
+      toDate: now + 1_000,
+    });
+    expect(recon.glArBalanceMinor).toBe(75_000);
+    expect(recon.subledgerOutstandingMinor).toBe(75_000);
+    expect(recon.isReconciled).toBe(true);
   });
 });

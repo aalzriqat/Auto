@@ -1,7 +1,8 @@
 import { convexTest } from "convex-test";
 import { expect, test, describe, vi } from "vitest";
 import schema from "../schema";
-import { notifyUser, notifyManagers, notifyAllMembers, notifyOwner, getActorName } from "./notifications";
+import { notifyUser, notifyManagers, notifyAllMembers, notifyOwner, notifyByPermission, getActorName } from "./notifications";
+import { PERMISSIONS } from "./permissions";
 
 vi.mock("../rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -287,6 +288,49 @@ describe("dispatch helpers", () => {
       ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", managerId)).collect()
     );
     expect(managerRows).toHaveLength(1);
+  });
+
+  test("notifyByPermission skips excluded, missing-role, and unauthorized members", async () => {
+    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, managerId, salesId } = await seedOrg(t);
+    const viewerRoleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "VIEWER", permissions: [PERMISSIONS.VIEW_VEHICLES] })
+    );
+    const viewerId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "viewer_001", email: "viewer@test.com" })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: viewerId, roleId: viewerRoleId }));
+
+    const ghostUserId = await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "ghost_perm_001", email: "ghost-perm@test.com" })
+    );
+    const ghostRoleId = await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "GHOST", permissions: [PERMISSIONS.VIEW_VEHICLES] })
+    );
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: ghostUserId, roleId: ghostRoleId }));
+    await t.run((ctx) => ctx.db.delete(ghostRoleId));
+
+    await t.run((ctx) =>
+      notifyByPermission(ctx, orgId, PERMISSIONS.VIEW_VEHICLES, "vehicle.created", { actorName: "Nora" }, { excludeUserId: salesId })
+    );
+
+    const viewerRows = await t.run((ctx) =>
+      ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", viewerId)).collect()
+    );
+    const salesRows = await t.run((ctx) =>
+      ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", salesId)).collect()
+    );
+    const managerRows = await t.run((ctx) =>
+      ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", managerId)).collect()
+    );
+    const ghostRows = await t.run((ctx) =>
+      ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", ghostUserId)).collect()
+    );
+
+    expect(viewerRows).toHaveLength(1);
+    expect(salesRows).toHaveLength(0);
+    expect(managerRows).toHaveLength(0);
+    expect(ghostRows).toHaveLength(0);
   });
 });
 

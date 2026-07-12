@@ -168,4 +168,60 @@ describe("vehicle valuations", () => {
       expiresAt: 1_900_000_000_000,
     });
   });
+
+  test("saveValuation_rejects_vehicle_and_company_from_other_organizations", async () => {
+    const { t, orgId, asOwner } = await setupFinanceOrg();
+    const vehicleId = await seedVehicle(t, orgId);
+    const companyId = await asOwner.mutation(api.finance.createCompany, {
+      orgId,
+      name: "Local Finance",
+      profitRate: 6,
+      maxTermMonths: 60,
+      gracePeriodMonths: 0,
+      isActive: true,
+    });
+    const { otherVehicleId, otherCompanyId } = await t.run(async (ctx) => {
+      const otherOrgId = await ctx.db.insert("organizations", { name: "Other Finance Dealer", createdAt: Date.now() });
+      const otherVehicleId = await ctx.db.insert("vehicles", {
+        orgId: otherOrgId,
+        vin: "FINANCEOTH001",
+        make: "Honda",
+        model: "Accord",
+        year: 2023,
+        mileage: 15_000,
+        color: "Blue",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        sellingPrice: 19_000,
+        status: "AVAILABLE",
+      });
+      const otherCompanyId = await ctx.db.insert("financeCompanies", {
+        orgId: otherOrgId,
+        name: "External Finance",
+        profitRate: 7,
+        maxTermMonths: 48,
+        gracePeriodMonths: 0,
+        isActive: true,
+      });
+      return { otherVehicleId, otherCompanyId };
+    });
+
+    await expect(
+      asOwner.mutation(api.finance.saveValuation, {
+        orgId,
+        vehicleId: otherVehicleId,
+        companyId,
+        valuationAmount: 18_500,
+      })
+    ).rejects.toThrow(/vehicle not found/i);
+
+    await expect(
+      asOwner.mutation(api.finance.saveValuation, {
+        orgId,
+        vehicleId,
+        companyId: otherCompanyId,
+        valuationAmount: 18_500,
+      })
+    ).rejects.toThrow(/finance company not found/i);
+  });
 });

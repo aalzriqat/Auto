@@ -1,6 +1,6 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { Doc } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { paginationOptsValidator } from "convex/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -10,6 +10,41 @@ import { validateInput } from "./utils/validation";
 import { CreateCustomerSchema, UpdateCustomerSchema } from "./validations/customers";
 import { normalizePhone, namesSimilar } from "./utils/dedup";
 import { CUSTOMER_REFERENCING_TABLES } from "./utils/mergeHelpers";
+
+const CUSTOMER_SELECTOR_LIMIT = 50;
+const RECENT_CUSTOMER_SEARCH_WINDOW = 200;
+
+type CustomerSelectorOption = {
+  _id: Id<"customers">;
+  firstName: string;
+  lastName: string;
+  phone?: string;
+  email?: string;
+};
+
+function customerMatchesSearch(customer: Doc<"customers">, searchTerm: string) {
+  const lowerSearchTerm = searchTerm.toLowerCase();
+  return (
+    customer.firstName.toLowerCase().includes(lowerSearchTerm) ||
+    customer.lastName.toLowerCase().includes(lowerSearchTerm) ||
+    (customer.phone?.toLowerCase().includes(lowerSearchTerm) ?? false) ||
+    (customer.email?.toLowerCase().includes(lowerSearchTerm) ?? false)
+  );
+}
+
+function addCustomerSelectorOption(
+  optionsById: Map<Id<"customers">, CustomerSelectorOption>,
+  customer: Doc<"customers">,
+) {
+  if (customer.isDeleted || optionsById.has(customer._id)) return;
+  optionsById.set(customer._id, {
+    _id: customer._id,
+    firstName: customer.firstName,
+    lastName: customer.lastName,
+    phone: customer.phone,
+    email: customer.email,
+  });
+}
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
 
@@ -41,6 +76,64 @@ export const list = query({
     );
 
     return { ...pageResult, page };
+  },
+});
+
+/**
+ * Bounded customer options for workflow selectors. The recent-customer window
+ * keeps newly-created customers selectable immediately, while search indexes
+ * cover older records once a user types.
+ */
+export const selectorOptions = query({
+  args: {
+    orgId: v.id("organizations"),
+    search: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_CUSTOMERS]);
+
+    const searchTerm = args.search.trim();
+    const optionsById = new Map<Id<"customers">, CustomerSelectorOption>();
+    const recentCustomers = await ctx.db
+      .query("customers")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .order("desc")
+      .take(
+        searchTerm.length >= 2
+          ? RECENT_CUSTOMER_SEARCH_WINDOW
+          : CUSTOMER_SELECTOR_LIMIT,
+      );
+
+    for (const customer of recentCustomers) {
+      if (!searchTerm || customerMatchesSearch(customer, searchTerm)) {
+        addCustomerSelectorOption(optionsById, customer);
+      }
+      if (optionsById.size >= CUSTOMER_SELECTOR_LIMIT) break;
+    }
+
+    if (searchTerm.length >= 2 && optionsById.size < CUSTOMER_SELECTOR_LIMIT) {
+      const [firstNameMatches, lastNameMatches] = await Promise.all([
+        ctx.db
+          .query("customers")
+          .withSearchIndex("search_firstName", (q) =>
+            q.search("firstName", searchTerm).eq("orgId", args.orgId),
+          )
+          .take(CUSTOMER_SELECTOR_LIMIT),
+        ctx.db
+          .query("customers")
+          .withSearchIndex("search_lastName", (q) =>
+            q.search("lastName", searchTerm).eq("orgId", args.orgId),
+          )
+          .take(CUSTOMER_SELECTOR_LIMIT),
+      ]);
+
+      for (const customer of [...firstNameMatches, ...lastNameMatches]) {
+        addCustomerSelectorOption(optionsById, customer);
+        if (optionsById.size >= CUSTOMER_SELECTOR_LIMIT) break;
+      }
+    }
+
+    return Array.from(optionsById.values());
   },
 });
 
