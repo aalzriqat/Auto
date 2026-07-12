@@ -19,7 +19,7 @@ describe("leads", () => {
           // a plain button trigger that opens a popover with an auto-focused
           // search input and plain <button> results — no ARIA combobox/option
           // roles, so type into whatever's focused rather than locating the input.
-          cy.findByRole("button", { name: "Select a customer" }).click();
+          cy.findByRole("button", { name: "Select customer" }).click();
           cy.focused().type(lastName);
           cy.findByRole("button", { name: new RegExp(customerName) }).click();
 
