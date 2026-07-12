@@ -51,7 +51,7 @@ export function createVehicle(
     return cy
       .findByRole("dialog")
       .within(() => {
-        cy.findByText("Add Vehicle").should("be.visible");
+        cy.findByRole("heading", { name: "Add Vehicle" }).should("be.visible");
         cy.findByLabelText("Make").type(make);
         cy.findByLabelText("Model").type(model);
         cy.findByLabelText("Year").clear().type("2024");
@@ -84,7 +84,7 @@ export function createCustomer(
     return cy
       .findByRole("dialog")
       .within(() => {
-        cy.findByText("Add Customer").should("be.visible");
+        cy.findByRole("heading", { name: "Add Customer" }).should("be.visible");
         cy.findByLabelText("First Name").type(firstName);
         cy.findByLabelText("Last Name").type(lastName);
         cy.findByRole("button", { name: "Add Customer" }).click();
