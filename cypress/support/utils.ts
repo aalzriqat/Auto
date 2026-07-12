@@ -13,12 +13,25 @@ export function testDataSuffix(): string {
 export function gotoOrgRoute(path: string): Cypress.Chainable<string> {
   return cy
     .visit("/dashboard")
-    .then(() => cy.url({ timeout: 30_000 }))
-    .should("match", /\/[^/]+\/(dashboard|sales|leads|accounting)(\?.*)?$/)
-    .then((url) => {
-      const match = url.match(/\/([^/]+)\/(dashboard|sales|leads|accounting)/);
-      if (!match) throw new Error(`Could not resolve orgId from URL: ${url}`);
-      return cy.visit(`/${match[1]}/${path}`).then(() => match[1]);
+    .then(() => cy.location("pathname", { timeout: 30_000 }))
+    .should("match", /^\/[^/]+\/(dashboard|sales|leads|accounting)$/)
+    .then((pathname) => {
+      const match = pathname.match(
+        /^\/([^/]+)\/(dashboard|sales|leads|accounting)$/,
+      );
+      if (!match)
+        throw new Error(`Could not resolve orgId from path: ${pathname}`);
+
+      const orgId = match[1];
+      const targetPath = `/${orgId}/${path}`;
+      if (pathname !== targetPath) {
+        cy.get(`a[href="${targetPath}"]`, { timeout: 15_000 }).first().click();
+      }
+
+      return cy
+        .location("pathname", { timeout: 30_000 })
+        .should("eq", targetPath)
+        .then(() => orgId);
     });
 }
 
