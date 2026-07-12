@@ -1,6 +1,64 @@
-import { test as setup, expect } from "@playwright/test";
+import { test as setup, expect, type Page } from "@playwright/test";
 
 const authFile = "playwright/.auth/user.json";
+const orgRoutePattern = /^\/[^/]+\/(dashboard|sales|leads|accounting)(\?.*)?$/;
+
+function isOrgRoute(url: URL): boolean {
+  return orgRoutePattern.test(url.pathname + url.search);
+}
+
+function verificationCodeFor(): string {
+  return process.env.E2E_LOGIN_VERIFICATION_CODE || "424242";
+}
+
+async function completeVerificationIfNeeded(page: Page, verificationCode?: string): Promise<void> {
+  const verificationCodeField = page.getByRole("textbox", { name: /verification code/i }).first();
+  const needsVerificationCode = await verificationCodeField
+    .waitFor({ state: "visible", timeout: 5_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!needsVerificationCode) return;
+
+  if (!verificationCode) {
+    throw new Error("Clerk requested an email verification code. Set E2E_LOGIN_VERIFICATION_CODE to continue.");
+  }
+
+  await verificationCodeField.pressSequentially(verificationCode);
+
+  const continueButton = page.getByRole("button", { name: /^(Continue|Verify)$/ }).first();
+  const canContinue = await continueButton
+    .isEnabled({ timeout: 2_000 })
+    .catch(() => false);
+  if (canContinue) {
+    await continueButton.click();
+  }
+}
+
+async function completeOnboardingIfNeeded(page: Page): Promise<void> {
+  if (isOrgRoute(new URL(page.url()))) return;
+
+  const dealershipNameField = page.getByRole("textbox", { name: "Dealership Name" });
+  const needsOnboarding = await dealershipNameField
+    .waitFor({ state: "visible", timeout: 15_000 })
+    .then(() => true)
+    .catch(() => false);
+  if (!needsOnboarding) return;
+
+  await dealershipNameField.fill(`AutoFlow Playwright QA ${Date.now()}`);
+  await page.getByRole("button", { name: /^Continue/ }).click();
+
+  await expect(page.getByRole("heading", { name: "Currency" })).toBeVisible();
+  await page.getByRole("button", { name: /^Continue/ }).click();
+
+  await expect(page.getByRole("heading", { name: "Lead Sources" })).toBeVisible();
+  await page.getByRole("button", { name: "Load Default Lead Sources" }).click();
+
+  await expect(page.getByRole("heading", { name: "Pipeline" })).toBeVisible();
+  await page.getByRole("button", { name: "Load Default Pipeline" }).click();
+
+  await expect(page.getByRole("heading", { name: "You're All Set" })).toBeVisible();
+  await page.getByRole("button", { name: "Go to Dashboard" }).click();
+}
 
 /**
  * Signs in against Clerk's hosted <SignIn/> using the same QA fixture and
@@ -17,6 +75,7 @@ setup("authenticate", async ({ page }) => {
   if (!user || !password) {
     throw new Error("E2E_LOGIN_USER and E2E_LOGIN_PASSWORD must be set to run the E2E suite.");
   }
+  const verificationCode = verificationCodeFor();
 
   await page.addInitScript(() => {
     window.localStorage.setItem("autoflow-locale", "en");
@@ -41,16 +100,14 @@ setup("authenticate", async ({ page }) => {
 
   await continueButton.click();
 
-  // A logged-in session always ends up on some /{orgId}/... route; the
-  // exact landing page depends on the fixture's role (owner -> /dashboard,
-  // sales -> /sales, etc.), so match broadly rather than one specific path.
-  // Matched against pathname specifically (not the full URL string) — a
-  // regex without a leading anchor can accidentally match "host:port" as
-  // the orgId segment against the bare Clerk-fallback /dashboard URL.
-  await page.waitForURL(
-    (url) => /^\/[^/]+\/(dashboard|sales|leads|accounting)(\?.*)?$/.test(url.pathname + url.search),
-    { timeout: 30_000 }
-  );
+  await completeVerificationIfNeeded(page, verificationCode);
+  await page.waitForURL((url) => !url.pathname.startsWith("/sign-in"), { timeout: 30_000 });
+
+  // Existing fixtures land on a role-dependent /{orgId}/... route. Brand-new
+  // fixtures first land on /dashboard with the dealership onboarding wizard;
+  // complete it once so future runs can use the saved authenticated state.
+  await completeOnboardingIfNeeded(page);
+  await page.waitForURL(isOrgRoute, { timeout: 30_000 });
 
   await expect(page.getByRole("banner")).toBeVisible();
 

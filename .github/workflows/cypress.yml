@@ -92,6 +92,7 @@ jobs:
         NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
         CYPRESS_E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
         CYPRESS_E2E_LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
+        CYPRESS_E2E_LOGIN_VERIFICATION_CODE: ${{ secrets.E2E_LOGIN_VERIFICATION_CODE }}
         CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_RECORD_KEY }}
 
     - name: Upload Cypress screenshots

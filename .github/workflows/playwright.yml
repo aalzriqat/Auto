@@ -48,6 +48,7 @@ jobs:
         NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
         E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
         E2E_LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
+        E2E_LOGIN_VERIFICATION_CODE: ${{ secrets.E2E_LOGIN_VERIFICATION_CODE }}
         CI: true
 
     - name: Upload Playwright report
