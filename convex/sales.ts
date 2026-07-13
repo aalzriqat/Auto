@@ -247,7 +247,11 @@ export const create = mutation({
     apr: v.optional(v.number()),
     termMonths: v.optional(v.number()),
     warrantySold: v.optional(v.number()),
+    warrantyCost: v.optional(v.number()),
+    warrantyTermMonths: v.optional(v.number()),
     gapSold: v.optional(v.number()),
+    gapCost: v.optional(v.number()),
+    gapTermMonths: v.optional(v.number()),
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -356,7 +360,11 @@ export const createDraft = mutation({
     apr: v.optional(v.number()),
     termMonths: v.optional(v.number()),
     warrantySold: v.optional(v.number()),
+    warrantyCost: v.optional(v.number()),
+    warrantyTermMonths: v.optional(v.number()),
     gapSold: v.optional(v.number()),
+    gapCost: v.optional(v.number()),
+    gapTermMonths: v.optional(v.number()),
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -440,7 +448,11 @@ export const update = mutation({
     apr: v.optional(v.number()),
     termMonths: v.optional(v.number()),
     warrantySold: v.optional(v.number()),
+    warrantyCost: v.optional(v.number()),
+    warrantyTermMonths: v.optional(v.number()),
     gapSold: v.optional(v.number()),
+    gapCost: v.optional(v.number()),
+    gapTermMonths: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_SALES]);
@@ -477,7 +489,11 @@ export const update = mutation({
       args.apr !== undefined ||
       args.termMonths !== undefined ||
       args.warrantySold !== undefined ||
-      args.gapSold !== undefined;
+      args.warrantyCost !== undefined ||
+      args.warrantyTermMonths !== undefined ||
+      args.gapSold !== undefined ||
+      args.gapCost !== undefined ||
+      args.gapTermMonths !== undefined;
     if (sale.status === "COMPLETED" && hasCompletedSaleFinancialChange) {
       throwAppError(
         AppErrorCode.SALE_ALREADY_COMPLETED,
@@ -503,7 +519,11 @@ export const update = mutation({
     if (args.apr !== undefined) patch.apr = args.apr;
     if (args.termMonths !== undefined) patch.termMonths = args.termMonths;
     if (args.warrantySold !== undefined) patch.warrantySold = args.warrantySold;
+    if (args.warrantyCost !== undefined) patch.warrantyCost = args.warrantyCost;
+    if (args.warrantyTermMonths !== undefined) patch.warrantyTermMonths = args.warrantyTermMonths;
     if (args.gapSold !== undefined) patch.gapSold = args.gapSold;
+    if (args.gapCost !== undefined) patch.gapCost = args.gapCost;
+    if (args.gapTermMonths !== undefined) patch.gapTermMonths = args.gapTermMonths;
 
     if (args.status === "CANCELLED" && sale.status !== "CANCELLED") {
       await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);

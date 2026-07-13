@@ -106,6 +106,15 @@ async function openAccountingPeriod(asUser: any, orgId: any) {
 }
 
 describe("deposits.create", () => {
+  test("rejects OTHER as a deposit method", async () => {
+    const { t, orgId, customerId, vehicleId, asUser } = await setup();
+    const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
+
+    await expect(
+      asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1500, method: "OTHER" })
+    ).rejects.toThrow(/OTHER is not accepted/i);
+  });
+
   test("places a vehicle on hold and records a DEPOSIT transaction", async () => {
     const { t, orgId, customerId, vehicleId, asUser } = await setup();
     const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
@@ -311,6 +320,49 @@ describe("deposits.release", () => {
     );
     expect(lines.find((l) => l.accountId === bankAccount!._id)?.creditMinor).toBe(1_500_000);
     expect(lines.some((l) => l.accountId === cashOnHand!._id)).toBe(false);
+  });
+
+  test("a PAYMENT_LINK refund credits Bank Account, not Cash on Hand", async () => {
+    const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
+    await openAccountingPeriod(asUser, orgId);
+    const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
+    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1500 });
+
+    await asApprover.mutation(api.deposits.release, {
+      orgId, depositId, resolution: "REFUNDED", refundMethod: "PAYMENT_LINK",
+    });
+
+    const bankAccount = await t.run((ctx) =>
+      ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", "BANK_ACCOUNT")).unique()
+    );
+    const cashOnHand = await t.run((ctx) =>
+      ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", "CASH_ON_HAND")).unique()
+    );
+    const event = await t.run((ctx) =>
+      ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "deposits").eq("sourceId", depositId.toString()))
+        .filter((q) => q.eq(q.field("eventType"), "DEPOSIT_REFUNDED"))
+        .first()
+    );
+    expect(event).not.toBeNull();
+    const lines = await t.run((ctx) =>
+      ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", event!.journalEntryId!)).collect()
+    );
+    expect(lines.find((l) => l.accountId === bankAccount!._id)?.creditMinor).toBe(1_500_000);
+    expect(lines.some((l) => l.accountId === cashOnHand!._id)).toBe(false);
+  });
+
+  test("rejects OTHER as a refund method", async () => {
+    const { t, orgId, customerId, vehicleId, asUser, asApprover } = await setup();
+    const quoteId = await makeQuote(t, asUser, orgId, customerId, vehicleId);
+    const depositId = await asUser.mutation(api.deposits.create, { orgId, quoteId, amount: 1500 });
+
+    await expect(
+      asApprover.mutation(api.deposits.release, {
+        orgId, depositId, resolution: "REFUNDED", refundMethod: "OTHER",
+      })
+    ).rejects.toThrow(/OTHER is not accepted/i);
   });
 
   test("ledger enrichment uses each transaction's exact deposit link", async () => {

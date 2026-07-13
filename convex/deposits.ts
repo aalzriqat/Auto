@@ -151,6 +151,9 @@ export const release = mutation({
     if (args.resolution === "REFUNDED" && !args.refundMethod) {
       throw new ConvexError("A refund payment method is required to refund a deposit.");
     }
+    if (args.refundMethod === "OTHER") {
+      throw new ConvexError("Select a specific refund method — OTHER is not accepted for a deposit refund.");
+    }
     return await runWithIdempotency(
       ctx,
       {

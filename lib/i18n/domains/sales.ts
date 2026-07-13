@@ -25,7 +25,11 @@ export const salesEn = {
   APR: "APR (%)",
   TermMonths: "Term (Months)",
   Warranty: "Extended Warranty",
+  WarrantyCost: "Warranty Cost (owed to provider)",
+  WarrantyTermMonths: "Warranty Term (Months)",
   GAPInsurance: "GAP Insurance",
+  GAPCost: "GAP Cost (owed to provider)",
+  GAPTermMonths: "GAP Term (Months)",
   EstMonthlyPayment: "Est. Monthly Payment",
 
   // Sales Page
@@ -487,7 +491,11 @@ export const salesAr = {
   APR: "نسبة الربح (%)",
   TermMonths: "المدة (أشهر)",
   Warranty: "تمديد الضمان",
+  WarrantyCost: "تكلفة الضمان (مستحقة للمزود)",
+  WarrantyTermMonths: "مدة الضمان (أشهر)",
   GAPInsurance: "تأمين GAP",
+  GAPCost: "تكلفة GAP (مستحقة للمزود)",
+  GAPTermMonths: "مدة GAP (أشهر)",
   EstMonthlyPayment: "القسط الشهري المتوقع",
   PrintBillOfSale: "طباعة فاتورة البيع",
 

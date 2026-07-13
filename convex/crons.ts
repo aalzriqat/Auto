@@ -114,6 +114,18 @@ crons.cron(
   {}
 );
 
+// GL Phase 19: post one month of ratable F&I commission recognition for every
+// ACTIVE dealer product deferral (resold warranty/GAP margin), across every
+// org. Runs once a month, same idempotency reasoning as the depreciation cron
+// above — recognizeDeferredCommissionForMonth is idempotent per
+// (deferralId, yearMonth).
+crons.cron(
+  "fi-commission-recognition",
+  "0 4 1 * *",
+  internal.crons.triggerFiCommissionRecognition,
+  {}
+);
+
 export default crons;
 
 export const triggerAlarms = internalMutation({
@@ -418,6 +430,109 @@ export const triggerFixedAssetDepreciation = internalAction({
         source: "fixed-asset-depreciation",
         status: "error",
         summary: "fixed-asset-depreciation cron failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+  },
+});
+
+// ─── GL Phase 19: monthly F&I commission recognition cron ────────────────────
+// Same shape as the fixed-asset depreciation cron above, one section up —
+// paginated cross-org scan, cached per-org owner resolution, one mutation
+// call per row, admin audit log on completion/failure.
+
+type RecognitionOutcome = "posted" | "skippedNoOwner" | "skippedOther";
+
+type RecognitionRunStats = {
+  total: number;
+  posted: number;
+  skippedNoOwner: number;
+  skippedOther: number;
+};
+
+async function recognizeCronDeferral(
+  ctx: ActionCtx,
+  deferral: Doc<"dealerProductDeferrals">,
+  args: {
+    ownerByOrg: Map<string, Id<"users"> | null>;
+    yearMonth: string;
+    occurredAt: number;
+  }
+): Promise<RecognitionOutcome> {
+  const systemActorId = await getCachedOrgOwnerUserId(ctx, args.ownerByOrg, deferral.orgId);
+  if (!systemActorId) {
+    return "skippedNoOwner";
+  }
+
+  const result = await ctx.runMutation(internal.dealerProductDeferrals.recognizeDeferredCommissionForMonth, {
+    orgId: deferral.orgId,
+    deferralId: deferral._id,
+    yearMonth: args.yearMonth,
+    occurredAt: args.occurredAt,
+    systemActorId,
+  });
+  return result.posted ? "posted" : "skippedOther";
+}
+
+function recordRecognitionOutcome(stats: RecognitionRunStats, outcome: RecognitionOutcome): void {
+  stats.total++;
+  stats[outcome]++;
+}
+
+async function runFiCommissionRecognition(
+  ctx: ActionCtx,
+  args: { yearMonth: string; occurredAt: number }
+): Promise<RecognitionRunStats> {
+  const ownerByOrg = new Map<string, Id<"users"> | null>();
+  const stats: RecognitionRunStats = {
+    total: 0,
+    posted: 0,
+    skippedNoOwner: 0,
+    skippedOther: 0,
+  };
+
+  let cursor: string | undefined;
+  do {
+    const page = await ctx.runQuery(internal.dealerProductDeferrals.listActiveDeferralsForRecognition, { cursor });
+    for (const deferral of page.page) {
+      const outcome = await recognizeCronDeferral(ctx, deferral, {
+        ownerByOrg,
+        yearMonth: args.yearMonth,
+        occurredAt: args.occurredAt,
+      });
+      recordRecognitionOutcome(stats, outcome);
+    }
+    cursor = page.isDone ? undefined : page.continueCursor;
+  } while (cursor);
+
+  return stats;
+}
+
+function recognitionSummary(yearMonth: string, stats: RecognitionRunStats): string {
+  return `F&I commission recognition ${yearMonth}: posted ${stats.posted}/${stats.total} deferral(s), ${stats.skippedNoOwner} skipped (no org owner), ${stats.skippedOther} skipped (already run / fully recognized / not active).`;
+}
+
+export const triggerFiCommissionRecognition = internalAction({
+  args: {},
+  handler: async (ctx: ActionCtx): Promise<string> => {
+    try {
+      const now = Date.now();
+      const d = new Date(now);
+      const yearMonth = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+      const stats = await runFiCommissionRecognition(ctx, { yearMonth, occurredAt: now });
+      const summary = recognitionSummary(yearMonth, stats);
+      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+        source: "fi-commission-recognition",
+        status: "success",
+        summary,
+      });
+      return summary;
+    } catch (err) {
+      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+        source: "fi-commission-recognition",
+        status: "error",
+        summary: "fi-commission-recognition cron failed",
         error: err instanceof Error ? err.message : String(err),
       });
       throw err;

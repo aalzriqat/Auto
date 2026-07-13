@@ -36,6 +36,8 @@ export type EventType =
   | "VEHICLE_INVENTORY_OPENING_BALANCE"
   | "VEHICLE_ACQUISITION_COST_CORRECTED"
   | "VEHICLE_PREP_EXPENSE_RECLASSIFIED"
+  | "TRADE_IN_ACCEPTED"
+  | "FI_COMMISSION_RECOGNIZED"
   | "RECEIVABLE_CREATED"
   | "JOURNAL_REVERSAL";
 
@@ -51,7 +53,9 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "CLAIM_SETTLED", "CLAIM_WRITTEN_OFF",
   "CASH_DRAWER_DEPOSITED",
   "VEHICLE_ACQUIRED", "VEHICLE_LANDED_COST_CAPITALIZED", "VEHICLE_INVENTORY_OPENING_BALANCE",
-  "VEHICLE_ACQUISITION_COST_CORRECTED", "VEHICLE_PREP_EXPENSE_RECLASSIFIED", "RECEIVABLE_CREATED",
+  "VEHICLE_ACQUISITION_COST_CORRECTED", "VEHICLE_PREP_EXPENSE_RECLASSIFIED", "TRADE_IN_ACCEPTED",
+  "FI_COMMISSION_RECOGNIZED",
+  "RECEIVABLE_CREATED",
   // JOURNAL_REVERSAL is intentionally excluded: it is written directly by
   // reverseAccountingEvent() in reversals.ts and never goes through postAccountingEvent().
 ]);
@@ -82,6 +86,10 @@ function cashAccountKey(
   if (method === "BANK_TRANSFER") return SYSTEM_KEYS.BANK_ACCOUNT;
   // Card payments settle to the bank account (via payment gateway clearing).
   if (method === "CARD") return SYSTEM_KEYS.BANK_ACCOUNT;
+  // Payment links settle to the bank account too, same as PAYMENT_LINK_RECEIVED's
+  // dedicated automatic flow in rulePaymentLinkReceived — this just makes the
+  // generic manual-entry paymentMethod field consistent with that.
+  if (method === "PAYMENT_LINK") return SYSTEM_KEYS.BANK_ACCOUNT;
   return opts?.defaultCash ?? SYSTEM_KEYS.CASH_ON_HAND;
 }
 
@@ -92,6 +100,7 @@ function refundDisbursementAccountKey(method: string | undefined): SystemKey {
   if (method === "CHEQUE") return SYSTEM_KEYS.BANK_ACCOUNT;
   if (method === "BANK_TRANSFER") return SYSTEM_KEYS.BANK_ACCOUNT;
   if (method === "CARD") return SYSTEM_KEYS.BANK_ACCOUNT;
+  if (method === "PAYMENT_LINK") return SYSTEM_KEYS.BANK_ACCOUNT;
   return SYSTEM_KEYS.CASH_ON_HAND;
 }
 
@@ -149,6 +158,21 @@ export interface SaleCompletedPayload {
   taxMinor?: number;
   /** When true the vehicle was sourced from another dealer; credits AP-Suppliers instead of Vehicle Inventory for COGS. */
   isSourced?: boolean;
+  /** Documentation/admin fees charged on top of the vehicle price — added to the AR debit, credited to Dealer Fee Income. */
+  dealerFeesMinor?: number;
+  /**
+   * Warranty/GAP premium collected from the customer (added to the AR debit)
+   * and the portion of it owed to the third-party underwriter (credited to
+   * Warranty & GAP Payable) — the dealer resells these, it doesn't underwrite
+   * them. The remainder (sold − cost) is the dealer's own margin, credited to
+   * Deferred F&I Commission rather than recognized immediately; see
+   * dealerProductDeferrals and recognizeDeferredCommissionForMonth for how it
+   * later moves to FI_COMMISSION_REVENUE.
+   */
+  warrantySoldMinor?: number;
+  warrantyCostMinor?: number;
+  gapSoldMinor?: number;
+  gapCostMinor?: number;
 }
 
 export interface SupplierPaymentSettledPayload {
@@ -295,13 +319,51 @@ export function ruleDepositForfeited(p: DepositForfeitedPayload): RuleResult {
   };
 }
 
+/**
+ * Adds a resold warranty/GAP product's lines: the full premium collected
+ * from the customer was already folded into the AR debit by the caller; this
+ * only adds the credit side — cost owed to the underwriter (if any) and the
+ * dealer's own margin, deferred rather than recognized immediately. Cost is
+ * clamped to the sold amount so a data-entry mistake (cost > sold) can never
+ * produce a negative margin line.
+ */
+function addResoldProductLines(
+  lines: LineSpec[],
+  soldMinor: number,
+  costMinor: number,
+  label: string,
+  dims: { customerId?: string; vehicleId?: string; salespersonId?: string }
+): void {
+  const clampedCost = Math.min(Math.max(costMinor, 0), soldMinor);
+  const marginMinor = soldMinor - clampedCost;
+  if (clampedCost > 0) {
+    lines.push(line(SYSTEM_KEYS.WARRANTY_GAP_PAYABLE, 0, clampedCost, `${label} premium payable`, dims));
+  }
+  if (marginMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.DEFERRED_FI_COMMISSION, 0, marginMinor, `${label} deferred commission`, dims));
+  }
+}
+
 export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
   const revenueMinor = p.taxMinor ? p.saleAmountMinor - p.taxMinor : p.saleAmountMinor;
   const dims = { customerId: p.customerId, vehicleId: p.vehicleId, salespersonId: p.salespersonId };
+  const dealerFeesMinor = p.dealerFeesMinor && p.dealerFeesMinor > 0 ? p.dealerFeesMinor : 0;
+  const warrantySoldMinor = p.warrantySoldMinor && p.warrantySoldMinor > 0 ? p.warrantySoldMinor : 0;
+  const gapSoldMinor = p.gapSoldMinor && p.gapSoldMinor > 0 ? p.gapSoldMinor : 0;
+  const arDebitMinor = p.saleAmountMinor + dealerFeesMinor + warrantySoldMinor + gapSoldMinor;
   const lines: LineSpec[] = [
-    line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, p.saleAmountMinor, 0, "Sale receivable", dims),
+    line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, arDebitMinor, 0, "Sale receivable", dims),
     line(SYSTEM_KEYS.SALES_REVENUE, 0, revenueMinor, "Vehicle sale revenue", dims),
   ];
+  if (dealerFeesMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.DEALER_FEE_INCOME, 0, dealerFeesMinor, "Dealer fee income", dims));
+  }
+  if (warrantySoldMinor > 0) {
+    addResoldProductLines(lines, warrantySoldMinor, p.warrantyCostMinor ?? 0, "Warranty", dims);
+  }
+  if (gapSoldMinor > 0) {
+    addResoldProductLines(lines, gapSoldMinor, p.gapCostMinor ?? 0, "GAP", dims);
+  }
   if (p.taxMinor && p.taxMinor > 0) {
     lines.push(line(SYSTEM_KEYS.SALES_TAX_PAYABLE, 0, p.taxMinor, "Sales tax payable", { vehicleId: p.vehicleId }));
   }
@@ -606,6 +668,35 @@ export function ruleVehicleAcquired(p: VehicleAcquiredPayload): RuleResult {
   };
 }
 
+export interface TradeInAcceptedPayload {
+  vehicleId: string;
+  saleId: string;
+  customerId: string;
+  tradeInValueMinor: number;
+  currency: string;
+}
+
+/**
+ * A trade-in vehicle nets against the sale's AR instead of being paid for in
+ * cash: debit Vehicle Inventory to capitalize the incoming vehicle at its
+ * appraised value, credit AR-Customers to reduce the receivable the sale just
+ * created by the same amount — the customer only owes sale price minus
+ * trade-in value going forward. Mirrors ruleVehicleAcquired's inventory debit,
+ * but the credit side is always AR (never cash/bank/AP), same reasoning as
+ * ruleDepositApplied's credit side for a deposit applied to a sale.
+ */
+export function ruleTradeInAccepted(p: TradeInAcceptedPayload): RuleResult {
+  const dims = { vehicleId: p.vehicleId, customerId: p.customerId };
+  return {
+    lines: [
+      line(SYSTEM_KEYS.VEHICLE_INVENTORY, p.tradeInValueMinor, 0, "Trade-in vehicle capitalized", dims),
+      line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, 0, p.tradeInValueMinor, "Trade-in applied to sale", dims),
+    ],
+    memo: "Trade-in vehicle accepted",
+    category: "SYSTEM",
+  };
+}
+
 export interface VehicleLandedCostCapitalizedPayload {
   vehicleId: string;
   currency: string;
@@ -869,6 +960,29 @@ export function ruleDepreciationPosted(p: DepreciationPostedPayload): RuleResult
   };
 }
 
+export interface FiCommissionRecognizedPayload {
+  deferralId: string;
+  amountMinor: number;
+  currency: string;
+}
+
+/**
+ * Monthly ratable recognition of a resold warranty/GAP product's margin —
+ * exact same shape as ruleDepreciationPosted (debit the liability being
+ * released, credit the revenue being recognized), just for a deferred
+ * commission instead of a fixed asset. See recognizeDeferredCommissionForMonth.
+ */
+export function ruleFiCommissionRecognized(p: FiCommissionRecognizedPayload): RuleResult {
+  return {
+    lines: [
+      line(SYSTEM_KEYS.DEFERRED_FI_COMMISSION, p.amountMinor, 0, "Deferred F&I commission released"),
+      line(SYSTEM_KEYS.FI_COMMISSION_REVENUE, 0, p.amountMinor, "F&I commission recognized"),
+    ],
+    memo: "Monthly F&I commission recognition",
+    category: "SYSTEM",
+  };
+}
+
 export function ruleAssetImpaired(p: AssetImpairedPayload): RuleResult {
   return {
     lines: [
@@ -1055,6 +1169,7 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "SUPPLIER_PAYMENT_SETTLED": return ruleSupplierPaymentSettled(payload as unknown as SupplierPaymentSettledPayload);
     case "ASSET_CAPITALIZED": return ruleAssetCapitalized(payload as unknown as AssetCapitalizedPayload);
     case "DEPRECIATION_POSTED": return ruleDepreciationPosted(payload as unknown as DepreciationPostedPayload);
+    case "FI_COMMISSION_RECOGNIZED": return ruleFiCommissionRecognized(payload as unknown as FiCommissionRecognizedPayload);
     case "ASSET_IMPAIRED": return ruleAssetImpaired(payload as unknown as AssetImpairedPayload);
     case "ASSET_DISPOSED": return ruleAssetDisposed(payload as unknown as AssetDisposedPayload);
     case "CAPITAL_CONTRIBUTED": return ruleCapitalContributed(payload as unknown as PartnerEquityMovementPayload);
@@ -1064,6 +1179,7 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "CLAIM_WRITTEN_OFF": return ruleClaimWrittenOff(payload as unknown as ClaimWrittenOffPayload);
     case "CASH_DRAWER_DEPOSITED": return ruleCashDrawerDeposited(payload as unknown as CashDrawerDepositedPayload);
     case "VEHICLE_ACQUIRED": return ruleVehicleAcquired(payload as unknown as VehicleAcquiredPayload);
+    case "TRADE_IN_ACCEPTED": return ruleTradeInAccepted(payload as unknown as TradeInAcceptedPayload);
     case "VEHICLE_LANDED_COST_CAPITALIZED": return ruleVehicleLandedCostCapitalized(payload as unknown as VehicleLandedCostCapitalizedPayload);
     case "VEHICLE_INVENTORY_OPENING_BALANCE": return ruleVehicleInventoryOpeningBalance(payload as unknown as VehicleInventoryOpeningBalancePayload);
     case "VEHICLE_ACQUISITION_COST_CORRECTED": return ruleVehicleAcquisitionCostCorrected(payload as unknown as VehicleAcquisitionCostCorrectedPayload);

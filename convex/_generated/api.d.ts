@@ -46,6 +46,7 @@ import type * as constants from "../constants.js";
 import type * as crons from "../crons.js";
 import type * as customers from "../customers.js";
 import type * as dashboard from "../dashboard.js";
+import type * as dealerProductDeferrals from "../dealerProductDeferrals.js";
 import type * as deposits from "../deposits.js";
 import type * as directMessages from "../directMessages.js";
 import type * as documents from "../documents.js";
@@ -214,6 +215,7 @@ declare const fullApi: ApiFromModules<{
   crons: typeof crons;
   customers: typeof customers;
   dashboard: typeof dashboard;
+  dealerProductDeferrals: typeof dealerProductDeferrals;
   deposits: typeof deposits;
   directMessages: typeof directMessages;
   documents: typeof documents;

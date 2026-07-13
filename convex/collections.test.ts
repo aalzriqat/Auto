@@ -1295,7 +1295,7 @@ describe("Collections", () => {
       vehicleId,
       saleId,
       amount: 12.3456,
-      method: "OTHER",
+      method: "CASH",
       paymentDate: Date.now(),
       reference: "manual-counter",
       notes: "No receivable selected",
@@ -1305,15 +1305,23 @@ describe("Collections", () => {
       const payment = await ctx.db.get(adHocPaymentId);
       expect(payment).toMatchObject({
         amount: 12.346,
-        method: "OTHER",
+        method: "CASH",
         customerId,
         vehicleId,
         saleId,
       });
       expect(payment?.paymentAllocationId).toBeUndefined();
       const canonical = payment?.canonicalPaymentId ? await ctx.db.get(payment.canonicalPaymentId) : null;
-      expect(canonical?.method).toBe("OTHER");
+      expect(canonical?.method).toBe("CASH");
     });
+
+    await expect(asFinance.mutation(api.collections.recordPayment, {
+      orgId,
+      customerId,
+      amount: 10,
+      method: "OTHER",
+      paymentDate: Date.now(),
+    })).rejects.toThrow("OTHER is not accepted");
 
     const appliedDepositPaymentId = await asFinance.mutation(api.collections.recordPayment, {
       orgId,

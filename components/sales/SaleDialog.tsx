@@ -91,7 +91,11 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
       apr: 0,
       termMonths: 0,
       warrantySold: 0,
+      warrantyCost: 0,
+      warrantyTermMonths: 0,
       gapSold: 0,
+      gapCost: 0,
+      gapTermMonths: 0,
     },
   });
 
@@ -141,7 +145,11 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
         apr: sale.apr || 0,
         termMonths: sale.termMonths || 0,
         warrantySold: sale.warrantySold || 0,
+        warrantyCost: sale.warrantyCost || 0,
+        warrantyTermMonths: sale.warrantyTermMonths || 0,
         gapSold: sale.gapSold || 0,
+        gapCost: sale.gapCost || 0,
+        gapTermMonths: sale.gapTermMonths || 0,
       });
     } else if (open && !sale) {
       form.reset({
@@ -162,7 +170,11 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
         apr: 0,
         termMonths: 0,
         warrantySold: 0,
+        warrantyCost: 0,
+        warrantyTermMonths: 0,
         gapSold: 0,
+        gapCost: 0,
+        gapTermMonths: 0,
       });
     }
   }, [sale, open, form]);
@@ -208,7 +220,11 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
           apr: values.apr,
           termMonths: values.termMonths,
           warrantySold: values.warrantySold,
+          warrantyCost: values.warrantyCost,
+          warrantyTermMonths: values.warrantyTermMonths,
           gapSold: values.gapSold,
+          gapCost: values.gapCost,
+          gapTermMonths: values.gapTermMonths,
         });
         if (completingDraft) {
           completeDraftIdempotencyKeyRef.current ??= `complete-draft-sale:${crypto.randomUUID()}`;
@@ -245,7 +261,11 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
           apr: values.apr,
           termMonths: values.termMonths,
           warrantySold: values.warrantySold,
+          warrantyCost: values.warrantyCost,
+          warrantyTermMonths: values.warrantyTermMonths,
           gapSold: values.gapSold,
+          gapCost: values.gapCost,
+          gapTermMonths: values.gapTermMonths,
           idempotencyKey: createSaleIdempotencyKeyRef.current,
         };
         if (values.status === "PENDING") {
@@ -566,6 +586,36 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                       </FormItem>
                     )}
                   />
+                  {!!Number(watchAll.warrantySold) && (
+                    <>
+                      <FormField
+                        control={form.control}
+                        name="warrantyCost"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t("WarrantyCost" as any)}</FormLabel>
+                            <FormControl>
+                              <Input type="number" {...field} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name="warrantyTermMonths"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t("WarrantyTermMonths" as any)}</FormLabel>
+                            <FormControl>
+                              <Input type="number" {...field} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </>
+                  )}
                   <FormField
                     control={form.control}
                     name="gapSold"
@@ -579,6 +629,36 @@ export function SaleDialog({ open, onOpenChange, sale }: SaleDialogProps) {
                       </FormItem>
                     )}
                   />
+                  {!!Number(watchAll.gapSold) && (
+                    <>
+                      <FormField
+                        control={form.control}
+                        name="gapCost"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t("GAPCost" as any)}</FormLabel>
+                            <FormControl>
+                              <Input type="number" {...field} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <FormField
+                        control={form.control}
+                        name="gapTermMonths"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>{t("GAPTermMonths" as any)}</FormLabel>
+                            <FormControl>
+                              <Input type="number" {...field} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </>
+                  )}
                 </div>
                 <div className="mt-4 flex items-center justify-between border-t pt-4 border-primary/20">
                   <span className="font-semibold text-lg">{t("EstMonthlyPayment" as any)}</span>

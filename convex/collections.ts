@@ -812,6 +812,9 @@ export const recordPayment = mutation({
       async () => {
         assertPositiveAmount(args.amount);
         if (args.method === "REFUND") throw new ConvexError("Refunds require manager approval.");
+        if (args.method === "OTHER") {
+          throw new ConvexError("Select a specific payment method — OTHER is not accepted for recording a payment.");
+        }
 
         let receivable: Doc<"receivables"> | null = null;
         if (args.receivableId) {

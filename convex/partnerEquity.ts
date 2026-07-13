@@ -12,6 +12,7 @@ import {
   hookProfitDistributed,
   getOrgCurrency,
 } from "./accounting/workflowHooks";
+import { paymentMethodValidator, PaymentMethod } from "./utils/paymentMethods";
 
 const movementTypeValidator = v.union(
   v.literal("CONTRIBUTION"),
@@ -102,7 +103,7 @@ export const add = mutation({
     // Optional opening contribution, posted to the GL like any other
     // contribution — replaces the old free-typed initialCapital/currentBalance.
     openingContributionMinor: v.optional(v.number()),
-    paymentMethod: v.optional(v.string()),
+    paymentMethod: v.optional(paymentMethodValidator),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -144,7 +145,7 @@ async function recordMovement(
     partnerId: Id<"partnerEquity">;
     type: "CONTRIBUTION" | "DRAW" | "PROFIT_DISTRIBUTION";
     amountMinor: number;
-    paymentMethod?: string;
+    paymentMethod?: PaymentMethod;
     notes?: string;
     occurredAt?: number;
     actorId: Id<"users">;
@@ -192,7 +193,7 @@ export const recordEquityMovement = mutation({
     partnerId: v.id("partnerEquity"),
     type: movementTypeValidator,
     amountMinor: v.number(),
-    paymentMethod: v.optional(v.string()),
+    paymentMethod: v.optional(paymentMethodValidator),
     notes: v.optional(v.string()),
     occurredAt: v.optional(v.number()),
   },
