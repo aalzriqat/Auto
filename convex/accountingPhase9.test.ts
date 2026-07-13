@@ -243,6 +243,80 @@ describe("Phase 9 — accounting outbox", () => {
     const resolved = await asUser.query(api.accountingOutbox.listPending, { orgId, status: "POSTED" });
     expect(resolved).toHaveLength(1);
   });
+
+  test("an event that keeps failing moves to FAILED after 10 attempts and stops being drained", async () => {
+    const { t, orgId, asUser } = await seedDealer("outbox_deadletter", /* openPeriod */ false);
+
+    const expenseId = await asUser.mutation(api.expenses.create, {
+      orgId, title: "Never posts", amount: 40, date: Date.now(),
+      category: "OFFICE", status: "PAID",
+    });
+
+    // Never open a period, so every drain attempt fails the same way.
+    for (let i = 0; i < 10; i++) {
+      await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    }
+
+    const failed = await asUser.query(api.accountingOutbox.listPending, { orgId, status: "FAILED" });
+    expect(failed).toHaveLength(1);
+    expect(failed[0].sourceId).toBe(expenseId.toString());
+    expect(failed[0].attempts).toBe(10);
+
+    // An 11th drain must not touch it further — it's no longer PENDING.
+    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    const stillFailed = await asUser.query(api.accountingOutbox.listPending, { orgId, status: "FAILED" });
+    expect(stillFailed[0].attempts).toBe(10);
+    const pending = await asUser.query(api.accountingOutbox.listPending, { orgId, status: "PENDING" });
+    expect(pending).toHaveLength(0);
+  });
+
+  test("retryFailed resets a FAILED event back to PENDING for another drain attempt", async () => {
+    const { t, orgId, asUser } = await seedDealer("outbox_retry", /* openPeriod */ false);
+
+    const expenseId = await asUser.mutation(api.expenses.create, {
+      orgId, title: "Fails then recovers", amount: 60, date: Date.now(),
+      category: "OFFICE", status: "PAID",
+    });
+
+    for (let i = 0; i < 10; i++) {
+      await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    }
+    const failed = await asUser.query(api.accountingOutbox.listPending, { orgId, status: "FAILED" });
+    expect(failed).toHaveLength(1);
+
+    // Fix the underlying cause (no open period), then retry.
+    const fiscalYear = new Date().getUTCFullYear();
+    await asUser.mutation(api.accountingPeriods.create, {
+      orgId, startDate: Date.UTC(fiscalYear, 0, 1),
+      endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+      fiscalYear, periodNumber: 1,
+    });
+    const period = (await asUser.query(api.accountingPeriods.list, { orgId }))[0];
+    await asUser.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+
+    await asUser.mutation(api.accountingOutbox.retryFailed, { orgId, pendingEventId: failed[0]._id });
+    const afterRetry = await asUser.query(api.accountingOutbox.listPending, { orgId, status: "PENDING" });
+    expect(afterRetry).toHaveLength(1);
+    expect(afterRetry[0].attempts).toBe(0);
+
+    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    const after = await eventForSource(asUser, orgId, "expenses", expenseId.toString());
+    expect(after.status).toBe("POSTED");
+  });
+
+  test("retryFailed rejects a non-FAILED event", async () => {
+    const { t, orgId, asUser } = await seedDealer("outbox_retry_reject", /* openPeriod */ false);
+
+    await asUser.mutation(api.expenses.create, {
+      orgId, title: "Still pending", amount: 20, date: Date.now(),
+      category: "OFFICE", status: "PAID",
+    });
+    const pending = await asUser.query(api.accountingOutbox.listPending, { orgId, status: "PENDING" });
+
+    await expect(
+      asUser.mutation(api.accountingOutbox.retryFailed, { orgId, pendingEventId: pending[0]._id })
+    ).rejects.toThrow(/Only a FAILED event can be retried/);
+  });
 });
 
 // ─── Idempotency fingerprint ──────────────────────────────────────────────────

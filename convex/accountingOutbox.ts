@@ -13,7 +13,7 @@
  * reverseAccountingEvent dedupe by idempotency key), so re-driving is safe even
  * if the original operation later posts directly.
  */
-import { v } from "convex/values";
+import { v, ConvexError } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { MutationCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
@@ -121,6 +121,13 @@ export async function cancelPendingPostByKey(
   return false;
 }
 
+// A pending event that fails this many times stops being auto-retried and
+// moves to FAILED so it surfaces distinctly for manual attention (via
+// listPending / retryFailed below) instead of retrying forever on every
+// drain — the underlying cause (e.g. a still-missing chart of accounts) is
+// usually not something that will resolve itself between drains.
+const MAX_ATTEMPTS = 10;
+
 // ─── Drain core (plain function, reused by the mutation + schedulers) ──────────
 
 export async function drainPendingForOrg(
@@ -180,9 +187,16 @@ export async function drainPendingForOrg(
       }
       posted++;
     } catch (err) {
-      // Keep the record PENDING and retryable; surface the error for visibility.
+      // Below the threshold: keep it PENDING and retryable, just surface the
+      // error for visibility. At/above it: stop auto-retrying and mark FAILED
+      // so it needs deliberate attention instead of retrying forever.
       const message = err instanceof Error ? err.message : String(err);
-      await ctx.db.patch(p._id, { attempts: p.attempts + 1, lastError: message });
+      const attempts = p.attempts + 1;
+      await ctx.db.patch(p._id, {
+        attempts,
+        lastError: message,
+        ...(attempts >= MAX_ATTEMPTS ? { status: "FAILED" as const } : {}),
+      });
       failed++;
     }
   }
@@ -233,5 +247,29 @@ export const redrive = mutation({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
     return drainPendingForOrg(ctx, args.orgId);
+  },
+});
+
+/**
+ * Resets a dead-lettered event back to PENDING (with a fresh attempts count)
+ * for another round of automatic retries, once whatever caused it to exhaust
+ * MAX_ATTEMPTS has been fixed (e.g. the chart of accounts is now initialized).
+ * Does not itself attempt to post — call redrive/drainPendingForOrg after.
+ */
+export const retryFailed = mutation({
+  args: { orgId: v.id("organizations"), pendingEventId: v.id("pendingAccountingEvents") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+
+    const event = await ctx.db.get(args.pendingEventId);
+    if (!event || event.orgId !== args.orgId) {
+      throw new ConvexError("Pending accounting event not found in this organization.");
+    }
+    if (event.status !== "FAILED") {
+      throw new ConvexError(`Only a FAILED event can be retried (current status: ${event.status}).`);
+    }
+
+    await ctx.db.patch(args.pendingEventId, { status: "PENDING", attempts: 0, lastError: undefined });
   },
 });

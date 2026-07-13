@@ -413,21 +413,26 @@ export const balanceSheet = query({
 // ─── AR Aging ─────────────────────────────────────────────────────────────────
 
 /**
- * Allocated amount for a receivable as of a historical date. Reversing an
- * allocation patches the original row's status to REVERSED (in place) and
- * inserts a separate marker row for the reversal — so filtering live rows by
- * `status === "ACTIVE"` reflects only the CURRENT state, not the state as of
- * an arbitrary past date. An allocation active on asOfDate but reversed after
- * it must still count; one reversed before asOfDate must not.
+ * Allocated amount as of a historical date, for every receivable in the org
+ * at once. Reversing an allocation patches the original row's status to
+ * REVERSED (in place) and inserts a separate marker row for the reversal —
+ * so filtering live rows by `status === "ACTIVE"` reflects only the CURRENT
+ * state, not the state as of an arbitrary past date. An allocation active on
+ * asOfDate but reversed after it must still count; one reversed before
+ * asOfDate must not.
+ *
+ * Scans `paymentAllocations` once per report call (via the `by_org` index)
+ * instead of once per receivable — the previous per-receivable `by_receivable`
+ * query was an N+1 that degrades on orgs with a large receivable history.
  */
-async function getReceivableAllocatedAsOf(
+async function getAllocatedAsOfByReceivable(
   ctx: QueryCtx,
-  receivableId: Id<"receivableDocuments">,
+  orgId: Id<"organizations">,
   asOfDate: number
-): Promise<number> {
+): Promise<Map<string, number>> {
   const allAllocations = await ctx.db
     .query("paymentAllocations")
-    .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", receivableId))
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
     .collect();
 
   const reversedAtByOriginal = new Map<string, number>();
@@ -437,15 +442,16 @@ async function getReceivableAllocatedAsOf(
     }
   }
 
-  let allocated = 0;
+  const allocatedByReceivable = new Map<string, number>();
   for (const a of allAllocations) {
     if (a.reversalOfAllocationId) continue; // marker row, not an original allocation
     if (a.createdAt > asOfDate) continue; // didn't exist yet as of the date
     const reversedAt = reversedAtByOriginal.get(a._id);
     if (reversedAt !== undefined && reversedAt <= asOfDate) continue; // reversed by then
-    allocated += a.amountMinor;
+    const key = a.receivableDocumentId;
+    allocatedByReceivable.set(key, (allocatedByReceivable.get(key) ?? 0) + a.amountMinor);
   }
-  return allocated;
+  return allocatedByReceivable;
 }
 
 type AgingBuckets = { current: number; days30: number; days60: number; days90: number; over90: number };
@@ -481,11 +487,12 @@ export const arAging = query({
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .filter((q) => q.lte(q.field("issueDate"), asOfDate))
       .collect();
+    const allocatedByReceivable = await getAllocatedAsOfByReceivable(ctx, args.orgId, asOfDate);
 
     const byCurrency = new Map<string, { buckets: AgingBuckets; rows: AgingRow[] }>();
 
     for (const rec of allReceivables) {
-      const allocated = await getReceivableAllocatedAsOf(ctx, rec._id, asOfDate);
+      const allocated = allocatedByReceivable.get(rec._id) ?? 0;
       const outstanding = Math.max(0, rec.originalAmountMinor - allocated);
       if (outstanding === 0) continue;
 
@@ -587,10 +594,11 @@ export async function computeSubledgerReconciliation(
       .withIndex("by_org", (q) => q.eq("orgId", orgId))
       .filter((q) => q.lte(q.field("issueDate"), effectiveAsOf))
       .collect();
+    const allocatedByReceivable = await getAllocatedAsOfByReceivable(ctx, orgId, effectiveAsOf);
 
     const subByCurrency = new Map<string, number>();
     for (const rec of allRecs) {
-      const allocated = await getReceivableAllocatedAsOf(ctx, rec._id, effectiveAsOf);
+      const allocated = allocatedByReceivable.get(rec._id) ?? 0;
       const outstanding = Math.max(0, rec.originalAmountMinor - allocated);
       subByCurrency.set(rec.currency, (subByCurrency.get(rec.currency) ?? 0) + outstanding);
     }

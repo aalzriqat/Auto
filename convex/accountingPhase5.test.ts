@@ -261,8 +261,12 @@ describe("Phase 5 — AR aging", () => {
     });
 
     // Snapshot a point in time strictly after the allocation was created but
-    // strictly before it gets reversed below.
+    // strictly before it gets reversed below. A real delay (not just two
+    // back-to-back Date.now() calls) guarantees the reversal's own Date.now()
+    // lands in a later millisecond — without it this is flaky, since a fast
+    // test can call both within the same millisecond.
     const asOfBeforeReversal = Date.now();
+    await new Promise((resolve) => setTimeout(resolve, 5));
 
     await asUser.mutation(internal.subledger.reverseAllocationMutation, {
       orgId, allocationId,
