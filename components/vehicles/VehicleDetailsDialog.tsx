@@ -112,7 +112,9 @@ export function VehicleDetailsDialog({
   const createReservation = useMutation(api.vehicles.createReservation);
   const releaseReservation = useMutation(api.vehicles.releaseReservation);
   const [releasingDepositId, setReleasingDepositId] = useState<string | null>(null);
-  const [landedCostItems, setLandedCostItems] = useState<{ label: string; amount: number; paymentMethod: PaymentMethod }[]>([]);
+  const [landedCostItems, setLandedCostItems] = useState<
+    { id: string; label: string; amount: number; paymentMethod: PaymentMethod }[]
+  >([]);
   const [savingLandedCosts, setSavingLandedCosts] = useState(false);
   const [reservationCustomerId, setReservationCustomerId] = useState("");
   const [reservationDeposit, setReservationDeposit] = useState("");
@@ -134,7 +136,11 @@ export function VehicleDetailsDialog({
       // display them as CASH (the same default upsertLandedCosts used to
       // apply for the whole edit) rather than leaving the picker empty.
       setLandedCostItems(
-        landedCosts.items.map((item) => ({ ...item, paymentMethod: item.paymentMethod ?? "CASH" }))
+        landedCosts.items.map((item) => ({
+          ...item,
+          id: crypto.randomUUID(),
+          paymentMethod: item.paymentMethod ?? "CASH",
+        }))
       );
     } else if (landedCosts === null) {
       setLandedCostItems([]);
@@ -150,6 +156,14 @@ export function VehicleDetailsDialog({
     return t("ReservationStatusConverted" as any);
   };
 
+  const updateLandedCostItem = (
+    index: number,
+    patch: Partial<{ label: string; amount: number; paymentMethod: PaymentMethod }>
+  ) =>
+    setLandedCostItems((items) =>
+      items.map((current, currentIndex) => (currentIndex === index ? { ...current, ...patch } : current))
+    );
+
   const handleSaveLandedCosts = async () => {
     if (!activeOrgId || !vehicle) return;
     setSavingLandedCosts(true);
@@ -157,7 +171,7 @@ export function VehicleDetailsDialog({
       await upsertLandedCosts({
         orgId: activeOrgId,
         vehicleId: vehicle._id,
-        items: landedCostItems,
+        items: landedCostItems.map(({ id: _id, ...item }) => item),
       });
       toast.success(t("LandedCostSaved" as any));
     } catch (error: any) {
@@ -735,7 +749,12 @@ export function VehicleDetailsDialog({
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => setLandedCostItems((items) => [...items, { label: "", amount: 0, paymentMethod: "CASH" }])}
+                    onClick={() =>
+                      setLandedCostItems((items) => [
+                        ...items,
+                        { id: crypto.randomUUID(), label: "", amount: 0, paymentMethod: "CASH" },
+                      ])
+                    }
                   >
                     <Plus className="h-4 w-4 me-2" />
                     {t("AddCostItem" as any)}
@@ -749,19 +768,13 @@ export function VehicleDetailsDialog({
               ) : (
                 <div className="space-y-3">
                   {landedCostItems.map((item, index) => (
-                    <div key={index} className="grid grid-cols-[1fr_140px_160px_auto] gap-2 items-end">
+                    <div key={item.id} className="grid grid-cols-[1fr_140px_160px_auto] gap-2 items-end">
                       <div className="space-y-1">
                         <Label>{t("CostItemLabel" as any)}</Label>
                         <Input
                           value={item.label}
                           disabled={!canEditVehicles}
-                          onChange={(event) =>
-                            setLandedCostItems((items) =>
-                              items.map((current, currentIndex) =>
-                                currentIndex === index ? { ...current, label: event.target.value } : current
-                              )
-                            )
-                          }
+                          onChange={(event) => updateLandedCostItem(index, { label: event.target.value })}
                         />
                       </div>
                       <div className="space-y-1">
@@ -771,13 +784,7 @@ export function VehicleDetailsDialog({
                           min="0"
                           value={item.amount}
                           disabled={!canEditVehicles}
-                          onChange={(event) =>
-                            setLandedCostItems((items) =>
-                              items.map((current, currentIndex) =>
-                                currentIndex === index ? { ...current, amount: Number(event.target.value) } : current
-                              )
-                            )
-                          }
+                          onChange={(event) => updateLandedCostItem(index, { amount: Number(event.target.value) })}
                         />
                       </div>
                       <div className="space-y-1">
@@ -785,13 +792,7 @@ export function VehicleDetailsDialog({
                         <PaymentMethodSelect
                           t={t as any}
                           value={item.paymentMethod}
-                          onValueChange={(method) =>
-                            setLandedCostItems((items) =>
-                              items.map((current, currentIndex) =>
-                                currentIndex === index ? { ...current, paymentMethod: method } : current
-                              )
-                            )
-                          }
+                          onValueChange={(method) => updateLandedCostItem(index, { paymentMethod: method })}
                         />
                       </div>
                       {canEditVehicles && (

@@ -1051,6 +1051,21 @@ describe("Review issue #5 — vehicle acquisition cost correction", () => {
     expect(lines.find((l) => l.accountId === ap._id)?.debitMinor).toBe(500_000);
     expect(lines.find((l) => l.accountId === inventory._id)?.creditMinor).toBe(500_000);
     expect(lines.some((l) => l.accountId === retainedEarnings._id)).toBe(false);
+
+    const vehicleId2 = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "1HGCM82633A000002", purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    await asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId, vehicleId: vehicleId2, newCost: 9700, reason: "Supplier invoice was entered with the wrong total",
+      correctionType: "SUPPLIER_INVOICE_ERROR",
+    });
+    const event2 = await t.run((ctx) =>
+      ctx.db.query("accountingEvents").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicleCostCorrections")).collect()
+    ).then((events) => events.find((e) => e.sourceId !== event!.sourceId));
+    const lines2 = await t.run((ctx) => ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", event2!.journalEntryId!)).collect());
+    expect(lines2.find((l) => l.accountId === ap._id)?.debitMinor).toBe(300_000);
+    expect(lines2.find((l) => l.accountId === inventory._id)?.creditMinor).toBe(300_000);
+    expect(lines2.some((l) => l.accountId === retainedEarnings._id)).toBe(false);
   });
 
   test("CASH_REFUND routes through the selected cash/bank account and requires a payment method", async () => {

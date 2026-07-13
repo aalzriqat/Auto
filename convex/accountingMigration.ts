@@ -90,7 +90,7 @@ async function classifyLegacyTransaction(
     description: tx.description,
     vehicleId: tx.vehicleId?.toString(),
     // Only consider an event as posted if it is in POSTED status with a journal entry linked
-    hasJournalEntry: !!(existing && existing.status === "POSTED" && existing.journalEntryId) || alreadyAccountedViaVehicle,
+    hasJournalEntry: (existing?.status === "POSTED" && !!existing.journalEntryId) || alreadyAccountedViaVehicle,
     eventType,
   };
 }

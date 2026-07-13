@@ -144,6 +144,20 @@ export const markPaid = mutation({
         // Use the currency snapshotted at sale time — not the current org
         // currency — so settlement always matches the original AP posting scale.
         const currency = payable.currency;
+        // A payable with a linked sale was created at SALE time for a sourced
+        // vehicle (AP credited against COST_OF_VEHICLES_SOLD — sourced vehicles
+        // never touch Vehicle Inventory), so it's unconditionally COGS. A payable
+        // with no linked sale was created at ACQUISITION time for an owned
+        // vehicle bought ON_ACCOUNT (AP credited against Vehicle Inventory) —
+        // but if that vehicle has since sold, its cost has already been relieved
+        // out of Vehicle Inventory into COGS by the normal sale posting, so the
+        // reclass must follow it there rather than crediting an account the
+        // vehicle's cost no longer sits in.
+        let costOrigin: "COGS" | "VEHICLE_INVENTORY" = "COGS";
+        if (payable.saleId == null) {
+          const vehicle = await ctx.db.get(payable.vehicleId);
+          costOrigin = vehicle?.status === "SOLD" ? "COGS" : "VEHICLE_INVENTORY";
+        }
         await hookSupplierPaymentSettled(ctx, {
           orgId: args.orgId,
           payableId: args.payableId,
@@ -152,10 +166,7 @@ export const markPaid = mutation({
           taxMinor: args.taxAmount ? toMinorUnits(args.taxAmount, currency) : undefined,
           currency,
           paymentMethod,
-          // A payable with no linked sale was created at ACQUISITION time for
-          // an owned vehicle bought ON_ACCOUNT (AP credited against Vehicle
-          // Inventory, not COGS) — see vehicles.postVehicleAcquisitionIfOwned.
-          costOrigin: payable.saleId == null ? "VEHICLE_INVENTORY" : "COGS",
+          costOrigin,
           actorId: user._id,
           occurredAt: now,
         });
