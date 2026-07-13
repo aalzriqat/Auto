@@ -299,7 +299,7 @@ describe("Phase 5 — AR aging", () => {
     ] as const;
 
     for (const receivable of receivables) {
-      await asUser.mutation(api.subledger.createReceivable, {
+      await asUser.mutation(internal.subledger.createReceivable, {
         orgId,
         documentType: "INVOICE",
         payerType: "CUSTOMER",
@@ -315,9 +315,9 @@ describe("Phase 5 — AR aging", () => {
 
     const aging = await asUser.query(api.accountingReports.arAging, { orgId, asOfDate: now });
     for (const receivable of receivables) {
-      expect(aging.buckets[receivable.bucket]).toBe(receivable.amount);
+      expect(aging.byCurrency.JOD.buckets[receivable.bucket]).toBe(receivable.amount);
     }
-    expect(aging.totalOutstandingMinor).toBe(150_000);
+    expect(aging.byCurrency.JOD.totalOutstandingMinor).toBe(150_000);
   });
 });
 
@@ -335,7 +335,7 @@ describe("Phase 5 — subledger reconciliation", () => {
     const customerId = await t.run((ctx) =>
       ctx.db.insert("customers", { orgId, firstName: "Recon", lastName: "Customer" })
     );
-    const receivableDocumentId = await asUser.mutation(api.subledger.createReceivable, {
+    const receivableDocumentId = await asUser.mutation(internal.subledger.createReceivable, {
       orgId,
       documentType: "INVOICE",
       payerType: "CUSTOMER",
@@ -347,7 +347,7 @@ describe("Phase 5 — subledger reconciliation", () => {
       issueDate: now,
       dueDate: now + 30 * 86400_000,
     });
-    const paymentId = await asUser.mutation(api.subledger.recordPayment, {
+    const paymentId = await asUser.mutation(internal.subledger.recordPayment, {
       orgId,
       direction: "IN",
       customerId,
@@ -356,7 +356,7 @@ describe("Phase 5 — subledger reconciliation", () => {
       currency: "JOD",
       idempotencyKey: "payment_recon_partial",
     });
-    await asUser.mutation(api.subledger.allocate, {
+    await asUser.mutation(internal.subledger.allocate, {
       orgId,
       paymentId,
       receivableDocumentId,
@@ -400,8 +400,8 @@ describe("Phase 5 — subledger reconciliation", () => {
       orgId,
       toDate: now + 1_000,
     });
-    expect(recon.glArBalanceMinor).toBe(75_000);
-    expect(recon.subledgerOutstandingMinor).toBe(75_000);
+    expect(recon.byCurrency.JOD.glArBalanceMinor).toBe(75_000);
+    expect(recon.byCurrency.JOD.subledgerOutstandingMinor).toBe(75_000);
     expect(recon.isReconciled).toBe(true);
   });
 });
