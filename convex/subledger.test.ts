@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { ALL_PERMISSIONS } from "./utils/permissions";
+import { voidCanonicalPayment } from "./subledger";
 
 const MODULES = import.meta.glob("./**/*.*s");
 
@@ -48,7 +49,7 @@ async function setupSubledgerOrg() {
   );
   const asManager = t.withIdentity({ subject: "subledger_manager" });
 
-  return { t, orgId, customerId, asManager };
+  return { t, orgId, userId, customerId, asManager };
 }
 
 describe("subledger balances", () => {
@@ -143,5 +144,88 @@ describe("subledger balances", () => {
       limit: 10,
     });
     expect(byStatus.map((doc) => doc._id)).toContain(receivableDocumentId);
+
+    const defaultList = await asManager.query(api.subledger.listReceivables, { orgId, limit: 10 });
+    expect(defaultList.map((doc) => doc._id)).toContain(receivableDocumentId);
+  });
+
+  test("allocation_rejects_amount_above_unapplied_payment_balance", async () => {
+    const { orgId, customerId, asManager } = await setupSubledgerOrg();
+    const now = Date.now();
+    const receivableDocumentId = await asManager.mutation(api.subledger.createReceivable, {
+      orgId,
+      documentType: "INVOICE",
+      payerType: "CUSTOMER",
+      customerId,
+      sourceType: "manual_invoice",
+      sourceId: "invoice-over-allocation",
+      originalAmountMinor: 100_000,
+      currency: "JOD",
+      issueDate: now,
+      dueDate: now + 7 * 24 * 60 * 60 * 1000,
+    });
+    const paymentId = await asManager.mutation(api.subledger.recordPayment, {
+      orgId,
+      direction: "IN",
+      customerId,
+      method: "CASH",
+      amountMinor: 60_000,
+      currency: "JOD",
+      idempotencyKey: "subledger-over-allocation-payment",
+    });
+    await asManager.mutation(api.subledger.allocate, {
+      orgId,
+      paymentId,
+      receivableDocumentId,
+      amountMinor: 60_000,
+    });
+
+    await expect(
+      asManager.mutation(api.subledger.allocate, {
+        orgId,
+        paymentId,
+        receivableDocumentId,
+        amountMinor: 1,
+      })
+    ).rejects.toThrow(/exceeds unapplied payment balance/i);
+  });
+
+  test("voidCanonicalPayment_rejects_active_allocations_and_listAllocations_allows_empty_filters", async () => {
+    const { t, orgId, userId, customerId, asManager } = await setupSubledgerOrg();
+    const now = Date.now();
+    const receivableDocumentId = await asManager.mutation(api.subledger.createReceivable, {
+      orgId,
+      documentType: "INVOICE",
+      payerType: "CUSTOMER",
+      customerId,
+      sourceType: "manual_invoice",
+      sourceId: "invoice-void-active-allocation",
+      originalAmountMinor: 50_000,
+      currency: "JOD",
+      issueDate: now,
+      dueDate: now + 7 * 24 * 60 * 60 * 1000,
+    });
+    const paymentId = await asManager.mutation(api.subledger.recordPayment, {
+      orgId,
+      direction: "IN",
+      customerId,
+      method: "CASH",
+      amountMinor: 50_000,
+      currency: "JOD",
+      idempotencyKey: "subledger-void-active-allocation-payment",
+    });
+    await asManager.mutation(api.subledger.allocate, {
+      orgId,
+      paymentId,
+      receivableDocumentId,
+      amountMinor: 50_000,
+    });
+
+    await expect(
+      t.run((ctx) => voidCanonicalPayment(ctx, { orgId, paymentId, actorId: userId }))
+    ).rejects.toThrow(/active allocations/i);
+
+    const noFilterAllocations = await asManager.query(api.subledger.listAllocations, { orgId });
+    expect(noFilterAllocations).toEqual([]);
   });
 });

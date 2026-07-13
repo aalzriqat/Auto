@@ -207,6 +207,86 @@ describe("transactions ledger", () => {
     });
   });
 
+  test("list_ignores_deleted_deposit_context_but_enriches_legacy_quote_descriptions", async () => {
+    const { t, orgId, userId, customerId, vehicleId, asManager } = await setupLedgerOrg();
+    const quoteId = await t.run((ctx) =>
+      ctx.db.insert("quotes", {
+        orgId,
+        customerId,
+        vehicleId,
+        vehiclePrice: 18_000,
+        downPayment: 1_000,
+        termMonths: 36,
+        status: "DRAFT",
+        createdBy: userId,
+        createdAt: Date.now(),
+      })
+    );
+    const deletedDepositId = await t.run((ctx) =>
+      ctx.db.insert("deposits", {
+        orgId,
+        vehicleId,
+        customerId,
+        amount: 500,
+        amountMinor: 500_000,
+        currency: "JOD",
+        method: "CASH",
+        status: "HELD",
+        holdActive: true,
+        isDeleted: true,
+        createdBy: userId,
+        createdAt: Date.now(),
+      })
+    );
+    const deletedDepositTransactionId = await t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId,
+        type: "IN",
+        amount: 500,
+        date: Date.now(),
+        category: "DEPOSIT",
+        description: "Deposit held for deleted deposit",
+        depositId: deletedDepositId,
+      })
+    );
+    const legacyQuoteTransactionId = await t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId,
+        type: "IN",
+        amount: 600,
+        date: Date.now() + 1,
+        category: "DEPOSIT",
+        description: `Deposit for quote ${quoteId}`,
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("transactions", {
+        orgId,
+        type: "IN",
+        amount: 700,
+        date: Date.now() + 2,
+        category: "DEPOSIT",
+        description: "Deposit for quote not-a-valid-id",
+      })
+    );
+
+    const page = await asManager.query(api.transactions.list, {
+      orgId,
+      paginationOpts: { numItems: 10, cursor: null },
+    });
+
+    const deletedDepositRow = page.page.find((transaction) => transaction._id === deletedDepositTransactionId);
+    expect(deletedDepositRow).not.toHaveProperty("customerName");
+    expect(deletedDepositRow).not.toHaveProperty("vehicleLabel");
+
+    const legacyQuoteRow = page.page.find((transaction) => transaction._id === legacyQuoteTransactionId);
+    expect(legacyQuoteRow).toMatchObject({
+      customerName: "Dana Saleh",
+      vehicleLabel: "2022 Hyundai Tucson",
+      quoteReference: quoteId.toString(),
+    });
+  });
+
   test("rejects_cross_org_vehicle_references", async () => {
     const { t, orgId, asManager } = await setupLedgerOrg();
     const otherVehicleId = await t.run(async (ctx) => {
@@ -237,6 +317,72 @@ describe("transactions ledger", () => {
         vehicleId: otherVehicleId,
       })
     ).rejects.toThrow(/vehicle not found/i);
+  });
+
+  test("rejects_cross_org_expense_references_on_add_and_update", async () => {
+    const { t, orgId, vehicleId, asManager } = await setupLedgerOrg();
+    const otherOrgReferences = await t.run(async (ctx) => {
+      const otherOrgId = await ctx.db.insert("organizations", { name: "Other Expense Dealer", createdAt: Date.now() });
+      const otherVehicleId = await ctx.db.insert("vehicles", {
+        orgId: otherOrgId,
+        vin: "OTHERLEDGER002",
+        make: "Ford",
+        model: "Explorer",
+        year: 2020,
+        mileage: 44_000,
+        color: "Gray",
+        fuelType: "Gasoline",
+        transmission: "Automatic",
+        sellingPrice: 16_000,
+        status: "AVAILABLE",
+      });
+      const otherExpenseId = await ctx.db.insert("expenses", {
+        orgId: otherOrgId,
+        title: "Other org expense",
+        amount: 200,
+        date: Date.now(),
+        category: "OTHER",
+      });
+      return { otherVehicleId, otherExpenseId };
+    });
+
+    await expect(
+      asManager.mutation(api.transactions.add, {
+        orgId,
+        type: "OUT",
+        amount: 200,
+        date: Date.now(),
+        category: "EXPENSE",
+        description: "Wrong org expense",
+        expenseId: otherOrgReferences.otherExpenseId,
+      })
+    ).rejects.toThrow(/expense not found/i);
+
+    const transactionId = await asManager.mutation(api.transactions.add, {
+      orgId,
+      type: "OUT",
+      amount: 300,
+      date: Date.now(),
+      category: "EXPENSE",
+      description: "Local transaction",
+      vehicleId,
+    });
+
+    await expect(
+      asManager.mutation(api.transactions.update, {
+        orgId,
+        transactionId,
+        vehicleId: otherOrgReferences.otherVehicleId,
+      })
+    ).rejects.toThrow(/vehicle not found/i);
+
+    await expect(
+      asManager.mutation(api.transactions.update, {
+        orgId,
+        transactionId,
+        expenseId: otherOrgReferences.otherExpenseId,
+      })
+    ).rejects.toThrow(/expense not found/i);
   });
 
   test("update_and_remove_reject_transactions_from_another_organization", async () => {

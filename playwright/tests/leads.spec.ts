@@ -14,13 +14,11 @@ test.describe("leads", () => {
       dialog.getByRole("heading", { name: "Add Lead" }),
     ).toBeVisible();
 
-    // Customer is a custom SearchableSelect (components/ui/searchable-select.tsx):
-    // a plain button trigger that opens a popover with an auto-focused search
-    // input and a list of plain <button> results — no ARIA combobox/option
-    // roles, so type into whatever's focused rather than locating the input.
     await dialog.getByRole("button", { name: "Select customer" }).click();
-    await page.keyboard.type(lastName);
-    await dialog.getByRole("button", { name: customerName }).click();
+    await dialog.locator('input[placeholder^="Search"]').fill(lastName);
+    const customerOption = dialog.getByRole("button", { name: customerName });
+    await expect(customerOption).toBeVisible({ timeout: 30_000 });
+    await customerOption.click();
 
     await dialog.getByRole("button", { name: "Add Lead", exact: true }).click();
 

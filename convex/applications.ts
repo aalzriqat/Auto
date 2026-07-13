@@ -101,7 +101,7 @@ async function getQuoteDeposits(ctx: QueryCtx, quoteId: Id<"quotes">): Promise<A
   return deposits;
 }
 
-async function transferFinancedAmountFromCustomerReceivable(
+export async function transferFinancedAmountFromCustomerReceivable(
   ctx: MutationCtx,
   args: {
     orgId: Id<"organizations">;
@@ -163,20 +163,6 @@ const VALID_STATUS_TRANSITIONS: Record<FinanceApplicationStatus, readonly Financ
   CLOSED: [],
   CANCELLED: [],
 };
-
-// Statuses from which an application can be voided via cancelApplication —
-// e.g. when it was submitted against the wrong car. CLOSED applications can
-// also be cancelled (see cancelApplication's CLOSED branch), which unwinds
-// the sale, vehicle, deposits, and posted GL entries it created — but only
-// while no disbursement has been confirmed yet (see the disbursedAt guard).
-const CANCELLABLE_STATUSES: readonly FinanceApplicationStatus[] = [
-  "DRAFT",
-  "PENDING_DOCS",
-  "UNDER_REVIEW",
-  "APPROVED",
-  "REJECTED",
-  "CLOSED",
-];
 
 async function assertRequiredApplicationDocumentsComplete(
   ctx: MutationCtx,
@@ -580,8 +566,9 @@ export const updateStatus = mutation({
  * vehicle) so the deal can be redone cleanly on a fresh quote. CANCELLED is
  * terminal — the application stays visible for audit purposes but can no
  * longer be acted on. Releases any deposit-driven vehicle hold tied to the
- * quote, same as a rejection. Not available once CLOSED, since finalizeDeal
- * has already created a sale.
+ * quote, same as a rejection. CLOSED applications can be cancelled only while
+ * no disbursement has been confirmed, because that branch unwinds the sale,
+ * vehicle, deposits, and posted accounting records.
  */
 export const cancelApplication = mutation({
   args: {
@@ -611,10 +598,6 @@ export const cancelApplication = mutation({
         if (app.status === "CANCELLED") {
           await releaseHoldForApplicationQuote(ctx, { quoteId: app.quoteId, actorId: auth.user._id });
           return;
-        }
-
-        if (!CANCELLABLE_STATUSES.includes(app.status)) {
-          throw new ConvexError("This application cannot be cancelled.");
         }
 
         // Reversing an already-APPROVED decision is more sensitive than voiding

@@ -82,6 +82,9 @@ jobs:
             --cmd-url-env-var-name NEXT_PUBLIC_CONVEX_URL || true
           retry_convex pnpm exec convex env set CLERK_JWT_ISSUER_DOMAIN "$CLERK_ISSUER_DOMAIN"
           retry_convex pnpm exec convex env set CLERK_DEV_JWT_ISSUER_DOMAIN "$CLERK_ISSUER_DOMAIN"
+          # Cloudflare's documented always-pass Turnstile secret for E2E runs.
+          # The matching public sitekey is passed only to the test build below.
+          retry_convex pnpm exec convex env set TURNSTILE_SECRET_KEY "1x0000000000000000000000000000000AA"
           retry_convex pnpm exec convex deploy \
             --typecheck enable \
             --cmd 'echo "NEXT_PUBLIC_CONVEX_URL=$NEXT_PUBLIC_CONVEX_URL" >> "$GITHUB_ENV"' \
@@ -95,6 +98,7 @@ jobs:
         env:
           NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
           NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
 
@@ -103,6 +107,7 @@ jobs:
         env:
           NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
           NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
 
@@ -135,8 +140,10 @@ jobs:
         env:
           NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
           NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          NEXT_PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
           NEXT_PUBLIC_APP_URL: ${{ secrets.NEXT_PUBLIC_APP_URL }}
+          CYPRESS_NEXT_PUBLIC_CONVEX_URL: ${{ env.NEXT_PUBLIC_CONVEX_URL }}
           CYPRESS_E2E_LOGIN_USER: ${{ secrets.E2E_LOGIN_USER }}
           CYPRESS_E2E_LOGIN_PASSWORD: ${{ secrets.E2E_LOGIN_PASSWORD }}
           CYPRESS_E2E_LOGIN_VERIFICATION_CODE: ${{ secrets.E2E_LOGIN_VERIFICATION_CODE }}

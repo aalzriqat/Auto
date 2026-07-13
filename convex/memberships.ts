@@ -166,15 +166,11 @@ async function createOrReuseMembershipOffboardingJob(
   ctx: MutationCtx,
   args: {
     orgId: Id<"organizations">;
-    membershipId: Id<"memberships">;
+    membership: Doc<"memberships">;
     requestedBy: Id<"users">;
   }
 ): Promise<MembershipOffboardingJobResult> {
-  const membership = await ctx.db.get(args.membershipId);
-  if (!membership || membership.orgId !== args.orgId) {
-    throw new ConvexError("Membership not found in this organization.");
-  }
-
+  const membership = args.membership;
   const user = await ctx.db.get(membership.userId);
   if (!user) {
     throw new ConvexError("Membership user record is missing.");
@@ -569,7 +565,7 @@ export const removeMembershipInternal = internalMutation({
 
     return await createOrReuseMembershipOffboardingJob(ctx, {
       orgId: args.orgId,
-      membershipId: args.membershipId,
+      membership,
       requestedBy: callingUser._id,
     });
   },

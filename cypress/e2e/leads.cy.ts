@@ -15,13 +15,11 @@ describe("leads", () => {
         cy.findByRole("dialog").within(() => {
           cy.findByRole("heading", { name: "Add Lead" }).should("be.visible");
 
-          // Customer is a custom SearchableSelect (components/ui/searchable-select.tsx):
-          // a plain button trigger that opens a popover with an auto-focused
-          // search input and plain <button> results — no ARIA combobox/option
-          // roles, so type into whatever's focused rather than locating the input.
           cy.findByRole("button", { name: "Select customer" }).click();
-          cy.focused().type(lastName);
-          cy.findByRole("button", { name: new RegExp(customerName) }).click();
+          cy.get('input[placeholder^="Search"]').first().clear().type(lastName);
+          cy.findByRole("button", { name: new RegExp(customerName) })
+            .should("be.visible")
+            .click();
 
           cy.findByRole("button", { name: /^(Add Lead|Create Lead)$/ }).click();
         });
