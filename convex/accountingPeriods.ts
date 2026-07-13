@@ -250,6 +250,7 @@ export type CloseChecklistResult = {
   canClose: boolean;
   blockers: string[];
   pendingOutboxEventCount: number;
+  failedOutboxEventCount: number;
   pendingManualJournalCount: number;
   unmatchedBankLineCount: number;
   arReconciliation: SubledgerReconciliationResult;
@@ -275,6 +276,17 @@ async function computeCloseChecklist(
       .collect()
   ).filter((e) => e.accountingDate <= period.endDate);
 
+  // A dead-lettered event (accountingOutbox.ts's MAX_ATTEMPTS) represents the
+  // same unposted GL impact as a pending one — it must block the close just
+  // as hard, or a permanently-failed event could silently disappear from
+  // every control the moment it stops retrying.
+  const failedOutboxEvents = (
+    await ctx.db
+      .query("pendingAccountingEvents")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "FAILED"))
+      .collect()
+  ).filter((e) => e.accountingDate <= period.endDate);
+
   // Not period-scoped by date — manualJournalDrafts have no accountingDate
   // until posted, and an unresolved approval is a control gap regardless of
   // which period it will eventually land in.
@@ -296,6 +308,11 @@ async function computeCloseChecklist(
   if (pendingOutboxEvents.length > 0) {
     blockers.push(`${pendingOutboxEvents.length} accounting event(s) from this period have not posted yet.`);
   }
+  if (failedOutboxEvents.length > 0) {
+    blockers.push(
+      `${failedOutboxEvents.length} accounting event(s) from this period FAILED to post after repeated retries and require resolution — retry them (after fixing the underlying cause) or have an owner explicitly override the close.`
+    );
+  }
   if (pendingManualJournals.length > 0) {
     blockers.push(`${pendingManualJournals.length} manual journal entr${pendingManualJournals.length === 1 ? "y is" : "ies are"} awaiting approval.`);
   }
@@ -311,6 +328,7 @@ async function computeCloseChecklist(
     canClose: blockers.length === 0,
     blockers,
     pendingOutboxEventCount: pendingOutboxEvents.length,
+    failedOutboxEventCount: failedOutboxEvents.length,
     pendingManualJournalCount: pendingManualJournals.length,
     unmatchedBankLineCount: unmatchedBankLines.length,
     arReconciliation,

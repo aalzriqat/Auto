@@ -43,13 +43,37 @@ const downPaymentRefinement = {
   path: ["downPayment"],
 };
 
+function warrantyTermRequiredWhenSold(data: { warrantySold?: number; warrantyTermMonths?: number }) {
+  return !data.warrantySold || (data.warrantyTermMonths ?? 0) > 0;
+}
+
+const warrantyTermRefinement = {
+  message: "A warranty term (in months) is required when a warranty premium is charged",
+  path: ["warrantyTermMonths"],
+};
+
+function gapTermRequiredWhenSold(data: { gapSold?: number; gapTermMonths?: number }) {
+  return !data.gapSold || (data.gapTermMonths ?? 0) > 0;
+}
+
+const gapTermRefinement = {
+  message: "A GAP term (in months) is required when a GAP premium is charged",
+  path: ["gapTermMonths"],
+};
+
 export const CreateSaleSchema = BaseSaleSchema.extend({
   status: z.literal("COMPLETED"),
-}).refine(downPaymentDoesNotExceedSalePrice, downPaymentRefinement);
+})
+  .refine(downPaymentDoesNotExceedSalePrice, downPaymentRefinement)
+  .refine(warrantyTermRequiredWhenSold, warrantyTermRefinement)
+  .refine(gapTermRequiredWhenSold, gapTermRefinement);
 
 export const CreateDraftSaleSchema = BaseSaleSchema.extend({
   status: z.literal("PENDING").optional(),
-}).refine(downPaymentDoesNotExceedSalePrice, downPaymentRefinement);
+})
+  .refine(downPaymentDoesNotExceedSalePrice, downPaymentRefinement)
+  .refine(warrantyTermRequiredWhenSold, warrantyTermRefinement)
+  .refine(gapTermRequiredWhenSold, gapTermRefinement);
 
 export const UpdateSaleSchema = BaseSaleSchema.partial().extend({
   orgId: z.string().min(1, "Organization ID is required"),

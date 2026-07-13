@@ -519,6 +519,15 @@ export async function hookTradeInAccepted(
   });
 }
 
+/** Reverses the TRADE_IN_ACCEPTED entry when the sale it was part of is cancelled. */
+export const hookTradeInReversed = makeReversalHook<{ vehicleId: Id<"vehicles">; saleId: Id<"sales"> }>({
+  eventType: "TRADE_IN_ACCEPTED",
+  sourceType: "vehicles",
+  sourceId: (a) => a.vehicleId.toString(),
+  reversalKey: (a) => `trade_in_reversed_${a.vehicleId}`,
+  pendingPostKey: (a) => `trade_in_accepted_${a.saleId}`,
+});
+
 /**
  * Each landed-cost edit is its own economic event (upsertLandedCosts replaces
  * the whole items list every save), so the idempotency/source key includes
@@ -1026,6 +1035,77 @@ export async function hookFiCommissionRecognized(
       currency: args.currency,
     },
   });
+}
+
+/**
+ * Claws back every month of F&I commission already recognized for a
+ * deferral whose sale was cancelled — unlike makeReversalHook's single-event
+ * lookup, a deferral can have one FI_COMMISSION_RECOGNIZED event per
+ * recognized month, so each is reversed individually. reverseAccountingEvent
+ * is a no-op (returns alreadyReversed) on an event it's already reversed, so
+ * this is safe to call more than once for the same deferral. Also drops any
+ * month that was enqueued but never posted, so it never posts later.
+ */
+export async function hookFiCommissionRecognitionsReversed(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    deferralId: Id<"dealerProductDeferrals">;
+    reason: string;
+    actorId: Id<"users">;
+    reversalDate: number;
+  }
+): Promise<void> {
+  const postedEvents = await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_source", (q) =>
+      q.eq("orgId", args.orgId).eq("sourceType", "dealerProductDeferrals").eq("sourceId", args.deferralId.toString())
+    )
+    .filter((q) => q.eq(q.field("eventType"), "FI_COMMISSION_RECOGNIZED"))
+    .filter((q) => q.eq(q.field("status"), "POSTED"))
+    .collect();
+
+  const period = await getOpenPeriodForDate(ctx, args.orgId, args.reversalDate);
+  for (const event of postedEvents) {
+    const reversalIdempotencyKey = `fi_commission_reversed_${event._id}`;
+    if (period) {
+      await reverseAccountingEvent(ctx, {
+        orgId: args.orgId,
+        originalEventId: event._id,
+        reversalDate: args.reversalDate,
+        reason: args.reason,
+        actorId: args.actorId,
+        idempotencyKey: reversalIdempotencyKey,
+      });
+    } else {
+      await enqueuePendingReversal(ctx, {
+        orgId: args.orgId,
+        originalEventId: event._id,
+        reversalDate: args.reversalDate,
+        reason: args.reason,
+        actorId: args.actorId,
+        idempotencyKey: reversalIdempotencyKey,
+        sourceType: "dealerProductDeferrals",
+        sourceId: args.deferralId.toString(),
+      });
+    }
+  }
+
+  const pendingEvents = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
+    .filter((q) =>
+      q.and(
+        q.eq(q.field("kind"), "POST"),
+        q.eq(q.field("sourceType"), "dealerProductDeferrals"),
+        q.eq(q.field("sourceId"), args.deferralId.toString()),
+        q.eq(q.field("eventType"), "FI_COMMISSION_RECOGNIZED")
+      )
+    )
+    .collect();
+  for (const pending of pendingEvents) {
+    await ctx.db.delete(pending._id);
+  }
 }
 
 export async function hookAssetImpaired(
