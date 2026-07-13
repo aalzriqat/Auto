@@ -56,7 +56,8 @@ export async function holdVehicleForDeposit(
   }
 }
 
-async function hasActiveDepositHold(
+/** Exported for saleCancellation.ts's trade-in-reversal safety guard, in addition to internal use by syncVehicleHoldStatus below. */
+export async function hasActiveDepositHold(
   ctx: MutationCtx,
   vehicleId: Id<"vehicles">
 ): Promise<boolean> {
@@ -76,7 +77,8 @@ async function hasActiveDepositHold(
   return secondaryHolds.length > 0;
 }
 
-async function hasActiveReservationHold(
+/** Exported for saleCancellation.ts's trade-in-reversal safety guard, in addition to internal use by syncVehicleHoldStatus below. */
+export async function hasActiveReservationHold(
   ctx: MutationCtx,
   args: { orgId: Id<"organizations">; vehicleId: Id<"vehicles"> }
 ): Promise<boolean> {

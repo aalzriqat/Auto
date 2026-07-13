@@ -237,6 +237,88 @@ describe("Dealer fees post to the GL", () => {
   });
 });
 
+describe("A cancelled sale's receivable stops counting as AR — but only from its cancellation date onward", () => {
+  test("historical AR aging as of a date BEFORE cancellation still counts the receivable as outstanding", async () => {
+    const { t, orgId, asOwner, customerId, userId } = await seedDealer("ar_cancel_hist");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    const saleDate = Date.UTC(2025, 3, 1);
+    const saleId = await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 15000, saleDate, status: "COMPLETED",
+    });
+
+    // sales.update's cancellation path always dates the reversal at
+    // Date.now() (real cancellation is never backdated), so cancelling here
+    // happens "in the future" relative to saleDate — an asOfDate of saleDate
+    // itself is therefore guaranteed to be before cancellation.
+    const asApprover = await addCancellationApprover(t, orgId, "ar_cancel_hist");
+    await asApprover.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
+
+    const historicalAging = await asOwner.query(api.accountingReports.arAging, { orgId, asOfDate: saleDate });
+    expect(historicalAging.currencies).toEqual(["JOD"]);
+    expect(historicalAging.byCurrency.JOD.totalOutstandingMinor).toBe(15_000_000);
+
+    const historicalRecon = await asOwner.query(api.accountingReports.subledgerReconciliation, {
+      orgId, toDate: saleDate,
+    });
+    expect(historicalRecon.byCurrency.JOD.subledgerOutstandingMinor).toBe(15_000_000);
+
+    // Current-state reports (asOfDate defaults to now, i.e. after
+    // cancellation) must exclude it entirely — matching the GL side, which
+    // hookSaleCancelled already zeroed via a reversal journal.
+    const currentAging = await asOwner.query(api.accountingReports.arAging, { orgId });
+    expect(currentAging.currencies).toHaveLength(0);
+    const currentRecon = await asOwner.query(api.accountingReports.subledgerReconciliation, { orgId });
+    expect(currentRecon.isReconciled).toBe(true);
+  });
+
+  test("a cancelled receivable reads as zero balance and rejects a new payment allocation", async () => {
+    const { t, orgId, asOwner, customerId, userId } = await seedDealer("ar_cancel_balance");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    const saleId = await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 15000, saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
+    });
+    const sale = await t.run((ctx) => ctx.db.get(saleId));
+    const receivableId = sale!.canonicalReceivableDocumentId!;
+
+    const asApprover = await addCancellationApprover(t, orgId, "ar_cancel_balance");
+    await asApprover.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
+
+    const receivable = await t.run((ctx) => ctx.db.get(receivableId));
+    expect(receivable?.status).toBe("CANCELLED");
+    expect(receivable?.cancelledAt).toBeTruthy();
+    // Cancelled by the approver identity (not userId/the salesperson) —
+    // sales.update requires a different actor from the sale's own salesperson.
+    expect(receivable?.cancelledBy).toBeTruthy();
+    expect(receivable?.cancelledBy).not.toBe(userId);
+    expect(receivable?.cancellationReason).toBe("Sale cancelled");
+
+    const balance = await asOwner.query(api.subledger.getReceivableBalance, { orgId, receivableDocumentId: receivableId });
+    expect(balance?.outstandingMinor).toBe(0);
+
+    // A stray payment must never be allocatable to a dead receivable, even
+    // though nothing else about it (e.g. its originalAmountMinor) changed.
+    const strayPaymentId = await t.run((ctx) =>
+      ctx.db.insert("canonicalPayments", {
+        orgId, direction: "IN", payerType: "CUSTOMER", customerId,
+        method: "CASH", amountMinor: 5_000_000, currency: "JOD", scale: 3,
+        idempotencyKey: "stray-payment-1", status: "SETTLED",
+        createdBy: userId, createdAt: Date.now(),
+      })
+    );
+    await expect(
+      asOwner.mutation(internal.subledger.allocate, {
+        orgId, paymentId: strayPaymentId, receivableDocumentId: receivableId, amountMinor: 1_000_000,
+      })
+    ).rejects.toThrow(/exceeds receivable outstanding balance/);
+  });
+});
+
 describe("Trade-in vehicles net against the sale's AR", () => {
   test("a trade-in vehicle capitalizes into inventory and reduces AR by its value", async () => {
     const { t, orgId, asOwner, customerId, userId } = await seedDealer("ti_a");
@@ -382,10 +464,20 @@ describe("Trade-in vehicles net against the sale's AR", () => {
     );
     expect(payment?.status).toBe("VOIDED");
 
-    // Not asserted: subledgerReconciliation still counts a CANCELLED
-    // receivable's full originalAmountMinor as outstanding (only `status` is
-    // patched on cancel, not the amount) — a pre-existing gap in that report
-    // unrelated to trade-in/deferral handling, out of scope here.
+    // A cancelled receivable must not reappear as outstanding — cancelledAt
+    // (set alongside status: "CANCELLED") lets both reports exclude it for
+    // any asOfDate on/after cancellation, matching the GL side which
+    // hookSaleCancelled already zeroed out via a reversal journal.
+    const recon = await asOwner.query(api.accountingReports.subledgerReconciliation, { orgId });
+    expect(recon.isReconciled).toBe(true);
+    const aging = await asOwner.query(api.accountingReports.arAging, { orgId });
+    expect(aging.currencies).toHaveLength(0);
+
+    // The trade-in vehicle was AVAILABLE and had no subsequent activity, so
+    // the reversal pulls it out of sellable inventory pending a human
+    // re-establishing a real cost basis, rather than leaving it AVAILABLE
+    // with a wiped (zero) purchasePrice.
+    expect(tradeInVehicle?.status).toBe("IN_INSPECTION");
   });
 
   test("reversing a second trade-in of the same vehicle (on a later sale) doesn't collide with the first reversal's key", async () => {
@@ -456,6 +548,123 @@ describe("Trade-in vehicles net against the sale's AR", () => {
     // cancellation must not treat it as a trade-in to undo.
     const otherVehicle = await t.run((ctx) => ctx.db.get(otherVehicleId));
     expect(otherVehicle?.purchasePrice).toBe(7000);
+  });
+
+  test("refuses to auto-cancel a trade-in that has already been resold", async () => {
+    const { t, orgId, asOwner, customerId, userId } = await seedDealer("ti_resold");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    const tradeInVehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "TRD3N9AN0000010AX", status: "AVAILABLE",
+    });
+    const saleA = await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 15000, tradeInVehicleId, tradeInValue: 4000,
+      saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
+    });
+
+    // The traded-in vehicle is now real inventory (purchasePrice = 4000) —
+    // resell it on a second, unrelated sale.
+    const otherCustomerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Sam", lastName: "Buyer", email: "sam@example.com" })
+    );
+    await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId: tradeInVehicleId, customerId: otherCustomerId, salespersonId: userId,
+      salePrice: 6000, saleDate: Date.UTC(2025, 4, 1), status: "COMPLETED",
+    });
+
+    const asApprover = await addCancellationApprover(t, orgId, "ti_resold");
+    await expect(
+      asApprover.mutation(api.sales.update, { orgId, saleId: saleA, status: "CANCELLED" })
+    ).rejects.toThrow(/already been resold/i);
+
+    // Nothing about the original sale/receivable should have been touched —
+    // the whole mutation must roll back atomically on the guard's throw.
+    const sale = await t.run((ctx) => ctx.db.get(saleA));
+    expect(sale?.status).toBe("COMPLETED");
+  });
+
+  test("refuses to auto-cancel a trade-in that's currently reserved", async () => {
+    const { t, orgId, asOwner, customerId, userId } = await seedDealer("ti_reserved");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    const tradeInVehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "TRD3N9AN0000011AX", status: "AVAILABLE",
+    });
+    const saleA = await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 15000, tradeInVehicleId, tradeInValue: 4000,
+      saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
+    });
+
+    // Simulates a deposit/reservation hold placed on the traded-in vehicle
+    // after it became inventory — the exact vehicle-status transition
+    // holdVehicleForDeposit/syncVehicleHoldStatus would make.
+    await t.run((ctx) => ctx.db.patch(tradeInVehicleId, { status: "RESERVED" }));
+
+    const asApprover = await addCancellationApprover(t, orgId, "ti_reserved");
+    await expect(
+      asApprover.mutation(api.sales.update, { orgId, saleId: saleA, status: "CANCELLED" })
+    ).rejects.toThrow(/currently reserved/i);
+  });
+
+  test("refuses to auto-cancel a trade-in that has received landed costs since acceptance", async () => {
+    const { t, orgId, asOwner, customerId, userId } = await seedDealer("ti_landed");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    const tradeInVehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "TRD3N9AN0000012AX", status: "AVAILABLE",
+    });
+    const saleA = await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 15000, tradeInVehicleId, tradeInValue: 4000,
+      saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
+    });
+
+    await asOwner.mutation(api.vehicles.upsertLandedCosts, {
+      orgId, vehicleId: tradeInVehicleId,
+      items: [{ label: "Reconditioning", amount: 250, paymentMethod: "CASH" }],
+    });
+
+    const asApprover = await addCancellationApprover(t, orgId, "ti_landed");
+    await expect(
+      asApprover.mutation(api.sales.update, { orgId, saleId: saleA, status: "CANCELLED" })
+    ).rejects.toThrow(/received landed costs/i);
+  });
+
+  test("refuses to auto-cancel a trade-in that has capitalized repair costs since acceptance", async () => {
+    const { t, orgId, asOwner, customerId, userId } = await seedDealer("ti_repair");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    const tradeInVehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "TRD3N9AN0000013AX", status: "AVAILABLE",
+    });
+    const saleA = await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 15000, tradeInVehicleId, tradeInValue: 4000,
+      saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
+    });
+
+    // Mirrors what recordPaidExpenseSideEffects would have stamped on a real
+    // capitalized repair — inserted directly since exercising the full
+    // expense-posting pipeline is already covered elsewhere and isn't what
+    // this guard test is about.
+    await t.run((ctx) =>
+      ctx.db.insert("expenses", {
+        orgId, vehicleId: tradeInVehicleId, title: "Brake job", amount: 150,
+        date: Date.UTC(2025, 3, 10), category: "REPAIR", status: "PAID",
+        accountingTreatment: "CAPITALIZED_INVENTORY", capitalizedAmount: 150,
+      })
+    );
+
+    const asApprover = await addCancellationApprover(t, orgId, "ti_repair");
+    await expect(
+      asApprover.mutation(api.sales.update, { orgId, saleId: saleA, status: "CANCELLED" })
+    ).rejects.toThrow(/capitalized repair/i);
   });
 });
 
@@ -596,6 +805,55 @@ describe("Resold warranty/GAP products defer the dealer's margin", () => {
     // The monthly cron must never touch it again.
     const summary: string = await t.action(internal.crons.triggerFiCommissionRecognition, {});
     expect(summary).toMatch(/posted 0\/0/i);
+  });
+
+  test("cancelling a sale also drops a FAILED (not just PENDING) queued recognition post for its deferral", async () => {
+    const { t, orgId, asOwner, customerId, userId, userId: actorId } = await seedDealer("fi_cancel_failed");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    const saleId = await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 15000, warrantySold: 500, warrantyCost: 300, warrantyTermMonths: 10,
+      saleDate: Date.now(), status: "COMPLETED",
+    });
+    const deferral = await t.run((ctx) =>
+      ctx.db.query("dealerProductDeferrals").withIndex("by_sale", (q) => q.eq("saleId", saleId)).first()
+    );
+
+    // Simulates a monthly recognition attempt that failed 10 times (moved
+    // out of auto-retry into FAILED, per accountingOutbox.ts's MAX_ATTEMPTS)
+    // and is still sitting in the outbox, unposted, when the sale gets
+    // cancelled — the exact scenario a finance user could later retry.
+    const pendingId = await t.run((ctx) =>
+      ctx.db.insert("pendingAccountingEvents", {
+        orgId,
+        kind: "POST",
+        status: "FAILED",
+        idempotencyKey: `fi_commission_${deferral!._id}_2025-01`,
+        accountingDate: Date.UTC(2025, 0, 31),
+        actorId,
+        attempts: 10,
+        lastError: "no open period",
+        createdAt: Date.now(),
+        sourceType: "dealerProductDeferrals",
+        sourceId: deferral!._id.toString(),
+        eventType: "FI_COMMISSION_RECOGNIZED",
+        eventVersion: 1,
+        currency: "JOD",
+        occurredAt: Date.UTC(2025, 0, 31),
+        payload: { deferralId: deferral!._id.toString(), amountMinor: 20_000, currency: "JOD" },
+      })
+    );
+
+    const asApprover = await addCancellationApprover(t, orgId, "fi_cancel_failed");
+    await asApprover.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
+
+    // Must be gone, not just left FAILED — a finance user resetting a FAILED
+    // entry back to PENDING and retrying it must not be able to post revenue
+    // for a deferral whose sale was already cancelled.
+    const stillThere = await t.run((ctx) => ctx.db.get(pendingId));
+    expect(stillThere).toBeNull();
   });
 });
 

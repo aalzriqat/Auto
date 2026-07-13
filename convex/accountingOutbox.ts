@@ -121,6 +121,39 @@ export async function cancelPendingPostByKey(
   return false;
 }
 
+/**
+ * Removes every unposted (PENDING or FAILED) queued POST tied to a given
+ * source record — for a source that gets voided/cancelled while it can have
+ * more than one outstanding queued post at once (e.g. a monthly F&I
+ * recognition deferral that failed to post in two different periods before
+ * its sale was cancelled), cancelPendingPostByKey's single-idempotencyKey
+ * lookup isn't enough: a stuck entry from an earlier period would survive
+ * and could still post — recognizing revenue for something that no longer
+ * exists — the next time the outbox drains. Returns the number removed.
+ */
+export async function cancelPendingPostsBySource(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  sourceType: string,
+  sourceId: string
+): Promise<number> {
+  const entries = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_source", (q) =>
+      q.eq("orgId", orgId).eq("sourceType", sourceType).eq("sourceId", sourceId)
+    )
+    .collect();
+
+  let cancelled = 0;
+  for (const entry of entries) {
+    if (entry.kind === "POST" && entry.status !== "POSTED") {
+      await ctx.db.delete(entry._id);
+      cancelled++;
+    }
+  }
+  return cancelled;
+}
+
 // A pending event that fails this many times stops being auto-retried and
 // moves to FAILED so it surfaces distinctly for manual attention (via
 // listPending / retryFailed below) instead of retrying forever on every

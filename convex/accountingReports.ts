@@ -455,6 +455,35 @@ async function getAllocatedAsOfByReceivable(
   return allocatedByReceivable;
 }
 
+/**
+ * Receivables issued on or before asOfDate that had NOT yet been cancelled as
+ * of that date. Cancellation reverses a receivable's allocations (so
+ * getAllocatedAsOfByReceivable stops counting them from cancelledAt onward),
+ * but without also excluding the receivable itself here, it would reappear
+ * as fully outstanding for every asOfDate on/after cancellation — even though
+ * the GL side was already zeroed out by the same cancellation's reversal
+ * journal (hookSaleCancelled). A receivable cancelled AFTER asOfDate must
+ * still count, exactly like the CURRENT-status independence documented above
+ * for arAging/subledgerReconciliation — only whether it was cancelled BY
+ * asOfDate matters.
+ */
+async function getReceivablesAsOf(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  asOfDate: number
+) {
+  return await ctx.db
+    .query("receivableDocuments")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .filter((q) =>
+      q.and(
+        q.lte(q.field("issueDate"), asOfDate),
+        q.or(q.eq(q.field("cancelledAt"), undefined), q.gt(q.field("cancelledAt"), asOfDate))
+      )
+    )
+    .collect();
+}
+
 type AgingBuckets = { current: number; days30: number; days60: number; days90: number; over90: number };
 type AgingRow = {
   receivableId: string;
@@ -483,11 +512,11 @@ export const arAging = query({
     // by_org_status (current status) would make it invisible. "Outstanding as
     // of asOfDate" is instead derived purely from allocations that themselves
     // existed by that date (below), which is what actually makes this correct.
-    const allReceivables = await ctx.db
-      .query("receivableDocuments")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.lte(q.field("issueDate"), asOfDate))
-      .collect();
+    // The one exception is cancellation (getReceivablesAsOf) — a cancelled
+    // receivable's reversed allocations stop counting as of cancelledAt, so
+    // the receivable itself must also stop counting from cancelledAt onward,
+    // or it would reappear as fully outstanding forever after cancellation.
+    const allReceivables = await getReceivablesAsOf(ctx, args.orgId, asOfDate);
     const allocatedByReceivable = await getAllocatedAsOfByReceivable(ctx, args.orgId, asOfDate);
 
     const byCurrency = new Map<string, { buckets: AgingBuckets; rows: AgingRow[] }>();
@@ -588,13 +617,10 @@ export async function computeSubledgerReconciliation(
 
     // Subledger total — scan every receivable issued on or before toDate
     // regardless of its CURRENT status, same reasoning as arAging: a
-    // receivable open as of toDate but since fully paid must still count.
+    // receivable open as of toDate but since fully paid must still count
+    // (and one cancelled by toDate must not — see getReceivablesAsOf).
     const effectiveAsOf = toDate ?? Date.now();
-    const allRecs = await ctx.db
-      .query("receivableDocuments")
-      .withIndex("by_org", (q) => q.eq("orgId", orgId))
-      .filter((q) => q.lte(q.field("issueDate"), effectiveAsOf))
-      .collect();
+    const allRecs = await getReceivablesAsOf(ctx, orgId, effectiveAsOf);
     const allocatedByReceivable = await getAllocatedAsOfByReceivable(ctx, orgId, effectiveAsOf);
 
     const subByCurrency = new Map<string, number>();
