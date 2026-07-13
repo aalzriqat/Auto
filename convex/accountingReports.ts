@@ -492,7 +492,7 @@ export const arAging = query({
 
     // Different currencies' minor units (e.g. JOD fils vs USD cents) are never
     // summed together — each currency gets its own bucket set and total.
-    const currencies = [...byCurrency.keys()].sort();
+    const currencies = [...byCurrency.keys()].sort((a, b) => a.localeCompare(b));
     return {
       currencies,
       byCurrency: Object.fromEntries(
@@ -581,7 +581,7 @@ export async function computeSubledgerReconciliation(
       subByCurrency.set(rec.currency, (subByCurrency.get(rec.currency) ?? 0) + outstanding);
     }
 
-    const currencies = [...new Set([...glByCurrency.keys(), ...subByCurrency.keys()])].sort();
+    const currencies = [...new Set([...glByCurrency.keys(), ...subByCurrency.keys()])].sort((a, b) => a.localeCompare(b));
     const byCurrency = Object.fromEntries(
       currencies.map((currency) => {
         const glArBalanceMinor = glByCurrency.get(currency) ?? 0;
