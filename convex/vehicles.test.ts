@@ -504,8 +504,8 @@ describe("inventory intelligence", () => {
         orgId,
         vehicleId,
         items: [
-          { label: "Shipping", amount: 500 },
-          { label: "Customs", amount: 750 },
+          { label: "Shipping", amount: 500, paymentMethod: "CASH" },
+          { label: "Customs", amount: 750, paymentMethod: "CASH" },
         ],
       })
     ).resolves.toEqual({ total: 1250 });
@@ -528,7 +528,7 @@ describe("inventory intelligence", () => {
       asViewer.mutation(api.vehicles.upsertLandedCosts, {
         orgId,
         vehicleId,
-        items: [{ label: "Shipping", amount: 100 }],
+        items: [{ label: "Shipping", amount: 100, paymentMethod: "CASH" }],
       })
     ).rejects.toThrow(/edit:vehicles/);
   });
@@ -545,7 +545,7 @@ describe("inventory intelligence", () => {
     await asUser.mutation(api.vehicles.upsertLandedCosts, {
       orgId,
       vehicleId,
-      items: [{ label: "Landed", amount: 2000 }],
+      items: [{ label: "Landed", amount: 2000, paymentMethod: "CASH" }],
     });
     const customerId = await t.run((ctx) =>
       ctx.db.insert("customers", { orgId, firstName: "Test", lastName: "Buyer" })

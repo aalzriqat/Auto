@@ -175,6 +175,191 @@ describe("Fix #1 — vehicle acquisition capitalizes into Vehicle Inventory", ()
   });
 });
 
+describe("Fix #11 — flipping a SOURCED vehicle to owned stock capitalizes it", () => {
+  test("SOURCED→STOCK via update() debits Vehicle Inventory using the mirrored sourceCost", async () => {
+    const { t, orgId, asOwner } = await seedDealer("f11a");
+
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "SRC3D9AN0000011AX", sourceType: "SOURCED",
+      sourcedFromName: "Other Dealer", sourceCost: 9000,
+    });
+
+    // Never capitalized while SOURCED.
+    const eventBeforeFlip = await t.run((ctx) =>
+      ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId))
+        .first()
+    );
+    expect(eventBeforeFlip).toBeNull();
+
+    await asOwner.mutation(api.vehicles.update, {
+      orgId, vehicleId, sourceType: "STOCK", purchasePaymentMethod: "CASH",
+    });
+
+    const inventory = await accountBySystemKey(t, orgId, "VEHICLE_INVENTORY");
+    const cash = await accountBySystemKey(t, orgId, "CASH_ON_HAND");
+    const { lines } = await linesForEvent(t, orgId, "vehicles", vehicleId, "VEHICLE_ACQUIRED");
+    const invLine = lines.find((l) => l.accountId === inventory._id)!;
+    const cashLine = lines.find((l) => l.accountId === cash._id)!;
+    expect(invLine.debitMinor).toBe(9_000_000); // sourceCost mirrored into purchasePrice at creation
+    expect(cashLine.creditMinor).toBe(9_000_000);
+
+    const legacyTx = await t.run((ctx) =>
+      ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId)).filter((q) => q.eq(q.field("category"), "VEHICLE_PURCHASE")).first()
+    );
+    expect(legacyTx?.amount).toBe(9000);
+
+    // A second no-op update (no sourceType/purchasePrice change) must not re-post.
+    await asOwner.mutation(api.vehicles.update, { orgId, vehicleId, notes: "inspected" });
+    const eventsAfterNoOp = await t.run((ctx) =>
+      ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId))
+        .collect()
+    );
+    expect(eventsAfterNoOp).toHaveLength(1);
+  });
+
+  test("SOURCED→STOCK via update() requires an explicit payment method", async () => {
+    const { orgId, asOwner } = await seedDealer("f11b");
+
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "SRC3D9AN0000012AX", sourceType: "SOURCED",
+      sourcedFromName: "Other Dealer", sourceCost: 9000,
+    });
+
+    await expect(
+      asOwner.mutation(api.vehicles.update, { orgId, vehicleId, sourceType: "STOCK" })
+    ).rejects.toThrow(/[Pp]ayment method is required/);
+  });
+
+  test("a STOCK vehicle created without a purchase price capitalizes once one is set via update()", async () => {
+    const { t, orgId, asOwner } = await seedDealer("f11c");
+
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "STK3D9AN0000013AX",
+    });
+
+    let event = await t.run((ctx) =>
+      ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId))
+        .first()
+    );
+    expect(event).toBeNull();
+
+    await asOwner.mutation(api.vehicles.update, {
+      orgId, vehicleId, purchasePrice: 7500, purchasePaymentMethod: "BANK_TRANSFER",
+    });
+
+    event = await t.run((ctx) =>
+      ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId))
+        .filter((q) => q.eq(q.field("eventType"), "VEHICLE_ACQUIRED"))
+        .first()
+    );
+    expect(event).not.toBeNull();
+    expect(event!.status).toBe("POSTED");
+  });
+});
+
+describe("Fix #13 — ON_ACCOUNT credit purchases for owned vehicles", () => {
+  test("create() with ON_ACCOUNT debits Vehicle Inventory and credits AP-Suppliers, no cash transaction row", async () => {
+    const { t, orgId, asOwner } = await seedDealer("f13a");
+
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000,
+      purchasePaymentMethod: "ON_ACCOUNT", sourcedFromName: "Credit Supplier Co",
+    });
+
+    const inventory = await accountBySystemKey(t, orgId, "VEHICLE_INVENTORY");
+    const ap = await accountBySystemKey(t, orgId, "ACCOUNTS_PAYABLE_SUPPLIERS");
+    const { lines } = await linesForEvent(t, orgId, "vehicles", vehicleId, "VEHICLE_ACQUIRED");
+    expect(lines.find((l) => l.accountId === inventory._id)?.debitMinor).toBe(10_000_000);
+    expect(lines.find((l) => l.accountId === ap._id)?.creditMinor).toBe(10_000_000);
+
+    const payable = await t.run((ctx) =>
+      ctx.db.query("vehicleSupplierPayables").withIndex("by_org", (q) => q.eq("orgId", orgId)).first()
+    );
+    expect(payable?.vehicleId).toBe(vehicleId);
+    expect(payable?.saleId).toBeUndefined();
+    expect(payable?.amountDue).toBe(10000);
+    expect(payable?.sourcedFromName).toBe("Credit Supplier Co");
+    expect(payable?.status).toBe("PENDING");
+
+    // No cash actually moved — the legacy transactions table shouldn't record one.
+    const legacyTx = await t.run((ctx) =>
+      ctx.db.query("transactions").withIndex("by_org", (q) => q.eq("orgId", orgId)).filter((q) => q.eq(q.field("category"), "VEHICLE_PURCHASE")).first()
+    );
+    expect(legacyTx).toBeNull();
+  });
+
+  test("create() with ON_ACCOUNT requires a supplier name", async () => {
+    const { orgId, asOwner } = await seedDealer("f13b");
+    await expect(
+      asOwner.mutation(api.vehicles.create, {
+        orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "ON_ACCOUNT",
+      })
+    ).rejects.toThrow(/supplier name/i);
+  });
+
+  test("settling the payable via sourcingPayables.markPaid clears AP against Bank and reclassifies VAT out of Vehicle Inventory, not COGS", async () => {
+    const { t, orgId, asOwner } = await seedDealer("f13c");
+
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000,
+      purchasePaymentMethod: "ON_ACCOUNT", sourcedFromName: "Credit Supplier Co",
+    });
+    const payable = await t.run((ctx) =>
+      ctx.db.query("vehicleSupplierPayables").withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicleId)).first()
+    );
+
+    await asOwner.mutation(api.sourcingPayables.markPaid, {
+      orgId, payableId: payable!._id, paymentMethod: "BANK_TRANSFER", taxAmount: 500,
+    });
+
+    const ap = await accountBySystemKey(t, orgId, "ACCOUNTS_PAYABLE_SUPPLIERS");
+    const bank = await accountBySystemKey(t, orgId, "BANK_ACCOUNT");
+    const vat = await accountBySystemKey(t, orgId, "VAT_RECEIVABLE");
+    const inventory = await accountBySystemKey(t, orgId, "VEHICLE_INVENTORY");
+    const { lines } = await linesForEvent(t, orgId, "vehicleSupplierPayables", payable!._id, "SUPPLIER_PAYMENT_SETTLED");
+
+    expect(lines.find((l) => l.accountId === ap._id)?.debitMinor).toBe(10_000_000);
+    expect(lines.find((l) => l.accountId === bank._id)?.creditMinor).toBe(10_000_000);
+    // VAT reclass hits Vehicle Inventory (this payable originated at
+    // acquisition, not a sale) — not Cost of Vehicles Sold.
+    expect(lines.find((l) => l.accountId === vat._id)?.debitMinor).toBe(500_000);
+    expect(lines.find((l) => l.accountId === inventory._id)?.creditMinor).toBe(500_000);
+  });
+
+  test("update() flipping SOURCED to STOCK with ON_ACCOUNT creates the payable at flip time", async () => {
+    const { t, orgId, asOwner } = await seedDealer("f13d");
+
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "SRC3D9AN0000013FD", sourceType: "SOURCED",
+      sourcedFromName: "Other Dealer", sourceCost: 9000,
+    });
+
+    await asOwner.mutation(api.vehicles.update, {
+      orgId, vehicleId, sourceType: "STOCK",
+      purchasePaymentMethod: "ON_ACCOUNT", sourcedFromName: "Credit Supplier Co",
+    });
+
+    const inventory = await accountBySystemKey(t, orgId, "VEHICLE_INVENTORY");
+    const ap = await accountBySystemKey(t, orgId, "ACCOUNTS_PAYABLE_SUPPLIERS");
+    const { lines } = await linesForEvent(t, orgId, "vehicles", vehicleId, "VEHICLE_ACQUIRED");
+    expect(lines.find((l) => l.accountId === inventory._id)?.debitMinor).toBe(9_000_000);
+    expect(lines.find((l) => l.accountId === ap._id)?.creditMinor).toBe(9_000_000);
+
+    const payable = await t.run((ctx) =>
+      ctx.db.query("vehicleSupplierPayables").withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicleId)).first()
+    );
+    expect(payable?.sourcedFromName).toBe("Credit Supplier Co");
+  });
+});
+
 describe("Fix #2 — landed costs post their delta to Vehicle Inventory", () => {
   test("increasing landed costs debits inventory; decreasing them reverses the delta", async () => {
     const { t, orgId, asOwner } = await seedDealer("f2a");
@@ -183,7 +368,10 @@ describe("Fix #2 — landed costs post their delta to Vehicle Inventory", () => 
     });
 
     await asOwner.mutation(api.vehicles.upsertLandedCosts, {
-      orgId, vehicleId, items: [{ label: "Transport", amount: 300 }, { label: "Detailing", amount: 200 }],
+      orgId, vehicleId, items: [
+        { label: "Transport", amount: 300, paymentMethod: "CASH" },
+        { label: "Detailing", amount: 200, paymentMethod: "CASH" },
+      ],
     });
 
     const inventory = await accountBySystemKey(t, orgId, "VEHICLE_INVENTORY");
@@ -201,7 +389,7 @@ describe("Fix #2 — landed costs post their delta to Vehicle Inventory", () => 
 
     // Edit down to 150 total — delta is -350, should reverse (credit inventory).
     await asOwner.mutation(api.vehicles.upsertLandedCosts, {
-      orgId, vehicleId, items: [{ label: "Transport", amount: 150 }],
+      orgId, vehicleId, items: [{ label: "Transport", amount: 150, paymentMethod: "CASH" }],
     });
 
     const events2 = await t.run((ctx) =>
@@ -216,6 +404,97 @@ describe("Fix #2 — landed costs post their delta to Vehicle Inventory", () => 
       ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", secondEvent.journalEntryId!)).collect()
     );
     expect(lines2.find((l) => l.accountId === inventory._id)?.creditMinor).toBe(350_000);
+  });
+
+  test("Fix #14 — removing an item reverses against the account IT was paid from, not another item's account", async () => {
+    const { t, orgId, asOwner } = await seedDealer("f2c");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+
+    await asOwner.mutation(api.vehicles.upsertLandedCosts, {
+      orgId, vehicleId, items: [
+        { label: "Transport", amount: 300, paymentMethod: "BANK_TRANSFER" },
+        { label: "Detailing", amount: 200, paymentMethod: "CASH" },
+      ],
+    });
+
+    const inventory = await accountBySystemKey(t, orgId, "VEHICLE_INVENTORY");
+    const bank = await accountBySystemKey(t, orgId, "BANK_ACCOUNT");
+    const cash = await accountBySystemKey(t, orgId, "CASH_ON_HAND");
+    const firstEvent = await t.run((ctx) =>
+      ctx.db.query("accountingEvents").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicleLandedCosts")).first()
+    );
+    const firstLines = await t.run((ctx) =>
+      ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", firstEvent!.journalEntryId!)).collect()
+    );
+    expect(firstLines.find((l) => l.accountId === inventory._id)?.debitMinor).toBe(500_000);
+    expect(firstLines.find((l) => l.accountId === bank._id)?.creditMinor).toBe(300_000);
+    expect(firstLines.find((l) => l.accountId === cash._id)?.creditMinor).toBe(200_000);
+
+    // Remove the BANK_TRANSFER item entirely — the reversal must hit Bank
+    // Account specifically, even though the only item left is CASH-paid.
+    await asOwner.mutation(api.vehicles.upsertLandedCosts, {
+      orgId, vehicleId, items: [{ label: "Detailing", amount: 200, paymentMethod: "CASH" }],
+    });
+
+    const events = await t.run((ctx) =>
+      ctx.db.query("accountingEvents").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicleLandedCosts")).collect()
+    );
+    const secondEvent = events.find((e) => e._id !== firstEvent!._id)!;
+    const secondLines = await t.run((ctx) =>
+      ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", secondEvent.journalEntryId!)).collect()
+    );
+    expect(secondLines.find((l) => l.accountId === bank._id)?.debitMinor).toBe(300_000);
+    expect(secondLines.find((l) => l.accountId === inventory._id)?.creditMinor).toBe(300_000);
+    // Cash must NOT be touched by this reversal — the item paid from it never changed.
+    expect(secondLines.some((l) => l.accountId === cash._id)).toBe(false);
+  });
+
+  test("Fix #14 — reclassifying an item to a different account posts even when the net total is unchanged", async () => {
+    const { t, orgId, asOwner } = await seedDealer("f2d");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+
+    await asOwner.mutation(api.vehicles.upsertLandedCosts, {
+      orgId, vehicleId, items: [{ label: "Transport", amount: 300, paymentMethod: "CASH" }],
+    });
+    const firstEvent = await t.run((ctx) =>
+      ctx.db.query("accountingEvents").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicleLandedCosts")).first()
+    );
+
+    // Same amount, different account — net total delta is zero, but this is
+    // a real reclassification the GL must reflect.
+    await asOwner.mutation(api.vehicles.upsertLandedCosts, {
+      orgId, vehicleId, items: [{ label: "Transport", amount: 300, paymentMethod: "BANK_TRANSFER" }],
+    });
+
+    const bank = await accountBySystemKey(t, orgId, "BANK_ACCOUNT");
+    const cash = await accountBySystemKey(t, orgId, "CASH_ON_HAND");
+    const events = await t.run((ctx) =>
+      ctx.db.query("accountingEvents").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicleLandedCosts")).collect()
+    );
+    expect(events).toHaveLength(2);
+    const secondEvent = events.find((e) => e._id !== firstEvent!._id)!;
+    const reclassLines = await t.run((ctx) =>
+      ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", secondEvent.journalEntryId!)).collect()
+    );
+    expect(reclassLines.find((l) => l.accountId === cash._id)?.debitMinor).toBe(300_000);
+    expect(reclassLines.find((l) => l.accountId === bank._id)?.creditMinor).toBe(300_000);
+  });
+
+  test("requires an explicit payment method per item on a non-SOURCED vehicle", async () => {
+    const { orgId, asOwner } = await seedDealer("f2e");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+
+    await expect(
+      asOwner.mutation(api.vehicles.upsertLandedCosts, {
+        orgId, vehicleId, items: [{ label: "Transport", amount: 300 }],
+      })
+    ).rejects.toThrow(/[Pp]ayment method is required/);
   });
 
   test("blocked once the vehicle is sold", async () => {
@@ -284,7 +563,7 @@ describe("Fix #4 — one authoritative cost basis for COGS and commission", () =
       orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
     });
     await asOwner.mutation(api.vehicles.upsertLandedCosts, {
-      orgId, vehicleId, items: [{ label: "Transport", amount: 300 }],
+      orgId, vehicleId, items: [{ label: "Transport", amount: 300, paymentMethod: "CASH" }],
     });
     await asOwner.mutation(api.expenses.create, {
       orgId, vehicleId, title: "Detailing", amount: 200, date: Date.UTC(2025, 2, 1),
@@ -378,6 +657,109 @@ describe("Opening-balance backfill for pre-existing inventory", () => {
     });
     expect(result.posted).toBe(0);
   });
+
+  test("cursor-based pagination reaches vehicles beyond the first page instead of re-scanning it forever", async () => {
+    const { t, orgId, asOwner } = await seedDealer("bf9a");
+
+    const vehicleId1 = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, vin: "PAGE0000000000001", make: "Toyota", model: "Camry", year: 2019,
+        mileage: 1000, color: "White", fuelType: "Gasoline", transmission: "Automatic",
+        purchasePrice: 5000, sellingPrice: 8000, status: "AVAILABLE", sourceType: "STOCK",
+      })
+    );
+    const vehicleId2 = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, vin: "PAGE0000000000002", make: "Honda", model: "Civic", year: 2020,
+        mileage: 2000, color: "Black", fuelType: "Gasoline", transmission: "Automatic",
+        purchasePrice: 6000, sellingPrice: 9000, status: "AVAILABLE", sourceType: "STOCK",
+      })
+    );
+
+    const first = await asOwner.mutation(api.accountingMigration.backfillVehicleInventoryOpeningBalances, {
+      orgId, dryRun: false, limit: 1,
+    });
+    expect(first.posted).toBe(1);
+    expect(first.isDone).toBe(false);
+    expect(first.nextCursor).toBeTruthy();
+
+    // Re-running with limit: 1 and NO cursor is the pre-fix bug: it would
+    // always re-scan the same first vehicle and could never reach the second.
+    const second = await asOwner.mutation(api.accountingMigration.backfillVehicleInventoryOpeningBalances, {
+      orgId, dryRun: false, limit: 1, cursor: first.nextCursor,
+    });
+    expect(second.posted).toBe(1);
+    expect(second.isDone).toBe(true);
+
+    const events = await t.run((ctx) =>
+      ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_eventType", (q) => q.eq("orgId", orgId).eq("eventType", "VEHICLE_INVENTORY_OPENING_BALANCE"))
+        .collect()
+    );
+    const postedVehicleIds = new Set(events.map((e) => e.sourceId));
+    expect(postedVehicleIds.has(vehicleId1)).toBe(true);
+    expect(postedVehicleIds.has(vehicleId2)).toBe(true);
+  });
+
+  test("a vehicle whose reclassification fails rolls back its own opening-balance post instead of leaking partial state", async () => {
+    const { t, orgId, asOwner, userId } = await seedDealer("bf10a");
+
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, vin: "ATOMIC0000000001", make: "Toyota", model: "Camry", year: 2019,
+        mileage: 40000, color: "Silver", fuelType: "Gasoline", transmission: "Automatic",
+        purchasePrice: 8000, sellingPrice: 12000, status: "AVAILABLE", sourceType: "STOCK",
+      })
+    );
+    const expenseId = await t.run((ctx) =>
+      ctx.db.insert("expenses", {
+        orgId, vehicleId, title: "Old repair", amount: 300, date: Date.UTC(2025, 1, 1),
+        category: "REPAIR", status: "PAID",
+      })
+    );
+    await t.run((ctx) =>
+      postAccountingEvent(ctx, {
+        orgId, eventType: "EXPENSE_POSTED", sourceType: "expenses", sourceId: expenseId.toString(),
+        eventVersion: 1, accountingDate: Date.UTC(2025, 1, 1), occurredAt: Date.UTC(2025, 1, 1),
+        currency: "JOD", idempotencyKey: `expense_posted_${expenseId}`,
+        payload: { expenseId: expenseId.toString(), amountMinor: 300_000, currency: "JOD", category: "REPAIR", paymentMethod: "CASH" },
+        actorId: userId,
+      })
+    );
+
+    // Force the reclassification step (which runs AFTER the base opening-balance
+    // post inside the same per-vehicle sub-transaction) to throw, by planting a
+    // REVERSED event under the idempotency key hookVehiclePrepExpenseReclassified
+    // will use — postAccountingEvent's own idempotency check throws on that.
+    await t.run((ctx) =>
+      ctx.db.insert("accountingEvents", {
+        orgId, eventType: "VEHICLE_PREP_EXPENSE_RECLASSIFIED", sourceType: "expenses",
+        sourceId: expenseId.toString(), eventVersion: 1,
+        idempotencyKey: `vehicle_prep_expense_reclassified_${expenseId}`,
+        occurredAt: Date.now(), accountingDate: Date.now(), currency: "JOD", payload: {},
+        status: "REVERSED", createdBy: userId, createdAt: Date.now(),
+      })
+    );
+
+    const result = await asOwner.mutation(api.accountingMigration.backfillVehicleInventoryOpeningBalances, {
+      orgId, dryRun: false,
+    });
+    expect(result.failed).toBe(1);
+    expect(result.results[0].action).toBe("FAILED");
+
+    // The base VEHICLE_INVENTORY_OPENING_BALANCE post from the same failed
+    // sub-transaction must have rolled back too — not left sitting in the GL
+    // with no valid companion reclassification, and not silently marked
+    // already_posted with no journal entry on a future retry.
+    const openingEvent = await t.run((ctx) =>
+      ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId))
+        .first()
+    );
+    expect(openingEvent).toBeNull();
+  });
 });
 
 describe("Review issue #1 — payment method required whenever a purchase price is entered", () => {
@@ -424,6 +806,74 @@ describe("Review issue #1 — payment method required whenever a purchase price 
     const { lines } = await linesForEvent(t, orgId, "vehicles", vehicle!._id, "VEHICLE_ACQUIRED");
     expect(lines.find((l) => l.accountId === bank._id)?.creditMinor).toBe(6_000_000);
   });
+
+  test("an approved creation request with ON_ACCOUNT credits AP-Suppliers and creates the payable", async () => {
+    const { t, orgId, asOwner } = await seedDealer("ri1e");
+    const requestId = await asOwner.mutation(api.vehicleEdits.requestCreate, {
+      orgId,
+      payload: {
+        ...baseVehicle, vin: "ONACCT0000000001", purchasePrice: 7000,
+        purchasePaymentMethod: "ON_ACCOUNT", sourcedFromName: "Approval Flow Supplier",
+      },
+    });
+    await asOwner.mutation(api.vehicleEdits.resolve, { orgId, requestId, status: "APPROVED" });
+
+    const vehicle = await t.run((ctx) =>
+      ctx.db.query("vehicles").withIndex("by_org_vin", (q) => q.eq("orgId", orgId).eq("vin", "ONACCT0000000001")).unique()
+    );
+    expect(vehicle).not.toBeNull();
+    const ap = await accountBySystemKey(t, orgId, "ACCOUNTS_PAYABLE_SUPPLIERS");
+    const { lines } = await linesForEvent(t, orgId, "vehicles", vehicle!._id, "VEHICLE_ACQUIRED");
+    expect(lines.find((l) => l.accountId === ap._id)?.creditMinor).toBe(7_000_000);
+
+    const payable = await t.run((ctx) =>
+      ctx.db.query("vehicleSupplierPayables").withIndex("by_vehicle", (q) => q.eq("vehicleId", vehicle!._id)).first()
+    );
+    expect(payable?.sourcedFromName).toBe("Approval Flow Supplier");
+  });
+
+  test("an approved UPDATE request flipping SOURCED to STOCK posts VEHICLE_ACQUIRED (previously a silent gap)", async () => {
+    const { t, orgId, asOwner } = await seedDealer("ri1f");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "SRC3D9AN0000001FG", sourceType: "SOURCED",
+      sourcedFromName: "Other Dealer", sourceCost: 8500,
+    });
+
+    // Never capitalized while SOURCED.
+    const eventBeforeFlip = await t.run((ctx) =>
+      ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", vehicleId))
+        .first()
+    );
+    expect(eventBeforeFlip).toBeNull();
+
+    const requestId = await asOwner.mutation(api.vehicleEdits.requestUpdate, {
+      orgId, vehicleId,
+      payload: { sourceType: "STOCK", purchasePaymentMethod: "CASH" },
+    });
+    await asOwner.mutation(api.vehicleEdits.resolve, { orgId, requestId, status: "APPROVED" });
+
+    const inventory = await accountBySystemKey(t, orgId, "VEHICLE_INVENTORY");
+    const cash = await accountBySystemKey(t, orgId, "CASH_ON_HAND");
+    const { lines } = await linesForEvent(t, orgId, "vehicles", vehicleId, "VEHICLE_ACQUIRED");
+    expect(lines.find((l) => l.accountId === inventory._id)?.debitMinor).toBe(8_500_000);
+    expect(lines.find((l) => l.accountId === cash._id)?.creditMinor).toBe(8_500_000);
+  });
+
+  test("requestUpdate rejects a SOURCED-to-STOCK flip with no payment method", async () => {
+    const { orgId, asOwner } = await seedDealer("ri1g");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "SRC3D9AN0000001GH", sourceType: "SOURCED",
+      sourcedFromName: "Other Dealer", sourceCost: 8500,
+    });
+
+    await expect(
+      asOwner.mutation(api.vehicleEdits.requestUpdate, {
+        orgId, vehicleId, payload: { sourceType: "STOCK" },
+      })
+    ).rejects.toThrow(/[Pp]ayment method is required/);
+  });
 });
 
 describe("Review issue #2 — outbound cheque purchases credit Bank Account, not Cheques in Hand", () => {
@@ -446,7 +896,7 @@ describe("Review issue #2 — outbound cheque purchases credit Bank Account, not
       orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
     });
     await asOwner.mutation(api.vehicles.upsertLandedCosts, {
-      orgId, vehicleId, items: [{ label: "Transport", amount: 300 }], paymentMethod: "CHEQUE",
+      orgId, vehicleId, items: [{ label: "Transport", amount: 300, paymentMethod: "CHEQUE" }],
     });
 
     const bank = await accountBySystemKey(t, orgId, "BANK_ACCOUNT");
@@ -543,6 +993,7 @@ describe("Review issue #5 — vehicle acquisition cost correction", () => {
 
     await asOwner.mutation(api.vehicles.correctAcquisitionCost, {
       orgId, vehicleId, newCost: 12000, reason: "Original invoice was mis-entered",
+      correctionType: "PRIOR_PERIOD_RESTATEMENT",
     });
 
     const vehicle = await t.run((ctx) => ctx.db.get(vehicleId));
@@ -565,6 +1016,7 @@ describe("Review issue #5 — vehicle acquisition cost correction", () => {
     expect(correction?.previousCost).toBe(10000);
     expect(correction?.newCost).toBe(12000);
     expect(correction?.reason).toBe("Original invoice was mis-entered");
+    expect(correction?.correctionType).toBe("PRIOR_PERIOD_RESTATEMENT");
   });
 
   test("rejects a correction before the acquisition cost has ever posted", async () => {
@@ -572,8 +1024,75 @@ describe("Review issue #5 — vehicle acquisition cost correction", () => {
     const vehicleId = await asOwner.mutation(api.vehicles.create, { orgId, ...baseVehicle });
 
     await expect(
-      asOwner.mutation(api.vehicles.correctAcquisitionCost, { orgId, vehicleId, newCost: 5000, reason: "test" })
+      asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+        orgId, vehicleId, newCost: 5000, reason: "test", correctionType: "PRIOR_PERIOD_RESTATEMENT",
+      })
     ).rejects.toThrow(/hasn't posted/);
+  });
+
+  test("SUPPLIER_INVOICE_ERROR and VENDOR_CREDIT route through AP-Suppliers instead of Retained Earnings", async () => {
+    const { t, orgId, asOwner } = await seedDealer("ri5c");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+
+    await asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId, vehicleId, newCost: 9500, reason: "Vendor issued a credit for a shipping error",
+      correctionType: "VENDOR_CREDIT",
+    });
+
+    const inventory = await accountBySystemKey(t, orgId, "VEHICLE_INVENTORY");
+    const ap = await accountBySystemKey(t, orgId, "ACCOUNTS_PAYABLE_SUPPLIERS");
+    const retainedEarnings = await accountBySystemKey(t, orgId, "RETAINED_EARNINGS");
+    const event = await t.run((ctx) =>
+      ctx.db.query("accountingEvents").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicleCostCorrections")).first()
+    );
+    const lines = await t.run((ctx) => ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", event!.journalEntryId!)).collect());
+    expect(lines.find((l) => l.accountId === ap._id)?.debitMinor).toBe(500_000);
+    expect(lines.find((l) => l.accountId === inventory._id)?.creditMinor).toBe(500_000);
+    expect(lines.some((l) => l.accountId === retainedEarnings._id)).toBe(false);
+
+    const vehicleId2 = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "1HGCM82633A000002", purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    await asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId, vehicleId: vehicleId2, newCost: 9700, reason: "Supplier invoice was entered with the wrong total",
+      correctionType: "SUPPLIER_INVOICE_ERROR",
+    });
+    const event2 = await t.run((ctx) =>
+      ctx.db.query("accountingEvents").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicleCostCorrections")).collect()
+    ).then((events) => events.find((e) => e.sourceId !== event!.sourceId));
+    const lines2 = await t.run((ctx) => ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", event2!.journalEntryId!)).collect());
+    expect(lines2.find((l) => l.accountId === ap._id)?.debitMinor).toBe(300_000);
+    expect(lines2.find((l) => l.accountId === inventory._id)?.creditMinor).toBe(300_000);
+    expect(lines2.some((l) => l.accountId === retainedEarnings._id)).toBe(false);
+  });
+
+  test("CASH_REFUND routes through the selected cash/bank account and requires a payment method", async () => {
+    const { t, orgId, asOwner } = await seedDealer("ri5d");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+
+    await expect(
+      asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+        orgId, vehicleId, newCost: 9000, reason: "Supplier refunded the overcharge", correctionType: "CASH_REFUND",
+      })
+    ).rejects.toThrow(/payment method is required/i);
+
+    await asOwner.mutation(api.vehicles.correctAcquisitionCost, {
+      orgId, vehicleId, newCost: 9000, reason: "Supplier refunded the overcharge",
+      correctionType: "CASH_REFUND", paymentMethod: "BANK_TRANSFER",
+    });
+
+    const inventory = await accountBySystemKey(t, orgId, "VEHICLE_INVENTORY");
+    const bank = await accountBySystemKey(t, orgId, "BANK_ACCOUNT");
+    const event = await t.run((ctx) =>
+      ctx.db.query("accountingEvents").withIndex("by_org_source", (q) => q.eq("orgId", orgId).eq("sourceType", "vehicleCostCorrections")).first()
+    );
+    const lines = await t.run((ctx) => ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", event!.journalEntryId!)).collect());
+    expect(lines.find((l) => l.accountId === bank._id)?.debitMinor).toBe(1_000_000);
+    expect(lines.find((l) => l.accountId === inventory._id)?.creditMinor).toBe(1_000_000);
   });
 });
 

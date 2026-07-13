@@ -7,7 +7,8 @@
  * passed.
  */
 import { v } from "convex/values";
-import { query, mutation } from "./_generated/server";
+import { query, mutation, internalMutation } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { QueryCtx, MutationCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -20,6 +21,7 @@ import { requireFeature } from "./subscriptions";
 import { auditLog } from "./financialAudit";
 import { computeVehicleCapitalizedCost, CAPITALIZABLE_EXPENSE_CATEGORIES } from "./utils/vehicleCost";
 import { getOpenPeriodForDate } from "./accountingPeriods";
+import { hasVehicleAcquisitionAccountingExposure } from "./vehicles";
 
 // ─── Snapshot / classification helpers ───────────────────────────────────────
 
@@ -70,6 +72,15 @@ async function classifyLegacyTransaction(
 
   const eventType = mapCategoryToEventType(tx.category, tx.type);
 
+  // VEHICLE_ACQUIRED never posts sourced from "transactions" — vehicles.ts's
+  // postVehicleAcquisitionIfOwned posts it sourced from "vehicles" (see
+  // hasVehicleAcquisitionAccountingExposure) in the same mutation that wrote
+  // this legacy row, so the lookup above can never find it there.
+  const alreadyAccountedViaVehicle =
+    eventType === "VEHICLE_ACQUIRED" && tx.vehicleId
+      ? await hasVehicleAcquisitionAccountingExposure(ctx, orgId, tx.vehicleId)
+      : false;
+
   return {
     id: tx._id.toString(),
     type: tx.type,
@@ -79,7 +90,7 @@ async function classifyLegacyTransaction(
     description: tx.description,
     vehicleId: tx.vehicleId?.toString(),
     // Only consider an event as posted if it is in POSTED status with a journal entry linked
-    hasJournalEntry: !!(existing && existing.status === "POSTED" && existing.journalEntryId),
+    hasJournalEntry: (existing?.status === "POSTED" && !!existing.journalEntryId) || alreadyAccountedViaVehicle,
     eventType,
   };
 }
@@ -291,6 +302,16 @@ export const migrateUnpostedTransactions = mutation({
         continue;
       }
 
+      // VEHICLE_ACQUIRED for a VEHICLE_PURCHASE row posts sourced from
+      // "vehicles" (see postVehicleAcquisitionIfOwned), not "transactions" —
+      // the `existing` lookup above can never see it. Without this check
+      // this loop would post a genuine duplicate VEHICLE_ACQUIRED event,
+      // double-debiting Vehicle Inventory.
+      if (eventType === "VEHICLE_ACQUIRED" && tx.vehicleId && await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, tx.vehicleId)) {
+        results.push({ transactionId: tx._id.toString(), action: "SKIP", eventType, reason: "already_posted_via_vehicle" });
+        continue;
+      }
+
       const amountMinor = toMinorUnits(tx.amount, currency);
       const idempotencyKey = `migrate_${tx._id}`;
 
@@ -492,6 +513,11 @@ export const backfillVehicleInventoryOpeningBalances = mutation({
     orgId: v.id("organizations"),
     limit: v.optional(v.number()),
     dryRun: v.optional(v.boolean()),
+    // Pass back the previous call's `nextCursor` to resume a large backfill
+    // past this call's page instead of re-scanning from the start — a plain
+    // `.take()` re-scans the same fixed prefix every call and can never
+    // reach vehicles beyond it once that prefix is fully skipped/posted.
+    cursor: v.optional(v.union(v.string(), v.null())),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -511,12 +537,11 @@ export const backfillVehicleInventoryOpeningBalances = mutation({
       await ensurePartnerEquityAccounts(ctx, args.orgId, user._id);
     }
 
-    const vehicles = (
-      await ctx.db
-        .query("vehicles")
-        .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-        .take(limit * 10)
-    ).filter((v) => !v.isDeleted && v.status !== "SOLD" && v.sourceType !== "SOURCED");
+    const page = await ctx.db
+      .query("vehicles")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .paginate({ numItems: limit, cursor: args.cursor ?? null });
+    const vehicles = page.page.filter((v) => !v.isDeleted && v.status !== "SOLD" && v.sourceType !== "SOURCED");
 
     // A vehicle's landedCostTotal can already include amounts a separate,
     // already-posted VEHICLE_LANDED_COST_CAPITALIZED event covered (landed
@@ -548,8 +573,6 @@ export const backfillVehicleInventoryOpeningBalances = mutation({
     }> = [];
 
     for (const vehicle of vehicles) {
-      if (results.filter((r) => r.action !== "SKIP").length >= limit) break;
-
       const alreadyPosted = await ctx.db
         .query("accountingEvents")
         .withIndex("by_org_source", (q) =>
@@ -669,47 +692,22 @@ export const backfillVehicleInventoryOpeningBalances = mutation({
         continue;
       }
 
+      // Each vehicle's writes go through their own sub-transaction (a nested
+      // mutation call rolls its own writes back on throw, per Convex's
+      // runMutation semantics) so one vehicle's failure can't leave partial
+      // state — e.g. a posted accountingEvent with no matching journal —
+      // sitting inside the outer transaction that this catch would otherwise
+      // paper over and let commit anyway.
       try {
-        const now = Date.now();
-        if (baseAmountMinor > 0) {
-          await postAccountingEvent(ctx, {
-            orgId: args.orgId,
-            eventType: "VEHICLE_INVENTORY_OPENING_BALANCE",
-            sourceType: "vehicles",
-            sourceId: vehicle._id.toString(),
-            eventVersion: 1,
-            accountingDate: now,
-            occurredAt: now,
-            currency,
-            idempotencyKey: `vehicle_inventory_opening_${vehicle._id}`,
-            payload: { vehicleId: vehicle._id.toString(), amountMinor: baseAmountMinor, currency },
-            actorId: user._id,
-          });
-          for (const be of baseFoldedExpenses) {
-            await ctx.db.patch(be.expenseId, {
-              accountingTreatment: "CAPITALIZED_INVENTORY",
-              capitalizedAmount: be.netAmount,
-            });
-          }
-        }
-        for (const r of reclassifications) {
-          await hookVehiclePrepExpenseReclassified(ctx, {
-            orgId: args.orgId,
-            expenseId: r.expenseId,
-            vehicleId: vehicle._id,
-            amountMinor: r.amountMinor,
-            currency,
-            actorId: user._id,
-            occurredAt: r.date,
-          });
-          // Mark it capitalized going forward so computeVehicleCapitalizedCost
-          // (COGS at sale, commission, both profit reports) stays in sync with
-          // what's now actually sitting in the Vehicle Inventory GL account.
-          await ctx.db.patch(r.expenseId, {
-            accountingTreatment: "CAPITALIZED_INVENTORY",
-            capitalizedAmount: r.netAmount,
-          });
-        }
+        await ctx.runMutation(internal.accountingMigration.postVehicleOpeningBalanceForVehicle, {
+          orgId: args.orgId,
+          vehicleId: vehicle._id,
+          currency,
+          baseAmountMinor,
+          baseFoldedExpenses,
+          reclassifications,
+          actorId: user._id,
+        });
         results.push({
           vehicleId: vehicle._id.toString(),
           action: "POSTED",
@@ -729,7 +727,76 @@ export const backfillVehicleInventoryOpeningBalances = mutation({
     const skipped = results.filter((r) => r.action === "SKIP").length;
     const failed = results.filter((r) => r.action === "FAILED").length;
 
-    return { dryRun, posted, wouldPost, needsReview, skipped, failed, results };
+    return {
+      dryRun, posted, wouldPost, needsReview, skipped, failed, results,
+      nextCursor: page.continueCursor,
+      isDone: page.isDone,
+    };
+  },
+});
+
+/**
+ * Per-vehicle write phase of backfillVehicleInventoryOpeningBalances, split
+ * out so each vehicle commits as its own sub-transaction via ctx.runMutation
+ * (rolled back independently on throw) instead of sharing one big try/catch
+ * inside the outer mutation's single transaction — see the caller for why.
+ */
+export const postVehicleOpeningBalanceForVehicle = internalMutation({
+  args: {
+    orgId: v.id("organizations"),
+    vehicleId: v.id("vehicles"),
+    currency: v.string(),
+    baseAmountMinor: v.number(),
+    baseFoldedExpenses: v.array(v.object({ expenseId: v.id("expenses"), netAmount: v.number() })),
+    reclassifications: v.array(v.object({
+      expenseId: v.id("expenses"),
+      date: v.number(),
+      amountMinor: v.number(),
+      netAmount: v.number(),
+    })),
+    actorId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    if (args.baseAmountMinor > 0) {
+      await postAccountingEvent(ctx, {
+        orgId: args.orgId,
+        eventType: "VEHICLE_INVENTORY_OPENING_BALANCE",
+        sourceType: "vehicles",
+        sourceId: args.vehicleId.toString(),
+        eventVersion: 1,
+        accountingDate: now,
+        occurredAt: now,
+        currency: args.currency,
+        idempotencyKey: `vehicle_inventory_opening_${args.vehicleId}`,
+        payload: { vehicleId: args.vehicleId.toString(), amountMinor: args.baseAmountMinor, currency: args.currency },
+        actorId: args.actorId,
+      });
+      for (const be of args.baseFoldedExpenses) {
+        await ctx.db.patch(be.expenseId, {
+          accountingTreatment: "CAPITALIZED_INVENTORY",
+          capitalizedAmount: be.netAmount,
+        });
+      }
+    }
+    for (const r of args.reclassifications) {
+      await hookVehiclePrepExpenseReclassified(ctx, {
+        orgId: args.orgId,
+        expenseId: r.expenseId,
+        vehicleId: args.vehicleId,
+        amountMinor: r.amountMinor,
+        currency: args.currency,
+        actorId: args.actorId,
+        occurredAt: r.date,
+      });
+      // Mark it capitalized going forward so computeVehicleCapitalizedCost
+      // (COGS at sale, commission, both profit reports) stays in sync with
+      // what's now actually sitting in the Vehicle Inventory GL account.
+      await ctx.db.patch(r.expenseId, {
+        accountingTreatment: "CAPITALIZED_INVENTORY",
+        capitalizedAmount: r.netAmount,
+      });
+    }
   },
 });
 

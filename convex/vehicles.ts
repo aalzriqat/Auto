@@ -1,5 +1,5 @@
 import { v, ConvexError } from "convex/values";
-import { MutationCtx, internalMutation, mutation, query } from "./_generated/server";
+import { MutationCtx, QueryCtx, internalMutation, mutation, query } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
@@ -11,7 +11,7 @@ import { maybeAutoPostToInstagram, maybeAutoPostToFacebook } from "./utils/socia
 import { internal } from "./_generated/api";
 import { getOrgCurrency, hookVehicleAcquired, hookVehicleLandedCostCapitalized, hookVehicleAcquisitionCostCorrected } from "./accounting/workflowHooks";
 import { toMinorUnits } from "./utils/money";
-import { paymentMethodValidator, normalizePaymentMethod, type PaymentMethod } from "./utils/paymentMethods";
+import { paymentMethodValidator, acquisitionPaymentMethodValidator, normalizePaymentMethod, type AcquisitionPaymentMethod, type PaymentMethod } from "./utils/paymentMethods";
 import { syncVehicleHoldStatus, getDefaultReservationExpiry } from "./utils/depositHelpers";
 import {
   amountToMinorOrThrow,
@@ -72,10 +72,17 @@ function generateImportVinPlaceholder(): string {
 /**
  * Posts the VEHICLE_ACQUIRED GL entry (+ legacy VEHICLE_PURCHASE transaction
  * row) for owned stock with a purchase price — shared by the direct
- * vehicles.create mutation and vehicleEdits.resolve's CREATE-approval branch,
- * so a vehicle created via the request/approval workflow gets the exact same
- * accounting treatment as one created directly. Sourced/drop-ship vehicles
- * never sit in physical inventory, so this is a no-op for those.
+ * vehicles.create mutation, vehicles.update (a SOURCED→STOCK flip or a price
+ * set for the first time), and vehicleEdits.resolve's CREATE-approval branch,
+ * so a vehicle acquired via any of those paths gets the exact same accounting
+ * treatment. Sourced/drop-ship vehicles never sit in physical inventory, so
+ * this is a no-op for those.
+ *
+ * ON_ACCOUNT means no cash moved: instead of the legacy cash-transaction row,
+ * this creates a vehicleSupplierPayables row (no saleId — settled independently
+ * of any future sale, via the same sourcingPayables.markPaid a sourced
+ * vehicle's payable uses) and credits AP-Suppliers in the GL instead of a
+ * cash/bank account.
  */
 export async function postVehicleAcquisitionIfOwned(
   ctx: MutationCtx,
@@ -84,7 +91,9 @@ export async function postVehicleAcquisitionIfOwned(
     vehicleId: Id<"vehicles">;
     isSourced: boolean;
     purchasePrice: number | undefined;
-    purchasePaymentMethod?: PaymentMethod;
+    purchasePaymentMethod?: AcquisitionPaymentMethod;
+    /** Required when purchasePaymentMethod is "ON_ACCOUNT" — who the payable is owed to. */
+    supplierName?: string;
     vehicleLabel: string;
     vin: string;
     actorId: Id<"users">;
@@ -92,7 +101,41 @@ export async function postVehicleAcquisitionIfOwned(
 ): Promise<void> {
   if (args.isSourced || args.purchasePrice == null || args.purchasePrice <= 0) return;
 
+  const isOnAccount = args.purchasePaymentMethod === "ON_ACCOUNT";
+  if (isOnAccount && !args.supplierName?.trim()) {
+    throw new ConvexError("A supplier name is required for a vehicle purchased on account.");
+  }
+
   const now = Date.now();
+  const currency = await getOrgCurrency(ctx, args.orgId);
+
+  if (isOnAccount) {
+    // No cash actually moved — the legacy transactions table only records
+    // real cash movements (a SOURCED vehicle's supplier payable, which never
+    // touches this table either, is the existing precedent).
+    await hookVehicleAcquired(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      costMinor: toMinorUnits(args.purchasePrice, currency),
+      currency,
+      paymentMethod: "ON_ACCOUNT",
+      actorId: args.actorId,
+      occurredAt: now,
+    });
+    await ctx.db.insert("vehicleSupplierPayables", {
+      orgId: args.orgId,
+      vehicleId: args.vehicleId,
+      sourcedFromName: args.supplierName!.trim(),
+      amountDue: args.purchasePrice,
+      currency,
+      status: "PENDING",
+      createdBy: args.actorId,
+      createdAt: now,
+      updatedAt: now,
+    });
+    return;
+  }
+
   await ctx.db.insert("transactions", {
     orgId: args.orgId,
     type: "OUT",
@@ -103,13 +146,13 @@ export async function postVehicleAcquisitionIfOwned(
     vehicleId: args.vehicleId,
   });
 
-  const currency = await getOrgCurrency(ctx, args.orgId);
   await hookVehicleAcquired(ctx, {
     orgId: args.orgId,
     vehicleId: args.vehicleId,
     costMinor: toMinorUnits(args.purchasePrice, currency),
     currency,
-    paymentMethod: normalizePaymentMethod(args.purchasePaymentMethod),
+    // Excludes "ON_ACCOUNT" — handled in the early-return branch above.
+    paymentMethod: normalizePaymentMethod(args.purchasePaymentMethod as Exclude<AcquisitionPaymentMethod, "ON_ACCOUNT"> | undefined),
     actorId: args.actorId,
     occurredAt: now,
   });
@@ -457,8 +500,8 @@ export const create = mutation({
     sourceCost: v.optional(v.number()),
     notes: v.optional(v.string()),
     imageIds: v.optional(v.array(v.id("_storage"))),
-    /** How the dealer paid for the vehicle — drives the GL credit side (Cash/Bank/Cheque/Card). Ignored for SOURCED vehicles, which never capitalize into inventory. */
-    purchasePaymentMethod: v.optional(paymentMethodValidator),
+    /** How the dealer paid for the vehicle — drives the GL credit side (Cash/Bank/Cheque/Card/AP-Suppliers for ON_ACCOUNT). Ignored for SOURCED vehicles, which never capitalize into inventory. */
+    purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
     ...trustPassportFieldValidators,
   },
   handler: async (ctx, args) => {
@@ -498,6 +541,12 @@ export const create = mutation({
     // paid by bank transfer, cheque, or card — require an explicit choice.
     if (!isSourced && args.purchasePrice != null && args.purchasePrice > 0 && !args.purchasePaymentMethod) {
       throw new ConvexError("Payment method is required when a purchase price is entered.");
+    }
+    // Reuses sourcedFromName as the generic "who is this owed to" field —
+    // same requirement SOURCED vehicles already have for the same reason
+    // (downstream AP-Suppliers/supplier-payable creation needs a name).
+    if (!isSourced && args.purchasePaymentMethod === "ON_ACCOUNT" && !args.sourcedFromName?.trim()) {
+      throw new ConvexError("A supplier name (sourcedFromName) is required for a vehicle purchased on account.");
     }
 
     // VIN is optional for sourced vehicles (car doesn't exist yet); generate a
@@ -563,6 +612,7 @@ export const create = mutation({
       isSourced,
       purchasePrice: effectivePurchasePrice,
       purchasePaymentMethod: args.purchasePaymentMethod,
+      supplierName: args.sourcedFromName,
       vehicleLabel: `${args.year} ${args.make.trim()} ${args.model.trim()}`,
       vin: normalizedVin,
       actorId: user._id,
@@ -602,7 +652,7 @@ export const create = mutation({
  * would leave the journal permanently out of sync with the vehicle record.
  */
 async function hasPostedVehicleAcquisition(
-  ctx: MutationCtx,
+  ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   vehicleId: Id<"vehicles">
 ): Promise<boolean> {
@@ -616,8 +666,16 @@ async function hasPostedVehicleAcquisition(
   return postedEvent !== null;
 }
 
-async function hasVehicleAcquisitionAccountingExposure(
-  ctx: MutationCtx,
+/**
+ * True once a vehicle's acquisition is either posted to the GL or durably
+ * queued in the accounting outbox — reused by the legacy transaction
+ * migration tool (accountingMigration.ts) so it can recognize a
+ * VEHICLE_PURCHASE transaction row as already accounted for via its
+ * companion VEHICLE_ACQUIRED event (sourced from "vehicles", not
+ * "transactions") instead of posting a second, duplicate event.
+ */
+export async function hasVehicleAcquisitionAccountingExposure(
+  ctx: QueryCtx | MutationCtx,
   orgId: Id<"organizations">,
   vehicleId: Id<"vehicles">
 ): Promise<boolean> {
@@ -655,6 +713,8 @@ export const update = mutation({
     sourceCost: v.optional(v.number()),
     notes: v.optional(v.string()),
     imageIds: v.optional(v.array(v.id("_storage"))),
+    /** How the dealer paid — required if this update capitalizes an acquisition that hasn't posted yet (e.g. a SOURCED→STOCK flip, or a purchase price set for the first time). Ignored otherwise. */
+    purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
     ...trustPassportFieldValidators,
   },
   handler: async (ctx, args) => {
@@ -705,7 +765,9 @@ export const update = mutation({
       }
     }
 
-    const { orgId: _, vehicleId: __, ...updates } = args;
+    // purchasePaymentMethod is a transient input for the acquisition posting
+    // below, not a persisted vehicle field — exclude it from the patch.
+    const { orgId: _, vehicleId: __, purchasePaymentMethod: ___, ...updates } = args;
     const patch: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(updates)) {
       if (value !== undefined) {
@@ -729,10 +791,38 @@ export const update = mutation({
       }
     }
 
-    if (("purchasePrice" in patch || "sourceCost" in patch) && await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, args.vehicleId)) {
+    // A SOURCED vehicle flipping to owned stock (or a STOCK vehicle whose
+    // purchase price is set for the first time here) needs the exact same
+    // capitalization create() does for a directly-created owned vehicle —
+    // otherwise a later sale relieves Vehicle Inventory for a cost that was
+    // never debited into it. Computed once up front since both this guard
+    // and the edit-lock guard below need to know whether it's already posted.
+    const mayAffectAcquisition =
+      "purchasePrice" in patch || "sourceCost" in patch ||
+      ("sourceType" in patch && patch.sourceType !== "SOURCED");
+    const acquisitionAlreadyExposed = mayAffectAcquisition
+      ? await hasVehicleAcquisitionAccountingExposure(ctx, args.orgId, args.vehicleId)
+      : false;
+
+    if (("purchasePrice" in patch || "sourceCost" in patch) && acquisitionAlreadyExposed) {
       throw new ConvexError(
         "This vehicle's acquisition cost has already been posted to accounting. Use a correction journal entry instead of editing purchasePrice/sourceCost directly."
       );
+    }
+
+    const acquisitionSourceType = (patch.sourceType as "STOCK" | "SOURCED" | undefined) ?? vehicle.sourceType;
+    const acquisitionPurchasePrice: number | undefined =
+      "purchasePrice" in patch ? (patch.purchasePrice as number) : vehicle.purchasePrice;
+    const needsAcquisitionPosting =
+      mayAffectAcquisition &&
+      acquisitionSourceType !== "SOURCED" &&
+      acquisitionPurchasePrice != null && acquisitionPurchasePrice > 0 &&
+      !acquisitionAlreadyExposed;
+    if (needsAcquisitionPosting && !args.purchasePaymentMethod) {
+      throw new ConvexError("Payment method is required to post this vehicle's acquisition cost to accounting.");
+    }
+    if (needsAcquisitionPosting && args.purchasePaymentMethod === "ON_ACCOUNT" && !(args.sourcedFromName ?? vehicle.sourcedFromName)?.trim()) {
+      throw new ConvexError("A supplier name (sourcedFromName) is required for a vehicle purchased on account.");
     }
 
     if (Object.keys(patch).length > 0) {
@@ -755,6 +845,21 @@ export const update = mutation({
       patch.updatedBy = user._id;
       patch.updatedAt = Date.now();
       await ctx.db.patch(args.vehicleId, patch);
+
+      if (needsAcquisitionPosting) {
+        await postVehicleAcquisitionIfOwned(ctx, {
+          orgId: args.orgId,
+          vehicleId: args.vehicleId,
+          isSourced: false,
+          purchasePrice: acquisitionPurchasePrice,
+          purchasePaymentMethod: args.purchasePaymentMethod,
+          supplierName: args.sourcedFromName ?? vehicle.sourcedFromName,
+          vehicleLabel: `${(patch.year as number | undefined) ?? vehicle.year} ${(patch.make as string | undefined) ?? vehicle.make} ${(patch.model as string | undefined) ?? vehicle.model}`,
+          vin: ((patch.vin as string | undefined) ?? vehicle.vin) || "",
+          actorId: user._id,
+        });
+      }
+
       const actorName = await getActorName(ctx);
       await notifyManagers(
         ctx,
@@ -788,9 +893,9 @@ export const upsertLandedCosts = mutation({
     items: v.array(v.object({
       label: v.string(),
       amount: v.number(),
+      /** How this specific item was paid — drives which account it capitalizes against and which account a later reduction/removal reverses against. Required for a non-zero item on a non-SOURCED vehicle. */
+      paymentMethod: v.optional(paymentMethodValidator),
     })),
-    /** How the landed costs were paid — drives the GL credit side. Ignored for SOURCED vehicles (never capitalized). */
-    paymentMethod: v.optional(paymentMethodValidator),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_VEHICLES]);
@@ -804,8 +909,18 @@ export const upsertLandedCosts = mutation({
     }
 
     const items = args.items
-      .map((item) => ({ label: item.label.trim(), amount: item.amount }))
+      .map((item) => ({ label: item.label.trim(), amount: item.amount, paymentMethod: item.paymentMethod }))
       .filter((item) => item.label.length > 0);
+    // Sourced/drop-ship vehicles never sit in physical inventory — their cost
+    // basis is sourceCost only, so landed costs entered against one (kept for
+    // informational tracking) never capitalize into the GL, and there's no
+    // account to silently default for them.
+    if (vehicle.sourceType !== "SOURCED") {
+      const missingMethod = items.find((item) => item.amount !== 0 && !item.paymentMethod);
+      if (missingMethod) {
+        throw new ConvexError(`Payment method is required for landed cost item "${missingMethod.label}".`);
+      }
+    }
     const total = items.reduce((sum, item) => sum + item.amount, 0);
     const now = Date.now();
 
@@ -813,7 +928,7 @@ export const upsertLandedCosts = mutation({
       .query("vehicleLandedCosts")
       .withIndex("by_org_vehicle", (q) => q.eq("orgId", args.orgId).eq("vehicleId", args.vehicleId))
       .unique();
-    const previousTotal = existing?.total ?? 0;
+    const previousItems = existing?.items ?? [];
 
     if (existing) {
       await ctx.db.patch(existing._id, { items, total, updatedAt: now, updatedBy: user._id });
@@ -834,25 +949,45 @@ export const upsertLandedCosts = mutation({
       updatedBy: user._id,
     });
 
-    // Sourced/drop-ship vehicles never sit in physical inventory — their cost
-    // basis is sourceCost only, so landed costs entered against one (kept for
-    // informational tracking) never capitalize into the GL.
-    const delta = total - previousTotal;
-    if (vehicle.sourceType !== "SOURCED" && delta !== 0) {
+    if (vehicle.sourceType !== "SOURCED") {
       const currency = await getOrgCurrency(ctx, args.orgId);
-      await hookVehicleLandedCostCapitalized(ctx, {
-        orgId: args.orgId,
-        vehicleId: args.vehicleId,
-        // A durable unique token, not a timestamp — two edits to the same
-        // vehicle's landed costs landing in the same millisecond must not
-        // collide on idempotencyKey and suppress a legitimate GL posting.
-        editToken: crypto.randomUUID(),
-        deltaMinor: toMinorUnits(delta, currency),
-        currency,
-        paymentMethod: normalizePaymentMethod(args.paymentMethod),
-        actorId: user._id,
-        occurredAt: now,
-      });
+      // Group old vs. new items by settlement account and diff per account —
+      // not just old-total vs. new-total — so moving an item between accounts
+      // (or removing one paid from a different account than the others) posts
+      // against the accounts actually affected, even when the net total is
+      // unchanged.
+      const sumsByMethod = (list: ReadonlyArray<{ amount: number; paymentMethod?: PaymentMethod }>) => {
+        const sums = new Map<string, number>();
+        for (const item of list) {
+          const key = item.paymentMethod ?? normalizePaymentMethod(undefined);
+          sums.set(key, (sums.get(key) ?? 0) + item.amount);
+        }
+        return sums;
+      };
+      const oldSums = sumsByMethod(previousItems);
+      const newSums = sumsByMethod(items);
+      const allMethods = new Set([...oldSums.keys(), ...newSums.keys()]);
+      const accountDeltas = Array.from(allMethods)
+        .map((paymentMethod) => ({
+          paymentMethod,
+          deltaMinor: toMinorUnits((newSums.get(paymentMethod) ?? 0) - (oldSums.get(paymentMethod) ?? 0), currency),
+        }))
+        .filter((d) => d.deltaMinor !== 0);
+
+      if (accountDeltas.length > 0) {
+        await hookVehicleLandedCostCapitalized(ctx, {
+          orgId: args.orgId,
+          vehicleId: args.vehicleId,
+          // A durable unique token, not a timestamp — two edits to the same
+          // vehicle's landed costs landing in the same millisecond must not
+          // collide on idempotencyKey and suppress a legitimate GL posting.
+          editToken: crypto.randomUUID(),
+          accountDeltas,
+          currency,
+          actorId: user._id,
+          occurredAt: now,
+        });
+      }
     }
 
     return { total };
@@ -874,6 +1009,15 @@ export const correctAcquisitionCost = mutation({
     vehicleId: v.id("vehicles"),
     newCost: v.number(),
     reason: v.string(),
+    /** Drives the GL counter-account — see ruleVehicleAcquisitionCostCorrected. */
+    correctionType: v.union(
+      v.literal("PRIOR_PERIOD_RESTATEMENT"),
+      v.literal("SUPPLIER_INVOICE_ERROR"),
+      v.literal("CASH_REFUND"),
+      v.literal("VENDOR_CREDIT"),
+    ),
+    /** Required when correctionType is CASH_REFUND — which cash/bank account actually moved. Ignored otherwise. */
+    paymentMethod: v.optional(paymentMethodValidator),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -882,6 +1026,9 @@ export const correctAcquisitionCost = mutation({
     if (!reason) throw new ConvexError("A reason is required to correct a vehicle's acquisition cost.");
     if (!Number.isFinite(args.newCost) || args.newCost < 0) {
       throw new ConvexError("New cost must be a non-negative number.");
+    }
+    if (args.correctionType === "CASH_REFUND" && !args.paymentMethod) {
+      throw new ConvexError("A payment method is required for a cash-refund correction.");
     }
 
     const vehicle = await ctx.db.get(args.vehicleId);
@@ -929,6 +1076,7 @@ export const correctAcquisitionCost = mutation({
       previousCost,
       newCost: args.newCost,
       reason,
+      correctionType: args.correctionType,
       correctedBy: user._id,
       createdAt: now,
     });
@@ -941,6 +1089,8 @@ export const correctAcquisitionCost = mutation({
       correctionToken: correctionId.toString(),
       deltaMinor: toMinorUnits(delta, currency),
       currency,
+      correctionType: args.correctionType,
+      paymentMethod: args.paymentMethod,
       actorId: user._id,
       occurredAt: now,
     });

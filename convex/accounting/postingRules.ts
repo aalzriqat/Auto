@@ -158,6 +158,15 @@ export interface SupplierPaymentSettledPayload {
   taxMinor?: number;
   currency: string;
   paymentMethod?: string;
+  /**
+   * Which account AP-Suppliers was originally credited against for this
+   * payable — a sourced/drop-ship vehicle credits AP against COST_OF_VEHICLES_SOLD
+   * at sale time (ruleSaleCompleted), while an owned vehicle bought ON_ACCOUNT
+   * credits it against VEHICLE_INVENTORY at acquisition time (ruleVehicleAcquired).
+   * Defaults to "COGS" (the only case that existed before ON_ACCOUNT) so every
+   * pre-existing caller keeps its current behavior unchanged.
+   */
+  costOrigin?: "COGS" | "VEHICLE_INVENTORY";
 }
 
 export interface CollectionPaymentPayload {
@@ -323,8 +332,12 @@ export function ruleSupplierPaymentSettled(p: SupplierPaymentSettledPayload): Ru
     line(cashKey, 0, p.amountMinor, "Cash paid to supplier"),
   ];
   if (p.taxMinor && p.taxMinor > 0) {
+    // Reclassify out of whichever account AP was actually credited against
+    // originally — crediting COST_OF_VEHICLES_SOLD for an ON_ACCOUNT owned
+    // purchase would understate COGS for a vehicle that hasn't even sold yet.
+    const costAccount = p.costOrigin === "VEHICLE_INVENTORY" ? SYSTEM_KEYS.VEHICLE_INVENTORY : SYSTEM_KEYS.COST_OF_VEHICLES_SOLD;
     lines.push(line(SYSTEM_KEYS.VAT_RECEIVABLE, p.taxMinor, 0, "Input VAT reclassified from cost"));
-    lines.push(line(SYSTEM_KEYS.COST_OF_VEHICLES_SOLD, 0, p.taxMinor, "Cost reduced by reclaimable VAT"));
+    lines.push(line(costAccount, 0, p.taxMinor, "Cost reduced by reclaimable VAT"));
   }
   return {
     lines,
@@ -567,13 +580,24 @@ export interface VehicleAcquiredPayload {
  * as ruleAssetCapitalized/rulePartnerDrew: a cheque the dealership writes to
  * buy the vehicle clears from the bank, it doesn't sit in CHEQUES_IN_HAND
  * (which holds cheques received *from* customers).
+ *
+ * ON_ACCOUNT means no cash moved yet — the dealership owes the supplier for
+ * an owned vehicle it already took into stock, so this credits AP-Suppliers
+ * instead (the same account SOURCED vehicles use, just recorded at
+ * acquisition time here rather than at sale time — see
+ * vehicles.postVehicleAcquisitionIfOwned, which also creates the matching
+ * vehicleSupplierPayables row). Settled later via sourcingPayables.markPaid,
+ * same as a sourced-vehicle payable.
  */
 export function ruleVehicleAcquired(p: VehicleAcquiredPayload): RuleResult {
-  const cashKey = p.paymentMethod === "CHEQUE" ? SYSTEM_KEYS.BANK_ACCOUNT : cashAccountKey(p.paymentMethod);
+  const isOnAccount = p.paymentMethod === "ON_ACCOUNT";
+  const creditKey = isOnAccount
+    ? SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS
+    : p.paymentMethod === "CHEQUE" ? SYSTEM_KEYS.BANK_ACCOUNT : cashAccountKey(p.paymentMethod);
   return {
     lines: [
       line(SYSTEM_KEYS.VEHICLE_INVENTORY, p.costMinor, 0, "Vehicle acquired", { vehicleId: p.vehicleId }),
-      line(cashKey, 0, p.costMinor, "Payment for vehicle", { vehicleId: p.vehicleId }),
+      line(creditKey, 0, p.costMinor, isOnAccount ? "Supplier payable created" : "Payment for vehicle", { vehicleId: p.vehicleId }),
     ],
     memo: "Vehicle acquired for inventory",
     category: "SYSTEM",
@@ -582,31 +606,47 @@ export function ruleVehicleAcquired(p: VehicleAcquiredPayload): RuleResult {
 
 export interface VehicleLandedCostCapitalizedPayload {
   vehicleId: string;
-  /** Signed change since the landed-cost record was last saved (can be negative on a downward edit). */
-  deltaMinor: number;
   currency: string;
-  paymentMethod?: string;
+  /**
+   * Signed change per settlement account since the landed-cost record was
+   * last saved (upsertLandedCosts replaces the whole items list on every
+   * save, so the caller diffs old-vs-new items grouped by paymentMethod
+   * rather than passing one aggregate delta) — a positive entry capitalizes
+   * more cost into inventory paid from that account, a negative entry
+   * reverses a previously capitalized amount from that SAME account (not
+   * whatever account happens to be selected on this call).
+   */
+  accountDeltas: Array<{ paymentMethod?: string; deltaMinor: number }>;
 }
 
 /**
- * upsertLandedCosts replaces the whole items list on every save, so the
- * caller passes the signed delta between the old and new total. A positive
- * delta capitalizes more cost into inventory (paid out); a negative delta
- * reverses a previously capitalized amount (e.g. an item was removed/corrected).
+ * See VehicleLandedCostCapitalizedPayload — one Vehicle Inventory line for
+ * the net change plus one cash/bank line per settlement account actually
+ * affected, so a reduction reverses against the account it was originally
+ * paid from even when other accounts were used for other items on the same
+ * vehicle.
  */
 export function ruleVehicleLandedCostCapitalized(p: VehicleLandedCostCapitalizedPayload): RuleResult {
-  // Outbound payment — see ruleVehicleAcquired for why CHEQUE routes to the bank.
-  const cashKey = p.paymentMethod === "CHEQUE" ? SYSTEM_KEYS.BANK_ACCOUNT : cashAccountKey(p.paymentMethod);
-  const amountMinor = Math.abs(p.deltaMinor);
-  const lines: LineSpec[] = p.deltaMinor > 0
-    ? [
-        line(SYSTEM_KEYS.VEHICLE_INVENTORY, amountMinor, 0, "Landed cost capitalized", { vehicleId: p.vehicleId }),
-        line(cashKey, 0, amountMinor, "Landed cost paid", { vehicleId: p.vehicleId }),
-      ]
-    : [
-        line(cashKey, amountMinor, 0, "Landed cost reversed", { vehicleId: p.vehicleId }),
-        line(SYSTEM_KEYS.VEHICLE_INVENTORY, 0, amountMinor, "Landed cost correction", { vehicleId: p.vehicleId }),
-      ];
+  const lines: LineSpec[] = [];
+  let netDeltaMinor = 0;
+  for (const { paymentMethod, deltaMinor } of p.accountDeltas) {
+    if (deltaMinor === 0) continue;
+    // Outbound payment — see ruleVehicleAcquired for why CHEQUE routes to the bank.
+    const cashKey = paymentMethod === "CHEQUE" ? SYSTEM_KEYS.BANK_ACCOUNT : cashAccountKey(paymentMethod);
+    const amountMinor = Math.abs(deltaMinor);
+    lines.push(
+      deltaMinor > 0
+        ? line(cashKey, 0, amountMinor, "Landed cost paid", { vehicleId: p.vehicleId })
+        : line(cashKey, amountMinor, 0, "Landed cost reversed", { vehicleId: p.vehicleId })
+    );
+    netDeltaMinor += deltaMinor;
+  }
+  const netAmountMinor = Math.abs(netDeltaMinor);
+  if (netDeltaMinor > 0) {
+    lines.unshift(line(SYSTEM_KEYS.VEHICLE_INVENTORY, netAmountMinor, 0, "Landed cost capitalized", { vehicleId: p.vehicleId }));
+  } else if (netDeltaMinor < 0) {
+    lines.push(line(SYSTEM_KEYS.VEHICLE_INVENTORY, 0, netAmountMinor, "Landed cost correction", { vehicleId: p.vehicleId }));
+  }
   return { lines, memo: "Vehicle landed cost adjusted", category: "SYSTEM" };
 }
 
@@ -635,32 +675,63 @@ export function ruleVehicleInventoryOpeningBalance(p: VehicleInventoryOpeningBal
   };
 }
 
+export type AcquisitionCorrectionType =
+  | "PRIOR_PERIOD_RESTATEMENT"
+  | "SUPPLIER_INVOICE_ERROR"
+  | "CASH_REFUND"
+  | "VENDOR_CREDIT";
+
 export interface VehicleAcquisitionCostCorrectedPayload {
   vehicleId: string;
   /** Signed change: new cost minus previous cost. */
   deltaMinor: number;
   currency: string;
+  /** Drives the counter-account below — defaults to PRIOR_PERIOD_RESTATEMENT (the only behavior that existed before this field). */
+  correctionType?: AcquisitionCorrectionType;
+  /** Only meaningful (and required by the caller) when correctionType is CASH_REFUND. */
+  paymentMethod?: string;
 }
 
 /**
  * Corrects a vehicle's acquisition cost after VEHICLE_ACQUIRED has already
  * posted (vehicles.correctAcquisitionCost) — e.g. the purchase price was
- * mis-entered. Since the correction doesn't necessarily correspond to any new
- * cash actually moving today, it credits/debits Retained Earnings rather than
- * cash/bank, the same reasoning as ruleVehicleInventoryOpeningBalance. Also
- * updates the vehicle's own purchasePrice (done by the caller), so
+ * mis-entered. The counter-account depends on WHY the correction happened,
+ * not just that it happened:
+ *   - PRIOR_PERIOD_RESTATEMENT: no cash moves today for a correction to a
+ *     genuinely past transaction — Retained Earnings, same reasoning as
+ *     ruleVehicleInventoryOpeningBalance. The only behavior this rule had
+ *     before correctionType existed, so it's also the default.
+ *   - SUPPLIER_INVOICE_ERROR / VENDOR_CREDIT: the dealership still owes (or
+ *     is owed) the supplier for the difference — routes through AP-Suppliers,
+ *     the same account a credit-purchase or sourced vehicle uses, so it nets
+ *     against whatever payable already exists there.
+ *   - CASH_REFUND: real cash actually changed hands — routes to the
+ *     caller-selected cash/bank account, same reasoning as ruleVehicleAcquired.
+ * Also updates the vehicle's own purchasePrice (done by the caller), so
  * computeVehicleCapitalizedCost, commission, and reports stop reading the
  * stale figure instead of only the GL being corrected.
  */
 export function ruleVehicleAcquisitionCostCorrected(p: VehicleAcquisitionCostCorrectedPayload): RuleResult {
   const amountMinor = Math.abs(p.deltaMinor);
+  const counterKey = ((): SystemKey => {
+    switch (p.correctionType) {
+      case "SUPPLIER_INVOICE_ERROR":
+      case "VENDOR_CREDIT":
+        return SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS;
+      case "CASH_REFUND":
+        return p.paymentMethod === "CHEQUE" ? SYSTEM_KEYS.BANK_ACCOUNT : cashAccountKey(p.paymentMethod);
+      case "PRIOR_PERIOD_RESTATEMENT":
+      default:
+        return SYSTEM_KEYS.RETAINED_EARNINGS;
+    }
+  })();
   const lines: LineSpec[] = p.deltaMinor > 0
     ? [
         line(SYSTEM_KEYS.VEHICLE_INVENTORY, amountMinor, 0, "Acquisition cost corrected upward", { vehicleId: p.vehicleId }),
-        line(SYSTEM_KEYS.RETAINED_EARNINGS, 0, amountMinor, "Acquisition cost correction", { vehicleId: p.vehicleId }),
+        line(counterKey, 0, amountMinor, "Acquisition cost correction", { vehicleId: p.vehicleId }),
       ]
     : [
-        line(SYSTEM_KEYS.RETAINED_EARNINGS, amountMinor, 0, "Acquisition cost correction", { vehicleId: p.vehicleId }),
+        line(counterKey, amountMinor, 0, "Acquisition cost correction", { vehicleId: p.vehicleId }),
         line(SYSTEM_KEYS.VEHICLE_INVENTORY, 0, amountMinor, "Acquisition cost corrected downward", { vehicleId: p.vehicleId }),
       ];
   return { lines, memo: "Vehicle acquisition cost corrected", category: "ADJUSTMENT" };

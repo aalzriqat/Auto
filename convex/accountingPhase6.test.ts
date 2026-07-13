@@ -3,9 +3,17 @@
  * dry-run migration, and legacy transaction classification.
  */
 import { convexTest } from "convex-test";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+
+vi.mock("./rateLimit", () => ({
+  rateLimiter: {
+    limit: vi.fn().mockResolvedValue({ ok: true }),
+    check: vi.fn().mockResolvedValue({ ok: true }),
+  },
+  checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
+}));
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -29,7 +37,7 @@ async function seedMigrationDealer() {
   const roleId = await t.run((ctx) =>
     ctx.db.insert("roles", {
       orgId, name: "Owner",
-      permissions: ["view:sales", "manage:finance", "view:finance"],
+      permissions: ["view:sales", "manage:finance", "view:finance", "create:vehicles", "view:vehicles"],
     })
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
@@ -186,5 +194,53 @@ describe("Phase 6 — dry-run migration", () => {
     const gap = await asUser.query(api.accountingMigration.migrationGapAnalysis, { orgId });
     expect(gap.gl.events).toBe(1);
     expect(gap.migrationProgress).toBe(100);
+  });
+});
+
+describe("Phase 6 — VEHICLE_PURCHASE rows are recognized as already posted via vehicles", () => {
+  const baseVehicle = {
+    vin: "1HGCM82633A000099",
+    make: "Honda", model: "Accord", year: 2020, mileage: 10000,
+    color: "White", fuelType: "Gasoline", transmission: "Automatic",
+    sellingPrice: 20000, status: "AVAILABLE" as const, sourceType: "STOCK" as const,
+  };
+
+  test("audit does not flag the companion VEHICLE_PURCHASE row as unposted", async () => {
+    const { orgId, asUser } = await seedMigrationDealer();
+
+    await asUser.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+
+    const audit = await asUser.query(api.accountingMigration.auditLegacyTransactions, {
+      orgId, onlyUnposted: true,
+    });
+    expect(audit.unpostedCount).toBe(0);
+  });
+
+  test("migration skips the VEHICLE_PURCHASE row instead of double-posting VEHICLE_ACQUIRED", async () => {
+    const { orgId, asUser } = await seedMigrationDealer();
+
+    const vehicleId = await asUser.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+
+    const result = await asUser.mutation(api.accountingMigration.migrateUnpostedTransactions, {
+      orgId, dryRun: false, limit: 10,
+    });
+
+    expect(result.posted).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(result.results[0]).toMatchObject({ action: "SKIP", reason: "already_posted_via_vehicle" });
+
+    // Only the one VEHICLE_ACQUIRED event exists for the vehicle — no duplicate.
+    const dup = await asUser.query(api.accountingMigration.duplicateEventCheck, {
+      orgId, eventType: "VEHICLE_ACQUIRED",
+    });
+    expect(dup.totalEvents).toBe(1);
+    expect(dup.duplicateCount).toBe(0);
+
+    const events = await asUser.query(api.accountingMigration.auditLegacyTransactions, { orgId });
+    expect(events.rows.filter((r) => r.eventType === "VEHICLE_ACQUIRED" && r.vehicleId === vehicleId)).toHaveLength(1);
   });
 });

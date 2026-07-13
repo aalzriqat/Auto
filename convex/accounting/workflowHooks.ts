@@ -12,7 +12,7 @@
 import { Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 import { postAccountingEvent, PostCommand } from "./postingEngine";
-import { EventType, ReceivableCreditKey } from "./postingRules";
+import { EventType, ReceivableCreditKey, AcquisitionCorrectionType } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate } from "../accountingPeriods";
 import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount } from "../chartOfAccounts";
@@ -319,6 +319,8 @@ export async function hookSupplierPaymentSettled(
     taxMinor?: number;
     currency: string;
     paymentMethod?: string;
+    /** See SupplierPaymentSettledPayload — defaults to "COGS" (sale-originated payables). */
+    costOrigin?: "COGS" | "VEHICLE_INVENTORY";
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -342,6 +344,7 @@ export async function hookSupplierPaymentSettled(
       taxMinor: args.taxMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+      costOrigin: args.costOrigin,
     },
   });
 }
@@ -474,9 +477,9 @@ export async function hookVehicleLandedCostCapitalized(
     orgId: Id<"organizations">;
     vehicleId: Id<"vehicles">;
     editToken: string;
-    deltaMinor: number;
+    /** Per-account signed deltas — see VehicleLandedCostCapitalizedPayload. */
+    accountDeltas: Array<{ paymentMethod?: string; deltaMinor: number }>;
     currency: string;
-    paymentMethod?: string;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -492,9 +495,13 @@ export async function hookVehicleLandedCostCapitalized(
     actorId: args.actorId,
     payload: {
       vehicleId: args.vehicleId.toString(),
-      deltaMinor: args.deltaMinor,
+      // Net total kept at the top level too — accountingMigration.ts's
+      // backfill reads this scalar to exclude already-posted landed-cost
+      // amounts from its opening-balance calculation without needing to
+      // know about the per-account breakdown.
+      deltaMinor: args.accountDeltas.reduce((sum, d) => sum + d.deltaMinor, 0),
+      accountDeltas: args.accountDeltas,
       currency: args.currency,
-      paymentMethod: args.paymentMethod,
     },
   });
 }
@@ -507,6 +514,8 @@ export async function hookVehicleAcquisitionCostCorrected(
     correctionToken: string;
     deltaMinor: number;
     currency: string;
+    correctionType?: AcquisitionCorrectionType;
+    paymentMethod?: string;
     actorId: Id<"users">;
     occurredAt: number;
   }
@@ -524,6 +533,8 @@ export async function hookVehicleAcquisitionCostCorrected(
       vehicleId: args.vehicleId.toString(),
       deltaMinor: args.deltaMinor,
       currency: args.currency,
+      correctionType: args.correctionType,
+      paymentMethod: args.paymentMethod,
     },
   });
 }

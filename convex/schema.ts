@@ -1,6 +1,6 @@
 import { defineSchema, defineTable } from "convex/server";
 import { v } from "convex/values";
-import { paymentMethodValidator } from "./utils/paymentMethods";
+import { paymentMethodValidator, acquisitionPaymentMethodValidator } from "./utils/paymentMethods";
 import { trustPassportFieldValidators } from "./utils/vehicleStatusGuards";
 
 const organizationDeletionRequestStatus = v.union(
@@ -612,6 +612,13 @@ export default defineSchema({
     items: v.array(v.object({
       label: v.string(),
       amount: v.number(),
+      // Which account this specific line was paid from — persisted per item
+      // (not one picker for the whole edit) so a later reduction/removal
+      // reverses against the account it actually came from, not whatever's
+      // selected on that later call. Optional/backward compatible: rows
+      // written before this field existed have none, treated as CASH (the
+      // old normalizePaymentMethod default) wherever it's read.
+      paymentMethod: v.optional(paymentMethodValidator),
     })),
     total: v.number(),
     updatedAt: v.number(),
@@ -628,6 +635,14 @@ export default defineSchema({
     previousCost: v.number(),
     newCost: v.number(),
     reason: v.string(),
+    // Drives the GL counter-account (see ruleVehicleAcquisitionCostCorrected)
+    // — optional/backward compatible for corrections that predate this field.
+    correctionType: v.optional(v.union(
+      v.literal("PRIOR_PERIOD_RESTATEMENT"),
+      v.literal("SUPPLIER_INVOICE_ERROR"),
+      v.literal("CASH_REFUND"),
+      v.literal("VENDOR_CREDIT"),
+    )),
     correctedBy: v.id("users"),
     createdAt: v.number(),
   }).index("by_org_vehicle", ["orgId", "vehicleId"]),
@@ -735,7 +750,7 @@ export default defineSchema({
       fuelType: v.optional(v.string()),
       transmission: v.optional(v.string()),
       purchasePrice: v.optional(v.number()),
-      purchasePaymentMethod: v.optional(paymentMethodValidator),
+      purchasePaymentMethod: v.optional(acquisitionPaymentMethodValidator),
       minimumProfit: v.optional(v.number()),
       sellingPrice: v.optional(v.number()),
       status: v.optional(v.string()),
