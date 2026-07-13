@@ -758,7 +758,10 @@ export function ApplicationDetailsDialog({
             <Button
               variant="outline"
               disabled={isResolvingPendingDeposit}
-              onClick={() => setPendingDepositResolution(null)}
+              onClick={() => {
+                setPendingDepositResolution(null);
+                setRefundMethod("CASH");
+              }}
             >
               {t("Cancel")}
             </Button>

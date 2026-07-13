@@ -412,6 +412,42 @@ export const balanceSheet = query({
 
 // ─── AR Aging ─────────────────────────────────────────────────────────────────
 
+/**
+ * Allocated amount for a receivable as of a historical date. Reversing an
+ * allocation patches the original row's status to REVERSED (in place) and
+ * inserts a separate marker row for the reversal — so filtering live rows by
+ * `status === "ACTIVE"` reflects only the CURRENT state, not the state as of
+ * an arbitrary past date. An allocation active on asOfDate but reversed after
+ * it must still count; one reversed before asOfDate must not.
+ */
+async function getReceivableAllocatedAsOf(
+  ctx: QueryCtx,
+  receivableId: Id<"receivableDocuments">,
+  asOfDate: number
+): Promise<number> {
+  const allAllocations = await ctx.db
+    .query("paymentAllocations")
+    .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", receivableId))
+    .collect();
+
+  const reversedAtByOriginal = new Map<string, number>();
+  for (const a of allAllocations) {
+    if (a.reversalOfAllocationId) {
+      reversedAtByOriginal.set(a.reversalOfAllocationId, a.createdAt);
+    }
+  }
+
+  let allocated = 0;
+  for (const a of allAllocations) {
+    if (a.reversalOfAllocationId) continue; // marker row, not an original allocation
+    if (a.createdAt > asOfDate) continue; // didn't exist yet as of the date
+    const reversedAt = reversedAtByOriginal.get(a._id);
+    if (reversedAt !== undefined && reversedAt <= asOfDate) continue; // reversed by then
+    allocated += a.amountMinor;
+  }
+  return allocated;
+}
+
 type AgingBuckets = { current: number; days30: number; days60: number; days90: number; over90: number };
 type AgingRow = {
   receivableId: string;
@@ -449,19 +485,7 @@ export const arAging = query({
     const byCurrency = new Map<string, { buckets: AgingBuckets; rows: AgingRow[] }>();
 
     for (const rec of allReceivables) {
-      // Only count allocations that existed as of asOfDate — an allocation
-      // (or reversal) made after asOfDate must not affect a historical figure.
-      const activeAllocations = await ctx.db
-        .query("paymentAllocations")
-        .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", rec._id))
-        .filter((q) =>
-          q.and(
-            q.eq(q.field("status"), "ACTIVE"),
-            q.lte(q.field("createdAt"), asOfDate)
-          )
-        )
-        .collect();
-      const allocated = activeAllocations.reduce((s, a) => s + a.amountMinor, 0);
+      const allocated = await getReceivableAllocatedAsOf(ctx, rec._id, asOfDate);
       const outstanding = Math.max(0, rec.originalAmountMinor - allocated);
       if (outstanding === 0) continue;
 
@@ -566,17 +590,7 @@ export async function computeSubledgerReconciliation(
 
     const subByCurrency = new Map<string, number>();
     for (const rec of allRecs) {
-      const activeAllocations = await ctx.db
-        .query("paymentAllocations")
-        .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", rec._id))
-        .filter((q) =>
-          q.and(
-            q.eq(q.field("status"), "ACTIVE"),
-            q.lte(q.field("createdAt"), effectiveAsOf)
-          )
-        )
-        .collect();
-      const allocated = activeAllocations.reduce((s, a) => s + a.amountMinor, 0);
+      const allocated = await getReceivableAllocatedAsOf(ctx, rec._id, effectiveAsOf);
       const outstanding = Math.max(0, rec.originalAmountMinor - allocated);
       subByCurrency.set(rec.currency, (subByCurrency.get(rec.currency) ?? 0) + outstanding);
     }

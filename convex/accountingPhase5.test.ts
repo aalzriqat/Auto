@@ -209,6 +209,52 @@ describe("Phase 5 — AR aging", () => {
     const aging = await asUser.query(api.accountingReports.arAging, { orgId, asOfDate: Date.now() });
     expect(aging.currencies).toEqual([]);
   });
+
+  test("a historical asOfDate before a since-reversed allocation still counts it as paid", async () => {
+    const { t, orgId, asUser } = await seedReportingDealer();
+    const now = Date.now();
+
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Reversal", lastName: "Customer" })
+    );
+
+    const recId = await asUser.mutation(internal.subledger.createReceivable, {
+      orgId, documentType: "INVOICE", payerType: "CUSTOMER", customerId,
+      sourceType: "sales", sourceId: "sale_reversed_alloc",
+      originalAmountMinor: 5000, currency: "JOD",
+      issueDate: now, dueDate: now - 10 * 86400_000,
+    });
+    const payId = await asUser.mutation(internal.subledger.recordPayment, {
+      orgId, direction: "IN", customerId, method: "CASH",
+      amountMinor: 5000, currency: "JOD", idempotencyKey: "pay_reversed_alloc",
+    });
+    const allocationId = await asUser.mutation(internal.subledger.allocate, {
+      orgId, paymentId: payId, receivableDocumentId: recId, amountMinor: 5000,
+    });
+
+    // Snapshot a point in time strictly after the allocation was created but
+    // strictly before it gets reversed below.
+    const asOfBeforeReversal = Date.now();
+
+    await asUser.mutation(internal.subledger.reverseAllocationMutation, {
+      orgId, allocationId,
+    });
+
+    // As of the snapshot, the payment had fully settled the receivable — the
+    // later reversal (which flips the original allocation row's CURRENT
+    // status to REVERSED) must not retroactively make this historical
+    // snapshot look outstanding.
+    const historicalAging = await asUser.query(api.accountingReports.arAging, {
+      orgId, asOfDate: asOfBeforeReversal,
+    });
+    expect(historicalAging.currencies).toEqual([]);
+
+    // A present-day query (after the reversal) must show it outstanding again.
+    const currentAging = await asUser.query(api.accountingReports.arAging, {
+      orgId, asOfDate: Date.now(),
+    });
+    expect(currentAging.byCurrency.JOD.totalOutstandingMinor).toBe(5000);
+  });
 });
 
 describe("Phase 5 — subledger reconciliation", () => {

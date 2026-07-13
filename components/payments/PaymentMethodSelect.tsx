@@ -12,15 +12,17 @@ export function PaymentMethodSelect({
   value,
   onValueChange,
   methods = DEFAULT_PAYMENT_METHODS,
+  ariaLabel,
 }: Readonly<{
   t: Translate;
   value: PaymentMethod;
   onValueChange: (method: PaymentMethod) => void;
   methods?: readonly PaymentMethod[];
+  ariaLabel?: string;
 }>) {
   return (
     <Select value={value} onValueChange={(method) => onValueChange(method as PaymentMethod)}>
-      <SelectTrigger>
+      <SelectTrigger aria-label={ariaLabel}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent>

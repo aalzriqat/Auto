@@ -391,6 +391,134 @@ describe("Phase 1 — accounting periods", () => {
     ).rejects.toThrow(/reason/i);
   });
 
+  test("close is blocked by a pending manual journal approval, without an override reason", async () => {
+    const { t, orgId, asUser, userId } = await seedPhase1Dealer();
+    await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
+    const account = await t.run((ctx) =>
+      ctx.db
+        .query("chartOfAccounts")
+        .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.CASH_ON_HAND))
+        .unique()
+    );
+
+    const periodId = await asUser.mutation(api.accountingPeriods.create, {
+      orgId,
+      fiscalYear: 2026,
+      periodNumber: 1,
+      startDate: JAN_2026_START,
+      endDate: JAN_2026_END,
+      openImmediately: true,
+    });
+
+    await t.run((ctx) =>
+      ctx.db.insert("manualJournalDrafts", {
+        orgId,
+        status: "PENDING_APPROVAL",
+        memo: "Awaiting review",
+        lines: [{ accountId: account!._id, debitMinor: 1000, creditMinor: 0 }],
+        idempotencyKey: "test-blocker-1",
+        createdBy: userId,
+        createdAt: Date.now(),
+      })
+    );
+
+    await expect(
+      asUser.mutation(api.accountingPeriods.close, { orgId, periodId })
+    ).rejects.toThrow(/awaiting approval/i);
+  });
+
+  test("a non-owner cannot override a blocked close even with a reason", async () => {
+    const { t, orgId, asUser, userId } = await seedPhase1Dealer();
+    await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
+    const account = await t.run((ctx) =>
+      ctx.db
+        .query("chartOfAccounts")
+        .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.CASH_ON_HAND))
+        .unique()
+    );
+
+    const periodId = await asUser.mutation(api.accountingPeriods.create, {
+      orgId,
+      fiscalYear: 2026,
+      periodNumber: 1,
+      startDate: JAN_2026_START,
+      endDate: JAN_2026_END,
+      openImmediately: true,
+    });
+
+    await t.run((ctx) =>
+      ctx.db.insert("manualJournalDrafts", {
+        orgId,
+        status: "PENDING_APPROVAL",
+        memo: "Awaiting review",
+        lines: [{ accountId: account!._id, debitMinor: 1000, creditMinor: 0 }],
+        idempotencyKey: "test-blocker-2",
+        createdBy: userId,
+        createdAt: Date.now(),
+      })
+    );
+
+    // asUser only has manage:finance via a custom "Finance Admin" role, not
+    // the system OWNER role — the override branch must reject them.
+    await expect(
+      asUser.mutation(api.accountingPeriods.close, {
+        orgId,
+        periodId,
+        overrideReason: "Known rounding discrepancy, accepted",
+      })
+    ).rejects.toThrow(/only the organization owner/i);
+  });
+
+  test("the org owner can override a blocked close with a reason", async () => {
+    const { t, orgId, asUser, userId } = await seedPhase1Dealer();
+    await asUser.mutation(api.chartOfAccounts.initialize, { orgId });
+    const account = await t.run((ctx) =>
+      ctx.db
+        .query("chartOfAccounts")
+        .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.CASH_ON_HAND))
+        .unique()
+    );
+
+    const periodId = await asUser.mutation(api.accountingPeriods.create, {
+      orgId,
+      fiscalYear: 2026,
+      periodNumber: 1,
+      startDate: JAN_2026_START,
+      endDate: JAN_2026_END,
+      openImmediately: true,
+    });
+
+    await t.run((ctx) =>
+      ctx.db.insert("manualJournalDrafts", {
+        orgId,
+        status: "PENDING_APPROVAL",
+        memo: "Awaiting review",
+        lines: [{ accountId: account!._id, debitMinor: 1000, creditMinor: 0 }],
+        idempotencyKey: "test-blocker-3",
+        createdBy: userId,
+        createdAt: Date.now(),
+      })
+    );
+
+    // Promote the existing user's role to the system owner role.
+    await t.run(async (ctx) => {
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
+        .unique();
+      await ctx.db.patch(membership!.roleId, { name: "OWNER", isSystemOwnerRole: true });
+    });
+
+    await asUser.mutation(api.accountingPeriods.close, {
+      orgId,
+      periodId,
+      overrideReason: "Known rounding discrepancy, accepted",
+    });
+
+    const closed = await asUser.query(api.accountingPeriods.get, { orgId, periodId });
+    expect(closed?.status).toBe("CLOSED");
+  });
+
   test("assertPostingAllowed rejects posting into a FUTURE period", async () => {
     const { t, orgId, asUser } = await seedPhase1Dealer();
 

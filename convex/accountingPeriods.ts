@@ -4,7 +4,7 @@ import { Id, Doc } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { requireTenantAuth } from "./utils/tenancy";
-import { PERMISSIONS } from "./utils/permissions";
+import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { auditLog } from "./financialAudit";
 import { requireFeature } from "./subscriptions";
 import { computeSubledgerReconciliation, SubledgerReconciliationResult } from "./accountingReports";
@@ -344,7 +344,7 @@ export const close = mutation({
     overrideReason: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
 
     const period = await ctx.db.get(args.periodId);
@@ -358,12 +358,22 @@ export const close = mutation({
     const checklist = await computeCloseChecklist(ctx, args.orgId, period);
     let overrideReason: string | undefined;
     if (!checklist.canClose) {
-      overrideReason = args.overrideReason?.trim();
-      if (!overrideReason) {
+      const trimmedReason = args.overrideReason?.trim();
+      if (!trimmedReason) {
         throw new ConvexError(
           `This period cannot be closed yet: ${checklist.blockers.join(" ")} Pass overrideReason to close anyway.`
         );
       }
+      // Bypassing an integrity blocker (unreconciled AR, unposted events,
+      // unmatched bank lines, pending approvals) is a materially bigger risk
+      // than a routine clean close — restrict it to the org owner, not any
+      // MANAGE_FINANCE holder (e.g. the ACCOUNTANT role).
+      if (!isSystemOwnerRole(role)) {
+        throw new ConvexError(
+          "Forbidden: Only the organization owner can close a period that has open blockers."
+        );
+      }
+      overrideReason = trimmedReason;
     }
 
     const now = Date.now();

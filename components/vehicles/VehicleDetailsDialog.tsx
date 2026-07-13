@@ -504,6 +504,7 @@ export function VehicleDetailsDialog({
                                   onValueChange={(method) =>
                                     setRefundMethodByDeposit((prev) => ({ ...prev, [deposit._id]: method }))
                                   }
+                                  ariaLabel={t("PaymentMethodLabel" as any)}
                                 />
                               </div>
                               <Button
