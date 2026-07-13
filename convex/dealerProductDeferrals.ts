@@ -38,20 +38,32 @@ export const recognizeDeferredCommissionForMonth = internalMutation({
     const deferral = await ctx.db.get(args.deferralId);
     if (!deferral || deferral.orgId !== args.orgId) return { posted: false, reason: "not_found" };
     if (deferral.status !== "ACTIVE") return { posted: false, reason: "not_active" };
-    if (deferral.lastRecognizedYearMonth === args.yearMonth) return { posted: false, reason: "already_ran_this_month" };
+    // Lexicographic comparison is safe for "YYYY-MM" strings. Equality alone
+    // (the old check) only blocked re-running the *same* month — it let a
+    // stale/earlier month slip through as a genuine second posting (its
+    // idempotency key differs from any month already posted), silently
+    // over-recognizing revenue.
+    if (deferral.lastRecognizedYearMonth && args.yearMonth <= deferral.lastRecognizedYearMonth) {
+      return { posted: false, reason: "not_after_last_recognized_month" };
+    }
 
     const remaining = deferral.totalMarginMinor - deferral.recognizedMinor;
     if (remaining <= 0) return { posted: false, reason: "fully_recognized" };
 
-    // Straight-line, same rounding-remainder handling as fixed-asset
-    // depreciation: never less than 1 minor unit/month, final month absorbs
-    // whatever's left so recognizedMinor never overshoots totalMarginMinor.
-    const flatMonthlyAmount = Math.floor(deferral.totalMarginMinor / deferral.termMonths);
-    const amountMinor = Math.min(Math.max(flatMonthlyAmount, 1), remaining);
+    // Explicit month-count schedule: the (termMonths)th month always absorbs
+    // whatever remains, so the deferral finishes in exactly termMonths
+    // (never termMonths+1, which Math.floor's remainder could previously
+    // require) regardless of rounding. Earlier months recognize a ceil'd
+    // flat share so the schedule never has to overshoot to catch up.
+    const monthsRecognized = deferral.monthsRecognized ?? 0;
+    const isFinalContractualMonth = monthsRecognized + 1 >= deferral.termMonths;
+    const flatMonthlyAmount = Math.ceil(deferral.totalMarginMinor / deferral.termMonths);
+    const amountMinor = isFinalContractualMonth ? remaining : Math.min(flatMonthlyAmount, remaining);
 
     const newRecognizedMinor = deferral.recognizedMinor + amountMinor;
     await ctx.db.patch(args.deferralId, {
       recognizedMinor: newRecognizedMinor,
+      monthsRecognized: monthsRecognized + 1,
       lastRecognizedYearMonth: args.yearMonth,
       status: newRecognizedMinor >= deferral.totalMarginMinor ? "FULLY_RECOGNIZED" : "ACTIVE",
     });

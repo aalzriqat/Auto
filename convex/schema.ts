@@ -922,8 +922,14 @@ export default defineSchema({
     currency: v.string(),
     termMonths: v.number(),
     recognizedMinor: v.number(),
+    // Contractual month count actually recognized so far — distinct from
+    // recognizedMinor/lastRecognizedYearMonth, which alone can't tell
+    // recognizeDeferredCommissionForMonth whether the *next* call is the
+    // final contractual month (the one that must absorb the remainder so the
+    // deferral finishes in exactly termMonths, not termMonths+1).
+    monthsRecognized: v.optional(v.number()),
     lastRecognizedYearMonth: v.optional(v.string()), // "YYYY-MM"
-    status: v.union(v.literal("ACTIVE"), v.literal("FULLY_RECOGNIZED")),
+    status: v.union(v.literal("ACTIVE"), v.literal("FULLY_RECOGNIZED"), v.literal("CANCELLED")),
     createdAt: v.number(),
   })
     .index("by_org", ["orgId"])

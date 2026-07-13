@@ -17,6 +17,7 @@ import {
   hookTradeInAccepted,
   getOrgCurrency,
 } from "../accounting/workflowHooks";
+import { computeResoldProductMargin } from "../accounting/postingRules";
 import { toMinorUnits } from "./money";
 import { computeVehicleCapitalizedCost } from "./vehicleCost";
 import {
@@ -305,7 +306,7 @@ async function applySaleCompletionSideEffects(
     { productType: "GAP" as const, soldMinor: gapSoldMinor, costMinor: gapCostMinor, termMonths: args.gapTermMonths },
   ]) {
     if (!deferral.soldMinor) continue;
-    const marginMinor = Math.max(0, deferral.soldMinor - Math.min(deferral.costMinor ?? 0, deferral.soldMinor));
+    const { marginMinor } = computeResoldProductMargin(deferral.soldMinor, deferral.costMinor ?? 0);
     if (marginMinor <= 0) continue;
     await ctx.db.insert("dealerProductDeferrals", {
       orgId: args.orgId,
@@ -315,6 +316,7 @@ async function applySaleCompletionSideEffects(
       currency: prepared.currency,
       termMonths: deferral.termMonths!,
       recognizedMinor: 0,
+      monthsRecognized: 0,
       status: "ACTIVE",
       createdAt: Date.now(),
     });
@@ -366,9 +368,21 @@ async function applySaleCompletionSideEffects(
   }
 
   if (args.tradeInVehicleId && args.tradeInValue && args.tradeInValue > 0) {
+    if (args.tradeInVehicleId === args.vehicleId) {
+      throw new ConvexError("A vehicle cannot be traded in against its own sale.");
+    }
     const tradeInVehicle = await ctx.db.get(args.tradeInVehicleId);
-    if (!tradeInVehicle || tradeInVehicle.orgId !== args.orgId) {
+    if (!tradeInVehicle || tradeInVehicle.orgId !== args.orgId || tradeInVehicle.isDeleted) {
       throw new ConvexError("Trade-in vehicle not found in this organization.");
+    }
+    if (tradeInVehicle.status === "SOLD" || tradeInVehicle.status === "ARCHIVED") {
+      throw new ConvexError(`This trade-in vehicle is ${tradeInVehicle.status.toLowerCase()} and cannot be accepted as a trade-in.`);
+    }
+    // Sourced/drop-ship vehicles cost-basis from sourceCost, not purchasePrice
+    // (see computeVehicleCapitalizedCost) — patching purchasePrice below would
+    // silently never establish a cost basis for this vehicle if it's later resold.
+    if (tradeInVehicle.sourceType === "SOURCED") {
+      throw new ConvexError("A sourced/drop-ship vehicle record cannot be used as a trade-in.");
     }
     // A trade-in vehicle must be brand new to inventory — if it already has a
     // purchase price, it was already capitalized via the normal acquisition

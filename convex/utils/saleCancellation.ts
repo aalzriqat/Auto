@@ -1,8 +1,12 @@
 import { ConvexError } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { MutationCtx } from "../_generated/server";
-import { hookDepositApplicationReversed } from "../accounting/workflowHooks";
-import { reverseAllocation } from "../subledger";
+import {
+  hookDepositApplicationReversed,
+  hookTradeInReversed,
+  hookFiCommissionRecognitionsReversed,
+} from "../accounting/workflowHooks";
+import { reverseAllocation, voidCanonicalPayment } from "../subledger";
 import { restoreVehicleToAvailable } from "./saleHelpers";
 import { reactivateAllVehiclesForDeposit, syncVehicleHoldStatus } from "./depositHelpers";
 
@@ -17,18 +21,30 @@ async function getActiveReceivableAllocations(
     .collect();
 }
 
-async function getAppliedDepositPaymentKeys(
+/**
+ * Idempotency keys of payments this routine already knows how to safely
+ * reverse (in addition to actually reversing them, below) — anything else
+ * found allocated against the receivable is an unexpected customer payment,
+ * which still blocks automatic cancellation.
+ */
+async function getSafelyReversiblePaymentKeys(
   ctx: MutationCtx,
-  quoteId: Id<"quotes"> | undefined
+  sale: Doc<"sales">
 ) {
-  if (!quoteId) return new Set<string>();
+  const keys = new Set<string>();
+  if (sale.tradeInVehicleId) {
+    keys.add(`trade_in_payment_${sale._id}`);
+  }
+  if (!sale.quoteId) return keys;
   const deposits = await ctx.db
     .query("deposits")
-    .withIndex("by_quote", (q) => q.eq("quoteId", quoteId))
+    .withIndex("by_quote", (q) => q.eq("quoteId", sale.quoteId!))
     .filter((q) => q.eq(q.field("status"), "APPLIED"))
     .collect();
-
-  return new Set(deposits.map((deposit) => `deposit_received_${deposit._id}`));
+  for (const deposit of deposits) {
+    keys.add(`deposit_received_${deposit._id}`);
+  }
+  return keys;
 }
 
 async function cancelSaleReceivableIfSafe(
@@ -44,11 +60,11 @@ async function cancelSaleReceivableIfSafe(
   if (!receivable || receivable.orgId !== args.orgId || receivable.status === "CANCELLED") return;
 
   const activeAllocations = await getActiveReceivableAllocations(ctx, receivable._id);
-  const appliedDepositPaymentKeys = await getAppliedDepositPaymentKeys(ctx, args.sale.quoteId);
+  const safeKeys = await getSafelyReversiblePaymentKeys(ctx, args.sale);
 
   for (const allocation of activeAllocations) {
     const payment = await ctx.db.get(allocation.paymentId);
-    if (!payment || payment.orgId !== args.orgId || !appliedDepositPaymentKeys.has(payment.idempotencyKey)) {
+    if (!payment || payment.orgId !== args.orgId || !safeKeys.has(payment.idempotencyKey)) {
       throw new ConvexError(
         "Cannot automatically cancel a sale with customer payments already applied. Refund or reverse those payments first."
       );
@@ -64,6 +80,93 @@ async function cancelSaleReceivableIfSafe(
   }
 
   await ctx.db.patch(receivable._id, { status: "CANCELLED" });
+}
+
+/**
+ * Undoes a trade-in fully when the sale it was part of is cancelled: reverses
+ * the TRADE_IN_ACCEPTED GL entry, voids the canonical trade-in payment (its
+ * allocation was already reversed by cancelSaleReceivableIfSafe, above —
+ * voidCanonicalPayment requires that first), and clears the vehicle's
+ * purchasePrice so it no longer reads as capitalized inventory.
+ */
+async function restoreTradeInVehicle(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    sale: Doc<"sales">;
+    actorId: Id<"users">;
+    reason: string;
+    reversalDate: number;
+  }
+) {
+  const tradeInVehicleId = args.sale.tradeInVehicleId;
+  // Must match saleCompletion.ts's exact gate (tradeInVehicleId && tradeInValue
+  // > 0) — a sale can store a tradeInVehicleId with no positive tradeInValue,
+  // in which case completion never ran the trade-in branch at all. Without
+  // this check, cancelling such a sale would still wipe the vehicle's
+  // unrelated, legitimate purchasePrice (e.g. from a normal acquisition).
+  if (!tradeInVehicleId || !args.sale.tradeInValue || args.sale.tradeInValue <= 0) return;
+
+  const payment = await ctx.db
+    .query("canonicalPayments")
+    .withIndex("by_org_idempotency", (q) =>
+      q.eq("orgId", args.orgId).eq("idempotencyKey", `trade_in_payment_${args.sale._id}`)
+    )
+    .unique();
+  if (payment && payment.status !== "VOIDED") {
+    await voidCanonicalPayment(ctx, {
+      orgId: args.orgId,
+      paymentId: payment._id,
+      actorId: args.actorId,
+    });
+  }
+
+  await hookTradeInReversed(ctx, {
+    orgId: args.orgId,
+    vehicleId: tradeInVehicleId,
+    saleId: args.sale._id,
+    reason: args.reason,
+    actorId: args.actorId,
+    reversalDate: args.reversalDate,
+  });
+
+  const tradeInVehicle = await ctx.db.get(tradeInVehicleId);
+  if (tradeInVehicle && tradeInVehicle.orgId === args.orgId) {
+    await ctx.db.patch(tradeInVehicleId, { purchasePrice: undefined });
+  }
+}
+
+/**
+ * Cancels every warranty/GAP deferral created at sale completion, clawing
+ * back any month(s) of F&I commission already recognized and stopping the
+ * monthly cron from recognizing any more (by moving it out of ACTIVE).
+ */
+async function cancelProductDeferrals(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    saleId: Id<"sales">;
+    actorId: Id<"users">;
+    reason: string;
+    reversalDate: number;
+  }
+) {
+  const deferrals = await ctx.db
+    .query("dealerProductDeferrals")
+    .withIndex("by_sale", (q) => q.eq("saleId", args.saleId))
+    .collect();
+
+  for (const deferral of deferrals) {
+    if (deferral.orgId !== args.orgId || deferral.status === "CANCELLED") continue;
+    await hookFiCommissionRecognitionsReversed(ctx, {
+      orgId: args.orgId,
+      deferralId: deferral._id,
+      reason: args.reason,
+      actorId: args.actorId,
+      reversalDate: args.reversalDate,
+    });
+    await ctx.db.patch(deferral._id, { status: "CANCELLED" });
+  }
 }
 
 async function cancelPendingSupplierPayables(
@@ -164,6 +267,22 @@ export async function cancelCompletedSaleOperationalRecords(
     orgId: args.orgId,
     sale: args.sale,
     actorId: args.actorId,
+  });
+  // Must run after cancelSaleReceivableIfSafe: voidCanonicalPayment requires
+  // the trade-in's payment allocation (reversed above) to no longer be ACTIVE.
+  await restoreTradeInVehicle(ctx, {
+    orgId: args.orgId,
+    sale: args.sale,
+    actorId: args.actorId,
+    reason: args.reason,
+    reversalDate: args.reversalDate,
+  });
+  await cancelProductDeferrals(ctx, {
+    orgId: args.orgId,
+    saleId: args.sale._id,
+    actorId: args.actorId,
+    reason: args.reason,
+    reversalDate: args.reversalDate,
   });
   await restoreVehicleToAvailable(ctx, args.sale.vehicleId);
   await reinstateAppliedDeposits(ctx, {

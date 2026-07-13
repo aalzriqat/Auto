@@ -72,6 +72,26 @@ async function seedDealer(suffix: string) {
   return { t, orgId, userId, roleId, asOwner, customerId };
 }
 
+/** Sale cancellation requires an approver distinct from the sale's own salesperson. */
+async function addCancellationApprover(t: Ctx["t"], orgId: Id<"organizations">, tag: string) {
+  const approverId = await t.run((ctx) =>
+    ctx.db.insert("users", {
+      clerkId: `${tag}_approver`,
+      email: `${tag}.approver@example.com`,
+      name: `${tag} Approver`,
+    })
+  );
+  const approverRoleId = await t.run((ctx) =>
+    ctx.db.insert("roles", {
+      orgId,
+      name: `${tag} Manager`,
+      permissions: ["view:sales", "edit:sales", "approve:requests"],
+    })
+  );
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: approverId, roleId: approverRoleId }));
+  return t.withIdentity({ subject: `${tag}_approver`, clerkId: `${tag}_approver` });
+}
+
 type Ctx = Awaited<ReturnType<typeof seedDealer>>;
 
 async function accountBySystemKey(t: Ctx["t"], orgId: Id<"organizations">, systemKey: string) {
@@ -270,6 +290,173 @@ describe("Trade-in vehicles net against the sale's AR", () => {
       })
     ).rejects.toThrow(/already has a purchase price/i);
   });
+
+  test("rejects a vehicle traded in against its own sale", async () => {
+    const { asOwner, orgId, customerId, userId } = await seedDealer("ti_self");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+
+    await expect(
+      asOwner.mutation(api.sales.create, {
+        orgId, vehicleId, customerId, salespersonId: userId,
+        salePrice: 15000, tradeInVehicleId: vehicleId, tradeInValue: 4000,
+        saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
+      })
+    ).rejects.toThrow(/cannot be traded in against its own sale/i);
+  });
+
+  test("rejects a SOLD trade-in vehicle", async () => {
+    const { t, asOwner, orgId, customerId, userId } = await seedDealer("ti_sold");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    const tradeInVehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "TRD3N9AN0000003AX", status: "AVAILABLE",
+    });
+    // status is workflow-controlled (only completing a sale can set SOLD) —
+    // patch directly to set up the pre-existing state this check guards against.
+    await t.run((ctx) => ctx.db.patch(tradeInVehicleId, { status: "SOLD" }));
+
+    await expect(
+      asOwner.mutation(api.sales.create, {
+        orgId, vehicleId, customerId, salespersonId: userId,
+        salePrice: 15000, tradeInVehicleId, tradeInValue: 4000,
+        saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
+      })
+    ).rejects.toThrow(/cannot be accepted as a trade-in/i);
+  });
+
+  test("rejects a SOURCED trade-in vehicle (its cost basis would never be established)", async () => {
+    const { asOwner, orgId, customerId, userId } = await seedDealer("ti_sourced");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    const tradeInVehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "TRD3N9AN0000004AX", status: "SOURCING", sourceType: "SOURCED",
+      sourcedFromName: "Test Supplier Dealer", sourceCost: 3000,
+    });
+
+    await expect(
+      asOwner.mutation(api.sales.create, {
+        orgId, vehicleId, customerId, salespersonId: userId,
+        salePrice: 15000, tradeInVehicleId, tradeInValue: 4000,
+        saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
+      })
+    ).rejects.toThrow(/sourced\/drop-ship vehicle/i);
+  });
+
+  test("cancelling a completed sale with a trade-in fully reverses it", async () => {
+    const { t, orgId, asOwner, customerId, userId } = await seedDealer("ti_cancel");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    const tradeInVehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "TRD3N9AN0000005AX", status: "AVAILABLE",
+    });
+
+    const saleId = await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 15000, tradeInVehicleId, tradeInValue: 4000,
+      saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
+    });
+
+    const asApprover = await addCancellationApprover(t, orgId, "ti_cancel");
+    await asApprover.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
+
+    const event = await t.run((ctx) =>
+      ctx.db.query("accountingEvents").withIndex("by_org_source", (q) =>
+        q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", tradeInVehicleId)
+      ).filter((q) => q.eq(q.field("eventType"), "TRADE_IN_ACCEPTED")).first()
+    );
+    expect(event?.status).toBe("REVERSED");
+    expect(event?.reversedByEventId).toBeTruthy();
+
+    const tradeInVehicle = await t.run((ctx) => ctx.db.get(tradeInVehicleId));
+    expect(tradeInVehicle?.purchasePrice).toBeUndefined();
+
+    const payment = await t.run((ctx) =>
+      ctx.db.query("canonicalPayments").withIndex("by_org_idempotency", (q) =>
+        q.eq("orgId", orgId).eq("idempotencyKey", `trade_in_payment_${saleId}`)
+      ).unique()
+    );
+    expect(payment?.status).toBe("VOIDED");
+
+    // Not asserted: subledgerReconciliation still counts a CANCELLED
+    // receivable's full originalAmountMinor as outstanding (only `status` is
+    // patched on cancel, not the amount) — a pre-existing gap in that report
+    // unrelated to trade-in/deferral handling, out of scope here.
+  });
+
+  test("reversing a second trade-in of the same vehicle (on a later sale) doesn't collide with the first reversal's key", async () => {
+    const { t, orgId, asOwner, customerId, userId } = await seedDealer("ti_reuse");
+    const vehicleA = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "TRD3N9AN0000006AX", purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    const vehicleB = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "TRD3N9AN0000007AX", purchasePrice: 12000, purchasePaymentMethod: "CASH",
+    });
+    const reusedVehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "TRD3N9AN0000008AX", status: "AVAILABLE",
+    });
+    const asApprover = await addCancellationApprover(t, orgId, "ti_reuse");
+
+    // First trade-in: sell vehicleA, trade in reusedVehicleId, then cancel.
+    const saleA = await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId: vehicleA, customerId, salespersonId: userId,
+      salePrice: 15000, tradeInVehicleId: reusedVehicleId, tradeInValue: 4000,
+      saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
+    });
+    await asApprover.mutation(api.sales.update, { orgId, saleId: saleA, status: "CANCELLED" });
+    const reusedVehicleAfterFirstCancel = await t.run((ctx) => ctx.db.get(reusedVehicleId));
+    expect(reusedVehicleAfterFirstCancel?.purchasePrice).toBeUndefined();
+
+    // Second trade-in: the same vehicle, now clear of a purchase price, is
+    // traded in again on a different sale — then that one is cancelled too.
+    const saleB = await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId: vehicleB, customerId, salespersonId: userId,
+      salePrice: 18000, tradeInVehicleId: reusedVehicleId, tradeInValue: 5000,
+      saleDate: Date.UTC(2025, 4, 1), status: "COMPLETED",
+    });
+    await asApprover.mutation(api.sales.update, { orgId, saleId: saleB, status: "CANCELLED" });
+
+    const secondEvent = await t.run((ctx) =>
+      ctx.db.query("accountingEvents").withIndex("by_org_source", (q) =>
+        q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", reusedVehicleId)
+      ).filter((q) => q.eq(q.field("eventType"), "TRADE_IN_ACCEPTED")).collect()
+    );
+    // Both this vehicle's TRADE_IN_ACCEPTED events (one per sale) must have
+    // actually been reversed — a vehicle-only reversal key would let the
+    // second one silently short-circuit as "already reversed".
+    expect(secondEvent).toHaveLength(2);
+    expect(secondEvent.every((e) => e.status === "REVERSED")).toBe(true);
+  });
+
+  test("cancelling a sale that stores a tradeInVehicleId but no positive tradeInValue never touches that vehicle", async () => {
+    const { t, orgId, asOwner, customerId, userId } = await seedDealer("ti_novalue");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    // A genuinely, separately-acquired vehicle with its own legitimate cost basis.
+    const otherVehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "TRD3N9AN0000009AX", purchasePrice: 7000, purchasePaymentMethod: "CASH",
+    });
+
+    const saleId = await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 15000, tradeInVehicleId: otherVehicleId, // no tradeInValue
+      saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
+    });
+
+    const asApprover = await addCancellationApprover(t, orgId, "ti_novalue");
+    await asApprover.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
+
+    // otherVehicleId's real purchasePrice must survive — completion never
+    // actually ran the trade-in branch for it (no positive tradeInValue), so
+    // cancellation must not treat it as a trade-in to undo.
+    const otherVehicle = await t.run((ctx) => ctx.db.get(otherVehicleId));
+    expect(otherVehicle?.purchasePrice).toBe(7000);
+  });
 });
 
 describe("Resold warranty/GAP products defer the dealer's margin", () => {
@@ -352,6 +539,64 @@ describe("Resold warranty/GAP products defer the dealer's margin", () => {
     const deferred = await accountBySystemKey(t, orgId, "DEFERRED_FI_COMMISSION");
     expect(lines.some((l) => l.accountId === deferred._id)).toBe(false);
   });
+
+  test("cancelling a sale cancels its never-recognized deferral", async () => {
+    const { t, orgId, asOwner, customerId, userId } = await seedDealer("fi_cancel_a");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    const saleId = await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 15000, warrantySold: 500, warrantyCost: 300, warrantyTermMonths: 10,
+      saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
+    });
+
+    const asApprover = await addCancellationApprover(t, orgId, "fi_cancel_a");
+    await asApprover.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
+
+    const deferral = await t.run((ctx) =>
+      ctx.db.query("dealerProductDeferrals").withIndex("by_sale", (q) => q.eq("saleId", saleId)).first()
+    );
+    expect(deferral?.status).toBe("CANCELLED");
+  });
+
+  test("cancelling a sale claws back F&I revenue already recognized for its deferral", async () => {
+    const { t, orgId, asOwner, customerId, userId } = await seedDealer("fi_cancel_b");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    const saleId = await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 15000, warrantySold: 500, warrantyCost: 300, warrantyTermMonths: 10,
+      saleDate: Date.now(), status: "COMPLETED",
+    });
+
+    // Recognize one month before the sale is cancelled.
+    await t.action(internal.crons.triggerFiCommissionRecognition, {});
+    const deferralBefore = await t.run((ctx) =>
+      ctx.db.query("dealerProductDeferrals").withIndex("by_sale", (q) => q.eq("saleId", saleId)).first()
+    );
+    expect(deferralBefore?.recognizedMinor).toBeGreaterThan(0);
+
+    const recognizedEvents = await t.run((ctx) =>
+      ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .filter((q) => q.eq(q.field("eventType"), "FI_COMMISSION_RECOGNIZED")).collect()
+    );
+    expect(recognizedEvents).toHaveLength(1);
+
+    const asApprover = await addCancellationApprover(t, orgId, "fi_cancel_b");
+    await asApprover.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
+
+    const reversedEvent = await t.run((ctx) => ctx.db.get(recognizedEvents[0]._id));
+    expect(reversedEvent?.status).toBe("REVERSED");
+
+    const deferralAfter = await t.run((ctx) => ctx.db.get(deferralBefore!._id));
+    expect(deferralAfter?.status).toBe("CANCELLED");
+
+    // The monthly cron must never touch it again.
+    const summary: string = await t.action(internal.crons.triggerFiCommissionRecognition, {});
+    expect(summary).toMatch(/posted 0\/0/i);
+  });
 });
 
 describe("Monthly F&I commission recognition cron", () => {
@@ -396,6 +641,75 @@ describe("Monthly F&I commission recognition cron", () => {
           .filter((q) => q.eq(q.field("eventType"), "FI_COMMISSION_RECOGNIZED")).collect()
       )
     ).toHaveLength(1);
+  });
+
+  test("a margin that doesn't divide evenly finishes in exactly termMonths, not termMonths+1", async () => {
+    const { t, orgId, asOwner, customerId, userId } = await seedDealer("fi_ceil");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    // Margin = 500-400 = 100 (minor units, JOD scale 3 -> 100 already in whole
+    // units here since warrantySold/Cost are decimal JOD; use whole-JOD amounts
+    // that convert to a minor-unit margin not evenly divisible by 3).
+    await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 15000, warrantySold: 0.100, warrantyCost: 0, warrantyTermMonths: 3,
+      saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
+    });
+    const deferral = await t.run((ctx) =>
+      ctx.db.query("dealerProductDeferrals").withIndex("by_org", (q) => q.eq("orgId", orgId)).first()
+    );
+    expect(deferral?.totalMarginMinor).toBe(100); // 100 minor units, not divisible by 3
+
+    const recognize = (yearMonth: string) =>
+      t.mutation(internal.dealerProductDeferrals.recognizeDeferredCommissionForMonth, {
+        orgId, deferralId: deferral!._id, yearMonth, occurredAt: Date.now(), systemActorId: userId,
+      });
+
+    const m1 = await recognize("2025-01");
+    const m2 = await recognize("2025-02");
+    const m3 = await recognize("2025-03");
+    expect(m1.posted && m2.posted && m3.posted).toBe(true);
+    expect((m1.amountMinor ?? 0) + (m2.amountMinor ?? 0) + (m3.amountMinor ?? 0)).toBe(100);
+
+    const after = await t.run((ctx) => ctx.db.get(deferral!._id));
+    expect(after?.status).toBe("FULLY_RECOGNIZED");
+    expect(after?.recognizedMinor).toBe(100);
+
+    // A 4th month must find nothing left to recognize — the deferral finished
+    // in exactly 3 months, never needing a 4th.
+    const m4 = await recognize("2025-04");
+    expect(m4.posted).toBe(false);
+    expect(m4.reason).toBe("not_active"); // already FULLY_RECOGNIZED after month 3
+  });
+
+  test("rejects an out-of-order (earlier) yearMonth", async () => {
+    const { t, orgId, asOwner, customerId, userId } = await seedDealer("fi_order");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 15000, warrantySold: 500, warrantyCost: 300, warrantyTermMonths: 10,
+      saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
+    });
+    const deferral = await t.run((ctx) =>
+      ctx.db.query("dealerProductDeferrals").withIndex("by_org", (q) => q.eq("orgId", orgId)).first()
+    );
+
+    const recognize = (yearMonth: string) =>
+      t.mutation(internal.dealerProductDeferrals.recognizeDeferredCommissionForMonth, {
+        orgId, deferralId: deferral!._id, yearMonth, occurredAt: Date.now(), systemActorId: userId,
+      });
+
+    await recognize("2025-08");
+    const earlier = await recognize("2025-07");
+    expect(earlier.posted).toBe(false);
+    expect(earlier.reason).toBe("not_after_last_recognized_month");
+
+    const after = await t.run((ctx) => ctx.db.get(deferral!._id));
+    // Only the 2025-08 month's amount was ever recognized.
+    expect(after?.recognizedMinor).toBe(20_000);
   });
 });
 

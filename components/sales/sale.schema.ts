@@ -22,10 +22,10 @@ export const saleSchema = z.object({
   termMonths: z.coerce.number().min(0).optional(),
   warrantySold: z.coerce.number().min(0).optional(),
   warrantyCost: z.coerce.number().min(0).optional(),
-  warrantyTermMonths: z.coerce.number().min(0).optional(),
+  warrantyTermMonths: z.coerce.number().min(0).max(360).optional(),
   gapSold: z.coerce.number().min(0).optional(),
   gapCost: z.coerce.number().min(0).optional(),
-  gapTermMonths: z.coerce.number().min(0).optional(),
+  gapTermMonths: z.coerce.number().min(0).max(360).optional(),
 }).refine(
   (data) => !data.warrantySold || (data.warrantyTermMonths ?? 0) > 0,
   { message: "A warranty term (in months) is required when a warranty premium is charged", path: ["warrantyTermMonths"] }

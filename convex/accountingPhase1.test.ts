@@ -427,6 +427,61 @@ describe("Phase 1 — accounting periods", () => {
     ).rejects.toThrow(/awaiting approval/i);
   });
 
+  test("close is blocked by a FAILED (dead-lettered) outbox event, not just PENDING ones", async () => {
+    const { t, orgId, asUser, userId } = await seedPhase1Dealer();
+
+    const periodId = await asUser.mutation(api.accountingPeriods.create, {
+      orgId,
+      fiscalYear: 2026,
+      periodNumber: 1,
+      startDate: JAN_2026_START,
+      endDate: JAN_2026_END,
+      openImmediately: true,
+    });
+
+    await t.run((ctx) =>
+      ctx.db.insert("pendingAccountingEvents", {
+        orgId,
+        kind: "POST",
+        status: "FAILED",
+        idempotencyKey: "test-failed-outbox-1",
+        accountingDate: JAN_2026_START + 1,
+        actorId: userId,
+        attempts: 10,
+        lastError: "chart of accounts not initialized",
+        createdAt: Date.now(),
+        sourceType: "sales",
+        sourceId: "test-sale-1",
+      })
+    );
+
+    const checklist = await asUser.query(api.accountingPeriods.closeChecklist, { orgId, periodId });
+    expect(checklist.canClose).toBe(false);
+    expect(checklist.failedOutboxEventCount).toBe(1);
+    expect(checklist.blockers.some((b) => /FAILED to post/i.test(b))).toBe(true);
+
+    await expect(
+      asUser.mutation(api.accountingPeriods.close, { orgId, periodId })
+    ).rejects.toThrow(/FAILED to post/i);
+
+    // The owner-override path (already exercised for other blockers below)
+    // must still cover this one — the checklist is generic, not blocker-specific.
+    await t.run(async (ctx) => {
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
+        .unique();
+      await ctx.db.patch(membership!.roleId, { name: "OWNER", isSystemOwnerRole: true });
+    });
+    await asUser.mutation(api.accountingPeriods.close, {
+      orgId,
+      periodId,
+      overrideReason: "Failed event will be retried after fixing the underlying cause",
+    });
+    const closed = await asUser.query(api.accountingPeriods.get, { orgId, periodId });
+    expect(closed?.status).toBe("CLOSED");
+  });
+
   test("a non-owner cannot override a blocked close even with a reason", async () => {
     const { t, orgId, asUser, userId } = await seedPhase1Dealer();
     await asUser.mutation(api.chartOfAccounts.initialize, { orgId });

@@ -18,13 +18,21 @@ const BaseSaleSchema = z.object({
   financingType: z.enum(["CASH", "FINANCED", "LEASE"]).optional(),
   loanAmount: z.number().min(0).optional(),
   apr: z.number().min(0).max(100).optional(),
-  termMonths: z.number().min(1).max(360).optional(),
+  // min(0), not min(1): the frontend form always sends a literal 0 default
+  // for these fields regardless of whether financing/warranty/GAP is
+  // actually used (SaleDialog.tsx never omits or undefines them), and Zod's
+  // .optional() only skips validation for undefined, not an explicit 0 — a
+  // min(1) here rejected every ordinary cash sale with no term financing.
+  // The real "term required when a premium/term IS used" rule is enforced
+  // by warrantyTermRequiredWhenSold/gapTermRequiredWhenSold below (and by
+  // saleCompletion.ts at the point it actually matters), not by this bound.
+  termMonths: z.number().min(0).max(360).optional(),
   warrantySold: z.number().min(0).optional(),
   warrantyCost: z.number().min(0).optional(),
-  warrantyTermMonths: z.number().min(1).max(360).optional(),
+  warrantyTermMonths: z.number().min(0).max(360).optional(),
   gapSold: z.number().min(0).optional(),
   gapCost: z.number().min(0).optional(),
-  gapTermMonths: z.number().min(1).max(360).optional(),
+  gapTermMonths: z.number().min(0).max(360).optional(),
 });
 
 function downPaymentDoesNotExceedSalePrice(data: { downPayment?: number; salePrice?: number }) {
@@ -43,13 +51,37 @@ const downPaymentRefinement = {
   path: ["downPayment"],
 };
 
+function warrantyTermRequiredWhenSold(data: { warrantySold?: number; warrantyTermMonths?: number }) {
+  return !data.warrantySold || (data.warrantyTermMonths ?? 0) > 0;
+}
+
+const warrantyTermRefinement = {
+  message: "A warranty term (in months) is required when a warranty premium is charged",
+  path: ["warrantyTermMonths"],
+};
+
+function gapTermRequiredWhenSold(data: { gapSold?: number; gapTermMonths?: number }) {
+  return !data.gapSold || (data.gapTermMonths ?? 0) > 0;
+}
+
+const gapTermRefinement = {
+  message: "A GAP term (in months) is required when a GAP premium is charged",
+  path: ["gapTermMonths"],
+};
+
 export const CreateSaleSchema = BaseSaleSchema.extend({
   status: z.literal("COMPLETED"),
-}).refine(downPaymentDoesNotExceedSalePrice, downPaymentRefinement);
+})
+  .refine(downPaymentDoesNotExceedSalePrice, downPaymentRefinement)
+  .refine(warrantyTermRequiredWhenSold, warrantyTermRefinement)
+  .refine(gapTermRequiredWhenSold, gapTermRefinement);
 
 export const CreateDraftSaleSchema = BaseSaleSchema.extend({
   status: z.literal("PENDING").optional(),
-}).refine(downPaymentDoesNotExceedSalePrice, downPaymentRefinement);
+})
+  .refine(downPaymentDoesNotExceedSalePrice, downPaymentRefinement)
+  .refine(warrantyTermRequiredWhenSold, warrantyTermRefinement)
+  .refine(gapTermRequiredWhenSold, gapTermRefinement);
 
 export const UpdateSaleSchema = BaseSaleSchema.partial().extend({
   orgId: z.string().min(1, "Organization ID is required"),

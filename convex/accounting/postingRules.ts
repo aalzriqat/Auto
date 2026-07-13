@@ -320,12 +320,28 @@ export function ruleDepositForfeited(p: DepositForfeitedPayload): RuleResult {
 }
 
 /**
+ * The dealer resells a warranty/GAP product for `soldMinor`, owing
+ * `costMinor` of it to the third-party underwriter; the rest is the dealer's
+ * own margin. Cost is clamped to the sold amount so a data-entry mistake
+ * (cost > sold) can never produce a negative margin. Shared by
+ * ruleSaleCompleted (GL posting, below) and saleCompletion.ts's deferral-row
+ * creation — both need the identical clamp/margin math, or the GL-posted
+ * margin and the margin tracked for deferred recognition can silently
+ * diverge if only one side of a future edit gets updated.
+ */
+export function computeResoldProductMargin(
+  soldMinor: number,
+  costMinor: number
+): { clampedCostMinor: number; marginMinor: number } {
+  const clampedCostMinor = Math.min(Math.max(costMinor, 0), soldMinor);
+  return { clampedCostMinor, marginMinor: soldMinor - clampedCostMinor };
+}
+
+/**
  * Adds a resold warranty/GAP product's lines: the full premium collected
  * from the customer was already folded into the AR debit by the caller; this
  * only adds the credit side — cost owed to the underwriter (if any) and the
- * dealer's own margin, deferred rather than recognized immediately. Cost is
- * clamped to the sold amount so a data-entry mistake (cost > sold) can never
- * produce a negative margin line.
+ * dealer's own margin, deferred rather than recognized immediately.
  */
 function addResoldProductLines(
   lines: LineSpec[],
@@ -334,10 +350,9 @@ function addResoldProductLines(
   label: string,
   dims: { customerId?: string; vehicleId?: string; salespersonId?: string }
 ): void {
-  const clampedCost = Math.min(Math.max(costMinor, 0), soldMinor);
-  const marginMinor = soldMinor - clampedCost;
-  if (clampedCost > 0) {
-    lines.push(line(SYSTEM_KEYS.WARRANTY_GAP_PAYABLE, 0, clampedCost, `${label} premium payable`, dims));
+  const { clampedCostMinor, marginMinor } = computeResoldProductMargin(soldMinor, costMinor);
+  if (clampedCostMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.WARRANTY_GAP_PAYABLE, 0, clampedCostMinor, `${label} premium payable`, dims));
   }
   if (marginMinor > 0) {
     lines.push(line(SYSTEM_KEYS.DEFERRED_FI_COMMISSION, 0, marginMinor, `${label} deferred commission`, dims));
