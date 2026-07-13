@@ -82,6 +82,10 @@ function cashAccountKey(
   if (method === "BANK_TRANSFER") return SYSTEM_KEYS.BANK_ACCOUNT;
   // Card payments settle to the bank account (via payment gateway clearing).
   if (method === "CARD") return SYSTEM_KEYS.BANK_ACCOUNT;
+  // Payment links settle to the bank account too, same as PAYMENT_LINK_RECEIVED's
+  // dedicated automatic flow in rulePaymentLinkReceived — this just makes the
+  // generic manual-entry paymentMethod field consistent with that.
+  if (method === "PAYMENT_LINK") return SYSTEM_KEYS.BANK_ACCOUNT;
   return opts?.defaultCash ?? SYSTEM_KEYS.CASH_ON_HAND;
 }
 
@@ -92,6 +96,7 @@ function refundDisbursementAccountKey(method: string | undefined): SystemKey {
   if (method === "CHEQUE") return SYSTEM_KEYS.BANK_ACCOUNT;
   if (method === "BANK_TRANSFER") return SYSTEM_KEYS.BANK_ACCOUNT;
   if (method === "CARD") return SYSTEM_KEYS.BANK_ACCOUNT;
+  if (method === "PAYMENT_LINK") return SYSTEM_KEYS.BANK_ACCOUNT;
   return SYSTEM_KEYS.CASH_ON_HAND;
 }
 

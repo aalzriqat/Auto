@@ -81,6 +81,9 @@ export const capitalize = mutation({
     if (!Number.isSafeInteger(args.usefulLifeMonths) || args.usefulLifeMonths <= 0) {
       throw new ConvexError("Useful life must be a positive integer number of months.");
     }
+    if (args.paymentMethod === "OTHER") {
+      throw new ConvexError("Select a specific payment method — OTHER is not accepted.");
+    }
 
     const currency = args.currency ?? (await getOrgCurrency(ctx, args.orgId));
     const now = Date.now();

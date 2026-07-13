@@ -153,6 +153,9 @@ async function recordMovement(
   if (!Number.isSafeInteger(args.amountMinor) || args.amountMinor <= 0) {
     throw new ConvexError("Amount must be a positive integer minor-unit amount.");
   }
+  if (args.paymentMethod === "OTHER") {
+    throw new ConvexError("Select a specific payment method — OTHER is not accepted.");
+  }
 
   const currency = await getOrgCurrency(ctx, args.orgId);
   const occurredAt = args.occurredAt ?? Date.now();

@@ -150,6 +150,21 @@ describe("Phase 11 — asset capitalization", () => {
     expect(cashLine?.creditMinor).toBe(500_000);
   });
 
+  test("capitalize rejects OTHER as a payment method", async () => {
+    const { orgId, asOwner } = await seedAssetDealer();
+    await expect(
+      asOwner.mutation(api.fixedAssets.capitalize, {
+        orgId,
+        name: "Forklift",
+        purchaseDate: Date.now(),
+        costMinor: 500_000,
+        salvageValueMinor: 50_000,
+        usefulLifeMonths: 60,
+        paymentMethod: "OTHER",
+      })
+    ).rejects.toThrow(/OTHER is not accepted/i);
+  });
+
   test("capitalize rejects when salvage value is not less than cost", async () => {
     const { orgId, asOwner } = await seedAssetDealer();
     await expect(

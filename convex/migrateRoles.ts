@@ -168,3 +168,40 @@ export const backfillMarketplacePermissions = internalMutation({
     return { updatedCount, updates };
   },
 });
+
+/**
+ * One-time backfill for the new expense permissions added to the ACCOUNTANT
+ * default template (accounting-pilot readiness review). `manage:finance` is
+ * a reliable ACCOUNTANT-only signal among the default templates — MANAGER
+ * doesn't hold it — same capability-matching approach as the two backfills
+ * above, so a renamed ACCOUNTANT role (or a custom role built with the same
+ * capability) still gets picked up.
+ */
+export const backfillAccountantExpensePermissions = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const roles = await ctx.db.query("roles").collect();
+    let updatedCount = 0;
+    const updates: string[] = [];
+
+    for (const role of roles) {
+      if (role.isDeleted) continue;
+      const has = (p: string) => role.permissions.includes(p);
+      const toAdd = new Set<string>();
+
+      if (has(PERMISSIONS.MANAGE_FINANCE)) {
+        toAdd.add(PERMISSIONS.CREATE_EXPENSES);
+        toAdd.add(PERMISSIONS.EDIT_EXPENSES);
+      }
+      // Owners always get every permission, same reasoning as the backfills above.
+      if (isSystemOwnerRole(role) || normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME) {
+        toAdd.add(PERMISSIONS.CREATE_EXPENSES);
+        toAdd.add(PERMISSIONS.EDIT_EXPENSES);
+      }
+
+      if (await patchRoleIfNeeded(ctx, role, toAdd, updates)) updatedCount++;
+    }
+
+    return { updatedCount, updates };
+  },
+});

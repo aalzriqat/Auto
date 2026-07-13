@@ -43,6 +43,9 @@ export function amountToMinorOrThrow(amount: number, currency: string, label = "
 }
 
 export function methodOrDefault(method?: DepositMethod): DepositMethod {
+  if (method === "OTHER") {
+    throw new ConvexError("Select a specific payment method — OTHER is not accepted for a deposit.");
+  }
   return method ?? "CASH";
 }
 
