@@ -14,6 +14,14 @@ async function getReceivableOutstandingMinor(
 ): Promise<number> {
   const doc = await ctx.db.get(receivableId);
   if (!doc) throw new ConvexError("Receivable not found.");
+  // A cancelled receivable's allocations are reversed (see saleCancellation.ts),
+  // which would otherwise make originalAmountMinor - 0 read as fully
+  // outstanding again — this is a CURRENT-balance helper (unlike
+  // accountingReports.ts's asOf-date reports), so "cancelled" always means
+  // zero, with no date reasoning needed. Without this, allocatePaymentToReceivable
+  // would let a new payment be applied to a dead receivable, and
+  // getReceivableBalance would show a cancelled sale as still owing in full.
+  if (doc.status === "CANCELLED") return 0;
 
   const activeAllocations = await ctx.db
     .query("paymentAllocations")

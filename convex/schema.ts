@@ -205,7 +205,13 @@ export default defineSchema({
     resultEventId: v.optional(v.id("accountingEvents")),
   })
     .index("by_org_status", ["orgId", "status"])
-    .index("by_org_idempotency", ["orgId", "idempotencyKey"]),
+    .index("by_org_idempotency", ["orgId", "idempotencyKey"])
+    // Lets a cancelled/voided source (e.g. a warranty/GAP deferral whose sale
+    // was cancelled) sweep every one of its own not-yet-posted queued POSTs in
+    // one query, not just the one idempotencyKey it happens to know about —
+    // a recurring source (monthly F&I recognition) can have more than one
+    // stuck entry across different periods. See cancelPendingPostsBySource.
+    .index("by_org_source", ["orgId", "sourceType", "sourceId"]),
 
   journalEntries: defineTable({
     orgId: v.id("organizations"),
@@ -306,6 +312,14 @@ export default defineSchema({
     reversedDocumentId: v.optional(v.id("receivableDocuments")),
     createdAt: v.number(),
     createdBy: v.id("users"),
+    // Set only when status transitions to CANCELLED (saleCancellation.ts).
+    // Historical AR reports (arAging, subledgerReconciliation) need this to
+    // tell "was open as of asOfDate, cancelled later" (still counts) apart
+    // from "already cancelled by asOfDate" (must not count) — the receivable's
+    // CURRENT status alone can't make that distinction for a past asOfDate.
+    cancelledAt: v.optional(v.number()),
+    cancelledBy: v.optional(v.id("users")),
+    cancellationReason: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
     .index("by_org_customer", ["orgId", "customerId"])

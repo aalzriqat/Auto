@@ -20,6 +20,7 @@ import {
   enqueuePendingPost,
   enqueuePendingReversal,
   cancelPendingPostByKey,
+  cancelPendingPostsBySource,
 } from "../accountingOutbox";
 
 export async function getOrgCurrency(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">): Promise<string> {
@@ -1098,21 +1099,12 @@ export async function hookFiCommissionRecognitionsReversed(
     }
   }
 
-  const pendingEvents = await ctx.db
-    .query("pendingAccountingEvents")
-    .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
-    .filter((q) =>
-      q.and(
-        q.eq(q.field("kind"), "POST"),
-        q.eq(q.field("sourceType"), "dealerProductDeferrals"),
-        q.eq(q.field("sourceId"), args.deferralId.toString()),
-        q.eq(q.field("eventType"), "FI_COMMISSION_RECOGNIZED")
-      )
-    )
-    .collect();
-  for (const pending of pendingEvents) {
-    await ctx.db.delete(pending._id);
-  }
+  // Drops every not-yet-posted queued month, PENDING or FAILED — a recognition
+  // attempt that failed 10 times (accountingOutbox.ts's MAX_ATTEMPTS) moves to
+  // FAILED but stays retryable by a finance user, so a status: "PENDING"-only
+  // sweep here would leave it behind: a later manual retry could then post F&I
+  // revenue for a deferral whose sale was already cancelled.
+  await cancelPendingPostsBySource(ctx, args.orgId, "dealerProductDeferrals", args.deferralId.toString());
 }
 
 export async function hookAssetImpaired(
