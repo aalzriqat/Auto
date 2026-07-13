@@ -387,6 +387,76 @@ describe("Trade-in vehicles net against the sale's AR", () => {
     // patched on cancel, not the amount) — a pre-existing gap in that report
     // unrelated to trade-in/deferral handling, out of scope here.
   });
+
+  test("reversing a second trade-in of the same vehicle (on a later sale) doesn't collide with the first reversal's key", async () => {
+    const { t, orgId, asOwner, customerId, userId } = await seedDealer("ti_reuse");
+    const vehicleA = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "TRD3N9AN0000006AX", purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    const vehicleB = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "TRD3N9AN0000007AX", purchasePrice: 12000, purchasePaymentMethod: "CASH",
+    });
+    const reusedVehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "TRD3N9AN0000008AX", status: "AVAILABLE",
+    });
+    const asApprover = await addCancellationApprover(t, orgId, "ti_reuse");
+
+    // First trade-in: sell vehicleA, trade in reusedVehicleId, then cancel.
+    const saleA = await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId: vehicleA, customerId, salespersonId: userId,
+      salePrice: 15000, tradeInVehicleId: reusedVehicleId, tradeInValue: 4000,
+      saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
+    });
+    await asApprover.mutation(api.sales.update, { orgId, saleId: saleA, status: "CANCELLED" });
+    const reusedVehicleAfterFirstCancel = await t.run((ctx) => ctx.db.get(reusedVehicleId));
+    expect(reusedVehicleAfterFirstCancel?.purchasePrice).toBeUndefined();
+
+    // Second trade-in: the same vehicle, now clear of a purchase price, is
+    // traded in again on a different sale — then that one is cancelled too.
+    const saleB = await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId: vehicleB, customerId, salespersonId: userId,
+      salePrice: 18000, tradeInVehicleId: reusedVehicleId, tradeInValue: 5000,
+      saleDate: Date.UTC(2025, 4, 1), status: "COMPLETED",
+    });
+    await asApprover.mutation(api.sales.update, { orgId, saleId: saleB, status: "CANCELLED" });
+
+    const secondEvent = await t.run((ctx) =>
+      ctx.db.query("accountingEvents").withIndex("by_org_source", (q) =>
+        q.eq("orgId", orgId).eq("sourceType", "vehicles").eq("sourceId", reusedVehicleId)
+      ).filter((q) => q.eq(q.field("eventType"), "TRADE_IN_ACCEPTED")).collect()
+    );
+    // Both this vehicle's TRADE_IN_ACCEPTED events (one per sale) must have
+    // actually been reversed — a vehicle-only reversal key would let the
+    // second one silently short-circuit as "already reversed".
+    expect(secondEvent).toHaveLength(2);
+    expect(secondEvent.every((e) => e.status === "REVERSED")).toBe(true);
+  });
+
+  test("cancelling a sale that stores a tradeInVehicleId but no positive tradeInValue never touches that vehicle", async () => {
+    const { t, orgId, asOwner, customerId, userId } = await seedDealer("ti_novalue");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    // A genuinely, separately-acquired vehicle with its own legitimate cost basis.
+    const otherVehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "TRD3N9AN0000009AX", purchasePrice: 7000, purchasePaymentMethod: "CASH",
+    });
+
+    const saleId = await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 15000, tradeInVehicleId: otherVehicleId, // no tradeInValue
+      saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
+    });
+
+    const asApprover = await addCancellationApprover(t, orgId, "ti_novalue");
+    await asApprover.mutation(api.sales.update, { orgId, saleId, status: "CANCELLED" });
+
+    // otherVehicleId's real purchasePrice must survive — completion never
+    // actually ran the trade-in branch for it (no positive tradeInValue), so
+    // cancellation must not treat it as a trade-in to undo.
+    const otherVehicle = await t.run((ctx) => ctx.db.get(otherVehicleId));
+    expect(otherVehicle?.purchasePrice).toBe(7000);
+  });
 });
 
 describe("Resold warranty/GAP products defer the dealer's margin", () => {

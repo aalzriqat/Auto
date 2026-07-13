@@ -519,12 +519,19 @@ export async function hookTradeInAccepted(
   });
 }
 
-/** Reverses the TRADE_IN_ACCEPTED entry when the sale it was part of is cancelled. */
+/**
+ * Reverses the TRADE_IN_ACCEPTED entry when the sale it was part of is
+ * cancelled. reversalKey includes saleId, not just vehicleId — the same
+ * vehicle can be traded in again on a later sale once its purchasePrice is
+ * cleared, and a vehicle-only key would collide with an earlier trade-in's
+ * reversal, causing reverseAccountingEvent's own idempotency check to report
+ * "already reversed" without ever reversing the second sale's entry.
+ */
 export const hookTradeInReversed = makeReversalHook<{ vehicleId: Id<"vehicles">; saleId: Id<"sales"> }>({
   eventType: "TRADE_IN_ACCEPTED",
   sourceType: "vehicles",
   sourceId: (a) => a.vehicleId.toString(),
-  reversalKey: (a) => `trade_in_reversed_${a.vehicleId}`,
+  reversalKey: (a) => `trade_in_reversed_${a.vehicleId}_${a.saleId}`,
   pendingPostKey: (a) => `trade_in_accepted_${a.saleId}`,
 });
 

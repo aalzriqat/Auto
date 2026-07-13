@@ -100,7 +100,12 @@ async function restoreTradeInVehicle(
   }
 ) {
   const tradeInVehicleId = args.sale.tradeInVehicleId;
-  if (!tradeInVehicleId) return;
+  // Must match saleCompletion.ts's exact gate (tradeInVehicleId && tradeInValue
+  // > 0) — a sale can store a tradeInVehicleId with no positive tradeInValue,
+  // in which case completion never ran the trade-in branch at all. Without
+  // this check, cancelling such a sale would still wipe the vehicle's
+  // unrelated, legitimate purchasePrice (e.g. from a normal acquisition).
+  if (!tradeInVehicleId || !args.sale.tradeInValue || args.sale.tradeInValue <= 0) return;
 
   const payment = await ctx.db
     .query("canonicalPayments")
