@@ -11,6 +11,7 @@ import {
   hookAssetDisposed,
   getOrgCurrency,
 } from "./accounting/workflowHooks";
+import { paymentMethodValidator } from "./utils/paymentMethods";
 
 const methodValidator = v.literal("STRAIGHT_LINE");
 
@@ -62,7 +63,7 @@ export const capitalize = mutation({
     usefulLifeMonths: v.number(),
     method: v.optional(methodValidator),
     depreciationStartDate: v.optional(v.number()),
-    paymentMethod: v.optional(v.string()),
+    paymentMethod: v.optional(paymentMethodValidator),
     notes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -80,9 +81,6 @@ export const capitalize = mutation({
     }
     if (!Number.isSafeInteger(args.usefulLifeMonths) || args.usefulLifeMonths <= 0) {
       throw new ConvexError("Useful life must be a positive integer number of months.");
-    }
-    if (args.paymentMethod === "OTHER") {
-      throw new ConvexError("Select a specific payment method — OTHER is not accepted.");
     }
 
     const currency = args.currency ?? (await getOrgCurrency(ctx, args.orgId));

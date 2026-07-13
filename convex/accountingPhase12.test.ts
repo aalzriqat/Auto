@@ -149,7 +149,7 @@ describe("Phase 12 — capital contribution", () => {
     expect(await partnerBalanceMinor(asOwner, orgId, partnerId)).toBe(500_000);
   });
 
-  test("rejects OTHER as a payment method", async () => {
+  test("rejects an unsupported payment method", async () => {
     const { orgId, asOwner } = await seedEquityDealer();
     const partnerId = await asOwner.mutation(api.partnerEquity.add, {
       orgId, partnerName: "Partner C",
@@ -157,9 +157,15 @@ describe("Phase 12 — capital contribution", () => {
 
     await expect(
       asOwner.mutation(api.partnerEquity.recordEquityMovement, {
-        orgId, partnerId, type: "CONTRIBUTION", amountMinor: 1_000_000, paymentMethod: "OTHER",
+        orgId, partnerId, type: "CONTRIBUTION", amountMinor: 1_000_000, paymentMethod: "OTHER" as any,
       })
-    ).rejects.toThrow(/OTHER is not accepted/i);
+    ).rejects.toThrow(/Validator error/i);
+
+    await expect(
+      asOwner.mutation(api.partnerEquity.recordEquityMovement, {
+        orgId, partnerId, type: "CONTRIBUTION", amountMinor: 1_000_000, paymentMethod: "WIRE" as any,
+      })
+    ).rejects.toThrow(/Validator error/i);
   });
 });
 

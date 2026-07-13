@@ -76,5 +76,9 @@ describe("backfillAccountantExpensePermissions", () => {
     const role = await t.run((ctx) => ctx.db.get(roleId));
     expect(role?.permissions).toContain("create:expenses");
     expect(role?.permissions).toContain("edit:expenses");
+    // patchRoleIfNeeded also stamps the explicit ownership flag on any stale
+    // OWNER-named row missing it — this backfill picking that up too is the
+    // whole point of sharing that helper, not just this permission pair.
+    expect(role?.isSystemOwnerRole).toBe(true);
   });
 });
