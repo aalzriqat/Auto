@@ -1,7 +1,7 @@
 import { convexTest } from "convex-test";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { ALL_PERMISSIONS } from "./utils/permissions";
 
 const MODULES = import.meta.glob("./**/*.*s");
@@ -56,7 +56,7 @@ describe("subledger balances", () => {
     const { orgId, customerId, asManager } = await setupSubledgerOrg();
     const now = Date.now();
 
-    const receivableDocumentId = await asManager.mutation(api.subledger.createReceivable, {
+    const receivableDocumentId = await asManager.mutation(internal.subledger.createReceivable, {
       orgId,
       documentType: "INVOICE",
       payerType: "CUSTOMER",
@@ -68,7 +68,7 @@ describe("subledger balances", () => {
       issueDate: now,
       dueDate: now + 7 * 24 * 60 * 60 * 1000,
     });
-    const paymentId = await asManager.mutation(api.subledger.recordPayment, {
+    const paymentId = await asManager.mutation(internal.subledger.recordPayment, {
       orgId,
       direction: "IN",
       customerId,
@@ -77,7 +77,7 @@ describe("subledger balances", () => {
       currency: "JOD",
       idempotencyKey: "subledger-payment-1",
     });
-    const allocationId = await asManager.mutation(api.subledger.allocate, {
+    const allocationId = await asManager.mutation(internal.subledger.allocate, {
       orgId,
       paymentId,
       receivableDocumentId,
@@ -101,7 +101,7 @@ describe("subledger balances", () => {
     expect(allocationsByReceivable).toHaveLength(1);
     expect(allocationsByReceivable[0]._id).toBe(allocationId);
 
-    await asManager.mutation(api.subledger.reverseAllocationMutation, { orgId, allocationId });
+    await asManager.mutation(internal.subledger.reverseAllocationMutation, { orgId, allocationId });
 
     const reopened = await asManager.query(api.subledger.getReceivableBalance, {
       orgId,
@@ -117,7 +117,7 @@ describe("subledger balances", () => {
   test("listReceivables_filters_by_customer_and_status", async () => {
     const { orgId, customerId, asManager } = await setupSubledgerOrg();
     const now = Date.now();
-    const receivableDocumentId = await asManager.mutation(api.subledger.createReceivable, {
+    const receivableDocumentId = await asManager.mutation(internal.subledger.createReceivable, {
       orgId,
       documentType: "INSTALLMENT",
       payerType: "CUSTOMER",

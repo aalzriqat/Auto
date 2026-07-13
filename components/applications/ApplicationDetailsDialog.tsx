@@ -21,6 +21,7 @@ import { scaleForCurrency } from "@/components/accounting/AccountingTabShared";
 import { DisbursementConfirmationDialog } from "./DisbursementConfirmationDialog";
 import { VehicleHandoverDialog } from "./VehicleHandoverDialog";
 import { RegisterExpectedPaymentDialog, type ExpectedPaymentMethod } from "./RegisterExpectedPaymentDialog";
+import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 
 type DepositResolution = "REFUNDED" | "FORFEITED";
 type PendingDepositResolution = {
@@ -61,6 +62,7 @@ export function ApplicationDetailsDialog({
   const [isRegisteringPayment, setIsRegisteringPayment] = useState(false);
   const [resolvingDepositId, setResolvingDepositId] = useState<Id<"deposits"> | null>(null);
   const [pendingDepositResolution, setPendingDepositResolution] = useState<PendingDepositResolution>(null);
+  const [refundMethod, setRefundMethod] = useState<PaymentMethod>("CASH");
   const [cancelReason, setCancelReason] = useState("");
   const finalizeDealIdempotencyKeyRef = useRef<string | null>(null);
   const cancelApplicationIdempotencyKeyRef = useRef<string | null>(null);
@@ -164,13 +166,19 @@ export function ApplicationDetailsDialog({
     if (!activeOrgId) return;
     setResolvingDepositId(depositId);
     try {
-      await releaseDeposit({ orgId: activeOrgId, depositId, resolution });
+      await releaseDeposit({
+        orgId: activeOrgId,
+        depositId,
+        resolution,
+        refundMethod: resolution === "REFUNDED" ? refundMethod : undefined,
+      });
       toast.success(
         resolution === "REFUNDED"
           ? t("DepositRefundedSuccess")
           : t("DepositForfeitedSuccess")
       );
       setPendingDepositResolution(null);
+      setRefundMethod("CASH");
     } catch {
       toast.error(t("UnexpectedError" as any));
     } finally {
@@ -717,7 +725,10 @@ export function ApplicationDetailsDialog({
       <Dialog
         open={pendingDepositResolution !== null}
         onOpenChange={(nextOpen) => {
-          if (!nextOpen && !isResolvingPendingDeposit) setPendingDepositResolution(null);
+          if (!nextOpen && !isResolvingPendingDeposit) {
+            setPendingDepositResolution(null);
+            setRefundMethod("CASH");
+          }
         }}
       >
         <DialogContent className="max-w-md">
@@ -735,6 +746,12 @@ export function ApplicationDetailsDialog({
                 <span className="text-muted-foreground">{t("DepositResolutionOutcome")}</span>
                 <span className="font-medium">{pendingResolutionLabel}</span>
               </div>
+            </div>
+          )}
+          {pendingDepositResolution?.resolution === "REFUNDED" && (
+            <div className="space-y-1">
+              <label className="text-sm font-medium">{t("PaymentMethodLabel" as any)}</label>
+              <PaymentMethodSelect t={t as any} value={refundMethod} onValueChange={setRefundMethod} />
             </div>
           )}
           <DialogFooter className="gap-2">

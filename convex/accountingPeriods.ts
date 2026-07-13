@@ -1,12 +1,13 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { Id } from "./_generated/dataModel";
+import { Id, Doc } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { auditLog } from "./financialAudit";
 import { requireFeature } from "./subscriptions";
+import { computeSubledgerReconciliation, SubledgerReconciliationResult } from "./accountingReports";
 
 const periodStatusValidator = v.union(
   v.literal("FUTURE"),
@@ -245,10 +246,102 @@ export const open = mutation({
   },
 });
 
+export type CloseChecklistResult = {
+  canClose: boolean;
+  blockers: string[];
+  pendingOutboxEventCount: number;
+  pendingManualJournalCount: number;
+  unmatchedBankLineCount: number;
+  arReconciliation: SubledgerReconciliationResult;
+};
+
+/**
+ * Everything that must be true before a period can close. Closing only flips
+ * a status flag and writes an audit entry — this is what actually protects
+ * the books: any accounting event still waiting to post, any manual journal
+ * still waiting on its second-approver, any AR-vs-GL discrepancy, or any bank
+ * statement line from within the period that's never been matched, all block
+ * the close outright rather than silently landing in a later period.
+ */
+async function computeCloseChecklist(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  period: Doc<"accountingPeriods">
+): Promise<CloseChecklistResult> {
+  const pendingOutboxEvents = (
+    await ctx.db
+      .query("pendingAccountingEvents")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
+      .collect()
+  ).filter((e) => e.accountingDate <= period.endDate);
+
+  // Not period-scoped by date — manualJournalDrafts have no accountingDate
+  // until posted, and an unresolved approval is a control gap regardless of
+  // which period it will eventually land in.
+  const pendingManualJournals = await ctx.db
+    .query("manualJournalDrafts")
+    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING_APPROVAL"))
+    .collect();
+
+  const unmatchedBankLines = (
+    await ctx.db
+      .query("bankStatementLines")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "UNMATCHED"))
+      .collect()
+  ).filter((l) => l.statementDate <= period.endDate);
+
+  const arReconciliation = await computeSubledgerReconciliation(ctx, orgId, period.endDate);
+
+  const blockers: string[] = [];
+  if (pendingOutboxEvents.length > 0) {
+    blockers.push(`${pendingOutboxEvents.length} accounting event(s) from this period have not posted yet.`);
+  }
+  if (pendingManualJournals.length > 0) {
+    blockers.push(`${pendingManualJournals.length} manual journal entr${pendingManualJournals.length === 1 ? "y is" : "ies are"} awaiting approval.`);
+  }
+  if (!arReconciliation.isReconciled) {
+    const badCurrencies = arReconciliation.currencies.filter((c) => !arReconciliation.byCurrency[c].isReconciled);
+    blockers.push(`AR subledger does not reconcile to the GL for: ${badCurrencies.join(", ")}.`);
+  }
+  if (unmatchedBankLines.length > 0) {
+    blockers.push(`${unmatchedBankLines.length} bank statement line(s) from this period are still unmatched.`);
+  }
+
+  return {
+    canClose: blockers.length === 0,
+    blockers,
+    pendingOutboxEventCount: pendingOutboxEvents.length,
+    pendingManualJournalCount: pendingManualJournals.length,
+    unmatchedBankLineCount: unmatchedBankLines.length,
+    arReconciliation,
+  };
+}
+
+export const closeChecklist = query({
+  args: {
+    orgId: v.id("organizations"),
+    periodId: v.id("accountingPeriods"),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+
+    const period = await ctx.db.get(args.periodId);
+    if (!period || period.orgId !== args.orgId) {
+      throw new ConvexError("Period not found in this organization.");
+    }
+    return computeCloseChecklist(ctx, args.orgId, period);
+  },
+});
+
 export const close = mutation({
   args: {
     orgId: v.id("organizations"),
     periodId: v.id("accountingPeriods"),
+    // A period whose checklist fails can still be closed with an explicit
+    // override + reason, for cases the checklist can't model (e.g. a known,
+    // accepted rounding discrepancy) — but the override is always audited.
+    overrideReason: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -262,6 +355,17 @@ export const close = mutation({
       throw new ConvexError(`Cannot close a period with status "${period.status}".`);
     }
 
+    const checklist = await computeCloseChecklist(ctx, args.orgId, period);
+    let overrideReason: string | undefined;
+    if (!checklist.canClose) {
+      overrideReason = args.overrideReason?.trim();
+      if (!overrideReason) {
+        throw new ConvexError(
+          `This period cannot be closed yet: ${checklist.blockers.join(" ")} Pass overrideReason to close anyway.`
+        );
+      }
+    }
+
     const now = Date.now();
     await ctx.db.patch(args.periodId, {
       status: "CLOSED",
@@ -271,7 +375,9 @@ export const close = mutation({
     await auditLog(ctx, {
       orgId: args.orgId, actorId: user._id, actionType: "CLOSE_PERIOD",
       resourceType: "accountingPeriods", resourceId: args.periodId.toString(),
-      description: `Closed period ${period.fiscalYear}-${String(period.periodNumber).padStart(2, "0")}`,
+      description: overrideReason
+        ? `Closed period ${period.fiscalYear}-${String(period.periodNumber).padStart(2, "0")} despite open blockers (${checklist.blockers.join(" ")}) — override: ${overrideReason}`
+        : `Closed period ${period.fiscalYear}-${String(period.periodNumber).padStart(2, "0")}`,
     });
     return args.periodId;
   },

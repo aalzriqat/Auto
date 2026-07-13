@@ -1,7 +1,7 @@
 import { convexTest } from "convex-test";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 
 async function seedPhase3Dealer() {
   const t = convexTest(schema, import.meta.glob("./**/*.*s"));
@@ -40,7 +40,7 @@ describe("Phase 3 — receivable documents", () => {
     const { orgId, customerId, asUser } = await seedPhase3Dealer();
     const now = Date.now();
 
-    const recId = await asUser.mutation(api.subledger.createReceivable, {
+    const recId = await asUser.mutation(internal.subledger.createReceivable, {
       orgId,
       documentType: "INVOICE",
       payerType: "CUSTOMER",
@@ -59,7 +59,7 @@ describe("Phase 3 — receivable documents", () => {
     const { orgId, customerId, asUser } = await seedPhase3Dealer();
     const now = Date.now();
 
-    const recId = await asUser.mutation(api.subledger.createReceivable, {
+    const recId = await asUser.mutation(internal.subledger.createReceivable, {
       orgId,
       documentType: "INVOICE",
       payerType: "CUSTOMER",
@@ -85,11 +85,11 @@ describe("Phase 3 — payments", () => {
   test("recording same idempotency key twice returns same payment", async () => {
     const { orgId, customerId, asUser } = await seedPhase3Dealer();
 
-    const first = await asUser.mutation(api.subledger.recordPayment, {
+    const first = await asUser.mutation(internal.subledger.recordPayment, {
       orgId, direction: "IN", customerId, method: "CASH",
       amountMinor: 5000, currency: "JOD", idempotencyKey: "pay_idem_001",
     });
-    const second = await asUser.mutation(api.subledger.recordPayment, {
+    const second = await asUser.mutation(internal.subledger.recordPayment, {
       orgId, direction: "IN", customerId, method: "CASH",
       amountMinor: 5000, currency: "JOD", idempotencyKey: "pay_idem_001",
     });
@@ -99,7 +99,7 @@ describe("Phase 3 — payments", () => {
   test("payment unapplied balance equals full amount before any allocation", async () => {
     const { orgId, customerId, asUser } = await seedPhase3Dealer();
 
-    const payId = await asUser.mutation(api.subledger.recordPayment, {
+    const payId = await asUser.mutation(internal.subledger.recordPayment, {
       orgId, direction: "IN", customerId, method: "CASH",
       amountMinor: 8000, currency: "JOD", idempotencyKey: "pay_bal_001",
     });
@@ -114,18 +114,18 @@ describe("Phase 3 — payment allocations", () => {
     const { orgId, customerId, asUser } = await seedPhase3Dealer();
     const now = Date.now();
 
-    const recId = await asUser.mutation(api.subledger.createReceivable, {
+    const recId = await asUser.mutation(internal.subledger.createReceivable, {
       orgId, documentType: "INVOICE", payerType: "CUSTOMER", customerId,
       sourceType: "sales", sourceId: "sale_alloc_001",
       originalAmountMinor: 5000, currency: "JOD",
       issueDate: now, dueDate: now + 30 * 86400_000,
     });
-    const payId = await asUser.mutation(api.subledger.recordPayment, {
+    const payId = await asUser.mutation(internal.subledger.recordPayment, {
       orgId, direction: "IN", customerId, method: "CASH",
       amountMinor: 5000, currency: "JOD", idempotencyKey: "pay_alloc_001",
     });
 
-    await asUser.mutation(api.subledger.allocate, {
+    await asUser.mutation(internal.subledger.allocate, {
       orgId, paymentId: payId, receivableDocumentId: recId, amountMinor: 5000,
     });
 
@@ -138,18 +138,18 @@ describe("Phase 3 — payment allocations", () => {
     const { orgId, customerId, asUser } = await seedPhase3Dealer();
     const now = Date.now();
 
-    const recId = await asUser.mutation(api.subledger.createReceivable, {
+    const recId = await asUser.mutation(internal.subledger.createReceivable, {
       orgId, documentType: "INVOICE", payerType: "CUSTOMER", customerId,
       sourceType: "sales", sourceId: "sale_partial_001",
       originalAmountMinor: 10000, currency: "JOD",
       issueDate: now, dueDate: now + 30 * 86400_000,
     });
-    const payId = await asUser.mutation(api.subledger.recordPayment, {
+    const payId = await asUser.mutation(internal.subledger.recordPayment, {
       orgId, direction: "IN", customerId, method: "CASH",
       amountMinor: 4000, currency: "JOD", idempotencyKey: "pay_partial_001",
     });
 
-    await asUser.mutation(api.subledger.allocate, {
+    await asUser.mutation(internal.subledger.allocate, {
       orgId, paymentId: payId, receivableDocumentId: recId, amountMinor: 4000,
     });
 
@@ -162,25 +162,25 @@ describe("Phase 3 — payment allocations", () => {
     const { orgId, customerId, asUser } = await seedPhase3Dealer();
     const now = Date.now();
 
-    const rec1 = await asUser.mutation(api.subledger.createReceivable, {
+    const rec1 = await asUser.mutation(internal.subledger.createReceivable, {
       orgId, documentType: "INSTALLMENT", payerType: "CUSTOMER", customerId,
       sourceType: "installments", sourceId: "inst_001",
       originalAmountMinor: 3000, currency: "JOD",
       issueDate: now, dueDate: now + 30 * 86400_000,
     });
-    const rec2 = await asUser.mutation(api.subledger.createReceivable, {
+    const rec2 = await asUser.mutation(internal.subledger.createReceivable, {
       orgId, documentType: "INSTALLMENT", payerType: "CUSTOMER", customerId,
       sourceType: "installments", sourceId: "inst_002",
       originalAmountMinor: 3000, currency: "JOD",
       issueDate: now, dueDate: now + 60 * 86400_000,
     });
-    const payId = await asUser.mutation(api.subledger.recordPayment, {
+    const payId = await asUser.mutation(internal.subledger.recordPayment, {
       orgId, direction: "IN", customerId, method: "CASH",
       amountMinor: 6000, currency: "JOD", idempotencyKey: "pay_multi_rec",
     });
 
-    await asUser.mutation(api.subledger.allocate, { orgId, paymentId: payId, receivableDocumentId: rec1, amountMinor: 3000 });
-    await asUser.mutation(api.subledger.allocate, { orgId, paymentId: payId, receivableDocumentId: rec2, amountMinor: 3000 });
+    await asUser.mutation(internal.subledger.allocate, { orgId, paymentId: payId, receivableDocumentId: rec1, amountMinor: 3000 });
+    await asUser.mutation(internal.subledger.allocate, { orgId, paymentId: payId, receivableDocumentId: rec2, amountMinor: 3000 });
 
     const b1 = await asUser.query(api.subledger.getReceivableBalance, { orgId, receivableDocumentId: rec1 });
     const b2 = await asUser.query(api.subledger.getReceivableBalance, { orgId, receivableDocumentId: rec2 });
@@ -195,19 +195,19 @@ describe("Phase 3 — payment allocations", () => {
     const { orgId, customerId, asUser } = await seedPhase3Dealer();
     const now = Date.now();
 
-    const recId = await asUser.mutation(api.subledger.createReceivable, {
+    const recId = await asUser.mutation(internal.subledger.createReceivable, {
       orgId, documentType: "INVOICE", payerType: "CUSTOMER", customerId,
       sourceType: "sales", sourceId: "sale_over_001",
       originalAmountMinor: 2000, currency: "JOD",
       issueDate: now, dueDate: now + 30 * 86400_000,
     });
-    const payId = await asUser.mutation(api.subledger.recordPayment, {
+    const payId = await asUser.mutation(internal.subledger.recordPayment, {
       orgId, direction: "IN", customerId, method: "CASH",
       amountMinor: 5000, currency: "JOD", idempotencyKey: "pay_over_001",
     });
 
     await expect(
-      asUser.mutation(api.subledger.allocate, {
+      asUser.mutation(internal.subledger.allocate, {
         orgId, paymentId: payId, receivableDocumentId: recId, amountMinor: 3000,
       })
     ).rejects.toThrow(/exceeds receivable outstanding/i);
@@ -217,18 +217,18 @@ describe("Phase 3 — payment allocations", () => {
     const { orgId, customerId, asUser } = await seedPhase3Dealer();
     const now = Date.now();
 
-    const recId = await asUser.mutation(api.subledger.createReceivable, {
+    const recId = await asUser.mutation(internal.subledger.createReceivable, {
       orgId, documentType: "INVOICE", payerType: "CUSTOMER", customerId,
       sourceType: "sales", sourceId: "sale_rev_001",
       originalAmountMinor: 4000, currency: "JOD",
       issueDate: now, dueDate: now + 30 * 86400_000,
     });
-    const payId = await asUser.mutation(api.subledger.recordPayment, {
+    const payId = await asUser.mutation(internal.subledger.recordPayment, {
       orgId, direction: "IN", customerId, method: "CASH",
       amountMinor: 4000, currency: "JOD", idempotencyKey: "pay_rev_001",
     });
 
-    const allocId = await asUser.mutation(api.subledger.allocate, {
+    const allocId = await asUser.mutation(internal.subledger.allocate, {
       orgId, paymentId: payId, receivableDocumentId: recId, amountMinor: 4000,
     });
 
@@ -236,7 +236,7 @@ describe("Phase 3 — payment allocations", () => {
     const before = await asUser.query(api.subledger.getReceivableBalance, { orgId, receivableDocumentId: recId });
     expect(before?.doc.status).toBe("PAID");
 
-    await asUser.mutation(api.subledger.reverseAllocationMutation, { orgId, allocationId: allocId });
+    await asUser.mutation(internal.subledger.reverseAllocationMutation, { orgId, allocationId: allocId });
 
     const after = await asUser.query(api.subledger.getReceivableBalance, { orgId, receivableDocumentId: recId });
     expect(after?.outstandingMinor).toBe(4000);
@@ -247,23 +247,23 @@ describe("Phase 3 — payment allocations", () => {
     const { orgId, customerId, asUser } = await seedPhase3Dealer();
     const now = Date.now();
 
-    const recId = await asUser.mutation(api.subledger.createReceivable, {
+    const recId = await asUser.mutation(internal.subledger.createReceivable, {
       orgId, documentType: "INVOICE", payerType: "CUSTOMER", customerId,
       sourceType: "sales", sourceId: "sale_multi_pay",
       originalAmountMinor: 9000, currency: "JOD",
       issueDate: now, dueDate: now + 30 * 86400_000,
     });
-    const pay1 = await asUser.mutation(api.subledger.recordPayment, {
+    const pay1 = await asUser.mutation(internal.subledger.recordPayment, {
       orgId, direction: "IN", customerId, method: "CASH",
       amountMinor: 4000, currency: "JOD", idempotencyKey: "multi_pay_1",
     });
-    const pay2 = await asUser.mutation(api.subledger.recordPayment, {
+    const pay2 = await asUser.mutation(internal.subledger.recordPayment, {
       orgId, direction: "IN", customerId, method: "BANK_TRANSFER",
       amountMinor: 5000, currency: "JOD", idempotencyKey: "multi_pay_2",
     });
 
-    await asUser.mutation(api.subledger.allocate, { orgId, paymentId: pay1, receivableDocumentId: recId, amountMinor: 4000 });
-    await asUser.mutation(api.subledger.allocate, { orgId, paymentId: pay2, receivableDocumentId: recId, amountMinor: 5000 });
+    await asUser.mutation(internal.subledger.allocate, { orgId, paymentId: pay1, receivableDocumentId: recId, amountMinor: 4000 });
+    await asUser.mutation(internal.subledger.allocate, { orgId, paymentId: pay2, receivableDocumentId: recId, amountMinor: 5000 });
 
     const balance = await asUser.query(api.subledger.getReceivableBalance, { orgId, receivableDocumentId: recId });
     expect(balance?.outstandingMinor).toBe(0);
@@ -274,19 +274,19 @@ describe("Phase 3 — payment allocations", () => {
     const { orgId, customerId, asUser } = await seedPhase3Dealer();
     const now = Date.now();
 
-    const recId = await asUser.mutation(api.subledger.createReceivable, {
+    const recId = await asUser.mutation(internal.subledger.createReceivable, {
       orgId, documentType: "INVOICE", payerType: "CUSTOMER", customerId,
       sourceType: "sales", sourceId: "sale_curr_mismatch",
       originalAmountMinor: 5000, currency: "JOD",
       issueDate: now, dueDate: now + 30 * 86400_000,
     });
-    const payId = await asUser.mutation(api.subledger.recordPayment, {
+    const payId = await asUser.mutation(internal.subledger.recordPayment, {
       orgId, direction: "IN", customerId, method: "CASH",
       amountMinor: 5000, currency: "USD", idempotencyKey: "pay_curr_mismatch",
     });
 
     await expect(
-      asUser.mutation(api.subledger.allocate, {
+      asUser.mutation(internal.subledger.allocate, {
         orgId, paymentId: payId, receivableDocumentId: recId, amountMinor: 5000,
       })
     ).rejects.toThrow(/Currency mismatch/i);

@@ -1,5 +1,5 @@
 import { v, ConvexError } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { internalMutation, query } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -183,6 +183,33 @@ export async function allocatePaymentToReceivable(
 
   const receivable = await ctx.db.get(args.receivableDocumentId);
   if (!receivable || receivable.orgId !== args.orgId) throw new ConvexError("Receivable not found.");
+
+  // Only money actually received and settled can pay down a receivable — an
+  // OUT payment (e.g. a deposit refund) or a DRAFT/unsettled one must never be
+  // allocatable, or the receivable would show as paid with no funds received.
+  if (payment.direction !== "IN") {
+    throw new ConvexError("Only inbound payments can be allocated to a receivable.");
+  }
+  if (payment.status !== "SETTLED") {
+    throw new ConvexError("Only settled payments can be allocated to a receivable.");
+  }
+  // Both sides carry payer identity only when known at creation time — only
+  // compare when both are set, so unattributed cash collections (no payer
+  // captured yet) can still be allocated by staff judgment; a genuine mismatch
+  // between two known identities is always rejected.
+  if (payment.payerType && receivable.payerType && payment.payerType !== receivable.payerType) {
+    throw new ConvexError("Payment payer type does not match the receivable's payer type.");
+  }
+  if (payment.customerId && receivable.customerId && payment.customerId !== receivable.customerId) {
+    throw new ConvexError("Payment customer does not match the receivable's customer.");
+  }
+  if (
+    payment.financeCompanyId &&
+    receivable.financeCompanyId &&
+    payment.financeCompanyId !== receivable.financeCompanyId
+  ) {
+    throw new ConvexError("Payment finance company does not match the receivable's finance company.");
+  }
 
   assertSameCurrency(payment.currency, receivable.currency, "payment allocation");
   assertValidMinorAmount(args.amountMinor, "allocation amount");
@@ -370,8 +397,20 @@ export const listAllocations = query({
 });
 
 // ─── Mutations ────────────────────────────────────────────────────────────────
+//
+// These four are internalMutation, not mutation: every production flow already
+// calls the underlying createReceivableDocument/createCanonicalPayment/
+// allocatePaymentToReceivable/reverseAllocation helpers directly, paired with a
+// workflowHooks.ts GL-posting call in the same transaction (saleCompletion.ts,
+// claims.ts, deposits.ts, paymentIntents.ts, collections.ts, applications.ts).
+// If these were public, any MANAGE_FINANCE user could call them straight from
+// the client and write subledger state with no corresponding GL entry, since
+// none of these handlers post to the ledger themselves — desyncing the GL from
+// the subledger with no trace. Keep them internal-only; a genuine ad-hoc/
+// back-office use case should get its own hookXxx-calling wrapper, not expose
+// these raw building blocks.
 
-export const createReceivable = mutation({
+export const createReceivable = internalMutation({
   args: {
     orgId: v.id("organizations"),
     documentType: v.union(
@@ -395,7 +434,7 @@ export const createReceivable = mutation({
   },
 });
 
-export const recordPayment = mutation({
+export const recordPayment = internalMutation({
   args: {
     orgId: v.id("organizations"),
     direction: v.union(v.literal("IN"), v.literal("OUT")),
@@ -415,7 +454,7 @@ export const recordPayment = mutation({
   },
 });
 
-export const allocate = mutation({
+export const allocate = internalMutation({
   args: {
     orgId: v.id("organizations"),
     paymentId: v.id("canonicalPayments"),
@@ -429,7 +468,7 @@ export const allocate = mutation({
   },
 });
 
-export const reverseAllocationMutation = mutation({
+export const reverseAllocationMutation = internalMutation({
   args: {
     orgId: v.id("organizations"),
     allocationId: v.id("paymentAllocations"),

@@ -227,6 +227,8 @@ type DepositResolutionHookArgs = {
   currency: string;
   actorId: Id<"users">;
   occurredAt: number;
+  /** Only meaningful for DEPOSIT_REFUNDED — forfeiture never moves cash. */
+  paymentMethod?: string;
 };
 
 /** Refund and forfeiture post identical event shapes — only the event type (and thus the posting rule) differs. */
@@ -246,6 +248,7 @@ function makeDepositResolutionHook(eventType: "DEPOSIT_REFUNDED" | "DEPOSIT_FORF
         amountMinor: args.amountMinor,
         currency: args.currency,
         customerId: args.customerId.toString(),
+        paymentMethod: args.paymentMethod,
       },
     });
 }

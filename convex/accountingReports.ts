@@ -412,6 +412,17 @@ export const balanceSheet = query({
 
 // ─── AR Aging ─────────────────────────────────────────────────────────────────
 
+type AgingBuckets = { current: number; days30: number; days60: number; days90: number; over90: number };
+type AgingRow = {
+  receivableId: string;
+  customerId: string | undefined;
+  dueDate: number;
+  originalAmountMinor: number;
+  outstandingMinor: number;
+  ageDays: number;
+  bucket: string;
+};
+
 export const arAging = query({
   args: {
     orgId: v.id("organizations"),
@@ -423,34 +434,23 @@ export const arAging = query({
 
     const asOfDate = args.asOfDate ?? Date.now();
 
-    // Only include receivables issued on or before asOfDate for historical accuracy
-    const openReceivables = await ctx.db
+    // Scan every receivable issued on or before asOfDate regardless of its
+    // CURRENT status — a receivable that was open as of asOfDate but has since
+    // been fully paid must still appear in a historical report; filtering by
+    // by_org_status (current status) would make it invisible. "Outstanding as
+    // of asOfDate" is instead derived purely from allocations that themselves
+    // existed by that date (below), which is what actually makes this correct.
+    const allReceivables = await ctx.db
       .query("receivableDocuments")
-      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "OPEN"))
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .filter((q) => q.lte(q.field("issueDate"), asOfDate))
       .collect();
 
-    const partialReceivables = await ctx.db
-      .query("receivableDocuments")
-      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PARTIALLY_PAID"))
-      .filter((q) => q.lte(q.field("issueDate"), asOfDate))
-      .collect();
+    const byCurrency = new Map<string, { buckets: AgingBuckets; rows: AgingRow[] }>();
 
-    const allOpen = [...openReceivables, ...partialReceivables];
-
-    const buckets = { current: 0, days30: 0, days60: 0, days90: 0, over90: 0 };
-    const rows: Array<{
-      receivableId: string;
-      customerId: string | undefined;
-      dueDate: number;
-      originalAmountMinor: number;
-      outstandingMinor: number;
-      ageDays: number;
-      bucket: string;
-    }> = [];
-
-    for (const rec of allOpen) {
-      // Only count allocations that existed as of asOfDate
+    for (const rec of allReceivables) {
+      // Only count allocations that existed as of asOfDate — an allocation
+      // (or reversal) made after asOfDate must not affect a historical figure.
       const activeAllocations = await ctx.db
         .query("paymentAllocations")
         .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", rec._id))
@@ -466,16 +466,19 @@ export const arAging = query({
       if (outstanding === 0) continue;
 
       const ageDays = Math.floor((asOfDate - rec.dueDate) / 86400_000);
-      type AgingBucket = keyof typeof buckets;
-      let bucket: AgingBucket;
+      let bucket: keyof AgingBuckets;
       if (ageDays <= 0) { bucket = "current"; }
       else if (ageDays <= 30) { bucket = "days30"; }
       else if (ageDays <= 60) { bucket = "days60"; }
       else if (ageDays <= 90) { bucket = "days90"; }
       else { bucket = "over90"; }
-      buckets[bucket] += outstanding;
 
-      rows.push({
+      const entry = byCurrency.get(rec.currency) ?? {
+        buckets: { current: 0, days30: 0, days60: 0, days90: 0, over90: 0 },
+        rows: [],
+      };
+      entry.buckets[bucket] += outstanding;
+      entry.rows.push({
         receivableId: rec._id,
         customerId: rec.customerId?.toString(),
         dueDate: rec.dueDate,
@@ -484,29 +487,56 @@ export const arAging = query({
         ageDays,
         bucket,
       });
+      byCurrency.set(rec.currency, entry);
     }
 
-    return { rows, buckets, totalOutstandingMinor: Object.values(buckets).reduce((s, v) => s + v, 0) };
+    // Different currencies' minor units (e.g. JOD fils vs USD cents) are never
+    // summed together — each currency gets its own bucket set and total.
+    const currencies = [...byCurrency.keys()].sort();
+    return {
+      currencies,
+      byCurrency: Object.fromEntries(
+        currencies.map((currency) => {
+          const entry = byCurrency.get(currency)!;
+          return [
+            currency,
+            {
+              rows: entry.rows,
+              buckets: entry.buckets,
+              totalOutstandingMinor: Object.values(entry.buckets).reduce((s, v) => s + v, 0),
+            },
+          ];
+        })
+      ),
+    };
   },
 });
 
 // ─── Subledger-to-GL Reconciliation ──────────────────────────────────────────
 
-export const subledgerReconciliation = query({
-  args: {
-    orgId: v.id("organizations"),
-    fromDate: v.optional(v.number()),
-    toDate: v.optional(v.number()),
-  },
-  handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
-    await requireFeature(ctx, args.orgId, "accounting");
+export type SubledgerReconciliationResult = {
+  currencies: string[];
+  byCurrency: Record<
+    string,
+    { glArBalanceMinor: number; subledgerOutstandingMinor: number; discrepancyMinor: number; isReconciled: boolean }
+  >;
+  isReconciled: boolean;
+};
 
+/**
+ * Shared with accountingPeriods.ts's close-checklist, which needs the same
+ * AR-vs-GL check as of a period's end date without duplicating the logic.
+ */
+export async function computeSubledgerReconciliation(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  toDate: number | undefined
+): Promise<SubledgerReconciliationResult> {
     // GL total for AR accounts — cumulative from inception to toDate so the
     // basis matches the subledger outstanding balance (not period movement).
     const accounts = await ctx.db
       .query("chartOfAccounts")
-      .withIndex("by_org_type", (q) => q.eq("orgId", args.orgId).eq("type", "ASSET"))
+      .withIndex("by_org_type", (q) => q.eq("orgId", orgId).eq("type", "ASSET"))
       .filter((q) => q.neq(q.field("systemKey"), null))
       .collect();
 
@@ -515,25 +545,27 @@ export const subledgerReconciliation = query({
       a.systemKey === SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_FINANCE_COMPANIES
     ).map((a) => a._id));
 
-    const lines = await getPostedLines(ctx, args.orgId, undefined, args.toDate);
+    const lines = await getPostedLines(ctx, orgId, undefined, toDate);
     const arLines = lines.filter((l) => arAccountIds.has(l.accountId));
-    const glArBalanceMinor = arLines.reduce((s, l) => s + l.debitMinor - l.creditMinor, 0);
+    // Never sum minor units across currencies (JOD fils + USD cents is not a
+    // meaningful number) — accumulate each currency's GL balance separately.
+    const glByCurrency = new Map<string, number>();
+    for (const l of arLines) {
+      glByCurrency.set(l.currency, (glByCurrency.get(l.currency) ?? 0) + l.debitMinor - l.creditMinor);
+    }
 
-    // Subledger total (open + partial receivables issued on or before toDate)
-    const effectiveAsOf = args.toDate ?? Date.now();
-    const openRecs = await ctx.db
+    // Subledger total — scan every receivable issued on or before toDate
+    // regardless of its CURRENT status, same reasoning as arAging: a
+    // receivable open as of toDate but since fully paid must still count.
+    const effectiveAsOf = toDate ?? Date.now();
+    const allRecs = await ctx.db
       .query("receivableDocuments")
-      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "OPEN"))
+      .withIndex("by_org", (q) => q.eq("orgId", orgId))
       .filter((q) => q.lte(q.field("issueDate"), effectiveAsOf))
       .collect();
-    const partialRecs = await ctx.db
-      .query("receivableDocuments")
-      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PARTIALLY_PAID"))
-      .filter((q) => q.lte(q.field("issueDate"), effectiveAsOf))
-      .collect();
 
-    let subledgerOutstandingMinor = 0;
-    for (const rec of [...openRecs, ...partialRecs]) {
+    const subByCurrency = new Map<string, number>();
+    for (const rec of allRecs) {
       const activeAllocations = await ctx.db
         .query("paymentAllocations")
         .withIndex("by_receivable", (q) => q.eq("receivableDocumentId", rec._id))
@@ -545,16 +577,39 @@ export const subledgerReconciliation = query({
         )
         .collect();
       const allocated = activeAllocations.reduce((s, a) => s + a.amountMinor, 0);
-      subledgerOutstandingMinor += Math.max(0, rec.originalAmountMinor - allocated);
+      const outstanding = Math.max(0, rec.originalAmountMinor - allocated);
+      subByCurrency.set(rec.currency, (subByCurrency.get(rec.currency) ?? 0) + outstanding);
     }
 
-    const discrepancyMinor = glArBalanceMinor - subledgerOutstandingMinor;
+    const currencies = [...new Set([...glByCurrency.keys(), ...subByCurrency.keys()])].sort();
+    const byCurrency = Object.fromEntries(
+      currencies.map((currency) => {
+        const glArBalanceMinor = glByCurrency.get(currency) ?? 0;
+        const subledgerOutstandingMinor = subByCurrency.get(currency) ?? 0;
+        const discrepancyMinor = glArBalanceMinor - subledgerOutstandingMinor;
+        return [currency, { glArBalanceMinor, subledgerOutstandingMinor, discrepancyMinor, isReconciled: discrepancyMinor === 0 }];
+      })
+    );
 
     return {
-      glArBalanceMinor,
-      subledgerOutstandingMinor,
-      discrepancyMinor,
-      isReconciled: discrepancyMinor === 0,
+      currencies,
+      byCurrency,
+      isReconciled: currencies.every((c) => byCurrency[c].isReconciled),
     };
+}
+
+export const subledgerReconciliation = query({
+  args: {
+    orgId: v.id("organizations"),
+    // No fromDate: both sides are cumulative balances from inception to toDate
+    // (not period movement), so a "from" bound has no meaningful effect here —
+    // a prior version accepted one but silently ignored it, which is worse
+    // than not accepting it at all.
+    toDate: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+    return computeSubledgerReconciliation(ctx, args.orgId, args.toDate);
   },
 });

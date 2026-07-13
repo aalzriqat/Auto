@@ -128,6 +128,7 @@ export interface DepositRefundedPayload {
   amountMinor: number;
   currency: string;
   customerId: string;
+  paymentMethod?: string;
 }
 
 export interface DepositForfeitedPayload {
@@ -272,10 +273,11 @@ export function ruleDepositApplied(p: DepositAppliedPayload): RuleResult {
 }
 
 export function ruleDepositRefunded(p: DepositRefundedPayload): RuleResult {
+  const disbursementKey = refundDisbursementAccountKey(p.paymentMethod);
   return {
     lines: [
       line(SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY, p.amountMinor, 0, "Deposit liability released", { customerId: p.customerId }),
-      line(SYSTEM_KEYS.CASH_ON_HAND, 0, p.amountMinor, "Deposit refund paid out", { customerId: p.customerId }),
+      line(disbursementKey, 0, p.amountMinor, "Deposit refund paid out", { customerId: p.customerId }),
     ],
     memo: "Deposit refunded to customer",
     category: "SYSTEM",
