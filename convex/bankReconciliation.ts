@@ -168,6 +168,7 @@ async function assertBankAccountActive(ctx: MutationCtx, orgId: Id<"organization
   if (!bankAccount || bankAccount.orgId !== orgId || bankAccount.isDeleted) {
     throw new ConvexError("This bank account is no longer active.");
   }
+  return bankAccount;
 }
 
 export const confirmMatch = mutation({
@@ -183,7 +184,7 @@ export const confirmMatch = mutation({
     if (!statementLine || statementLine.orgId !== args.orgId) {
       throw new ConvexError("Statement line not found.");
     }
-    await assertBankAccountActive(ctx, args.orgId, statementLine.bankAccountId);
+    const bankAccount = await assertBankAccountActive(ctx, args.orgId, statementLine.bankAccountId);
     if (statementLine.status !== "UNMATCHED") {
       throw new ConvexError("This statement line is no longer unmatched.");
     }
@@ -191,6 +192,26 @@ export const confirmMatch = mutation({
     const journalLine = await ctx.db.get(args.journalLineId);
     if (!journalLine || journalLine.orgId !== args.orgId) {
       throw new ConvexError("Ledger line not found.");
+    }
+
+    // The suggestion query (suggestMatches, above) computes these same four
+    // checks to build its candidate list, but a client-supplied journalLineId
+    // here is otherwise fully trusted — re-derive and enforce them server-side
+    // rather than relying on the UI having only offered a valid suggestion.
+    const bankChartAccountId = await resolveSystemAccount(ctx, args.orgId, SYSTEM_KEYS.BANK_ACCOUNT);
+    if (journalLine.accountId !== bankChartAccountId) {
+      throw new ConvexError("This ledger line is not on the bank account.");
+    }
+    const netMinor = journalLine.debitMinor - journalLine.creditMinor;
+    if (netMinor !== statementLine.amountMinor) {
+      throw new ConvexError("This ledger line's amount does not match the statement line.");
+    }
+    if (journalLine.currency !== bankAccount.currency) {
+      throw new ConvexError("This ledger line's currency does not match the bank account.");
+    }
+    const daysDiff = Math.abs(journalLine.accountingDate - statementLine.statementDate) / DAY_MS;
+    if (daysDiff > MATCH_WINDOW_DAYS) {
+      throw new ConvexError("This ledger line's date is too far from the statement line.");
     }
 
     // Guard against double-claiming the same ledger line from two statement

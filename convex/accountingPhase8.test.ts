@@ -436,7 +436,7 @@ describe("Phase 8 — payment intent settlement", () => {
   test("settling an intent linked to a receivable allocates the canonical payment", async () => {
     const { t, orgId, asUser, customerId } = await seedDealer("pi_alloc");
 
-    const receivableDocumentId = await asUser.mutation(api.subledger.createReceivable, {
+    const receivableDocumentId = await asUser.mutation(internal.subledger.createReceivable, {
       orgId,
       documentType: "INVOICE",
       payerType: "CUSTOMER",

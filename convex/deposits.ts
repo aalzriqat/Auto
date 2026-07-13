@@ -140,11 +140,17 @@ export const release = mutation({
     orgId: v.id("organizations"),
     depositId: v.id("deposits"),
     resolution: v.union(v.literal("REFUNDED"), v.literal("FORFEITED")),
+    // Required when resolution is REFUNDED — real cash/bank/card/cheque moves
+    // out, and the GL entry must credit the account it actually left from.
+    refundMethod: v.optional(depositMethodValidator),
     notes: v.optional(v.string()),
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.APPROVE_REQUESTS]);
+    if (args.resolution === "REFUNDED" && !args.refundMethod) {
+      throw new ConvexError("A refund payment method is required to refund a deposit.");
+    }
     return await runWithIdempotency(
       ctx,
       {
@@ -155,6 +161,7 @@ export const release = mutation({
         fingerprint: JSON.stringify({
           depositId: args.depositId,
           resolution: args.resolution,
+          refundMethod: args.refundMethod ?? null,
           notes: args.notes ?? null,
         }),
       },
@@ -234,7 +241,7 @@ export const release = mutation({
             direction: "OUT",
             payerType: "CUSTOMER",
             customerId: deposit.customerId,
-            method: "OTHER",
+            method: args.refundMethod!,
             amountMinor,
             currency,
             idempotencyKey: `deposit_refund_${args.depositId}`,
@@ -253,6 +260,7 @@ export const release = mutation({
             currency,
             actorId: user._id,
             occurredAt: now,
+            paymentMethod: args.refundMethod,
           });
         } else {
           await hookDepositForfeited(ctx, {

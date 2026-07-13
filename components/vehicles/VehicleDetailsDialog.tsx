@@ -112,6 +112,7 @@ export function VehicleDetailsDialog({
   const createReservation = useMutation(api.vehicles.createReservation);
   const releaseReservation = useMutation(api.vehicles.releaseReservation);
   const [releasingDepositId, setReleasingDepositId] = useState<string | null>(null);
+  const [refundMethodByDeposit, setRefundMethodByDeposit] = useState<Record<string, PaymentMethod>>({});
   const [landedCostItems, setLandedCostItems] = useState<
     { id: string; label: string; amount: number; paymentMethod: PaymentMethod }[]
   >([]);
@@ -220,7 +221,12 @@ export function VehicleDetailsDialog({
     if (!activeOrgId) return;
     setReleasingDepositId(depositId);
     try {
-      await releaseDeposit({ orgId: activeOrgId, depositId, resolution });
+      await releaseDeposit({
+        orgId: activeOrgId,
+        depositId,
+        resolution,
+        refundMethod: resolution === "REFUNDED" ? (refundMethodByDeposit[depositId] ?? "CASH") : undefined,
+      });
       toast.success(
         resolution === "REFUNDED"
           ? (t("DepositRefundedSuccess" as any) ?? "Deposit refunded")
@@ -490,7 +496,17 @@ export function VehicleDetailsDialog({
                             {deposit.notes && <p className="text-xs text-muted-foreground mt-0.5 italic">"{deposit.notes}"</p>}
                           </div>
                           {deposit.status === "HELD" && !permissionsLoading && hasPermission(PERMISSIONS.APPROVE_REQUESTS) && (
-                            <div className="flex gap-2 shrink-0">
+                            <div className="flex gap-2 shrink-0 items-center">
+                              <div className="w-32">
+                                <PaymentMethodSelect
+                                  t={t as any}
+                                  value={refundMethodByDeposit[deposit._id] ?? "CASH"}
+                                  onValueChange={(method) =>
+                                    setRefundMethodByDeposit((prev) => ({ ...prev, [deposit._id]: method }))
+                                  }
+                                  ariaLabel={t("PaymentMethodLabel" as any)}
+                                />
+                              </div>
                               <Button
                                 variant="outline"
                                 size="sm"

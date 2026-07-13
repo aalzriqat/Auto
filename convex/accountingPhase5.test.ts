@@ -6,7 +6,7 @@
 import { convexTest } from "convex-test";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -188,7 +188,7 @@ describe("Phase 5 — AR aging", () => {
       ctx.db.insert("customers", { orgId, firstName: "Aging", lastName: "Customer" })
     );
 
-    await asUser.mutation(api.subledger.createReceivable, {
+    await asUser.mutation(internal.subledger.createReceivable, {
       orgId,
       documentType: "INVOICE",
       payerType: "CUSTOMER",
@@ -202,10 +202,11 @@ describe("Phase 5 — AR aging", () => {
     });
 
     const aging = await asUser.query(api.accountingReports.arAging, { orgId, asOfDate: now });
-    expect(aging.rows).toHaveLength(1);
-    expect(aging.totalOutstandingMinor).toBe(100000);
+    expect(aging.currencies).toEqual(["JOD"]);
+    expect(aging.byCurrency.JOD.rows).toHaveLength(1);
+    expect(aging.byCurrency.JOD.totalOutstandingMinor).toBe(100000);
     // 45 days overdue → days60 bucket (31-60 days)
-    expect(aging.buckets.days60).toBe(100000);
+    expect(aging.byCurrency.JOD.buckets.days60).toBe(100000);
   });
 
   test("paid receivable does not appear in aging report", async () => {
@@ -216,23 +217,71 @@ describe("Phase 5 — AR aging", () => {
       ctx.db.insert("customers", { orgId, firstName: "Paid", lastName: "Customer" })
     );
 
-    const recId = await asUser.mutation(api.subledger.createReceivable, {
+    const recId = await asUser.mutation(internal.subledger.createReceivable, {
       orgId, documentType: "INVOICE", payerType: "CUSTOMER", customerId,
       sourceType: "sales", sourceId: "sale_paid_aging",
       originalAmountMinor: 5000, currency: "JOD",
       issueDate: now, dueDate: now - 10 * 86400_000,
     });
-    const payId = await asUser.mutation(api.subledger.recordPayment, {
+    const payId = await asUser.mutation(internal.subledger.recordPayment, {
       orgId, direction: "IN", customerId, method: "CASH",
       amountMinor: 5000, currency: "JOD", idempotencyKey: "pay_paid_aging",
     });
-    await asUser.mutation(api.subledger.allocate, {
+    await asUser.mutation(internal.subledger.allocate, {
       orgId, paymentId: payId, receivableDocumentId: recId, amountMinor: 5000,
     });
 
-    const aging = await asUser.query(api.accountingReports.arAging, { orgId, asOfDate: now });
-    expect(aging.rows).toHaveLength(0);
-    expect(aging.totalOutstandingMinor).toBe(0);
+    // Query strictly after the allocation actually committed — not the
+    // pre-mutation "now" snapshot, whose millisecond value can predate the
+    // allocation's own createdAt and would make it look not-yet-active.
+    const aging = await asUser.query(api.accountingReports.arAging, { orgId, asOfDate: Date.now() });
+    expect(aging.currencies).toEqual([]);
+  });
+
+  test("a historical asOfDate before a since-reversed allocation still counts it as paid", async () => {
+    const { t, orgId, asUser } = await seedReportingDealer();
+    const now = Date.now();
+
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Reversal", lastName: "Customer" })
+    );
+
+    const recId = await asUser.mutation(internal.subledger.createReceivable, {
+      orgId, documentType: "INVOICE", payerType: "CUSTOMER", customerId,
+      sourceType: "sales", sourceId: "sale_reversed_alloc",
+      originalAmountMinor: 5000, currency: "JOD",
+      issueDate: now, dueDate: now - 10 * 86400_000,
+    });
+    const payId = await asUser.mutation(internal.subledger.recordPayment, {
+      orgId, direction: "IN", customerId, method: "CASH",
+      amountMinor: 5000, currency: "JOD", idempotencyKey: "pay_reversed_alloc",
+    });
+    const allocationId = await asUser.mutation(internal.subledger.allocate, {
+      orgId, paymentId: payId, receivableDocumentId: recId, amountMinor: 5000,
+    });
+
+    // Snapshot a point in time strictly after the allocation was created but
+    // strictly before it gets reversed below.
+    const asOfBeforeReversal = Date.now();
+
+    await asUser.mutation(internal.subledger.reverseAllocationMutation, {
+      orgId, allocationId,
+    });
+
+    // As of the snapshot, the payment had fully settled the receivable — the
+    // later reversal (which flips the original allocation row's CURRENT
+    // status to REVERSED) must not retroactively make this historical
+    // snapshot look outstanding.
+    const historicalAging = await asUser.query(api.accountingReports.arAging, {
+      orgId, asOfDate: asOfBeforeReversal,
+    });
+    expect(historicalAging.currencies).toEqual([]);
+
+    // A present-day query (after the reversal) must show it outstanding again.
+    const currentAging = await asUser.query(api.accountingReports.arAging, {
+      orgId, asOfDate: Date.now(),
+    });
+    expect(currentAging.byCurrency.JOD.totalOutstandingMinor).toBe(5000);
   });
 
   test("aging report buckets current, 30, 60, 90, and over-90 day receivables", async () => {
@@ -250,7 +299,7 @@ describe("Phase 5 — AR aging", () => {
     ] as const;
 
     for (const receivable of receivables) {
-      await asUser.mutation(api.subledger.createReceivable, {
+      await asUser.mutation(internal.subledger.createReceivable, {
         orgId,
         documentType: "INVOICE",
         payerType: "CUSTOMER",
@@ -266,9 +315,9 @@ describe("Phase 5 — AR aging", () => {
 
     const aging = await asUser.query(api.accountingReports.arAging, { orgId, asOfDate: now });
     for (const receivable of receivables) {
-      expect(aging.buckets[receivable.bucket]).toBe(receivable.amount);
+      expect(aging.byCurrency.JOD.buckets[receivable.bucket]).toBe(receivable.amount);
     }
-    expect(aging.totalOutstandingMinor).toBe(150_000);
+    expect(aging.byCurrency.JOD.totalOutstandingMinor).toBe(150_000);
   });
 });
 
@@ -277,7 +326,7 @@ describe("Phase 5 — subledger reconciliation", () => {
     const { orgId, asUser } = await seedReportingDealer();
     const recon = await asUser.query(api.accountingReports.subledgerReconciliation, { orgId });
     expect(recon.isReconciled).toBe(true);
-    expect(recon.discrepancyMinor).toBe(0);
+    expect(recon.currencies).toEqual([]);
   });
 
   test("partial receivable allocations reduce subledger outstanding for reconciliation", async () => {
@@ -286,7 +335,7 @@ describe("Phase 5 — subledger reconciliation", () => {
     const customerId = await t.run((ctx) =>
       ctx.db.insert("customers", { orgId, firstName: "Recon", lastName: "Customer" })
     );
-    const receivableDocumentId = await asUser.mutation(api.subledger.createReceivable, {
+    const receivableDocumentId = await asUser.mutation(internal.subledger.createReceivable, {
       orgId,
       documentType: "INVOICE",
       payerType: "CUSTOMER",
@@ -298,7 +347,7 @@ describe("Phase 5 — subledger reconciliation", () => {
       issueDate: now,
       dueDate: now + 30 * 86400_000,
     });
-    const paymentId = await asUser.mutation(api.subledger.recordPayment, {
+    const paymentId = await asUser.mutation(internal.subledger.recordPayment, {
       orgId,
       direction: "IN",
       customerId,
@@ -307,7 +356,7 @@ describe("Phase 5 — subledger reconciliation", () => {
       currency: "JOD",
       idempotencyKey: "payment_recon_partial",
     });
-    await asUser.mutation(api.subledger.allocate, {
+    await asUser.mutation(internal.subledger.allocate, {
       orgId,
       paymentId,
       receivableDocumentId,
@@ -351,8 +400,8 @@ describe("Phase 5 — subledger reconciliation", () => {
       orgId,
       toDate: now + 1_000,
     });
-    expect(recon.glArBalanceMinor).toBe(75_000);
-    expect(recon.subledgerOutstandingMinor).toBe(75_000);
+    expect(recon.byCurrency.JOD.glArBalanceMinor).toBe(75_000);
+    expect(recon.byCurrency.JOD.subledgerOutstandingMinor).toBe(75_000);
     expect(recon.isReconciled).toBe(true);
   });
 });
