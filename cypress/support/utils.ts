@@ -1,6 +1,28 @@
 /// <reference types="cypress" />
+import { ConvexHttpClient } from "convex/browser";
+import { api } from "../../convex/_generated/api";
+import type { Id } from "../../convex/_generated/dataModel";
 
 let testDataCounter = 0;
+const TURNSTILE_DUMMY_TOKEN = "XXXX.DUMMY.TOKEN.XXXX";
+const CLERK_CONVEX_TOKEN_TIMEOUT_MS = 30_000;
+const CLERK_CONVEX_TOKEN_RETRY_MS = 500;
+
+type PublishedDealerWebsite = {
+  orgId: Id<"organizations">;
+  host: string;
+  vehicleModel: string;
+  vehicleSlug: string;
+};
+
+type ClerkWindow = Window & {
+  Clerk?: {
+    loaded?: Promise<unknown>;
+    session?: {
+      getToken: (options?: { template?: string }) => Promise<string | null>;
+    };
+  };
+};
 
 function nextTestDataCounter(): number {
   testDataCounter += 1;
@@ -19,6 +41,155 @@ function testVin(): string {
   const counterPart = nextTestDataCounter().toString().padStart(4, "0");
 
   return `E2E${timePart}${counterPart}`;
+}
+
+async function readClerkConvexToken(win: Window): Promise<string | null> {
+  const clerk = (win as ClerkWindow).Clerk;
+  if (clerk?.loaded) await clerk.loaded;
+
+  return (await clerk?.session?.getToken({ template: "convex" })) ?? null;
+}
+
+function waitForClerkConvexToken(
+  startedAt = Date.now(),
+): Cypress.Chainable<string> {
+  return cy
+    .window({ log: false })
+    .then((win) => readClerkConvexToken(win))
+    .then((token) => {
+      if (token) return token;
+
+      if (Date.now() - startedAt >= CLERK_CONVEX_TOKEN_TIMEOUT_MS) {
+        throw new Error(
+          "Unable to read Clerk Convex token from the authenticated browser session.",
+        );
+      }
+
+      return cy
+        .wait(CLERK_CONVEX_TOKEN_RETRY_MS, { log: false })
+        .then(() => waitForClerkConvexToken(startedAt));
+    }) as Cypress.Chainable<string>;
+}
+
+function getConvexClient(): Cypress.Chainable<ConvexHttpClient> {
+  const convexUrl = Cypress.env("NEXT_PUBLIC_CONVEX_URL") as string | undefined;
+  if (!convexUrl) {
+    throw new Error("NEXT_PUBLIC_CONVEX_URL must be set to seed dealer-site E2E data.");
+  }
+
+  return waitForClerkConvexToken().then((token) => {
+    const client = new ConvexHttpClient(convexUrl);
+    client.setAuth(token);
+    return client;
+  });
+}
+
+function waitForPublishedVehicle(
+  client: ConvexHttpClient,
+  host: string,
+  vehicleModel: string,
+): Cypress.Chainable<{ slug: string }> {
+  return cy.then(async () => {
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const site = await client.query(api.websites.resolveDomain, { host });
+      const vehicle = site?.vehicles.find(
+        (item: { model: string; slug: string }) => item.model === vehicleModel,
+      );
+      if (vehicle) return { slug: vehicle.slug };
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+
+    throw new Error(`Published dealer site did not include ${vehicleModel}.`);
+  });
+}
+
+export function ensurePublishedDealerWebsite(): Cypress.Chainable<PublishedDealerWebsite> {
+  return gotoOrgRoute("dashboard").then((orgId) => {
+    return getConvexClient().then((client) => {
+      const suffix = `${Date.now().toString(36)}-${nextTestDataCounter().toString(36)}`;
+      const subdomainSlug = `e2e-${suffix}`;
+      const host = `${subdomainSlug}.autoflowdealer.com`;
+      const vehicleModel = `DealerSite-${suffix}`;
+
+      return cy
+        .wrap(client.mutation(api.websites.startSetup, { orgId: orgId as Id<"organizations"> }), {
+          log: false,
+        })
+        .then(() =>
+          cy.wrap(
+            client.mutation(api.vehicles.create, {
+              orgId: orgId as Id<"organizations">,
+              vin: testVin(),
+              make: "Public",
+              model: vehicleModel,
+              year: 2024,
+              mileage: 100,
+              color: "Silver",
+              fuelType: "Gasoline",
+              transmission: "Automatic",
+              sellingPrice: 25_000,
+              status: "AVAILABLE",
+              sourceType: "STOCK",
+            }),
+            { log: false },
+          ),
+        )
+        .then(() =>
+          cy.wrap(
+            client.mutation(api.websites.saveDraft, {
+              orgId: orgId as Id<"organizations">,
+              subdomainSlug,
+              templateId: "modern-showroom",
+              defaultLanguage: "en",
+              supportedLanguages: ["en", "ar"],
+              heroTitle: "E2E public inventory",
+              heroSubtitle: "Browser-tested public lead forms.",
+              sections: [
+                { sectionKey: "forms.contact", enabled: true },
+                { sectionKey: "forms.financing", enabled: true },
+                { sectionKey: "forms.vehicleInquiry", enabled: true },
+                { sectionKey: "inventory.availableVehicles", enabled: true },
+                { sectionKey: "vehicle.makeModelYear", enabled: true },
+                { sectionKey: "vehicle.price", enabled: true },
+              ],
+            }),
+            { log: false },
+          ),
+        )
+        .then(() =>
+          cy.wrap(client.mutation(api.websites.publish, { orgId: orgId as Id<"organizations"> }), {
+            log: false,
+          }),
+        )
+        .then(() => waitForPublishedVehicle(client, host, vehicleModel))
+        .then(({ slug }) => ({
+          orgId: orgId as Id<"organizations">,
+          host,
+          vehicleModel,
+          vehicleSlug: slug,
+        }));
+    });
+  });
+}
+
+export function ensureTurnstileToken(): Cypress.Chainable<JQuery<HTMLFormElement>> {
+  return cy.get("form").first().then(($form) => {
+    const formElement = $form.get(0) as HTMLFormElement;
+    const input = $form.find('input[name="cf-turnstile-response"]') as unknown as JQuery<HTMLInputElement>;
+    if (input.length > 0 && input.val()) {
+      return cy.wrap($form as JQuery<HTMLFormElement>);
+    }
+
+    let tokenInput: HTMLInputElement | undefined = input.get(0);
+    if (!tokenInput) {
+      tokenInput = document.createElement("input");
+      tokenInput.type = "hidden";
+      tokenInput.name = "cf-turnstile-response";
+      formElement.appendChild(tokenInput);
+    }
+    tokenInput.value = TURNSTILE_DUMMY_TOKEN;
+    return cy.wrap($form as JQuery<HTMLFormElement>);
+  });
 }
 
 /**

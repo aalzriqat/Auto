@@ -226,6 +226,76 @@ describe("customers.checkDuplicates", () => {
   });
 });
 
+describe("customers.selectorOptions", () => {
+  test("finds a fresh customer even when the org has more than 100 existing customers", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    await t.run(async (ctx) => {
+      for (let index = 0; index < 120; index += 1) {
+        await ctx.db.insert("customers", {
+          orgId,
+          firstName: "Existing",
+          lastName: `Customer${index}`,
+        });
+      }
+      await ctx.db.insert("customers", {
+        orgId,
+        firstName: "Fresh",
+        lastName: "LeadTarget",
+        email: "fresh.leadtarget@example.com",
+      });
+    });
+
+    const options = await asUser.query(api.customers.selectorOptions, {
+      orgId,
+      search: "LeadTarget",
+    });
+
+    expect(options).toHaveLength(1);
+    expect(options[0]).toMatchObject({
+      firstName: "Fresh",
+      lastName: "LeadTarget",
+      email: "fresh.leadtarget@example.com",
+    });
+  });
+
+  test("searches older customers and excludes deleted matches", async () => {
+    const { t, orgId, asUser } = await setup();
+
+    await t.run(async (ctx) => {
+      await ctx.db.insert("customers", {
+        orgId,
+        firstName: "Older",
+        lastName: "Needle",
+      });
+      await ctx.db.insert("customers", {
+        orgId,
+        firstName: "Deleted",
+        lastName: "Needle",
+        isDeleted: true,
+      });
+      for (let index = 0; index < 220; index += 1) {
+        await ctx.db.insert("customers", {
+          orgId,
+          firstName: "Recent",
+          lastName: `Filler${index}`,
+        });
+      }
+    });
+
+    const options = await asUser.query(api.customers.selectorOptions, {
+      orgId,
+      search: "Needle",
+    });
+
+    expect(options).toHaveLength(1);
+    expect(options[0]).toMatchObject({
+      firstName: "Older",
+      lastName: "Needle",
+    });
+  });
+});
+
 describe("customers.findMergeCandidates", () => {
   test("groups customers with a matching normalized name", async () => {
     const { orgId, asUser } = await setup();

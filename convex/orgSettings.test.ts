@@ -2,6 +2,7 @@ import { convexTest } from "convex-test";
 import { expect, test, describe, vi } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
+import { definedPatchFields } from "./orgSettings";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
@@ -30,6 +31,12 @@ async function seedOwner(t: ReturnType<typeof convexTest>) {
 }
 
 describe("orgSettings", () => {
+  test("definedPatchFields drops explicit undefined values before patching", () => {
+    expect(definedPatchFields({ currency: "USD", vatRate: undefined })).toEqual({
+      currency: "USD",
+    });
+  });
+
   test("get returns null when no settings row exists", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
@@ -68,11 +75,23 @@ describe("orgSettings", () => {
     const t = convexTest(schema, import.meta.glob("./**/*.*s"));
     const { orgId, asOwner } = await seedOwner(t);
     await asOwner.mutation(api.orgSettings.upsert, { orgId, currency: "SAR", vatRate: 15 });
-    await asOwner.mutation(api.orgSettings.upsert, { orgId, currency: "USD" });
+    await asOwner.mutation(api.orgSettings.upsert, { orgId, currency: "USD", vatRate: undefined });
     const settings = await asOwner.query(api.orgSettings.get, { orgId });
     expect(settings?.currency).toBe("USD");
-    // vatRate should be unchanged
     expect(settings?.vatRate).toBe(15);
+  });
+
+  test("upsert trims dealership phone list and drops blank values", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.*s"));
+    const { orgId, asOwner } = await seedOwner(t);
+
+    await asOwner.mutation(api.orgSettings.upsert, {
+      orgId,
+      dealershipPhones: [" +962700000001 ", " ", "+962700000002"],
+    });
+
+    const settings = await asOwner.query(api.orgSettings.get, { orgId });
+    expect(settings?.dealershipPhones).toEqual(["+962700000001", "+962700000002"]);
   });
 
   test("setGeneratedLeadAutoAssignmentEnabled creates and patches the toggle", async () => {

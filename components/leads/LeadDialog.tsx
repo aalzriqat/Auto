@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -47,12 +47,12 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
   const { activeOrgId } = useOrg();
   const { t, locale } = useLanguage();
   const router = useRouter();
+  const [customerSearch, setCustomerSearch] = useState("");
 
   // Data for dropdowns
-  const { results: customers } = usePaginatedQuery(
-    api.customers.list,
-    activeOrgId ? { orgId: activeOrgId } : "skip",
-    { initialNumItems: 100 }
+  const customerSelectorOptions = useQuery(
+    api.customers.selectorOptions,
+    activeOrgId ? { orgId: activeOrgId, search: customerSearch } : "skip"
   );
   const vehicles = useQuery(api.vehicles.listAll, activeOrgId ? { orgId: activeOrgId, status: "AVAILABLE", includeReserved: true } : "skip");
   const dynamicLeadSources = useQuery(
@@ -74,6 +74,15 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [customFieldValues, setCustomFieldValues] = useState<Record<string, string>>({});
   const saveCustomFields = useSaveCustomFieldValues();
+  const customerOptions = useMemo(
+    () =>
+      customerSelectorOptions?.map((customer) => ({
+        value: customer._id,
+        label: `${customer.firstName} ${customer.lastName}`,
+        subLabel: customer.phone || customer.email || undefined,
+      })) ?? [],
+    [customerSelectorOptions],
+  );
 
   const form = useForm<LeadFormValues>({
     resolver: zodResolver(leadSchema as any),
@@ -199,12 +208,9 @@ export function LeadDialog({ open, onOpenChange, lead }: LeadDialogProps) {
                       <SearchableSelect
                         value={field.value}
                         onValueChange={field.onChange}
+                        onSearchChange={setCustomerSearch}
                         placeholder={t("SelectCustomer" as any) || "Select a customer"}
-                        options={customers?.map((c) => ({
-                          value: c._id,
-                          label: `${c.firstName} ${c.lastName}`,
-                          subLabel: c.phone || c.email || undefined,
-                        })) ?? []}
+                        options={customerOptions}
                       />
                     </FormControl>
                     <FormMessage />

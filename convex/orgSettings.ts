@@ -12,6 +12,15 @@ export const DEFAULT_SETTINGS = {
   enabledPaymentTypes: ["CASH", "INSTALLMENT"],
 };
 
+export function definedPatchFields(fields: Record<string, unknown>): Record<string, unknown> {
+  const patch: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(fields)) {
+    if (value === undefined) continue;
+    patch[key] = value;
+  }
+  return patch;
+}
+
 // ─── Queries ──────────────────────────────────────────────────────────────────
 
 /**
@@ -96,13 +105,7 @@ export const upsert = mutation({
     }
 
     if (existing) {
-      // Patch only provided fields (exclude undefined values)
-      const patch: Record<string, unknown> = {};
-      for (const [key, value] of Object.entries(fields)) {
-        if (value !== undefined) {
-          patch[key] = value;
-        }
-      }
+      const patch = definedPatchFields(fields);
       await ctx.db.patch(existing._id, patch);
       return existing._id;
     } else {

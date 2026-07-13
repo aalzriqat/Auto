@@ -1,6 +1,28 @@
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { expect } from "@playwright/test";
 import { randomInt } from "node:crypto";
+import { ConvexHttpClient } from "convex/browser";
+import { api } from "../convex/_generated/api";
+import type { Id } from "../convex/_generated/dataModel";
+
+const TURNSTILE_DUMMY_TOKEN = "XXXX.DUMMY.TOKEN.XXXX";
+const CLERK_CONVEX_TOKEN_TIMEOUT_MS = 30_000;
+
+type ClerkWindow = Window & {
+  Clerk?: {
+    loaded?: Promise<unknown>;
+    session?: {
+      getToken: (options?: { template?: string }) => Promise<string | null>;
+    };
+  };
+};
+
+export type PublishedDealerWebsite = {
+  orgId: Id<"organizations">;
+  host: string;
+  vehicleModel: string;
+  vehicleSlug: string;
+};
 
 /**
  * Every authenticated route is scoped under /{orgId}/... and the QA fixture's
@@ -54,6 +76,129 @@ function testVin(): string {
   const randomPart = randomInt(0, 10_000).toString().padStart(4, "0");
 
   return `E2E${timePart}${randomPart}`;
+}
+
+async function authenticatedConvexClient(page: Page): Promise<ConvexHttpClient> {
+  const convexUrl = process.env.NEXT_PUBLIC_CONVEX_URL;
+  if (!convexUrl) {
+    throw new Error("NEXT_PUBLIC_CONVEX_URL must be set to seed dealer-site E2E data.");
+  }
+
+  await page.waitForFunction(
+    () => Boolean((window as ClerkWindow).Clerk?.session?.getToken),
+    undefined,
+    { timeout: 15_000 },
+  );
+  const token = await expect
+    .poll(
+      () =>
+        page.evaluate(async () => {
+          const clerk = (window as ClerkWindow).Clerk;
+          if (clerk?.loaded) await clerk.loaded;
+          return (await clerk?.session?.getToken({ template: "convex" })) ?? null;
+        }),
+      { timeout: CLERK_CONVEX_TOKEN_TIMEOUT_MS },
+    )
+    .not.toBeNull()
+    .then(() =>
+      page.evaluate(async () => {
+        const clerk = (window as ClerkWindow).Clerk;
+        return (await clerk?.session?.getToken({ template: "convex" })) ?? null;
+      }),
+    );
+  if (!token) throw new Error("Unable to read Clerk Convex token from the authenticated browser session.");
+
+  const client = new ConvexHttpClient(convexUrl);
+  client.setAuth(token);
+  return client;
+}
+
+export async function ensurePublishedDealerWebsite(
+  page: Page,
+): Promise<PublishedDealerWebsite> {
+  const orgId = (await resolveOrgId(page)) as Id<"organizations">;
+  const client = await authenticatedConvexClient(page);
+  const suffix = `${Date.now().toString(36)}-${randomInt(0, 10_000).toString(36)}`;
+  const subdomainSlug = `e2e-${suffix}`;
+  const host = `${subdomainSlug}.autoflowdealer.com`;
+  const vehicleModel = `DealerSite-${suffix}`;
+
+  await client.mutation(api.websites.startSetup, { orgId });
+  await client.mutation(api.vehicles.create, {
+    orgId,
+    vin: testVin(),
+    make: "Public",
+    model: vehicleModel,
+    year: 2024,
+    mileage: 100,
+    color: "Silver",
+    fuelType: "Gasoline",
+    transmission: "Automatic",
+    sellingPrice: 25_000,
+    status: "AVAILABLE",
+    sourceType: "STOCK",
+  });
+  await client.mutation(api.websites.saveDraft, {
+    orgId,
+    subdomainSlug,
+    templateId: "modern-showroom",
+    defaultLanguage: "en",
+    supportedLanguages: ["en", "ar"],
+    heroTitle: "E2E public inventory",
+    heroSubtitle: "Browser-tested public lead forms.",
+    sections: [
+      { sectionKey: "forms.contact", enabled: true },
+      { sectionKey: "forms.financing", enabled: true },
+      { sectionKey: "forms.vehicleInquiry", enabled: true },
+      { sectionKey: "inventory.availableVehicles", enabled: true },
+      { sectionKey: "vehicle.makeModelYear", enabled: true },
+      { sectionKey: "vehicle.price", enabled: true },
+    ],
+  });
+  await client.mutation(api.websites.publish, { orgId });
+
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    const site = await client.query(api.websites.resolveDomain, { host });
+    const vehicle = site?.vehicles.find(
+      (item: { model: string; slug: string }) => item.model === vehicleModel,
+    );
+    if (vehicle) {
+      return { orgId, host, vehicleModel, vehicleSlug: vehicle.slug };
+    }
+    await page.waitForTimeout(500);
+  }
+
+  throw new Error(`Published dealer site did not include ${vehicleModel}.`);
+}
+
+export async function ensureTurnstileToken(form: Locator): Promise<void> {
+  const tokenInput = form.locator('input[name="cf-turnstile-response"]').first();
+  const hasGeneratedToken = await expect
+    .poll(
+      async () => {
+        if ((await tokenInput.count()) === 0) return "";
+        return await tokenInput.inputValue().catch(() => "");
+      },
+      { timeout: 15_000 },
+    )
+    .not.toBe("")
+    .then(
+      () => true,
+      () => false,
+    );
+
+  if (hasGeneratedToken) return;
+
+  await form.evaluate((formElement, token) => {
+    let input = formElement.querySelector<HTMLInputElement>('input[name="cf-turnstile-response"]');
+    if (!input) {
+      input = document.createElement("input");
+      input.type = "hidden";
+      input.name = "cf-turnstile-response";
+      formElement.appendChild(input);
+    }
+    input.value = token;
+  }, TURNSTILE_DUMMY_TOKEN);
 }
 
 export async function searchCurrentTable(
