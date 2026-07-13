@@ -10,10 +10,11 @@ import { Id } from "./_generated/dataModel";
 import { QueryCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
-import { fromMinorUnits, scaleForCurrency } from "./utils/money";
-import { SYSTEM_KEYS } from "./utils/defaultChart";
+import { fromMinorUnits, scaleForCurrency, toMinorUnits } from "./utils/money";
+import { SYSTEM_KEYS, SystemKey } from "./utils/defaultChart";
 import { requireFeature } from "./subscriptions";
 import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
+import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 
 /**
  * GL Phase 14 note on aggregation: every aggregate below keys on
@@ -633,5 +634,173 @@ export const subledgerReconciliation = query({
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
     return computeSubledgerReconciliation(ctx, args.orgId, args.toDate);
+  },
+});
+
+// ─── Additional GL-vs-subledger reconciliation reports ────────────────────────
+//
+// These four cover the remaining subledgers that only have one side of the
+// picture today (a subledger table but no GL comparison): Vehicle Inventory,
+// AP-Suppliers, Customer Deposits Liability, and Commission Payable. Unlike
+// arAging/subledgerReconciliation above, the subledger side here reflects
+// CURRENT state, not a point-in-time reconstruction as of `toDate` — none of
+// these four track historical state changes (e.g. a vehicle's status history
+// isn't recorded), so building that rigor isn't possible without new audit
+// tables. `toDate` only bounds the GL side; for the common case (an
+// unspecified toDate, defaulting to now) both sides line up exactly. These
+// are informational reports for the accountant to check manually — not
+// period-close blockers.
+
+export type GlVsSubledgerResult = {
+  currencies: string[];
+  byCurrency: Record<
+    string,
+    { glBalanceMinor: number; subledgerBalanceMinor: number; discrepancyMinor: number; isReconciled: boolean }
+  >;
+  isReconciled: boolean;
+};
+
+async function computeGlBalanceByCurrency(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  systemKey: SystemKey,
+  toDate: number | undefined
+): Promise<Map<string, number>> {
+  const account = await ctx.db
+    .query("chartOfAccounts")
+    .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", systemKey))
+    .unique();
+
+  const glByCurrency = new Map<string, number>();
+  if (!account) return glByCurrency;
+
+  const lines = (await getPostedLines(ctx, orgId, undefined, toDate)).filter((l) => l.accountId === account._id);
+  for (const l of lines) {
+    const delta = account.normalBalance === "DEBIT" ? l.debitMinor - l.creditMinor : l.creditMinor - l.debitMinor;
+    glByCurrency.set(l.currency, (glByCurrency.get(l.currency) ?? 0) + delta);
+  }
+  return glByCurrency;
+}
+
+function combineGlAndSubledger(
+  glByCurrency: Map<string, number>,
+  subByCurrency: Map<string, number>
+): GlVsSubledgerResult {
+  const currencies = [...new Set([...glByCurrency.keys(), ...subByCurrency.keys()])].sort((a, b) => a.localeCompare(b));
+  const byCurrency = Object.fromEntries(
+    currencies.map((currency) => {
+      const glBalanceMinor = glByCurrency.get(currency) ?? 0;
+      const subledgerBalanceMinor = subByCurrency.get(currency) ?? 0;
+      const discrepancyMinor = glBalanceMinor - subledgerBalanceMinor;
+      return [currency, { glBalanceMinor, subledgerBalanceMinor, discrepancyMinor, isReconciled: discrepancyMinor === 0 }];
+    })
+  );
+  return { currencies, byCurrency, isReconciled: currencies.every((c) => byCurrency[c].isReconciled) };
+}
+
+export const vehicleInventoryReconciliation = query({
+  args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+
+    const orgCurrency = await getOrgCurrencyForReports(ctx, args.orgId);
+    const vehicles = await ctx.db
+      .query("vehicles")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    // Sourced/drop-ship vehicles never capitalize into Vehicle Inventory
+    // (ruleSaleCompleted credits AP-Suppliers for them instead) — excluding
+    // status SOLD/ARCHIVED leaves everything still physically in stock.
+    const inStock = vehicles.filter((v) =>
+      !v.isDeleted && v.sourceType !== "SOURCED" && v.status !== "SOLD" && v.status !== "ARCHIVED"
+    );
+
+    let subledgerMinor = 0;
+    for (const vehicle of inStock) {
+      const cost = await computeVehicleCapitalizedCost(ctx, vehicle);
+      if (cost > 0) subledgerMinor += toMinorUnits(cost, orgCurrency);
+    }
+
+    const subByCurrency = new Map<string, number>();
+    if (subledgerMinor > 0) subByCurrency.set(orgCurrency, subledgerMinor);
+
+    const glByCurrency = await computeGlBalanceByCurrency(ctx, args.orgId, SYSTEM_KEYS.VEHICLE_INVENTORY, args.toDate);
+    return combineGlAndSubledger(glByCurrency, subByCurrency);
+  },
+});
+
+export const supplierPayablesReconciliation = query({
+  args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+
+    const pending = await ctx.db
+      .query("vehicleSupplierPayables")
+      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
+      .collect();
+
+    const subByCurrency = new Map<string, number>();
+    for (const p of pending) {
+      const minor = toMinorUnits(p.amountDue, p.currency);
+      subByCurrency.set(p.currency, (subByCurrency.get(p.currency) ?? 0) + minor);
+    }
+
+    const glByCurrency = await computeGlBalanceByCurrency(ctx, args.orgId, SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, args.toDate);
+    return combineGlAndSubledger(glByCurrency, subByCurrency);
+  },
+});
+
+export const customerDepositsReconciliation = query({
+  args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+
+    const orgCurrency = await getOrgCurrencyForReports(ctx, args.orgId);
+    const held = await ctx.db
+      .query("deposits")
+      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "HELD"))
+      .collect();
+
+    const subByCurrency = new Map<string, number>();
+    for (const d of held) {
+      if (d.isDeleted) continue;
+      const currency = d.currency ?? orgCurrency;
+      const minor = d.amountMinor ?? toMinorUnits(d.amount, currency);
+      subByCurrency.set(currency, (subByCurrency.get(currency) ?? 0) + minor);
+    }
+
+    const glByCurrency = await computeGlBalanceByCurrency(ctx, args.orgId, SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY, args.toDate);
+    return combineGlAndSubledger(glByCurrency, subByCurrency);
+  },
+});
+
+export const commissionPayableReconciliation = query({
+  args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+
+    const orgCurrency = await getOrgCurrencyForReports(ctx, args.orgId);
+    const sales = await ctx.db
+      .query("sales")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    const owed = sales.filter((s) =>
+      !s.isDeleted && s.commissionAmount != null && s.commissionAmount > 0 && s.commissionPaidAt == null
+    );
+
+    let subledgerMinor = 0;
+    for (const sale of owed) {
+      subledgerMinor += toMinorUnits(sale.commissionAmount!, orgCurrency);
+    }
+
+    const subByCurrency = new Map<string, number>();
+    if (subledgerMinor > 0) subByCurrency.set(orgCurrency, subledgerMinor);
+
+    const glByCurrency = await computeGlBalanceByCurrency(ctx, args.orgId, SYSTEM_KEYS.COMMISSION_PAYABLE, args.toDate);
+    return combineGlAndSubledger(glByCurrency, subByCurrency);
   },
 });

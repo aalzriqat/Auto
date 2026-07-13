@@ -175,6 +175,49 @@ describe("Fix #1 — vehicle acquisition capitalizes into Vehicle Inventory", ()
   });
 });
 
+describe("vehicleInventoryReconciliation", () => {
+  test("an owned in-stock vehicle reconciles Vehicle Inventory GL against capitalized cost", async () => {
+    const { orgId, asOwner } = await seedDealer("recon_a");
+    await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+
+    const recon = await asOwner.query(api.accountingReports.vehicleInventoryReconciliation, { orgId });
+    expect(recon.currencies).toEqual(["JOD"]);
+    expect(recon.byCurrency.JOD.glBalanceMinor).toBe(10_000_000);
+    expect(recon.byCurrency.JOD.subledgerBalanceMinor).toBe(10_000_000);
+    expect(recon.isReconciled).toBe(true);
+  });
+
+  test("a sourced/drop-ship vehicle is excluded from both sides", async () => {
+    const { orgId, asOwner } = await seedDealer("recon_b");
+    await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "SRC3D9AN0000099AX", sourceType: "SOURCED",
+      sourcedFromName: "Other Dealer", sourceCost: 9000,
+    });
+
+    const recon = await asOwner.query(api.accountingReports.vehicleInventoryReconciliation, { orgId });
+    expect(recon.currencies).toEqual([]);
+  });
+
+  test("a sold vehicle no longer counts toward the subledger side", async () => {
+    const { t, orgId, asOwner } = await seedDealer("recon_c");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    await t.run((ctx) => ctx.db.patch(vehicleId, { status: "SOLD" }));
+
+    const recon = await asOwner.query(api.accountingReports.vehicleInventoryReconciliation, { orgId });
+    // The GL side isn't relieved by this direct status patch (a real sale
+    // would post COST_OF_VEHICLES_SOLD/inventory-relief) — this asserts only
+    // that the subledger side correctly drops a SOLD vehicle from its sum,
+    // which is what surfaces as a discrepancy for the accountant to review.
+    expect(recon.byCurrency.JOD.subledgerBalanceMinor).toBe(0);
+    expect(recon.byCurrency.JOD.glBalanceMinor).toBe(10_000_000);
+    expect(recon.isReconciled).toBe(false);
+  });
+});
+
 describe("Fix #11 — flipping a SOURCED vehicle to owned stock capitalizes it", () => {
   test("SOURCED→STOCK via update() debits Vehicle Inventory using the mirrored sourceCost", async () => {
     const { t, orgId, asOwner } = await seedDealer("f11a");

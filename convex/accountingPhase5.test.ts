@@ -409,3 +409,215 @@ describe("Phase 5 — subledger reconciliation", () => {
     expect(recon.isReconciled).toBe(true);
   });
 });
+
+describe("Phase 5 — supplier payables reconciliation", () => {
+  test("empty system is reconciled", async () => {
+    const { orgId, asUser } = await seedReportingDealer();
+    const recon = await asUser.query(api.accountingReports.supplierPayablesReconciliation, { orgId });
+    expect(recon.isReconciled).toBe(true);
+    expect(recon.currencies).toEqual([]);
+  });
+
+  test("a pending supplier payable reconciles against a matching AP-Suppliers GL balance", async () => {
+    const { t, orgId, userId, asUser } = await seedReportingDealer();
+    const now = Date.now();
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, make: "Test", model: "Sourced", year: 2024, mileage: 0, color: "Black",
+        fuelType: "PETROL", transmission: "AUTOMATIC", sellingPrice: 30000, status: "AVAILABLE",
+        sourceType: "SOURCED",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("vehicleSupplierPayables", {
+        orgId, vehicleId, sourcedFromName: "Other Dealer", amountDue: 15000, currency: "JOD",
+        status: "PENDING", createdBy: userId, createdAt: now, updatedAt: now,
+      })
+    );
+
+    const apAccount = await t.run((ctx) =>
+      ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", "ACCOUNTS_PAYABLE_SUPPLIERS")).unique()
+    );
+    await t.run(async (ctx) => {
+      const journalEntryId = await ctx.db.insert("journalEntries", {
+        orgId, journalNumber: "JRN-AP-RECON", accountingDate: now, sourceType: "vehicles", sourceId: vehicleId,
+        category: "SYSTEM", memo: "Supplier payable fixture", status: "POSTED", currency: "JOD",
+        postedBy: userId, postedAt: now, createdAt: now,
+      });
+      await ctx.db.insert("journalLines", {
+        orgId, journalEntryId, lineNumber: 1, accountId: apAccount!._id, debitMinor: 0, creditMinor: 15_000_000,
+        currency: "JOD", scale: 3, accountingDate: now,
+      });
+    });
+
+    const recon = await asUser.query(api.accountingReports.supplierPayablesReconciliation, { orgId });
+    expect(recon.byCurrency.JOD.glBalanceMinor).toBe(15_000_000);
+    expect(recon.byCurrency.JOD.subledgerBalanceMinor).toBe(15_000_000);
+    expect(recon.isReconciled).toBe(true);
+  });
+
+  test("a PAID payable no longer counts toward the subledger side", async () => {
+    const { t, orgId, userId, asUser } = await seedReportingDealer();
+    const now = Date.now();
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, make: "Test", model: "Sourced2", year: 2024, mileage: 0, color: "Black",
+        fuelType: "PETROL", transmission: "AUTOMATIC", sellingPrice: 30000, status: "AVAILABLE",
+        sourceType: "SOURCED",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("vehicleSupplierPayables", {
+        orgId, vehicleId, sourcedFromName: "Other Dealer", amountDue: 15000, currency: "JOD",
+        status: "PAID", paidAt: now, createdBy: userId, createdAt: now, updatedAt: now,
+      })
+    );
+
+    const recon = await asUser.query(api.accountingReports.supplierPayablesReconciliation, { orgId });
+    expect(recon.currencies).toEqual([]);
+  });
+});
+
+describe("Phase 5 — customer deposits reconciliation", () => {
+  test("empty system is reconciled", async () => {
+    const { orgId, asUser } = await seedReportingDealer();
+    const recon = await asUser.query(api.accountingReports.customerDepositsReconciliation, { orgId });
+    expect(recon.isReconciled).toBe(true);
+    expect(recon.currencies).toEqual([]);
+  });
+
+  test("a held deposit reconciles against a matching Customer Deposits Liability GL balance", async () => {
+    const { t, orgId, userId, asUser } = await seedReportingDealer();
+    const now = Date.now();
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Deposit", lastName: "Customer" })
+    );
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, make: "Test", model: "Deposit", year: 2024, mileage: 0, color: "Black",
+        fuelType: "PETROL", transmission: "AUTOMATIC", sellingPrice: 30000, status: "RESERVED",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("deposits", {
+        orgId, vehicleId, customerId, amount: 1500, amountMinor: 1_500_000, currency: "JOD",
+        status: "HELD", holdActive: true, createdBy: userId, createdAt: now,
+      })
+    );
+
+    const liabilityAccount = await t.run((ctx) =>
+      ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", "CUSTOMER_DEPOSITS_LIABILITY")).unique()
+    );
+    await t.run(async (ctx) => {
+      const journalEntryId = await ctx.db.insert("journalEntries", {
+        orgId, journalNumber: "JRN-DEP-RECON", accountingDate: now, sourceType: "deposits", sourceId: vehicleId,
+        category: "SYSTEM", memo: "Deposit fixture", status: "POSTED", currency: "JOD",
+        postedBy: userId, postedAt: now, createdAt: now,
+      });
+      await ctx.db.insert("journalLines", {
+        orgId, journalEntryId, lineNumber: 1, accountId: liabilityAccount!._id, debitMinor: 0, creditMinor: 1_500_000,
+        currency: "JOD", scale: 3, accountingDate: now,
+      });
+    });
+
+    const recon = await asUser.query(api.accountingReports.customerDepositsReconciliation, { orgId });
+    expect(recon.byCurrency.JOD.glBalanceMinor).toBe(1_500_000);
+    expect(recon.byCurrency.JOD.subledgerBalanceMinor).toBe(1_500_000);
+    expect(recon.isReconciled).toBe(true);
+  });
+
+  test("a refunded deposit no longer counts toward the subledger side", async () => {
+    const { t, orgId, userId, asUser } = await seedReportingDealer();
+    const now = Date.now();
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Refunded", lastName: "Customer" })
+    );
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, make: "Test", model: "Refunded", year: 2024, mileage: 0, color: "Black",
+        fuelType: "PETROL", transmission: "AUTOMATIC", sellingPrice: 30000, status: "AVAILABLE",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("deposits", {
+        orgId, vehicleId, customerId, amount: 1500, amountMinor: 1_500_000, currency: "JOD",
+        status: "REFUNDED", holdActive: false, createdBy: userId, createdAt: now,
+      })
+    );
+
+    const recon = await asUser.query(api.accountingReports.customerDepositsReconciliation, { orgId });
+    expect(recon.currencies).toEqual([]);
+  });
+});
+
+describe("Phase 5 — commission payable reconciliation", () => {
+  test("empty system is reconciled", async () => {
+    const { orgId, asUser } = await seedReportingDealer();
+    const recon = await asUser.query(api.accountingReports.commissionPayableReconciliation, { orgId });
+    expect(recon.isReconciled).toBe(true);
+    expect(recon.currencies).toEqual([]);
+  });
+
+  test("an unpaid commission reconciles against a matching Commission Payable GL balance", async () => {
+    const { t, orgId, userId, asUser } = await seedReportingDealer();
+    const now = Date.now();
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Sale", lastName: "Customer" })
+    );
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, make: "Test", model: "Sold", year: 2024, mileage: 0, color: "Black",
+        fuelType: "PETROL", transmission: "AUTOMATIC", sellingPrice: 30000, status: "SOLD",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId, vehicleId, customerId, salespersonId: userId, salePrice: 30000, saleDate: now,
+        status: "COMPLETED", commissionAmount: 500,
+      })
+    );
+
+    const payableAccount = await t.run((ctx) =>
+      ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", "COMMISSION_PAYABLE")).unique()
+    );
+    await t.run(async (ctx) => {
+      const journalEntryId = await ctx.db.insert("journalEntries", {
+        orgId, journalNumber: "JRN-COMM-RECON", accountingDate: now, sourceType: "sales", sourceId: vehicleId,
+        category: "SYSTEM", memo: "Commission fixture", status: "POSTED", currency: "JOD",
+        postedBy: userId, postedAt: now, createdAt: now,
+      });
+      await ctx.db.insert("journalLines", {
+        orgId, journalEntryId, lineNumber: 1, accountId: payableAccount!._id, debitMinor: 0, creditMinor: 500_000,
+        currency: "JOD", scale: 3, accountingDate: now,
+      });
+    });
+
+    const recon = await asUser.query(api.accountingReports.commissionPayableReconciliation, { orgId });
+    expect(recon.byCurrency.JOD.glBalanceMinor).toBe(500_000);
+    expect(recon.byCurrency.JOD.subledgerBalanceMinor).toBe(500_000);
+    expect(recon.isReconciled).toBe(true);
+  });
+
+  test("a paid commission no longer counts toward the subledger side", async () => {
+    const { t, orgId, userId, asUser } = await seedReportingDealer();
+    const now = Date.now();
+    const customerId = await t.run((ctx) =>
+      ctx.db.insert("customers", { orgId, firstName: "Sale2", lastName: "Customer" })
+    );
+    const vehicleId = await t.run((ctx) =>
+      ctx.db.insert("vehicles", {
+        orgId, make: "Test", model: "Sold2", year: 2024, mileage: 0, color: "Black",
+        fuelType: "PETROL", transmission: "AUTOMATIC", sellingPrice: 30000, status: "SOLD",
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("sales", {
+        orgId, vehicleId, customerId, salespersonId: userId, salePrice: 30000, saleDate: now,
+        status: "COMPLETED", commissionAmount: 500, commissionPaidAt: now,
+      })
+    );
+
+    const recon = await asUser.query(api.accountingReports.commissionPayableReconciliation, { orgId });
+    expect(recon.currencies).toEqual([]);
+  });
+});
