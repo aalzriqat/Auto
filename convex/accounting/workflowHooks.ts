@@ -15,7 +15,7 @@ import { postAccountingEvent, PostCommand } from "./postingEngine";
 import { EventType, ReceivableCreditKey, AcquisitionCorrectionType } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate } from "../accountingPeriods";
-import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount } from "../chartOfAccounts";
+import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts } from "../chartOfAccounts";
 import {
   enqueuePendingPost,
   enqueuePendingReversal,
@@ -274,8 +274,21 @@ export async function hookSaleCompleted(
     isSourced?: boolean;
     /** Documentation/admin fees on top of the vehicle price — added to the AR debit, credited to Dealer Fee Income. */
     dealerFeesMinor?: number;
+    /** Warranty/GAP premium collected and the portion owed to the third-party underwriter — see SaleCompletedPayload. */
+    warrantySoldMinor?: number;
+    warrantyCostMinor?: number;
+    gapSoldMinor?: number;
+    gapCostMinor?: number;
   }
 ) {
+  // Self-heal for orgs that initialized their chart before dealer-fee/warranty/GAP
+  // support existed — only relevant when this specific sale actually uses one
+  // of those fields, to avoid the extra lookups on every ordinary sale.
+  if (args.dealerFeesMinor || args.warrantySoldMinor || args.gapSoldMinor) {
+    if (await isChartInitialized(ctx, args.orgId)) {
+      await ensureSaleFiAccounts(ctx, args.orgId, args.actorId);
+    }
+  }
   await postDomainEvent(ctx, {
     orgId: args.orgId,
     eventType: "SALE_COMPLETED",
@@ -296,6 +309,10 @@ export async function hookSaleCompleted(
       taxMinor: args.taxMinor,
       isSourced: args.isSourced ?? false,
       dealerFeesMinor: args.dealerFeesMinor,
+      warrantySoldMinor: args.warrantySoldMinor,
+      warrantyCostMinor: args.warrantyCostMinor,
+      gapSoldMinor: args.gapSoldMinor,
+      gapCostMinor: args.gapCostMinor,
     },
   });
 }
@@ -975,6 +992,38 @@ export async function hookDepreciationPosted(
     idempotencyKey: `depr_${args.assetId}_${args.yearMonth}`,
     payload: {
       amountMinor: args.amountMinor,
+    },
+  });
+}
+
+export async function hookFiCommissionRecognized(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    deferralId: Id<"dealerProductDeferrals">;
+    yearMonth: string; // "YYYY-MM", used only for the idempotency key
+    amountMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  if (await isChartInitialized(ctx, args.orgId)) {
+    await ensureSaleFiAccounts(ctx, args.orgId, args.actorId);
+  }
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "FI_COMMISSION_RECOGNIZED",
+    sourceType: "dealerProductDeferrals",
+    sourceId: args.deferralId.toString(),
+    idempotencyKey: `fi_commission_${args.deferralId}_${args.yearMonth}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      deferralId: args.deferralId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
     },
   });
 }

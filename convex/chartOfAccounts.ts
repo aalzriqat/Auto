@@ -281,6 +281,24 @@ export async function ensureMiscIncomeAccount(
   await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.MISCELLANEOUS_INCOME, "4400");
 }
 
+/**
+ * Self-heal for the 4 accounts orgs that initialized their chart before
+ * dealer-fee/trade-in/warranty/GAP support was added would otherwise be
+ * missing. Called from hookSaleCompleted (covers dealer fees + warranty/GAP
+ * at sale time) and hookFiCommissionRecognized (covers the monthly
+ * recognition posting, which can run long after the sale).
+ */
+export async function ensureSaleFiAccounts(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.DEALER_FEE_INCOME, "4150");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.WARRANTY_GAP_PAYABLE, "2410");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.DEFERRED_FI_COMMISSION, "2420");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.FI_COMMISSION_REVENUE, "4160");
+}
+
 // ─── Queries ──────────────────────────────────────────────────────────────────
 
 export const list = query({

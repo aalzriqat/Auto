@@ -879,6 +879,16 @@ export default defineSchema({
     termMonths: v.optional(v.number()),
     warrantySold: v.optional(v.number()),
     gapSold: v.optional(v.number()),
+    // Portion of warrantySold/gapSold owed to the third-party underwriter
+    // (dealer resells, doesn't underwrite) — the remainder is the dealer's
+    // own margin, deferred and recognized ratably over the term below. Same
+    // decimal-major-unit convention as every other money field on this table
+    // (salePrice, dealerFees, warrantySold, ...); converted to minor units
+    // only at GL-posting time. See ruleSaleCompleted and dealerProductDeferrals.
+    warrantyCost: v.optional(v.number()),
+    warrantyTermMonths: v.optional(v.number()),
+    gapCost: v.optional(v.number()),
+    gapTermMonths: v.optional(v.number()),
     applicationId: v.optional(v.id("financeApplications")),
     quoteId: v.optional(v.id("quotes")),
     leadId: v.optional(v.id("leads")),
@@ -898,6 +908,27 @@ export default defineSchema({
     .index("by_org_customer", ["orgId", "customerId"])
     .index("by_quote", ["quoteId"])
     .index("by_lead", ["leadId"]),
+
+  // GL Phase 19: the dealer's margin on a resold warranty/GAP product is
+  // deferred at sale and recognized ratably over the product's term — one row
+  // per product per sale. Same recognized/lastRecognizedYearMonth tracking
+  // shape as fixedAssets' depreciation fields; see crons.ts's monthly
+  // fi-commission-recognition job and recognizeDeferredCommissionForMonth.
+  dealerProductDeferrals: defineTable({
+    orgId: v.id("organizations"),
+    saleId: v.id("sales"),
+    productType: v.union(v.literal("WARRANTY"), v.literal("GAP")),
+    totalMarginMinor: v.number(),
+    currency: v.string(),
+    termMonths: v.number(),
+    recognizedMinor: v.number(),
+    lastRecognizedYearMonth: v.optional(v.string()), // "YYYY-MM"
+    status: v.union(v.literal("ACTIVE"), v.literal("FULLY_RECOGNIZED")),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_status", ["status"])
+    .index("by_sale", ["saleId"]),
 
   expenses: defineTable({
     orgId: v.id("organizations"),
@@ -2729,6 +2760,7 @@ export default defineSchema({
       v.literal("upgrade-request"),
       v.literal("social-auto-reply-retry"),
       v.literal("fixed-asset-depreciation"),
+      v.literal("fi-commission-recognition"),
       v.literal("marketplace-weekly-report"),
       v.literal("marketplace-whatsapp")
     ),

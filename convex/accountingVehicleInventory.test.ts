@@ -12,7 +12,7 @@
 import { convexTest } from "convex-test";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { postAccountingEvent } from "./accounting/postingEngine";
 
@@ -269,6 +269,133 @@ describe("Trade-in vehicles net against the sale's AR", () => {
         saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
       })
     ).rejects.toThrow(/already has a purchase price/i);
+  });
+});
+
+describe("Resold warranty/GAP products defer the dealer's margin", () => {
+  test("premium inflates AR, cost credits the payable, margin is deferred", async () => {
+    const { t, orgId, asOwner, customerId, userId } = await seedDealer("fi_a");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+
+    const saleId = await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 15000,
+      warrantySold: 500, warrantyCost: 300, warrantyTermMonths: 10,
+      gapSold: 200, gapCost: 120, gapTermMonths: 12,
+      saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
+    });
+
+    const { lines } = await linesForEvent(t, orgId, "sales", saleId, "SALE_COMPLETED");
+    const ar = await accountBySystemKey(t, orgId, "ACCOUNTS_RECEIVABLE_CUSTOMERS");
+    const payable = await accountBySystemKey(t, orgId, "WARRANTY_GAP_PAYABLE");
+    const deferred = await accountBySystemKey(t, orgId, "DEFERRED_FI_COMMISSION");
+    const sumCredit = (accountId: string) =>
+      lines.filter((l) => l.accountId === accountId).reduce((s, l) => s + l.creditMinor, 0);
+    // AR = 15000 sale + 500 warranty + 200 gap = 15700.
+    expect(lines.find((l) => l.accountId === ar._id)?.debitMinor).toBe(15_700_000);
+    // Payable = 300 (warranty cost) + 120 (gap cost) = 420, across two separate lines.
+    expect(sumCredit(payable._id)).toBe(420_000);
+    // Deferred = (500-300) + (200-120) = 200 + 80 = 280, across two separate lines.
+    expect(sumCredit(deferred._id)).toBe(280_000);
+
+    const deferrals = await t.run((ctx) =>
+      ctx.db.query("dealerProductDeferrals").withIndex("by_sale", (q) => q.eq("saleId", saleId)).collect()
+    );
+    expect(deferrals).toHaveLength(2);
+    const warranty = deferrals.find((d) => d.productType === "WARRANTY")!;
+    const gap = deferrals.find((d) => d.productType === "GAP")!;
+    expect(warranty.totalMarginMinor).toBe(200_000);
+    expect(warranty.termMonths).toBe(10);
+    expect(warranty.status).toBe("ACTIVE");
+    expect(gap.totalMarginMinor).toBe(80_000);
+    expect(gap.termMonths).toBe(12);
+
+    const recon = await asOwner.query(api.accountingReports.subledgerReconciliation, { orgId });
+    expect(recon.isReconciled).toBe(true);
+  });
+
+  test("requires a term when a warranty premium is charged", async () => {
+    const { asOwner, orgId, customerId, userId } = await seedDealer("fi_b");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+
+    await expect(
+      asOwner.mutation(api.sales.create, {
+        orgId, vehicleId, customerId, salespersonId: userId,
+        salePrice: 15000, warrantySold: 500, warrantyCost: 300,
+        saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
+      })
+    ).rejects.toThrow(/warranty term.*required/i);
+  });
+
+  test("a zero-margin product (cost equals sold) creates no deferral", async () => {
+    const { t, orgId, asOwner, customerId, userId } = await seedDealer("fi_c");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+
+    const saleId = await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 15000, warrantySold: 500, warrantyCost: 500, warrantyTermMonths: 12,
+      saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
+    });
+
+    const deferrals = await t.run((ctx) =>
+      ctx.db.query("dealerProductDeferrals").withIndex("by_sale", (q) => q.eq("saleId", saleId)).collect()
+    );
+    expect(deferrals).toHaveLength(0);
+
+    const { lines } = await linesForEvent(t, orgId, "sales", saleId, "SALE_COMPLETED");
+    const deferred = await accountBySystemKey(t, orgId, "DEFERRED_FI_COMMISSION");
+    expect(lines.some((l) => l.accountId === deferred._id)).toBe(false);
+  });
+});
+
+describe("Monthly F&I commission recognition cron", () => {
+  test("recognizes one month of deferred margin, end to end, without double-posting", async () => {
+    const { t, orgId, asOwner, customerId, userId } = await seedDealer("fi_cron");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 15000, warrantySold: 500, warrantyCost: 300, warrantyTermMonths: 10,
+      saleDate: Date.now(), status: "COMPLETED",
+    });
+
+    const summary: string = await t.action(internal.crons.triggerFiCommissionRecognition, {});
+    expect(summary).toMatch(/posted 1\/1/i);
+
+    const events = await t.run((ctx) =>
+      ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .filter((q) => q.eq(q.field("eventType"), "FI_COMMISSION_RECOGNIZED")).collect()
+    );
+    expect(events).toHaveLength(1);
+    const lines = await t.run((ctx) =>
+      ctx.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", events[0].journalEntryId!)).collect()
+    );
+    const deferred = await accountBySystemKey(t, orgId, "DEFERRED_FI_COMMISSION");
+    const revenue = await accountBySystemKey(t, orgId, "FI_COMMISSION_REVENUE");
+    // Margin = 500-300 = 200, over 10 months = floor(200_000/10) = 20_000/month.
+    expect(lines.find((l) => l.accountId === deferred._id)?.debitMinor).toBe(20_000);
+    expect(lines.find((l) => l.accountId === revenue._id)?.creditMinor).toBe(20_000);
+
+    const deferral = await t.run((ctx) => ctx.db.query("dealerProductDeferrals").withIndex("by_org", (q) => q.eq("orgId", orgId)).first());
+    expect(deferral?.recognizedMinor).toBe(20_000);
+    expect(deferral?.status).toBe("ACTIVE");
+
+    // Running the cron again in the same calendar month must not double-post.
+    const secondSummary: string = await t.action(internal.crons.triggerFiCommissionRecognition, {});
+    expect(secondSummary).toMatch(/posted 0\/1/i);
+    expect(
+      await t.run((ctx) =>
+        ctx.db.query("accountingEvents").withIndex("by_org", (q) => q.eq("orgId", orgId))
+          .filter((q) => q.eq(q.field("eventType"), "FI_COMMISSION_RECOGNIZED")).collect()
+      )
+    ).toHaveLength(1);
   });
 });
 

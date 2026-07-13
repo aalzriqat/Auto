@@ -37,6 +37,7 @@ export type EventType =
   | "VEHICLE_ACQUISITION_COST_CORRECTED"
   | "VEHICLE_PREP_EXPENSE_RECLASSIFIED"
   | "TRADE_IN_ACCEPTED"
+  | "FI_COMMISSION_RECOGNIZED"
   | "RECEIVABLE_CREATED"
   | "JOURNAL_REVERSAL";
 
@@ -53,6 +54,7 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "CASH_DRAWER_DEPOSITED",
   "VEHICLE_ACQUIRED", "VEHICLE_LANDED_COST_CAPITALIZED", "VEHICLE_INVENTORY_OPENING_BALANCE",
   "VEHICLE_ACQUISITION_COST_CORRECTED", "VEHICLE_PREP_EXPENSE_RECLASSIFIED", "TRADE_IN_ACCEPTED",
+  "FI_COMMISSION_RECOGNIZED",
   "RECEIVABLE_CREATED",
   // JOURNAL_REVERSAL is intentionally excluded: it is written directly by
   // reverseAccountingEvent() in reversals.ts and never goes through postAccountingEvent().
@@ -158,6 +160,19 @@ export interface SaleCompletedPayload {
   isSourced?: boolean;
   /** Documentation/admin fees charged on top of the vehicle price — added to the AR debit, credited to Dealer Fee Income. */
   dealerFeesMinor?: number;
+  /**
+   * Warranty/GAP premium collected from the customer (added to the AR debit)
+   * and the portion of it owed to the third-party underwriter (credited to
+   * Warranty & GAP Payable) — the dealer resells these, it doesn't underwrite
+   * them. The remainder (sold − cost) is the dealer's own margin, credited to
+   * Deferred F&I Commission rather than recognized immediately; see
+   * dealerProductDeferrals and recognizeDeferredCommissionForMonth for how it
+   * later moves to FI_COMMISSION_REVENUE.
+   */
+  warrantySoldMinor?: number;
+  warrantyCostMinor?: number;
+  gapSoldMinor?: number;
+  gapCostMinor?: number;
 }
 
 export interface SupplierPaymentSettledPayload {
@@ -304,16 +319,50 @@ export function ruleDepositForfeited(p: DepositForfeitedPayload): RuleResult {
   };
 }
 
+/**
+ * Adds a resold warranty/GAP product's lines: the full premium collected
+ * from the customer was already folded into the AR debit by the caller; this
+ * only adds the credit side — cost owed to the underwriter (if any) and the
+ * dealer's own margin, deferred rather than recognized immediately. Cost is
+ * clamped to the sold amount so a data-entry mistake (cost > sold) can never
+ * produce a negative margin line.
+ */
+function addResoldProductLines(
+  lines: LineSpec[],
+  soldMinor: number,
+  costMinor: number,
+  label: string,
+  dims: { customerId?: string; vehicleId?: string; salespersonId?: string }
+): void {
+  const clampedCost = Math.min(Math.max(costMinor, 0), soldMinor);
+  const marginMinor = soldMinor - clampedCost;
+  if (clampedCost > 0) {
+    lines.push(line(SYSTEM_KEYS.WARRANTY_GAP_PAYABLE, 0, clampedCost, `${label} premium payable`, dims));
+  }
+  if (marginMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.DEFERRED_FI_COMMISSION, 0, marginMinor, `${label} deferred commission`, dims));
+  }
+}
+
 export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
   const revenueMinor = p.taxMinor ? p.saleAmountMinor - p.taxMinor : p.saleAmountMinor;
   const dims = { customerId: p.customerId, vehicleId: p.vehicleId, salespersonId: p.salespersonId };
   const dealerFeesMinor = p.dealerFeesMinor && p.dealerFeesMinor > 0 ? p.dealerFeesMinor : 0;
+  const warrantySoldMinor = p.warrantySoldMinor && p.warrantySoldMinor > 0 ? p.warrantySoldMinor : 0;
+  const gapSoldMinor = p.gapSoldMinor && p.gapSoldMinor > 0 ? p.gapSoldMinor : 0;
+  const arDebitMinor = p.saleAmountMinor + dealerFeesMinor + warrantySoldMinor + gapSoldMinor;
   const lines: LineSpec[] = [
-    line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, p.saleAmountMinor + dealerFeesMinor, 0, "Sale receivable", dims),
+    line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, arDebitMinor, 0, "Sale receivable", dims),
     line(SYSTEM_KEYS.SALES_REVENUE, 0, revenueMinor, "Vehicle sale revenue", dims),
   ];
   if (dealerFeesMinor > 0) {
     lines.push(line(SYSTEM_KEYS.DEALER_FEE_INCOME, 0, dealerFeesMinor, "Dealer fee income", dims));
+  }
+  if (warrantySoldMinor > 0) {
+    addResoldProductLines(lines, warrantySoldMinor, p.warrantyCostMinor ?? 0, "Warranty", dims);
+  }
+  if (gapSoldMinor > 0) {
+    addResoldProductLines(lines, gapSoldMinor, p.gapCostMinor ?? 0, "GAP", dims);
   }
   if (p.taxMinor && p.taxMinor > 0) {
     lines.push(line(SYSTEM_KEYS.SALES_TAX_PAYABLE, 0, p.taxMinor, "Sales tax payable", { vehicleId: p.vehicleId }));
@@ -911,6 +960,29 @@ export function ruleDepreciationPosted(p: DepreciationPostedPayload): RuleResult
   };
 }
 
+export interface FiCommissionRecognizedPayload {
+  deferralId: string;
+  amountMinor: number;
+  currency: string;
+}
+
+/**
+ * Monthly ratable recognition of a resold warranty/GAP product's margin —
+ * exact same shape as ruleDepreciationPosted (debit the liability being
+ * released, credit the revenue being recognized), just for a deferred
+ * commission instead of a fixed asset. See recognizeDeferredCommissionForMonth.
+ */
+export function ruleFiCommissionRecognized(p: FiCommissionRecognizedPayload): RuleResult {
+  return {
+    lines: [
+      line(SYSTEM_KEYS.DEFERRED_FI_COMMISSION, p.amountMinor, 0, "Deferred F&I commission released"),
+      line(SYSTEM_KEYS.FI_COMMISSION_REVENUE, 0, p.amountMinor, "F&I commission recognized"),
+    ],
+    memo: "Monthly F&I commission recognition",
+    category: "SYSTEM",
+  };
+}
+
 export function ruleAssetImpaired(p: AssetImpairedPayload): RuleResult {
   return {
     lines: [
@@ -1097,6 +1169,7 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "SUPPLIER_PAYMENT_SETTLED": return ruleSupplierPaymentSettled(payload as unknown as SupplierPaymentSettledPayload);
     case "ASSET_CAPITALIZED": return ruleAssetCapitalized(payload as unknown as AssetCapitalizedPayload);
     case "DEPRECIATION_POSTED": return ruleDepreciationPosted(payload as unknown as DepreciationPostedPayload);
+    case "FI_COMMISSION_RECOGNIZED": return ruleFiCommissionRecognized(payload as unknown as FiCommissionRecognizedPayload);
     case "ASSET_IMPAIRED": return ruleAssetImpaired(payload as unknown as AssetImpairedPayload);
     case "ASSET_DISPOSED": return ruleAssetDisposed(payload as unknown as AssetDisposedPayload);
     case "CAPITAL_CONTRIBUTED": return ruleCapitalContributed(payload as unknown as PartnerEquityMovementPayload);

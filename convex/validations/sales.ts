@@ -20,7 +20,11 @@ const BaseSaleSchema = z.object({
   apr: z.number().min(0).max(100).optional(),
   termMonths: z.number().min(1).max(360).optional(),
   warrantySold: z.number().min(0).optional(),
+  warrantyCost: z.number().min(0).optional(),
+  warrantyTermMonths: z.number().min(1).max(360).optional(),
   gapSold: z.number().min(0).optional(),
+  gapCost: z.number().min(0).optional(),
+  gapTermMonths: z.number().min(1).max(360).optional(),
 });
 
 function downPaymentDoesNotExceedSalePrice(data: { downPayment?: number; salePrice?: number }) {

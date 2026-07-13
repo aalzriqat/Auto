@@ -49,7 +49,11 @@ type SaleCompletionArgs = {
   apr?: number;
   termMonths?: number;
   warrantySold?: number;
+  warrantyCost?: number;
+  warrantyTermMonths?: number;
   gapSold?: number;
+  gapCost?: number;
+  gapTermMonths?: number;
   idempotencyKey?: string;
   actorId: Id<"users">;
 };
@@ -186,7 +190,11 @@ async function insertSaleRecord(
     apr: args.apr,
     termMonths: args.termMonths,
     warrantySold: args.warrantySold,
+    warrantyCost: args.warrantyCost,
+    warrantyTermMonths: args.warrantyTermMonths,
     gapSold: args.gapSold,
+    gapCost: args.gapCost,
+    gapTermMonths: args.gapTermMonths,
     commissionAmount,
     quoteId: args.quoteId,
     applicationId: args.applicationId,
@@ -256,6 +264,22 @@ async function applySaleCompletionSideEffects(
   const costMinor = costAmount > 0 ? toMinorUnits(costAmount, prepared.currency) : undefined;
   const dealerFeesMinor = args.dealerFees && args.dealerFees > 0 ? toMinorUnits(args.dealerFees, prepared.currency) : undefined;
 
+  // Warranty/GAP: the dealer resells these (collects the full premium, owes
+  // most of it to the underwriter, keeps a margin) — a term is required
+  // whenever there's a premium to defer, since it drives the recognition
+  // schedule (see dealerProductDeferrals / recognizeDeferredCommissionForMonth).
+  const warrantySoldMinor = args.warrantySold && args.warrantySold > 0 ? toMinorUnits(args.warrantySold, prepared.currency) : undefined;
+  if (warrantySoldMinor && (!args.warrantyTermMonths || args.warrantyTermMonths <= 0)) {
+    throw new ConvexError("A warranty term (in months) is required when a warranty premium is charged.");
+  }
+  const warrantyCostMinor = args.warrantyCost && args.warrantyCost > 0 ? toMinorUnits(args.warrantyCost, prepared.currency) : undefined;
+
+  const gapSoldMinor = args.gapSold && args.gapSold > 0 ? toMinorUnits(args.gapSold, prepared.currency) : undefined;
+  if (gapSoldMinor && (!args.gapTermMonths || args.gapTermMonths <= 0)) {
+    throw new ConvexError("A GAP term (in months) is required when a GAP premium is charged.");
+  }
+  const gapCostMinor = args.gapCost && args.gapCost > 0 ? toMinorUnits(args.gapCost, prepared.currency) : undefined;
+
   await hookSaleCompleted(ctx, {
     orgId: args.orgId,
     saleId,
@@ -270,11 +294,35 @@ async function applySaleCompletionSideEffects(
     occurredAt: args.saleDate,
     isSourced,
     dealerFeesMinor,
+    warrantySoldMinor,
+    warrantyCostMinor,
+    gapSoldMinor,
+    gapCostMinor,
   });
 
+  for (const deferral of [
+    { productType: "WARRANTY" as const, soldMinor: warrantySoldMinor, costMinor: warrantyCostMinor, termMonths: args.warrantyTermMonths },
+    { productType: "GAP" as const, soldMinor: gapSoldMinor, costMinor: gapCostMinor, termMonths: args.gapTermMonths },
+  ]) {
+    if (!deferral.soldMinor) continue;
+    const marginMinor = Math.max(0, deferral.soldMinor - Math.min(deferral.costMinor ?? 0, deferral.soldMinor));
+    if (marginMinor <= 0) continue;
+    await ctx.db.insert("dealerProductDeferrals", {
+      orgId: args.orgId,
+      saleId,
+      productType: deferral.productType,
+      totalMarginMinor: marginMinor,
+      currency: prepared.currency,
+      termMonths: deferral.termMonths!,
+      recognizedMinor: 0,
+      status: "ACTIVE",
+      createdAt: Date.now(),
+    });
+  }
+
   // The receivable's total must match what the AR debit in hookSaleCompleted
-  // actually posted (salePrice + dealerFees) — not just salePrice — or the
-  // subledger and GL diverge by exactly the fee amount on every fee-bearing sale.
+  // actually posted (salePrice + dealerFees + warranty/GAP premiums) — not
+  // just salePrice — or the subledger and GL diverge by that amount.
   const saleReceivableId = await ensureReceivableDocument(ctx, {
     orgId: args.orgId,
     branchId: prepared.vehicle.branchId,
@@ -283,7 +331,8 @@ async function applySaleCompletionSideEffects(
     customerId: args.customerId,
     sourceType: "sales",
     sourceId: saleId,
-    originalAmountMinor: toMinorUnits(args.salePrice, prepared.currency) + (dealerFeesMinor ?? 0),
+    originalAmountMinor: toMinorUnits(args.salePrice, prepared.currency)
+      + (dealerFeesMinor ?? 0) + (warrantySoldMinor ?? 0) + (gapSoldMinor ?? 0),
     currency: prepared.currency,
     issueDate: args.saleDate,
     dueDate: args.saleDate,
@@ -540,7 +589,11 @@ export async function completeExistingSale(
     apr: sale.apr,
     termMonths: sale.termMonths,
     warrantySold: sale.warrantySold,
+    warrantyCost: sale.warrantyCost,
+    warrantyTermMonths: sale.warrantyTermMonths,
     gapSold: sale.gapSold,
+    gapCost: sale.gapCost,
+    gapTermMonths: sale.gapTermMonths,
     idempotencyKey: args.idempotencyKey ?? sale.idempotencyKey,
     actorId: args.actorId,
   };

@@ -32,6 +32,9 @@ export const SYSTEM_KEYS = {
   CLAIM_WRITE_OFF_EXPENSE: "CLAIM_WRITE_OFF_EXPENSE",
   MISCELLANEOUS_INCOME: "MISCELLANEOUS_INCOME",
   DEALER_FEE_INCOME: "DEALER_FEE_INCOME",
+  WARRANTY_GAP_PAYABLE: "WARRANTY_GAP_PAYABLE",
+  DEFERRED_FI_COMMISSION: "DEFERRED_FI_COMMISSION",
+  FI_COMMISSION_REVENUE: "FI_COMMISSION_REVENUE",
 } as const;
 
 export type SystemKey = typeof SYSTEM_KEYS[keyof typeof SYSTEM_KEYS];
@@ -237,6 +240,33 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     allowManualPosting: false,
     systemKey: SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS,
   },
+  {
+    // Amount owed to the third-party warranty/GAP underwriter for premiums
+    // collected from customers on the dealer's behalf — not the dealer's own
+    // revenue. One combined account for both products, dimensioned by line
+    // description (same pattern as CUSTOMER_DEPOSITS_LIABILITY).
+    code: "2410",
+    name: "Warranty & GAP Payable",
+    nameAr: "ذمم دائنة — ضمان وتأمين الفجوة",
+    type: "LIABILITY",
+    normalBalance: "CREDIT",
+    isControlAccount: false,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.WARRANTY_GAP_PAYABLE,
+  },
+  {
+    // The dealer's own margin on a resold warranty/GAP product, held here
+    // until recognized ratably over the product's term — see
+    // dealerProductDeferrals and FI_COMMISSION_REVENUE.
+    code: "2420",
+    name: "Deferred F&I Commission",
+    nameAr: "عمولة تمويل وتأمين مؤجلة",
+    type: "LIABILITY",
+    normalBalance: "CREDIT",
+    isControlAccount: false,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.DEFERRED_FI_COMMISSION,
+  },
 
   // ── Equity ───────────────────────────────────────────────────────────────
   {
@@ -292,6 +322,18 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     isControlAccount: false,
     allowManualPosting: false,
     systemKey: SYSTEM_KEYS.DEALER_FEE_INCOME,
+  },
+  {
+    // Recognized ratably from DEFERRED_FI_COMMISSION over each product's term
+    // — never posted directly at sale time. See recognizeDeferredCommissionForMonth.
+    code: "4160",
+    name: "F&I Commission Revenue",
+    nameAr: "إيرادات عمولة تمويل وتأمين",
+    type: "REVENUE",
+    normalBalance: "CREDIT",
+    isControlAccount: false,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.FI_COMMISSION_REVENUE,
   },
   {
     code: "4200",
