@@ -31,6 +31,7 @@ export const SYSTEM_KEYS = {
   PARTNER_DRAWINGS: "PARTNER_DRAWINGS",
   CLAIM_WRITE_OFF_EXPENSE: "CLAIM_WRITE_OFF_EXPENSE",
   MISCELLANEOUS_INCOME: "MISCELLANEOUS_INCOME",
+  DEALER_FEE_INCOME: "DEALER_FEE_INCOME",
 } as const;
 
 export type SystemKey = typeof SYSTEM_KEYS[keyof typeof SYSTEM_KEYS];
@@ -281,6 +282,16 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     isControlAccount: false,
     allowManualPosting: false,
     systemKey: SYSTEM_KEYS.SALES_REVENUE,
+  },
+  {
+    code: "4150",
+    name: "Dealer Fee Income",
+    nameAr: "إيرادات رسوم الوكيل",
+    type: "REVENUE",
+    normalBalance: "CREDIT",
+    isControlAccount: false,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.DEALER_FEE_INCOME,
   },
   {
     code: "4200",

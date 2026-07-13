@@ -114,7 +114,7 @@ export async function createCanonicalPayment(
     payerType?: "CUSTOMER" | "FINANCE_COMPANY";
     customerId?: Id<"customers">;
     financeCompanyId?: Id<"financeCompanies">;
-    method: "CASH" | "BANK_TRANSFER" | "CARD" | "PAYMENT_LINK" | "CHEQUE" | "INTERNAL_TRANSFER" | "OTHER";
+    method: "CASH" | "BANK_TRANSFER" | "CARD" | "PAYMENT_LINK" | "CHEQUE" | "INTERNAL_TRANSFER" | "TRADE_IN" | "OTHER";
     amountMinor: number;
     currency: string;
     idempotencyKey: string;

@@ -175,6 +175,103 @@ describe("Fix #1 — vehicle acquisition capitalizes into Vehicle Inventory", ()
   });
 });
 
+describe("Dealer fees post to the GL", () => {
+  test("dealer fees inflate the AR debit and credit Dealer Fee Income", async () => {
+    const { t, orgId, asOwner, customerId, userId } = await seedDealer("fee_a");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+
+    const saleId = await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 15000, dealerFees: 300, saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
+    });
+
+    const { lines } = await linesForEvent(t, orgId, "sales", saleId, "SALE_COMPLETED");
+    const ar = await accountBySystemKey(t, orgId, "ACCOUNTS_RECEIVABLE_CUSTOMERS");
+    const feeIncome = await accountBySystemKey(t, orgId, "DEALER_FEE_INCOME");
+    expect(lines.find((l) => l.accountId === ar._id)?.debitMinor).toBe(15_300_000);
+    expect(lines.find((l) => l.accountId === feeIncome._id)?.creditMinor).toBe(300_000);
+
+    const sale = await t.run((ctx) => ctx.db.get(saleId));
+    const receivable = await t.run((ctx) => ctx.db.get(sale!.canonicalReceivableDocumentId!));
+    expect(receivable?.originalAmountMinor).toBe(15_300_000);
+
+    const recon = await asOwner.query(api.accountingReports.subledgerReconciliation, { orgId });
+    expect(recon.isReconciled).toBe(true);
+  });
+
+  test("a sale with no dealer fees has no Dealer Fee Income line", async () => {
+    const { t, orgId, asOwner, customerId, userId } = await seedDealer("fee_b");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    const saleId = await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 15000, saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
+    });
+
+    const { lines } = await linesForEvent(t, orgId, "sales", saleId, "SALE_COMPLETED");
+    const feeIncome = await accountBySystemKey(t, orgId, "DEALER_FEE_INCOME");
+    expect(lines.some((l) => l.accountId === feeIncome._id)).toBe(false);
+  });
+});
+
+describe("Trade-in vehicles net against the sale's AR", () => {
+  test("a trade-in vehicle capitalizes into inventory and reduces AR by its value", async () => {
+    const { t, orgId, asOwner, customerId, userId } = await seedDealer("ti_a");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    const tradeInVehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "TRD3N9AN0000001AX", status: "AVAILABLE",
+    });
+
+    const saleId = await asOwner.mutation(api.sales.create, {
+      orgId, vehicleId, customerId, salespersonId: userId,
+      salePrice: 15000, tradeInVehicleId, tradeInValue: 4000,
+      saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
+    });
+
+    const { lines } = await linesForEvent(t, orgId, "vehicles", tradeInVehicleId, "TRADE_IN_ACCEPTED");
+    const inventory = await accountBySystemKey(t, orgId, "VEHICLE_INVENTORY");
+    const ar = await accountBySystemKey(t, orgId, "ACCOUNTS_RECEIVABLE_CUSTOMERS");
+    expect(lines.find((l) => l.accountId === inventory._id)?.debitMinor).toBe(4_000_000);
+    expect(lines.find((l) => l.accountId === ar._id)?.creditMinor).toBe(4_000_000);
+
+    const tradeInVehicle = await t.run((ctx) => ctx.db.get(tradeInVehicleId));
+    expect(tradeInVehicle?.purchasePrice).toBe(4000);
+
+    const sale = await t.run((ctx) => ctx.db.get(saleId));
+    const receivableBalance = await asOwner.query(api.subledger.getReceivableBalance, {
+      orgId, receivableDocumentId: sale!.canonicalReceivableDocumentId!,
+    });
+    // 15000 sale price minus the 4000 trade-in allocation.
+    expect(receivableBalance?.outstandingMinor).toBe(11_000_000);
+
+    const recon = await asOwner.query(api.accountingReports.subledgerReconciliation, { orgId });
+    expect(recon.isReconciled).toBe(true);
+  });
+
+  test("rejects a trade-in vehicle that's already capitalized (has a purchase price)", async () => {
+    const { asOwner, orgId, customerId, userId } = await seedDealer("ti_b");
+    const vehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, purchasePrice: 10000, purchasePaymentMethod: "CASH",
+    });
+    const tradeInVehicleId = await asOwner.mutation(api.vehicles.create, {
+      orgId, ...baseVehicle, vin: "TRD3N9AN0000002AX", purchasePrice: 2000, purchasePaymentMethod: "CASH",
+    });
+
+    await expect(
+      asOwner.mutation(api.sales.create, {
+        orgId, vehicleId, customerId, salespersonId: userId,
+        salePrice: 15000, tradeInVehicleId, tradeInValue: 4000,
+        saleDate: Date.UTC(2025, 3, 1), status: "COMPLETED",
+      })
+    ).rejects.toThrow(/already has a purchase price/i);
+  });
+});
+
 describe("vehicleInventoryReconciliation", () => {
   test("an owned in-stock vehicle reconciles Vehicle Inventory GL against capitalized cost", async () => {
     const { orgId, asOwner } = await seedDealer("recon_a");

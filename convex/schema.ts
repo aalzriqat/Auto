@@ -327,6 +327,7 @@ export default defineSchema({
       v.literal("PAYMENT_LINK"),
       v.literal("CHEQUE"),
       v.literal("INTERNAL_TRANSFER"),
+      v.literal("TRADE_IN"),
       v.literal("OTHER"),
     ),
     amountMinor: v.number(),

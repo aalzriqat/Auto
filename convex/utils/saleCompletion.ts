@@ -14,6 +14,7 @@ import {
   hookSaleCompleted,
   hookCommissionAccrued,
   hookDepositApplied,
+  hookTradeInAccepted,
   getOrgCurrency,
 } from "../accounting/workflowHooks";
 import { toMinorUnits } from "./money";
@@ -253,6 +254,7 @@ async function applySaleCompletionSideEffects(
   // VEHICLE_INVENTORY, so this credit fully relieves it at sale.
   const costAmount = await computeVehicleCapitalizedCost(ctx, prepared.vehicle);
   const costMinor = costAmount > 0 ? toMinorUnits(costAmount, prepared.currency) : undefined;
+  const dealerFeesMinor = args.dealerFees && args.dealerFees > 0 ? toMinorUnits(args.dealerFees, prepared.currency) : undefined;
 
   await hookSaleCompleted(ctx, {
     orgId: args.orgId,
@@ -267,8 +269,12 @@ async function applySaleCompletionSideEffects(
     actorId: args.actorId,
     occurredAt: args.saleDate,
     isSourced,
+    dealerFeesMinor,
   });
 
+  // The receivable's total must match what the AR debit in hookSaleCompleted
+  // actually posted (salePrice + dealerFees) — not just salePrice — or the
+  // subledger and GL diverge by exactly the fee amount on every fee-bearing sale.
   const saleReceivableId = await ensureReceivableDocument(ctx, {
     orgId: args.orgId,
     branchId: prepared.vehicle.branchId,
@@ -277,7 +283,7 @@ async function applySaleCompletionSideEffects(
     customerId: args.customerId,
     sourceType: "sales",
     sourceId: saleId,
-    originalAmountMinor: toMinorUnits(args.salePrice, prepared.currency),
+    originalAmountMinor: toMinorUnits(args.salePrice, prepared.currency) + (dealerFeesMinor ?? 0),
     currency: prepared.currency,
     issueDate: args.saleDate,
     dueDate: args.saleDate,
@@ -308,6 +314,61 @@ async function applySaleCompletionSideEffects(
       amountMinor: toMinorUnits(amount, prepared.currency),
       actorId: args.actorId,
     });
+  }
+
+  if (args.tradeInVehicleId && args.tradeInValue && args.tradeInValue > 0) {
+    const tradeInVehicle = await ctx.db.get(args.tradeInVehicleId);
+    if (!tradeInVehicle || tradeInVehicle.orgId !== args.orgId) {
+      throw new ConvexError("Trade-in vehicle not found in this organization.");
+    }
+    // A trade-in vehicle must be brand new to inventory — if it already has a
+    // purchase price, it was already capitalized via the normal acquisition
+    // flow (postVehicleAcquisitionIfOwned), and capitalizing it again here
+    // would double-count Vehicle Inventory.
+    if (tradeInVehicle.purchasePrice && tradeInVehicle.purchasePrice > 0) {
+      throw new ConvexError(
+        "This trade-in vehicle already has a purchase price recorded. Clear it before completing this sale, or the trade-in value won't be capitalized correctly."
+      );
+    }
+
+    const tradeInValueMinor = toMinorUnits(args.tradeInValue, prepared.currency);
+    const tradeInPaymentId = await createCanonicalPayment(ctx, {
+      orgId: args.orgId,
+      branchId: prepared.vehicle.branchId,
+      direction: "IN",
+      payerType: "CUSTOMER",
+      customerId: args.customerId,
+      method: "TRADE_IN",
+      amountMinor: tradeInValueMinor,
+      currency: prepared.currency,
+      idempotencyKey: `trade_in_payment_${saleId}`,
+      actorId: args.actorId,
+      status: "SETTLED",
+      externalReference: `Trade-in vehicle ${args.tradeInVehicleId}`,
+      receivedAt: args.saleDate,
+    });
+    await allocatePaymentToReceivable(ctx, {
+      orgId: args.orgId,
+      paymentId: tradeInPaymentId,
+      receivableDocumentId: saleReceivableId,
+      amountMinor: tradeInValueMinor,
+      actorId: args.actorId,
+    });
+
+    await hookTradeInAccepted(ctx, {
+      orgId: args.orgId,
+      vehicleId: args.tradeInVehicleId,
+      saleId,
+      customerId: args.customerId,
+      tradeInValueMinor,
+      currency: prepared.currency,
+      actorId: args.actorId,
+      occurredAt: args.saleDate,
+    });
+
+    // Sets the trade-in vehicle's cost basis to the trade-in value, so
+    // computeVehicleCapitalizedCost picks it up correctly if/when it's later resold.
+    await ctx.db.patch(args.tradeInVehicleId, { purchasePrice: args.tradeInValue });
   }
 
   // For sourced vehicles, record the outstanding payable to the supplier dealer.

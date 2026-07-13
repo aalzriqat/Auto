@@ -272,6 +272,8 @@ export async function hookSaleCompleted(
     occurredAt: number;
     /** Pass true for drop-shipped vehicles — credits AP-Suppliers instead of Vehicle Inventory for COGS. */
     isSourced?: boolean;
+    /** Documentation/admin fees on top of the vehicle price — added to the AR debit, credited to Dealer Fee Income. */
+    dealerFeesMinor?: number;
   }
 ) {
   await postDomainEvent(ctx, {
@@ -293,6 +295,7 @@ export async function hookSaleCompleted(
       salespersonId: args.salespersonId.toString(),
       taxMinor: args.taxMinor,
       isSourced: args.isSourced ?? false,
+      dealerFeesMinor: args.dealerFeesMinor,
     },
   });
 }
@@ -463,6 +466,38 @@ export async function hookVehicleAcquired(
       costMinor: args.costMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
+    },
+  });
+}
+
+export async function hookTradeInAccepted(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    vehicleId: Id<"vehicles">;
+    saleId: Id<"sales">;
+    customerId: Id<"customers">;
+    tradeInValueMinor: number;
+    currency: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "TRADE_IN_ACCEPTED",
+    sourceType: "vehicles",
+    sourceId: args.vehicleId.toString(),
+    idempotencyKey: `trade_in_accepted_${args.saleId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      vehicleId: args.vehicleId.toString(),
+      saleId: args.saleId.toString(),
+      customerId: args.customerId.toString(),
+      tradeInValueMinor: args.tradeInValueMinor,
+      currency: args.currency,
     },
   });
 }

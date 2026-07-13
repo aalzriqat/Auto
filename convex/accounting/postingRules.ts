@@ -36,6 +36,7 @@ export type EventType =
   | "VEHICLE_INVENTORY_OPENING_BALANCE"
   | "VEHICLE_ACQUISITION_COST_CORRECTED"
   | "VEHICLE_PREP_EXPENSE_RECLASSIFIED"
+  | "TRADE_IN_ACCEPTED"
   | "RECEIVABLE_CREATED"
   | "JOURNAL_REVERSAL";
 
@@ -51,7 +52,8 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "CLAIM_SETTLED", "CLAIM_WRITTEN_OFF",
   "CASH_DRAWER_DEPOSITED",
   "VEHICLE_ACQUIRED", "VEHICLE_LANDED_COST_CAPITALIZED", "VEHICLE_INVENTORY_OPENING_BALANCE",
-  "VEHICLE_ACQUISITION_COST_CORRECTED", "VEHICLE_PREP_EXPENSE_RECLASSIFIED", "RECEIVABLE_CREATED",
+  "VEHICLE_ACQUISITION_COST_CORRECTED", "VEHICLE_PREP_EXPENSE_RECLASSIFIED", "TRADE_IN_ACCEPTED",
+  "RECEIVABLE_CREATED",
   // JOURNAL_REVERSAL is intentionally excluded: it is written directly by
   // reverseAccountingEvent() in reversals.ts and never goes through postAccountingEvent().
 ]);
@@ -154,6 +156,8 @@ export interface SaleCompletedPayload {
   taxMinor?: number;
   /** When true the vehicle was sourced from another dealer; credits AP-Suppliers instead of Vehicle Inventory for COGS. */
   isSourced?: boolean;
+  /** Documentation/admin fees charged on top of the vehicle price — added to the AR debit, credited to Dealer Fee Income. */
+  dealerFeesMinor?: number;
 }
 
 export interface SupplierPaymentSettledPayload {
@@ -303,10 +307,14 @@ export function ruleDepositForfeited(p: DepositForfeitedPayload): RuleResult {
 export function ruleSaleCompleted(p: SaleCompletedPayload): RuleResult {
   const revenueMinor = p.taxMinor ? p.saleAmountMinor - p.taxMinor : p.saleAmountMinor;
   const dims = { customerId: p.customerId, vehicleId: p.vehicleId, salespersonId: p.salespersonId };
+  const dealerFeesMinor = p.dealerFeesMinor && p.dealerFeesMinor > 0 ? p.dealerFeesMinor : 0;
   const lines: LineSpec[] = [
-    line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, p.saleAmountMinor, 0, "Sale receivable", dims),
+    line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, p.saleAmountMinor + dealerFeesMinor, 0, "Sale receivable", dims),
     line(SYSTEM_KEYS.SALES_REVENUE, 0, revenueMinor, "Vehicle sale revenue", dims),
   ];
+  if (dealerFeesMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.DEALER_FEE_INCOME, 0, dealerFeesMinor, "Dealer fee income", dims));
+  }
   if (p.taxMinor && p.taxMinor > 0) {
     lines.push(line(SYSTEM_KEYS.SALES_TAX_PAYABLE, 0, p.taxMinor, "Sales tax payable", { vehicleId: p.vehicleId }));
   }
@@ -607,6 +615,35 @@ export function ruleVehicleAcquired(p: VehicleAcquiredPayload): RuleResult {
       line(creditKey, 0, p.costMinor, isOnAccount ? "Supplier payable created" : "Payment for vehicle", { vehicleId: p.vehicleId }),
     ],
     memo: "Vehicle acquired for inventory",
+    category: "SYSTEM",
+  };
+}
+
+export interface TradeInAcceptedPayload {
+  vehicleId: string;
+  saleId: string;
+  customerId: string;
+  tradeInValueMinor: number;
+  currency: string;
+}
+
+/**
+ * A trade-in vehicle nets against the sale's AR instead of being paid for in
+ * cash: debit Vehicle Inventory to capitalize the incoming vehicle at its
+ * appraised value, credit AR-Customers to reduce the receivable the sale just
+ * created by the same amount — the customer only owes sale price minus
+ * trade-in value going forward. Mirrors ruleVehicleAcquired's inventory debit,
+ * but the credit side is always AR (never cash/bank/AP), same reasoning as
+ * ruleDepositApplied's credit side for a deposit applied to a sale.
+ */
+export function ruleTradeInAccepted(p: TradeInAcceptedPayload): RuleResult {
+  const dims = { vehicleId: p.vehicleId, customerId: p.customerId };
+  return {
+    lines: [
+      line(SYSTEM_KEYS.VEHICLE_INVENTORY, p.tradeInValueMinor, 0, "Trade-in vehicle capitalized", dims),
+      line(SYSTEM_KEYS.ACCOUNTS_RECEIVABLE_CUSTOMERS, 0, p.tradeInValueMinor, "Trade-in applied to sale", dims),
+    ],
+    memo: "Trade-in vehicle accepted",
     category: "SYSTEM",
   };
 }
@@ -1069,6 +1106,7 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "CLAIM_WRITTEN_OFF": return ruleClaimWrittenOff(payload as unknown as ClaimWrittenOffPayload);
     case "CASH_DRAWER_DEPOSITED": return ruleCashDrawerDeposited(payload as unknown as CashDrawerDepositedPayload);
     case "VEHICLE_ACQUIRED": return ruleVehicleAcquired(payload as unknown as VehicleAcquiredPayload);
+    case "TRADE_IN_ACCEPTED": return ruleTradeInAccepted(payload as unknown as TradeInAcceptedPayload);
     case "VEHICLE_LANDED_COST_CAPITALIZED": return ruleVehicleLandedCostCapitalized(payload as unknown as VehicleLandedCostCapitalizedPayload);
     case "VEHICLE_INVENTORY_OPENING_BALANCE": return ruleVehicleInventoryOpeningBalance(payload as unknown as VehicleInventoryOpeningBalancePayload);
     case "VEHICLE_ACQUISITION_COST_CORRECTED": return ruleVehicleAcquisitionCostCorrected(payload as unknown as VehicleAcquisitionCostCorrectedPayload);
