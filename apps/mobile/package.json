@@ -9,7 +9,8 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
-    "test": "jest --watchAll=false"
+    "test": "jest --coverage --watchAll=false",
+    "test:coverage": "jest --coverage --watchAll=false"
   },
   "dependencies": {
     "@autoflow/shared": "workspace:*",
@@ -44,6 +45,20 @@
     "typescript": "^6.0.3"
   },
   "jest": {
+    "collectCoverageFrom": [
+      "src/config/env.ts",
+      "src/features/marketplace/marketplaceFingerprint.ts",
+      "src/features/marketplace/marketplaceUtils.ts",
+      "src/features/workspace/nativeModules.ts"
+    ],
+    "coverageThreshold": {
+      "global": {
+        "branches": 100,
+        "functions": 100,
+        "lines": 100,
+        "statements": 100
+      }
+    },
     "preset": "jest-expo",
     "setupFilesAfterEnv": [
       "<rootDir>/jest.setup.ts"
