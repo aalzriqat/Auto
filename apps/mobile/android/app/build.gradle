@@ -14,7 +14,9 @@ def hasReleaseSigning = ["storeFile", "storePassword", "keyAlias", "keyPassword"
     releaseSigningProperties.getProperty(it)
 }
 def requestedReleaseBuild = gradle.startParameter.taskNames.any {
-    it.toLowerCase().contains("release")
+    def name = it.toLowerCase()
+    def simpleName = name.tokenize(":").last()
+    name.contains("release") || simpleName in ["build", "assemble", "bundle"]
 }
 if (requestedReleaseBuild && !hasReleaseSigning) {
     throw new GradleException("Release signing is not configured. Create apps/mobile/android/release-signing.properties before building release artifacts.")

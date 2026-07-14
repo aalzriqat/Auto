@@ -5,22 +5,13 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useLocale } from "../../providers/LocaleProvider";
 import { theme } from "../../theme";
 import {
+  compactInitials,
   getVisibleNativeModulesByCategory,
   labelFor,
+  nativeModulePath,
   nativeModuleCategories,
   type NativeModuleCategory,
 } from "./nativeModules";
-
-function nativeModulePath(moduleId: string): "/org/[orgId]/marketplace" | "/org/[orgId]/module/[moduleId]" {
-  return moduleId === "marketplace" ? "/org/[orgId]/marketplace" : "/org/[orgId]/module/[moduleId]";
-}
-
-function moduleInitials(label: string): string {
-  const parts = label.trim().split(/\s+/).filter(Boolean);
-  const first = parts[0]?.[0] ?? "A";
-  const second = parts[1]?.[0] ?? parts[0]?.[1] ?? "F";
-  return `${first}${second}`.toUpperCase();
-}
 
 export function WorkspaceModuleLauncher({
   orgId,
@@ -125,7 +116,7 @@ export function WorkspaceModuleLauncher({
           >
             <View style={styles.moduleTopRow}>
               <View style={styles.moduleBadge}>
-                <Text style={styles.moduleBadgeText}>{moduleInitials(title)}</Text>
+                <Text style={styles.moduleBadgeText}>{compactInitials(title)}</Text>
               </View>
               <Text style={styles.moduleAction}>{locale === "ar" ? "فتح" : "Open"}</Text>
             </View>

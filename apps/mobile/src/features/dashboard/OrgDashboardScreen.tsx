@@ -308,28 +308,28 @@ function TeamPanel({ stats }: { stats: MobileDashboardStats }) {
 function QuickActionRail({
   orgId,
   roleName,
-}: {
+}: Readonly<{
   orgId: string;
   roleName: string;
-}) {
+}>) {
   const router = useRouter();
-  const { locale, textDirection } = useLocale();
+  const { t, textDirection } = useLocale();
   const isOwner = roleName.toUpperCase() === "OWNER";
   const actions = [
     {
-      label: locale === "ar" ? "المخزون" : "Inventory",
+      label: t("inventory"),
       moduleId: "vehicles",
     },
     {
-      label: locale === "ar" ? "العملاء" : "Leads",
+      label: t("leads"),
       moduleId: "leads",
     },
     {
-      label: locale === "ar" ? "الرسائل" : "Messages",
+      label: t("messages"),
       moduleId: "messages",
     },
     {
-      label: locale === "ar" ? "الإعدادات" : "Settings",
+      label: t("settings"),
       moduleId: isOwner ? "settings" : "team",
     },
   ];
@@ -450,7 +450,7 @@ function InaccessibleWorkspaceState() {
   );
 }
 
-export function OrgDashboardScreen({ orgId }: { orgId: string | null }) {
+export function OrgDashboardScreen({ orgId }: Readonly<{ orgId: string | null }>) {
   const router = useRouter();
   const { t } = useLocale();
   const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });

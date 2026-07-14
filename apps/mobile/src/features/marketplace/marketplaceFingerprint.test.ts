@@ -98,14 +98,47 @@ describe("marketplace mobile fingerprint", () => {
     setItemAsync.mockResolvedValueOnce(undefined);
 
     try {
-      await expect(getMarketplaceClientFingerprint("en")).resolves.toBe(`0-1:en:unknown:${Platform.OS}:320x569@2`);
-      expect(setItemAsync).toHaveBeenCalledWith("autoflow-mobile-marketplace-fingerprint", "0-1");
+      const fingerprint = await getMarketplaceClientFingerprint("en");
+      const visitorId = fingerprint.split(":")[0];
+
+      expect(visitorId).toMatch(/^0-[a-z0-9]+$/u);
+      expect(fingerprint).toBe(`${visitorId}:en:unknown:${Platform.OS}:320x569@2`);
+      expect(setItemAsync).toHaveBeenCalledWith("autoflow-mobile-marketplace-fingerprint", visitorId);
     } finally {
       Object.defineProperty(Intl, "DateTimeFormat", {
         configurable: true,
         value: dateTimeFormat,
       });
     }
+  });
+
+  test("returns a transient visitor id when secure storage reads fail", async () => {
+    jest.spyOn(Dimensions, "get").mockReturnValue(screen(390, 844, 3));
+    Object.defineProperty(globalThis, "crypto", {
+      configurable: true,
+      value: { randomUUID: jest.fn(() => "transient-id") },
+    });
+    getItemAsync.mockRejectedValueOnce(new Error("storage unavailable"));
+
+    await expect(getMarketplaceClientFingerprint("en")).resolves.toBe(
+      `transient-id:en:${Intl.DateTimeFormat().resolvedOptions().timeZone || "unknown"}:${Platform.OS}:390x844@3`,
+    );
+    expect(setItemAsync).toHaveBeenCalledWith("autoflow-mobile-marketplace-fingerprint", "transient-id");
+  });
+
+  test("returns a transient visitor id when secure storage writes fail", async () => {
+    jest.spyOn(Dimensions, "get").mockReturnValue(screen(390, 844, 3));
+    Object.defineProperty(globalThis, "crypto", {
+      configurable: true,
+      value: { randomUUID: jest.fn(() => "transient-id") },
+    });
+    getItemAsync.mockResolvedValueOnce(null);
+    setItemAsync.mockRejectedValueOnce(new Error("storage unavailable"));
+
+    await expect(getMarketplaceClientFingerprint("ar")).resolves.toBe(
+      `transient-id:ar:${Intl.DateTimeFormat().resolvedOptions().timeZone || "unknown"}:${Platform.OS}:390x844@3`,
+    );
+    expect(setItemAsync).toHaveBeenCalledWith("autoflow-mobile-marketplace-fingerprint", "transient-id");
   });
 
   test("uses an unknown timezone when the runtime returns an empty timezone", async () => {

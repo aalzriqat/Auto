@@ -1,10 +1,11 @@
 /// <reference types="jest" />
 
-import { fireEvent, render } from "@testing-library/react-native";
+import { fireEvent, render, waitFor } from "@testing-library/react-native";
 import * as SecureStore from "expo-secure-store";
-import { Text } from "react-native";
+import { StyleSheet, Text } from "react-native";
 
 import { LocaleProvider } from "../providers/LocaleProvider";
+import { FormField } from "./FormField";
 import { getLocaleTogglePressedStyle, LocaleToggle } from "./LocaleToggle";
 import { getRouteButtonPressedStyle, RouteErrorState, RouteLoadingState } from "./RouteState";
 import { Screen } from "./Screen";
@@ -25,6 +26,62 @@ describe("mobile shell components", () => {
     );
 
     expect(getByText("Inside shell")).toBeTruthy();
+  });
+
+  test("reports shared form field text changes", async () => {
+    const onChangeText = jest.fn();
+    const defaultField = await render(
+      <LocaleProvider>
+        <FormField label="Name" value="initial" onChangeText={onChangeText} />
+      </LocaleProvider>,
+    );
+
+    await fireEvent.changeText(defaultField.getByDisplayValue("initial"), "next");
+
+    expect(defaultField.getByText("Name")).toBeTruthy();
+    expect(onChangeText).toHaveBeenCalledWith("next");
+  });
+
+  test("passes multiline and keyboard settings to shared form fields", async () => {
+    const onChangeText = jest.fn();
+    const multilineField = await render(
+      <LocaleProvider>
+        <FormField
+          keyboardType="number-pad"
+          label="Notes"
+          multiline
+          onChangeText={onChangeText}
+          value="long"
+        />
+      </LocaleProvider>,
+    );
+
+    expect(multilineField.getByDisplayValue("long").props.multiline).toBe(true);
+    expect(multilineField.getByDisplayValue("long").props.keyboardType).toBe("number-pad");
+  });
+
+  test("aligns shared form fields with the loaded locale direction", async () => {
+    const onChangeText = jest.fn();
+    const rtlField = await render(
+      <LocaleProvider>
+        <FormField label="City" onChangeText={onChangeText} value="Amman" />
+      </LocaleProvider>,
+    );
+
+    await waitFor(() => {
+      expect(StyleSheet.flatten(rtlField.getByDisplayValue("Amman").props.style).textAlign).toBe("right");
+    });
+
+    getItemAsync.mockResolvedValueOnce("en");
+    const ltrField = await render(
+      <LocaleProvider>
+        <FormField label="City" onChangeText={onChangeText} value="Amman" />
+      </LocaleProvider>,
+    );
+
+    await waitFor(() => {
+      expect(StyleSheet.flatten(ltrField.getByDisplayValue("Amman").props.style).textAlign).toBe("left");
+    });
   });
 
   test("renders loading and error states with retry behavior", async () => {

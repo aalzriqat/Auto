@@ -121,7 +121,7 @@ describe("mobile locale provider", () => {
       return null;
     }
 
-    await expect(render(<ConsumerWithoutProvider />)).rejects.toThrow(
+    await expect((async () => render(<ConsumerWithoutProvider />))()).rejects.toThrow(
       "useLocale must be used within LocaleProvider",
     );
   });

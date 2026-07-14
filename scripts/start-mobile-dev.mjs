@@ -39,6 +39,11 @@ const child = spawn(command, commandArgs, {
   stdio: "inherit",
 });
 
+child.on("error", (error) => {
+  console.error(`Failed to start mobile dev server: ${error.message}`);
+  process.exit(1);
+});
+
 child.on("exit", (code, signal) => {
   if (signal) {
     process.kill(process.pid, signal);

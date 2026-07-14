@@ -87,3 +87,8 @@ export function getMobileEnv(raw?: RawEnv): MobileEnv {
 
   return result.data;
 }
+
+export function getMobileAppUrl(raw: RawEnv = getBuildEnv()): string | undefined {
+  const appUrl = raw.EXPO_PUBLIC_APP_URL?.trim() || undefined;
+  return appUrl && isHttpUrl(appUrl) ? appUrl : undefined;
+}

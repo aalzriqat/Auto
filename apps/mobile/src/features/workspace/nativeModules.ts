@@ -135,6 +135,19 @@ export function labelFor(label: LocalizedLabel, locale: "en" | "ar"): string {
   return label[locale] || label.en;
 }
 
+export function compactInitials(value: string): string {
+  const parts = value.trim().split(/\s+/).filter(Boolean);
+  const first = parts[0]?.[0] ?? "A";
+  const second = parts[1]?.[0] ?? parts[0]?.[1] ?? "F";
+  return `${first}${second}`.toUpperCase();
+}
+
+export function nativeModulePath(
+  moduleId: NativeModuleId | string,
+): "/org/[orgId]/marketplace" | "/org/[orgId]/module/[moduleId]" {
+  return moduleId === "marketplace" ? "/org/[orgId]/marketplace" : "/org/[orgId]/module/[moduleId]";
+}
+
 export function getNativeModule(moduleId: string | null | undefined): NativeModuleDefinition | null {
   return nativeModules.find((module) => module.id === moduleId) ?? null;
 }

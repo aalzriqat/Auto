@@ -54,6 +54,7 @@
       "src/features/marketplace/TurnstileVerification.tsx",
       "src/features/marketplace/marketplaceUtils.ts",
       "src/providers/LocaleProvider.tsx",
+      "src/navigation/*.ts",
       "src/theme.ts",
       "src/features/workspace/nativeModules.ts"
     ],

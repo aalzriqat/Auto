@@ -1,9 +1,11 @@
 import {
   canAccessNativeModule,
+  compactInitials,
   getNativeModule,
   getNativeModulesByCategory,
   getVisibleNativeModulesByCategory,
   labelFor,
+  nativeModulePath,
   nativeModuleCategories,
   nativeModules,
 } from "./nativeModules";
@@ -30,6 +32,15 @@ describe("native workspace modules", () => {
   test("localizes module labels with an English fallback", () => {
     expect(labelFor({ en: "Inventory", ar: "المخزون" }, "ar")).toBe("المخزون");
     expect(labelFor({ en: "Inventory", ar: "" }, "ar")).toBe("Inventory");
+  });
+
+  test("builds shared module paths and compact initials", () => {
+    expect(nativeModulePath("marketplace")).toBe("/org/[orgId]/marketplace");
+    expect(nativeModulePath("vehicles")).toBe("/org/[orgId]/module/[moduleId]");
+    expect(compactInitials("Marketplace Requests")).toBe("MR");
+    expect(compactInitials("Auto")).toBe("AU");
+    expect(compactInitials("A")).toBe("AF");
+    expect(compactInitials("")).toBe("AF");
   });
 
   test("checks module access from owner roles and member permissions", () => {

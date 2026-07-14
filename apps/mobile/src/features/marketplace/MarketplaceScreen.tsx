@@ -11,7 +11,6 @@ import {
   StyleSheet,
   Switch,
   Text,
-  TextInput,
   useWindowDimensions,
   View,
 } from "react-native";
@@ -23,6 +22,7 @@ import {
   type MobileMarketplaceSearchResult,
   type MobileMarketplaceVehicle,
 } from "../../convexApi";
+import { FormField } from "../../components/FormField";
 import { RouteLoadingState } from "../../components/RouteState";
 import { Screen } from "../../components/Screen";
 import { useLocale } from "../../providers/LocaleProvider";
@@ -171,72 +171,45 @@ function TabBar({ activeTab, onChange }: { activeTab: BuyerTab; onChange: (tab: 
   );
 }
 
-function Field({
-  label,
-  value,
-  onChangeText,
-  keyboardType = "default",
-}: {
-  label: string;
-  value: string;
-  onChangeText: (value: string) => void;
-  keyboardType?: "default" | "number-pad" | "phone-pad";
-}) {
-  const { isRtl } = useLocale();
-
-  return (
-    <View style={styles.field}>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      <TextInput
-        value={value}
-        onChangeText={onChangeText}
-        keyboardType={keyboardType}
-        style={[styles.input, { textAlign: isRtl ? "right" : "left" }]}
-        placeholderTextColor="#94a3b8"
-      />
-    </View>
-  );
-}
-
 function SearchPanel({
   fields,
   setFields,
   onSearch,
   onReset,
-}: {
+}: Readonly<{
   fields: SearchFields;
   setFields: (fields: SearchFields) => void;
   onSearch: () => void;
   onReset: () => void;
-}) {
+}>) {
   const { t, textDirection } = useLocale();
 
   return (
     <View style={[styles.searchPanel, { direction: textDirection }]}>
       <View style={styles.formGrid}>
-        <Field
+        <FormField
           label={t("marketplaceMake")}
           value={fields.make}
           onChangeText={(make) => setFields({ ...fields, make })}
         />
-        <Field
+        <FormField
           label={t("marketplaceCity")}
           value={fields.city}
           onChangeText={(city) => setFields({ ...fields, city })}
         />
-        <Field
+        <FormField
           label={t("marketplacePriceMin")}
           value={fields.priceMin}
           keyboardType="number-pad"
           onChangeText={(priceMin) => setFields({ ...fields, priceMin })}
         />
-        <Field
+        <FormField
           label={t("marketplacePriceMax")}
           value={fields.priceMax}
           keyboardType="number-pad"
           onChangeText={(priceMax) => setFields({ ...fields, priceMax })}
         />
-        <Field
+        <FormField
           label={t("marketplaceMonthlyMax")}
           value={fields.maxMonthlyPayment}
           keyboardType="number-pad"
@@ -266,7 +239,7 @@ function SearchPanel({
   );
 }
 
-function Badge({ label, tone = "green" }: { label: string; tone?: "green" | "amber" | "blue" }) {
+function Badge({ label, tone = "green" }: Readonly<{ label: string; tone?: "green" | "amber" | "blue" }>) {
   return (
     <View style={[styles.badge, tone === "amber" && styles.amberBadge, tone === "blue" && styles.blueBadge]}>
       <Text style={styles.badgeText}>{label}</Text>
@@ -274,7 +247,7 @@ function Badge({ label, tone = "green" }: { label: string; tone?: "green" | "amb
   );
 }
 
-function TrustFacts({ vehicle }: { vehicle: MobileMarketplaceVehicle }) {
+function TrustFacts({ vehicle }: Readonly<{ vehicle: MobileMarketplaceVehicle }>) {
   const { locale, t } = useLocale();
   const facts = [
     vehicle.inspectionStatus === "SELF_REPORTED" ? t("marketplaceTrustSelfReported") : null,
@@ -303,10 +276,10 @@ function TrustFacts({ vehicle }: { vehicle: MobileMarketplaceVehicle }) {
 function VehicleCard({
   vehicle,
   onTradeInPress,
-}: {
+}: Readonly<{
   vehicle: MobileMarketplaceVehicle;
   onTradeInPress: (dealer: TradeInDealerTarget) => void;
-}) {
+}>) {
   const { locale, t, textDirection } = useLocale();
   const title = getVehicleTitle(vehicle);
   const listingUrl = getListingUrl(vehicle);
@@ -418,7 +391,7 @@ function CarsResultsPage({
   );
 }
 
-function CarsPanel({ onTradeInPress }: { onTradeInPress: (dealer: TradeInDealerTarget) => void }) {
+function CarsPanel({ onTradeInPress }: Readonly<{ onTradeInPress: (dealer: TradeInDealerTarget) => void }>) {
   const [fields, setFields] = useState<SearchFields>(DEFAULT_FIELDS);
   const [searchKey, setSearchKey] = useState(0);
   const [filters, setFilters] = useState<SearchFilters>(() => buildSearchFilters(DEFAULT_FIELDS));
@@ -458,10 +431,10 @@ function CarsPanel({ onTradeInPress }: { onTradeInPress: (dealer: TradeInDealerT
 function DealerCard({
   dealer,
   onTradeInPress,
-}: {
+}: Readonly<{
   dealer: MobileMarketplaceDealer;
   onTradeInPress: (dealer: TradeInDealerTarget) => void;
-}) {
+}>) {
   const { locale, t, textDirection } = useLocale();
 
   return (
@@ -521,7 +494,7 @@ function DealerCard({
   );
 }
 
-function DealersPanel({ onTradeInPress }: { onTradeInPress: (dealer: TradeInDealerTarget) => void }) {
+function DealersPanel({ onTradeInPress }: Readonly<{ onTradeInPress: (dealer: TradeInDealerTarget) => void }>) {
   const { t } = useLocale();
   const dealers = useQuery(api.marketplaceDealers.listPublicDirectory, {});
 
@@ -603,8 +576,8 @@ function StatusPanel() {
   return (
     <View style={[styles.panelGap, { direction: textDirection }]}>
       <View style={styles.lookupPanel}>
-        <Field label={t("marketplaceStatusRequestId")} value={requestId} onChangeText={setRequestId} />
-        <Field
+        <FormField label={t("marketplaceStatusRequestId")} value={requestId} onChangeText={setRequestId} />
+        <FormField
           label={t("marketplaceStatusPhone")}
           value={requestPhone}
           onChangeText={setRequestPhone}
@@ -641,8 +614,8 @@ function StatusPanel() {
       </View>
 
       <View style={styles.lookupPanel}>
-        <Field label={t("marketplaceStatusTradeInId")} value={tradeInId} onChangeText={setTradeInId} />
-        <Field
+        <FormField label={t("marketplaceStatusTradeInId")} value={tradeInId} onChangeText={setTradeInId} />
+        <FormField
           label={t("marketplaceStatusPhone")}
           value={tradeInPhone}
           onChangeText={setTradeInPhone}
@@ -848,24 +821,6 @@ const styles = StyleSheet.create({
   },
   formGrid: {
     gap: theme.spacing.md,
-  },
-  field: {
-    gap: theme.spacing.xs,
-  },
-  fieldLabel: {
-    color: theme.colors.mutedText,
-    fontSize: 12,
-    fontWeight: "800",
-  },
-  input: {
-    minHeight: 44,
-    borderRadius: theme.radius.sm,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surface,
-    color: theme.colors.text,
-    fontSize: 15,
-    paddingHorizontal: theme.spacing.md,
   },
   switchRow: {
     flexDirection: "row",

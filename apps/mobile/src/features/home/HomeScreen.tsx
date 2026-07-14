@@ -226,10 +226,18 @@ export function HomeScreen() {
     );
   }
 
-  if (convexAuthLoading || !isAuthenticated) {
+  if (convexAuthLoading) {
     return (
       <Screen>
         <RouteLoadingState label={t("loadingSession")} />
+      </Screen>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return (
+      <Screen>
+        <SignedOutState />
       </Screen>
     );
   }

@@ -1,6 +1,6 @@
 /// <reference types="jest" />
 
-import { getMobileEnv, validateMobileEnv } from "./env";
+import { getMobileAppUrl, getMobileEnv, validateMobileEnv } from "./env";
 
 const PUBLIC_ENV_KEYS = [
   "EXPO_PUBLIC_CONVEX_URL",
@@ -125,5 +125,13 @@ describe("mobile env validation", () => {
         EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: "",
       }),
     ).toThrow("Missing: EXPO_PUBLIC_CONVEX_URL, EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY");
+  });
+
+  test("reads app URL independently from required mobile config", () => {
+    expect(getMobileAppUrl({ EXPO_PUBLIC_APP_URL: "https://mobile.example/" })).toBe(
+      "https://mobile.example/",
+    );
+    expect(getMobileAppUrl({ EXPO_PUBLIC_APP_URL: "not-a-url" })).toBeUndefined();
+    expect(getMobileAppUrl({})).toBeUndefined();
   });
 });

@@ -31,7 +31,7 @@ class MainApplication : Application(), ReactApplication {
     super.onCreate()
     DefaultNewArchitectureEntryPoint.releaseLevel = try {
       ReleaseLevel.valueOf(BuildConfig.REACT_NATIVE_RELEASE_LEVEL.uppercase())
-    } catch (e: IllegalArgumentException) {
+    } catch (ignored: IllegalArgumentException) {
       ReleaseLevel.STABLE
     }
     loadReactNative(this)

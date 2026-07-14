@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 
-import { getMobileEnv } from "../../config/env";
+import { getMobileAppUrl } from "../../config/env";
 import { theme } from "../../theme";
 import { useLocale } from "../../providers/LocaleProvider";
 import { parseTurnstileMessage } from "./marketplaceUtils";
@@ -24,11 +24,7 @@ function serializeScriptString(value: string): string {
 }
 
 function getTurnstileBaseUrl(): string {
-  try {
-    return getMobileEnv().appUrl || DEFAULT_BASE_URL;
-  } catch {
-    return DEFAULT_BASE_URL;
-  }
+  return getMobileAppUrl() || DEFAULT_BASE_URL;
 }
 
 function buildTurnstileHtml(siteKey: string, locale: Locale): string {

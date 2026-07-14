@@ -42,7 +42,7 @@ function getSafeOrgs(orgs: Array<MobileOrgSummary | null> | undefined): MobileOr
   return (orgs ?? []).filter((org): org is MobileOrgSummary => org !== null);
 }
 
-function Header({ org }: { org: MobileOrgSummary }) {
+function Header({ org }: Readonly<{ org: MobileOrgSummary }>) {
   const router = useRouter();
   const { isRtl, t, textDirection } = useLocale();
 
@@ -67,7 +67,7 @@ function Header({ org }: { org: MobileOrgSummary }) {
           {t("dealerMarketplace")}
         </Text>
         <Text numberOfLines={1} style={styles.subtitle}>
-          {org.name || "Untitled workspace"}
+          {org.name || t("untitledWorkspace")}
         </Text>
       </View>
       <UserButton />
@@ -75,7 +75,10 @@ function Header({ org }: { org: MobileOrgSummary }) {
   );
 }
 
-function TabBar({ activeTab, onChange }: { activeTab: DealerTab; onChange: (tab: DealerTab) => void }) {
+function TabBar({
+  activeTab,
+  onChange,
+}: Readonly<{ activeTab: DealerTab; onChange: (tab: DealerTab) => void }>) {
   const { t, textDirection } = useLocale();
   const tabs: Array<{ value: DealerTab; label: string }> = [
     { value: "requests", label: t("marketplaceDealerInboxTab") },
@@ -106,7 +109,10 @@ function TabBar({ activeTab, onChange }: { activeTab: DealerTab; onChange: (tab:
   );
 }
 
-function Pill({ label, tone = "slate" }: { label: string; tone?: "green" | "amber" | "rose" | "slate" }) {
+function Pill({
+  label,
+  tone = "slate",
+}: Readonly<{ label: string; tone?: "green" | "amber" | "rose" | "slate" }>) {
   return (
     <View
       style={[
@@ -126,12 +132,12 @@ function RequestCard({
   request,
   openRequestId,
   onToggle,
-}: {
+}: Readonly<{
   orgId: string;
   request: MobileMarketplaceRequestRow;
   openRequestId: string | null;
   onToggle: (requestId: string | null) => void;
-}) {
+}>) {
   const { locale, t, textDirection } = useLocale();
   const isOpen = openRequestId === request.requestId;
   const vehicleLabel = [request.make, request.model].filter(Boolean).join(" ") || t("marketplaceVehicle");
@@ -174,11 +180,11 @@ function VehicleOption({
   vehicle,
   selected,
   onSelect,
-}: {
+}: Readonly<{
   vehicle: MobileVehiclePickerItem;
   selected: boolean;
   onSelect: () => void;
-}) {
+}>) {
   const { locale } = useLocale();
   const label = [vehicle.year, vehicle.make, vehicle.model, vehicle.trim].filter(Boolean).join(" ");
 
@@ -203,24 +209,29 @@ function ResponseForm({
   orgId,
   requestId,
   onSaved,
-}: {
+}: Readonly<{
   orgId: string;
   requestId: string;
   onSaved: () => void;
-}) {
+}>) {
   const { isRtl, t } = useLocale();
   const respond = useMutation(api.marketplaceResponses.respond);
-  const vehiclesPage = useQuery(api.vehicles.list, {
-    orgId,
-    status: "AVAILABLE",
-    paginationOpts: { numItems: 30, cursor: null },
-  });
   const [kind, setKind] = useState<MobileMarketplaceResponseKind>("HAVE_MATCH");
   const [vehicleId, setVehicleId] = useState<string | null>(null);
   const [offerPrice, setOfferPrice] = useState("");
   const [note, setNote] = useState("");
   const [saving, setSaving] = useState(false);
   const showOfferFields = kind !== "NOT_AVAILABLE";
+  const vehiclesPage = useQuery(
+    api.vehicles.list,
+    showOfferFields
+      ? {
+          orgId,
+          status: "AVAILABLE",
+          paginationOpts: { numItems: 30, cursor: null },
+        }
+      : "skip",
+  );
   const parsedOffer = parseOptionalPositiveNumber(offerPrice);
 
   async function submit() {
@@ -315,7 +326,7 @@ function ResponseForm({
   );
 }
 
-function RequestsTab({ orgId }: { orgId: string }) {
+function RequestsTab({ orgId }: Readonly<{ orgId: string }>) {
   const { t } = useLocale();
   const requests = useQuery(api.marketplaceResponses.listForOrg, { orgId });
   const [openRequestId, setOpenRequestId] = useState<string | null>(null);
@@ -343,7 +354,10 @@ function RequestsTab({ orgId }: { orgId: string }) {
   );
 }
 
-function TradeInCard({ orgId, tradeIn }: { orgId: string; tradeIn: MobileMarketplaceTradeInRow }) {
+function TradeInCard({
+  orgId,
+  tradeIn,
+}: Readonly<{ orgId: string; tradeIn: MobileMarketplaceTradeInRow }>) {
   const { locale, t, textDirection } = useLocale();
   const makeOffer = useMutation(api.marketplaceTradeIns.makeOffer);
   const [expanded, setExpanded] = useState(false);
@@ -418,7 +432,7 @@ function TradeInCard({ orgId, tradeIn }: { orgId: string; tradeIn: MobileMarketp
   );
 }
 
-function TradeInsTab({ orgId }: { orgId: string }) {
+function TradeInsTab({ orgId }: Readonly<{ orgId: string }>) {
   const { t } = useLocale();
   const tradeIns = useQuery(api.marketplaceTradeIns.listForOrg, { orgId });
 
@@ -457,7 +471,7 @@ function InaccessibleState() {
   );
 }
 
-export function DealerMarketplaceScreen({ orgId }: { orgId: string | null }) {
+export function DealerMarketplaceScreen({ orgId }: Readonly<{ orgId: string | null }>) {
   const router = useRouter();
   const { t, textDirection } = useLocale();
   const { isLoaded, isSignedIn } = useAuth({ treatPendingAsSignedOut: false });

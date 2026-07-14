@@ -162,8 +162,151 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `pnpm test:coverage:sonar`: passed locally with 98 files passed, 1 skipped; 1101 tests passed, 22 skipped. This matches the CI command that failed from a Vitest teardown rejection.
   - `git diff --check`: passed with line-ending normalization warnings only.
   - test-guard review: passed for the Cypress change; the test continues to verify an end-to-end user behavior with no new mocks or implementation assertions.
+- 2026-07-14 17:24 +03: post-push PR watch after Cypress fix
+  - Pushed commit `65796971 Fix Cypress sales click coverage`.
+  - Fresh PR checks passed for SonarCloud, Vercel, CodeQL, Checkov, GitGuardian, Semgrep, OSV, secret scan, lint, type-check, Convex backend, unit-and-integration, Cypress, Playwright, TestSprite E2E, nuclei, zap-baseline, dependency audit, and dealer-worker.
+  - The previous `unit-and-integration` teardown failure did not recur; GitHub Actions passed the job in 3m16s.
+  - The previous `cypress` failure is fixed; GitHub Actions passed the Cypress job in 5m32s.
+  - PR #70 remains non-draft and points at head `6579697176a1574cb2d3e5bf15e1896cf8c8d81c`.
+  - GitHub review threads and submitted reviews remain empty; no inline comments were found.
+  - CodeRabbit is still the only red status. The latest CodeRabbit comment says the PR review limit is reached and the next included review is available in about 14 minutes, so the next action is to trigger `@coderabbitai review` after the wait window.
+- 2026-07-14 17:26 +03: CodeRabbit wait heartbeat
+  - Continuing to wait for the CodeRabbit included-review window before manually triggering `@coderabbitai review`.
+- 2026-07-14 17:29 +03: CodeRabbit wait heartbeat
+  - CodeRabbit status is still rate-limited; all other PR checks remain green.
+- 2026-07-14 17:31 +03: CodeRabbit wait heartbeat
+  - Continuing to hold for the CodeRabbit review window; no new reviews or inline comments have appeared.
+- 2026-07-14 17:33 +03: CodeRabbit wait heartbeat
+  - Still waiting on CodeRabbit availability; no check failures have reappeared.
+- 2026-07-14 17:35 +03: CodeRabbit wait heartbeat
+  - Preparing to manually trigger CodeRabbit review after the advertised wait window.
+- 2026-07-14 17:37 +03: CodeRabbit manual review triggered
+  - Posted `@coderabbitai review` on PR #70.
+  - CodeRabbit accepted the command and changed status from rate-limited failure to pending review in progress.
+  - No CodeRabbit inline review threads or submitted reviews were present at the first post-trigger check.
+- 2026-07-14 17:39 +03: CodeRabbit review still processing
+  - CodeRabbit status remains pending with "Review in progress."
+  - No CodeRabbit inline review threads, submitted reviews, or new actionable comments have appeared yet.
+- 2026-07-14 17:42 +03: CodeRabbit review still processing
+  - CodeRabbit remains pending and the PR still has no review threads or submitted reviews.
+- 2026-07-14 17:43 +03: CodeRabbit watch resumed after Sonar attachment review
+  - Read the attached Sonar failure text; it describes the earlier Quality Gate failure that has since been fixed on the PR.
+  - Live PR check status: SonarCloud and every GitHub Actions/external check now pass except CodeRabbit, which is pending with "Review in progress."
+  - PR #70 remains open, mergeable, and non-draft.
+  - Thread-aware GitHub review read remains clean: no review threads, inline comments, or submitted reviews.
+- 2026-07-14 17:45 +03: CodeRabbit processing heartbeat
+  - CodeRabbit is still pending with "Review in progress."
+  - SonarCloud, Cypress, and unit-and-integration remain passed on the latest PR head.
+  - Thread-aware GitHub review read remains empty: no review threads, inline comments, or submitted reviews.
+- 2026-07-14 17:46 +03: CodeRabbit processing heartbeat
+  - CodeRabbit remains pending with "Review in progress."
+  - Live checks for SonarCloud, Cypress, and unit-and-integration remain green.
+  - Thread-aware GitHub review read remains empty: no review threads, inline comments, or submitted reviews.
+- 2026-07-14 17:48 +03: CodeRabbit processing heartbeat
+  - CodeRabbit remains pending with "Review in progress."
+  - Live checks for SonarCloud, Cypress, and unit-and-integration remain green.
+  - Thread-aware GitHub review read remains empty: no review threads, inline comments, or submitted reviews.
+- 2026-07-14 17:50 +03: CodeRabbit processing heartbeat
+  - CodeRabbit status context started at 2026-07-14T14:35:51Z and remains pending with "Review in progress."
+  - Live checks for SonarCloud, Cypress, and unit-and-integration remain green.
+  - Thread-aware GitHub review read remains empty: no review threads, inline comments, or submitted reviews.
+- 2026-07-14 17:51 +03: CodeRabbit processing heartbeat
+  - CodeRabbit remains pending with "Review in progress."
+  - Live checks for SonarCloud, Cypress, and unit-and-integration remain green.
+  - Thread-aware GitHub review read remains empty: no review threads, inline comments, or submitted reviews.
+- 2026-07-14 17:53 +03: CodeRabbit processing heartbeat
+  - CodeRabbit remains pending with "Review in progress."
+  - Live checks for SonarCloud, Cypress, and unit-and-integration remain green.
+  - Thread-aware GitHub review read remains empty: no review threads, inline comments, or submitted reviews.
+- 2026-07-14 17:54 +03: CodeRabbit processing heartbeat
+  - CodeRabbit remains pending with "Review in progress."
+  - CodeRabbit summary comment was last updated at 2026-07-14T14:36:06Z, shortly after the manual `@coderabbitai review` trigger.
+  - Live checks for SonarCloud, Cypress, and unit-and-integration remain green.
+  - Thread-aware GitHub review read remains empty: no review threads, inline comments, or submitted reviews.
+- 2026-07-14 17:56 +03: CodeRabbit processing heartbeat
+  - CodeRabbit remains pending with "Review in progress."
+  - Live checks for SonarCloud, Cypress, and unit-and-integration remain green.
+  - Thread-aware GitHub review read remains empty: no review threads, inline comments, or submitted reviews.
+  - Holding off on duplicate CodeRabbit triggers while the status context is still actively pending.
+- 2026-07-14 17:58 +03: CodeRabbit processing heartbeat
+  - CodeRabbit remains pending with "Review in progress."
+  - Live checks for SonarCloud, Cypress, and unit-and-integration remain green.
+  - Thread-aware GitHub review read remains empty: no review threads, inline comments, or submitted reviews.
+- 2026-07-14 17:59 +03: CodeRabbit processing heartbeat
+  - CodeRabbit remains pending with "Review in progress."
+  - Live checks for SonarCloud, Cypress, and unit-and-integration remain green.
+  - Thread-aware GitHub review read remains empty: no review threads, inline comments, or submitted reviews.
+  - Preparing to re-check CodeRabbit comment timestamps before deciding whether a second manual trigger is warranted.
+- 2026-07-14 18:00 +03: CodeRabbit manual review re-triggered
+  - CodeRabbit status/comment timestamps were stale: the pending status context started at 2026-07-14T14:35:51Z and the summary comment was last updated at 2026-07-14T14:36:06Z.
+  - Posted a second `@coderabbitai review` nudge after the stale wait.
+  - CodeRabbit acknowledged the second command at 2026-07-14T15:00:01Z with "Review triggered."
+  - Live checks for SonarCloud, Cypress, and unit-and-integration remain green.
+  - No CodeRabbit review threads, inline comments, or submitted reviews have appeared yet.
+- 2026-07-14 18:01 +03: CodeRabbit processing heartbeat
+  - CodeRabbit remains pending with "Review in progress."
+  - The CodeRabbit status context timestamp did not reset after the second acknowledged `@coderabbitai review` command.
+  - Live checks for SonarCloud, Cypress, and unit-and-integration remain green.
+  - Thread-aware GitHub review read remains empty: no review threads, inline comments, or submitted reviews.
+- 2026-07-14 18:03 +03: CodeRabbit processing heartbeat
+  - Raw commit status confirms a single CodeRabbit pending status on head `6579697176a1574cb2d3e5bf15e1896cf8c8d81c`, created/updated at 2026-07-14T14:35:51Z with description "Review in progress."
+  - CodeRabbit has acknowledged both manual review commands, but has not posted a completed review, inline thread, or new actionable comment.
+  - Live checks for SonarCloud, Cypress, and unit-and-integration remain green.
+  - Thread-aware GitHub review read remains empty.
+- 2026-07-14 18:05 +03: CodeRabbit processing heartbeat
+  - CodeRabbit remains pending with "Review in progress."
+  - CodeRabbit comments still contain only the original processing summary plus the two manual review acknowledgements.
+  - Live checks for SonarCloud, Cypress, and unit-and-integration remain green.
+  - Thread-aware GitHub review read remains empty: no review threads, inline comments, or submitted reviews.
+- 2026-07-14 18:07 +03: CodeRabbit review completed
+  - CodeRabbit status is now passed with "Review completed"; all PR checks are passing.
+  - PR remains open, mergeable, and non-draft.
+  - GitHub inline review comments API is empty because CodeRabbit reported GitHub failed to post inline comments.
+  - CodeRabbit submitted two review bodies with 28 bundled actionable comments; review threads remain empty.
+  - Beginning review-feedback triage and fixes. One CodeRabbit suggestion conflicts with the user's explicit 100% mobile coverage requirement (`apps/mobile/package.json` coverageThreshold relaxation), so the 100% mobile coverage gate will be preserved.
+- 2026-07-14 18:17 +03: CodeRabbit feedback fix pass in progress
+  - Applied route-param deduplication with `apps/mobile/src/navigation/routeParams.ts`.
+  - Extracted a shared mobile `FormField` component and rewired marketplace buyer/search fields to use it.
+  - Added missing shared i18n keys for quick actions and untitled workspace fallback; kept coverage thresholds at 100%.
+  - Patched HomeScreen Convex auth loading behavior, DealerMarketplace readonly/skip-query issues, Turnstile app URL lookup, marketplace fingerprint storage fallbacks, workspace native-module helper duplication, sourceType update safety, message typing failure isolation, and numeric zero preservation.
+  - Patched Android release task detection, Kotlin catch variable naming, LocaleProvider synchronous throw assertion, and start-mobile-dev spawn error handling.
+  - Renamed launcher image assets from `.webp` to `.png` after verifying their PNG byte signatures; Android manifest resource references remain extension-independent.
+- 2026-07-14 18:19 +03: mobile validation after CodeRabbit fixes
+  - `pnpm mobile:test`: passed with 8 suites and 73 tests.
+  - Mobile coverage remains 100% statements, 100% branches, 100% functions, and 100% lines.
+  - `pnpm mobile:typecheck`: passed.
+  - The LocaleProvider render-error assertion uses an async render wrapper because this React Native Testing Library/React 19 setup reports the render failure asynchronously; the attempted synchronous `toThrow` form failed locally.
+- 2026-07-14 18:26 +03: broader validation after CodeRabbit fixes
+  - `pnpm typecheck`: passed.
+  - `pnpm lint`: passed with the repo's existing warning set and no errors.
+  - `pnpm shared:test`: passed.
+  - `pnpm shared:typecheck`: passed.
+  - `node --check scripts/start-mobile-dev.mjs`: passed.
+  - `pnpm test:coverage:sonar`: passed with 98 files passed, 1 skipped; 1101 tests passed, 22 skipped.
+  - Initial parallel `pnpm test:coverage` conflicted with `test:coverage:sonar` over Vitest's shared `coverage/.tmp`; reran it by itself and it passed with 107 files passed, 1 skipped; 1179 tests passed, 22 skipped; configured coverage summary stayed 100%.
+  - Android resource validation: initial `:app:processDebugResources` exposed a missing `aapt2-8.12.0-13700139` checksum in Gradle verification metadata; updated metadata with `--write-verification-metadata sha256`, then reran `:app:processDebugResources --no-daemon` without the write flag and it passed.
+  - Removed generated Gradle report output from `apps/mobile/android/build/reports` after validation so ESLint does not scan transient report JavaScript.
+  - `pnpm exec eslint apps/mobile packages/shared scripts/start-mobile-dev.mjs --quiet`: passed.
+- 2026-07-14 18:29 +03: final mobile coverage tightening
+  - Added `src/navigation/*.ts` to the mobile Jest coverage include list so new navigation helpers are part of the 100% mobile gate.
+  - Added direct route-param coverage in `apps/mobile/src/navigation/routeParams.test.ts`.
+  - Split the shared `FormField` coverage into focused text-change, input-prop, and locale-direction scenarios.
+  - `pnpm mobile:test`: passed with 9 suites and 79 tests.
+  - Mobile coverage remains 100% statements, 100% branches, 100% functions, and 100% lines; `src/navigation/routeParams.ts` now appears in the coverage table at 100%.
+  - `pnpm mobile:typecheck`: passed.
+  - `pnpm exec eslint apps/mobile packages/shared scripts/start-mobile-dev.mjs --quiet`: passed.
+  - `pnpm typecheck`: passed.
+  - `git diff --check`: passed with line-ending warnings only.
+- 2026-07-14 18:33 +03: Sonar coverage rerun
+  - First `pnpm test:coverage:sonar` rerun hit a Vitest worker teardown error: `EnvironmentTeardownError: [vitest-worker]: Closing rpc while "onUserConsoleLog" was pending`; all 98 test files and 1101 tests had passed before the teardown error.
+  - Targeted `pnpm exec vitest run convex/utils/notifications.test.ts --coverage=false`: passed with 20 tests.
+  - Exact `pnpm test:coverage:sonar` rerun: passed with 98 files passed, 1 skipped; 1101 tests passed, 22 skipped.
+- 2026-07-14 18:34 +03: full coverage confirmation
+  - `pnpm test:coverage`: passed with 107 files passed, 1 skipped; 1179 tests passed, 22 skipped.
+  - Configured coverage summary remains 100% statements, 100% branches, 100% functions, and 100% lines.
 
 ## Next Steps
 
-1. Commit and push the Cypress CI fix.
-2. Retrigger/watch PR checks, comments, inline comments, and failures again.
+1. Triage the bundled CodeRabbit review comments.
+2. Fix still-valid issues without reducing mobile coverage requirements.
+3. Validate, commit, push, and watch the PR checks again.

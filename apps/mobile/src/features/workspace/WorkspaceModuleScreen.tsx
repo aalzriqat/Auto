@@ -76,9 +76,11 @@ import { useLocale } from "../../providers/LocaleProvider";
 import { theme } from "../../theme";
 import {
   canAccessNativeModule,
+  compactInitials,
   getNativeModule,
   getVisibleNativeModulesByCategory,
   labelFor,
+  nativeModulePath,
   type NativeModuleId,
 } from "./nativeModules";
 
@@ -159,13 +161,6 @@ function relativeTimeLabel(value: number, locale: "en" | "ar"): string {
   return dateLabel(value, locale);
 }
 
-function compactInitials(value: string): string {
-  const parts = value.trim().split(/\s+/).filter(Boolean);
-  const first = parts[0]?.[0] ?? "A";
-  const second = parts[1]?.[0] ?? parts[0]?.[1] ?? "F";
-  return `${first}${second}`.toUpperCase();
-}
-
 function directConversationTitle(
   conversation: MobileDirectConversation,
   currentUserId: string | undefined,
@@ -241,10 +236,6 @@ function useGenericError() {
       locale === "ar" ? "حدث خطأ غير متوقع. حاول مرة أخرى." : "An unexpected error occurred. Please try again.",
     );
   };
-}
-
-function nativeModulePath(moduleId: NativeModuleId): "/org/[orgId]/marketplace" | "/org/[orgId]/module/[moduleId]" {
-  return moduleId === "marketplace" ? "/org/[orgId]/marketplace" : "/org/[orgId]/module/[moduleId]";
 }
 
 function ModuleHeader({
@@ -905,13 +896,12 @@ function VehiclesModule({ orgId }: { orgId: string }) {
         purchasePrice: parseOptionalNumber(form.purchasePrice),
         sellingPrice,
         status: form.status,
-        sourceType: "STOCK" as const,
         notes: maybeText(form.notes),
       };
       if (editing) {
         await updateVehicle({ ...payload, vehicleId: editing._id });
       } else {
-        await createVehicle(payload);
+        await createVehicle({ ...payload, sourceType: "STOCK" as const });
       }
       setOpen(false);
       setEditing(null);
@@ -1947,7 +1937,9 @@ function MessagesModule({ orgId }: { orgId: string }) {
     }
 
     try {
-      await setTyping({ conversationId: selectedId, isTyping: false });
+      setTyping({ conversationId: selectedId, isTyping: false }).catch((error) => {
+        console.error("Mobile typing status clear failed", error);
+      });
       await sendDirectMessage({ conversationId: selectedId, body });
     } catch (error) {
       setDraft(body);
@@ -2345,7 +2337,10 @@ function SourcingModule({ orgId }: { orgId: string }) {
 
   function openPay(payable: MobileSupplierPayable) {
     setSelected(payable);
-    setForm({ notes: payable.paymentNotes ?? "", taxAmount: payable.taxAmount ? String(payable.taxAmount) : "" });
+    setForm({
+      notes: payable.paymentNotes ?? "",
+      taxAmount: payable.taxAmount != null ? String(payable.taxAmount) : "",
+    });
   }
 
   async function savePaid() {
@@ -2431,10 +2426,10 @@ function FinanceCompaniesModule({ orgId }: { orgId: string }) {
       profitRate: company ? String(company.profitRate) : "",
       maxTermMonths: company ? String(company.maxTermMonths) : "60",
       gracePeriodMonths: company ? String(company.gracePeriodMonths) : "0",
-      insuranceRate: company?.insuranceRate ? String(company.insuranceRate) : "",
-      adminFees: company?.adminFees ? String(company.adminFees) : "",
-      commission: company?.commission ? String(company.commission) : "",
-      maxFinancingLTV: company?.maxFinancingLTV ? String(company.maxFinancingLTV) : "",
+      insuranceRate: company?.insuranceRate != null ? String(company.insuranceRate) : "",
+      adminFees: company?.adminFees != null ? String(company.adminFees) : "",
+      commission: company?.commission != null ? String(company.commission) : "",
+      maxFinancingLTV: company?.maxFinancingLTV != null ? String(company.maxFinancingLTV) : "",
       isActive: company?.isActive === false ? "false" : "true",
       includesCommissionInDebt: company?.includesCommissionInDebt ? "true" : "false",
     });

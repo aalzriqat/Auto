@@ -7,7 +7,6 @@ import {
   StyleSheet,
   Switch,
   Text,
-  TextInput,
   View,
 } from "react-native";
 
@@ -18,6 +17,7 @@ import {
   type MobilePaymentType,
   type MobileTradeInCondition,
 } from "../../convexApi";
+import { FormField } from "../../components/FormField";
 import { RouteLoadingState } from "../../components/RouteState";
 import { getMobileEnv } from "../../config/env";
 import { useLocale } from "../../providers/LocaleProvider";
@@ -126,40 +126,6 @@ function getTurnstileSiteKey(): string | undefined {
 function reportMarketplaceSubmitFailure(error: unknown, userMessage: string) {
   console.error(userMessage, error);
   Alert.alert("AutoFlow", userMessage);
-}
-
-function FormField({
-  label,
-  value,
-  onChangeText,
-  keyboardType = "default",
-  multiline = false,
-}: {
-  label: string;
-  value: string;
-  onChangeText: (value: string) => void;
-  keyboardType?: "default" | "number-pad" | "phone-pad";
-  multiline?: boolean;
-}) {
-  const { isRtl } = useLocale();
-
-  return (
-    <View style={styles.field}>
-      <Text style={styles.fieldLabel}>{label}</Text>
-      <TextInput
-        value={value}
-        onChangeText={onChangeText}
-        keyboardType={keyboardType}
-        multiline={multiline}
-        style={[
-          styles.input,
-          multiline && styles.multilineInput,
-          { textAlign: isRtl ? "right" : "left" },
-        ]}
-        placeholderTextColor="#94a3b8"
-      />
-    </View>
-  );
 }
 
 function ChoiceGroup<TValue extends string>({
@@ -732,21 +698,6 @@ const styles = StyleSheet.create({
     color: theme.colors.mutedText,
     fontSize: 12,
     fontWeight: "800",
-  },
-  input: {
-    minHeight: 44,
-    borderRadius: theme.radius.sm,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surface,
-    color: theme.colors.text,
-    fontSize: 15,
-    paddingHorizontal: theme.spacing.md,
-  },
-  multilineInput: {
-    minHeight: 86,
-    paddingTop: theme.spacing.md,
-    textAlignVertical: "top",
   },
   choiceWrap: {
     flexDirection: "row",

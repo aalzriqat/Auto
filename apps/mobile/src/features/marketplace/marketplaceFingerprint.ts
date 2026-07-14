@@ -39,10 +39,20 @@ function getTimeZone(): string {
 }
 
 export async function getMarketplaceClientFingerprint(locale: Locale): Promise<string> {
-  let visitorId = await SecureStore.getItemAsync(FINGERPRINT_STORAGE_KEY);
+  let visitorId: string | null = null;
+  try {
+    visitorId = await SecureStore.getItemAsync(FINGERPRINT_STORAGE_KEY);
+  } catch {
+    visitorId = null;
+  }
+
   if (!visitorId) {
     visitorId = createVisitorId();
-    await SecureStore.setItemAsync(FINGERPRINT_STORAGE_KEY, visitorId);
+    try {
+      await SecureStore.setItemAsync(FINGERPRINT_STORAGE_KEY, visitorId);
+    } catch {
+      // Use the generated transient visitor id when secure storage is unavailable.
+    }
   }
 
   const screen = Dimensions.get("screen");
