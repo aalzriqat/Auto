@@ -16,6 +16,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { resolveSystemAccount } from "./chartOfAccounts";
 import { SYSTEM_KEYS } from "./utils/defaultChart";
 import { getPostedLines } from "./accountingReports";
+import { auditLog } from "./financialAudit";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MATCH_WINDOW_DAYS = 10;
@@ -258,9 +259,14 @@ export const ignoreLine = mutation({
   args: {
     orgId: v.id("organizations"),
     statementLineId: v.id("bankStatementLines"),
+    reason: v.string(),
   },
   handler: async (ctx, args) => {
-    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const reason = args.reason.trim();
+    if (!reason) {
+      throw new ConvexError("A reason is required to ignore a bank statement line.");
+    }
     const statementLine = await ctx.db.get(args.statementLineId);
     if (!statementLine || statementLine.orgId !== args.orgId) {
       throw new ConvexError("Statement line not found.");
@@ -269,6 +275,24 @@ export const ignoreLine = mutation({
     if (statementLine.status === "MATCHED") {
       throw new ConvexError("Unmatch this line before ignoring it.");
     }
-    await ctx.db.patch(args.statementLineId, { status: "IGNORED" });
+    const now = Date.now();
+    await ctx.db.patch(args.statementLineId, {
+      status: "IGNORED",
+      ignoredAt: now,
+      ignoredBy: user._id,
+      ignoreReason: reason,
+    });
+    // Ignoring removes a discrepancy from the close-blocking unmatched count
+    // (computeCloseChecklist) — that must never happen without a trace, or
+    // an accountant could quietly clear a control without documenting why.
+    await auditLog(ctx, {
+      orgId: args.orgId,
+      actorId: user._id,
+      actionType: "IGNORE_BANK_STATEMENT_LINE",
+      resourceType: "bankStatementLines",
+      resourceId: args.statementLineId.toString(),
+      description: `Bank statement line ignored: ${statementLine.description} (${statementLine.amountMinor}) — ${reason}`,
+      after: { amountMinor: statementLine.amountMinor, statementDate: statementLine.statementDate, reason },
+    });
   },
 });

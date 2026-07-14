@@ -111,8 +111,8 @@ describe("Phase 9 — expense account mapping", () => {
     const { orgId, asUser } = await seedDealer("exp");
 
     const expenseId = await asUser.mutation(api.expenses.create, {
-      orgId, title: "Marketing flyers", amount: 120, date: Date.now(),
-      category: "MARKETING", status: "PAID",
+      orgId, title: "Miscellaneous expense", amount: 120, date: Date.now(),
+      category: "OTHER", status: "PAID",
     });
 
     const event = await eventForSource(asUser, orgId, "expenses", expenseId.toString());
@@ -362,7 +362,7 @@ describe("Phase 9 — reversal audit log", () => {
     });
     const event = await eventForSource(asUser, orgId, "expenses", expenseId.toString());
 
-    await asUser.mutation(api.accountingLedger.reverse, {
+    await asUser.mutation(internal.accountingLedger.reverse, {
       orgId, originalEventId: event._id, reversalDate: Date.now(),
       reason: "Audit re-audit reversal", idempotencyKey: `rev_${expenseId}`,
     });
@@ -554,7 +554,7 @@ describe("Phase 9 — commission payment GL posting", () => {
       sourceType: "sales",
       sourceId: `commission_paid_${saleId}`,
     });
-    expect(events.filter((row) => row.eventType === "COMMISSION_PAID")).toHaveLength(1);
+    expect(events.filter((row: { eventType: string }) => row.eventType === "COMMISSION_PAID")).toHaveLength(1);
   });
 
   test("markCommissionPaid stores bank-transfer method and credits Bank", async () => {

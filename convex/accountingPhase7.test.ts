@@ -4,7 +4,7 @@
 import { convexTest } from "convex-test";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 
 const MODULE_GLOB = import.meta.glob("./**/*.*s");
 
@@ -96,7 +96,7 @@ describe("Phase 7 — financial audit log", () => {
     const { orgId, asUser } = await seedAuditDealer();
     const now = Date.now();
 
-    await asUser.mutation(api.accountingLedger.post, {
+    await asUser.mutation(internal.accountingLedger.post, {
       orgId,
       eventType: "EXPENSE_POSTED",
       sourceType: "expenses",
@@ -118,7 +118,7 @@ describe("Phase 7 — financial audit log", () => {
     const { orgId, userId, asUser } = await seedAuditDealer();
     const now = Date.now();
 
-    await asUser.mutation(api.accountingLedger.post, {
+    await asUser.mutation(internal.accountingLedger.post, {
       orgId,
       eventType: "EXPENSE_POSTED",
       sourceType: "expenses",

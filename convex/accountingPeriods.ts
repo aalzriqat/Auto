@@ -3,11 +3,19 @@ import { mutation, query } from "./_generated/server";
 import { Id, Doc } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { auditLog } from "./financialAudit";
 import { requireFeature } from "./subscriptions";
-import { computeSubledgerReconciliation, SubledgerReconciliationResult } from "./accountingReports";
+import {
+  computeSubledgerReconciliation,
+  SubledgerReconciliationResult,
+  computeVehicleInventoryReconciliation,
+  computeSupplierPayablesReconciliation,
+  computeCustomerDepositsReconciliation,
+  computeCommissionPayableReconciliation,
+  GlVsSubledgerResult,
+} from "./accountingReports";
 
 const periodStatusValidator = v.union(
   v.literal("FUTURE"),
@@ -254,6 +262,10 @@ export type CloseChecklistResult = {
   pendingManualJournalCount: number;
   unmatchedBankLineCount: number;
   arReconciliation: SubledgerReconciliationResult;
+  vehicleInventoryReconciliation: GlVsSubledgerResult;
+  supplierPayablesReconciliation: GlVsSubledgerResult;
+  customerDepositsReconciliation: GlVsSubledgerResult;
+  commissionPayableReconciliation: GlVsSubledgerResult;
 };
 
 /**
@@ -302,7 +314,20 @@ async function computeCloseChecklist(
       .collect()
   ).filter((l) => l.statementDate <= period.endDate);
 
-  const arReconciliation = await computeSubledgerReconciliation(ctx, orgId, period.endDate);
+  // These four used to be informational-only reports, never checked at close
+  // — an org could close a period with Vehicle Inventory, AP-Suppliers,
+  // Customer Deposits, or Commission Payable silently out of sync with the
+  // GL. They already exist and are cheap to compute, so there's no reason
+  // not to gate on them the same way AR already is. Independent read-only
+  // computations, so run them concurrently rather than five sequential round-trips.
+  const [arReconciliation, vehicleInventoryRecon, supplierPayablesRecon, customerDepositsRecon, commissionPayableRecon] =
+    await Promise.all([
+      computeSubledgerReconciliation(ctx, orgId, period.endDate),
+      computeVehicleInventoryReconciliation(ctx, orgId, period.endDate),
+      computeSupplierPayablesReconciliation(ctx, orgId, period.endDate),
+      computeCustomerDepositsReconciliation(ctx, orgId, period.endDate),
+      computeCommissionPayableReconciliation(ctx, orgId, period.endDate),
+    ]);
 
   const blockers: string[] = [];
   if (pendingOutboxEvents.length > 0) {
@@ -320,6 +345,22 @@ async function computeCloseChecklist(
     const badCurrencies = arReconciliation.currencies.filter((c) => !arReconciliation.byCurrency[c].isReconciled);
     blockers.push(`AR subledger does not reconcile to the GL for: ${badCurrencies.join(", ")}.`);
   }
+  if (!vehicleInventoryRecon.isReconciled) {
+    const badCurrencies = vehicleInventoryRecon.currencies.filter((c) => !vehicleInventoryRecon.byCurrency[c].isReconciled);
+    blockers.push(`Vehicle Inventory subledger does not reconcile to the GL for: ${badCurrencies.join(", ")}.`);
+  }
+  if (!supplierPayablesRecon.isReconciled) {
+    const badCurrencies = supplierPayablesRecon.currencies.filter((c) => !supplierPayablesRecon.byCurrency[c].isReconciled);
+    blockers.push(`Supplier payables subledger does not reconcile to the GL for: ${badCurrencies.join(", ")}.`);
+  }
+  if (!customerDepositsRecon.isReconciled) {
+    const badCurrencies = customerDepositsRecon.currencies.filter((c) => !customerDepositsRecon.byCurrency[c].isReconciled);
+    blockers.push(`Customer deposits subledger does not reconcile to the GL for: ${badCurrencies.join(", ")}.`);
+  }
+  if (!commissionPayableRecon.isReconciled) {
+    const badCurrencies = commissionPayableRecon.currencies.filter((c) => !commissionPayableRecon.byCurrency[c].isReconciled);
+    blockers.push(`Commission payable subledger does not reconcile to the GL for: ${badCurrencies.join(", ")}.`);
+  }
   if (unmatchedBankLines.length > 0) {
     blockers.push(`${unmatchedBankLines.length} bank statement line(s) from this period are still unmatched.`);
   }
@@ -332,6 +373,10 @@ async function computeCloseChecklist(
     pendingManualJournalCount: pendingManualJournals.length,
     unmatchedBankLineCount: unmatchedBankLines.length,
     arReconciliation,
+    vehicleInventoryReconciliation: vehicleInventoryRecon,
+    supplierPayablesReconciliation: supplierPayablesRecon,
+    customerDepositsReconciliation: customerDepositsRecon,
+    commissionPayableReconciliation: commissionPayableRecon,
   };
 }
 
@@ -445,7 +490,14 @@ export const reopen = mutation({
     reason: v.string(),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    // Reopening un-does a close's own protections (pending events, AR/subledger
+    // reconciliation, unmatched bank lines all stop blocking anything once a
+    // period is OPEN again) — the same reasoning close()'s override path
+    // already uses to require the org owner specifically, not any
+    // MANAGE_FINANCE holder (e.g. the default ACCOUNTANT role). requireOwner
+    // already implies every permission (owners have them all), so it
+    // subsumes the MANAGE_FINANCE check too.
+    const { user } = await requireOwner(ctx, args.orgId);
     await requireFeature(ctx, args.orgId, "accounting");
 
     const period = await ctx.db.get(args.periodId);

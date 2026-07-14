@@ -279,7 +279,7 @@ describe("Phase 11 — monthly depreciation", () => {
       orgId, assetId, yearMonth: "2026-01", occurredAt: Date.now(), systemActorId: userId,
     });
     expect(second.posted).toBe(false);
-    expect(second.reason).toBe("already_ran_this_month");
+    expect(second.reason).toBe("not_after_last_depreciated_month");
 
     const assetAfterRerun = await t.run((ctx) => ctx.db.get(assetId));
     expect(assetAfterRerun?.accumulatedDepreciationMinor).toBe(100_000);
@@ -390,6 +390,67 @@ describe("Phase 11 — monthly depreciation", () => {
 
     const asset = await t.run((ctx) => ctx.db.get(assetId));
     expect(asset?.accumulatedDepreciationMinor).toBe(1);
+  });
+
+  test("fully depreciates in exactly usefulLifeMonths even when the base doesn't divide evenly", async () => {
+    const { t, orgId, userId, asOwner } = await seedAssetDealer();
+    // 100 / 3 = 33.33 — the old Math.floor-based schedule posted 33+33+33
+    // and needed a 4th month to absorb the leftover 1, missing the
+    // contractual 3-month useful life. The fix must finish in exactly 3.
+    const assetId = await asOwner.mutation(api.fixedAssets.capitalize, {
+      orgId,
+      name: "Non-Divisible Base Asset",
+      purchaseDate: PAST_PURCHASE_DATE,
+      costMinor: 100,
+      usefulLifeMonths: 3,
+    });
+
+    const m1 = await t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
+      orgId, assetId, yearMonth: "2026-01", occurredAt: Date.now(), systemActorId: userId,
+    });
+    const m2 = await t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
+      orgId, assetId, yearMonth: "2026-02", occurredAt: Date.now(), systemActorId: userId,
+    });
+    const m3 = await t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
+      orgId, assetId, yearMonth: "2026-03", occurredAt: Date.now(), systemActorId: userId,
+    });
+    expect(m1.posted && m2.posted && m3.posted).toBe(true);
+    expect((m1.amountMinor ?? 0) + (m2.amountMinor ?? 0) + (m3.amountMinor ?? 0)).toBe(100);
+
+    const asset = await t.run((ctx) => ctx.db.get(assetId));
+    expect(asset?.accumulatedDepreciationMinor).toBe(100);
+
+    // A 4th month must find nothing left — the schedule finished in exactly
+    // usefulLifeMonths (3), never needing a 4th.
+    const m4 = await t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
+      orgId, assetId, yearMonth: "2026-04", occurredAt: Date.now(), systemActorId: userId,
+    });
+    expect(m4.posted).toBe(false);
+    expect(m4.reason).toBe("fully_depreciated");
+  });
+
+  test("rejects an out-of-order (earlier) yearMonth", async () => {
+    const { t, orgId, userId, asOwner } = await seedAssetDealer();
+    const assetId = await asOwner.mutation(api.fixedAssets.capitalize, {
+      orgId,
+      name: "Out Of Order Asset",
+      purchaseDate: PAST_PURCHASE_DATE,
+      costMinor: 1_200_000,
+      usefulLifeMonths: 12,
+    });
+
+    await t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
+      orgId, assetId, yearMonth: "2026-08", occurredAt: Date.now(), systemActorId: userId,
+    });
+    const earlier = await t.mutation(internal.fixedAssets.depreciateAssetForMonth, {
+      orgId, assetId, yearMonth: "2026-07", occurredAt: Date.now(), systemActorId: userId,
+    });
+    expect(earlier.posted).toBe(false);
+    expect(earlier.reason).toBe("not_after_last_depreciated_month");
+
+    const asset = await t.run((ctx) => ctx.db.get(assetId));
+    // Only the 2026-08 month's amount was ever posted.
+    expect(asset?.accumulatedDepreciationMinor).toBe(100_000);
   });
 
   test("listActiveAssetsForDepreciation paginates across every active asset", async () => {

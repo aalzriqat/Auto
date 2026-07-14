@@ -2,26 +2,32 @@
  * GL Phase 17 — legacy money migration + accountant sign-off.
  *
  * Three distinct capabilities:
- *  - postOpeningBalance: a one-time, direct-lines journal entry seeding an
- *    org's starting GL position (mirrors financialAudit.ts's manual-journal
- *    posting mechanics — arbitrary caller-specified lines, not a fixed
- *    payload-driven posting rule — but constrained to post exactly once).
+ *  - draftOpeningBalance / approveOpeningBalance / rejectOpeningBalanceDraft:
+ *    a one-time, direct-lines journal entry seeding an org's starting GL
+ *    position (mirrors financialAudit.ts's manual-journal posting mechanics
+ *    — arbitrary caller-specified lines, not a fixed payload-driven posting
+ *    rule), gated by the same two-person segregation of duties as a manual
+ *    journal: the approver must be a different MANAGE_FINANCE user from
+ *    whoever drafted it, and it can still only ever post once.
  *  - signOffCutover / listSignOffs: an accountant's point-in-time attestation
  *    that the legacy-to-GL cutover has been reviewed, carrying a snapshot of
  *    the numbers reviewed (not a live computation, so the sign-off stays
- *    meaningful after later activity changes current totals).
+ *    meaningful after later activity changes current totals). Requires zero
+ *    unmigrated legacy transactions, a balanced trial balance in every
+ *    currency, and a signer distinct from whoever approved the opening
+ *    balance — a sign-off can't paper over an incomplete migration or be
+ *    self-certified by the same person who seeded the starting position.
  *  - compareLegacyToGL: a parallel-reporting query so a human can verify
  *    nothing was lost or double-counted for a given period.
  */
 import { v, ConvexError } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { mutation, query, QueryCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { getOpenPeriodForDate } from "./accountingPeriods";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { validateManualJournalLines, auditLog, type ManualJournalLine } from "./financialAudit";
 import { toMinorUnits, scaleForCurrency } from "./utils/money";
-import { QueryCtx, MutationCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
 
@@ -74,7 +80,21 @@ async function sumAllPostedJournalLinesByCurrency(
   }));
 }
 
-export const postOpeningBalance = mutation({
+async function hasOpeningBalanceCommitment(ctx: QueryCtx, orgId: Id<"organizations">): Promise<boolean> {
+  const postedJournal = await ctx.db
+    .query("journalEntries")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .filter((q) => q.and(q.eq(q.field("category"), "OPENING_BALANCE"), q.eq(q.field("status"), "POSTED")))
+    .first();
+  if (postedJournal) return true;
+  const pendingDraft = await ctx.db
+    .query("openingBalanceDrafts")
+    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING_APPROVAL"))
+    .first();
+  return pendingDraft !== null;
+}
+
+export const draftOpeningBalance = mutation({
   args: {
     orgId: v.id("organizations"),
     lines: v.array(v.object({
@@ -86,19 +106,14 @@ export const postOpeningBalance = mutation({
     asOfDate: v.number(),
     memo: v.optional(v.string()),
   },
-  handler: async (ctx, args): Promise<{ journalId: string }> => {
+  handler: async (ctx, args): Promise<{ draftId: string }> => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
 
-    const existing = await ctx.db
-      .query("journalEntries")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.eq(q.field("category"), "OPENING_BALANCE"))
-      .first();
-    if (existing) {
-      throw new ConvexError("An opening balance has already been posted for this organization.");
+    if (await hasOpeningBalanceCommitment(ctx, args.orgId)) {
+      throw new ConvexError("An opening balance has already been posted or is awaiting approval for this organization.");
     }
 
-    const totalDebits = validateManualJournalLines(args.lines as ManualJournalLine[]);
+    validateManualJournalLines(args.lines as ManualJournalLine[]);
 
     // Every account must belong to this org — an opening balance is a
     // direct-lines insert (no applyPostingRule resolution in between), so
@@ -114,7 +129,67 @@ export const postOpeningBalance = mutation({
       }
     }
 
-    const period = await getOpenPeriodForDate(ctx, args.orgId, args.asOfDate);
+    if (!(await getOpenPeriodForDate(ctx, args.orgId, args.asOfDate))) {
+      throw new ConvexError("No open accounting period covers the opening-balance date. Create and open a period first.");
+    }
+
+    const now = Date.now();
+    const draftId = await ctx.db.insert("openingBalanceDrafts", {
+      orgId: args.orgId,
+      status: "PENDING_APPROVAL",
+      lines: args.lines,
+      asOfDate: args.asOfDate,
+      memo: args.memo,
+      createdBy: user._id,
+      createdAt: now,
+    });
+
+    await auditLog(ctx, {
+      orgId: args.orgId,
+      actorId: user._id,
+      actionType: "CREATE_MANUAL_JOURNAL_DRAFT",
+      resourceType: "openingBalanceDrafts",
+      resourceId: draftId.toString(),
+      description: `Opening balance draft submitted for approval: ${args.lines.length} lines.`,
+      after: { lines: args.lines.length },
+    });
+
+    return { draftId: draftId.toString() };
+  },
+});
+
+export const approveOpeningBalance = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    draftId: v.id("openingBalanceDrafts"),
+  },
+  handler: async (ctx, args): Promise<{ journalId: string }> => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+
+    const draft = await ctx.db.get(args.draftId);
+    if (!draft || draft.orgId !== args.orgId) {
+      throw new ConvexError("Opening balance draft not found.");
+    }
+    if (draft.status !== "PENDING_APPROVAL") {
+      throw new ConvexError("This opening balance draft has already been resolved.");
+    }
+    // Segregation of duties, same as approveManualJournal: seeding an org's
+    // entire starting GL position is at least as high-risk as an ordinary
+    // manual journal, so it gets the same unbypassable two-person check.
+    if (draft.createdBy === user._id) {
+      throw new ConvexError("Opening balance approver cannot be the same as the preparer.");
+    }
+
+    const totalDebits = validateManualJournalLines(draft.lines as ManualJournalLine[]);
+
+    for (const line of draft.lines) {
+      const account = await ctx.db.get(line.accountId);
+      if (!account || account.orgId !== args.orgId) {
+        throw new ConvexError(`Account ${line.accountId} not found in this organization.`);
+      }
+    }
+
+    const period = await getOpenPeriodForDate(ctx, args.orgId, draft.asOfDate);
     if (!period) {
       throw new ConvexError("No open accounting period covers the opening-balance date. Create and open a period first.");
     }
@@ -126,11 +201,11 @@ export const postOpeningBalance = mutation({
       orgId: args.orgId,
       periodId: period._id,
       journalNumber: "OB-pending",
-      accountingDate: args.asOfDate,
+      accountingDate: draft.asOfDate,
       sourceType: "cutover",
       sourceId: args.orgId.toString(),
       category: "OPENING_BALANCE",
-      memo: args.memo ?? "Opening balance",
+      memo: draft.memo ?? "Opening balance",
       status: "POSTED",
       currency,
       postedBy: user._id,
@@ -141,8 +216,8 @@ export const postOpeningBalance = mutation({
     await ctx.db.patch(journalId, { journalNumber });
 
     const scale = scaleForCurrency(currency);
-    for (let i = 0; i < args.lines.length; i++) {
-      const line = args.lines[i];
+    for (let i = 0; i < draft.lines.length; i++) {
+      const line = draft.lines[i];
       await ctx.db.insert("journalLines", {
         orgId: args.orgId,
         journalEntryId: journalId,
@@ -152,7 +227,7 @@ export const postOpeningBalance = mutation({
         creditMinor: line.creditMinor,
         currency,
         scale,
-        accountingDate: args.asOfDate,
+        accountingDate: draft.asOfDate,
         description: line.description,
       });
       // GL Phase 18: this is a direct journalLines insert (not routed through
@@ -168,17 +243,80 @@ export const postOpeningBalance = mutation({
       });
     }
 
+    await ctx.db.patch(draft._id, {
+      status: "POSTED",
+      reviewedBy: user._id,
+      decidedAt: now,
+      journalEntryId: journalId,
+    });
+
     await auditLog(ctx, {
       orgId: args.orgId,
       actorId: user._id,
       actionType: "POST_MANUAL_JOURNAL",
       resourceType: "journalEntries",
       resourceId: journalId.toString(),
-      description: `Opening balance posted: ${args.lines.length} lines, ${totalDebits} total.`,
-      after: { lines: args.lines.length, totalDebits },
+      description: `Opening balance posted: ${draft.lines.length} lines, ${totalDebits} total.`,
+      after: { lines: draft.lines.length, totalDebits, preparedBy: draft.createdBy },
     });
 
     return { journalId: journalId.toString() };
+  },
+});
+
+export const rejectOpeningBalanceDraft = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    draftId: v.id("openingBalanceDrafts"),
+    rejectionReason: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+
+    const rejectionReason = args.rejectionReason.trim();
+    if (!rejectionReason) {
+      throw new ConvexError("A rejection reason is required.");
+    }
+
+    const draft = await ctx.db.get(args.draftId);
+    if (!draft || draft.orgId !== args.orgId) {
+      throw new ConvexError("Opening balance draft not found.");
+    }
+    if (draft.status !== "PENDING_APPROVAL") {
+      throw new ConvexError("This opening balance draft has already been resolved.");
+    }
+    if (draft.createdBy === user._id) {
+      throw new ConvexError("Opening balance approver cannot be the same as the preparer.");
+    }
+
+    const now = Date.now();
+    await ctx.db.patch(draft._id, {
+      status: "REJECTED",
+      reviewedBy: user._id,
+      decidedAt: now,
+      rejectionReason,
+    });
+
+    await auditLog(ctx, {
+      orgId: args.orgId,
+      actorId: user._id,
+      actionType: "REJECT_MANUAL_JOURNAL",
+      resourceType: "openingBalanceDrafts",
+      resourceId: draft._id.toString(),
+      description: `Opening balance draft rejected: ${rejectionReason}`,
+      after: { createdBy: draft.createdBy, rejectionReason },
+    });
+  },
+});
+
+export const listPendingOpeningBalanceDrafts = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    return await ctx.db
+      .query("openingBalanceDrafts")
+      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING_APPROVAL"))
+      .collect();
   },
 });
 
@@ -189,7 +327,7 @@ export const hasOpeningBalance = query({
     const existing = await ctx.db
       .query("journalEntries")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.eq(q.field("category"), "OPENING_BALANCE"))
+      .filter((q) => q.and(q.eq(q.field("category"), "OPENING_BALANCE"), q.eq(q.field("status"), "POSTED")))
       .first();
     return existing !== null;
   },
@@ -312,12 +450,45 @@ export const signOffCutover = mutation({
 
     const trialBalanceByCurrency = await sumAllPostedJournalLinesByCurrency(ctx, args.orgId);
 
+    const unmigratedTransactionCount = activeLegacy.length - migratedCount;
+    const isBalanced = trialBalanceByCurrency.every((b) => b.isBalanced);
+
+    // A sign-off is an attestation that the cutover is DONE and correct —
+    // recording one while transactions remain unmigrated or the trial
+    // balance doesn't foot would let the org proceed as if production-ready
+    // when it isn't. Neither is overridable here: an incomplete migration or
+    // an unbalanced ledger needs to be fixed, not signed off around.
+    if (unmigratedTransactionCount > 0) {
+      throw new ConvexError(
+        `Cannot sign off: ${unmigratedTransactionCount} legacy transaction(s) are still unmigrated. Run the migration tools first.`
+      );
+    }
+    if (!isBalanced) {
+      const badCurrencies = trialBalanceByCurrency.filter((b) => !b.isBalanced).map((b) => b.currency);
+      throw new ConvexError(`Cannot sign off: the trial balance is unbalanced for: ${badCurrencies.join(", ")}.`);
+    }
+
+    // Segregation of duties: the sign-off can't be self-certified by the
+    // same person who approved (posted) the org's opening balance — an
+    // independent reviewer must confirm the starting position, not the
+    // person who set it.
+    const openingBalanceJournal = await ctx.db
+      .query("journalEntries")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .filter((q) => q.and(q.eq(q.field("category"), "OPENING_BALANCE"), q.eq(q.field("status"), "POSTED")))
+      .first();
+    if (openingBalanceJournal && openingBalanceJournal.postedBy === user._id) {
+      throw new ConvexError(
+        "Cannot sign off: the signer must be different from whoever approved and posted the opening balance."
+      );
+    }
+
     const snapshot = {
       legacyTransactionCount: activeLegacy.length,
       migratedTransactionCount: migratedCount,
-      unmigratedTransactionCount: activeLegacy.length - migratedCount,
+      unmigratedTransactionCount,
       trialBalanceByCurrency,
-      isBalanced: trialBalanceByCurrency.every((b) => b.isBalanced),
+      isBalanced,
     };
 
     const signOffId = await ctx.db.insert("accountingCutoverSignOffs", {

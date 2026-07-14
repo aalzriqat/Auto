@@ -40,6 +40,13 @@ async function seedCutoverDealer() {
     })
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+
+  // A second finance-authorized user for opening-balance segregation of
+  // duties (approver must differ from the preparer).
+  const reviewerId = await t.run((ctx) =>
+    ctx.db.insert("users", { clerkId: "p17_reviewer", email: "p17reviewer@example.com", name: "Reviewer" })
+  );
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: reviewerId, roleId }));
   await t.run((ctx) =>
     ctx.db.insert("orgSettings", {
       orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH"],
@@ -47,6 +54,7 @@ async function seedCutoverDealer() {
   );
 
   const asOwner = t.withIdentity({ subject: "p17_owner", clerkId: "p17_owner" });
+  const asReviewer = t.withIdentity({ subject: "p17_reviewer", clerkId: "p17_reviewer" });
 
   await asOwner.mutation(api.chartOfAccounts.initialize, { orgId });
   const fiscalYear = new Date().getUTCFullYear();
@@ -60,7 +68,7 @@ async function seedCutoverDealer() {
   await asOwner.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
 
   const accounts = await asOwner.query(api.chartOfAccounts.list, { orgId, activeOnly: true });
-  return { t, orgId, userId, asOwner, accounts };
+  return { t, orgId, userId, reviewerId, asOwner, asReviewer, accounts };
 }
 
 type Ctx = Awaited<ReturnType<typeof seedCutoverDealer>>;
@@ -72,12 +80,12 @@ function account(ctx: Ctx, systemKey: string) {
 }
 
 describe("Phase 17 — opening balance journal", () => {
-  test("posts a balanced entry categorized OPENING_BALANCE and can only be done once", async () => {
+  test("drafts, approves (by a different user), posts a balanced entry categorized OPENING_BALANCE, and can only be done once", async () => {
     const ctx = await seedCutoverDealer();
     const cash = account(ctx, "CASH_ON_HAND");
     const capital = account(ctx, "PARTNER_CAPITAL");
 
-    const result = await ctx.asOwner.mutation(api.accountingCutover.postOpeningBalance, {
+    const draft = await ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
       orgId: ctx.orgId,
       asOfDate: Date.now(),
       lines: [
@@ -85,11 +93,26 @@ describe("Phase 17 — opening balance journal", () => {
         { accountId: capital._id, debitMinor: 0, creditMinor: 1_000_000 },
       ],
     });
+    expect(draft.draftId).toBeTruthy();
+
+    // The same preparer cannot also approve their own draft.
+    await expect(
+      ctx.asOwner.mutation(api.accountingCutover.approveOpeningBalance, {
+        orgId: ctx.orgId,
+        draftId: draft.draftId as Id<"openingBalanceDrafts">,
+      })
+    ).rejects.toThrow(/cannot be the same as the preparer/i);
+
+    const result = await ctx.asReviewer.mutation(api.accountingCutover.approveOpeningBalance, {
+      orgId: ctx.orgId,
+      draftId: draft.draftId as Id<"openingBalanceDrafts">,
+    });
     expect(result.journalId).toBeTruthy();
 
     const journal = await ctx.t.run((c) => c.db.get(result.journalId as Id<"journalEntries">));
     expect(journal?.category).toBe("OPENING_BALANCE");
     expect(journal?.status).toBe("POSTED");
+    expect(journal?.postedBy).toBe(ctx.reviewerId);
 
     const lines = await ctx.t.run((c) =>
       c.db.query("journalLines").withIndex("by_journal_entry", (q) => q.eq("journalEntryId", result.journalId as Id<"journalEntries">)).collect()
@@ -102,7 +125,7 @@ describe("Phase 17 — opening balance journal", () => {
     expect(await ctx.asOwner.query(api.accountingCutover.hasOpeningBalance, { orgId: ctx.orgId })).toBe(true);
 
     await expect(
-      ctx.asOwner.mutation(api.accountingCutover.postOpeningBalance, {
+      ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
         orgId: ctx.orgId,
         asOfDate: Date.now(),
         lines: [
@@ -110,7 +133,46 @@ describe("Phase 17 — opening balance journal", () => {
           { accountId: capital._id, debitMinor: 0, creditMinor: 500 },
         ],
       })
-    ).rejects.toThrow(/already been posted/i);
+    ).rejects.toThrow(/already been posted or is awaiting approval/i);
+  });
+
+  test("a rejected draft can be drafted again", async () => {
+    const ctx = await seedCutoverDealer();
+    const cash = account(ctx, "CASH_ON_HAND");
+    const capital = account(ctx, "PARTNER_CAPITAL");
+
+    const draft = await ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
+      orgId: ctx.orgId,
+      asOfDate: Date.now(),
+      lines: [
+        { accountId: cash._id, debitMinor: 1_000, creditMinor: 0 },
+        { accountId: capital._id, debitMinor: 0, creditMinor: 1_000 },
+      ],
+    });
+
+    await expect(
+      ctx.asOwner.mutation(api.accountingCutover.rejectOpeningBalanceDraft, {
+        orgId: ctx.orgId,
+        draftId: draft.draftId as Id<"openingBalanceDrafts">,
+        rejectionReason: "Wrong numbers",
+      })
+    ).rejects.toThrow(/cannot be the same as the preparer/i);
+
+    await ctx.asReviewer.mutation(api.accountingCutover.rejectOpeningBalanceDraft, {
+      orgId: ctx.orgId,
+      draftId: draft.draftId as Id<"openingBalanceDrafts">,
+      rejectionReason: "Wrong numbers",
+    });
+
+    const redrafted = await ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
+      orgId: ctx.orgId,
+      asOfDate: Date.now(),
+      lines: [
+        { accountId: cash._id, debitMinor: 2_000, creditMinor: 0 },
+        { accountId: capital._id, debitMinor: 0, creditMinor: 2_000 },
+      ],
+    });
+    expect(redrafted.draftId).toBeTruthy();
   });
 
   test("rejects an unbalanced opening balance", async () => {
@@ -119,7 +181,7 @@ describe("Phase 17 — opening balance journal", () => {
     const capital = account(ctx, "PARTNER_CAPITAL");
 
     await expect(
-      ctx.asOwner.mutation(api.accountingCutover.postOpeningBalance, {
+      ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
         orgId: ctx.orgId,
         asOfDate: Date.now(),
         lines: [
@@ -136,7 +198,7 @@ describe("Phase 17 — opening balance journal", () => {
     const capital = account(ctx, "PARTNER_CAPITAL");
 
     await expect(
-      ctx.asOwner.mutation(api.accountingCutover.postOpeningBalance, {
+      ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
         orgId: ctx.orgId,
         asOfDate: Date.UTC(2010, 0, 1),
         lines: [
@@ -264,6 +326,69 @@ describe("Phase 17 — parallel reporting and sign-off", () => {
     expect(signOffs).toHaveLength(1);
     expect(signOffs[0].notes).toBe("Reviewed and reconciled.");
     expect(signOffs[0].signedOffBy).toBe(ctx.userId);
+  });
+
+  test("signOffCutover rejects when transactions remain unmigrated", async () => {
+    const ctx = await seedCutoverDealer();
+    await ctx.t.run((c) =>
+      c.db.insert("transactions", { orgId: ctx.orgId, type: "IN", amount: 200, date: Date.now(), category: "COLLECTION_PAYMENT", description: "Never migrated" })
+    );
+    // Deliberately skip migrateUnpostedTransactions.
+
+    await expect(
+      ctx.asOwner.mutation(api.accountingCutover.signOffCutover, { orgId: ctx.orgId })
+    ).rejects.toThrow(/still unmigrated/i);
+  });
+
+  test("signOffCutover rejects when the trial balance is unbalanced", async () => {
+    const ctx = await seedCutoverDealer();
+    const cash = account(ctx, "CASH_ON_HAND");
+    // Insert a lone unbalanced journal entry directly, bypassing the
+    // balanced-lines validators that every real posting path enforces —
+    // simulates a corrupted/hand-edited ledger for this guard's purpose.
+    await ctx.t.run(async (c) => {
+      const period = (await ctx.asOwner.query(api.accountingPeriods.list, { orgId: ctx.orgId }))[0];
+      const journalId = await c.db.insert("journalEntries", {
+        orgId: ctx.orgId, periodId: period._id, journalNumber: "TEST-1", accountingDate: Date.now(),
+        sourceType: "test", sourceId: "1", category: "MANUAL", memo: "Unbalanced", status: "POSTED",
+        currency: "JOD", postedBy: ctx.userId, postedAt: Date.now(), createdAt: Date.now(),
+      });
+      await c.db.insert("journalLines", {
+        orgId: ctx.orgId, journalEntryId: journalId, lineNumber: 1, accountId: cash._id,
+        debitMinor: 1_000, creditMinor: 0, currency: "JOD", scale: 3, accountingDate: Date.now(),
+      });
+    });
+
+    await expect(
+      ctx.asOwner.mutation(api.accountingCutover.signOffCutover, { orgId: ctx.orgId })
+    ).rejects.toThrow(/unbalanced/i);
+  });
+
+  test("signOffCutover rejects a signer who approved the opening balance themselves", async () => {
+    const ctx = await seedCutoverDealer();
+    const cash = account(ctx, "CASH_ON_HAND");
+    const capital = account(ctx, "PARTNER_CAPITAL");
+
+    const draft = await ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
+      orgId: ctx.orgId,
+      asOfDate: Date.now(),
+      lines: [
+        { accountId: cash._id, debitMinor: 1_000, creditMinor: 0 },
+        { accountId: capital._id, debitMinor: 0, creditMinor: 1_000 },
+      ],
+    });
+    await ctx.asReviewer.mutation(api.accountingCutover.approveOpeningBalance, {
+      orgId: ctx.orgId,
+      draftId: draft.draftId as Id<"openingBalanceDrafts">,
+    });
+
+    await expect(
+      ctx.asReviewer.mutation(api.accountingCutover.signOffCutover, { orgId: ctx.orgId })
+    ).rejects.toThrow(/must be different from whoever approved/i);
+
+    // A third, uninvolved user can sign off cleanly.
+    const signer = await ctx.asOwner.mutation(api.accountingCutover.signOffCutover, { orgId: ctx.orgId });
+    expect(signer.signOffId).toBeTruthy();
   });
 });
 

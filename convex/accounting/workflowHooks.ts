@@ -15,7 +15,7 @@ import { postAccountingEvent, PostCommand } from "./postingEngine";
 import { EventType, ReceivableCreditKey, AcquisitionCorrectionType } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate } from "../accountingPeriods";
-import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts } from "../chartOfAccounts";
+import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureExpenseCategoryAccounts } from "../chartOfAccounts";
 import {
   enqueuePendingPost,
   enqueuePendingReversal,
@@ -433,6 +433,12 @@ export async function hookExpensePosted(
 ) {
   if (args.taxMinor && args.taxMinor > 0) {
     await ensureVatReceivableAccountIfChartReady(ctx, args.orgId, args.actorId);
+  }
+  // Not capitalized expenses resolve expenseAccountKeyForCategory, which can
+  // now point at a dedicated per-category account instead of always
+  // GENERAL_EXPENSE — self-heal for charts initialized before this addition.
+  if (!(args.capitalizeToInventory === true && args.vehicleId) && await isChartInitialized(ctx, args.orgId)) {
+    await ensureExpenseCategoryAccounts(ctx, args.orgId, args.actorId);
   }
   await postDomainEvent(ctx, {
     orgId: args.orgId,

@@ -5,7 +5,7 @@
 import { convexTest } from "convex-test";
 import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -101,13 +101,13 @@ describe("Phase 6 — duplicate event detection", () => {
     const { orgId, asUser } = await seedMigrationDealer();
     const now = Date.now();
 
-    await asUser.mutation(api.accountingLedger.post, {
+    await asUser.mutation(internal.accountingLedger.post, {
       orgId, eventType: "EXPENSE_POSTED", sourceType: "expenses", sourceId: "dup_exp",
       eventVersion: 1, accountingDate: now, occurredAt: now, currency: "JOD",
       idempotencyKey: "dup_exp_key",
       payload: { expenseId: "dup_exp", amountMinor: 10000, currency: "JOD" },
     });
-    await asUser.mutation(api.accountingLedger.post, {
+    await asUser.mutation(internal.accountingLedger.post, {
       orgId, eventType: "EXPENSE_POSTED", sourceType: "expenses", sourceId: "dup_exp",
       eventVersion: 1, accountingDate: now, occurredAt: now, currency: "JOD",
       idempotencyKey: "dup_exp_key",

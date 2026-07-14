@@ -62,7 +62,7 @@ describe("Phase 5 — trial balance", () => {
     const { orgId, asUser } = await seedReportingDealer();
     const now = Date.now();
 
-    await asUser.mutation(api.accountingLedger.post, {
+    await asUser.mutation(internal.accountingLedger.post, {
       orgId,
       eventType: "EXPENSE_POSTED",
       sourceType: "expenses",
@@ -92,7 +92,7 @@ describe("Phase 5 — trial balance", () => {
     const { orgId, asUser } = await seedReportingDealer();
     const now = Date.now();
 
-    await asUser.mutation(api.accountingLedger.post, {
+    await asUser.mutation(internal.accountingLedger.post, {
       orgId,
       eventType: "EXPENSE_POSTED",
       sourceType: "expenses",
@@ -126,7 +126,7 @@ describe("Phase 5 — income statement", () => {
       ctx.db.insert("customers", { orgId, firstName: "P5", lastName: "Customer" })
     );
 
-    await asUser.mutation(api.accountingLedger.post, {
+    await asUser.mutation(internal.accountingLedger.post, {
       orgId,
       eventType: "SALE_COMPLETED",
       sourceType: "sales",
@@ -158,7 +158,7 @@ describe("Phase 5 — income statement", () => {
     const { orgId, asUser } = await seedReportingDealer();
     const now = Date.now();
 
-    await asUser.mutation(api.accountingLedger.post, {
+    await asUser.mutation(internal.accountingLedger.post, {
       orgId,
       eventType: "EXPENSE_POSTED",
       sourceType: "expenses",
