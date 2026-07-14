@@ -1,6 +1,6 @@
 # Mobile Test Coverage Progress
 
-Last updated: 2026-07-14 12:24:17 +03:00
+Last updated: 2026-07-14 12:24:54 +03:00
 
 ## Context
 
@@ -56,7 +56,11 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - Result: passed. Tests focus on observable behavior and justified runtime boundaries.
 - 2026-07-14 12:24 +03: `git diff --check`
   - Result: passed. Git reported line-ending normalization warnings only.
+- 2026-07-14 12:24 +03: commit and push
+  - Result: pushed to PR branch `agent/mobile-ui-port`.
+  - Commit: `80ba7549 Add mobile coverage gate`.
 
 ## Next Steps
 
-1. Commit and push the coverage gate to `agent/mobile-ui-port`.
+1. Watch PR checks for the pushed branch.
+2. Expand coverage later with targeted component or device/E2E tests for UI screens, rather than forcing brittle line coverage over framework-heavy views.
