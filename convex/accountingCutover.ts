@@ -21,14 +21,13 @@
  *    nothing was lost or double-counted for a given period.
  */
 import { v, ConvexError } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { mutation, query, QueryCtx } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { getOpenPeriodForDate } from "./accountingPeriods";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 import { validateManualJournalLines, auditLog, type ManualJournalLine } from "./financialAudit";
 import { toMinorUnits, scaleForCurrency } from "./utils/money";
-import { QueryCtx } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { incrementAccountSnapshot } from "./accounting/accountSnapshots";
 
@@ -85,7 +84,7 @@ async function hasOpeningBalanceCommitment(ctx: QueryCtx, orgId: Id<"organizatio
   const postedJournal = await ctx.db
     .query("journalEntries")
     .withIndex("by_org", (q) => q.eq("orgId", orgId))
-    .filter((q) => q.eq(q.field("category"), "OPENING_BALANCE"))
+    .filter((q) => q.and(q.eq(q.field("category"), "OPENING_BALANCE"), q.eq(q.field("status"), "POSTED")))
     .first();
   if (postedJournal) return true;
   const pendingDraft = await ctx.db
@@ -328,7 +327,7 @@ export const hasOpeningBalance = query({
     const existing = await ctx.db
       .query("journalEntries")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.eq(q.field("category"), "OPENING_BALANCE"))
+      .filter((q) => q.and(q.eq(q.field("category"), "OPENING_BALANCE"), q.eq(q.field("status"), "POSTED")))
       .first();
     return existing !== null;
   },

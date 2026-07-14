@@ -3,7 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { Id, Doc } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { requireTenantAuth } from "./utils/tenancy";
+import { requireTenantAuth, requireOwner } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { auditLog } from "./financialAudit";
 import { requireFeature } from "./subscriptions";
@@ -314,16 +314,20 @@ async function computeCloseChecklist(
       .collect()
   ).filter((l) => l.statementDate <= period.endDate);
 
-  const arReconciliation = await computeSubledgerReconciliation(ctx, orgId, period.endDate);
   // These four used to be informational-only reports, never checked at close
   // — an org could close a period with Vehicle Inventory, AP-Suppliers,
   // Customer Deposits, or Commission Payable silently out of sync with the
   // GL. They already exist and are cheap to compute, so there's no reason
-  // not to gate on them the same way AR already is.
-  const vehicleInventoryRecon = await computeVehicleInventoryReconciliation(ctx, orgId, period.endDate);
-  const supplierPayablesRecon = await computeSupplierPayablesReconciliation(ctx, orgId, period.endDate);
-  const customerDepositsRecon = await computeCustomerDepositsReconciliation(ctx, orgId, period.endDate);
-  const commissionPayableRecon = await computeCommissionPayableReconciliation(ctx, orgId, period.endDate);
+  // not to gate on them the same way AR already is. Independent read-only
+  // computations, so run them concurrently rather than five sequential round-trips.
+  const [arReconciliation, vehicleInventoryRecon, supplierPayablesRecon, customerDepositsRecon, commissionPayableRecon] =
+    await Promise.all([
+      computeSubledgerReconciliation(ctx, orgId, period.endDate),
+      computeVehicleInventoryReconciliation(ctx, orgId, period.endDate),
+      computeSupplierPayablesReconciliation(ctx, orgId, period.endDate),
+      computeCustomerDepositsReconciliation(ctx, orgId, period.endDate),
+      computeCommissionPayableReconciliation(ctx, orgId, period.endDate),
+    ]);
 
   const blockers: string[] = [];
   if (pendingOutboxEvents.length > 0) {
@@ -486,16 +490,15 @@ export const reopen = mutation({
     reason: v.string(),
   },
   handler: async (ctx, args) => {
-    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
-    await requireFeature(ctx, args.orgId, "accounting");
     // Reopening un-does a close's own protections (pending events, AR/subledger
     // reconciliation, unmatched bank lines all stop blocking anything once a
     // period is OPEN again) — the same reasoning close()'s override path
     // already uses to require the org owner specifically, not any
-    // MANAGE_FINANCE holder (e.g. the default ACCOUNTANT role).
-    if (!isSystemOwnerRole(role)) {
-      throw new ConvexError("Forbidden: Only the organization owner can reopen a period.");
-    }
+    // MANAGE_FINANCE holder (e.g. the default ACCOUNTANT role). requireOwner
+    // already implies every permission (owners have them all), so it
+    // subsumes the MANAGE_FINANCE check too.
+    const { user } = await requireOwner(ctx, args.orgId);
+    await requireFeature(ctx, args.orgId, "accounting");
 
     const period = await ctx.db.get(args.periodId);
     if (!period || period.orgId !== args.orgId) {

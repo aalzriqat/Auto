@@ -76,15 +76,20 @@ export function ReconciliationPanel({
       toast.error(t("IgnoreLineReasonPlaceholder" as any));
       return;
     }
-    setBusyAction(`ignore_${ignoring.id}`);
+    // Capture the target id and use functional state updates keyed to it:
+    // if the user dismisses this dialog and opens another line's while this
+    // request is still in flight, completion here must not clear the newer
+    // dialog's state or busy indicator.
+    const targetId = ignoring.id;
+    setBusyAction(`ignore_${targetId}`);
     try {
-      await ignoreLine({ orgId, statementLineId: ignoring.id, reason: ignoring.reason });
+      await ignoreLine({ orgId, statementLineId: targetId, reason: ignoring.reason });
       toast.success(t("LineIgnored" as any));
-      setIgnoring(null);
+      setIgnoring((cur) => (cur?.id === targetId ? null : cur));
     } catch (error) {
       toast.error(errorMessage(error));
     } finally {
-      setBusyAction(null);
+      setBusyAction((cur) => (cur === `ignore_${targetId}` ? null : cur));
     }
   }
 
