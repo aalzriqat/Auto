@@ -4,16 +4,16 @@ import { nativeRoutes } from "@autoflow/shared";
 import { fireEvent, render } from "@testing-library/react-native";
 import type { ReactNode } from "react";
 
-import NotFoundRoute, { getNotFoundButtonPressedStyle } from "./+not-found";
-import RootLayout, { ErrorBoundary } from "./_layout";
-import AppLayout from "./(app)/_layout";
-import HomeRoute from "./(app)/index";
-import MarketplaceRoute from "./(app)/marketplace";
-import OrgDashboardRoute from "./(app)/org/[orgId]";
-import DealerMarketplaceRoute from "./(app)/org/[orgId]/marketplace";
-import WorkspaceModuleRoute from "./(app)/org/[orgId]/module/[moduleId]";
-import AuthLayout from "./(auth)/_layout";
-import SignInRoute from "./(auth)/sign-in";
+import NotFoundRoute, { getNotFoundButtonPressedStyle } from "../../app/+not-found";
+import RootLayout, { ErrorBoundary } from "../../app/_layout";
+import AppLayout from "../../app/(app)/_layout";
+import HomeRoute from "../../app/(app)/index";
+import MarketplaceRoute from "../../app/(app)/marketplace";
+import OrgDashboardRoute from "../../app/(app)/org/[orgId]";
+import DealerMarketplaceRoute from "../../app/(app)/org/[orgId]/marketplace";
+import WorkspaceModuleRoute from "../../app/(app)/org/[orgId]/module/[moduleId]";
+import AuthLayout from "../../app/(auth)/_layout";
+import SignInRoute from "../../app/(auth)/sign-in";
 
 const mockReplace = jest.fn();
 let mockParams: Record<string, string | string[] | undefined> = {};
@@ -44,11 +44,11 @@ jest.mock("@clerk/expo/native", () => {
   };
 });
 
-jest.mock("../src/providers/AppProviders", () => ({
+jest.mock("../providers/AppProviders", () => ({
   AppProviders: ({ children }: { children: ReactNode }) => children,
 }));
 
-jest.mock("../src/providers/LocaleProvider", () => ({
+jest.mock("../providers/LocaleProvider", () => ({
   useLocale: () => ({
     isRtl: false,
     locale: "en",
@@ -58,7 +58,7 @@ jest.mock("../src/providers/LocaleProvider", () => ({
   }),
 }));
 
-jest.mock("../src/features/home/HomeScreen", () => {
+jest.mock("../features/home/HomeScreen", () => {
   const React = jest.requireActual<typeof import("react")>("react");
   const { Text } = jest.requireActual<typeof import("react-native")>("react-native");
 
@@ -67,7 +67,7 @@ jest.mock("../src/features/home/HomeScreen", () => {
   };
 });
 
-jest.mock("../src/features/marketplace/MarketplaceScreen", () => {
+jest.mock("../features/marketplace/MarketplaceScreen", () => {
   const React = jest.requireActual<typeof import("react")>("react");
   const { Text } = jest.requireActual<typeof import("react-native")>("react-native");
 
@@ -76,7 +76,7 @@ jest.mock("../src/features/marketplace/MarketplaceScreen", () => {
   };
 });
 
-jest.mock("../src/features/dashboard/OrgDashboardScreen", () => {
+jest.mock("../features/dashboard/OrgDashboardScreen", () => {
   const React = jest.requireActual<typeof import("react")>("react");
   const { Text } = jest.requireActual<typeof import("react-native")>("react-native");
 
@@ -86,7 +86,7 @@ jest.mock("../src/features/dashboard/OrgDashboardScreen", () => {
   };
 });
 
-jest.mock("../src/features/marketplace/DealerMarketplaceScreen", () => {
+jest.mock("../features/marketplace/DealerMarketplaceScreen", () => {
   const React = jest.requireActual<typeof import("react")>("react");
   const { Text } = jest.requireActual<typeof import("react-native")>("react-native");
 
@@ -96,7 +96,7 @@ jest.mock("../src/features/marketplace/DealerMarketplaceScreen", () => {
   };
 });
 
-jest.mock("../src/features/workspace/WorkspaceModuleScreen", () => {
+jest.mock("../features/workspace/WorkspaceModuleScreen", () => {
   const React = jest.requireActual<typeof import("react")>("react");
   const { Text } = jest.requireActual<typeof import("react-native")>("react-native");
 
