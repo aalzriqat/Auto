@@ -194,30 +194,35 @@ async function ensureSystemAccount(
   // used to insert `code` blindly, which — if an org had already created a
   // custom account on one of these reserved codes (e.g. a hand-made 6800) —
   // produced a duplicate code the normal create path would have rejected.
-  // So first look for an account already sitting on this code and decide:
+  // `collect()` (not `unique()`) because a chart the old blind-insert already
+  // corrupted may hold more than one row on this code; unique() would throw
+  // before we could diagnose it.
   const byCode = await ctx.db
     .query("chartOfAccounts")
     .withIndex("by_org_code", (q) => q.eq("orgId", orgId).eq("code", code))
-    .unique();
+    .collect();
 
-  if (byCode) {
+  if (byCode.length > 0) {
     // Already the right system account under a slightly different lookup? done.
-    if (byCode.systemKey === systemKey) return;
+    if (byCode.some((a) => a.systemKey === systemKey)) return;
     // Occupied by a *different* system account — cannot silently steal its code.
-    if (byCode.systemKey) {
+    const conflictingSystem = byCode.find((a) => a.systemKey && a.systemKey !== systemKey);
+    if (conflictingSystem) {
       throw new ConvexError(
-        `Chart of accounts conflict: code ${code} is already the "${byCode.systemKey}" system account, but "${systemKey}" also needs it. Resolve the conflicting code before this posting can proceed.`
+        `Chart of accounts conflict: code ${code} is already the "${conflictingSystem.systemKey}" system account, but "${systemKey}" also needs it. Resolve the conflicting code before this posting can proceed.`
       );
     }
-    // A plain custom account on this code. Only safe to adopt it as the system
-    // account if its fundamental shape matches; otherwise re-tagging it would
+    // Only plain custom accounts remain. Adopt a shape-compatible one as the
+    // system account; re-tagging one whose type/normalBalance differs would
     // corrupt whatever the org is using it for.
-    if (byCode.type !== def.type || byCode.normalBalance !== def.normalBalance) {
+    const compatible = byCode.find((a) => a.type === def.type && a.normalBalance === def.normalBalance);
+    if (!compatible) {
+      const shapes = byCode.map((a) => `${a.type}/${a.normalBalance}`).join(", ");
       throw new ConvexError(
-        `Chart of accounts conflict: code ${code} exists as a ${byCode.type}/${byCode.normalBalance} account, but system account "${systemKey}" requires ${def.type}/${def.normalBalance}. Move the custom account to a different code.`
+        `Chart of accounts conflict: code ${code} exists as ${shapes}, but system account "${systemKey}" requires ${def.type}/${def.normalBalance}. Move the custom account to a different code.`
       );
     }
-    await ctx.db.patch(byCode._id, {
+    await ctx.db.patch(compatible._id, {
       systemKey,
       active: true,
       updatedAt: now,

@@ -585,6 +585,12 @@ export const remove = mutation({
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new ConvexError("Unauthenticated");
 
+    // Defensive: a posted prepaid expense has accounting exposure and is blocked
+    // above (reverseExpense handles it), so this only ever matches an
+    // unposted/never-scheduled expense (no-op). Kept so a deleted expense can
+    // never leave an ACTIVE schedule behind to keep amortizing.
+    await cancelPrepaidScheduleForExpense(ctx, args.orgId, args.expenseId);
+
     await softDeleteExpenseRecord(ctx, {
       orgId: args.orgId,
       expenseId: args.expenseId,

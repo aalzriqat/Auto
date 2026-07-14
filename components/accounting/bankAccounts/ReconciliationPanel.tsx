@@ -35,9 +35,21 @@ export function ReconciliationPanel({
 }>) {
   const { t } = useLanguage();
   const formatCurrency = useCurrencyFormatter();
-  const [busyAction, setBusyAction] = useState<string | null>(null);
+  // A set of in-flight action keys, so overlapping confirm/ignore requests each
+  // keep their own spinner — one completing (or another starting) can never
+  // clear a different request's busy state.
+  const [busyActions, setBusyActions] = useState<Set<string>>(new Set());
   const [importing, setImporting] = useState(false);
   const [ignoring, setIgnoring] = useState<{ id: Id<"bankStatementLines">; reason: string } | null>(null);
+
+  const startAction = (key: string) => setBusyActions((prev) => new Set(prev).add(key));
+  const endAction = (key: string) =>
+    setBusyActions((prev) => {
+      if (!prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
 
   const suggestions = useQuery(api.bankReconciliation.suggestMatches, { orgId, bankAccountId });
   const uploadLines = useMutation(api.bankReconciliation.uploadStatementLines);
@@ -59,18 +71,15 @@ export function ReconciliationPanel({
   }
 
   async function handleConfirm(statementLineId: Id<"bankStatementLines">, journalLineId: Id<"journalLines">) {
-    // Key the busy state to this specific line and only clear it if it's still
-    // ours — otherwise a confirm that resolves while a *different* line's
-    // confirm/ignore is in flight would wipe the other action's spinner (the
-    // same reasoning handleIgnore uses).
-    setBusyAction(`confirm_${statementLineId}`);
+    const key = `confirm_${statementLineId}`;
+    startAction(key);
     try {
       await confirmMatch({ orgId, statementLineId, journalLineId });
       toast.success(t("MatchConfirmed" as any));
     } catch (error) {
       toast.error(errorMessage(error));
     } finally {
-      setBusyAction((cur) => (cur === `confirm_${statementLineId}` ? null : cur));
+      endAction(key);
     }
   }
 
@@ -85,7 +94,8 @@ export function ReconciliationPanel({
     // request is still in flight, completion here must not clear the newer
     // dialog's state or busy indicator.
     const targetId = ignoring.id;
-    setBusyAction(`ignore_${targetId}`);
+    const key = `ignore_${targetId}`;
+    startAction(key);
     try {
       await ignoreLine({ orgId, statementLineId: targetId, reason: ignoring.reason });
       toast.success(t("LineIgnored" as any));
@@ -93,7 +103,7 @@ export function ReconciliationPanel({
     } catch (error) {
       toast.error(errorMessage(error));
     } finally {
-      setBusyAction((cur) => (cur === `ignore_${targetId}` ? null : cur));
+      endAction(key);
     }
   }
 
@@ -125,8 +135,8 @@ export function ReconciliationPanel({
             ) : (
               suggestions.map((s) => {
                 const suggested = s.candidates.find((c) => c.journalLineId === s.suggestedJournalLineId);
-                const confirming = busyAction === `confirm_${s.statementLineId}`;
-                const ignoringThisLine = busyAction === `ignore_${s.statementLineId}`;
+                const confirming = busyActions.has(`confirm_${s.statementLineId}`);
+                const ignoringThisLine = busyActions.has(`ignore_${s.statementLineId}`);
                 return (
                   <TableRow key={s.statementLineId}>
                     <TableCell className="text-slate-500">
@@ -199,7 +209,7 @@ export function ReconciliationPanel({
             <Button
               variant="destructive"
               onClick={() => void handleIgnore()}
-              disabled={busyAction === `ignore_${ignoring?.id}`}
+              disabled={!!ignoring && busyActions.has(`ignore_${ignoring.id}`)}
             >
               {t("IgnoreLine" as any)}
             </Button>

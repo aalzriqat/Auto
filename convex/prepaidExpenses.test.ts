@@ -183,6 +183,31 @@ describe("prepaid expense — monthly amortization", () => {
     expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(100_000);
   });
 
+  test("waits until the source EXPENSE_POSTED event has actually posted before recognizing", async () => {
+    const { t, orgId, userId } = await seedDealer("gate");
+    // A schedule whose expense has no POSTED EXPENSE_POSTED event yet (e.g. it
+    // was queued because no period was open at posting time).
+    const expenseId = await t.run((ctx) =>
+      ctx.db.insert("expenses", {
+        orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+        category: "FEES", status: "PAID", isPrepaid: true, amortizationMonths: 12,
+      })
+    );
+    const scheduleId = await t.run((ctx) =>
+      ctx.db.insert("prepaidExpenseSchedules", {
+        orgId, expenseId, currency: "JOD", totalMinor: 1_200_000, termMonths: 12,
+        expenseSystemKey: "PROFESSIONAL_FEES_EXPENSE", startYearMonth: "2026-01",
+        recognizedMinor: 0, monthsRecognized: 0, status: "ACTIVE", createdAt: Date.now(),
+      })
+    );
+    const r = await t.mutation(internal.prepaidExpenses.amortizePrepaidExpenseForMonth, {
+      orgId, scheduleId, yearMonth: "2026-01", occurredAt: Date.UTC(2026, 0, 15), systemActorId: userId,
+    });
+    expect(r.posted).toBe(false);
+    expect(r.reason).toBe("source_expense_not_posted");
+    expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(0);
+  });
+
   test("strict month ordering: a month at/before the last recognized one is rejected", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("order");
     const expenseId = await asOwner.mutation(api.expenses.create, {
@@ -375,9 +400,6 @@ describe("Fix #3 — inactive accounts cannot be posted to", () => {
     });
     await asOwner.mutation(api.chartOfAccounts.update, { orgId, accountId: acctId, active: false });
 
-    const cashAcct = await asOwner.query(api.chartOfAccounts.list, { orgId }).then((rows: any[]) =>
-      rows.find((a) => a.systemKey === "CASH_ON_HAND")
-    );
     // Cash doesn't allow manual posting, so use another manual-postable account
     // for the balancing side: General Expenses (6300).
     const genExp = await asOwner.query(api.chartOfAccounts.list, { orgId }).then((rows: any[]) =>
@@ -393,6 +415,5 @@ describe("Fix #3 — inactive accounts cannot be posted to", () => {
         ],
       })
     ).rejects.toThrow(/inactive/i);
-    void cashAcct;
   });
 });

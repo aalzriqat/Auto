@@ -480,10 +480,26 @@ export function ruleCollectionRefund(p: CollectionRefundPayload): RuleResult {
   };
 }
 
+/**
+ * Single source of truth for how a paid expense is booked, so ruleExpensePosted
+ * (which posts it) and hookExpensePosted (which self-heals the target accounts)
+ * can never disagree: a vehicle-linked recon cost capitalizes into inventory;
+ * otherwise a prepaid expense becomes a balance-sheet asset; otherwise it's an
+ * immediate period expense. Inventory capitalization wins over prepaid.
+ */
+export function classifyExpensePosting(args: {
+  capitalizeToInventory?: boolean;
+  vehicleId?: unknown;
+  isPrepaid?: boolean;
+}): { capitalize: boolean; prepaid: boolean } {
+  const capitalize = args.capitalizeToInventory === true && !!args.vehicleId;
+  const prepaid = args.isPrepaid === true && !capitalize;
+  return { capitalize, prepaid };
+}
+
 export function ruleExpensePosted(p: ExpensePostedPayload): RuleResult {
   const cashKey = cashAccountKey(p.paymentMethod);
-  const capitalize = p.capitalizeToInventory === true && !!p.vehicleId;
-  const prepaid = p.isPrepaid === true && !capitalize;
+  const { capitalize, prepaid } = classifyExpensePosting(p);
   const debitKey = capitalize
     ? SYSTEM_KEYS.VEHICLE_INVENTORY
     : prepaid

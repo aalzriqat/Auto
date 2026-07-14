@@ -564,6 +564,7 @@ type PrepaidAmortizationRunStats = {
   posted: number;
   skippedNoOwner: number;
   skippedOther: number;
+  failed: number;
 };
 
 async function amortizeCronSchedule(
@@ -600,19 +601,27 @@ async function runPrepaidExpenseAmortization(
     posted: 0,
     skippedNoOwner: 0,
     skippedOther: 0,
+    failed: 0,
   };
 
   let cursor: string | undefined;
   do {
     const page = await ctx.runQuery(internal.prepaidExpenses.listActivePrepaidSchedulesForRecognition, { cursor });
     for (const schedule of page.page) {
-      const outcome = await amortizeCronSchedule(ctx, schedule, {
-        ownerByOrg,
-        yearMonth: args.yearMonth,
-        occurredAt: args.occurredAt,
-      });
       stats.total++;
-      stats[outcome]++;
+      try {
+        // One malformed schedule (e.g. a chart-of-accounts conflict) must not
+        // abort the whole cross-org run and starve every later organization —
+        // isolate the failure, count it, and keep going.
+        const outcome = await amortizeCronSchedule(ctx, schedule, {
+          ownerByOrg,
+          yearMonth: args.yearMonth,
+          occurredAt: args.occurredAt,
+        });
+        stats[outcome]++;
+      } catch {
+        stats.failed++;
+      }
     }
     cursor = page.isDone ? undefined : page.continueCursor;
   } while (cursor);
@@ -628,7 +637,7 @@ export const triggerPrepaidExpenseAmortization = internalAction({
       const d = new Date(now);
       const yearMonth = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
       const stats = await runPrepaidExpenseAmortization(ctx, { yearMonth, occurredAt: now });
-      const summary = `Prepaid expense amortization ${yearMonth}: posted ${stats.posted}/${stats.total} schedule(s), ${stats.skippedNoOwner} skipped (no org owner), ${stats.skippedOther} skipped (already run / fully amortized / not active).`;
+      const summary = `Prepaid expense amortization ${yearMonth}: posted ${stats.posted}/${stats.total} schedule(s), ${stats.skippedNoOwner} skipped (no org owner), ${stats.skippedOther} skipped (already run / fully amortized / not active), ${stats.failed} failed.`;
       await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
         source: "prepaid-expense-amortization",
         status: "success",

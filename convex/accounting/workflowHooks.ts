@@ -12,7 +12,7 @@
 import { Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 import { postAccountingEvent, PostCommand } from "./postingEngine";
-import { EventType, ReceivableCreditKey, AcquisitionCorrectionType } from "./postingRules";
+import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate } from "../accountingPeriods";
 import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount } from "../chartOfAccounts";
@@ -432,8 +432,7 @@ export async function hookExpensePosted(
     isPrepaid?: boolean;
   }
 ) {
-  const capitalize = args.capitalizeToInventory === true && !!args.vehicleId;
-  const prepaid = args.isPrepaid === true && !capitalize;
+  const { capitalize, prepaid } = classifyExpensePosting(args);
   if (args.taxMinor && args.taxMinor > 0) {
     await ensureVatReceivableAccountIfChartReady(ctx, args.orgId, args.actorId);
   }

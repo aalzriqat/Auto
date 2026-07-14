@@ -17,7 +17,7 @@
  * expense. Catch-up (a missed cron month) and idempotency (a re-run of the same
  * month) both fall out of the "recognize the delta up to this month" math.
  */
-import { v, ConvexError } from "convex/values";
+import { v } from "convex/values";
 import { internalMutation, internalQuery, query, MutationCtx } from "./_generated/server";
 import { Id, Doc } from "./_generated/dataModel";
 import { hookPrepaidExpenseAmortized } from "./accounting/workflowHooks";
@@ -131,6 +131,22 @@ export const amortizePrepaidExpenseForMonth = internalMutation({
     const schedule = await ctx.db.get(args.scheduleId);
     if (!schedule || schedule.orgId !== args.orgId) return { posted: false, reason: "not_found" };
     if (schedule.status !== "ACTIVE") return { posted: false, reason: "not_active" };
+
+    // Don't release the asset before it's been booked: the schedule is created
+    // ACTIVE as soon as the expense is marked paid, but the EXPENSE_POSTED entry
+    // that debits Prepaid Expenses may still be queued (no open period at
+    // posting time). Recognizing first would credit an asset that isn't there
+    // yet. Wait until the source expense has actually posted; the next cron run
+    // catches it up once it does.
+    const sourcePosted = await ctx.db
+      .query("accountingEvents")
+      .withIndex("by_org_source", (q) =>
+        q.eq("orgId", args.orgId).eq("sourceType", "expenses").eq("sourceId", schedule.expenseId.toString())
+      )
+      .filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED"))
+      .filter((q) => q.eq(q.field("status"), "POSTED"))
+      .first();
+    if (!sourcePosted) return { posted: false, reason: "source_expense_not_posted" };
 
     // Strict month ordering (lexicographic "YYYY-MM"): never recognize a month
     // at or before the last one already recognized — that would double-post.
