@@ -41,7 +41,9 @@ describe("sales", () => {
         // a quote — it never calls sales.completeFromQuote, so no sale is
         // actually recorded unless "Submit Sale" is clicked.
         cy.findByText("Quote Generated Successfully!").should("be.visible");
-        cy.findByRole("button", { name: "Submit Sale" }).click();
+        cy.findByRole("button", { name: "Submit Sale" }).click({
+          scrollBehavior: "center",
+        });
 
         cy.findByText("Cash sale completed successfully").should("be.visible");
         cy.findByRole("link", { name: "Sale Completed ✓" }).should(

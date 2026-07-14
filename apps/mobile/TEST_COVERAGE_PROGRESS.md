@@ -145,8 +145,25 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - test-guard review: passed for the fingerprint test changes. The crypto/date/dimensions mocks are runtime boundary mocks and cover behavior not already asserted.
   - clean-code guard pass: adjusted the shared i18n builder to use a `Locale` parameter instead of numeric tuple indexes.
   - Gradle dependency verification metadata is now tracked at `apps/mobile/android/gradle/verification-metadata.xml`; size is about 926 KB and contains dependency checksums, not app secrets.
+- 2026-07-14 17:12 +03: latest PR check watch after Sonar remediation push
+  - Latest pushed commit is `076238dd Address mobile Sonar quality gate`; PR #70 remains non-draft (`isDraft=false`).
+  - SonarCloud Code Analysis now passes. SonarCloud comment reports Quality Gate passed, 0 Security Hotspots, and 0.9% duplication on new code.
+  - GitHub review state checked again: no review threads, inline comments, or submitted reviews were found.
+  - CodeRabbit remains an external non-code blocker because review credits/rate limit are exhausted; no actionable CodeRabbit review comments were produced.
+  - Two GitHub Actions checks are failing on the latest run: `unit-and-integration` and `cypress`.
+  - `unit-and-integration` root signal: all Vitest test files passed (98 passed, 1 skipped; 1101 tests passed, 22 skipped), then Vitest failed on one unhandled teardown rejection: `[vitest-worker]: Closing rpc while "onUserConsoleLog" was pending`, attributed by Vitest to `convex/collections.test.ts`.
+  - `cypress` root signal: `sales.cy.ts` failed because the web floating `Send Feedback` button covered the sales wizard submit/continue button at Cypress' viewport, causing `cy.click()` to fail with "element is being covered by another element."
+- 2026-07-14 17:16 +03: focused CI failure fix validation
+  - Patched `cypress/e2e/sales.cy.ts` to click the sales wizard `Submit Sale` button with Cypress `scrollBehavior: "center"`, avoiding the floating feedback button collision without changing production UI behavior.
+  - `pnpm exec eslint cypress/e2e/sales.cy.ts --quiet`: passed.
+  - `pnpm typecheck:cypress`: passed.
+  - `pnpm mobile:test`: passed with 8 suites and 68 tests; mobile coverage remains 100% statements, 100% branches, 100% functions, and 100% lines.
+  - `pnpm test:coverage`: passed locally with 107 files passed, 1 skipped; 1179 tests passed, 22 skipped; configured coverage summary stayed at 100%.
+  - `pnpm test:coverage:sonar`: passed locally with 98 files passed, 1 skipped; 1101 tests passed, 22 skipped. This matches the CI command that failed from a Vitest teardown rejection.
+  - `git diff --check`: passed with line-ending normalization warnings only.
+  - test-guard review: passed for the Cypress change; the test continues to verify an end-to-end user behavior with no new mocks or implementation assertions.
 
 ## Next Steps
 
-1. Commit and push the Sonar remediation batch.
-2. Watch PR checks, comments, inline comments, and Sonar quality gate again.
+1. Commit and push the Cypress CI fix.
+2. Retrigger/watch PR checks, comments, inline comments, and failures again.
