@@ -475,7 +475,7 @@ export const signOffCutover = mutation({
     const openingBalanceJournal = await ctx.db
       .query("journalEntries")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.eq(q.field("category"), "OPENING_BALANCE"))
+      .filter((q) => q.and(q.eq(q.field("category"), "OPENING_BALANCE"), q.eq(q.field("status"), "POSTED")))
       .first();
     if (openingBalanceJournal && openingBalanceJournal.postedBy === user._id) {
       throw new ConvexError(
