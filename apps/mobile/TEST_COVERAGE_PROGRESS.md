@@ -1,6 +1,6 @@
 # Mobile Test Coverage Progress
 
-Last updated: 2026-07-14 13:06:38 +03:00
+Last updated: 2026-07-14 13:08:11 +03:00
 
 ## Context
 
@@ -93,8 +93,12 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - Result: passed. New tests assert route/component/provider behavior; mocks are limited to framework/runtime boundaries.
 - 2026-07-14 13:06 +03: `git diff --check`
   - Result: passed. Git reported line-ending normalization warnings only.
+- 2026-07-14 13:08 +03: PR readiness for CodeRabbit
+  - Result: PR #70 was marked ready for review with `gh pr ready 70`.
+  - Verified: `isDraft` is now `false`.
+  - CodeRabbit status changed from skipped/success-for-draft behavior to pending review.
 
 ## Next Steps
 
-1. Commit and push the expanded coverage gate.
+1. Watch CodeRabbit and CI checks now that the PR is no longer draft.
 2. Separately address SonarCloud duplication/security findings if we want the whole PR green.
