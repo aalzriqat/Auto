@@ -767,6 +767,42 @@ export const vehicleInventoryReconciliation = query({
   },
 });
 
+/**
+ * Prepaid Expenses asset (GL) vs the unamortized remainder of every ACTIVE
+ * prepaid schedule (subledger). Like the other four here the subledger side is
+ * CURRENT state, so this is an informational report / close warning, not a
+ * close blocker — but for a clean books it should be zero-discrepancy.
+ */
+export async function computePrepaidExpensesReconciliation(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  toDate: number | undefined
+): Promise<GlVsSubledgerResult> {
+  const active = await ctx.db
+    .query("prepaidExpenseSchedules")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .filter((q) => q.eq(q.field("status"), "ACTIVE"))
+    .collect();
+
+  const subByCurrency = new Map<string, number>();
+  for (const s of active) {
+    const remaining = Math.max(s.totalMinor - s.recognizedMinor, 0);
+    if (remaining > 0) subByCurrency.set(s.currency, (subByCurrency.get(s.currency) ?? 0) + remaining);
+  }
+
+  const glByCurrency = await computeGlBalanceByCurrency(ctx, orgId, SYSTEM_KEYS.PREPAID_EXPENSES, toDate);
+  return combineGlAndSubledger(glByCurrency, subByCurrency);
+}
+
+export const prepaidExpensesReconciliation = query({
+  args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+    return computePrepaidExpensesReconciliation(ctx, args.orgId, args.toDate);
+  },
+});
+
 export async function computeSupplierPayablesReconciliation(
   ctx: QueryCtx,
   orgId: Id<"organizations">,

@@ -89,6 +89,7 @@ import type * as organizations from "../organizations.js";
 import type * as partnerEquity from "../partnerEquity.js";
 import type * as paymentIntents from "../paymentIntents.js";
 import type * as paymentVouchers from "../paymentVouchers.js";
+import type * as prepaidExpenses from "../prepaidExpenses.js";
 import type * as pushSend from "../pushSend.js";
 import type * as pushSubscriptions from "../pushSubscriptions.js";
 import type * as quotes from "../quotes.js";
@@ -258,6 +259,7 @@ declare const fullApi: ApiFromModules<{
   partnerEquity: typeof partnerEquity;
   paymentIntents: typeof paymentIntents;
   paymentVouchers: typeof paymentVouchers;
+  prepaidExpenses: typeof prepaidExpenses;
   pushSend: typeof pushSend;
   pushSubscriptions: typeof pushSubscriptions;
   quotes: typeof quotes;

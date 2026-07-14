@@ -35,6 +35,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { SearchableSelect } from "@/components/ui/searchable-select";
+import { Checkbox } from "@/components/ui/checkbox";
 import { PaymentMethodSelect, type PaymentMethod } from "@/components/payments/PaymentMethodSelect";
 
 import { expenseSchema, ExpenseFormValues, ExpenseDialogProps } from "./expense.schema";
@@ -71,9 +72,12 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
       payerId: "none",
       paymentMethod: "CASH",
       notes: "",
+      isPrepaid: false,
+      amortizationMonths: undefined,
     },
   });
   const paymentStatus = form.watch("status");
+  const isPrepaid = form.watch("isPrepaid");
 
   useEffect(() => {
     if (expense && open) {
@@ -90,6 +94,8 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
         payerId: expense.payerId || "none",
         paymentMethod: (expense.paymentMethod || "CASH") as PaymentMethod,
         notes: expense.notes || "",
+        isPrepaid: expense.isPrepaid ?? false,
+        amortizationMonths: expense.amortizationMonths ?? undefined,
       });
     } else if (open && !expense) {
       form.reset({
@@ -104,6 +110,8 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
         payerId: "none",
         paymentMethod: "CASH",
         notes: "",
+        isPrepaid: false,
+        amortizationMonths: undefined,
       });
     }
   }, [expense, open, form]);
@@ -136,6 +144,8 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
           payerId: parsedPayerId === undefined ? null : parsedPayerId,
           paymentMethod: values.status === "PAID" ? values.paymentMethod : undefined,
           notes: values.notes,
+          isPrepaid: values.isPrepaid ?? false,
+          amortizationMonths: values.isPrepaid ? values.amortizationMonths : undefined,
         });
         toast.success(t("ExpenseUpdatedSuccess" as any));
       } else {
@@ -152,6 +162,8 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
           payerId: parsedPayerId,
           paymentMethod: values.status === "PAID" ? values.paymentMethod : undefined,
           notes: values.notes,
+          isPrepaid: values.isPrepaid ?? false,
+          amortizationMonths: values.isPrepaid ? values.amortizationMonths : undefined,
         });
         toast.success(t("ExpenseRecordedSuccess" as any));
       }
@@ -253,6 +265,10 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                         <SelectItem value="TRANSPORT">{t("Transport" as any)}</SelectItem>
                         <SelectItem value="MARKETING">{t("Marketing" as any)}</SelectItem>
                         <SelectItem value="OFFICE">{t("Office" as any)}</SelectItem>
+                        <SelectItem value="RENT">{t("Rent" as any)}</SelectItem>
+                        <SelectItem value="UTILITIES">{t("Utilities" as any)}</SelectItem>
+                        <SelectItem value="SALARIES">{t("Salaries" as any)}</SelectItem>
+                        <SelectItem value="FEES">{t("ProfessionalFees" as any)}</SelectItem>
                         <SelectItem value="OTHER">{t("Other" as any)}</SelectItem>
                       </SelectContent>
                     </Select>
@@ -364,6 +380,56 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                   </FormItem>
                 )}
               />
+
+              {paymentStatus === "PAID" && (
+                <div className="md:col-span-2 rounded-md border p-3 space-y-3">
+                  <FormField
+                    control={form.control}
+                    name="isPrepaid"
+                    render={({ field }) => (
+                      <FormItem className="flex flex-row items-start gap-3 space-y-0">
+                        <FormControl>
+                          <Checkbox
+                            checked={!!field.value}
+                            onCheckedChange={(checked) => {
+                              const on = checked === true;
+                              field.onChange(on);
+                              if (!on) form.setValue("amortizationMonths", undefined);
+                            }}
+                          />
+                        </FormControl>
+                        <div className="space-y-0.5 leading-tight">
+                          <FormLabel className="font-normal">{t("PrepaidExpenseLabel" as any)}</FormLabel>
+                          <p className="text-xs text-muted-foreground">{t("PrepaidExpenseHint" as any)}</p>
+                        </div>
+                      </FormItem>
+                    )}
+                  />
+
+                  {isPrepaid && (
+                    <FormField
+                      control={form.control}
+                      name="amortizationMonths"
+                      render={({ field }) => (
+                        <FormItem className="max-w-[220px]">
+                          <FormLabel>{t("AmortizationMonthsLabel" as any)} <span className="text-red-500">*</span></FormLabel>
+                          <FormControl>
+                            <Input
+                              type="number"
+                              min="1"
+                              step="1"
+                              placeholder={t("AmortizationMonthsPlaceholder" as any)}
+                              value={field.value ?? ""}
+                              onChange={(e) => field.onChange(e.target.value === "" ? undefined : Number(e.target.value))}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
+                </div>
+              )}
 
               <FormField
                 control={form.control}

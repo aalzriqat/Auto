@@ -10,6 +10,7 @@ import {
   PREPAID_LOOKBACK_MS,
 } from "./utils/expenseAmortization";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
+import { getOrgCurrency } from "./accounting/workflowHooks";
 
 export const getSalesAndProfitReport = query({
   args: {
@@ -200,6 +201,11 @@ export const getExpensesReport = query({
       throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
     }
 
+    // Prepaid amortization is computed on the exact same integer minor-unit
+    // basis as the GL (see expenseAmortization.ts), so the org currency is
+    // required to convert each expense's amount to minor units identically.
+    const currency = await getOrgCurrency(ctx, args.orgId);
+
     // Use index range — avoids collecting ALL org expenses
     const expensesInDateRange = await ctx.db
       .query("expenses")
@@ -229,7 +235,7 @@ export const getExpensesReport = query({
       .collect();
 
     const stillAmortizing = priorPrepaidExpenses.filter(
-      (exp) => recognizedAmountInRange(exp, args.startDate, args.endDate) > 0
+      (exp) => recognizedAmountInRange(exp, args.startDate, args.endDate, currency) > 0
     );
 
     const allExpenses: Doc<"expenses">[] = [...expensesInDateRange, ...stillAmortizing];
@@ -245,7 +251,7 @@ export const getExpensesReport = query({
     );
 
     const enrichedExpenses = allExpenses.map((exp) => {
-      const recognizedAmount = recognizedAmountInRange(exp, args.startDate, args.endDate);
+      const recognizedAmount = recognizedAmountInRange(exp, args.startDate, args.endDate, currency);
       totalExpenses += recognizedAmount;
       let vehicleDesc = "General";
 
@@ -260,7 +266,7 @@ export const getExpensesReport = query({
         ...exp,
         vehicleDesc,
         recognizedAmount,
-        amortization: computeAmortizationInfo(exp, args.endDate),
+        amortization: computeAmortizationInfo(exp, args.endDate, currency),
       };
     });
 

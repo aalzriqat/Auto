@@ -59,6 +59,10 @@ export function ReconciliationPanel({
   }
 
   async function handleConfirm(statementLineId: Id<"bankStatementLines">, journalLineId: Id<"journalLines">) {
+    // Key the busy state to this specific line and only clear it if it's still
+    // ours — otherwise a confirm that resolves while a *different* line's
+    // confirm/ignore is in flight would wipe the other action's spinner (the
+    // same reasoning handleIgnore uses).
     setBusyAction(`confirm_${statementLineId}`);
     try {
       await confirmMatch({ orgId, statementLineId, journalLineId });
@@ -66,7 +70,7 @@ export function ReconciliationPanel({
     } catch (error) {
       toast.error(errorMessage(error));
     } finally {
-      setBusyAction(null);
+      setBusyAction((cur) => (cur === `confirm_${statementLineId}` ? null : cur));
     }
   }
 

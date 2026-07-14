@@ -875,6 +875,22 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "أصبح البحث في الجداول المقسمة إلى صفحات يجلب صفحات إضافية تلقائياً عند الحاجة، حتى لا تفوت المستخدم نتائج موجودة بعد الصفحة الأولى.",
     publishedAt: releaseAt(2026, 7, 5, 6),
   },
+  {
+    type: "FEATURE",
+    titleEn: "Prepaid expenses now spread across the months they cover",
+    titleAr: "المصروفات المدفوعة مقدماً تُوزّع الآن على الأشهر التي تغطيها",
+    descriptionEn: "When you record an expense you can now mark it as prepaid and choose how many months it covers (e.g. a year of insurance paid up front). AutoFlow holds it as an asset and recognizes an equal share each month automatically, so your monthly profit and the accounting ledger always agree.",
+    descriptionAr: "عند تسجيل مصروف يمكنك الآن تحديده كمدفوع مقدماً واختيار عدد الأشهر التي يغطيها (مثل تأمين سنة مدفوع مقدماً). يحتفظ أوتوفلو به كأصل ويحتسب حصة متساوية كل شهر تلقائياً، بحيث يتطابق ربحك الشهري مع دفتر المحاسبة دائماً.",
+    publishedAt: releaseAt(2026, 7, 14, 1),
+  },
+  {
+    type: "IMPROVEMENT",
+    titleEn: "Clearer month-end close: real blockers vs. review warnings",
+    titleAr: "إغلاق نهاية الشهر أوضح: عوائق حقيقية مقابل تنبيهات للمراجعة",
+    descriptionEn: "The period-close checklist now separates issues that truly must be fixed before closing from subledger differences that are usually just cross-period timing and only need a review — so a legitimate month can no longer be blocked from closing by activity that happened after it ended.",
+    descriptionAr: "أصبحت قائمة إغلاق الفترة تفصل الأمور التي يجب إصلاحها فعلاً قبل الإغلاق عن فروقات دفاتر الأستاذ المساعدة التي تكون عادةً مجرد توقيت بين الفترات وتحتاج مراجعة فقط، فلم يعد بالإمكان منع إغلاق شهر سليم بسبب نشاط حدث بعد انتهائه.",
+    publishedAt: releaseAt(2026, 7, 14, 2),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;

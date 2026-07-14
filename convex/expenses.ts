@@ -9,13 +9,15 @@ import { validateInput } from "./utils/validation";
 import { CreateExpenseSchema, UpdateExpenseSchema } from "./validations/expenses";
 import { checkTenantWriteLimit } from "./rateLimit";
 import { runWithIdempotency } from "./utils/idempotency";
-import { hookExpensePosted, getOrgCurrency } from "./accounting/workflowHooks";
+import { hookExpensePosted, getOrgCurrency, hookPrepaidExpenseAmortizationsReversed } from "./accounting/workflowHooks";
 import { reverseAccountingEvent } from "./accounting/reversals";
 import { cancelPendingPostByKey } from "./accountingOutbox";
 import { requireFeature } from "./subscriptions";
 import { toMinorUnits } from "./utils/money";
 import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentMethods";
 import { CAPITALIZABLE_EXPENSE_CATEGORIES } from "./utils/vehicleCost";
+import { expenseAccountKeyForCategory } from "./accounting/postingRules";
+import { createPrepaidScheduleForExpense, cancelPrepaidScheduleForExpense } from "./prepaidExpenses";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -33,6 +35,27 @@ const expenseCategory = v.union(
   v.literal("PREPAID"),
   v.literal("OTHER")
 );
+
+/**
+ * Validates and normalizes the prepaid pair: a prepaid expense must specify a
+ * whole number of amortization months (1–600); a non-prepaid one carries
+ * neither field. Returns the cleaned values to persist.
+ */
+function normalizePrepaidFields(
+  isPrepaid: boolean | undefined,
+  amortizationMonths: number | undefined
+): { isPrepaid: boolean | undefined; amortizationMonths: number | undefined } {
+  if (!isPrepaid) return { isPrepaid: undefined, amortizationMonths: undefined };
+  if (
+    amortizationMonths === undefined ||
+    !Number.isInteger(amortizationMonths) ||
+    amortizationMonths < 1 ||
+    amortizationMonths > 600
+  ) {
+    throw new ConvexError("A prepaid expense must specify a whole number of amortization months between 1 and 600.");
+  }
+  return { isPrepaid: true, amortizationMonths };
+}
 
 async function hasExpenseAccountingExposure(
   ctx: MutationCtx,
@@ -99,9 +122,14 @@ async function recordPaidExpenseSideEffects(
   // A retry (e.g. after the vehicle sells) must NOT re-derive: the GL event
   // below is idempotent and won't re-post, so flipping the treatment here
   // would desync the expense's cost basis from what's already in the ledger.
+  // A prepaid expense is a balance-sheet asset amortized over its term — it is
+  // never simultaneously capitalized into a vehicle's inventory cost, so prepaid
+  // wins and inventory capitalization is skipped for it.
+  const isPrepaid = args.expense.isPrepaid === true && (args.expense.amortizationMonths ?? 0) > 0;
+
   let capitalizeToInventory = args.expense.accountingTreatment === "CAPITALIZED_INVENTORY";
   if (args.expense.accountingTreatment === undefined) {
-    if (args.expense.vehicleId && CAPITALIZABLE_EXPENSE_CATEGORIES.has(args.expense.category)) {
+    if (!isPrepaid && args.expense.vehicleId && CAPITALIZABLE_EXPENSE_CATEGORIES.has(args.expense.category)) {
       const vehicle = await ctx.db.get(args.expense.vehicleId);
       capitalizeToInventory = !!vehicle && vehicle.sourceType !== "SOURCED" && vehicle.status !== "SOLD";
     }
@@ -126,7 +154,27 @@ async function recordPaidExpenseSideEffects(
     occurredAt: args.expense.date,
     vehicleId: args.expense.vehicleId,
     capitalizeToInventory,
+    isPrepaid,
   });
+
+  // Set up the amortization schedule so the Prepaid Expenses asset booked above
+  // is released to its expense account ratably (prepaidExpenses.ts). The NET
+  // (ex-VAT) minor amount is what was debited to the asset, so that's what
+  // amortizes — computed the same way ruleExpensePosted derives its net line.
+  if (isPrepaid && capitalizeToInventory === false) {
+    const amountMinor = toMinorUnits(args.expense.amount, currency);
+    const taxMinor = args.expense.taxAmount ? toMinorUnits(args.expense.taxAmount, currency) : 0;
+    const netMinor = amountMinor - taxMinor;
+    await createPrepaidScheduleForExpense(ctx, {
+      orgId: args.expense.orgId,
+      expenseId: args.expense._id,
+      currency,
+      totalMinor: netMinor,
+      termMonths: args.expense.amortizationMonths!,
+      expenseSystemKey: expenseAccountKeyForCategory(args.expense.category),
+      startDate: args.expense.date,
+    });
+  }
 }
 
 // ─── Queries ─────────────────────────────────────────────────────────────────
@@ -229,6 +277,8 @@ export const create = mutation({
     payerId: v.optional(v.id("users")),
     paymentMethod: v.optional(paymentMethodValidator),
     notes: v.optional(v.string()),
+    isPrepaid: v.optional(v.boolean()),
+    amortizationMonths: v.optional(v.number()),
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -238,6 +288,7 @@ export const create = mutation({
     if (args.taxAmount !== undefined && args.taxAmount > args.amount) {
       throw new ConvexError("VAT amount cannot exceed the expense amount.");
     }
+    const { isPrepaid, amortizationMonths } = normalizePrepaidFields(args.isPrepaid, args.amortizationMonths);
 
     return await runWithIdempotency(
       ctx,
@@ -258,6 +309,8 @@ export const create = mutation({
           payerId: args.payerId ?? null,
           paymentMethod: paymentMethod ?? null,
           notes: args.notes ?? null,
+          isPrepaid: isPrepaid ?? null,
+          amortizationMonths: amortizationMonths ?? null,
         }),
       },
       async () => {
@@ -284,6 +337,8 @@ export const create = mutation({
           vendor: args.vendor,
           payerId: args.payerId,
           notes: args.notes,
+          isPrepaid,
+          amortizationMonths,
         });
 
         if (status === "PAID") {
@@ -329,6 +384,8 @@ export const update = mutation({
     payerId: v.optional(v.union(v.id("users"), v.null())),
     paymentMethod: v.optional(paymentMethodValidator),
     notes: v.optional(v.string()),
+    isPrepaid: v.optional(v.boolean()),
+    amortizationMonths: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_EXPENSES]);
@@ -373,10 +430,23 @@ export const update = mutation({
       (args.date !== undefined && args.date !== expense.date) ||
       (args.category !== undefined && args.category !== expense.category) ||
       (args.status !== undefined && args.status !== currentStatus) ||
-      (args.paymentMethod !== undefined && args.paymentMethod !== expense.paymentMethod);
+      (args.paymentMethod !== undefined && args.paymentMethod !== expense.paymentMethod) ||
+      (args.isPrepaid !== undefined && (args.isPrepaid || false) !== (expense.isPrepaid || false)) ||
+      (args.amortizationMonths !== undefined && args.amortizationMonths !== expense.amortizationMonths);
     if (hasAccountingExposure && hasMaterialAccountingChange) {
       throw new ConvexError(
         "Posted expenses are locked. Use a correction or reversal workflow before changing accounting fields."
+      );
+    }
+
+    // Re-validate the prepaid pair against the post-update effective values so a
+    // partial edit (e.g. flipping isPrepaid on without months) can't persist an
+    // inconsistent schedule basis.
+    let normalizedPrepaid: { isPrepaid: boolean | undefined; amortizationMonths: number | undefined } | null = null;
+    if (args.isPrepaid !== undefined || args.amortizationMonths !== undefined) {
+      normalizedPrepaid = normalizePrepaidFields(
+        args.isPrepaid ?? expense.isPrepaid,
+        args.amortizationMonths ?? expense.amortizationMonths
       );
     }
 
@@ -404,6 +474,10 @@ export const update = mutation({
       patch.payerId = args.payerId === null ? undefined : args.payerId;
     }
     if (args.notes !== undefined) patch.notes = args.notes;
+    if (normalizedPrepaid) {
+      patch.isPrepaid = normalizedPrepaid.isPrepaid;
+      patch.amortizationMonths = normalizedPrepaid.amortizationMonths;
+    }
 
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(args.expenseId, patch);
@@ -578,6 +652,22 @@ export const reverseExpense = mutation({
       if (!cancelled) {
         throw new ConvexError("This expense hasn't been posted to accounting — delete it directly instead.");
       }
+    }
+
+    // Prepaid expense: unwind the amortization half of the lifecycle too. This
+    // reverses every asset→expense release already posted (and drops any queued
+    // month) and stops future recognition, so together with the EXPENSE_POSTED
+    // reversal above the whole schedule nets back to zero — no orphaned Prepaid
+    // Expenses balance, no expense recognized for a reversed prepayment.
+    const schedule = await cancelPrepaidScheduleForExpense(ctx, args.orgId, args.expenseId);
+    if (schedule) {
+      await hookPrepaidExpenseAmortizationsReversed(ctx, {
+        orgId: args.orgId,
+        scheduleId: schedule,
+        reason,
+        actorId: user._id,
+        reversalDate: now,
+      });
     }
 
     const identity = await ctx.auth.getUserIdentity();

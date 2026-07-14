@@ -212,6 +212,9 @@ async function resolveManualJournalCurrency(
     if (!account || account.orgId !== orgId) {
       throw new ConvexError(`Account ${line.accountId} not found in this org.`);
     }
+    if (!account.active) {
+      throw new ConvexError(`Account "${account.name}" is inactive and cannot be posted to. Reactivate it first or use a different account.`);
+    }
     if (!account.allowManualPosting) {
       throw new ConvexError(`Account "${account.name}" does not allow manual posting.`);
     }

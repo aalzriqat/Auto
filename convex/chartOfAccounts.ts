@@ -189,6 +189,43 @@ async function ensureSystemAccount(
 
   const now = Date.now();
   const def = DEFAULT_CHART.find((d) => d.code === code)!;
+
+  // Codes are unique within an org (see the `create` mutation). This self-heal
+  // used to insert `code` blindly, which — if an org had already created a
+  // custom account on one of these reserved codes (e.g. a hand-made 6800) —
+  // produced a duplicate code the normal create path would have rejected.
+  // So first look for an account already sitting on this code and decide:
+  const byCode = await ctx.db
+    .query("chartOfAccounts")
+    .withIndex("by_org_code", (q) => q.eq("orgId", orgId).eq("code", code))
+    .unique();
+
+  if (byCode) {
+    // Already the right system account under a slightly different lookup? done.
+    if (byCode.systemKey === systemKey) return;
+    // Occupied by a *different* system account — cannot silently steal its code.
+    if (byCode.systemKey) {
+      throw new ConvexError(
+        `Chart of accounts conflict: code ${code} is already the "${byCode.systemKey}" system account, but "${systemKey}" also needs it. Resolve the conflicting code before this posting can proceed.`
+      );
+    }
+    // A plain custom account on this code. Only safe to adopt it as the system
+    // account if its fundamental shape matches; otherwise re-tagging it would
+    // corrupt whatever the org is using it for.
+    if (byCode.type !== def.type || byCode.normalBalance !== def.normalBalance) {
+      throw new ConvexError(
+        `Chart of accounts conflict: code ${code} exists as a ${byCode.type}/${byCode.normalBalance} account, but system account "${systemKey}" requires ${def.type}/${def.normalBalance}. Move the custom account to a different code.`
+      );
+    }
+    await ctx.db.patch(byCode._id, {
+      systemKey,
+      active: true,
+      updatedAt: now,
+      updatedBy: actorId,
+    });
+    return;
+  }
+
   await ctx.db.insert("chartOfAccounts", {
     orgId,
     code: def.code,
@@ -262,6 +299,20 @@ export async function ensureExpenseCategoryAccounts(
   await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.MARKETING_EXPENSE, "6830");
   await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.OFFICE_EXPENSE, "6840");
   await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.PROFESSIONAL_FEES_EXPENSE, "6850");
+}
+
+/**
+ * Self-heal for the Prepaid Expenses asset account: a prepaid expense debits
+ * this at payment and releases it to an operating-expense account monthly.
+ * Scoped to the prepaid posting + amortization hooks only — nothing else
+ * resolves this key.
+ */
+export async function ensurePrepaidExpensesAccount(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.PREPAID_EXPENSES, "1450");
 }
 
 /** GL Phase 13 self-heal: finance-company AR (very old charts may predate it) plus the claim write-off expense account. */

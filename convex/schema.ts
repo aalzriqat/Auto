@@ -980,6 +980,41 @@ export default defineSchema({
     .index("by_status", ["status"])
     .index("by_sale", ["saleId"]),
 
+  // One row per PREPAID expense: its full amount is capitalized to the Prepaid
+  // Expenses asset when paid, then released to the matching operating-expense
+  // account ratably over termMonths by the monthly amortization cron. Same
+  // shape and recognition discipline as dealerProductDeferrals above (idempotent
+  // per yearMonth, strict month ordering, final month absorbs the remainder).
+  prepaidExpenseSchedules: defineTable({
+    orgId: v.id("organizations"),
+    expenseId: v.id("expenses"),
+    currency: v.string(),
+    totalMinor: v.number(),
+    termMonths: v.number(),
+    // The expense-category account the released amount is booked to (e.g.
+    // RENT_EXPENSE). Stored so recognition posts to the same account the
+    // original expense would have hit, without re-deriving from category later.
+    expenseSystemKey: v.string(),
+    startYearMonth: v.string(), // "YYYY-MM" — the month recognition begins (expense.date's month)
+    recognizedMinor: v.number(),
+    // Contractual month count actually recognized so far — distinct from
+    // recognizedMinor/lastRecognizedYearMonth, which alone can't tell the
+    // recognizer whether the *next* call is the final contractual month (the
+    // one that must absorb the remainder so the schedule finishes in exactly
+    // termMonths, not termMonths+1).
+    monthsRecognized: v.optional(v.number()),
+    lastRecognizedYearMonth: v.optional(v.string()), // "YYYY-MM"
+    status: v.union(
+      v.literal("ACTIVE"),
+      v.literal("FULLY_AMORTIZED"),
+      v.literal("CANCELLED"),
+    ),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_status", ["status"])
+    .index("by_expense", ["expenseId"]),
+
   expenses: defineTable({
     orgId: v.id("organizations"),
     branchId: v.optional(v.id("branches")),
@@ -2824,6 +2859,7 @@ export default defineSchema({
       v.literal("social-auto-reply-retry"),
       v.literal("fixed-asset-depreciation"),
       v.literal("fi-commission-recognition"),
+      v.literal("prepaid-expense-amortization"),
       v.literal("marketplace-weekly-report"),
       v.literal("marketplace-whatsapp")
     ),
