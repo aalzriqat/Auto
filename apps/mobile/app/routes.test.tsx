@@ -19,8 +19,8 @@ const mockReplace = jest.fn();
 let mockParams: Record<string, string | string[] | undefined> = {};
 
 jest.mock("expo-router", () => {
-  const React = require("react");
-  const { Text } = require("react-native");
+  const React = jest.requireActual<typeof import("react")>("react");
+  const { Text } = jest.requireActual<typeof import("react-native")>("react-native");
 
   return {
     Stack: ({ screenOptions }: { screenOptions?: Record<string, unknown> }) =>
@@ -31,8 +31,8 @@ jest.mock("expo-router", () => {
 });
 
 jest.mock("@clerk/expo/native", () => {
-  const React = require("react");
-  const { Pressable, Text } = require("react-native");
+  const React = jest.requireActual<typeof import("react")>("react");
+  const { Pressable, Text } = jest.requireActual<typeof import("react-native")>("react-native");
 
   return {
     AuthView: ({ onDismiss }: { onDismiss: () => void }) =>
@@ -59,8 +59,8 @@ jest.mock("../src/providers/LocaleProvider", () => ({
 }));
 
 jest.mock("../src/features/home/HomeScreen", () => {
-  const React = require("react");
-  const { Text } = require("react-native");
+  const React = jest.requireActual<typeof import("react")>("react");
+  const { Text } = jest.requireActual<typeof import("react-native")>("react-native");
 
   return {
     HomeScreen: () => React.createElement(Text, { testID: "home-screen" }, "HomeScreen"),
@@ -68,8 +68,8 @@ jest.mock("../src/features/home/HomeScreen", () => {
 });
 
 jest.mock("../src/features/marketplace/MarketplaceScreen", () => {
-  const React = require("react");
-  const { Text } = require("react-native");
+  const React = jest.requireActual<typeof import("react")>("react");
+  const { Text } = jest.requireActual<typeof import("react-native")>("react-native");
 
   return {
     MarketplaceScreen: () => React.createElement(Text, { testID: "marketplace-screen" }, "MarketplaceScreen"),
@@ -77,8 +77,8 @@ jest.mock("../src/features/marketplace/MarketplaceScreen", () => {
 });
 
 jest.mock("../src/features/dashboard/OrgDashboardScreen", () => {
-  const React = require("react");
-  const { Text } = require("react-native");
+  const React = jest.requireActual<typeof import("react")>("react");
+  const { Text } = jest.requireActual<typeof import("react-native")>("react-native");
 
   return {
     OrgDashboardScreen: ({ orgId }: { orgId: string | null }) =>
@@ -87,8 +87,8 @@ jest.mock("../src/features/dashboard/OrgDashboardScreen", () => {
 });
 
 jest.mock("../src/features/marketplace/DealerMarketplaceScreen", () => {
-  const React = require("react");
-  const { Text } = require("react-native");
+  const React = jest.requireActual<typeof import("react")>("react");
+  const { Text } = jest.requireActual<typeof import("react-native")>("react-native");
 
   return {
     DealerMarketplaceScreen: ({ orgId }: { orgId: string | null }) =>
@@ -97,8 +97,8 @@ jest.mock("../src/features/marketplace/DealerMarketplaceScreen", () => {
 });
 
 jest.mock("../src/features/workspace/WorkspaceModuleScreen", () => {
-  const React = require("react");
-  const { Text } = require("react-native");
+  const React = jest.requireActual<typeof import("react")>("react");
+  const { Text } = jest.requireActual<typeof import("react-native")>("react-native");
 
   return {
     WorkspaceModuleScreen: ({ moduleId, orgId }: { moduleId: string | null; orgId: string | null }) =>

@@ -1,6 +1,6 @@
 # Mobile Test Coverage Progress
 
-Last updated: 2026-07-14 13:08:11 +03:00
+Last updated: 2026-07-14 16:37:07 +03:00
 
 ## Context
 
@@ -97,8 +97,25 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - Result: PR #70 was marked ready for review with `gh pr ready 70`.
   - Verified: `isDraft` is now `false`.
   - CodeRabbit status changed from skipped/success-for-draft behavior to pending review.
+- 2026-07-14 16:33 +03: PR check rerun/watch
+  - Result: reran failed GitHub Actions jobs and watched the PR checks.
+  - Passed after rerun: type-check, unit-and-integration, convex-backend, dealer-worker, dependency-audit, secret-scan, cypress, playwright, e2e, checkov, semgrep, nuclei, osv-scanner, zap-baseline, CodeQL, GitGuardian, Vercel, and analysis jobs.
+  - Still failing: `lint`, CodeRabbit, and SonarCloud Code Analysis.
+  - CodeRabbit status: external failure because prepaid credits/review limit are exhausted; no actionable CodeRabbit code review comments were posted.
+  - Inline review status: no GitHub review threads or inline comments were found on PR #70.
+  - SonarCloud status: Quality Gate failed for 6.4% duplication on new code (required <= 3%) and C Security Rating on new code (required >= A).
+  - Lint root cause: 16 `@typescript-eslint/no-require-imports` errors in new mobile tests (`app/routes.test.tsx` and `TurnstileVerification.test.tsx`).
+- 2026-07-14 16:37 +03: lint fix validation
+  - Replaced test-local `require()` calls with typed `jest.requireActual` usage in route and Turnstile WebView mocks.
+  - Tightened the Turnstile WebView mock props type and added a `getLastWebViewProps()` assertion helper.
+  - `pnpm exec eslint . --quiet`: passed.
+  - `pnpm mobile:test`: passed with 100% statements, 100% branches, 100% functions, and 100% lines across the configured mobile coverage gate.
+  - `pnpm mobile:typecheck`: passed.
+  - `pnpm typecheck`: passed.
+  - `pnpm lint`: passed. Existing repo warnings remain, but the 16 blocking lint errors are gone.
+  - `git diff --check`: passed. Git reported line-ending normalization warnings only.
 
 ## Next Steps
 
-1. Watch CodeRabbit and CI checks now that the PR is no longer draft.
+1. Push the lint fix and rerun/watch PR checks again.
 2. Separately address SonarCloud duplication/security findings if we want the whole PR green.

@@ -7,14 +7,24 @@ import { act, render, waitFor } from "@testing-library/react-native";
 import { LocaleProvider } from "../../providers/LocaleProvider";
 import { TurnstileVerification } from "./TurnstileVerification";
 
-const mockWebViewProps: Array<Record<string, any>> = [];
+type MockWebViewProps = {
+  onError: () => void;
+  onLoadStart: () => void;
+  onMessage: (event: { nativeEvent: { data: string } }) => void;
+  source: {
+    baseUrl?: string;
+    html?: string;
+  };
+};
+
+const mockWebViewProps: MockWebViewProps[] = [];
 
 jest.mock("react-native-webview", () => {
-  const React = require("react");
-  const { View } = require("react-native");
+  const React = jest.requireActual<typeof import("react")>("react");
+  const { View } = jest.requireActual<typeof import("react-native")>("react-native");
 
   return {
-    WebView: (props: Record<string, any>) => {
+    WebView: (props: MockWebViewProps) => {
       mockWebViewProps.push(props);
       return React.createElement(View, { testID: "turnstile-webview" });
     },
@@ -52,6 +62,14 @@ async function renderVerification(options: {
   };
 }
 
+function getLastWebViewProps(): MockWebViewProps {
+  const props = mockWebViewProps.at(-1);
+  if (!props) {
+    throw new Error("Expected the Turnstile WebView to render.");
+  }
+  return props;
+}
+
 describe("Turnstile verification", () => {
   beforeEach(() => {
     mockWebViewProps.length = 0;
@@ -69,21 +87,21 @@ describe("Turnstile verification", () => {
 
   test("renders a Turnstile WebView with safe HTML and configured base URL", async () => {
     await renderVerification({ siteKey: "<site-key" });
-    const props = mockWebViewProps.at(-1);
+    const props = getLastWebViewProps();
 
-    expect(props?.source.baseUrl).toBe("https://mobile.example/");
-    expect(props?.source.html).toContain("\\u003csite-key");
-    expect(props?.source.html).toContain('"en"');
+    expect(props.source.baseUrl).toBe("https://mobile.example/");
+    expect(props.source.html).toContain("\\u003csite-key");
+    expect(props.source.html).toContain('"en"');
   });
 
   test("falls back to the default base URL when app URL config is absent or invalid", async () => {
     setValidPublicEnv("");
     await renderVerification();
-    expect(mockWebViewProps.at(-1)?.source.baseUrl).toBe("https://www.autoflowdealer.com/");
+    expect(getLastWebViewProps().source.baseUrl).toBe("https://www.autoflowdealer.com/");
 
     delete process.env.EXPO_PUBLIC_CONVEX_URL;
     await renderVerification();
-    expect(mockWebViewProps.at(-1)?.source.baseUrl).toBe("https://www.autoflowdealer.com/");
+    expect(getLastWebViewProps().source.baseUrl).toBe("https://www.autoflowdealer.com/");
   });
 
   test("renders Arabic Turnstile HTML when the stored locale is Arabic", async () => {
@@ -91,22 +109,22 @@ describe("Turnstile verification", () => {
     await renderVerification();
 
     await waitFor(() => {
-      expect(mockWebViewProps.at(-1)?.source.html).toContain('<html lang="ar">');
-      expect(mockWebViewProps.at(-1)?.source.html).toContain('"ar"');
+      expect(getLastWebViewProps().source.html).toContain('<html lang="ar">');
+      expect(getLastWebViewProps().source.html).toContain('"ar"');
     });
   });
 
   test("clears tokens during load and handles valid token messages", async () => {
     const { getByText, onTokenChange } = await renderVerification();
-    const props = mockWebViewProps.at(-1);
+    const props = getLastWebViewProps();
 
     await act(async () => {
-      props?.onLoadStart();
+      props.onLoadStart();
     });
     expect(onTokenChange).toHaveBeenLastCalledWith(null);
 
     await act(async () => {
-      props?.onMessage({ nativeEvent: { data: JSON.stringify({ type: "token", token: "token-123" }) } });
+      props.onMessage({ nativeEvent: { data: JSON.stringify({ type: "token", token: "token-123" }) } });
     });
 
     expect(onTokenChange).toHaveBeenLastCalledWith("token-123");
@@ -115,27 +133,27 @@ describe("Turnstile verification", () => {
 
   test("handles expired, error, invalid, and WebView error states", async () => {
     const { getByText, onTokenChange } = await renderVerification();
-    const props = mockWebViewProps.at(-1);
+    const props = getLastWebViewProps();
 
     await act(async () => {
-      props?.onMessage({ nativeEvent: { data: "not-json" } });
+      props.onMessage({ nativeEvent: { data: "not-json" } });
     });
     expect(onTokenChange).not.toHaveBeenCalled();
 
     await act(async () => {
-      props?.onMessage({ nativeEvent: { data: JSON.stringify({ type: "expired" }) } });
+      props.onMessage({ nativeEvent: { data: JSON.stringify({ type: "expired" }) } });
     });
     expect(onTokenChange).toHaveBeenLastCalledWith(null);
     expect(getByText(getMobileFoundationString("en", "marketplaceVerificationExpired"))).toBeTruthy();
 
     await act(async () => {
-      props?.onMessage({ nativeEvent: { data: JSON.stringify({ type: "error", code: "load-timeout" }) } });
+      props.onMessage({ nativeEvent: { data: JSON.stringify({ type: "error", code: "load-timeout" }) } });
     });
     expect(onTokenChange).toHaveBeenLastCalledWith(null);
     expect(getByText(getMobileFoundationString("en", "marketplaceVerificationFailed"))).toBeTruthy();
 
     await act(async () => {
-      props?.onError();
+      props.onError();
     });
     expect(onTokenChange).toHaveBeenLastCalledWith(null);
     expect(getByText(getMobileFoundationString("en", "marketplaceVerificationFailed"))).toBeTruthy();
