@@ -3,6 +3,7 @@ import { withSentryConfig } from "@sentry/nextjs";
 import "./lib/env";
 
 const nextConfig: NextConfig = {
+  transpilePackages: ["@autoflow/shared"],
   // Baked into the client bundle at build time — compared at runtime against
   // /api/build-id (read fresh on every request) to detect when a tab is
   // running an older build than what's currently deployed. Falls back to a

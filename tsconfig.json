@@ -37,6 +37,8 @@
   ],
   "exclude": [
     "node_modules",
+    "apps",
+    "packages",
     "convex",
     "dealer-worker",
     "cypress"
