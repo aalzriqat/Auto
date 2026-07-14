@@ -5,14 +5,29 @@ import { Dimensions, Platform } from "react-native";
 import { buildMarketplaceClientFingerprint } from "./marketplaceUtils";
 
 const FINGERPRINT_STORAGE_KEY = "autoflow-mobile-marketplace-fingerprint";
+let fallbackVisitorIdCounter = 0;
+
+function cryptoHex(byteLength: number): string | null {
+  if (typeof globalThis.crypto?.getRandomValues !== "function") {
+    return null;
+  }
+
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(byteLength));
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 function createVisitorId(): string {
   if (typeof globalThis.crypto?.randomUUID === "function") {
     return globalThis.crypto.randomUUID();
   }
 
-  const randomPart = Math.random().toString(36).slice(2);
-  return `${Date.now().toString(36)}-${randomPart}`;
+  const randomPart = cryptoHex(16);
+  if (randomPart) {
+    return `${Date.now().toString(36)}-${randomPart}`;
+  }
+
+  fallbackVisitorIdCounter += 1;
+  return `${Date.now().toString(36)}-${fallbackVisitorIdCounter.toString(36)}`;
 }
 
 function getTimeZone(): string {

@@ -213,8 +213,15 @@ function joinList(value: string[] | undefined): string {
   return (value ?? []).join("\n");
 }
 
+let idempotencyFallbackCounter = 0;
+
 function idempotencyKey(operation: string): string {
-  return `${operation}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  if (typeof globalThis.crypto?.randomUUID === "function") {
+    return `${operation}-${globalThis.crypto.randomUUID()}`;
+  }
+
+  idempotencyFallbackCounter += 1;
+  return `${operation}-${Date.now().toString(36)}-${idempotencyFallbackCounter.toString(36)}`;
 }
 
 function isPaginationLoading(status: string): boolean {

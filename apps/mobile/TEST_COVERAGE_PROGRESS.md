@@ -1,6 +1,6 @@
 # Mobile Test Coverage Progress
 
-Last updated: 2026-07-14 16:37:07 +03:00
+Last updated: 2026-07-14 17:01:56 +03:00
 
 ## Context
 
@@ -114,8 +114,39 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `pnpm typecheck`: passed.
   - `pnpm lint`: passed. Existing repo warnings remain, but the 16 blocking lint errors are gone.
   - `git diff --check`: passed. Git reported line-ending normalization warnings only.
+- 2026-07-14 16:45 +03: post-push PR watch and Sonar triage
+  - Pushed commit `0eba38e0 Fix mobile test lint errors`.
+  - New PR check watch result: all GitHub Actions passed, including `lint`, `type-check`, `unit-and-integration`, `convex-backend`, `cypress`, `playwright`, `e2e`, and security scan jobs.
+  - Remaining blockers: CodeRabbit external failure due exhausted review credits/rate limit, and SonarCloud Quality Gate failure.
+  - PR remains non-draft: `isDraft=false`.
+  - Inline review status: no GitHub review threads or inline comments were found on PR #70.
+  - Sonar Quality Gate: 6.4% duplication on new code (989 duplicated lines out of 15,432 new lines; required <= 3%) and C Security Rating on new code (required >= A).
+  - Largest Sonar duplication buckets: `packages/shared/src/i18n.ts` (390), `apps/mobile/src/features/workspace/nativeModules.ts` (221), `scripts/*.mjs` mobile scripts (116), `BuyerIntakePanels.tsx` (96), and `WorkspaceModuleScreen.tsx` (61).
+  - Sonar security findings include Android cleartext/backup flags, missing Gradle lock or verification metadata, and `Math.random()` fallbacks in mobile fingerprint/idempotency helpers.
+- 2026-07-14 16:56 +03: Sonar remediation pass in progress
+  - Security fixes applied locally: removed `Math.random()` fallbacks from mobile fingerprint/idempotency helpers, restricted Turnstile WebView origins to HTTPS/about URLs, disabled Android backup and cleartext traffic in checked-in manifests, and generated real Gradle dependency verification metadata.
+  - Gradle metadata generation command passed with local JBR/Android SDK: `.\gradlew.bat --write-verification-metadata sha256 help`.
+  - Duplication fixes applied locally: extracted shared mobile env-loading script helper, rewired mobile dev/production scripts to use it, reshaped shared mobile i18n strings into a single tuple table, and reshaped the native module registry into compact rows.
+  - Validation in progress: the native registry typecheck passed; mobile coverage initially failed only because the new secure byte-entropy branch needed test coverage, and that test has now been added.
+- 2026-07-14 16:59 +03: local validation after Sonar remediation
+  - `pnpm mobile:test`: passed with 100% statements, 100% branches, 100% functions, and 100% lines across the configured mobile gate.
+  - `pnpm mobile:typecheck`: passed.
+  - `pnpm typecheck`: passed.
+  - `pnpm lint`: passed. Existing repo warnings remain, but there are no blocking lint errors.
+  - `pnpm shared:test`: passed.
+  - `pnpm shared:typecheck`: passed.
+  - `node --check` for `scripts/mobile-env.mjs`, `scripts/start-mobile-dev.mjs`, and `scripts/build-mobile-production-android.mjs`: passed.
+  - `git diff --check`: passed. Git reported line-ending normalization warnings only.
+  - Gradle validation: `.\gradlew.bat help` passed with local `JAVA_HOME`, `ANDROID_HOME`, and `ANDROID_SDK_ROOT` set. Generated Gradle build reports were removed afterward so ESLint does not scan transient report JavaScript.
+- 2026-07-14 17:01 +03: final pre-commit validation
+  - `pnpm test`: passed. Result: 107 test files passed, 1 skipped; 1179 tests passed, 22 skipped.
+  - Re-ran `pnpm shared:test`, `pnpm shared:typecheck`, `pnpm typecheck`, `pnpm exec eslint . --quiet`, and `pnpm mobile:test` after the final i18n readability patch; all passed.
+  - `pnpm mobile:test` remains at 100% statements, 100% branches, 100% functions, and 100% lines; tests are now 8 suites and 68 tests.
+  - test-guard review: passed for the fingerprint test changes. The crypto/date/dimensions mocks are runtime boundary mocks and cover behavior not already asserted.
+  - clean-code guard pass: adjusted the shared i18n builder to use a `Locale` parameter instead of numeric tuple indexes.
+  - Gradle dependency verification metadata is now tracked at `apps/mobile/android/gradle/verification-metadata.xml`; size is about 926 KB and contains dependency checksums, not app secrets.
 
 ## Next Steps
 
-1. Push the lint fix and rerun/watch PR checks again.
-2. Separately address SonarCloud duplication/security findings if we want the whole PR green.
+1. Commit and push the Sonar remediation batch.
+2. Watch PR checks, comments, inline comments, and Sonar quality gate again.

@@ -153,7 +153,7 @@ export function TurnstileVerification({ siteKey, onTokenChange, resetKey }: Turn
       <WebView
         key={`${resetKey}-${locale}`}
         source={{ html, baseUrl }}
-        originWhitelist={["https://*", "http://*", "about:blank", "about:srcdoc"]}
+        originWhitelist={["https://*", "about:blank", "about:srcdoc"]}
         javaScriptEnabled
         domStorageEnabled
         thirdPartyCookiesEnabled

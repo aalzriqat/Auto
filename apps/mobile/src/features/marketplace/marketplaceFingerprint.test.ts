@@ -54,11 +54,36 @@ describe("marketplace mobile fingerprint", () => {
     expect(setItemAsync).toHaveBeenCalledWith("autoflow-mobile-marketplace-fingerprint", "uuid-1");
   });
 
+  test("uses crypto byte entropy when random UUID is unavailable", async () => {
+    jest.spyOn(Dimensions, "get").mockReturnValue(screen(390, 844, 3));
+    jest.spyOn(Date, "now").mockReturnValue(36);
+    Object.defineProperty(globalThis, "crypto", {
+      configurable: true,
+      value: {
+        getRandomValues: (bytes: Uint8Array) => {
+          bytes.set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+          return bytes;
+        },
+      },
+    });
+    getItemAsync.mockResolvedValueOnce(null);
+    setItemAsync.mockResolvedValueOnce(undefined);
+
+    const fingerprint = await getMarketplaceClientFingerprint("ar");
+
+    expect(fingerprint).toBe(
+      `10-000102030405060708090a0b0c0d0e0f:ar:${Intl.DateTimeFormat().resolvedOptions().timeZone || "unknown"}:${Platform.OS}:390x844@3`,
+    );
+    expect(setItemAsync).toHaveBeenCalledWith(
+      "autoflow-mobile-marketplace-fingerprint",
+      "10-000102030405060708090a0b0c0d0e0f",
+    );
+  });
+
   test("falls back when crypto and timezone APIs are unavailable", async () => {
     const dateTimeFormat = Intl.DateTimeFormat;
     jest.spyOn(Dimensions, "get").mockReturnValue(screen(320.4, 568.6, 2));
     jest.spyOn(Date, "now").mockReturnValue(0);
-    jest.spyOn(Math, "random").mockReturnValue(0.5);
     Object.defineProperty(globalThis, "crypto", {
       configurable: true,
       value: {},
@@ -73,8 +98,8 @@ describe("marketplace mobile fingerprint", () => {
     setItemAsync.mockResolvedValueOnce(undefined);
 
     try {
-      await expect(getMarketplaceClientFingerprint("en")).resolves.toBe(`0-i:en:unknown:${Platform.OS}:320x569@2`);
-      expect(setItemAsync).toHaveBeenCalledWith("autoflow-mobile-marketplace-fingerprint", "0-i");
+      await expect(getMarketplaceClientFingerprint("en")).resolves.toBe(`0-1:en:unknown:${Platform.OS}:320x569@2`);
+      expect(setItemAsync).toHaveBeenCalledWith("autoflow-mobile-marketplace-fingerprint", "0-1");
     } finally {
       Object.defineProperty(Intl, "DateTimeFormat", {
         configurable: true,
