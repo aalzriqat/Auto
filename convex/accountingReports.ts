@@ -15,6 +15,7 @@ import { SYSTEM_KEYS, SystemKey } from "./utils/defaultChart";
 import { requireFeature } from "./subscriptions";
 import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
+import { recognizedDueThroughDateMinor } from "./utils/expenseAmortization";
 
 /**
  * GL Phase 14 note on aggregation: every aggregate below keys on
@@ -766,6 +767,88 @@ export const vehicleInventoryReconciliation = query({
     return computeVehicleInventoryReconciliation(ctx, args.orgId, args.toDate);
   },
 });
+
+/**
+ * Prepaid Expenses asset (GL) vs the unamortized remainder of every ACTIVE
+ * prepaid schedule (subledger). Like the other four here the subledger side is
+ * CURRENT state, so this is an informational report / close warning, not a
+ * close blocker — but for a clean books it should be zero-discrepancy.
+ */
+export async function computePrepaidExpensesReconciliation(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  toDate: number | undefined
+): Promise<GlVsSubledgerResult> {
+  const active = await ctx.db
+    .query("prepaidExpenseSchedules")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .filter((q) => q.eq(q.field("status"), "ACTIVE"))
+    .collect();
+
+  const subByCurrency = new Map<string, number>();
+  for (const s of active) {
+    const remaining = Math.max(s.totalMinor - s.recognizedMinor, 0);
+    if (remaining > 0) subByCurrency.set(s.currency, (subByCurrency.get(s.currency) ?? 0) + remaining);
+  }
+
+  const glByCurrency = await computeGlBalanceByCurrency(ctx, orgId, SYSTEM_KEYS.PREPAID_EXPENSES, toDate);
+  return combineGlAndSubledger(glByCurrency, subByCurrency);
+}
+
+export const prepaidExpensesReconciliation = query({
+  args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+    return computePrepaidExpensesReconciliation(ctx, args.orgId, args.toDate);
+  },
+});
+
+export type PrepaidRecognitionShortfallResult = {
+  hasShortfall: boolean;
+  scheduleCount: number; // schedules that are behind as of the date
+  byCurrency: Record<string, number>; // unrecognized-but-due minor units, per currency
+};
+
+/**
+ * How much prepaid recognition is DUE through `asOfDate` but has not yet been
+ * recognized on the subledger. Unlike prepaidExpensesReconciliation (a
+ * remaining-vs-GL current-state check that a stalled schedule still passes
+ * because the GL and subledger fall behind together), this compares each
+ * schedule's authoritative "should have recognized by now" figure against what
+ * it actually has — so it catches a schedule the monthly cron never advanced
+ * (e.g. an expense paid mid-period, with the period closed before the next
+ * cron run). A positive shortfall means the period's P&L is missing expense
+ * that belongs in it, which is a genuine books error, not a timing artifact —
+ * hence a close BLOCKER rather than a warning.
+ */
+export async function computePrepaidRecognitionShortfall(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  asOfDate: number
+): Promise<PrepaidRecognitionShortfallResult> {
+  const schedules = await ctx.db
+    .query("prepaidExpenseSchedules")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+
+  const byCurrency: Record<string, number> = {};
+  let scheduleCount = 0;
+  for (const s of schedules) {
+    if (s.status === "CANCELLED") continue;
+    const dueMinor = recognizedDueThroughDateMinor(
+      { totalMinor: s.totalMinor, termMonths: s.termMonths, startYearMonth: s.startYearMonth, currency: s.currency },
+      asOfDate
+    );
+    const shortfall = dueMinor - s.recognizedMinor;
+    if (shortfall > 0) {
+      byCurrency[s.currency] = (byCurrency[s.currency] ?? 0) + shortfall;
+      scheduleCount++;
+    }
+  }
+
+  return { hasShortfall: scheduleCount > 0, scheduleCount, byCurrency };
+}
 
 export async function computeSupplierPayablesReconciliation(
   ctx: QueryCtx,

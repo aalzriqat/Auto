@@ -14,6 +14,7 @@ import {
   computeSupplierPayablesReconciliation,
   computeCustomerDepositsReconciliation,
   computeCommissionPayableReconciliation,
+  computePrepaidRecognitionShortfall,
   GlVsSubledgerResult,
 } from "./accountingReports";
 
@@ -257,10 +258,14 @@ export const open = mutation({
 export type CloseChecklistResult = {
   canClose: boolean;
   blockers: string[];
+  // Non-blocking advisories the accountant should review but which must NOT
+  // prevent a close (see the four current-state reconciliations below).
+  warnings: string[];
   pendingOutboxEventCount: number;
   failedOutboxEventCount: number;
   pendingManualJournalCount: number;
   unmatchedBankLineCount: number;
+  prepaidRecognitionShortfallScheduleCount: number;
   arReconciliation: SubledgerReconciliationResult;
   vehicleInventoryReconciliation: GlVsSubledgerResult;
   supplierPayablesReconciliation: GlVsSubledgerResult;
@@ -314,22 +319,29 @@ async function computeCloseChecklist(
       .collect()
   ).filter((l) => l.statementDate <= period.endDate);
 
-  // These four used to be informational-only reports, never checked at close
-  // — an org could close a period with Vehicle Inventory, AP-Suppliers,
-  // Customer Deposits, or Commission Payable silently out of sync with the
-  // GL. They already exist and are cheap to compute, so there's no reason
-  // not to gate on them the same way AR already is. Independent read-only
-  // computations, so run them concurrently rather than five sequential round-trips.
-  const [arReconciliation, vehicleInventoryRecon, supplierPayablesRecon, customerDepositsRecon, commissionPayableRecon] =
+  // AR is the only one of these five that is a genuine point-in-time
+  // reconstruction as of period.endDate on BOTH sides — so it's the only one
+  // safe to hard-block on. The other four (Vehicle Inventory, AP-Suppliers,
+  // Customer Deposits, Commission Payable) reconcile a period-end GL balance
+  // against a CURRENT-state subledger (none of them records historical state
+  // changes — see the docstring on computeVehicleInventoryReconciliation), so
+  // a perfectly legitimate June close can look "unreconciled" purely because a
+  // vehicle was sold, a deposit applied, or a payable settled in July. Blocking
+  // on them produced false close-blockers, so they are surfaced as warnings the
+  // accountant reviews, not blockers. Independent read-only computations, so
+  // run them concurrently rather than five sequential round-trips.
+  const [arReconciliation, vehicleInventoryRecon, supplierPayablesRecon, customerDepositsRecon, commissionPayableRecon, prepaidRecognitionShortfall] =
     await Promise.all([
       computeSubledgerReconciliation(ctx, orgId, period.endDate),
       computeVehicleInventoryReconciliation(ctx, orgId, period.endDate),
       computeSupplierPayablesReconciliation(ctx, orgId, period.endDate),
       computeCustomerDepositsReconciliation(ctx, orgId, period.endDate),
       computeCommissionPayableReconciliation(ctx, orgId, period.endDate),
+      computePrepaidRecognitionShortfall(ctx, orgId, period.endDate),
     ]);
 
   const blockers: string[] = [];
+  const warnings: string[] = [];
   if (pendingOutboxEvents.length > 0) {
     blockers.push(`${pendingOutboxEvents.length} accounting event(s) from this period have not posted yet.`);
   }
@@ -345,33 +357,51 @@ async function computeCloseChecklist(
     const badCurrencies = arReconciliation.currencies.filter((c) => !arReconciliation.byCurrency[c].isReconciled);
     blockers.push(`AR subledger does not reconcile to the GL for: ${badCurrencies.join(", ")}.`);
   }
+  if (unmatchedBankLines.length > 0) {
+    blockers.push(`${unmatchedBankLines.length} bank statement line(s) from this period are still unmatched.`);
+  }
+  // Point-in-time (as of period.endDate), computed from the authoritative
+  // prepaid schedule — so, unlike the current-state warnings below, a shortfall
+  // is a real "expense that belongs in this period hasn't been recognized"
+  // error and blocks the close. Resolved by running the amortization cron /
+  // recognizing the due months before closing.
+  if (prepaidRecognitionShortfall.hasShortfall) {
+    const currencies = Object.keys(prepaidRecognitionShortfall.byCurrency).join(", ");
+    blockers.push(
+      `${prepaidRecognitionShortfall.scheduleCount} prepaid expense schedule(s) have amortization due through this period that has not been recognized yet (${currencies}) — run prepaid amortization for the period before closing.`
+    );
+  }
+
+  // Current-state reconciliations — advisory only (see the note above). A
+  // discrepancy here is worth the accountant's attention but is frequently a
+  // legitimate cross-period timing artifact rather than a real books error, so
+  // it never blocks the close.
   if (!vehicleInventoryRecon.isReconciled) {
     const badCurrencies = vehicleInventoryRecon.currencies.filter((c) => !vehicleInventoryRecon.byCurrency[c].isReconciled);
-    blockers.push(`Vehicle Inventory subledger does not reconcile to the GL for: ${badCurrencies.join(", ")}.`);
+    warnings.push(`Vehicle Inventory subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);
   }
   if (!supplierPayablesRecon.isReconciled) {
     const badCurrencies = supplierPayablesRecon.currencies.filter((c) => !supplierPayablesRecon.byCurrency[c].isReconciled);
-    blockers.push(`Supplier payables subledger does not reconcile to the GL for: ${badCurrencies.join(", ")}.`);
+    warnings.push(`Supplier payables subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);
   }
   if (!customerDepositsRecon.isReconciled) {
     const badCurrencies = customerDepositsRecon.currencies.filter((c) => !customerDepositsRecon.byCurrency[c].isReconciled);
-    blockers.push(`Customer deposits subledger does not reconcile to the GL for: ${badCurrencies.join(", ")}.`);
+    warnings.push(`Customer deposits subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);
   }
   if (!commissionPayableRecon.isReconciled) {
     const badCurrencies = commissionPayableRecon.currencies.filter((c) => !commissionPayableRecon.byCurrency[c].isReconciled);
-    blockers.push(`Commission payable subledger does not reconcile to the GL for: ${badCurrencies.join(", ")}.`);
-  }
-  if (unmatchedBankLines.length > 0) {
-    blockers.push(`${unmatchedBankLines.length} bank statement line(s) from this period are still unmatched.`);
+    warnings.push(`Commission payable subledger does not reconcile to the GL for: ${badCurrencies.join(", ")} (current-state check — review for timing differences).`);
   }
 
   return {
     canClose: blockers.length === 0,
     blockers,
+    warnings,
     pendingOutboxEventCount: pendingOutboxEvents.length,
     failedOutboxEventCount: failedOutboxEvents.length,
     pendingManualJournalCount: pendingManualJournals.length,
     unmatchedBankLineCount: unmatchedBankLines.length,
+    prepaidRecognitionShortfallScheduleCount: prepaidRecognitionShortfall.scheduleCount,
     arReconciliation,
     vehicleInventoryReconciliation: vehicleInventoryRecon,
     supplierPayablesReconciliation: supplierPayablesRecon,

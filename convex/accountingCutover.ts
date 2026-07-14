@@ -121,11 +121,17 @@ export const draftOpeningBalance = mutation({
     // Deliberately not checking allowManualPosting here (unlike manual
     // journals): the whole point of an opening balance is to seed starting
     // values for system-controlled accounts (Cash, Fixed Assets, etc.) that
-    // normally block manual posting.
+    // normally block manual posting. A deactivated account is still rejected,
+    // though — seeding a starting balance into an account the org has retired
+    // is always a mistake, and (unlike system accounts) a custom account can be
+    // deactivated while still technically allowing manual posting.
     for (const line of args.lines) {
       const account = await ctx.db.get(line.accountId);
       if (!account || account.orgId !== args.orgId) {
         throw new ConvexError(`Account ${line.accountId} not found in this organization.`);
+      }
+      if (!account.active) {
+        throw new ConvexError(`Account "${account.name}" is inactive and cannot carry an opening balance. Reactivate it first or use a different account.`);
       }
     }
 
@@ -182,10 +188,15 @@ export const approveOpeningBalance = mutation({
 
     const totalDebits = validateManualJournalLines(draft.lines as ManualJournalLine[]);
 
+    // Re-validate at approval time — an account may have been deactivated
+    // between draft and approval (mirrors resolveManualJournalCurrency).
     for (const line of draft.lines) {
       const account = await ctx.db.get(line.accountId);
       if (!account || account.orgId !== args.orgId) {
         throw new ConvexError(`Account ${line.accountId} not found in this organization.`);
+      }
+      if (!account.active) {
+        throw new ConvexError(`Account "${account.name}" is inactive and cannot carry an opening balance. Reactivate it first or use a different account.`);
       }
     }
 

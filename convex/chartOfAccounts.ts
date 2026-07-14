@@ -189,6 +189,57 @@ async function ensureSystemAccount(
 
   const now = Date.now();
   const def = DEFAULT_CHART.find((d) => d.code === code)!;
+
+  // Codes are unique within an org (see the `create` mutation). This self-heal
+  // used to insert `code` blindly, which — if an org had already created a
+  // custom account on one of these reserved codes (e.g. a hand-made 6800) —
+  // produced a duplicate code the normal create path would have rejected.
+  // `collect()` (not `unique()`) because a chart the old blind-insert already
+  // corrupted may hold more than one row on this code; unique() would throw
+  // before we could diagnose it.
+  const byCode = await ctx.db
+    .query("chartOfAccounts")
+    .withIndex("by_org_code", (q) => q.eq("orgId", orgId).eq("code", code))
+    .collect();
+
+  if (byCode.length > 0) {
+    // Already the right system account under a slightly different lookup? done.
+    if (byCode.some((a) => a.systemKey === systemKey)) return;
+    // Occupied by a *different* system account — cannot silently steal its code.
+    const conflictingSystem = byCode.find((a) => a.systemKey && a.systemKey !== systemKey);
+    if (conflictingSystem) {
+      throw new ConvexError(
+        `Chart of accounts conflict: code ${code} is already the "${conflictingSystem.systemKey}" system account, but "${systemKey}" also needs it. Resolve the conflicting code before this posting can proceed.`
+      );
+    }
+    // Only plain custom accounts remain. Adopt a shape-compatible one as the
+    // system account; re-tagging one whose type/normalBalance differs would
+    // corrupt whatever the org is using it for.
+    const compatible = byCode.find((a) => a.type === def.type && a.normalBalance === def.normalBalance);
+    if (!compatible) {
+      const shapes = byCode.map((a) => `${a.type}/${a.normalBalance}`).join(", ");
+      throw new ConvexError(
+        `Chart of accounts conflict: code ${code} exists as ${shapes}, but system account "${systemKey}" requires ${def.type}/${def.normalBalance}. Move the custom account to a different code.`
+      );
+    }
+    // Normalize the posting-safety flags and subtype to the DEFAULT_CHART shape.
+    // The org's hand-made account may allow manual posting or not be flagged a
+    // control account; adopting it as, say, PREPAID_EXPENSES (a control account
+    // that must block manual posting) while keeping allowManualPosting: true
+    // would leave a system account manually-postable — a books-integrity hole.
+    // Its user-chosen name/nameAr are left intact.
+    await ctx.db.patch(compatible._id, {
+      systemKey,
+      active: true,
+      isControlAccount: def.isControlAccount,
+      allowManualPosting: def.allowManualPosting,
+      subtype: def.subtype,
+      updatedAt: now,
+      updatedBy: actorId,
+    });
+    return;
+  }
+
   await ctx.db.insert("chartOfAccounts", {
     orgId,
     code: def.code,
@@ -262,6 +313,20 @@ export async function ensureExpenseCategoryAccounts(
   await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.MARKETING_EXPENSE, "6830");
   await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.OFFICE_EXPENSE, "6840");
   await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.PROFESSIONAL_FEES_EXPENSE, "6850");
+}
+
+/**
+ * Self-heal for the Prepaid Expenses asset account: a prepaid expense debits
+ * this at payment and releases it to an operating-expense account monthly.
+ * Scoped to the prepaid posting + amortization hooks only — nothing else
+ * resolves this key.
+ */
+export async function ensurePrepaidExpensesAccount(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.PREPAID_EXPENSES, "1450");
 }
 
 /** GL Phase 13 self-heal: finance-company AR (very old charts may predate it) plus the claim write-off expense account. */
