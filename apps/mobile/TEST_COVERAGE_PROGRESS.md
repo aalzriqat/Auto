@@ -1,6 +1,6 @@
 # Mobile Test Coverage Progress
 
-Last updated: 2026-07-14 12:24:54 +03:00
+Last updated: 2026-07-14 12:26:36 +03:00
 
 ## Context
 
@@ -59,8 +59,18 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
 - 2026-07-14 12:24 +03: commit and push
   - Result: pushed to PR branch `agent/mobile-ui-port`.
   - Commit: `80ba7549 Add mobile coverage gate`.
+- 2026-07-14 12:26 +03: `pnpm mobile:test`
+  - Result: passed.
+  - Coverage: 100% statements, 100% branches, 100% functions, 100% lines for the configured mobile logic coverage gate.
+  - Tests: 4 suites passed, 44 tests passed.
+- 2026-07-14 12:26 +03: PR check review
+  - Result: GitHub PR checks are still running.
+  - Coverage-related local gate is green.
+  - SonarCloud Quality Gate is failing for duplication/security rating, not for the mobile Jest coverage gate.
+  - SonarCloud reported 6.7% duplication on new code, required <= 3%, plus C security rating, required >= A.
 
 ## Next Steps
 
-1. Watch PR checks for the pushed branch.
-2. Expand coverage later with targeted component or device/E2E tests for UI screens, rather than forcing brittle line coverage over framework-heavy views.
+1. Watch remaining PR checks for the pushed branch.
+2. Separately address SonarCloud duplication/security findings if we want the whole PR green.
+3. Expand UI assurance with targeted component or device/E2E tests for screens, rather than forcing brittle line coverage over framework-heavy views.
