@@ -288,6 +288,43 @@ describe("prepaid expense — operational report matches the GL", () => {
     expect(report.totalExpenses).toBeCloseTo(100, 6);
     expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(100_000);
   });
+
+  test("Fix B1 — with VAT, the report recognizes the NET monthly share (from the schedule), not gross", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("vatreport");
+    // Gross 1200 incl. 200 VAT → net 1000 capitalized, amortized over 10 months.
+    await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Prepaid rent w/ VAT", amount: 1200, taxAmount: 200, date: Date.UTC(2026, 0, 1),
+      category: "RENT", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 10,
+    });
+    const schedule = await t.run((ctx) => ctx.db.query("prepaidExpenseSchedules").first());
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    const report = await asOwner.query(api.reports.getExpensesReport, {
+      orgId, startDate: Date.UTC(2026, 0, 1), endDate: Date.UTC(2026, 0, 31, 23, 59, 59, 999),
+    });
+    // Net 1000 / 10 = 100 per month — NOT gross 1200 / 10 = 120. The report and
+    // the GL agree exactly because both read the net schedule row.
+    expect(report.totalExpenses).toBeCloseTo(100, 6);
+    expect(await accountNetMinor(t, orgId, "RENT_EXPENSE")).toBe(100_000);
+  });
+
+  test("a prepaid schedule that started before the reporting window still amortizes into it (schedule-driven, no lookback cap)", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("prior");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    for (const m of ["2026-01", "2026-02", "2026-03"]) await amortize(t, orgId, schedule!._id, userId, m);
+
+    // Report for MARCH only — the expense's date (Jan 1) is before the window,
+    // so it's found via its schedule, not a dated expense scan.
+    const report = await asOwner.query(api.reports.getExpensesReport, {
+      orgId, startDate: Date.UTC(2026, 2, 1), endDate: Date.UTC(2026, 2, 31, 23, 59, 59, 999),
+    });
+    expect(report.totalExpenses).toBeCloseTo(100, 6); // March's 1/12
+    expect(report.expenses.some((e: { _id: Id<"expenses"> }) => e._id === expenseId)).toBe(true);
+  });
 });
 
 // ─── Reconciliation ───────────────────────────────────────────────────────────
@@ -306,6 +343,72 @@ describe("prepaid expenses reconciliation", () => {
     expect(recon.isReconciled).toBe(true);
     expect(recon.byCurrency["JOD"].glBalanceMinor).toBe(1_100_000);
     expect(recon.byCurrency["JOD"].subledgerBalanceMinor).toBe(1_100_000);
+  });
+});
+
+// ─── Fix B2/B9: unrecognized prepaid amortization blocks the period close ──────
+
+describe("Fix B2/B9 — a period with prepaid amortization due but unrecognized cannot close", () => {
+  test("a schedule the cron never advanced blocks the close, and recognizing it unblocks", async () => {
+    const { t, orgId, userId, asOwner, period } = await seedDealer("shortfall");
+    // Prepaid paid Jan 1, 12-month term — but the monthly cron has NOT run, so
+    // nothing has been recognized. The period runs Jan–Dec, so by period end a
+    // full year of amortization is DUE but zero is recognized.
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+
+    const before = await asOwner.query(api.accountingPeriods.closeChecklist, { orgId, periodId: period._id });
+    expect(before.canClose).toBe(false);
+    expect(before.prepaidRecognitionShortfallScheduleCount).toBe(1);
+    expect(before.blockers.some((b: string) => /prepaid/i.test(b))).toBe(true);
+
+    // Recognize all 12 months, then the shortfall clears and the period closes.
+    const schedule = await scheduleForExpense(t, expenseId);
+    for (let m = 1; m <= 12; m++) {
+      await amortize(t, orgId, schedule!._id, userId, `2026-${String(m).padStart(2, "0")}`);
+    }
+    const after = await asOwner.query(api.accountingPeriods.closeChecklist, { orgId, periodId: period._id });
+    expect(after.prepaidRecognitionShortfallScheduleCount).toBe(0);
+    expect(after.blockers.some((b: string) => /prepaid/i.test(b))).toBe(false);
+  });
+});
+
+// ─── Fix B3: the monthly cron dates each missed month to its own month ────────
+
+describe("Fix B3 — catch-up recognizes each missed month in its own month, never lumped into the present", () => {
+  test("a schedule behind by several months posts one dated event per month", async () => {
+    const { t, orgId, asOwner } = await seedDealer("catchup");
+    const now = new Date();
+    // Paid in January of the current fiscal year (the seeded open period); the
+    // cron has never run, so it must catch up Jan..currentMonth.
+    await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(now.getUTCFullYear(), 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+
+    // Run the real cross-org monthly cron action (uses the current wall-clock month).
+    await t.action(internal.crons.triggerPrepaidExpenseAmortization, {});
+
+    const events = await t.run((ctx) =>
+      ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org", (q) => q.eq("orgId", orgId))
+        .filter((q) => q.eq(q.field("eventType"), "PREPAID_EXPENSE_AMORTIZED"))
+        .collect()
+    );
+
+    const elapsedMonths = Math.min(now.getUTCMonth() + 1, 12); // Jan..currentMonth inclusive
+    expect(events.length).toBe(elapsedMonths);
+    // Each recognition is dated to a DISTINCT calendar month (not all lumped
+    // into "now"), and none is dated in the future.
+    const monthKeys = events.map((e) => {
+      const d = new Date(e.occurredAt);
+      return d.getUTCFullYear() * 12 + d.getUTCMonth();
+    });
+    expect(new Set(monthKeys).size).toBe(events.length);
+    expect(Math.max(...events.map((e) => e.occurredAt))).toBeLessThanOrEqual(Date.now());
   });
 });
 
@@ -335,15 +438,17 @@ describe("Fix #4 — chart self-heal never duplicates or hijacks a code", () => 
     ).rejects.toThrow(/conflict/i);
   });
 
-  test("a compatible unmapped account on the reserved code is adopted, not duplicated", async () => {
+  test("a compatible unmapped account on the reserved code is adopted, not duplicated, and its posting-safety flags are normalized (Fix #10)", async () => {
     const { t, orgId, asOwner } = await seedDealer("adopt");
     await t.run(async (ctx) => {
       const mapped = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", "PREPAID_EXPENSES")).unique();
       if (mapped) await ctx.db.delete(mapped._id);
       const owner = (await ctx.db.query("users").first())!;
+      // Hand-made account that is manually-postable and NOT flagged a control
+      // account — the opposite of the DEFAULT_CHART PREPAID_EXPENSES shape.
       await ctx.db.insert("chartOfAccounts", {
         orgId, code: "1450", name: "Prepaids (hand-made)", type: "ASSET", normalBalance: "DEBIT",
-        isControlAccount: false, allowManualPosting: false, active: true,
+        isControlAccount: false, allowManualPosting: true, active: true,
         createdAt: Date.now(), createdBy: owner._id, updatedAt: Date.now(), updatedBy: owner._id,
       });
     });
@@ -358,6 +463,12 @@ describe("Fix #4 — chart self-heal never duplicates or hijacks a code", () => 
     );
     expect(on1450).toHaveLength(1); // adopted, not duplicated
     expect(on1450[0].systemKey).toBe("PREPAID_EXPENSES");
+    // Adopting the account normalizes it to the DEFAULT_CHART posting-safety
+    // shape: a control account that blocks manual posting — otherwise the system
+    // Prepaid Expenses account would remain manually-postable.
+    expect(on1450[0].isControlAccount).toBe(true);
+    expect(on1450[0].allowManualPosting).toBe(false);
+    expect(on1450[0].name).toBe("Prepaids (hand-made)"); // user-chosen name kept
     expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(1_200_000);
   });
 });

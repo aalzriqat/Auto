@@ -222,9 +222,18 @@ async function ensureSystemAccount(
         `Chart of accounts conflict: code ${code} exists as ${shapes}, but system account "${systemKey}" requires ${def.type}/${def.normalBalance}. Move the custom account to a different code.`
       );
     }
+    // Normalize the posting-safety flags and subtype to the DEFAULT_CHART shape.
+    // The org's hand-made account may allow manual posting or not be flagged a
+    // control account; adopting it as, say, PREPAID_EXPENSES (a control account
+    // that must block manual posting) while keeping allowManualPosting: true
+    // would leave a system account manually-postable — a books-integrity hole.
+    // Its user-chosen name/nameAr are left intact.
     await ctx.db.patch(compatible._id, {
       systemKey,
       active: true,
+      isControlAccount: def.isControlAccount,
+      allowManualPosting: def.allowManualPosting,
+      subtype: def.subtype,
       updatedAt: now,
       updatedBy: actorId,
     });

@@ -15,6 +15,7 @@ import { SYSTEM_KEYS, SystemKey } from "./utils/defaultChart";
 import { requireFeature } from "./subscriptions";
 import { getCumulativeBalancesAsOf } from "./accounting/accountSnapshots";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
+import { recognizedDueThroughDateMinor } from "./utils/expenseAmortization";
 
 /**
  * GL Phase 14 note on aggregation: every aggregate below keys on
@@ -802,6 +803,52 @@ export const prepaidExpensesReconciliation = query({
     return computePrepaidExpensesReconciliation(ctx, args.orgId, args.toDate);
   },
 });
+
+export type PrepaidRecognitionShortfallResult = {
+  hasShortfall: boolean;
+  scheduleCount: number; // schedules that are behind as of the date
+  byCurrency: Record<string, number>; // unrecognized-but-due minor units, per currency
+};
+
+/**
+ * How much prepaid recognition is DUE through `asOfDate` but has not yet been
+ * recognized on the subledger. Unlike prepaidExpensesReconciliation (a
+ * remaining-vs-GL current-state check that a stalled schedule still passes
+ * because the GL and subledger fall behind together), this compares each
+ * schedule's authoritative "should have recognized by now" figure against what
+ * it actually has — so it catches a schedule the monthly cron never advanced
+ * (e.g. an expense paid mid-period, with the period closed before the next
+ * cron run). A positive shortfall means the period's P&L is missing expense
+ * that belongs in it, which is a genuine books error, not a timing artifact —
+ * hence a close BLOCKER rather than a warning.
+ */
+export async function computePrepaidRecognitionShortfall(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  asOfDate: number
+): Promise<PrepaidRecognitionShortfallResult> {
+  const schedules = await ctx.db
+    .query("prepaidExpenseSchedules")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+
+  const byCurrency: Record<string, number> = {};
+  let scheduleCount = 0;
+  for (const s of schedules) {
+    if (s.status === "CANCELLED") continue;
+    const dueMinor = recognizedDueThroughDateMinor(
+      { totalMinor: s.totalMinor, termMonths: s.termMonths, startYearMonth: s.startYearMonth, currency: s.currency },
+      asOfDate
+    );
+    const shortfall = dueMinor - s.recognizedMinor;
+    if (shortfall > 0) {
+      byCurrency[s.currency] = (byCurrency[s.currency] ?? 0) + shortfall;
+      scheduleCount++;
+    }
+  }
+
+  return { hasShortfall: scheduleCount > 0, scheduleCount, byCurrency };
+}
 
 export async function computeSupplierPayablesReconciliation(
   ctx: QueryCtx,

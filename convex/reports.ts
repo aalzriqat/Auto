@@ -6,7 +6,9 @@ import { PERMISSIONS } from "./utils/permissions";
 import { rateLimiter } from "./rateLimit";
 import {
   computeAmortizationInfo,
+  computeAmortizationInfoFromSchedule,
   recognizedAmountInRange,
+  recognizedAmountInRangeFromSchedule,
   PREPAID_LOOKBACK_MS,
 } from "./utils/expenseAmortization";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
@@ -201,26 +203,66 @@ export const getExpensesReport = query({
       throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
     }
 
-    // Prepaid amortization is computed on the exact same integer minor-unit
-    // basis as the GL (see expenseAmortization.ts), so the org currency is
-    // required to convert each expense's amount to minor units identically.
+    // The net-of-VAT fallback (a prepaid expense with no schedule row yet) is
+    // computed on the same integer minor-unit basis as the GL (see
+    // expenseAmortization.ts), so the org currency is required to convert each
+    // expense's amount to minor units identically.
     const currency = await getOrgCurrency(ctx, args.orgId);
 
-    // Use index range — avoids collecting ALL org expenses
+    // Use index range — avoids collecting ALL org expenses. Only PAID expenses
+    // count: a PENDING expense has no GL impact yet, so including it would make
+    // this operational P&L disagree with the ledger.
     const expensesInDateRange = await ctx.db
       .query("expenses")
       .withIndex("by_org_date", (q) =>
         q.eq("orgId", args.orgId).gte("date", args.startDate)
       )
-      .filter((q) => q.and(q.lte(q.field("date"), args.endDate), q.neq(q.field("isDeleted"), true)))
+      .filter((q) =>
+        q.and(
+          q.lte(q.field("date"), args.endDate),
+          q.neq(q.field("isDeleted"), true),
+          q.neq(q.field("status"), "PENDING")
+        )
+      )
       .collect();
+
+    // Authoritative prepaid schedules for this org — one row per prepaid
+    // expense (low-volume: rent/insurance/licences, not per-transaction). The
+    // report reads recognition straight from these rows, so it can never
+    // diverge from the GL (which amortizes the same rows), and a long-term
+    // prepaid dated well before the window is still found without an arbitrary
+    // date-lookback cap.
+    const schedules = await ctx.db
+      .query("prepaidExpenseSchedules")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    const scheduleByExpenseId = new Map(schedules.map((s) => [s.expenseId, s]));
+
+    const scheduledRecognitionFor = (exp: Doc<"expenses">) => {
+      const schedule = scheduleByExpenseId.get(exp._id);
+      return exp.isPrepaid && schedule && schedule.status !== "CANCELLED" ? schedule : null;
+    };
 
     // A PREPAID expense (e.g. 6 months of rent paid up front) recognizes only
     // 1/6th per month, so its `date` — the day it was paid — can fall well
     // before this report's startDate while it's still amortizing into this
-    // window. Pull those separately (bounded lookback, not a full table scan)
-    // since the range query above only sees expenses dated inside the window.
-    const priorPrepaidExpenses = await ctx.db
+    // window. The range query above only sees expenses dated inside the window,
+    // so pull each still-amortizing prior expense two ways, deduped by id:
+    //   (1) every non-cancelled schedule (authoritative, uncapped), and
+    //   (2) a bounded lookback for prepaid expenses that have NO schedule row
+    //       (legacy / not-yet-backfilled) — the net-of-VAT fallback.
+    const inRangeIds = new Set(expensesInDateRange.map((e) => e._id));
+    const priorById = new Map<Id<"expenses">, Doc<"expenses">>();
+
+    for (const schedule of schedules) {
+      if (schedule.status === "CANCELLED") continue;
+      if (inRangeIds.has(schedule.expenseId)) continue;
+      if (recognizedAmountInRangeFromSchedule(schedule, args.startDate, args.endDate) <= 0) continue;
+      const exp = await ctx.db.get(schedule.expenseId);
+      if (exp && exp.isDeleted !== true) priorById.set(exp._id, exp);
+    }
+
+    const priorUnscheduledPrepaid = await ctx.db
       .query("expenses")
       .withIndex("by_org_date", (q) =>
         q.eq("orgId", args.orgId).gte("date", args.startDate - PREPAID_LOOKBACK_MS)
@@ -229,16 +271,20 @@ export const getExpensesReport = query({
         q.and(
           q.lt(q.field("date"), args.startDate),
           q.eq(q.field("isPrepaid"), true),
-          q.neq(q.field("isDeleted"), true)
+          q.neq(q.field("isDeleted"), true),
+          q.neq(q.field("status"), "PENDING")
         )
       )
       .collect();
+    for (const exp of priorUnscheduledPrepaid) {
+      // A scheduled prepaid is handled above; skip anything with a schedule row
+      // (a CANCELLED schedule means it was reversed — no recognition either way).
+      if (scheduleByExpenseId.has(exp._id) || inRangeIds.has(exp._id) || priorById.has(exp._id)) continue;
+      if (recognizedAmountInRange(exp, args.startDate, args.endDate, currency) <= 0) continue;
+      priorById.set(exp._id, exp);
+    }
 
-    const stillAmortizing = priorPrepaidExpenses.filter(
-      (exp) => recognizedAmountInRange(exp, args.startDate, args.endDate, currency) > 0
-    );
-
-    const allExpenses: Doc<"expenses">[] = [...expensesInDateRange, ...stillAmortizing];
+    const allExpenses: Doc<"expenses">[] = [...expensesInDateRange, ...priorById.values()];
 
     let totalExpenses = 0;
 
@@ -251,7 +297,12 @@ export const getExpensesReport = query({
     );
 
     const enrichedExpenses = allExpenses.map((exp) => {
-      const recognizedAmount = recognizedAmountInRange(exp, args.startDate, args.endDate, currency);
+      // Prefer the authoritative schedule row; fall back to the net-of-VAT
+      // expense doc only for a prepaid expense that has no schedule row yet.
+      const schedule = scheduledRecognitionFor(exp);
+      const recognizedAmount = schedule
+        ? recognizedAmountInRangeFromSchedule(schedule, args.startDate, args.endDate)
+        : recognizedAmountInRange(exp, args.startDate, args.endDate, currency);
       totalExpenses += recognizedAmount;
       let vehicleDesc = "General";
 
@@ -266,7 +317,9 @@ export const getExpensesReport = query({
         ...exp,
         vehicleDesc,
         recognizedAmount,
-        amortization: computeAmortizationInfo(exp, args.endDate, currency),
+        amortization: schedule
+          ? computeAmortizationInfoFromSchedule(schedule, args.endDate)
+          : computeAmortizationInfo(exp, args.endDate, currency),
       };
     });
 

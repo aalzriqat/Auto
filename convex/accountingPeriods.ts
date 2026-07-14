@@ -14,6 +14,7 @@ import {
   computeSupplierPayablesReconciliation,
   computeCustomerDepositsReconciliation,
   computeCommissionPayableReconciliation,
+  computePrepaidRecognitionShortfall,
   GlVsSubledgerResult,
 } from "./accountingReports";
 
@@ -264,6 +265,7 @@ export type CloseChecklistResult = {
   failedOutboxEventCount: number;
   pendingManualJournalCount: number;
   unmatchedBankLineCount: number;
+  prepaidRecognitionShortfallScheduleCount: number;
   arReconciliation: SubledgerReconciliationResult;
   vehicleInventoryReconciliation: GlVsSubledgerResult;
   supplierPayablesReconciliation: GlVsSubledgerResult;
@@ -328,13 +330,14 @@ async function computeCloseChecklist(
   // on them produced false close-blockers, so they are surfaced as warnings the
   // accountant reviews, not blockers. Independent read-only computations, so
   // run them concurrently rather than five sequential round-trips.
-  const [arReconciliation, vehicleInventoryRecon, supplierPayablesRecon, customerDepositsRecon, commissionPayableRecon] =
+  const [arReconciliation, vehicleInventoryRecon, supplierPayablesRecon, customerDepositsRecon, commissionPayableRecon, prepaidRecognitionShortfall] =
     await Promise.all([
       computeSubledgerReconciliation(ctx, orgId, period.endDate),
       computeVehicleInventoryReconciliation(ctx, orgId, period.endDate),
       computeSupplierPayablesReconciliation(ctx, orgId, period.endDate),
       computeCustomerDepositsReconciliation(ctx, orgId, period.endDate),
       computeCommissionPayableReconciliation(ctx, orgId, period.endDate),
+      computePrepaidRecognitionShortfall(ctx, orgId, period.endDate),
     ]);
 
   const blockers: string[] = [];
@@ -356,6 +359,17 @@ async function computeCloseChecklist(
   }
   if (unmatchedBankLines.length > 0) {
     blockers.push(`${unmatchedBankLines.length} bank statement line(s) from this period are still unmatched.`);
+  }
+  // Point-in-time (as of period.endDate), computed from the authoritative
+  // prepaid schedule — so, unlike the current-state warnings below, a shortfall
+  // is a real "expense that belongs in this period hasn't been recognized"
+  // error and blocks the close. Resolved by running the amortization cron /
+  // recognizing the due months before closing.
+  if (prepaidRecognitionShortfall.hasShortfall) {
+    const currencies = Object.keys(prepaidRecognitionShortfall.byCurrency).join(", ");
+    blockers.push(
+      `${prepaidRecognitionShortfall.scheduleCount} prepaid expense schedule(s) have amortization due through this period that has not been recognized yet (${currencies}) — run prepaid amortization for the period before closing.`
+    );
   }
 
   // Current-state reconciliations — advisory only (see the note above). A
@@ -387,6 +401,7 @@ async function computeCloseChecklist(
     failedOutboxEventCount: failedOutboxEvents.length,
     pendingManualJournalCount: pendingManualJournals.length,
     unmatchedBankLineCount: unmatchedBankLines.length,
+    prepaidRecognitionShortfallScheduleCount: prepaidRecognitionShortfall.scheduleCount,
     arReconciliation,
     vehicleInventoryReconciliation: vehicleInventoryRecon,
     supplierPayablesReconciliation: supplierPayablesRecon,
