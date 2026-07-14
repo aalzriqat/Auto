@@ -16,7 +16,7 @@ export default function NotFoundRoute() {
         <Text style={styles.title}>{t("notFoundTitle")}</Text>
         <Text style={styles.body}>{t("notFoundBody")}</Text>
         <Pressable
-          style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]}
+          style={({ pressed }) => [styles.button, getNotFoundButtonPressedStyle(pressed)]}
           onPress={() => router.replace(nativeRoutes.home)}
         >
           <Text style={styles.buttonText}>{t("home")}</Text>
@@ -24,6 +24,10 @@ export default function NotFoundRoute() {
       </View>
     </Screen>
   );
+}
+
+export function getNotFoundButtonPressedStyle(pressed: boolean) {
+  return pressed ? styles.buttonPressed : null;
 }
 
 const styles = StyleSheet.create({

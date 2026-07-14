@@ -26,12 +26,16 @@ export function RouteErrorState({ message, onRetry }: RouteErrorStateProps) {
       <Text style={styles.title}>AutoFlow</Text>
       <Text style={styles.error}>{message || "An unexpected error occurred."}</Text>
       {onRetry ? (
-        <Pressable style={({ pressed }) => [styles.button, pressed && styles.buttonPressed]} onPress={onRetry}>
+        <Pressable style={({ pressed }) => [styles.button, getRouteButtonPressedStyle(pressed)]} onPress={onRetry}>
           <Text style={styles.buttonText}>Retry</Text>
         </Pressable>
       ) : null}
     </View>
   );
+}
+
+export function getRouteButtonPressedStyle(pressed: boolean) {
+  return pressed ? styles.buttonPressed : null;
 }
 
 const styles = StyleSheet.create({

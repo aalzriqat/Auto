@@ -46,9 +46,15 @@
   },
   "jest": {
     "collectCoverageFrom": [
+      "app/**/*.tsx",
+      "!app/**/*.test.tsx",
+      "src/components/*.tsx",
       "src/config/env.ts",
       "src/features/marketplace/marketplaceFingerprint.ts",
+      "src/features/marketplace/TurnstileVerification.tsx",
       "src/features/marketplace/marketplaceUtils.ts",
+      "src/providers/LocaleProvider.tsx",
+      "src/theme.ts",
       "src/features/workspace/nativeModules.ts"
     ],
     "coverageThreshold": {

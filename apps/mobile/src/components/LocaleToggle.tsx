@@ -11,7 +11,7 @@ export function LocaleToggle() {
     <Pressable
       accessibilityLabel={locale === "ar" ? "Switch to English" : "Switch to Arabic"}
       accessibilityRole="button"
-      style={({ pressed }) => [styles.toggle, pressed && styles.pressed]}
+      style={({ pressed }) => [styles.toggle, getLocaleTogglePressedStyle(pressed)]}
       onPress={() => {
         void setLocale(nextLocale);
       }}
@@ -19,6 +19,10 @@ export function LocaleToggle() {
       <Text style={styles.toggleText}>{nextLocale.toUpperCase()}</Text>
     </Pressable>
   );
+}
+
+export function getLocaleTogglePressedStyle(pressed: boolean) {
+  return pressed ? styles.pressed : null;
 }
 
 const styles = StyleSheet.create({
