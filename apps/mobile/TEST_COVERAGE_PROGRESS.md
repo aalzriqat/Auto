@@ -167,7 +167,7 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - Fresh PR checks passed for SonarCloud, Vercel, CodeQL, Checkov, GitGuardian, Semgrep, OSV, secret scan, lint, type-check, Convex backend, unit-and-integration, Cypress, Playwright, TestSprite E2E, nuclei, zap-baseline, dependency audit, and dealer-worker.
   - The previous `unit-and-integration` teardown failure did not recur; GitHub Actions passed the job in 3m16s.
   - The previous `cypress` failure is fixed; GitHub Actions passed the Cypress job in 5m32s.
-  - PR #70 remains non-draft and points at head `6579697176a1574cb2d3e5bf15e1896cf8c8d81c`.
+  - PR #70 remains non-draft and points at head `65796971`.
   - GitHub review threads and submitted reviews remain empty; no inline comments were found.
   - CodeRabbit is still the only red status. The latest CodeRabbit comment says the PR review limit is reached and the next included review is available in about 14 minutes, so the next action is to trigger `@coderabbitai review` after the wait window.
 - 2026-07-14 17:26 +03: CodeRabbit wait heartbeat
@@ -249,7 +249,7 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - Live checks for SonarCloud, Cypress, and unit-and-integration remain green.
   - Thread-aware GitHub review read remains empty: no review threads, inline comments, or submitted reviews.
 - 2026-07-14 18:03 +03: CodeRabbit processing heartbeat
-  - Raw commit status confirms a single CodeRabbit pending status on head `6579697176a1574cb2d3e5bf15e1896cf8c8d81c`, created/updated at 2026-07-14T14:35:51Z with description "Review in progress."
+  - Raw commit status confirms a single CodeRabbit pending status on head `65796971`, created/updated at 2026-07-14T14:35:51Z with description "Review in progress."
   - CodeRabbit has acknowledged both manual review commands, but has not posted a completed review, inline thread, or new actionable comment.
   - Live checks for SonarCloud, Cypress, and unit-and-integration remain green.
   - Thread-aware GitHub review read remains empty.
@@ -305,7 +305,7 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `pnpm test:coverage`: passed with 107 files passed, 1 skipped; 1179 tests passed, 22 skipped.
   - Configured coverage summary remains 100% statements, 100% branches, 100% functions, and 100% lines.
 - 2026-07-14 18:35 +03: pushed CodeRabbit-fix commit and started PR watch
-  - Committed `037306d5a877fd162e3d1d937605bd2528229b6a` with message `Fix mobile review feedback`.
+  - Committed `037306d5` with message `Fix mobile review feedback`.
   - Pushed `agent/mobile-ui-port` to PR #70; PR remains open, mergeable, and non-draft.
   - New GitHub checks started for the pushed head.
   - CodeRabbit status failed immediately with `Prepaid credits exhausted - enable usage-based reviews`; the CodeRabbit PR comment says the next review should be available after about 1 minute.
@@ -331,7 +331,7 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
 - 2026-07-14 18:40 +03: PR watch heartbeat
   - `cypress` passed on GitHub.
   - `nuclei` passed on GitHub.
-  - All non-CodeRabbit checks are now passing on head `037306d5a877fd162e3d1d937605bd2528229b6a`.
+  - All non-CodeRabbit checks are now passing on head `037306d5`.
   - CodeRabbit remains `Review in progress`, and its summary comment is in the `Currently processing new changes` state.
   - No inline review threads have appeared.
 - 2026-07-14 18:42 +03: PR watch heartbeat
@@ -357,7 +357,7 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - CodeRabbit's latest summary says: `No actionable comments were generated in the recent review.`
   - CodeRabbit's follow-up command response was updated to `Review finished`.
   - Review threads remain empty.
-  - All GitHub/Vercel/Sonar/security/test checks are passing on head `037306d5a877fd162e3d1d937605bd2528229b6a`.
+  - All GitHub/Vercel/Sonar/security/test checks are passing on head `037306d5`.
   - The attached earlier Sonar failure showed Quality Gate failures for duplication and security rating; the current PR Sonar comment now says `Quality Gate passed`, with new-code duplication reported at 0.7%.
 - 2026-07-14 19:41 +03: Android phone install started
   - Connected Android device detected: `A99JBB5826170023`.
@@ -467,9 +467,18 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - Mobile coverage remains 100% statements, 100% branches, 100% functions, and 100% lines.
   - `pnpm mobile:typecheck`: passed.
   - `git diff --check`: passed; only line-ending warnings were reported by Git.
+- 2026-07-14 20:34 +03: PR branch updated and checks running
+  - Committed `Fix mobile native bundle test placement` (`ce3f4354`) and pushed it to the existing non-draft PR #70.
+  - PR #70 is open, non-draft, and now points at head SHA `ce3f4354`.
+  - GitHub checks retriggered automatically after the push; early status is 8 passing and 16 pending, including CodeRabbit and Vercel.
+  - Thread-aware GitHub review lookup currently reports zero inline review threads.
+- 2026-07-14 20:36 +03: Semgrep progress-log false positive fixed
+  - Security/Semgrep failed on the progress markdown because a full 40-character commit SHA in an older log entry matched a Sonar token-shaped secret rule.
+  - Redacted that historical entry to the short SHA form so the progress log keeps the reference without looking like a credential.
+  - No mobile app code changed for this fix; the debug APK at `C:\h\apps\mobile\android\app\build\outputs\apk\debug\app-debug.apk` remains the current install artifact.
 
 ## Next Steps
 
-1. Commit and push the mobile native-bundle fix plus progress log to the non-draft PR.
-2. Install and launch the built APK once the Android phone is visible to `adb`.
-3. Watch PR checks and review comments after the push.
+1. Commit and push the Semgrep progress-log redaction.
+2. Continue watching PR checks and CodeRabbit for failures or new comments.
+3. Install and launch the built APK once the Android phone is visible to `adb`.
