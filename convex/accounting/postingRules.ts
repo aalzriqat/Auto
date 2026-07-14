@@ -225,14 +225,31 @@ export interface ExpensePostedPayload {
 }
 
 /**
- * Maps an operational expense category to a GL expense account system key.
- * Today every category routes to GENERAL_EXPENSE (the default chart has no
- * dedicated marketing/rent/salary accounts yet); the map exists so dedicated
- * accounts can be added later without touching the posting engine. Crucially,
+ * Maps an operational expense category to a GL expense account system key,
+ * so an accountant gets a real operating-expense breakdown instead of every
+ * category landing in one undifferentiated GENERAL_EXPENSE bucket. Crucially,
  * general expenses are NO LONGER booked to COMMISSION_EXPENSE.
+ *
+ * REPAIR/MAINTENANCE/DETAILING/TRANSPORT are deliberately excluded here: when
+ * vehicle-linked and not yet sold, those capitalize into Vehicle Inventory
+ * instead (see the capitalize branch in ruleExpensePosted below) — they only
+ * fall through to this mapper when NOT vehicle-linked (e.g. office/shop
+ * repairs), where GENERAL_EXPENSE remains the right catch-all, same as OTHER.
+ * PREPAID is also excluded: a prepaid expense is a balance-sheet asset until
+ * amortized, not an immediate expense — mapping it into an expense account
+ * here would be a new wrong-account bug, not a fix. It stays GENERAL_EXPENSE
+ * until prepaid-expense GL wiring is built as its own piece of work.
  */
-export function expenseAccountKeyForCategory(_category?: string): SystemKey {
-  return SYSTEM_KEYS.GENERAL_EXPENSE;
+export function expenseAccountKeyForCategory(category?: string): SystemKey {
+  switch (category) {
+    case "RENT": return SYSTEM_KEYS.RENT_EXPENSE;
+    case "UTILITIES": return SYSTEM_KEYS.UTILITIES_EXPENSE;
+    case "SALARIES": return SYSTEM_KEYS.SALARIES_EXPENSE;
+    case "MARKETING": return SYSTEM_KEYS.MARKETING_EXPENSE;
+    case "OFFICE": return SYSTEM_KEYS.OFFICE_EXPENSE;
+    case "FEES": return SYSTEM_KEYS.PROFESSIONAL_FEES_EXPENSE;
+    default: return SYSTEM_KEYS.GENERAL_EXPENSE;
+  }
 }
 
 export interface CommissionAccruedPayload {

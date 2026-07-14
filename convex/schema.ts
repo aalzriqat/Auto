@@ -421,6 +421,7 @@ export default defineSchema({
       v.literal("MIGRATE_TRANSACTION"),
       v.literal("ALLOCATE_PAYMENT"),
       v.literal("REVERSE_ALLOCATION"),
+      v.literal("IGNORE_BANK_STATEMENT_LINE"),
     ),
     resourceType: v.string(),
     resourceId: v.string(),
@@ -463,6 +464,35 @@ export default defineSchema({
     .index("by_org_status", ["orgId", "status"])
     .index("by_org_time", ["orgId", "createdAt"])
     .index("by_org_idempotency", ["orgId", "idempotencyKey"]),
+
+  // GL Phase 17 hardening: opening balances get the same two-person
+  // segregation of duties as manual journals — a direct-lines posting to
+  // system-controlled accounts is exactly the highest-risk control point
+  // manualJournalDrafts already exists to protect, and a one-time seed entry
+  // is no less risky for being one-time. See accountingCutover.ts.
+  openingBalanceDrafts: defineTable({
+    orgId: v.id("organizations"),
+    status: v.union(
+      v.literal("PENDING_APPROVAL"),
+      v.literal("POSTED"),
+      v.literal("REJECTED"),
+    ),
+    lines: v.array(v.object({
+      accountId: v.id("chartOfAccounts"),
+      debitMinor: v.number(),
+      creditMinor: v.number(),
+      description: v.optional(v.string()),
+    })),
+    asOfDate: v.number(),
+    memo: v.optional(v.string()),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+    reviewedBy: v.optional(v.id("users")),
+    decidedAt: v.optional(v.number()),
+    rejectionReason: v.optional(v.string()),
+    journalEntryId: v.optional(v.id("journalEntries")),
+  })
+    .index("by_org_status", ["orgId", "status"]),
 
   roles: defineTable({
     orgId: v.id("organizations"), // Roles are scoped to orgs allowing custom roles
@@ -1821,6 +1851,13 @@ export default defineSchema({
     // recomputable from fixedAssetEvents, never the source of truth.
     accumulatedDepreciationMinor: v.optional(v.number()),
     lastDepreciatedYearMonth: v.optional(v.string()), // "YYYY-MM" of the last posted depreciation run
+    // Contractual month count actually depreciated so far — same role as
+    // dealerProductDeferrals.monthsRecognized: distinct from
+    // lastDepreciatedYearMonth, which alone can't tell depreciateAssetForMonth
+    // whether the *next* call is the final contractual month (the one that
+    // must absorb the remainder so the schedule finishes in exactly
+    // usefulLifeMonths, not usefulLifeMonths+1).
+    monthsDepreciated: v.optional(v.number()),
     disposedAt: v.optional(v.number()),
     disposalProceedsMinor: v.optional(v.number()),
   })
@@ -1995,6 +2032,12 @@ export default defineSchema({
     matchedJournalLineId: v.optional(v.id("journalLines")),
     matchedAt: v.optional(v.number()),
     matchedBy: v.optional(v.id("users")),
+    // Set when status flips to IGNORED — a discrepancy removed from the
+    // close-blocking unmatched count must carry a documented reason and
+    // who/when, not disappear from the control silently.
+    ignoredAt: v.optional(v.number()),
+    ignoredBy: v.optional(v.id("users")),
+    ignoreReason: v.optional(v.string()),
     createdAt: v.number(),
     createdBy: v.id("users"),
   })

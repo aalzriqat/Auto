@@ -568,4 +568,86 @@ describe("expenses VAT split (Phase 41)", () => {
       expect(lines).toHaveLength(2);
     });
   });
+
+  test("a MARKETING expense debits the dedicated Marketing Expense account, not GENERAL_EXPENSE", async () => {
+    const { t, orgId, asUser } = await setupFullyPosted();
+
+    const expenseId = await asUser.mutation(api.expenses.create, {
+      orgId,
+      title: "Social ad spend",
+      amount: 400,
+      date: Date.now(),
+      category: "MARKETING",
+    });
+
+    await t.run(async (ctx) => {
+      const event = await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", "expenses").eq("sourceId", expenseId.toString())
+        )
+        .filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED"))
+        .first();
+      const lines = await ctx.db
+        .query("journalLines")
+        .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", event!.journalEntryId!))
+        .collect();
+
+      const marketingAccount = await ctx.db
+        .query("chartOfAccounts")
+        .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", "MARKETING_EXPENSE"))
+        .unique();
+      const generalAccount = await ctx.db
+        .query("chartOfAccounts")
+        .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", "GENERAL_EXPENSE"))
+        .unique();
+      expect(lines.find((l) => l.accountId === marketingAccount!._id)?.debitMinor).toBe(400_000);
+      expect(lines.find((l) => l.accountId === generalAccount!._id)).toBeUndefined();
+    });
+  });
+
+  test("self-heals a missing category account for a chart initialized before this addition", async () => {
+    const { t, orgId, asUser } = await setupFullyPosted();
+
+    // Simulate a pre-existing org's chart that predates the dedicated
+    // expense-category accounts by deleting the one this expense will need.
+    await t.run(async (ctx) => {
+      const rentAccount = await ctx.db
+        .query("chartOfAccounts")
+        .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", "RENT_EXPENSE"))
+        .unique();
+      await ctx.db.delete(rentAccount!._id);
+    });
+
+    const expenseId = await asUser.mutation(api.expenses.create, {
+      orgId,
+      title: "Showroom rent",
+      amount: 900,
+      date: Date.now(),
+      category: "RENT",
+    });
+
+    await t.run(async (ctx) => {
+      const event = await ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", "expenses").eq("sourceId", expenseId.toString())
+        )
+        .filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED"))
+        .first();
+      expect(event?.status).toBe("POSTED");
+
+      const rentAccount = await ctx.db
+        .query("chartOfAccounts")
+        .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", "RENT_EXPENSE"))
+        .unique();
+      expect(rentAccount).toBeTruthy();
+
+      const lines = await ctx.db
+        .query("journalLines")
+        .withIndex("by_journal_entry", (q) => q.eq("journalEntryId", event!.journalEntryId!))
+        .collect();
+      expect(lines.find((l) => l.accountId === rentAccount!._id)?.debitMinor).toBe(900_000);
+    });
+  });
 });

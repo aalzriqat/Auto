@@ -1367,14 +1367,18 @@ describe("Fix #3 — vehicle-prep expenses capitalize into inventory", () => {
 
     const inventory = await accountBySystemKey(t, orgId, "VEHICLE_INVENTORY");
     const generalExpense = await accountBySystemKey(t, orgId, "GENERAL_EXPENSE");
+    const marketingExpense = await accountBySystemKey(t, orgId, "MARKETING_EXPENSE");
 
     const { lines: repairLines } = await linesForEvent(t, orgId, "expenses", repairExpenseId, "EXPENSE_POSTED");
     expect(repairLines.find((l) => l.accountId === inventory._id)?.debitMinor).toBe(400_000);
     expect(repairLines.some((l) => l.accountId === generalExpense._id)).toBe(false);
 
+    // MARKETING routes to its own dedicated expense account, not Vehicle
+    // Inventory — vehicle-linked or not, marketing spend is never inventoriable.
     const { lines: marketingLines } = await linesForEvent(t, orgId, "expenses", marketingExpenseId, "EXPENSE_POSTED");
-    expect(marketingLines.find((l) => l.accountId === generalExpense._id)?.debitMinor).toBe(100_000);
+    expect(marketingLines.find((l) => l.accountId === marketingExpense._id)?.debitMinor).toBe(100_000);
     expect(marketingLines.some((l) => l.accountId === inventory._id)).toBe(false);
+    expect(marketingLines.some((l) => l.accountId === generalExpense._id)).toBe(false);
   });
 
   test("REPAIR expense on an already-sold vehicle falls back to GENERAL_EXPENSE", async () => {

@@ -1,7 +1,7 @@
 import { convexTest } from "convex-test";
 import { describe, expect, test } from "vitest";
 import schema from "./schema";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { validateBalance, simplePayloadHash } from "./accounting/postingRules";
 
@@ -54,11 +54,18 @@ async function seedPhase2Dealer() {
   const customerId = await t.run((ctx) =>
     ctx.db.insert("customers", { orgId, firstName: "Posting", lastName: "Customer" })
   );
+  // SOLD (not AVAILABLE): this vehicle is only ever used as the vehicleId
+  // dimension on a directly-posted SALE_COMPLETED test event (never through
+  // the real vehicles.create/sale-completion flow, so no VEHICLE_ACQUIRED GL
+  // event exists for it) — leaving it AVAILABLE would make it read as
+  // in-stock inventory with a real purchasePrice but zero GL posting, a
+  // genuine Vehicle Inventory subledger-vs-GL discrepancy that (correctly)
+  // blocks period close in the "posting into closed period" test below.
   const vehicleId = await t.run((ctx) =>
     ctx.db.insert("vehicles", {
       orgId, vin: "P2VIN001", make: "BMW", model: "X5", year: 2025,
       mileage: 0, color: "Black", fuelType: "Gasoline", transmission: "Automatic",
-      purchasePrice: 50000, sellingPrice: 65000, status: "AVAILABLE",
+      purchasePrice: 50000, sellingPrice: 65000, status: "SOLD",
     })
   );
 
@@ -126,7 +133,7 @@ describe("Phase 2 — posting engine", () => {
   test("DEPOSIT_RECEIVED creates balanced journal entry", async () => {
     const { t, orgId, customerId, asUser, now } = await seedPhase2Dealer();
 
-    const result = await asUser.mutation(api.accountingLedger.post, {
+    const result = await asUser.mutation(internal.accountingLedger.post, {
       orgId,
       eventType: "DEPOSIT_RECEIVED",
       sourceType: "deposits",
@@ -161,7 +168,7 @@ describe("Phase 2 — posting engine", () => {
   test("SALE_COMPLETED with COGS creates 4-line balanced journal", async () => {
     const { t, orgId, customerId, vehicleId, asUser, now } = await seedPhase2Dealer();
 
-    const result = await asUser.mutation(api.accountingLedger.post, {
+    const result = await asUser.mutation(internal.accountingLedger.post, {
       orgId,
       eventType: "SALE_COMPLETED",
       sourceType: "sales",
@@ -202,14 +209,14 @@ describe("Phase 2 — posting engine", () => {
       customerId: customerId.toString(),
     };
 
-    const first = await asUser.mutation(api.accountingLedger.post, {
+    const first = await asUser.mutation(internal.accountingLedger.post, {
       orgId, eventType: "DEPOSIT_RECEIVED", sourceType: "deposits",
       sourceId: "dep_idem", eventVersion: 1, accountingDate: now,
       occurredAt: now, currency: "JOD", idempotencyKey: "idempotent_deposit_001",
       payload,
     });
 
-    const second = await asUser.mutation(api.accountingLedger.post, {
+    const second = await asUser.mutation(internal.accountingLedger.post, {
       orgId, eventType: "DEPOSIT_RECEIVED", sourceType: "deposits",
       sourceId: "dep_idem", eventVersion: 1, accountingDate: now,
       occurredAt: now, currency: "JOD", idempotencyKey: "idempotent_deposit_001",
@@ -232,7 +239,7 @@ describe("Phase 2 — posting engine", () => {
     await asUser.mutation(api.accountingPeriods.close, { orgId, periodId });
 
     await expect(
-      asUser.mutation(api.accountingLedger.post, {
+      asUser.mutation(internal.accountingLedger.post, {
         orgId, eventType: "DEPOSIT_RECEIVED", sourceType: "deposits",
         sourceId: "dep_closed", eventVersion: 1,
         accountingDate: monthStart + 1000,
@@ -251,7 +258,7 @@ describe("Phase 2 — posting engine", () => {
     const futureDate = Date.now() + 365 * 24 * 60 * 60 * 1000;
 
     await expect(
-      asUser.mutation(api.accountingLedger.post, {
+      asUser.mutation(internal.accountingLedger.post, {
         orgId, eventType: "DEPOSIT_RECEIVED", sourceType: "deposits",
         sourceId: "dep_future", eventVersion: 1,
         accountingDate: futureDate, occurredAt: futureDate,
@@ -268,7 +275,7 @@ describe("Phase 2 — posting engine", () => {
     const { orgId, asUser, now, customerId } = await seedPhase2Dealer();
 
     await expect(
-      asUser.mutation(api.accountingLedger.post, {
+      asUser.mutation(internal.accountingLedger.post, {
         orgId, eventType: "UNKNOWN_EVENT", sourceType: "foo",
         sourceId: "bar", eventVersion: 1,
         accountingDate: now, occurredAt: now,
@@ -281,7 +288,7 @@ describe("Phase 2 — posting engine", () => {
   test("reversal creates inverse journal and marks original reversed", async () => {
     const { t, orgId, customerId, asUser, now } = await seedPhase2Dealer();
 
-    const postResult = await asUser.mutation(api.accountingLedger.post, {
+    const postResult = await asUser.mutation(internal.accountingLedger.post, {
       orgId, eventType: "DEPOSIT_RECEIVED", sourceType: "deposits",
       sourceId: "dep_rev", eventVersion: 1, accountingDate: now,
       occurredAt: now, currency: "JOD", idempotencyKey: "dep_rev_post",
@@ -291,7 +298,7 @@ describe("Phase 2 — posting engine", () => {
       },
     });
 
-    const reversalResult = await asUser.mutation(api.accountingLedger.reverse, {
+    const reversalResult = await asUser.mutation(internal.accountingLedger.reverse, {
       orgId,
       originalEventId: postResult.eventId,
       reversalDate: now,
@@ -331,7 +338,7 @@ describe("Phase 2 — posting engine", () => {
   test("reversing an already-reversed event is idempotent on second call", async () => {
     const { orgId, customerId, asUser, now } = await seedPhase2Dealer();
 
-    const postResult = await asUser.mutation(api.accountingLedger.post, {
+    const postResult = await asUser.mutation(internal.accountingLedger.post, {
       orgId, eventType: "DEPOSIT_RECEIVED", sourceType: "deposits",
       sourceId: "dep_rev2", eventVersion: 1, accountingDate: now,
       occurredAt: now, currency: "JOD", idempotencyKey: "dep_rev2_post",
@@ -341,12 +348,12 @@ describe("Phase 2 — posting engine", () => {
       },
     });
 
-    await asUser.mutation(api.accountingLedger.reverse, {
+    await asUser.mutation(internal.accountingLedger.reverse, {
       orgId, originalEventId: postResult.eventId, reversalDate: now,
       reason: "Test reversal", idempotencyKey: "dep_rev2_reversal",
     });
 
-    const secondReversal = await asUser.mutation(api.accountingLedger.reverse, {
+    const secondReversal = await asUser.mutation(internal.accountingLedger.reverse, {
       orgId, originalEventId: postResult.eventId, reversalDate: now,
       reason: "Test reversal", idempotencyKey: "dep_rev2_reversal",
     });
@@ -357,7 +364,7 @@ describe("Phase 2 — posting engine", () => {
   test("getJournalEntry returns entry with lines and event", async () => {
     const { orgId, customerId, asUser, now } = await seedPhase2Dealer();
 
-    const postResult = await asUser.mutation(api.accountingLedger.post, {
+    const postResult = await asUser.mutation(internal.accountingLedger.post, {
       orgId, eventType: "DEPOSIT_RECEIVED", sourceType: "deposits",
       sourceId: "dep_read", eventVersion: 1, accountingDate: now,
       occurredAt: now, currency: "JOD", idempotencyKey: "dep_read_001",

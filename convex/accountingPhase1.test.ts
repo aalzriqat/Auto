@@ -326,8 +326,18 @@ describe("Phase 1 — accounting periods", () => {
     expect(locked?.status).toBe("LOCKED");
   });
 
+  async function makeOwner(t: Awaited<ReturnType<typeof seedPhase1Dealer>>["t"], orgId: any, userId: any) {
+    await t.run(async (ctx) => {
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
+        .unique();
+      await ctx.db.patch(membership!.roleId, { name: "OWNER", isSystemOwnerRole: true });
+    });
+  }
+
   test("can reopen a closed period with reason", async () => {
-    const { orgId, asUser } = await seedPhase1Dealer();
+    const { t, orgId, asUser, userId } = await seedPhase1Dealer();
 
     const periodId = await asUser.mutation(api.accountingPeriods.create, {
       orgId,
@@ -338,6 +348,7 @@ describe("Phase 1 — accounting periods", () => {
       openImmediately: true,
     });
     await asUser.mutation(api.accountingPeriods.close, { orgId, periodId });
+    await makeOwner(t, orgId, userId);
     await asUser.mutation(api.accountingPeriods.reopen, {
       orgId,
       periodId,
@@ -350,8 +361,30 @@ describe("Phase 1 — accounting periods", () => {
     expect(period?.reopenedAt).toBeTruthy();
   });
 
-  test("locked periods cannot be reopened", async () => {
+  test("a non-owner cannot reopen a closed period even with a reason", async () => {
     const { orgId, asUser } = await seedPhase1Dealer();
+
+    const periodId = await asUser.mutation(api.accountingPeriods.create, {
+      orgId,
+      fiscalYear: 2026,
+      periodNumber: 1,
+      startDate: JAN_2026_START,
+      endDate: JAN_2026_END,
+      openImmediately: true,
+    });
+    await asUser.mutation(api.accountingPeriods.close, { orgId, periodId });
+
+    await expect(
+      asUser.mutation(api.accountingPeriods.reopen, {
+        orgId,
+        periodId,
+        reason: "Trying to reopen without owner rights",
+      })
+    ).rejects.toThrow(/only the organization owner/i);
+  });
+
+  test("locked periods cannot be reopened", async () => {
+    const { t, orgId, asUser, userId } = await seedPhase1Dealer();
 
     const periodId = await asUser.mutation(api.accountingPeriods.create, {
       orgId,
@@ -363,6 +396,7 @@ describe("Phase 1 — accounting periods", () => {
     });
     await asUser.mutation(api.accountingPeriods.close, { orgId, periodId });
     await asUser.mutation(api.accountingPeriods.lock, { orgId, periodId });
+    await makeOwner(t, orgId, userId);
 
     await expect(
       asUser.mutation(api.accountingPeriods.reopen, {
@@ -374,7 +408,7 @@ describe("Phase 1 — accounting periods", () => {
   });
 
   test("reopen without reason is rejected", async () => {
-    const { orgId, asUser } = await seedPhase1Dealer();
+    const { t, orgId, asUser, userId } = await seedPhase1Dealer();
 
     const periodId = await asUser.mutation(api.accountingPeriods.create, {
       orgId,
@@ -385,6 +419,7 @@ describe("Phase 1 — accounting periods", () => {
       openImmediately: true,
     });
     await asUser.mutation(api.accountingPeriods.close, { orgId, periodId });
+    await makeOwner(t, orgId, userId);
 
     await expect(
       asUser.mutation(api.accountingPeriods.reopen, { orgId, periodId, reason: "   " })

@@ -8,7 +8,16 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { toast } from "@/components/ui/sonner";
 import { errorMessage, AccountingEmptyRow, AccountingTableFrame, scaleForCurrency } from "../AccountingTabShared";
 import { BankStatementUploadDialog } from "./BankStatementUploadDialog";
@@ -28,6 +37,7 @@ export function ReconciliationPanel({
   const formatCurrency = useCurrencyFormatter();
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
+  const [ignoring, setIgnoring] = useState<{ id: Id<"bankStatementLines">; reason: string } | null>(null);
 
   const suggestions = useQuery(api.bankReconciliation.suggestMatches, { orgId, bankAccountId });
   const uploadLines = useMutation(api.bankReconciliation.uploadStatementLines);
@@ -60,11 +70,17 @@ export function ReconciliationPanel({
     }
   }
 
-  async function handleIgnore(statementLineId: Id<"bankStatementLines">) {
-    setBusyAction(`ignore_${statementLineId}`);
+  async function handleIgnore() {
+    if (!ignoring) return;
+    if (!ignoring.reason.trim()) {
+      toast.error(t("IgnoreLineReasonPlaceholder" as any));
+      return;
+    }
+    setBusyAction(`ignore_${ignoring.id}`);
     try {
-      await ignoreLine({ orgId, statementLineId });
+      await ignoreLine({ orgId, statementLineId: ignoring.id, reason: ignoring.reason });
       toast.success(t("LineIgnored" as any));
+      setIgnoring(null);
     } catch (error) {
       toast.error(errorMessage(error));
     } finally {
@@ -101,7 +117,7 @@ export function ReconciliationPanel({
               suggestions.map((s) => {
                 const suggested = s.candidates.find((c) => c.journalLineId === s.suggestedJournalLineId);
                 const confirming = busyAction === `confirm_${s.statementLineId}`;
-                const ignoring = busyAction === `ignore_${s.statementLineId}`;
+                const ignoringThisLine = busyAction === `ignore_${s.statementLineId}`;
                 return (
                   <TableRow key={s.statementLineId}>
                     <TableCell className="text-slate-500">
@@ -140,10 +156,10 @@ export function ReconciliationPanel({
                           size="sm"
                           variant="ghost"
                           className="text-rose-600 hover:text-rose-700"
-                          disabled={ignoring}
-                          onClick={() => void handleIgnore(s.statementLineId)}
+                          disabled={ignoringThisLine}
+                          onClick={() => setIgnoring({ id: s.statementLineId, reason: "" })}
                         >
-                          {ignoring ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}
+                          {ignoringThisLine ? <Loader2 className="h-4 w-4 animate-spin" /> : <XCircle className="h-4 w-4" />}
                           {t("IgnoreLine" as any)}
                         </Button>
                       )}
@@ -155,6 +171,32 @@ export function ReconciliationPanel({
           </TableBody>
         </Table>
       </AccountingTableFrame>
+
+      <Dialog open={!!ignoring} onOpenChange={(open) => !open && setIgnoring(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("IgnoreLineReasonTitle" as any)}</DialogTitle>
+            <DialogDescription>{t("IgnoreLineReasonDescription" as any)}</DialogDescription>
+          </DialogHeader>
+          <Textarea
+            value={ignoring?.reason ?? ""}
+            onChange={(e) => setIgnoring((cur) => (cur ? { ...cur, reason: e.target.value } : cur))}
+            placeholder={t("IgnoreLineReasonPlaceholder" as any)}
+          />
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setIgnoring(null)}>
+              {t("Cancel")}
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => void handleIgnore()}
+              disabled={busyAction === `ignore_${ignoring?.id}`}
+            >
+              {t("IgnoreLine" as any)}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

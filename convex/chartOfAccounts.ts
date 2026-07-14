@@ -245,6 +245,25 @@ export async function ensurePartnerEquityAccounts(
   await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.PARTNER_DRAWINGS, "3300");
 }
 
+/**
+ * Self-heal for the dedicated operating-expense accounts: previously every
+ * expense category posted to the single GENERAL_EXPENSE account, so any
+ * chart initialized before this addition won't have these mapped yet.
+ * Scoped to hookExpensePosted only — nothing else resolves these keys.
+ */
+export async function ensureExpenseCategoryAccounts(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.RENT_EXPENSE, "6800");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.UTILITIES_EXPENSE, "6810");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.SALARIES_EXPENSE, "6820");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.MARKETING_EXPENSE, "6830");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.OFFICE_EXPENSE, "6840");
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.PROFESSIONAL_FEES_EXPENSE, "6850");
+}
+
 /** GL Phase 13 self-heal: finance-company AR (very old charts may predate it) plus the claim write-off expense account. */
 export async function ensureClaimAccounts(
   ctx: MutationCtx,

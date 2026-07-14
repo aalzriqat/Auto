@@ -333,12 +333,16 @@ export const dispose = mutation({
 
 /**
  * Cron-callable: posts one month of straight-line depreciation for a single
- * ACTIVE asset, if it isn't already fully depreciated and hasn't already run
- * for this calendar month. Posts min(flat monthly amount, remaining
- * depreciable balance) so the final month absorbs any rounding remainder and
- * accumulated depreciation never exceeds cost − salvage. Idempotent both via
- * the lastDepreciatedYearMonth pre-check (cheap, skips the call entirely) and
- * the underlying accounting event's own idempotency key (authoritative).
+ * ACTIVE asset, if it isn't already fully depreciated and this month is after
+ * whatever was last posted. Uses the same explicit month-count schedule as
+ * dealerProductDeferrals.recognizeDeferredCommissionForMonth: the
+ * (usefulLifeMonths)th month always absorbs whatever remains, so the asset
+ * always finishes depreciating in exactly usefulLifeMonths (never
+ * usefulLifeMonths+1, which a plain Math.floor's rounding remainder could
+ * previously require) regardless of rounding. Idempotent both via the
+ * lastDepreciatedYearMonth/monthsDepreciated pre-checks (cheap, skip the call
+ * entirely) and the underlying accounting event's own idempotency key
+ * (authoritative).
  */
 export const depreciateAssetForMonth = internalMutation({
   args: {
@@ -352,7 +356,14 @@ export const depreciateAssetForMonth = internalMutation({
     const asset = await ctx.db.get(args.assetId);
     if (!asset || asset.orgId !== args.orgId || asset.isDeleted) return { posted: false, reason: "not_found" };
     if (asset.status !== "ACTIVE") return { posted: false, reason: "not_active" };
-    if (asset.lastDepreciatedYearMonth === args.yearMonth) return { posted: false, reason: "already_ran_this_month" };
+    // Lexicographic comparison is safe for "YYYY-MM" strings. Equality alone
+    // (the old check) only blocked re-running the *same* month — it let a
+    // stale/earlier month slip through as a genuine second posting (its
+    // idempotency key differs from any month already posted), silently
+    // over-depreciating the asset.
+    if (asset.lastDepreciatedYearMonth && args.yearMonth <= asset.lastDepreciatedYearMonth) {
+      return { posted: false, reason: "not_after_last_depreciated_month" };
+    }
     if (asset.costMinor == null || asset.usefulLifeMonths == null) return { posted: false, reason: "not_capitalized_under_gl_phase_11" };
 
     // Don't start the schedule before the asset's depreciation start date
@@ -368,18 +379,22 @@ export const depreciateAssetForMonth = internalMutation({
     const remaining = depreciableBase - accumulatedDepreciationMinor;
     if (remaining <= 0) return { posted: false, reason: "fully_depreciated" };
 
-    // Straight-line, but never less than 1 minor unit per month: when the
-    // depreciable base is smaller than the useful life in months the flat
-    // amount floors to 0, and posting max(flat, 1) spreads the base one
-    // minor unit at a time instead of dumping the whole remainder into the
-    // first month. min(remaining) still lets the final month absorb rounding.
-    const flatMonthlyAmount = Math.floor(depreciableBase / asset.usefulLifeMonths);
-    const amountMinor = Math.min(Math.max(flatMonthlyAmount, 1), remaining);
+    // Explicit month-count schedule, not just "cap at remaining": a plain
+    // min(Math.floor(base/life), remaining) still needs a (life+1)th call
+    // whenever base doesn't divide evenly (e.g. 100/3 -> 33+33+33, 1 left
+    // over). Using ceil for every month before the last guarantees the last
+    // contractual month is always <= the flat share, so it can absorb
+    // whatever remains without overshooting past usefulLifeMonths.
+    const monthsDepreciated = asset.monthsDepreciated ?? 0;
+    const isFinalContractualMonth = monthsDepreciated + 1 >= asset.usefulLifeMonths;
+    const flatMonthlyAmount = Math.ceil(depreciableBase / asset.usefulLifeMonths);
+    const amountMinor = isFinalContractualMonth ? remaining : Math.min(flatMonthlyAmount, remaining);
 
     const currency = asset.currency ?? (await getOrgCurrency(ctx, args.orgId));
 
     await ctx.db.patch(args.assetId, {
       accumulatedDepreciationMinor: accumulatedDepreciationMinor + amountMinor,
+      monthsDepreciated: monthsDepreciated + 1,
       lastDepreciatedYearMonth: args.yearMonth,
     });
 

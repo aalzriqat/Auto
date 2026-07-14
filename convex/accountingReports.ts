@@ -724,109 +724,146 @@ function combineGlAndSubledger(
   return { currencies, byCurrency, isReconciled: currencies.every((c) => byCurrency[c].isReconciled) };
 }
 
+/**
+ * Shared with accountingPeriods.ts's close-checklist, same reason as
+ * computeSubledgerReconciliation above.
+ */
+export async function computeVehicleInventoryReconciliation(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  toDate: number | undefined
+): Promise<GlVsSubledgerResult> {
+  const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
+  const vehicles = await ctx.db
+    .query("vehicles")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+  // Sourced/drop-ship vehicles never capitalize into Vehicle Inventory
+  // (ruleSaleCompleted credits AP-Suppliers for them instead) — excluding
+  // status SOLD/ARCHIVED leaves everything still physically in stock.
+  const inStock = vehicles.filter((v) =>
+    !v.isDeleted && v.sourceType !== "SOURCED" && v.status !== "SOLD" && v.status !== "ARCHIVED"
+  );
+
+  let subledgerMinor = 0;
+  for (const vehicle of inStock) {
+    const cost = await computeVehicleCapitalizedCost(ctx, vehicle);
+    if (cost > 0) subledgerMinor += toMinorUnits(cost, orgCurrency);
+  }
+
+  const subByCurrency = new Map<string, number>();
+  if (subledgerMinor > 0) subByCurrency.set(orgCurrency, subledgerMinor);
+
+  const glByCurrency = await computeGlBalanceByCurrency(ctx, orgId, SYSTEM_KEYS.VEHICLE_INVENTORY, toDate);
+  return combineGlAndSubledger(glByCurrency, subByCurrency);
+}
+
 export const vehicleInventoryReconciliation = query({
   args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
-
-    const orgCurrency = await getOrgCurrencyForReports(ctx, args.orgId);
-    const vehicles = await ctx.db
-      .query("vehicles")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .collect();
-    // Sourced/drop-ship vehicles never capitalize into Vehicle Inventory
-    // (ruleSaleCompleted credits AP-Suppliers for them instead) — excluding
-    // status SOLD/ARCHIVED leaves everything still physically in stock.
-    const inStock = vehicles.filter((v) =>
-      !v.isDeleted && v.sourceType !== "SOURCED" && v.status !== "SOLD" && v.status !== "ARCHIVED"
-    );
-
-    let subledgerMinor = 0;
-    for (const vehicle of inStock) {
-      const cost = await computeVehicleCapitalizedCost(ctx, vehicle);
-      if (cost > 0) subledgerMinor += toMinorUnits(cost, orgCurrency);
-    }
-
-    const subByCurrency = new Map<string, number>();
-    if (subledgerMinor > 0) subByCurrency.set(orgCurrency, subledgerMinor);
-
-    const glByCurrency = await computeGlBalanceByCurrency(ctx, args.orgId, SYSTEM_KEYS.VEHICLE_INVENTORY, args.toDate);
-    return combineGlAndSubledger(glByCurrency, subByCurrency);
+    return computeVehicleInventoryReconciliation(ctx, args.orgId, args.toDate);
   },
 });
+
+export async function computeSupplierPayablesReconciliation(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  toDate: number | undefined
+): Promise<GlVsSubledgerResult> {
+  const pending = await ctx.db
+    .query("vehicleSupplierPayables")
+    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
+    .collect();
+
+  const subByCurrency = new Map<string, number>();
+  for (const p of pending) {
+    const minor = toMinorUnits(p.amountDue, p.currency);
+    subByCurrency.set(p.currency, (subByCurrency.get(p.currency) ?? 0) + minor);
+  }
+
+  const glByCurrency = await computeGlBalanceByCurrency(ctx, orgId, SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, toDate);
+  return combineGlAndSubledger(glByCurrency, subByCurrency);
+}
 
 export const supplierPayablesReconciliation = query({
   args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
-
-    const pending = await ctx.db
-      .query("vehicleSupplierPayables")
-      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
-      .collect();
-
-    const subByCurrency = new Map<string, number>();
-    for (const p of pending) {
-      const minor = toMinorUnits(p.amountDue, p.currency);
-      subByCurrency.set(p.currency, (subByCurrency.get(p.currency) ?? 0) + minor);
-    }
-
-    const glByCurrency = await computeGlBalanceByCurrency(ctx, args.orgId, SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS, args.toDate);
-    return combineGlAndSubledger(glByCurrency, subByCurrency);
+    return computeSupplierPayablesReconciliation(ctx, args.orgId, args.toDate);
   },
 });
+
+export async function computeCustomerDepositsReconciliation(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  toDate: number | undefined
+): Promise<GlVsSubledgerResult> {
+  const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
+  const held = await ctx.db
+    .query("deposits")
+    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "HELD"))
+    .collect();
+
+  const subByCurrency = new Map<string, number>();
+  for (const d of held) {
+    if (d.isDeleted) continue;
+    const currency = d.currency ?? orgCurrency;
+    const minor = d.amountMinor ?? toMinorUnits(d.amount, currency);
+    subByCurrency.set(currency, (subByCurrency.get(currency) ?? 0) + minor);
+  }
+
+  const glByCurrency = await computeGlBalanceByCurrency(ctx, orgId, SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY, toDate);
+  return combineGlAndSubledger(glByCurrency, subByCurrency);
+}
 
 export const customerDepositsReconciliation = query({
   args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
-
-    const orgCurrency = await getOrgCurrencyForReports(ctx, args.orgId);
-    const held = await ctx.db
-      .query("deposits")
-      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "HELD"))
-      .collect();
-
-    const subByCurrency = new Map<string, number>();
-    for (const d of held) {
-      if (d.isDeleted) continue;
-      const currency = d.currency ?? orgCurrency;
-      const minor = d.amountMinor ?? toMinorUnits(d.amount, currency);
-      subByCurrency.set(currency, (subByCurrency.get(currency) ?? 0) + minor);
-    }
-
-    const glByCurrency = await computeGlBalanceByCurrency(ctx, args.orgId, SYSTEM_KEYS.CUSTOMER_DEPOSITS_LIABILITY, args.toDate);
-    return combineGlAndSubledger(glByCurrency, subByCurrency);
+    return computeCustomerDepositsReconciliation(ctx, args.orgId, args.toDate);
   },
 });
+
+export async function computeCommissionPayableReconciliation(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  toDate: number | undefined
+): Promise<GlVsSubledgerResult> {
+  const orgCurrency = await getOrgCurrencyForReports(ctx, orgId);
+  const sales = await ctx.db
+    .query("sales")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+  const owed = sales.filter((s) =>
+    // Cancellation reverses the GL commission accrual (hookCommissionReversed)
+    // but never clears commissionAmount on the sale row — without this
+    // check a cancelled sale would still count in the subledger side while
+    // its GL liability is already zero, permanently unreconciled.
+    !s.isDeleted && s.status !== "CANCELLED" &&
+    s.commissionAmount != null && s.commissionAmount > 0 && s.commissionPaidAt == null
+  );
+
+  let subledgerMinor = 0;
+  for (const sale of owed) {
+    subledgerMinor += toMinorUnits(sale.commissionAmount!, orgCurrency);
+  }
+
+  const subByCurrency = new Map<string, number>();
+  if (subledgerMinor > 0) subByCurrency.set(orgCurrency, subledgerMinor);
+
+  const glByCurrency = await computeGlBalanceByCurrency(ctx, orgId, SYSTEM_KEYS.COMMISSION_PAYABLE, toDate);
+  return combineGlAndSubledger(glByCurrency, subByCurrency);
+}
 
 export const commissionPayableReconciliation = query({
   args: { orgId: v.id("organizations"), toDate: v.optional(v.number()) },
   handler: async (ctx, args) => {
     await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
-
-    const orgCurrency = await getOrgCurrencyForReports(ctx, args.orgId);
-    const sales = await ctx.db
-      .query("sales")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .collect();
-    const owed = sales.filter((s) =>
-      !s.isDeleted && s.commissionAmount != null && s.commissionAmount > 0 && s.commissionPaidAt == null
-    );
-
-    let subledgerMinor = 0;
-    for (const sale of owed) {
-      subledgerMinor += toMinorUnits(sale.commissionAmount!, orgCurrency);
-    }
-
-    const subByCurrency = new Map<string, number>();
-    if (subledgerMinor > 0) subByCurrency.set(orgCurrency, subledgerMinor);
-
-    const glByCurrency = await computeGlBalanceByCurrency(ctx, args.orgId, SYSTEM_KEYS.COMMISSION_PAYABLE, args.toDate);
-    return combineGlAndSubledger(glByCurrency, subByCurrency);
+    return computeCommissionPayableReconciliation(ctx, args.orgId, args.toDate);
   },
 });

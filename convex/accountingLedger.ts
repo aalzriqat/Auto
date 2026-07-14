@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { query, mutation } from "./_generated/server";
+import { query, internalMutation } from "./_generated/server";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { postAccountingEvent } from "./accounting/postingEngine";
@@ -131,9 +131,24 @@ export const listAccountingEvents = query({
   },
 });
 
-// ─── Mutations (engine entry points for manual use / testing) ─────────────────
+// ─── Mutations (engine entry points, internal-only) ───────────────────────────
+//
+// post/reverse are internalMutation, not mutation: every production event is
+// posted through a specific hookXxx wrapper in accounting/workflowHooks.ts that
+// builds a well-typed, event-specific payload from a real operational record
+// (sale, deposit, vehicle, etc). If these were public, any MANAGE_FINANCE user
+// (the default ACCOUNTANT role included) could post an arbitrary payload under
+// any event type/source directly from the client — postAccountingEvent's rule
+// dispatcher does an unchecked `payload as unknown as XPayload` cast per event
+// type with no schema or source-record-existence validation, so a fabricated
+// vehicle acquisition, sale, deposit, or supplier payment would post straight
+// to the GL. Likewise reverseAccountingEvent accepts any POSTED event id,
+// letting a real SALE_COMPLETED entry be reversed directly, bypassing
+// saleCancellation.ts's coordinated operational reversal entirely. Keep both
+// internal-only; genuine back-office adjustments go through financialAudit.ts's
+// two-person manual-journal workflow instead.
 
-export const post = mutation({
+export const post = internalMutation({
   args: {
     orgId: v.id("organizations"),
     branchId: v.optional(v.id("branches")),
@@ -154,7 +169,7 @@ export const post = mutation({
   },
 });
 
-export const reverse = mutation({
+export const reverse = internalMutation({
   args: {
     orgId: v.id("organizations"),
     originalEventId: v.id("accountingEvents"),

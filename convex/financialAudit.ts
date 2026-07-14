@@ -29,7 +29,8 @@ type AuditActionType =
   | "UPDATE_ACCOUNT"
   | "MIGRATE_TRANSACTION"
   | "ALLOCATE_PAYMENT"
-  | "REVERSE_ALLOCATION";
+  | "REVERSE_ALLOCATION"
+  | "IGNORE_BANK_STATEMENT_LINE";
 
 // ─── Internal: write audit entry ─────────────────────────────────────────────
 
@@ -379,7 +380,7 @@ export const approveManualJournal = mutation({
       // GL Phase 18: a direct journalLines insert (not routed through
       // postAccountingEvent), so the running snapshot needs its own update
       // here too — same as postingEngine.ts, reversals.ts, and
-      // accountingCutover.ts's postOpeningBalance.
+      // accountingCutover.ts's approveOpeningBalance.
       await incrementAccountSnapshot(ctx, {
         orgId: args.orgId,
         accountId: line.accountId,

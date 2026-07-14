@@ -42,6 +42,13 @@ async function seedSnapshotDealer() {
     })
   );
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+
+  // A second finance-authorized user for opening-balance segregation of
+  // duties (approver must differ from the preparer).
+  const reviewerId = await t.run((ctx) =>
+    ctx.db.insert("users", { clerkId: "p18_reviewer", email: "p18reviewer@example.com", name: "Reviewer" })
+  );
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: reviewerId, roleId }));
   await t.run((ctx) =>
     ctx.db.insert("orgSettings", {
       orgId, currency: "JOD", currencySymbol: "JD", enabledPaymentTypes: ["CASH"],
@@ -49,6 +56,7 @@ async function seedSnapshotDealer() {
   );
 
   const asOwner = t.withIdentity({ subject: "p18_owner", clerkId: "p18_owner" });
+  const asReviewer = t.withIdentity({ subject: "p18_reviewer", clerkId: "p18_reviewer" });
   await asOwner.mutation(api.chartOfAccounts.initialize, { orgId });
 
   // Two consecutive half-year periods so there's a genuinely "fully
@@ -68,7 +76,7 @@ async function seedSnapshotDealer() {
   await asOwner.mutation(api.accountingPeriods.open, { orgId, periodId: periodA._id });
   await asOwner.mutation(api.accountingPeriods.open, { orgId, periodId: periodB._id });
 
-  return { t, orgId, userId, asOwner, periodA, periodB };
+  return { t, orgId, userId, reviewerId, asOwner, asReviewer, periodA, periodB };
 }
 
 type Ctx = Awaited<ReturnType<typeof seedSnapshotDealer>>;
@@ -265,18 +273,22 @@ describe("Phase 18 — every direct journalLines inserter keeps snapshots in syn
     expect(tb.rows.find((r) => r.code === expenseAccount!.code)?.netMinor).toBe(40_000);
   });
 
-  test("postOpeningBalance keeps the running snapshot in sync", async () => {
+  test("approveOpeningBalance keeps the running snapshot in sync", async () => {
     const ctx = await seedSnapshotDealer();
     const cash = await accountBySystemKey(ctx.t, ctx.orgId, "CASH_ON_HAND");
     const capital = await accountBySystemKey(ctx.t, ctx.orgId, "PARTNER_CAPITAL");
 
-    await ctx.asOwner.mutation(api.accountingCutover.postOpeningBalance, {
+    const draft = await ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
       orgId: ctx.orgId,
       asOfDate: Date.UTC(2025, 0, 15),
       lines: [
         { accountId: cash!._id, debitMinor: 500_000, creditMinor: 0 },
         { accountId: capital!._id, debitMinor: 0, creditMinor: 500_000 },
       ],
+    });
+    await ctx.asReviewer.mutation(api.accountingCutover.approveOpeningBalance, {
+      orgId: ctx.orgId,
+      draftId: draft.draftId as Id<"openingBalanceDrafts">,
     });
 
     const snapshots = await ctx.t.run((c) =>
@@ -289,7 +301,7 @@ describe("Phase 18 — every direct journalLines inserter keeps snapshots in syn
     expect(bs.assetRows.find((r) => r.code === cash!.code)?.netMinor).toBe(500_000);
   });
 
-  test("postOpeningBalance rejects an account that belongs to a different org", async () => {
+  test("draftOpeningBalance rejects an account that belongs to a different org", async () => {
     const ctx = await seedSnapshotDealer();
     const otherOrgId = await ctx.t.run((c) =>
       c.db.insert("organizations", { name: "Other Org", createdAt: Date.now() })
@@ -311,7 +323,7 @@ describe("Phase 18 — every direct journalLines inserter keeps snapshots in syn
     const capital = await accountBySystemKey(ctx.t, ctx.orgId, "PARTNER_CAPITAL");
 
     await expect(
-      ctx.asOwner.mutation(api.accountingCutover.postOpeningBalance, {
+      ctx.asOwner.mutation(api.accountingCutover.draftOpeningBalance, {
         orgId: ctx.orgId,
         asOfDate: Date.UTC(2025, 0, 15),
         lines: [

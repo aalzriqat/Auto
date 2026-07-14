@@ -212,7 +212,7 @@ describe("bankReconciliation.confirmMatch", () => {
       orgId, bankAccountId, rows: [{ statementDate, description: "Once", amountMinor: 20_000 }],
     });
     const [line] = await asOwner.query(api.bankReconciliation.listStatementLines, { orgId, bankAccountId });
-    await asOwner.mutation(api.bankReconciliation.ignoreLine, { orgId, statementLineId: line._id });
+    await asOwner.mutation(api.bankReconciliation.ignoreLine, { orgId, statementLineId: line._id, reason: "Bank error, never posted." });
 
     await expect(
       asOwner.mutation(api.bankReconciliation.confirmMatch, {
@@ -255,7 +255,35 @@ describe("bankReconciliation.unmatch / ignoreLine", () => {
     });
 
     await expect(
-      asOwner.mutation(api.bankReconciliation.ignoreLine, { orgId, statementLineId: line._id })
+      asOwner.mutation(api.bankReconciliation.ignoreLine, { orgId, statementLineId: line._id, reason: "Test" })
     ).rejects.toThrow(/unmatch/i);
+  });
+
+  test("ignoreLine requires a reason and records who/when/why in the audit log", async () => {
+    const { orgId, asOwner, bankAccountId } = await seedDealerWithBankAccount();
+    const statementDate = Date.now();
+    await asOwner.mutation(api.bankReconciliation.uploadStatementLines, {
+      orgId, bankAccountId, rows: [{ statementDate, description: "Duplicate bank fee", amountMinor: 500 }],
+    });
+    const [line] = await asOwner.query(api.bankReconciliation.listStatementLines, { orgId, bankAccountId });
+
+    await expect(
+      asOwner.mutation(api.bankReconciliation.ignoreLine, { orgId, statementLineId: line._id, reason: "  " })
+    ).rejects.toThrow(/reason is required/i);
+
+    await asOwner.mutation(api.bankReconciliation.ignoreLine, {
+      orgId, statementLineId: line._id, reason: "Duplicate import, already reconciled under a different line.",
+    });
+
+    const [updated] = await asOwner.query(api.bankReconciliation.listStatementLines, { orgId, bankAccountId });
+    expect(updated.status).toBe("IGNORED");
+    expect(updated.ignoreReason).toBe("Duplicate import, already reconciled under a different line.");
+    expect(updated.ignoredBy).toBeTruthy();
+    expect(updated.ignoredAt).toBeTruthy();
+
+    const auditEntries = await asOwner.query(api.financialAudit.listAuditLog, { orgId });
+    const entry = auditEntries.find((e: { actionType: string }) => e.actionType === "IGNORE_BANK_STATEMENT_LINE");
+    expect(entry).toBeTruthy();
+    expect(entry?.description).toMatch(/Duplicate import/);
   });
 });

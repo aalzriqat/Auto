@@ -194,6 +194,12 @@ export const getBookBalance = query({
     let netMinor = 0;
     for (const line of lines) {
       if (line.accountId !== bankChartAccountId) continue;
+      // Every real bank account shares this one control account (see file
+      // header), so a second bank account in a different currency would
+      // otherwise have its activity silently folded into this one's balance
+      // — filter to the target account's own currency, same as everywhere
+      // else in this file that reads/writes target.currency.
+      if (line.currency !== target.currency) continue;
       // BANK_ACCOUNT is a DEBIT-normal asset — debits increase the balance.
       netMinor += line.debitMinor - line.creditMinor;
     }
