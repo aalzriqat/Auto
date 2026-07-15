@@ -2,20 +2,6 @@
   "name": "auto",
   "version": "0.1.0",
   "private": true,
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "@sentry/cli",
-      "core-js",
-      "cypress",
-      "esbuild",
-      "playwright",
-      "sharp",
-      "unrs-resolver"
-    ],
-    "overrides": {
-      "undici": "^7.28.0"
-    }
-  },
   "scripts": {
     "dev": "convex dev --start \"next dev -H 0.0.0.0\"",
     "build": "next build",
