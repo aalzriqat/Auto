@@ -249,6 +249,71 @@ function RunNowResultsDialog({
   );
 }
 
+type ReconciliationResult = {
+  currencies: string[];
+  isReconciled: boolean;
+  byCurrency: Record<
+    string,
+    { glBalanceMinor: number; subledgerBalanceMinor: number; discrepancyMinor: number; isReconciled: boolean }
+  >;
+};
+
+/** GL Prepaid Expenses balance vs the subledger's own remaining total, per currency — a founder shouldn't have to be the one who notices these have drifted apart. */
+function PrepaidReconciliationCard({ orgId }: Readonly<{ orgId: Id<"organizations"> }>) {
+  const { t } = useLanguage();
+  const recon = useQuery(api.accountingReports.prepaidExpensesReconciliation, { orgId }) as
+    | ReconciliationResult
+    | undefined;
+  const formatCurrency = useCurrencyFormatterInCurrency();
+
+  if (!recon || recon.currencies.length === 0) return null;
+
+  return (
+    <div className="rounded-md border border-slate-200 p-4 space-y-2">
+      <h3 className="text-sm font-semibold text-slate-900">{t("PrepaidReconciliationTitle" as any)}</h3>
+      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {recon.currencies.map((currency) => {
+          const row = recon.byCurrency[currency];
+          const scale = scaleForCurrency(currency);
+          const factor = Math.pow(10, scale);
+          return (
+            <div
+              key={currency}
+              className={`rounded-md border p-3 text-sm space-y-1 ${
+                row.isReconciled ? "border-emerald-500/30 bg-emerald-500/5" : "border-rose-500/30 bg-rose-500/5"
+              }`}
+            >
+              <div className="flex justify-between items-center">
+                <span className="font-medium text-slate-900">{currency}</span>
+                <Badge
+                  variant="outline"
+                  className={row.isReconciled ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : "bg-rose-500/10 text-rose-600 border-rose-500/20"}
+                >
+                  {t(row.isReconciled ? "PrepaidReconciliationOk" as any : "PrepaidReconciliationMismatch" as any)}
+                </Badge>
+              </div>
+              <div className="flex justify-between text-slate-600">
+                <span>{t("PrepaidReconciliationGlLabel" as any)}</span>
+                <span>{formatCurrency(row.glBalanceMinor / factor, currency, scale)}</span>
+              </div>
+              <div className="flex justify-between text-slate-600">
+                <span>{t("PrepaidReconciliationSubledgerLabel" as any)}</span>
+                <span>{formatCurrency(row.subledgerBalanceMinor / factor, currency, scale)}</span>
+              </div>
+              {!row.isReconciled && (
+                <div className="flex justify-between text-rose-600 font-medium">
+                  <span>{t("PrepaidReconciliationDeltaLabel" as any)}</span>
+                  <span>{formatCurrency(row.discrepancyMinor / factor, currency, scale)}</span>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 type PendingCorrectionRequest = {
   _id: Id<"prepaidCorrectionRequests">;
   scheduleId: Id<"prepaidExpenseSchedules">;
@@ -408,6 +473,8 @@ export function PrepaidExpensesTab() {
           </Button>
         )}
       </div>
+
+      {activeOrgId && <PrepaidReconciliationCard orgId={activeOrgId} />}
 
       {activeOrgId && canManage && <PendingCorrectionRequestsPanel orgId={activeOrgId} />}
 

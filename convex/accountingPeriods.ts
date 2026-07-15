@@ -3,7 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { Id, Doc } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { requireTenantAuth, requireOwner } from "./utils/tenancy";
+import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { auditLog } from "./financialAudit";
 import { requireFeature } from "./subscriptions";
@@ -540,12 +540,12 @@ export const reopen = mutation({
   handler: async (ctx, args) => {
     // Reopening un-does a close's own protections (pending events, AR/subledger
     // reconciliation, unmatched bank lines all stop blocking anything once a
-    // period is OPEN again) — the same reasoning close()'s override path
-    // already uses to require the org owner specifically, not any
-    // MANAGE_FINANCE holder (e.g. the default ACCOUNTANT role). requireOwner
-    // already implies every permission (owners have them all), so it
-    // subsumes the MANAGE_FINANCE check too.
-    const { user } = await requireOwner(ctx, args.orgId);
+    // period is OPEN again) — deliberately narrower than plain MANAGE_FINANCE
+    // (e.g. the default ACCOUNTANT role doesn't have it out of the box). The
+    // owner always has REOPEN_PERIODS via ALL_PERMISSIONS; other orgs grant
+    // it to a controller role explicitly, founder-independence style, rather
+    // than requiring the owner personally for every reopen.
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.REOPEN_PERIODS]);
     await requireFeature(ctx, args.orgId, "accounting");
 
     const period = await ctx.db.get(args.periodId);

@@ -45,7 +45,7 @@ import { PERMISSIONS } from "./utils/permissions";
 import { isSystemOwnerRole } from "./utils/permissions";
 import { requireFeature } from "./subscriptions";
 import { auditLog } from "./financialAudit";
-import { notifyOwner, notifyUser, getActorName } from "./utils/notifications";
+import { notifyFinanceManagers, notifyUser, getActorName } from "./utils/notifications";
 import { paymentMethodValidator, type PaymentMethod } from "./utils/paymentMethods";
 import { runWithIdempotency } from "./utils/idempotency";
 import { drainEntries } from "./accountingOutbox";
@@ -355,7 +355,7 @@ export const recordAmortizationFailure = internalMutation({
     });
     const schedule = await ctx.db.get(args.scheduleId);
     const expense = schedule ? await ctx.db.get(schedule.expenseId) : null;
-    await notifyOwner(ctx, args.orgId, "accounting.prepaidAmortizationFailed", {
+    await notifyFinanceManagers(ctx, args.orgId, "accounting.prepaidAmortizationFailed", {
       expenseTitle: expense?.title ?? "Prepaid expense",
       yearMonth: args.yearMonth,
       errorMessage: args.errorMessage,
@@ -901,11 +901,15 @@ export const correctSchedule = mutation({
 
         const expense = await ctx.db.get(schedule.expenseId);
         const actorName = await getActorName(ctx);
-        await notifyOwner(ctx, args.orgId, "accounting.prepaidCorrectionRequested", {
-          actorName,
-          expenseTitle: expense?.title ?? "Prepaid expense",
-          amount: String(writeOffMinor),
-        });
+        // Every OTHER MANAGE_FINANCE holder (or the owner) — never the maker
+        // themselves, who already knows they just submitted this.
+        await notifyFinanceManagers(
+          ctx,
+          args.orgId,
+          "accounting.prepaidCorrectionRequested",
+          { actorName, expenseTitle: expense?.title ?? "Prepaid expense", amount: String(writeOffMinor) },
+          { excludeUserId: user._id }
+        );
 
         return { status: "PENDING" as const, correctionId: null, requestId };
       }

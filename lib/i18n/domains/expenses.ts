@@ -130,6 +130,12 @@ export const expensesEn = {
   PrepaidCorrectionOwnRequestNotice: "This is your own request — another finance manager or the owner must approve it.",
   PrepaidCorrectionApproved: "Correction approved and applied.",
   PrepaidCorrectionRejected: "Correction request rejected.",
+  PrepaidReconciliationTitle: "Prepaid Expenses reconciliation",
+  PrepaidReconciliationOk: "OK",
+  PrepaidReconciliationMismatch: "Mismatch",
+  PrepaidReconciliationGlLabel: "GL balance",
+  PrepaidReconciliationSubledgerLabel: "Subledger remaining",
+  PrepaidReconciliationDeltaLabel: "Delta",
 };
 
 export const expensesAr = {
@@ -264,4 +270,10 @@ export const expensesAr = {
   PrepaidCorrectionOwnRequestNotice: "هذا طلبك الخاص — يجب أن يوافق عليه مدير مالي آخر أو المالك.",
   PrepaidCorrectionApproved: "تمت الموافقة على التصحيح وتطبيقه.",
   PrepaidCorrectionRejected: "تم رفض طلب التصحيح.",
+  PrepaidReconciliationTitle: "تسوية المصروفات المدفوعة مقدماً",
+  PrepaidReconciliationOk: "متطابق",
+  PrepaidReconciliationMismatch: "عدم تطابق",
+  PrepaidReconciliationGlLabel: "رصيد دفتر الأستاذ",
+  PrepaidReconciliationSubledgerLabel: "المتبقي في السجل الفرعي",
+  PrepaidReconciliationDeltaLabel: "الفرق",
 };

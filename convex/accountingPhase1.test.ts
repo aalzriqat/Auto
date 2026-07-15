@@ -361,7 +361,7 @@ describe("Phase 1 — accounting periods", () => {
     expect(period?.reopenedAt).toBeTruthy();
   });
 
-  test("a non-owner cannot reopen a closed period even with a reason", async () => {
+  test("a plain MANAGE_FINANCE holder without REOPEN_PERIODS cannot reopen a closed period", async () => {
     const { orgId, asUser } = await seedPhase1Dealer();
 
     const periodId = await asUser.mutation(api.accountingPeriods.create, {
@@ -374,13 +374,49 @@ describe("Phase 1 — accounting periods", () => {
     });
     await asUser.mutation(api.accountingPeriods.close, { orgId, periodId });
 
+    // seedPhase1Dealer's role has manage:finance but not reopen:accounting_periods
+    // — reopening is deliberately narrower than plain finance management.
     await expect(
       asUser.mutation(api.accountingPeriods.reopen, {
         orgId,
         periodId,
-        reason: "Trying to reopen without owner rights",
+        reason: "Trying to reopen without the reopen permission",
       })
-    ).rejects.toThrow(/only the organization owner/i);
+    ).rejects.toThrow(/missing required permissions/i);
+  });
+
+  test("a non-owner role explicitly granted REOPEN_PERIODS (a controller role) CAN reopen", async () => {
+    const { t, orgId, userId, asUser } = await seedPhase1Dealer();
+
+    const periodId = await asUser.mutation(api.accountingPeriods.create, {
+      orgId,
+      fiscalYear: 2026,
+      periodNumber: 1,
+      startDate: JAN_2026_START,
+      endDate: JAN_2026_END,
+      openImmediately: true,
+    });
+    await asUser.mutation(api.accountingPeriods.close, { orgId, periodId });
+
+    await t.run(async (ctx) => {
+      const membership = await ctx.db
+        .query("memberships")
+        .withIndex("by_org_user", (q) => q.eq("orgId", orgId).eq("userId", userId))
+        .unique();
+      const role = await ctx.db.get(membership!.roleId);
+      await ctx.db.patch(membership!.roleId, {
+        permissions: [...role!.permissions, "reopen:accounting_periods"],
+      });
+    });
+
+    await asUser.mutation(api.accountingPeriods.reopen, {
+      orgId,
+      periodId,
+      reason: "Controller-approved correction",
+    });
+
+    const period = await asUser.query(api.accountingPeriods.get, { orgId, periodId });
+    expect(period?.status).toBe("OPEN");
   });
 
   test("locked periods cannot be reopened", async () => {

@@ -120,6 +120,38 @@ export const backfillFinanceApplicationPermissions = internalMutation({
 });
 
 /**
+ * One-time backfill for the new REOPEN_PERIODS permission (accounting
+ * autonomy remediation, Phase 7). Deliberately narrower than every backfill
+ * above: this permission is NOT granted to any capability-matched role, only
+ * to OWNER rows — the whole point is that an org grants it to a controller
+ * role explicitly, not automatically to whoever already holds MANAGE_FINANCE
+ * (the default ACCOUNTANT template shouldn't gain the ability to reopen a
+ * closed period just because this migration ran). Still needed for every
+ * OWNER row regardless: any legacy OWNER row missing the explicit
+ * isSystemOwnerRole flag fails the isSystemOwnerRole() fallback check the
+ * instant ANY new permission is added to the PERMISSIONS registry, not just
+ * this one — see patchRoleIfNeeded's own comment.
+ */
+export const backfillReopenPeriodsPermission = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const roles = await ctx.db.query("roles").collect();
+    let updatedCount = 0;
+    const updates: string[] = [];
+
+    for (const role of roles) {
+      if (role.isDeleted) continue;
+      if (!(isSystemOwnerRole(role) || normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME)) continue;
+
+      const toAdd = new Set<string>([PERMISSIONS.REOPEN_PERIODS]);
+      if (await patchRoleIfNeeded(ctx, role, toAdd, updates)) updatedCount++;
+    }
+
+    return { updatedCount, updates };
+  },
+});
+
+/**
  * One-time backfill for the new Dealer Network Marketplace permissions
  * (Phase 56/57, PR #52). Same capability-matching approach as
  * backfillFinanceApplicationPermissions above: any org whose OWNER role
