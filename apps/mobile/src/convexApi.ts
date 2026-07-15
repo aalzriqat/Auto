@@ -1577,6 +1577,11 @@ export const api = {
       OrgScopedArgs & { saleId: string; idempotencyKey?: string },
       string
     >("sales:completeDraft"),
+    completeFromQuote: makeFunctionReference<
+      "mutation",
+      OrgScopedArgs & { quoteId: string; idempotencyKey?: string },
+      string
+    >("sales:completeFromQuote"),
     update: makeFunctionReference<"mutation", SaleUpdateArgs, null>("sales:update"),
     softDelete: makeFunctionReference<"mutation", OrgScopedArgs & { saleId: string }, null>(
       "sales:softDelete",
@@ -1946,6 +1951,18 @@ export const api = {
       ApplicationListArgs,
       MobilePageResult<MobileFinanceApplication>
     >("applications:list"),
+    createFromQuote: makeFunctionReference<
+      "mutation",
+      OrgScopedArgs & { quoteId: string; notes?: string },
+      string
+    >("applications:createFromQuote"),
+  },
+  deposits: {
+    create: makeFunctionReference<
+      "mutation",
+      OrgScopedArgs & { quoteId: string; amount: number; notes?: string; idempotencyKey?: string },
+      string
+    >("deposits:create"),
   },
   approvals: {
     checkPendingApproval: makeFunctionReference<
@@ -2150,6 +2167,12 @@ export const api = {
       "mutation",
       "public",
       OrgScopedArgs & { saleId: string; idempotencyKey?: string },
+      string
+    >;
+    completeFromQuote: FunctionReference<
+      "mutation",
+      "public",
+      OrgScopedArgs & { quoteId: string; idempotencyKey?: string },
       string
     >;
     update: FunctionReference<"mutation", "public", SaleUpdateArgs, null>;
@@ -2414,7 +2437,21 @@ export const api = {
     >;
     getLeadConversionReport: FunctionReference<"query", "public", ReportRangeArgs, MobileLeadConversionReport>;
   };
+  deposits: {
+    create: FunctionReference<
+      "mutation",
+      "public",
+      OrgScopedArgs & { quoteId: string; amount: number; notes?: string; idempotencyKey?: string },
+      string
+    >;
+  };
   applications: {
+    createFromQuote: FunctionReference<
+      "mutation",
+      "public",
+      OrgScopedArgs & { quoteId: string; notes?: string },
+      string
+    >;
     list: FunctionReference<
       "query",
       "public",

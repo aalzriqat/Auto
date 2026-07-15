@@ -8,6 +8,7 @@ import {
   Modal,
   Pressable,
   ScrollView,
+  Share,
   StyleSheet,
   Text,
   TextInput,
@@ -23,7 +24,7 @@ import {
 import { useLocale } from "../../../providers/LocaleProvider";
 import { theme } from "../../../theme";
 import { compactInitials } from "../nativeModules";
-import { money, parseOptionalNumber, useGenericError, SearchInput } from "../modules/moduleShared";
+import { idempotencyKey, money, parseOptionalNumber, useGenericError, SearchInput } from "../modules/moduleShared";
 import { calculateUnifiedMurabaha, type UnifiedMurabahaResult } from "./murabaha";
 
 export type WizardPaymentType = "CASH" | "INSTALLMENT";
@@ -160,6 +161,11 @@ export function SalesWizardScreen({
   const [saving, setSaving] = useState(false);
   const [quoteId, setQuoteId] = useState<string | null>(null);
   const [shared, setShared] = useState(false);
+  const [depositOpen, setDepositOpen] = useState(false);
+  const [depositAmount, setDepositAmount] = useState("");
+  const [depositDone, setDepositDone] = useState(false);
+  const [saleCompleted, setSaleCompleted] = useState(false);
+  const [applicationStarted, setApplicationStarted] = useState(false);
 
   const availableVehicles = useQuery(api.vehicles.listAll, {
     orgId,
@@ -184,6 +190,9 @@ export function SalesWizardScreen({
   const createCustomer = useMutation(api.customers.create);
   const saveQuote = useMutation(api.quotes.saveQuote);
   const updateQuoteStatus = useMutation(api.quotes.updateQuoteStatus);
+  const createDeposit = useMutation(api.deposits.create);
+  const completeFromQuote = useMutation(api.sales.completeFromQuote);
+  const createApplication = useMutation(api.applications.createFromQuote);
 
   const activeStatusOptions = (statusOptions ?? []).filter((option) => option.isActive);
   const selectedVehicle =
@@ -366,6 +375,78 @@ export function SalesWizardScreen({
       setShared(true);
     } catch (error) {
       reportError("Mobile wizard quote share failed", error);
+    }
+  }
+
+  // Native counterpart of the web "Download PDF Quote": share a formatted
+  // quote summary through the system share sheet (WhatsApp, email, ...).
+  async function handleShareQuote() {
+    const vehicleLine = selectedVehicle
+      ? `${selectedVehicle.year} ${selectedVehicle.make} ${selectedVehicle.model}`
+      : "";
+    const lines = [
+      locale === "ar" ? "عرض سعر — AutoFlow" : "Quote — AutoFlow",
+      `${locale === "ar" ? "العميل" : "Customer"}: ${customer?.firstName ?? ""} ${customer?.lastName ?? ""}`,
+      `${locale === "ar" ? "السيارة" : "Vehicle"}: ${vehicleLine}`,
+      `${locale === "ar" ? "السعر" : "Price"}: ${money(price, locale)}`,
+    ];
+    if (!isCash && selectedResult) {
+      lines.push(
+        `${locale === "ar" ? "الدفعة الأولى" : "Down payment"}: ${money(down, locale)}`,
+        `${locale === "ar" ? "المدة" : "Term"}: ${term} ${locale === "ar" ? "شهر" : "months"}`,
+        `${locale === "ar" ? "القسط الشهري" : "Monthly"}: ${money(selectedResult.monthlyInstallment, locale)}`,
+      );
+    }
+    try {
+      await Share.share({ message: lines.join("\n") });
+    } catch (error) {
+      reportError("Mobile wizard quote share sheet failed", error);
+    }
+  }
+
+  async function handleRecordDeposit() {
+    const amount = parseOptionalNumber(depositAmount);
+    if (!quoteId || !amount || amount <= 0) return;
+    setSaving(true);
+    try {
+      await createDeposit({
+        orgId,
+        quoteId,
+        amount,
+        idempotencyKey: idempotencyKey("deposits.create"),
+      });
+      setDepositDone(true);
+      setDepositOpen(false);
+    } catch (error) {
+      reportError("Mobile wizard deposit failed", error);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleCompleteSale() {
+    if (!quoteId) return;
+    setSaving(true);
+    try {
+      await completeFromQuote({ orgId, quoteId, idempotencyKey: idempotencyKey("sales.completeFromQuote") });
+      setSaleCompleted(true);
+    } catch (error) {
+      reportError("Mobile wizard complete sale failed", error);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleStartApplication() {
+    if (!quoteId) return;
+    setSaving(true);
+    try {
+      await createApplication({ orgId, quoteId });
+      setApplicationStarted(true);
+    } catch (error) {
+      reportError("Mobile wizard application failed", error);
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -878,15 +959,94 @@ export function SalesWizardScreen({
                 <Text style={[styles.successMonthly, { color: accent }]}>{money(price, locale)}</Text>
               )}
             </View>
+            {/* Action set — mirrors the web Step4: share/download, deposit,
+                complete cash sale or start finance application, mark shared */}
+            <Pressable
+              accessibilityRole="button"
+              style={({ pressed }) => [styles.nextButton, { backgroundColor: accent }, pressed && styles.pressed]}
+              onPress={handleShareQuote}
+            >
+              <Text style={styles.nextButtonText}>
+                {locale === "ar" ? "مشاركة العرض" : "Share quote"}
+              </Text>
+            </Pressable>
+
+            {depositOpen && !depositDone ? (
+              <View style={styles.createCard}>
+                <Field
+                  keyboardType="numeric"
+                  label={locale === "ar" ? "قيمة العربون" : "Deposit amount"}
+                  value={depositAmount}
+                  onChangeText={setDepositAmount}
+                />
+                <View style={styles.rowButtons}>
+                  <Pressable accessibilityRole="button" style={({ pressed }) => [styles.ghostButton, pressed && styles.pressed]} onPress={() => setDepositOpen(false)}>
+                    <Text style={styles.ghostButtonText}>{locale === "ar" ? "إلغاء" : "Cancel"}</Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={saving}
+                    style={({ pressed }) => [styles.nextButton, { backgroundColor: accent, flex: 1 }, pressed && styles.pressed]}
+                    onPress={handleRecordDeposit}
+                  >
+                    <Text style={styles.nextButtonText}>
+                      {saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "تسجيل العربون" : "Record deposit")}
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : (
+              <Pressable
+                accessibilityRole="button"
+                disabled={depositDone}
+                style={({ pressed }) => [styles.outlineButton, { borderColor: accent }, depositDone && styles.disabled, pressed && styles.pressed]}
+                onPress={() => setDepositOpen(true)}
+              >
+                <Text style={[styles.outlineButtonText, { color: accent }]}>
+                  {depositDone
+                    ? locale === "ar" ? "تم تسجيل العربون ✓" : "Deposit recorded ✓"
+                    : locale === "ar" ? "تسجيل عربون" : "Record deposit"}
+                </Text>
+              </Pressable>
+            )}
+
+            {isCash ? (
+              <Pressable
+                accessibilityRole="button"
+                disabled={saleCompleted || saving}
+                style={({ pressed }) => [styles.outlineButton, { borderColor: accent }, saleCompleted && styles.disabled, pressed && styles.pressed]}
+                onPress={handleCompleteSale}
+              >
+                <Text style={[styles.outlineButtonText, { color: accent }]}>
+                  {saleCompleted
+                    ? locale === "ar" ? "اكتملت البيعة ✓" : "Sale completed ✓"
+                    : locale === "ar" ? "إتمام البيع النقدي" : "Complete cash sale"}
+                </Text>
+              </Pressable>
+            ) : (
+              <Pressable
+                accessibilityRole="button"
+                disabled={applicationStarted || saving}
+                style={({ pressed }) => [styles.outlineButton, { borderColor: accent }, applicationStarted && styles.disabled, pressed && styles.pressed]}
+                onPress={handleStartApplication}
+              >
+                <Text style={[styles.outlineButtonText, { color: accent }]}>
+                  {applicationStarted
+                    ? locale === "ar" ? "بدأ طلب التمويل ✓" : "Finance application started ✓"
+                    : locale === "ar" ? "بدء طلب التمويل" : "Start finance application"}
+                </Text>
+              </Pressable>
+            )}
+
             <Pressable
               accessibilityRole="button"
               disabled={shared}
-              style={({ pressed }) => [styles.nextButton, { backgroundColor: accent }, shared && styles.disabled, pressed && styles.pressed]}
+              style={({ pressed }) => [styles.outlineButton, { borderColor: theme.colors.borderStrong }, shared && styles.disabled, pressed && styles.pressed]}
               onPress={handleMarkShared}
             >
-              <Text style={styles.nextButtonText}>
+              <Text style={[styles.outlineButtonText, { color: theme.colors.text }]}>
                 {shared
-                  ? locale === "ar" ? "تمت المشاركة" : "Marked as shared"
+                  ? locale === "ar" ? "تمت المشاركة ✓" : "Marked as shared ✓"
                   : locale === "ar" ? "تحديد كمشارك مع العميل" : "Mark as shared with customer"}
               </Text>
             </Pressable>
@@ -1275,6 +1435,18 @@ const styles = StyleSheet.create({
   nextButtonText: {
     color: theme.colors.onPrimary,
     fontSize: 16,
+    fontWeight: "600",
+  },
+  outlineButton: {
+    minHeight: 48,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1.5,
+    borderRadius: theme.radius.full,
+    paddingHorizontal: theme.spacing.lg,
+  },
+  outlineButtonText: {
+    fontSize: 15,
     fontWeight: "600",
   },
   ghostButton: {
