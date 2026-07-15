@@ -1,7 +1,8 @@
 import { nativeRoutes } from "@autoflow/shared";
 import { useRouter } from "expo-router";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, View } from "react-native";
 
+import { EmptyState } from "../src/components/EmptyState";
 import { Screen } from "../src/components/Screen";
 import { useLocale } from "../src/providers/LocaleProvider";
 import { theme } from "../src/theme";
@@ -13,14 +14,13 @@ export default function NotFoundRoute() {
   return (
     <Screen>
       <View style={[styles.center, { direction: textDirection }]}>
-        <Text style={styles.title}>{t("notFoundTitle")}</Text>
-        <Text style={styles.body}>{t("notFoundBody")}</Text>
-        <Pressable
-          style={({ pressed }) => [styles.button, getNotFoundButtonPressedStyle(pressed)]}
-          onPress={() => router.replace(nativeRoutes.home)}
-        >
-          <Text style={styles.buttonText}>{t("home")}</Text>
-        </Pressable>
+        <EmptyState
+          actionLabel={t("home")}
+          hint={t("notFoundBody")}
+          icon="search"
+          onAction={() => router.replace(nativeRoutes.home)}
+          title={t("notFoundTitle")}
+        />
       </View>
     </Screen>
   );
@@ -35,36 +35,10 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    gap: 12,
     padding: theme.spacing.xl,
-  },
-  title: {
-    color: theme.colors.text,
-    fontSize: 24,
-    fontWeight: "700",
-    textAlign: "center",
-  },
-  body: {
-    color: theme.colors.mutedText,
-    fontSize: 16,
-    lineHeight: 22,
-    textAlign: "center",
-  },
-  button: {
-    minHeight: 48,
-    minWidth: 120,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.primary,
-    paddingHorizontal: theme.spacing.lg,
   },
   buttonPressed: {
     opacity: 0.82,
-  },
-  buttonText: {
-    color: theme.colors.onPrimary,
-    fontSize: 16,
-    fontWeight: "700",
+    transform: [{ scale: 0.98 }],
   },
 });

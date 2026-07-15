@@ -56,6 +56,10 @@ jest.mock("../providers/AppProviders", () => ({
   AppProviders: ({ children }: { children: ReactNode }) => children,
 }));
 
+jest.mock("../providers/AppFontContext", () => ({
+  useAppFontState: () => ({ fontLoadError: null, fontsLoaded: true }),
+}));
+
 jest.mock("../providers/LocaleProvider", () => ({
   useLocale: () => ({
     isRtl: false,

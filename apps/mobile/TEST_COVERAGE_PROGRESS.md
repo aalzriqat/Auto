@@ -1029,9 +1029,16 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `pnpm install --frozen-lockfile`: passed; lockfile already up to date.
   - `pnpm --filter @autoflow/mobile typecheck`: passed.
   - `pnpm --filter @autoflow/mobile test`: passed with 13 suites, 107 tests, and 100% statements/branches/functions/lines.
+- 2026-07-15 18:47 +03: mobile UI modernization Phase 6 auth/not-found routes validated locally
+  - Restyled `app/(auth)/sign-in.tsx` with a branded card shell, locale toggle, and locale-aware typography while preserving Clerk `AuthView` dismissal behavior.
+  - Replaced the custom not-found panel with the shared `EmptyState` component and kept the existing home navigation test surface.
+  - Added the AppFontContext route-test mock needed by typography-aware route components.
+  - `pnpm install --frozen-lockfile`: passed; lockfile already up to date.
+  - `pnpm --filter @autoflow/mobile typecheck`: passed.
+  - `pnpm --filter @autoflow/mobile test`: passed with 13 suites, 107 tests, and 100% statements/branches/functions/lines.
 
 ## Next Steps
 
-1. Commit Phase 6 marketplace screen restyle on top of `agent/mobile-ui-port`.
-2. Continue Phase 6 with `app/(auth)/sign-in.tsx` and `app/+not-found.tsx`.
-3. Continue the later UI/list phases with typecheck and 100% mobile Jest coverage before each commit.
+1. Commit Phase 6 auth/not-found route restyle on top of `agent/mobile-ui-port`.
+2. Continue Phase 7 list-performance conversion.
+3. Run final verification and push `origin/agent/mobile-ui-port`.
