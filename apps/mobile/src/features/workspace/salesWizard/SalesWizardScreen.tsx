@@ -3,7 +3,9 @@
 // CASH (teal) and INSTALLMENT (indigo) accents, murabaha finance comparison,
 // customer-status gating, and profit-approval blocking.
 import { useMutation, useQuery } from "convex/react";
-import { useMemo, useState } from "react";
+import * as Print from "expo-print";
+import * as Sharing from "expo-sharing";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Modal,
   Pressable,
@@ -164,6 +166,9 @@ export function SalesWizardScreen({
   const [depositOpen, setDepositOpen] = useState(false);
   const [depositAmount, setDepositAmount] = useState("");
   const [depositDone, setDepositDone] = useState(false);
+  const [depositId, setDepositId] = useState<string | null>(null);
+  const [resumeChecked, setResumeChecked] = useState(false);
+  const [resumePromptVisible, setResumePromptVisible] = useState(false);
   const [saleCompleted, setSaleCompleted] = useState(false);
   const [applicationStarted, setApplicationStarted] = useState(false);
 
@@ -191,6 +196,13 @@ export function SalesWizardScreen({
   const saveQuote = useMutation(api.quotes.saveQuote);
   const updateQuoteStatus = useMutation(api.quotes.updateQuoteStatus);
   const createDeposit = useMutation(api.deposits.create);
+  const saveDraft = useMutation(api.wizardDrafts.saveDraft);
+  const clearDraft = useMutation(api.wizardDrafts.clearDraft);
+  const dbDraft = useQuery(api.wizardDrafts.getMyDraft, { orgId });
+  const voucher = useQuery(
+    api.paymentVouchers.getByDeposit,
+    depositId ? { orgId, depositId } : "skip",
+  );
   const completeFromQuote = useMutation(api.sales.completeFromQuote);
   const createApplication = useMutation(api.applications.createFromQuote);
 
@@ -283,6 +295,99 @@ export function SalesWizardScreen({
     !isBlockedByProfit &&
     (isCash || Boolean(selectedCompanyId));
 
+  // Resume prompt: mirrors the web wizard DB-draft restore.
+  useEffect(() => {
+    if (resumeChecked || dbDraft === undefined) return;
+    setResumeChecked(true);
+    if (dbDraft && dbDraft.paymentType === paymentType && dbDraft.currentStep > 1) {
+      setResumePromptVisible(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dbDraft, paymentType, resumeChecked]);
+
+  function handleResumeDraft() {
+    if (!dbDraft) return;
+    const data = dbDraft.wizardData;
+    setVehicleId(data.vehicleId);
+    setVehiclePrice(data.vehiclePrice ? String(data.vehiclePrice) : "");
+    setDesiredProfit(String(data.desiredProfit ?? 0));
+    setDownPayment(String(data.downPayment ?? 0));
+    setTermMonths(String(data.termMonths || 84));
+    setSelectedCompanyId(data.selectedCompanyId);
+    setManualProfitRate(String(data.manualProfitRate ?? 0));
+    setManualInsuranceRate(String(data.manualInsuranceRate ?? 0));
+    setManualCommission(String(data.manualExecutionCommission ?? 0));
+    setManualFees(String(data.manualExecutionFees ?? 0));
+    setManualIncludesCommission(data.manualIncludesCommissionInDebt ?? true);
+    setStep(Math.min(dbDraft.currentStep, 3) as WizardStep);
+    setResumePromptVisible(false);
+  }
+
+  function handleDiscardDraft() {
+    clearDraft({ orgId }).catch((error: unknown) => console.error(error));
+    setResumePromptVisible(false);
+  }
+
+  // Debounced autosave while the wizard is in progress (steps 1-3).
+  const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (step === 4 || resumePromptVisible || !resumeChecked) return;
+    if (draftTimer.current) clearTimeout(draftTimer.current);
+    draftTimer.current = setTimeout(() => {
+      saveDraft({
+        orgId,
+        paymentType,
+        currentStep: step,
+        wizardData: {
+          vehicleId,
+          vehiclePrice: price,
+          desiredProfit: profit,
+          downPayment: down,
+          termMonths: term,
+          selectedCompanyId,
+          manualProfitRate: parseOptionalNumber(manualProfitRate),
+          manualInsuranceRate: parseOptionalNumber(manualInsuranceRate),
+          manualExecutionCommission: parseOptionalNumber(manualCommission),
+          manualExecutionFees: parseOptionalNumber(manualFees),
+          manualIncludesCommissionInDebt: manualIncludesCommission,
+        },
+        selectedCustomerId: customer?._id,
+      }).catch((error: unknown) => console.error(error));
+    }, 1500);
+    return () => {
+      if (draftTimer.current) clearTimeout(draftTimer.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, vehicleId, price, profit, down, term, selectedCompanyId, manualProfitRate, manualInsuranceRate, manualCommission, manualFees, manualIncludesCommission, customer, resumePromptVisible, resumeChecked]);
+
+  async function handleDownloadVoucher() {
+    if (!voucher) return;
+    const vehicleLine = selectedVehicle
+      ? String(selectedVehicle.year) + " " + selectedVehicle.make + " " + selectedVehicle.model
+      : "";
+    const dir = locale === "ar" ? "rtl" : "ltr";
+    const heading = locale === "ar" ? "\u0633\u0646\u062f \u0642\u0628\u0636" : "Receipt Voucher";
+    const customerLabel = locale === "ar" ? "\u0627\u0644\u0639\u0645\u064a\u0644" : "Customer";
+    const vehicleLabel = locale === "ar" ? "\u0627\u0644\u0633\u064a\u0627\u0631\u0629" : "Vehicle";
+    const html =
+      '<html dir="' + dir + '"><body style="font-family:sans-serif;padding:32px;">' +
+      '<h2 style="margin:0;color:#0f766e;">AutoFlow</h2>' +
+      "<h3>" + heading + " " + (voucher.voucherNumber ?? "") + "</h3>" +
+      "<p>" + customerLabel + ": " + (customer?.firstName ?? "") + " " + (customer?.lastName ?? "") + "</p>" +
+      "<p>" + vehicleLabel + ": " + vehicleLine + "</p>" +
+      '<p style="font-size:22px;font-weight:bold;">' + money(voucher.amount, locale) + "</p>" +
+      "<p>" + new Date(voucher._creationTime).toLocaleString(locale === "ar" ? "ar-JO" : "en-JO") + "</p>" +
+      "</body></html>";
+    try {
+      const file = await Print.printToFileAsync({ html });
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(file.uri, { mimeType: "application/pdf" });
+      }
+    } catch (error) {
+      reportError("Mobile voucher share failed", error);
+    }
+  }
+
   async function handleRequestApproval() {
     if (!vehicleId) return;
     setRequesting(true);
@@ -360,6 +465,7 @@ export function SalesWizardScreen({
         manualIncludesCommissionInDebt: manual ? manualIncludesCommission : undefined,
       });
       setQuoteId(id);
+      clearDraft({ orgId }).catch((error: unknown) => console.error(error));
       setStep(4);
     } catch (error) {
       reportError("Mobile wizard quote save failed", error);
@@ -409,12 +515,13 @@ export function SalesWizardScreen({
     if (!quoteId || !amount || amount <= 0) return;
     setSaving(true);
     try {
-      await createDeposit({
+      const newDepositId = await createDeposit({
         orgId,
         quoteId,
         amount,
         idempotencyKey: idempotencyKey("deposits.create"),
       });
+      setDepositId(newDepositId);
       setDepositDone(true);
       setDepositOpen(false);
     } catch (error) {
@@ -473,6 +580,26 @@ export function SalesWizardScreen({
       </View>
 
       {step < 4 ? <StepIndicator currentStep={step} paymentType={paymentType} /> : null}
+
+      {resumePromptVisible ? (
+        <View style={styles.resumeBanner}>
+          <Text style={styles.resumeTitle}>
+            {locale === "ar" ? "\u0644\u062f\u064a\u0643 \u0645\u0633\u0648\u062f\u0629 \u063a\u064a\u0631 \u0645\u0643\u062a\u0645\u0644\u0629 \u0645\u0646 \u062c\u0644\u0633\u0629 \u0633\u0627\u0628\u0642\u0629." : "You have an unsaved draft from a previous session."}
+          </Text>
+          <View style={styles.rowButtons}>
+            <Pressable accessibilityRole="button" style={({ pressed }) => [styles.ghostButton, pressed && styles.pressed]} onPress={handleDiscardDraft}>
+              <Text style={styles.ghostButtonText}>{locale === "ar" ? "\u0627\u0644\u0628\u062f\u0621 \u0645\u0646 \u062c\u062f\u064a\u062f" : "Start fresh"}</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              style={({ pressed }) => [styles.nextButton, styles.resumeButton, pressed && styles.pressed]}
+              onPress={handleResumeDraft}
+            >
+              <Text style={styles.nextButtonText}>{locale === "ar" ? "\u0627\u0633\u062a\u0626\u0646\u0627\u0641 \u0627\u0644\u0645\u0633\u0648\u062f\u0629" : "Resume draft"}</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
 
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         {/* ── STEP 1 — QUOTE SETUP ─────────────────────────────── */}
@@ -1010,6 +1137,18 @@ export function SalesWizardScreen({
               </Pressable>
             )}
 
+            {depositDone && voucher ? (
+              <Pressable
+                accessibilityRole="button"
+                style={({ pressed }) => [styles.outlineButton, { borderColor: accent }, pressed && styles.pressed]}
+                onPress={handleDownloadVoucher}
+              >
+                <Text style={[styles.outlineButtonText, { color: accent }]}>
+                  {locale === "ar" ? "\u062a\u0646\u0632\u064a\u0644 \u0633\u0646\u062f \u0627\u0644\u0642\u0628\u0636" : "Download receipt voucher"}
+                </Text>
+              </Pressable>
+            ) : null}
+
             {isCash ? (
               <Pressable
                 accessibilityRole="button"
@@ -1436,6 +1575,24 @@ const styles = StyleSheet.create({
     color: theme.colors.onPrimary,
     fontSize: 16,
     fontWeight: "600",
+  },
+  resumeBanner: {
+    gap: 8,
+    marginHorizontal: theme.spacing.lg,
+    marginBottom: theme.spacing.sm,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.warningSoft,
+    padding: theme.spacing.lg,
+  },
+  resumeTitle: {
+    color: theme.colors.warning,
+    fontSize: 13,
+    fontWeight: "600",
+    lineHeight: 19,
+  },
+  resumeButton: {
+    flex: 1,
+    backgroundColor: theme.colors.warning,
   },
   outlineButton: {
     minHeight: 48,

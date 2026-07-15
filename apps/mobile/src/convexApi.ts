@@ -958,6 +958,36 @@ export interface MobileVehiclePickerItem {
   status: string;
 }
 
+export interface MobileWizardDraftData {
+  vehicleId: string;
+  vehiclePrice: number;
+  desiredProfit: number;
+  downPayment: number;
+  termMonths: number;
+  selectedCompanyId?: string;
+  manualProfitRate?: number;
+  manualInsuranceRate?: number;
+  manualExecutionCommission?: number;
+  manualExecutionFees?: number;
+  manualIncludesCommissionInDebt?: boolean;
+  recipientName?: string;
+}
+
+export interface MobileWizardDraft {
+  paymentType: string;
+  currentStep: number;
+  wizardData: MobileWizardDraftData;
+  selectedCustomerId?: string;
+  savedAt: number;
+}
+
+export interface MobilePaymentVoucher {
+  _id: string;
+  voucherNumber?: string;
+  amount: number;
+  _creationTime: number;
+}
+
 type OrgScopedArgs = {
   orgId: string;
 };
@@ -1957,6 +1987,29 @@ export const api = {
       string
     >("applications:createFromQuote"),
   },
+  wizardDrafts: {
+    getMyDraft: makeFunctionReference<"query", OrgScopedArgs, MobileWizardDraft | null>(
+      "wizardDrafts:getMyDraft",
+    ),
+    saveDraft: makeFunctionReference<
+      "mutation",
+      OrgScopedArgs & {
+        paymentType: string;
+        currentStep: number;
+        wizardData: MobileWizardDraftData;
+        selectedCustomerId?: string;
+      },
+      null
+    >("wizardDrafts:saveDraft"),
+    clearDraft: makeFunctionReference<"mutation", OrgScopedArgs, null>("wizardDrafts:clearDraft"),
+  },
+  paymentVouchers: {
+    getByDeposit: makeFunctionReference<
+      "query",
+      OrgScopedArgs & { depositId: string },
+      MobilePaymentVoucher | null
+    >("paymentVouchers:getByDeposit"),
+  },
   deposits: {
     create: makeFunctionReference<
       "mutation",
@@ -2436,6 +2489,29 @@ export const api = {
       MobileSalespersonPerformanceRow[]
     >;
     getLeadConversionReport: FunctionReference<"query", "public", ReportRangeArgs, MobileLeadConversionReport>;
+  };
+  wizardDrafts: {
+    getMyDraft: FunctionReference<"query", "public", OrgScopedArgs, MobileWizardDraft | null>;
+    saveDraft: FunctionReference<
+      "mutation",
+      "public",
+      OrgScopedArgs & {
+        paymentType: string;
+        currentStep: number;
+        wizardData: MobileWizardDraftData;
+        selectedCustomerId?: string;
+      },
+      null
+    >;
+    clearDraft: FunctionReference<"mutation", "public", OrgScopedArgs, null>;
+  };
+  paymentVouchers: {
+    getByDeposit: FunctionReference<
+      "query",
+      "public",
+      OrgScopedArgs & { depositId: string },
+      MobilePaymentVoucher | null
+    >;
   };
   deposits: {
     create: FunctionReference<

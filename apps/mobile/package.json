@@ -33,6 +33,8 @@
     "expo-dev-client": "~57.0.5",
     "expo-font": "^57.0.1",
     "expo-linking": "~57.0.2",
+    "expo-print": "~15.0.2",
+    "expo-sharing": "~14.0.1",
     "expo-router": "~57.0.4",
     "expo-secure-store": "~57.0.0",
     "expo-splash-screen": "~57.0.2",
