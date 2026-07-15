@@ -14,6 +14,9 @@
     ],
     "overrides": {
       "undici": "^7.28.0"
+    },
+    "patchedDependencies": {
+      "expo-sharing": "patches/expo-sharing.patch"
     }
   },
   "scripts": {
