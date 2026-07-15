@@ -838,6 +838,7 @@ export async function computePrepaidRecognitionShortfall(
     if (s.status === "CANCELLED") continue;
     const dueMinor = recognizedDueThroughDateMinor(
       { totalMinor: s.totalMinor, termMonths: s.termMonths, startYearMonth: s.startYearMonth, currency: s.currency },
+      { recognizedMinor: s.recognizedMinor, monthsRecognized: s.monthsRecognized ?? 0 },
       asOfDate
     );
     const shortfall = dueMinor - s.recognizedMinor;

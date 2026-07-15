@@ -6,11 +6,11 @@ import { PERMISSIONS } from "./utils/permissions";
 import { rateLimiter } from "./rateLimit";
 import {
   computeAmortizationInfo,
-  computeAmortizationInfoFromSchedule,
+  amortizationInfoFromScheduleProgress,
   recognizedAmountInRange,
-  recognizedAmountInRangeFromSchedule,
   PREPAID_LOOKBACK_MS,
 } from "./utils/expenseAmortization";
+import { loadOrgPrepaidRecognitionByMonth, recognizedAmountInRangeFromEvents } from "./utils/prepaidRecognitionEvents";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 
@@ -228,19 +228,26 @@ export const getExpensesReport = query({
 
     // Authoritative prepaid schedules for this org — one row per prepaid
     // expense (low-volume: rent/insurance/licences, not per-transaction). The
-    // report reads recognition straight from these rows, so it can never
-    // diverge from the GL (which amortizes the same rows), and a long-term
-    // prepaid dated well before the window is still found without an arbitrary
-    // date-lookback cap.
+    // report reads recognition from the schedule's posted GL events (below),
+    // not the row's mutable totalMinor/termMonths, so it can never diverge
+    // from the GL and a long-term prepaid dated well before the window is
+    // still found without an arbitrary date-lookback cap.
     const schedules = await ctx.db
       .query("prepaidExpenseSchedules")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .collect();
     const scheduleByExpenseId = new Map(schedules.map((s) => [s.expenseId, s]));
+    const recognitionEvents = await loadOrgPrepaidRecognitionByMonth(ctx, args.orgId);
 
+    // Any status, INCLUDING CANCELLED: cancellation only stops future
+    // recognition, it never un-happens history. A cancelled schedule's
+    // already-posted months (and an accelerated write-off's own month) must
+    // keep showing up in the report they originally posted into, so it always
+    // stays the event path — never the expense-doc fallback, which would
+    // double count months the schedule already reported before cancellation.
     const scheduledRecognitionFor = (exp: Doc<"expenses">) => {
       const schedule = scheduleByExpenseId.get(exp._id);
-      return exp.isPrepaid && schedule && schedule.status !== "CANCELLED" ? schedule : null;
+      return exp.isPrepaid && schedule ? schedule : null;
     };
 
     // A PREPAID expense (e.g. 6 months of rent paid up front) recognizes only
@@ -255,9 +262,12 @@ export const getExpensesReport = query({
     const priorById = new Map<Id<"expenses">, Doc<"expenses">>();
 
     for (const schedule of schedules) {
-      if (schedule.status === "CANCELLED") continue;
       if (inRangeIds.has(schedule.expenseId)) continue;
-      if (recognizedAmountInRangeFromSchedule(schedule, args.startDate, args.endDate) <= 0) continue;
+      if (
+        recognizedAmountInRangeFromEvents(recognitionEvents, schedule._id, args.startDate, args.endDate, schedule.currency) <= 0
+      ) {
+        continue;
+      }
       const exp = await ctx.db.get(schedule.expenseId);
       if (exp && exp.isDeleted !== true) priorById.set(exp._id, exp);
     }
@@ -277,8 +287,8 @@ export const getExpensesReport = query({
       )
       .collect();
     for (const exp of priorUnscheduledPrepaid) {
-      // A scheduled prepaid is handled above; skip anything with a schedule row
-      // (a CANCELLED schedule means it was reversed — no recognition either way).
+      // A scheduled prepaid (any status) is handled above via its GL events;
+      // skip anything with a schedule row so it's never double-counted here.
       if (scheduleByExpenseId.has(exp._id) || inRangeIds.has(exp._id) || priorById.has(exp._id)) continue;
       if (recognizedAmountInRange(exp, args.startDate, args.endDate, currency) <= 0) continue;
       priorById.set(exp._id, exp);
@@ -297,11 +307,12 @@ export const getExpensesReport = query({
     );
 
     const enrichedExpenses = allExpenses.map((exp) => {
-      // Prefer the authoritative schedule row; fall back to the net-of-VAT
-      // expense doc only for a prepaid expense that has no schedule row yet.
+      // Prefer the authoritative schedule's own GL events; fall back to the
+      // net-of-VAT expense doc only for a prepaid expense that has no
+      // schedule row yet.
       const schedule = scheduledRecognitionFor(exp);
       const recognizedAmount = schedule
-        ? recognizedAmountInRangeFromSchedule(schedule, args.startDate, args.endDate)
+        ? recognizedAmountInRangeFromEvents(recognitionEvents, schedule._id, args.startDate, args.endDate, schedule.currency)
         : recognizedAmountInRange(exp, args.startDate, args.endDate, currency);
       totalExpenses += recognizedAmount;
       let vehicleDesc = "General";
@@ -318,7 +329,7 @@ export const getExpensesReport = query({
         vehicleDesc,
         recognizedAmount,
         amortization: schedule
-          ? computeAmortizationInfoFromSchedule(schedule, args.endDate)
+          ? amortizationInfoFromScheduleProgress(schedule)
           : computeAmortizationInfo(exp, args.endDate, currency),
       };
     });

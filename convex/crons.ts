@@ -6,7 +6,6 @@ import { notifyManagers, notifyUser } from "./utils/notifications";
 import { PLANS, PlanId } from "./subscriptions";
 import { Doc, Id } from "./_generated/dataModel";
 import { isSystemOwnerRole } from "./utils/permissions";
-import { yearMonthStringIndex } from "./utils/expenseAmortization";
 
 const crons = cronJobs();
 
@@ -568,26 +567,6 @@ type PrepaidAmortizationRunStats = {
   failed: number;
 };
 
-/** "YYYY-MM" for an absolute month index (year*12 + 0-based month). */
-function yearMonthFromIndex(idx: number): string {
-  const year = Math.floor(idx / 12);
-  const month = idx % 12;
-  return `${year}-${String(month + 1).padStart(2, "0")}`;
-}
-
-/**
- * A timestamp that falls inside calendar month `idx` (its last millisecond),
- * clamped to `now` so the in-progress current month posts as-of-now rather than
- * a future date. Dating each recognition to its own month is what keeps a
- * caught-up schedule from lumping missed months into the present period.
- */
-function occurredAtForMonthIndex(idx: number, now: number): number {
-  const year = Math.floor(idx / 12);
-  const month = idx % 12;
-  const endOfMonth = Date.UTC(year, month + 1, 0, 23, 59, 59, 999);
-  return Math.min(endOfMonth, now);
-}
-
 async function amortizeCronSchedule(
   ctx: ActionCtx,
   schedule: Doc<"prepaidExpenseSchedules">,
@@ -604,37 +583,20 @@ async function amortizeCronSchedule(
 
   // Recognize every missing calendar month in its OWN month — from the first
   // month not yet recognized through the current month — never lumping missed
-  // months into the present. The mutation is idempotent per month, refuses
-  // months at/before the last recognized one, and each posting is dated to its
-  // month, so a month whose period is already closed parks in the outbox
-  // (postOrEnqueue) rather than posting into a closed period. Re-drives are safe.
-  const startIdx = yearMonthStringIndex(schedule.startYearMonth);
-  const lastIdx = schedule.lastRecognizedYearMonth
-    ? yearMonthStringIndex(schedule.lastRecognizedYearMonth)
-    : startIdx - 1;
-  const fromIdx = Math.max(startIdx, lastIdx + 1);
-  // Never past the contractual final month or the current month.
-  const toIdx = Math.min(yearMonthStringIndex(args.currentYearMonth), startIdx + schedule.termMonths - 1);
-
-  let posted = false;
-  for (let idx = fromIdx; idx <= toIdx; idx++) {
-    const result = await ctx.runMutation(internal.prepaidExpenses.amortizePrepaidExpenseForMonth, {
-      orgId: schedule.orgId,
-      scheduleId: schedule._id,
-      yearMonth: yearMonthFromIndex(idx),
-      occurredAt: occurredAtForMonthIndex(idx, args.now),
-      systemActorId,
-    });
-    if (result.posted) {
-      posted = true;
-      continue;
-    }
-    // The source expense hasn't posted yet (queued behind a closed period at
-    // payment time): no later month can post either, so stop and let the next
-    // cron run catch the whole schedule up once it posts.
-    if (result.reason === "source_expense_not_posted") break;
-  }
-  return posted ? "posted" : "skippedOther";
+  // months into the present. catchUpScheduleMutation shares its recognition
+  // logic (catchUpPrepaidSchedule) with the accountant-triggered manual run, is
+  // idempotent per month, refuses months at/before the last recognized one, and
+  // each posting is dated to its month, so a month whose period is already
+  // closed parks in the outbox (postOrEnqueue) rather than posting into a
+  // closed period. Re-drives are safe.
+  const result = await ctx.runMutation(internal.prepaidExpenses.catchUpScheduleMutation, {
+    orgId: schedule.orgId,
+    scheduleId: schedule._id,
+    throughYearMonth: args.currentYearMonth,
+    now: args.now,
+    systemActorId,
+  });
+  return result.monthsPosted > 0 ? "posted" : "skippedOther";
 }
 
 async function runPrepaidExpenseAmortization(
@@ -665,8 +627,19 @@ async function runPrepaidExpenseAmortization(
           now: args.now,
         });
         stats[outcome]++;
-      } catch {
+      } catch (err) {
         stats.failed++;
+        // Previously only the aggregate counter above recorded this — the
+        // schedule, org, and error itself were discarded, leaving nothing an
+        // accountant or support engineer could act on. Record the specifics
+        // and alert the org owner so a stuck schedule doesn't sit silent until
+        // someone happens to notice a missing month in a report.
+        await ctx.runMutation(internal.prepaidExpenses.recordAmortizationFailure, {
+          orgId: schedule.orgId,
+          scheduleId: schedule._id,
+          yearMonth: args.currentYearMonth,
+          errorMessage: err instanceof Error ? err.message : String(err),
+        });
       }
     }
     cursor = page.isDone ? undefined : page.continueCursor;

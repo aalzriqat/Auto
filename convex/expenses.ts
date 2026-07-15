@@ -18,6 +18,7 @@ import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentM
 import { CAPITALIZABLE_EXPENSE_CATEGORIES } from "./utils/vehicleCost";
 import { expenseAccountKeyForCategory } from "./accounting/postingRules";
 import { createPrepaidScheduleForExpense, cancelPrepaidScheduleForExpense } from "./prepaidExpenses";
+import { yearMonthIndex } from "./utils/expenseAmortization";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -37,15 +38,35 @@ const expenseCategory = v.union(
 );
 
 /**
- * Validates and normalizes the prepaid pair: a prepaid expense must specify a
- * whole number of amortization months (1–600); a non-prepaid one carries
- * neither field. Returns the cleaned values to persist.
+ * Validates and normalizes the prepaid trio: a prepaid expense must specify a
+ * whole number of amortization months (1–600); a non-prepaid one carries none
+ * of the three fields. The PREPAID category and the isPrepaid flag are
+ * otherwise two independent signals for the same accounting concept that
+ * could silently disagree (e.g. category PREPAID with isPrepaid left false) —
+ * for new writes, category always implies the flag rather than the two being
+ * allowed to drift apart. `expenseDate` is the effective date of the expense
+ * itself (the caller passes args.date on create, args.date ?? expense.date on
+ * update) — amortizationStartDate can never predate it: recognition can't
+ * begin before the prepaid asset was booked. Comparison is month-level (not
+ * day-level) because recognition is month-bucketed — a start date a few days
+ * earlier in the same calendar month changes nothing. Returns the cleaned
+ * values to persist.
  */
 function normalizePrepaidFields(
-  isPrepaid: boolean | undefined,
-  amortizationMonths: number | undefined
-): { isPrepaid: boolean | undefined; amortizationMonths: number | undefined } {
-  if (!isPrepaid) return { isPrepaid: undefined, amortizationMonths: undefined };
+  category: string,
+  isPrepaidArg: boolean | undefined,
+  amortizationMonths: number | undefined,
+  amortizationStartDate: number | undefined,
+  expenseDate: number
+): {
+  isPrepaid: boolean | undefined;
+  amortizationMonths: number | undefined;
+  amortizationStartDate: number | undefined;
+} {
+  const isPrepaid = isPrepaidArg === true || category === "PREPAID";
+  if (!isPrepaid) {
+    return { isPrepaid: undefined, amortizationMonths: undefined, amortizationStartDate: undefined };
+  }
   if (
     amortizationMonths === undefined ||
     !Number.isInteger(amortizationMonths) ||
@@ -54,7 +75,12 @@ function normalizePrepaidFields(
   ) {
     throw new ConvexError("A prepaid expense must specify a whole number of amortization months between 1 and 600.");
   }
-  return { isPrepaid: true, amortizationMonths };
+  if (amortizationStartDate !== undefined && yearMonthIndex(amortizationStartDate) < yearMonthIndex(expenseDate)) {
+    throw new ConvexError(
+      "The amortization start date cannot be earlier than the month the expense was paid — recognition can't begin before the prepaid asset was booked."
+    );
+  }
+  return { isPrepaid: true, amortizationMonths, amortizationStartDate };
 }
 
 async function hasExpenseAccountingExposure(
@@ -172,7 +198,7 @@ async function recordPaidExpenseSideEffects(
       totalMinor: netMinor,
       termMonths: args.expense.amortizationMonths!,
       expenseSystemKey: expenseAccountKeyForCategory(args.expense.category),
-      startDate: args.expense.date,
+      startDate: args.expense.amortizationStartDate ?? args.expense.date,
     });
   }
 }
@@ -279,6 +305,7 @@ export const create = mutation({
     notes: v.optional(v.string()),
     isPrepaid: v.optional(v.boolean()),
     amortizationMonths: v.optional(v.number()),
+    amortizationStartDate: v.optional(v.number()),
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -288,7 +315,13 @@ export const create = mutation({
     if (args.taxAmount !== undefined && args.taxAmount > args.amount) {
       throw new ConvexError("VAT amount cannot exceed the expense amount.");
     }
-    const { isPrepaid, amortizationMonths } = normalizePrepaidFields(args.isPrepaid, args.amortizationMonths);
+    const { isPrepaid, amortizationMonths, amortizationStartDate } = normalizePrepaidFields(
+      args.category,
+      args.isPrepaid,
+      args.amortizationMonths,
+      args.amortizationStartDate,
+      args.date
+    );
 
     return await runWithIdempotency(
       ctx,
@@ -311,6 +344,7 @@ export const create = mutation({
           notes: args.notes ?? null,
           isPrepaid: isPrepaid ?? null,
           amortizationMonths: amortizationMonths ?? null,
+          amortizationStartDate: amortizationStartDate ?? null,
         }),
       },
       async () => {
@@ -339,6 +373,7 @@ export const create = mutation({
           notes: args.notes,
           isPrepaid,
           amortizationMonths,
+          amortizationStartDate,
         });
 
         if (status === "PAID") {
@@ -386,6 +421,10 @@ export const update = mutation({
     notes: v.optional(v.string()),
     isPrepaid: v.optional(v.boolean()),
     amortizationMonths: v.optional(v.number()),
+    // null (distinct from omitted/undefined) explicitly clears a previously-set
+    // start date back to "recognition begins the month the expense was paid" —
+    // same null-means-clear convention as vehicleId/payerId below.
+    amortizationStartDate: v.optional(v.union(v.number(), v.null())),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_EXPENSES]);
@@ -397,13 +436,14 @@ export const update = mutation({
 
     // Note: Zod schema might not expect `null` for vehicleId or payerId directly if not configured,
     // but the schema is typed using .optional(). We may need to filter out nulls or the schema might pass.
-    // The UpdateExpenseSchema defines them as optional string, not nullable. 
+    // The UpdateExpenseSchema defines them as optional string, not nullable.
     // We can pre-process args before validation if necessary, or just validate.
     // The UpdateExpenseSchema is `.partial()`, so `undefined` is allowed. `null` from Convex might fail Zod string check.
     // Let's strip nulls before validation just for Zod.
     const argsToValidate = { ...args };
     if (argsToValidate.vehicleId === null) delete argsToValidate.vehicleId;
     if (argsToValidate.payerId === null) delete argsToValidate.payerId;
+    if (argsToValidate.amortizationStartDate === null) delete argsToValidate.amortizationStartDate;
 
     validateInput(UpdateExpenseSchema, argsToValidate);
 
@@ -432,21 +472,38 @@ export const update = mutation({
       (args.status !== undefined && args.status !== currentStatus) ||
       (args.paymentMethod !== undefined && args.paymentMethod !== expense.paymentMethod) ||
       (args.isPrepaid !== undefined && (args.isPrepaid || false) !== (expense.isPrepaid || false)) ||
-      (args.amortizationMonths !== undefined && args.amortizationMonths !== expense.amortizationMonths);
+      (args.amortizationMonths !== undefined && args.amortizationMonths !== expense.amortizationMonths) ||
+      (args.amortizationStartDate !== undefined && args.amortizationStartDate !== (expense.amortizationStartDate ?? null));
     if (hasAccountingExposure && hasMaterialAccountingChange) {
       throw new ConvexError(
         "Posted expenses are locked. Use a correction or reversal workflow before changing accounting fields."
       );
     }
 
-    // Re-validate the prepaid pair against the post-update effective values so a
+    // Re-validate the prepaid trio against the post-update effective values so a
     // partial edit (e.g. flipping isPrepaid on without months) can't persist an
-    // inconsistent schedule basis.
-    let normalizedPrepaid: { isPrepaid: boolean | undefined; amortizationMonths: number | undefined } | null = null;
-    if (args.isPrepaid !== undefined || args.amortizationMonths !== undefined) {
+    // inconsistent schedule basis. `date` also re-triggers this even though
+    // it isn't one of the trio's own fields: moving the expense's date can by
+    // itself make an unchanged, already-stored amortizationStartDate invalid
+    // (now earlier than the new effective date).
+    let normalizedPrepaid: {
+      isPrepaid: boolean | undefined;
+      amortizationMonths: number | undefined;
+      amortizationStartDate: number | undefined;
+    } | null = null;
+    if (
+      args.isPrepaid !== undefined ||
+      args.amortizationMonths !== undefined ||
+      args.amortizationStartDate !== undefined ||
+      args.category !== undefined ||
+      args.date !== undefined
+    ) {
       normalizedPrepaid = normalizePrepaidFields(
+        args.category ?? expense.category,
         args.isPrepaid ?? expense.isPrepaid,
-        args.amortizationMonths ?? expense.amortizationMonths
+        args.amortizationMonths ?? expense.amortizationMonths,
+        args.amortizationStartDate === null ? undefined : (args.amortizationStartDate ?? expense.amortizationStartDate),
+        args.date ?? expense.date
       );
     }
 
@@ -477,6 +534,7 @@ export const update = mutation({
     if (normalizedPrepaid) {
       patch.isPrepaid = normalizedPrepaid.isPrepaid;
       patch.amortizationMonths = normalizedPrepaid.amortizationMonths;
+      patch.amortizationStartDate = normalizedPrepaid.amortizationStartDate;
     }
 
     if (Object.keys(patch).length > 0) {

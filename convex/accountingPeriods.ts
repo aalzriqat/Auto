@@ -3,7 +3,7 @@ import { mutation, query } from "./_generated/server";
 import { Id, Doc } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { requireTenantAuth, requireOwner } from "./utils/tenancy";
+import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { auditLog } from "./financialAudit";
 import { requireFeature } from "./subscriptions";
@@ -435,6 +435,12 @@ export const close = mutation({
     // override + reason, for cases the checklist can't model (e.g. a known,
     // accepted rounding discrepancy) — but the override is always audited.
     overrideReason: v.optional(v.string()),
+    // Every current warning's exact text (from closeChecklist), required
+    // before a close proceeds when warnings exist. This is what forces the
+    // caller to have actually fetched and displayed the checklist rather than
+    // calling close() directly — the review dialog is the only realistic way
+    // to produce this list.
+    acknowledgedWarnings: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -469,6 +475,16 @@ export const close = mutation({
       overrideReason = trimmedReason;
     }
 
+    if (checklist.warnings.length > 0) {
+      const acknowledged = new Set(args.acknowledgedWarnings ?? []);
+      const missing = checklist.warnings.filter((w) => !acknowledged.has(w));
+      if (missing.length > 0) {
+        throw new ConvexError(
+          `Review and acknowledge every warning before closing: ${missing.join(" ")}`
+        );
+      }
+    }
+
     const now = Date.now();
     await ctx.db.patch(args.periodId, {
       status: "CLOSED",
@@ -478,9 +494,11 @@ export const close = mutation({
     await auditLog(ctx, {
       orgId: args.orgId, actorId: user._id, actionType: "CLOSE_PERIOD",
       resourceType: "accountingPeriods", resourceId: args.periodId.toString(),
-      description: overrideReason
-        ? `Closed period ${period.fiscalYear}-${String(period.periodNumber).padStart(2, "0")} despite open blockers (${checklist.blockers.join(" ")}) — override: ${overrideReason}`
-        : `Closed period ${period.fiscalYear}-${String(period.periodNumber).padStart(2, "0")}`,
+      description:
+        (overrideReason
+          ? `Closed period ${period.fiscalYear}-${String(period.periodNumber).padStart(2, "0")} despite open blockers (${checklist.blockers.join(" ")}) — override: ${overrideReason}`
+          : `Closed period ${period.fiscalYear}-${String(period.periodNumber).padStart(2, "0")}`) +
+        (checklist.warnings.length > 0 ? ` Acknowledged warnings: ${checklist.warnings.join(" | ")}` : ""),
     });
     return args.periodId;
   },
@@ -522,12 +540,12 @@ export const reopen = mutation({
   handler: async (ctx, args) => {
     // Reopening un-does a close's own protections (pending events, AR/subledger
     // reconciliation, unmatched bank lines all stop blocking anything once a
-    // period is OPEN again) — the same reasoning close()'s override path
-    // already uses to require the org owner specifically, not any
-    // MANAGE_FINANCE holder (e.g. the default ACCOUNTANT role). requireOwner
-    // already implies every permission (owners have them all), so it
-    // subsumes the MANAGE_FINANCE check too.
-    const { user } = await requireOwner(ctx, args.orgId);
+    // period is OPEN again) — deliberately narrower than plain MANAGE_FINANCE
+    // (e.g. the default ACCOUNTANT role doesn't have it out of the box). The
+    // owner always has REOPEN_PERIODS via ALL_PERMISSIONS; other orgs grant
+    // it to a controller role explicitly, founder-independence style, rather
+    // than requiring the owner personally for every reopen.
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.REOPEN_PERIODS]);
     await requireFeature(ctx, args.orgId, "accounting");
 
     const period = await ctx.db.get(args.periodId);

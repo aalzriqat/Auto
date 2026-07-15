@@ -16,7 +16,7 @@
 import { v, ConvexError } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { MutationCtx } from "./_generated/server";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { PostCommand, postAccountingEvent } from "./accounting/postingEngine";
 import { reverseAccountingEvent } from "./accounting/reversals";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -163,6 +163,90 @@ const MAX_ATTEMPTS = 10;
 
 // ─── Drain core (plain function, reused by the mutation + schedulers) ──────────
 
+async function postPendingEntry(ctx: MutationCtx, p: Doc<"pendingAccountingEvents">): Promise<Id<"accountingEvents">> {
+  if (!p.eventType) throw new Error("Pending POST record missing eventType");
+  if (!p.currency) throw new Error("Pending POST record missing currency");
+  const res = await postAccountingEvent(ctx, {
+    orgId: p.orgId,
+    branchId: p.branchId,
+    eventType: p.eventType,
+    sourceType: p.sourceType,
+    sourceId: p.sourceId,
+    eventVersion: p.eventVersion ?? 1,
+    accountingDate: p.accountingDate,
+    occurredAt: p.occurredAt ?? p.accountingDate,
+    currency: p.currency,
+    idempotencyKey: p.idempotencyKey,
+    payload: (p.payload ?? {}) as Record<string, unknown>,
+    actorId: p.actorId,
+  });
+  return res.eventId;
+}
+
+async function reversePendingEntry(ctx: MutationCtx, p: Doc<"pendingAccountingEvents">): Promise<Id<"accountingEvents">> {
+  if (!p.originalEventId) throw new Error("Pending REVERSE record missing originalEventId");
+  const res = await reverseAccountingEvent(ctx, {
+    orgId: p.orgId,
+    originalEventId: p.originalEventId,
+    reversalDate: p.accountingDate,
+    reason: p.reason ?? "Reversal (deferred)",
+    actorId: p.actorId,
+    idempotencyKey: p.idempotencyKey,
+  });
+  return res.reversalEventId;
+}
+
+async function markEntryPosted(
+  ctx: MutationCtx,
+  p: Doc<"pendingAccountingEvents">,
+  resultEventId: Id<"accountingEvents">
+): Promise<void> {
+  await ctx.db.patch(p._id, { status: "POSTED", resolvedAt: Date.now(), resultEventId, attempts: p.attempts + 1 });
+}
+
+/**
+ * Below the retry threshold: keep it PENDING and retryable, just surface the
+ * error for visibility. At/above it: stop auto-retrying and mark FAILED so it
+ * needs deliberate attention instead of retrying forever.
+ */
+async function markEntryFailed(ctx: MutationCtx, p: Doc<"pendingAccountingEvents">, message: string): Promise<void> {
+  const attempts = p.attempts + 1;
+  await ctx.db.patch(p._id, {
+    attempts,
+    lastError: message,
+    ...(attempts >= MAX_ATTEMPTS ? { status: "FAILED" as const } : {}),
+  });
+}
+
+/**
+ * Attempts to post/reverse a batch of already-fetched outbox rows, one at a
+ * time, isolating each row's failure from the rest. Factored out of
+ * drainPendingForOrg so a narrower, pre-filtered subset (e.g. one prepaid
+ * schedule's own rows — see prepaidExpenses.redriveScheduleEvents) can share
+ * the exact same posting/retry/dead-letter logic instead of re-implementing it.
+ */
+export async function drainEntries(
+  ctx: MutationCtx,
+  entries: Doc<"pendingAccountingEvents">[]
+): Promise<{ posted: number; failed: number }> {
+  let posted = 0;
+  let failed = 0;
+
+  for (const p of entries) {
+    try {
+      const resultEventId = p.kind === "POST" ? await postPendingEntry(ctx, p) : await reversePendingEntry(ctx, p);
+      await markEntryPosted(ctx, p, resultEventId);
+      posted++;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await markEntryFailed(ctx, p, message);
+      failed++;
+    }
+  }
+
+  return { posted, failed };
+}
+
 export async function drainPendingForOrg(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
@@ -173,68 +257,7 @@ export async function drainPendingForOrg(
     .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
     .take(Math.min(limit, 200));
 
-  let posted = 0;
-  let failed = 0;
-
-  for (const p of pending) {
-    try {
-      if (p.kind === "POST") {
-        if (!p.eventType) throw new Error("Pending POST record missing eventType");
-        if (!p.currency) throw new Error("Pending POST record missing currency");
-        const res = await postAccountingEvent(ctx, {
-          orgId: p.orgId,
-          branchId: p.branchId,
-          eventType: p.eventType,
-          sourceType: p.sourceType,
-          sourceId: p.sourceId,
-          eventVersion: p.eventVersion ?? 1,
-          accountingDate: p.accountingDate,
-          occurredAt: p.occurredAt ?? p.accountingDate,
-          currency: p.currency,
-          idempotencyKey: p.idempotencyKey,
-          payload: (p.payload ?? {}) as Record<string, unknown>,
-          actorId: p.actorId,
-        });
-        await ctx.db.patch(p._id, {
-          status: "POSTED",
-          resolvedAt: Date.now(),
-          resultEventId: res.eventId,
-          attempts: p.attempts + 1,
-        });
-      } else {
-        if (!p.originalEventId) throw new Error("Pending REVERSE record missing originalEventId");
-        const res = await reverseAccountingEvent(ctx, {
-          orgId: p.orgId,
-          originalEventId: p.originalEventId,
-          reversalDate: p.accountingDate,
-          reason: p.reason ?? "Reversal (deferred)",
-          actorId: p.actorId,
-          idempotencyKey: p.idempotencyKey,
-        });
-        await ctx.db.patch(p._id, {
-          status: "POSTED",
-          resolvedAt: Date.now(),
-          resultEventId: res.reversalEventId,
-          attempts: p.attempts + 1,
-        });
-      }
-      posted++;
-    } catch (err) {
-      // Below the threshold: keep it PENDING and retryable, just surface the
-      // error for visibility. At/above it: stop auto-retrying and mark FAILED
-      // so it needs deliberate attention instead of retrying forever.
-      const message = err instanceof Error ? err.message : String(err);
-      const attempts = p.attempts + 1;
-      await ctx.db.patch(p._id, {
-        attempts,
-        lastError: message,
-        ...(attempts >= MAX_ATTEMPTS ? { status: "FAILED" as const } : {}),
-      });
-      failed++;
-    }
-  }
-
-  return { posted, failed };
+  return drainEntries(ctx, pending);
 }
 
 // ─── Internal mutation (scheduler target) ─────────────────────────────────────

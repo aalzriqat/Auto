@@ -74,10 +74,12 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
       notes: "",
       isPrepaid: false,
       amortizationMonths: undefined,
+      amortizationStartDate: "",
     },
   });
   const paymentStatus = form.watch("status");
   const isPrepaid = form.watch("isPrepaid");
+  const expenseDateValue = form.watch("date");
 
   useEffect(() => {
     if (expense && open) {
@@ -96,6 +98,9 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
         notes: expense.notes || "",
         isPrepaid: expense.isPrepaid ?? false,
         amortizationMonths: expense.amortizationMonths ?? undefined,
+        amortizationStartDate: expense.amortizationStartDate
+          ? new Date(expense.amortizationStartDate).toISOString().split('T')[0]
+          : "",
       });
     } else if (open && !expense) {
       form.reset({
@@ -112,6 +117,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
         notes: "",
         isPrepaid: false,
         amortizationMonths: undefined,
+        amortizationStartDate: "",
       });
     }
   }, [expense, open, form]);
@@ -123,6 +129,14 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
       const parsedDate = new Date(values.date).getTime();
       const parsedVehicleId = values.vehicleId === "none" ? undefined : (values.vehicleId as Id<"vehicles">);
       const parsedPayerId = values.payerId === "none" ? undefined : (values.payerId as Id<"users">);
+      // null (distinct from undefined) means "explicitly cleared" — only
+      // meaningful on update, where it tells the server to unset a
+      // previously-stored value rather than leave it untouched.
+      const parsedAmortizationStartDate: number | null | undefined = values.isPrepaid
+        ? values.amortizationStartDate
+          ? new Date(values.amortizationStartDate).getTime()
+          : null
+        : undefined;
 
       if (expense) {
         // The server is the authority on whether this is actually allowed:
@@ -146,6 +160,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
           notes: values.notes,
           isPrepaid: values.isPrepaid ?? false,
           amortizationMonths: values.isPrepaid ? values.amortizationMonths : undefined,
+          amortizationStartDate: parsedAmortizationStartDate,
         });
         toast.success(t("ExpenseUpdatedSuccess" as any));
       } else {
@@ -164,6 +179,9 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
           notes: values.notes,
           isPrepaid: values.isPrepaid ?? false,
           amortizationMonths: values.isPrepaid ? values.amortizationMonths : undefined,
+          // create's schema has no concept of "clearing" a field that doesn't
+          // exist yet — null only means something on update.
+          amortizationStartDate: parsedAmortizationStartDate ?? undefined,
         });
         toast.success(t("ExpenseRecordedSuccess" as any));
       }
@@ -407,26 +425,43 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                   />
 
                   {isPrepaid && (
-                    <FormField
-                      control={form.control}
-                      name="amortizationMonths"
-                      render={({ field }) => (
-                        <FormItem className="max-w-[220px]">
-                          <FormLabel>{t("AmortizationMonthsLabel" as any)} <span className="text-red-500">*</span></FormLabel>
-                          <FormControl>
-                            <Input
-                              type="number"
-                              min="1"
-                              step="1"
-                              placeholder={t("AmortizationMonthsPlaceholder" as any)}
-                              value={field.value ?? ""}
-                              onChange={(e) => field.onChange(e.target.value === "" ? undefined : Number(e.target.value))}
-                            />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
+                    <div className="flex flex-wrap gap-3">
+                      <FormField
+                        control={form.control}
+                        name="amortizationMonths"
+                        render={({ field }) => (
+                          <FormItem className="max-w-[220px]">
+                            <FormLabel>{t("AmortizationMonthsLabel" as any)} <span className="text-red-500">*</span></FormLabel>
+                            <FormControl>
+                              <Input
+                                type="number"
+                                min="1"
+                                step="1"
+                                placeholder={t("AmortizationMonthsPlaceholder" as any)}
+                                value={field.value ?? ""}
+                                onChange={(e) => field.onChange(e.target.value === "" ? undefined : Number(e.target.value))}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={form.control}
+                        name="amortizationStartDate"
+                        render={({ field }) => (
+                          <FormItem className="max-w-[220px]">
+                            <FormLabel>{t("AmortizationStartDateLabel" as any)}</FormLabel>
+                            <FormControl>
+                              <Input type="date" min={expenseDateValue || undefined} {...field} />
+                            </FormControl>
+                            <p className="text-xs text-muted-foreground">{t("AmortizationStartDateHint" as any)}</p>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
                   )}
                 </div>
               )}

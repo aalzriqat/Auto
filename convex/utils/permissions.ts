@@ -90,6 +90,12 @@ export const PERMISSIONS = {
   // Finance / Accounting
   VIEW_FINANCE: "view:finance",
   MANAGE_FINANCE: "manage:finance",
+  // Reopening a closed period undoes every one of the close's own protections
+  // (pending events, AR/subledger reconciliation, unmatched bank lines all
+  // stop blocking anything) — deliberately narrower than MANAGE_FINANCE, not
+  // granted to the default ACCOUNTANT template. An org grants it to a
+  // controller role explicitly; the owner always has it via ALL_PERMISSIONS.
+  REOPEN_PERIODS: "reopen:accounting_periods",
 
   // Financial — sensitive field visibility
   VIEW_COST_PRICE: "view:cost_price",

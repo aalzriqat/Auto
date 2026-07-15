@@ -8,13 +8,17 @@
  * There is ONE authoritative schedule — `recognizedThroughMonthsMinor` below,
  * computed entirely in integer minor units — and it lives in the
  * `prepaidExpenseSchedules` row (net-of-VAT `totalMinor`, `currency`,
- * `startYearMonth`, `termMonths`). BOTH consumers read that same row: the
- * monthly GL amortization cron (prepaidExpenses.amortizePrepaidExpenseForMonth)
- * and the operational P&L report (reports.ts, via the *FromSchedule helpers).
- * Because they share the row and the integer schedule, the ledger-backed P&L
- * and the operational P&L can never diverge — VAT or a currency change on the
- * source expense doc can't skew the report, because the report no longer reads
- * the gross expense amount for a scheduled prepaid.
+ * `startYearMonth`, `termMonths`). The monthly GL amortization cron
+ * (prepaidExpenses.amortizePrepaidExpenseForMonth) advances it and posts a
+ * dated PREPAID_EXPENSE_AMORTIZED / PREPAID_EXPENSE_WRITTEN_OFF event per
+ * recognition. The operational P&L report (reports.ts) does NOT recompute
+ * this curve — a correction (prepaidExpenses.correctSchedule) can change the
+ * schedule's totalMinor/termMonths after some months already posted, and a
+ * from-month-0 recompute using the CURRENT total/term would silently restate
+ * those already-posted months. Instead the report sums the posted (and
+ * still-queued) recognition EVENTS themselves, bucketed by month — see
+ * ./prepaidRecognitionEvents.ts — which can never diverge from the GL because
+ * it reads the GL's own record of what happened, not a re-derivation of it.
  *
  * The expense-doc helpers (computeAmortizationInfo / recognizedAmountInRange)
  * remain only as a net-of-VAT fallback for a prepaid expense that has no
@@ -44,6 +48,26 @@ export function yearMonthIndex(timestamp: number): number {
 export function yearMonthStringIndex(ym: string): number {
   const [year, month] = ym.split("-").map(Number);
   return year * 12 + (month - 1);
+}
+
+/** "YYYY-MM" for an absolute month index (year*12 + 0-based month) — inverse of yearMonthStringIndex. */
+export function yearMonthFromIndex(idx: number): string {
+  const year = Math.floor(idx / 12);
+  const month = idx % 12;
+  return `${year}-${String(month + 1).padStart(2, "0")}`;
+}
+
+/**
+ * A timestamp that falls inside calendar month `idx` (its last millisecond),
+ * clamped to `now` so the in-progress current month posts as-of-now rather
+ * than a future date. Shared by the cron and the accountant-triggered manual
+ * run so a caught-up schedule dates each recognition to its own month either way.
+ */
+export function occurredAtForMonthIndex(idx: number, now: number): number {
+  const year = Math.floor(idx / 12);
+  const month = idx % 12;
+  const endOfMonth = Date.UTC(year, month + 1, 0, 23, 59, 59, 999);
+  return Math.min(endOfMonth, now);
 }
 
 function clampMonths(value: number, max: number): number {
@@ -124,41 +148,44 @@ export interface ScheduleLike {
 }
 
 /**
- * Portion of a scheduled prepaid recognized within [startDate, endDate], read
- * straight from the authoritative schedule row (net minor units, schedule's own
- * currency). This is the report's primary path; it agrees to the minor unit
- * with what amortizePrepaidExpenseForMonth posts to the GL.
+ * A schedule's amortization info derived from its ACTUAL progress
+ * (recognizedMinor/monthsRecognized), not a date-driven curve recompute — see
+ * the file header for why a from-month-0 recompute is unsafe once a
+ * correction has changed totalMinor/termMonths. `monthlyAmount` is the
+ * remaining-balance/remaining-months share the *next* recognition would post
+ * (same math amortizeScheduleForMonth uses), so it always reflects the
+ * schedule's current state even after a correction.
  */
-export function recognizedAmountInRangeFromSchedule(
-  schedule: ScheduleLike,
-  startDate: number,
-  endDate: number
-): number {
-  const startIdx = yearMonthStringIndex(schedule.startYearMonth);
-  const monthsElapsedAtEnd = clampMonths(yearMonthIndex(endDate) - startIdx + 1, schedule.termMonths);
-  const monthsElapsedBeforeStart = clampMonths(yearMonthIndex(startDate) - startIdx, schedule.termMonths);
-  const recognizedMinor =
-    recognizedThroughMonthsMinor(schedule.totalMinor, schedule.termMonths, monthsElapsedAtEnd) -
-    recognizedThroughMonthsMinor(schedule.totalMinor, schedule.termMonths, monthsElapsedBeforeStart);
-  if (recognizedMinor <= 0) return 0;
-  return fromMinorUnits(recognizedMinor, schedule.currency);
+export interface ScheduleProgressLike extends ScheduleLike {
+  recognizedMinor: number;
+  monthsRecognized?: number;
 }
 
-/** Amortization schedule (as of `asOfDate`) read from the authoritative schedule row. */
-export function computeAmortizationInfoFromSchedule(
-  schedule: ScheduleLike,
-  asOfDate: number
-): AmortizationInfo {
-  const startIdx = yearMonthStringIndex(schedule.startYearMonth);
-  const monthsElapsed = clampMonths(yearMonthIndex(asOfDate) - startIdx + 1, schedule.termMonths);
-  const recognizedMinor = recognizedThroughMonthsMinor(schedule.totalMinor, schedule.termMonths, monthsElapsed);
+export function amortizationInfoFromScheduleProgress(schedule: ScheduleProgressLike): AmortizationInfo {
+  const monthsRecognized = clampMonths(schedule.monthsRecognized ?? 0, schedule.termMonths);
+  const remainingMonths = schedule.termMonths - monthsRecognized;
+  const remainingMinor = Math.max(schedule.totalMinor - schedule.recognizedMinor, 0);
+  let monthlyMinor: number;
+  if (remainingMonths <= 0) {
+    monthlyMinor = 0;
+  } else if (remainingMonths <= 1) {
+    monthlyMinor = remainingMinor;
+  } else {
+    monthlyMinor = Math.floor(remainingMinor / remainingMonths);
+  }
   return {
-    monthlyAmount: fromMinorUnits(monthAmountMinor(schedule.totalMinor, schedule.termMonths, 0), schedule.currency),
-    recognizedToDateAmount: fromMinorUnits(recognizedMinor, schedule.currency),
-    remainingAmount: fromMinorUnits(schedule.totalMinor - recognizedMinor, schedule.currency),
-    monthsElapsed,
+    monthlyAmount: fromMinorUnits(monthlyMinor, schedule.currency),
+    recognizedToDateAmount: fromMinorUnits(schedule.recognizedMinor, schedule.currency),
+    remainingAmount: fromMinorUnits(remainingMinor, schedule.currency),
+    monthsElapsed: monthsRecognized,
     amortizationMonths: schedule.termMonths,
   };
+}
+
+/** A schedule's current recognition anchor — how far it's actually gotten, as of right now. */
+export interface ScheduleProgress {
+  recognizedMinor: number;
+  monthsRecognized: number;
 }
 
 /**
@@ -166,13 +193,39 @@ export function computeAmortizationInfoFromSchedule(
  * month containing `asOfDate` — the "should have recognized by now" figure the
  * period-close blocker compares against `recognizedMinor` to catch a schedule
  * that has silently fallen behind (a missed cron month within the period).
+ *
+ * Anchored at the schedule's CURRENT progress (recognizedMinor/monthsRecognized)
+ * and projected forward month by month using the same remaining-balance /
+ * remaining-months share amortizeScheduleForMonth actually posts — not a
+ * whole-curve recompute from month 0. A pure recompute would silently
+ * misstate this the moment correctSchedule changes totalMinor/termMonths: it
+ * would compare against what the schedule "should" have recognized under the
+ * NEW total from the very start, which the schedule's already-posted months
+ * never followed (they posted at the OLD rate) — producing a false shortfall
+ * that blocks a period close even though the schedule is fully caught up.
  */
-export function recognizedDueThroughDateMinor(schedule: ScheduleLike, asOfDate: number): number {
-  const monthsElapsed = clampMonths(
+export function recognizedDueThroughDateMinor(
+  schedule: ScheduleLike,
+  progress: ScheduleProgress,
+  asOfDate: number
+): number {
+  const monthsElapsedTarget = clampMonths(
     yearMonthIndex(asOfDate) - yearMonthStringIndex(schedule.startYearMonth) + 1,
     schedule.termMonths
   );
-  return recognizedThroughMonthsMinor(schedule.totalMinor, schedule.termMonths, monthsElapsed);
+  const alreadyRecognizedMonths = clampMonths(progress.monthsRecognized, schedule.termMonths);
+  if (monthsElapsedTarget <= alreadyRecognizedMonths) return progress.recognizedMinor;
+
+  let dueMinor = progress.recognizedMinor;
+  let remainingMinor = schedule.totalMinor - progress.recognizedMinor;
+  let remainingMonths = schedule.termMonths - alreadyRecognizedMonths;
+  for (let m = alreadyRecognizedMonths + 1; m <= monthsElapsedTarget; m++) {
+    const monthShare = remainingMonths <= 1 ? remainingMinor : Math.floor(remainingMinor / remainingMonths);
+    dueMinor += monthShare;
+    remainingMinor -= monthShare;
+    remainingMonths -= 1;
+  }
+  return dueMinor;
 }
 
 /**

@@ -1101,6 +1101,97 @@ export async function hookPrepaidExpenseAmortized(
       amountMinor: args.amountMinor,
       currency: args.currency,
       expenseSystemKey: args.expenseSystemKey,
+      // Explicit recognition month for the report's event-derived bucketing
+      // (utils/prepaidRecognitionEvents.ts) — previously only encoded in the
+      // sourceId suffix, which the report parses as a fallback for events
+      // posted before this field existed.
+      yearMonth: args.yearMonth,
+    },
+  });
+}
+
+/**
+ * Posts the cash-in entry for a partial refund of a prepaid schedule's unused
+ * portion — called from prepaidExpenses.correctSchedule. `correctionId` (the
+ * prepaidScheduleCorrections row) makes the idempotency key unique per
+ * correction, distinct from the per-month keys hookPrepaidExpenseAmortized uses.
+ */
+export async function hookPrepaidExpenseRefunded(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    scheduleId: Id<"prepaidExpenseSchedules">;
+    correctionId: Id<"prepaidScheduleCorrections">;
+    amountMinor: number;
+    taxMinor?: number;
+    currency: string;
+    paymentMethod?: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  if (await isChartInitialized(ctx, args.orgId)) {
+    await ensurePrepaidExpensesAccount(ctx, args.orgId, args.actorId);
+  }
+  if (args.taxMinor && args.taxMinor > 0) {
+    await ensureVatReceivableAccountIfChartReady(ctx, args.orgId, args.actorId);
+  }
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "PREPAID_EXPENSE_REFUNDED",
+    sourceType: "prepaidExpenseSchedules",
+    sourceId: `prepaid_refund_${args.correctionId}`,
+    idempotencyKey: `prepaid_refund_${args.correctionId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      scheduleId: args.scheduleId.toString(),
+      amountMinor: args.amountMinor,
+      taxMinor: args.taxMinor,
+      currency: args.currency,
+      paymentMethod: args.paymentMethod,
+    },
+  });
+}
+
+/**
+ * Posts the accelerated write-off of a prepaid schedule's non-refundable
+ * unused portion — same GL shape as hookPrepaidExpenseAmortized (release the
+ * asset into its expense account) but as a distinct eventType and a one-off
+ * per-correction idempotency key rather than a per-month one.
+ */
+export async function hookPrepaidExpenseWrittenOff(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    scheduleId: Id<"prepaidExpenseSchedules">;
+    correctionId: Id<"prepaidScheduleCorrections">;
+    amountMinor: number;
+    currency: string;
+    expenseSystemKey: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  if (await isChartInitialized(ctx, args.orgId)) {
+    await ensurePrepaidExpensesAccount(ctx, args.orgId, args.actorId);
+    await ensureExpenseCategoryAccounts(ctx, args.orgId, args.actorId);
+  }
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "PREPAID_EXPENSE_WRITTEN_OFF",
+    sourceType: "prepaidExpenseSchedules",
+    sourceId: `prepaid_writeoff_${args.correctionId}`,
+    idempotencyKey: `prepaid_writeoff_${args.correctionId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      scheduleId: args.scheduleId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      expenseSystemKey: args.expenseSystemKey,
     },
   });
 }
