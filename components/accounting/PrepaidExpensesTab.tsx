@@ -285,6 +285,7 @@ function CorrectScheduleDialog({
     resolver: zodResolver(prepaidCorrectionSchema),
     defaultValues: {
       refundAmount: 0,
+      refundPaymentMethod: "BANK_TRANSFER",
       writeOffAmount: 0,
       changeTerm: false,
       newTermMonths: schedule.termMonths,
@@ -366,6 +367,10 @@ function CorrectScheduleDialog({
                     <FormControl>
                       <PaymentMethodSelect
                         t={t as any}
+                        // defaultValues below always seeds a real value, so this
+                        // fallback is unreachable at runtime — kept only because
+                        // the field's zod type stays optional (refundPaymentMethod
+                        // is only required when refundAmount > 0).
                         value={field.value ?? "BANK_TRANSFER"}
                         onValueChange={field.onChange}
                       />

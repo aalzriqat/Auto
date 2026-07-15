@@ -36,6 +36,11 @@ export function SystemAccountConflictsPanel({ orgId, canManageFinance, t }: Read
     setBusyKey(systemKey);
     try {
       await resolve({ orgId, systemKey, decision });
+      // REJECT intentionally leaves the candidate account untouched (see
+      // confirmSystemAccountAdoption's docstring) — the conflict keeps
+      // blocking posting and reappears in this list right after. A generic
+      // "success" toast would make the click look like a no-op, so the
+      // REJECT copy sets the expectation up front that nothing cleared yet.
       toast.success(decision === "ADOPT" ? t("SystemAccountAdopted") : t("SystemAccountAdoptionRejected"));
     } catch (error) {
       toast.error(errorMessage(error));

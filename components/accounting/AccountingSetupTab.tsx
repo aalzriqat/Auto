@@ -30,7 +30,7 @@ type SetupActionMessage<T> = (outcome: T) => string;
 export function AccountingSetupTab() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
-  const { hasPermission, isLoading: permissionsLoading } = usePermissions();
+  const { hasPermission, isOwner, isLoading: permissionsLoading } = usePermissions();
   const [periodDialogOpen, setPeriodDialogOpen] = useState(false);
   const [periodForm, setPeriodForm] = useState<PeriodFormState>(defaultPeriodForm);
   const [busyAction, setBusyAction] = useState<string | null>(null);
@@ -196,6 +196,7 @@ export function AccountingSetupTab() {
         orgId={activeOrgId}
         period={closeReviewPeriod}
         open={closeReviewPeriod !== null}
+        isOwner={isOwner}
         onOpenChange={(nextOpen) => {
           if (!nextOpen) setCloseReviewPeriod(null);
         }}

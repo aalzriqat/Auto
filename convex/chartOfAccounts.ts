@@ -243,7 +243,7 @@ async function ensureSystemAccount(
     // mutation that throws rolls back every write it made this call,
     // including an "I found a conflict" row inserted moments earlier — so
     // there is no way to durably persist that fact from inside this call.
-    const compatible = byCode.find((a) => a.type === def.type && a.normalBalance === def.normalBalance);
+    const compatible = byCode.some((a) => a.type === def.type && a.normalBalance === def.normalBalance);
     if (!compatible) {
       const shapes = byCode.map((a) => `${a.type}/${a.normalBalance}`).join(", ");
       throw new ConvexError(

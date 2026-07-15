@@ -25,6 +25,7 @@ type ClosePeriodReviewDialogProps = {
   orgId: Id<"organizations">;
   period: PeriodSummary | null;
   open: boolean;
+  isOwner: boolean;
   onOpenChange: (open: boolean) => void;
   onClosed: () => void;
   t: Translate;
@@ -43,6 +44,7 @@ export function ClosePeriodReviewDialog({
   orgId,
   period,
   open,
+  isOwner,
   onOpenChange,
   onClosed,
   t,
@@ -72,7 +74,7 @@ export function ClosePeriodReviewDialog({
   const canSubmit =
     checklist !== undefined &&
     allWarningsAcknowledged &&
-    (checklist.canClose || overrideReason.trim().length > 0);
+    (checklist.canClose || (isOwner && overrideReason.trim().length > 0));
 
   async function handleConfirm() {
     if (!checklist) return;
@@ -154,7 +156,7 @@ export function ClosePeriodReviewDialog({
               <p className="text-sm text-emerald-700">{t("ClosePeriodNoIssues")}</p>
             )}
 
-            {!checklist.canClose && (
+            {!checklist.canClose && isOwner && (
               <div className="space-y-1.5">
                 <Label>{t("ClosePeriodOverrideReasonLabel")}</Label>
                 <Textarea
@@ -164,6 +166,14 @@ export function ClosePeriodReviewDialog({
                 />
                 <p className="text-xs text-muted-foreground">{t("ClosePeriodOverrideOwnerOnlyHint")}</p>
               </div>
+            )}
+
+            {/* The backend restricts blocker overrides to the org owner
+                (accountingPeriods.close) — showing the reason input to a
+                MANAGE_FINANCE user who isn't the owner would only let them
+                type a reason and submit, then get rejected server-side. */}
+            {!checklist.canClose && !isOwner && (
+              <p className="text-xs text-muted-foreground">{t("ClosePeriodOverrideOwnerOnlyHint")}</p>
             )}
           </div>
         )}

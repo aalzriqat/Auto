@@ -382,6 +382,17 @@ export const retryAmortizationFailure = mutation({
       systemActorId: user._id,
     });
 
+    // catchUpPrepaidSchedule sets stoppedReason when it had to break out early
+    // (currently only "source_expense_not_posted") — the underlying blocker is
+    // still there, so marking every failure resolved here would report success
+    // to the accountant while the schedule is still stuck. Only clear the
+    // failure records once the loop actually ran clean through the target month.
+    if (result.stoppedReason) {
+      throw new ConvexError(
+        `Retry could not clear the blocker (${result.stoppedReason}). The schedule's source expense still hasn't posted — resolve that first, then retry.`
+      );
+    }
+
     const unresolved = (
       await ctx.db
         .query("prepaidAmortizationFailures")
@@ -502,6 +513,16 @@ export const correctSchedule = mutation({
     if (refundMinor + writeOffMinor > remainingMinor) {
       throw new ConvexError(
         `Refund + write-off (${refundMinor + writeOffMinor}) cannot exceed the unrecognized remainder (${remainingMinor}).`
+      );
+    }
+
+    // A term equal to monthsRecognized leaves zero future months for
+    // amortizeScheduleForMonth to ever recognize — if the refund/write-off
+    // doesn't also cover the entire remainder, the leftover balance would sit
+    // ACTIVE in the Prepaid Expenses asset forever with no path to expense it.
+    if (newTermMonths <= monthsRecognized && refundMinor + writeOffMinor < remainingMinor) {
+      throw new ConvexError(
+        "The corrected term leaves no future month to recognize the remaining balance — either keep at least one month beyond what's already recognized, or write off/refund the full remainder."
       );
     }
 
@@ -633,7 +654,17 @@ export const listSchedules = query({
         .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", status))
         .collect();
       for (const entry of queued) {
-        if (entry.sourceType !== "prepaidExpenseSchedules" || entry.kind !== "POST") continue;
+        // Refund/write-off corrections share sourceType + scheduleId with
+        // ordinary monthly amortization but are a separate eventType — without
+        // this check a pending/failed refund or write-off would be miscounted
+        // into the "amortization" pending/failed totals shown to the accountant.
+        if (
+          entry.sourceType !== "prepaidExpenseSchedules" ||
+          entry.kind !== "POST" ||
+          entry.eventType !== "PREPAID_EXPENSE_AMORTIZED"
+        ) {
+          continue;
+        }
         const scheduleId = (entry.payload as { scheduleId?: string })?.scheduleId;
         const amountMinor = (entry.payload as { amountMinor?: number })?.amountMinor ?? 0;
         if (!scheduleId) continue;

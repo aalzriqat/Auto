@@ -491,6 +491,92 @@ describe("correctSchedule — a partial correction stays consistent with future 
     );
     expect(shortfall.hasShortfall).toBe(false);
   });
+
+  test("a term correction that leaves an unrecognized remainder with no future month is rejected", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("correct-strand");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    for (const m of ["2026-01", "2026-02", "2026-03"]) {
+      await amortize(t, orgId, schedule!._id, userId, m);
+    }
+
+    // 3 months recognized (300 of 1200), 900 unrecognized. Shortening the
+    // term to exactly 3 (== monthsRecognized) with no refund/write-off would
+    // leave that 900 permanently stuck in the Prepaid Expenses asset — there
+    // would be zero future months left for amortizeScheduleForMonth to ever
+    // recognize it.
+    await expect(
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId, scheduleId: schedule!._id, newTermMonths: 3, reason: "Shorten to 3 months",
+      })
+    ).rejects.toThrow(/no future month/i);
+  });
+});
+
+describe("retryAmortizationFailure — doesn't report success when still blocked", () => {
+  test("a retry that can't clear the underlying blocker throws and leaves the failure unresolved", async () => {
+    const { t, orgId, asOwner } = await seedDealer("retry-blocked");
+    // Same "queued behind a closed period at posting time" setup as the
+    // amortization gate test: an expense with no POSTED EXPENSE_POSTED event,
+    // so catchUpPrepaidSchedule's source_expense_not_posted stop condition
+    // fires and the retry can't actually make progress.
+    const expenseId = await t.run((ctx) =>
+      ctx.db.insert("expenses", {
+        orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+        category: "FEES", status: "PAID", isPrepaid: true, amortizationMonths: 12,
+      })
+    );
+    const scheduleId = await t.run((ctx) =>
+      ctx.db.insert("prepaidExpenseSchedules", {
+        orgId, expenseId, currency: "JOD", totalMinor: 1_200_000, termMonths: 12,
+        expenseSystemKey: "PROFESSIONAL_FEES_EXPENSE", startYearMonth: "2026-01",
+        recognizedMinor: 0, monthsRecognized: 0, status: "ACTIVE", createdAt: Date.now(),
+      })
+    );
+    const failureId = await t.run((ctx) =>
+      ctx.db.insert("prepaidAmortizationFailures", {
+        orgId, scheduleId, yearMonth: "2026-01", errorMessage: "cron hit a transient error",
+        createdAt: Date.now(),
+      })
+    );
+
+    await expect(
+      asOwner.mutation(api.prepaidExpenses.retryAmortizationFailure, { orgId, scheduleId })
+    ).rejects.toThrow(/could not clear the blocker/i);
+
+    const failure = await t.run((ctx) => ctx.db.get(failureId));
+    expect(failure?.resolvedAt).toBeUndefined();
+  });
+});
+
+describe("listSchedules — pending/failed totals only count amortization, not corrections", () => {
+  test("a pending refund event is not counted as pending amortization", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("pending-filter");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    // Simulate a refund whose GL posting is still queued (e.g. no open period
+    // at correction time) — same outbox shape a real correction would produce.
+    await t.run((ctx) =>
+      ctx.db.insert("pendingAccountingEvents", {
+        orgId, kind: "POST", status: "PENDING", idempotencyKey: "test-pending-refund-1",
+        accountingDate: Date.UTC(2026, 1, 1), actorId: userId, attempts: 0, createdAt: Date.now(),
+        eventType: "PREPAID_EXPENSE_REFUNDED", sourceType: "prepaidExpenseSchedules",
+        sourceId: `prepaid_refund_test`, payload: { scheduleId: schedule!._id.toString(), amountMinor: 500_000 },
+      })
+    );
+
+    const schedules = await asOwner.query(api.prepaidExpenses.listSchedules, { orgId });
+    const row = schedules.find((s) => s._id === schedule!._id)!;
+    expect(row.pendingMinor).toBe(0); // the pending REFUND must not inflate pending amortization
+  });
 });
 
 // ─── Fix #4: chart self-heal code-collision safety ────────────────────────────
