@@ -1,15 +1,19 @@
 import { useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { useLocale } from "../../providers/LocaleProvider";
 import { theme } from "../../theme";
 import {
   compactInitials,
+  countVisibleNativeModulesByCategory,
+  getVisibleNativeModules,
   getVisibleNativeModulesByCategory,
   labelFor,
   nativeModulePath,
   nativeModuleCategories,
+  searchNativeModules,
+  type NativeModuleDefinition,
   type NativeModuleCategory,
 } from "./nativeModules";
 
@@ -25,6 +29,8 @@ export function WorkspaceModuleLauncher({
   const router = useRouter();
   const { locale, textDirection } = useLocale();
   const [category, setCategory] = useState<NativeModuleCategory>("operations");
+  const [query, setQuery] = useState("");
+  const isSearching = query.trim().length > 0;
   const visibleCategories = useMemo(
     () =>
       nativeModuleCategories
@@ -35,10 +41,19 @@ export function WorkspaceModuleLauncher({
         .filter((item) => item.modules.length > 0),
     [permissions, roleName],
   );
+  const allVisibleModules = useMemo(
+    () => getVisibleNativeModules(permissions, roleName),
+    [permissions, roleName],
+  );
   const modules = useMemo(
     () => getVisibleNativeModulesByCategory(category, permissions, roleName),
     [category, permissions, roleName],
   );
+  const searchedModules = useMemo(
+    () => searchNativeModules(allVisibleModules, query, locale),
+    [allVisibleModules, locale, query],
+  );
+  const displayedModules = isSearching ? searchedModules : modules;
   const moduleCount = visibleCategories.reduce((total, item) => total + item.modules.length, 0);
 
   useEffect(() => {
@@ -55,12 +70,12 @@ export function WorkspaceModuleLauncher({
         <View style={styles.headingRow}>
           <View style={styles.headingText}>
             <Text style={styles.panelTitle}>
-              {locale === "ar" ? "مركز العمل" : "Work center"}
+              {locale === "ar" ? "مركز الأوامر" : "Command center"}
             </Text>
             <Text style={styles.panelBody}>
               {locale === "ar"
-                ? "نفس أقسام الويب، مصممة لاستخدام سريع من الهاتف."
-                : "The same web workspace sections, shaped for fast mobile work."}
+                ? "ابحث عن أي قسم أو انتقل بين أدوات الويب من مكان واحد."
+                : "Search every workspace tool and jump across the web-grade operating system."}
             </Text>
           </View>
           <View style={styles.countBadge}>
@@ -70,9 +85,33 @@ export function WorkspaceModuleLauncher({
         </View>
       </View>
 
+      <View style={styles.searchShell}>
+        <Text style={styles.searchIcon}>⌕</Text>
+        <TextInput
+          accessibilityLabel={locale === "ar" ? "البحث في الأقسام" : "Search workspace tools"}
+          autoCorrect={false}
+          onChangeText={setQuery}
+          placeholder={locale === "ar" ? "ابحث: سيارات، مبيعات، رسائل..." : "Search: inventory, sales, messages..."}
+          placeholderTextColor={theme.colors.subtleText}
+          style={[styles.searchInput, { textAlign: locale === "ar" ? "right" : "left" }]}
+          value={query}
+        />
+        {query ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={locale === "ar" ? "مسح البحث" : "Clear search"}
+            style={({ pressed }) => [styles.clearSearch, pressed && styles.pressed]}
+            onPress={() => setQuery("")}
+          >
+            <Text style={styles.clearSearchText}>×</Text>
+          </Pressable>
+        ) : null}
+      </View>
+
       <View style={styles.tabs}>
         {visibleCategories.map((item) => {
           const selected = item.id === category;
+          const visibleCount = countVisibleNativeModulesByCategory(item.id, permissions, roleName);
           return (
             <Pressable
               key={item.id}
@@ -91,56 +130,77 @@ export function WorkspaceModuleLauncher({
                 numberOfLines={1}
                 style={[styles.tabText, selected && styles.tabTextSelected]}
               >
-                {labelFor(item.title, locale)}
+                {labelFor(item.title, locale)} · {visibleCount}
               </Text>
             </Pressable>
           );
         })}
       </View>
 
-      {modules.length > 0 ? (
+      {displayedModules.length > 0 ? (
         <View style={styles.grid}>
-          {modules.map((module) => {
+          {displayedModules.map((module) => {
             const title = labelFor(module.title, locale);
+            const categoryTitle = getCategoryLabel(module, locale);
             return (
-          <Pressable
-            key={module.id}
-            accessibilityRole="button"
-            style={({ pressed }) => [styles.moduleCard, pressed && styles.pressed]}
-              onPress={() =>
-                router.push({
-                  pathname: nativeModulePath(module.id),
-                  params: { orgId, moduleId: module.id },
-                })
-              }
-          >
-            <View style={styles.moduleTopRow}>
-              <View style={styles.moduleBadge}>
-                <Text style={styles.moduleBadgeText}>{compactInitials(title)}</Text>
-              </View>
-              <Text style={styles.moduleAction}>{locale === "ar" ? "فتح" : "Open"}</Text>
-            </View>
-            <View style={styles.moduleText}>
-              <Text numberOfLines={1} style={styles.moduleTitle}>
-                {title}
-              </Text>
-              <Text numberOfLines={2} style={styles.moduleSubtitle}>
-                {labelFor(module.subtitle, locale)}
-              </Text>
-            </View>
-          </Pressable>
+              <Pressable
+                key={module.id}
+                accessibilityRole="button"
+                style={({ pressed }) => [
+                  styles.moduleCard,
+                  isSearching && styles.moduleCardWide,
+                  pressed && styles.pressed,
+                ]}
+                onPress={() =>
+                  router.push({
+                    pathname: nativeModulePath(module.id),
+                    params: { orgId, moduleId: module.id },
+                  })
+                }
+              >
+                <View style={styles.moduleTopRow}>
+                  <View style={styles.moduleBadge}>
+                    <Text style={styles.moduleBadgeText}>{compactInitials(title)}</Text>
+                  </View>
+                  <View style={styles.moduleMeta}>
+                    <Text numberOfLines={1} style={styles.moduleCategory}>
+                      {categoryTitle}
+                    </Text>
+                    <Text style={styles.moduleAction}>{locale === "ar" ? "فتح" : "Open"}</Text>
+                  </View>
+                </View>
+                <View style={styles.moduleText}>
+                  <Text numberOfLines={1} style={styles.moduleTitle}>
+                    {title}
+                  </Text>
+                  <Text numberOfLines={isSearching ? 3 : 2} style={styles.moduleSubtitle}>
+                    {labelFor(module.subtitle, locale)}
+                  </Text>
+                </View>
+              </Pressable>
             );
           })}
         </View>
       ) : (
         <View style={styles.emptyState}>
           <Text style={styles.emptyText}>
-            {locale === "ar" ? "لا توجد أقسام متاحة لهذا الدور." : "No tools are available for this role."}
+            {isSearching
+              ? locale === "ar"
+                ? "لا توجد نتائج مطابقة. جرّب اسم قسم أو عملية أخرى."
+                : "No matching tools. Try another module name or workflow."
+              : locale === "ar"
+                ? "لا توجد أقسام متاحة لهذا الدور."
+                : "No tools are available for this role."}
           </Text>
         </View>
       )}
     </View>
   );
+}
+
+function getCategoryLabel(module: NativeModuleDefinition, locale: "en" | "ar"): string {
+  const category = nativeModuleCategories.find((item) => item.id === module.category);
+  return category ? labelFor(category.title, locale) : module.category;
 }
 
 const styles = StyleSheet.create({
@@ -195,6 +255,43 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     textTransform: "uppercase",
   },
+  searchShell: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.sm,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.borderStrong,
+    backgroundColor: theme.colors.background,
+    paddingHorizontal: theme.spacing.md,
+  },
+  searchIcon: {
+    color: theme.colors.primary,
+    fontSize: 18,
+    fontWeight: "900",
+  },
+  searchInput: {
+    flex: 1,
+    minHeight: 46,
+    color: theme.colors.text,
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  clearSearch: {
+    width: 28,
+    height: 28,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.radius.sm,
+    backgroundColor: theme.colors.surfaceAlt,
+  },
+  clearSearchText: {
+    color: theme.colors.text,
+    fontSize: 18,
+    fontWeight: "900",
+    lineHeight: 20,
+  },
   tabs: {
     flexDirection: "row",
     gap: theme.spacing.xs,
@@ -240,6 +337,10 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.background,
     padding: theme.spacing.md,
   },
+  moduleCardWide: {
+    width: "100%",
+    minHeight: 126,
+  },
   moduleTopRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -258,6 +359,17 @@ const styles = StyleSheet.create({
     color: theme.colors.primary,
     fontSize: 11,
     fontWeight: "900",
+  },
+  moduleMeta: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: "flex-end",
+    gap: 2,
+  },
+  moduleCategory: {
+    color: theme.colors.mutedText,
+    fontSize: 11,
+    fontWeight: "800",
   },
   moduleText: {
     gap: theme.spacing.xs,

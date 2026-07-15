@@ -183,3 +183,51 @@ export function getVisibleNativeModulesByCategory(
     canAccessNativeModule(module, permissions, roleName),
   );
 }
+
+export function getVisibleNativeModules(
+  permissions: readonly string[] = [],
+  roleName?: string,
+): NativeModuleDefinition[] {
+  return nativeModules.filter((module) => canAccessNativeModule(module, permissions, roleName));
+}
+
+export function moduleSearchText(
+  module: NativeModuleDefinition,
+  locale: "en" | "ar",
+): string {
+  return [
+    module.id,
+    module.category,
+    module.permission ?? "",
+    labelFor(module.title, locale),
+    labelFor(module.subtitle, locale),
+    module.title.en,
+    module.title.ar,
+    module.subtitle.en,
+    module.subtitle.ar,
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
+export function searchNativeModules(
+  modules: readonly NativeModuleDefinition[],
+  query: string,
+  locale: "en" | "ar",
+): NativeModuleDefinition[] {
+  const normalizedQuery = query.trim().toLowerCase();
+
+  if (!normalizedQuery) {
+    return [...modules];
+  }
+
+  return modules.filter((module) => moduleSearchText(module, locale).includes(normalizedQuery));
+}
+
+export function countVisibleNativeModulesByCategory(
+  category: NativeModuleCategory,
+  permissions: readonly string[] = [],
+  roleName?: string,
+): number {
+  return getVisibleNativeModulesByCategory(category, permissions, roleName).length;
+}

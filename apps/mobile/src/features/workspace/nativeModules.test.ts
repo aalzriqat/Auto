@@ -1,13 +1,17 @@
 import {
   canAccessNativeModule,
   compactInitials,
+  countVisibleNativeModulesByCategory,
   getNativeModule,
   getNativeModulesByCategory,
+  getVisibleNativeModules,
   getVisibleNativeModulesByCategory,
   labelFor,
+  moduleSearchText,
   nativeModulePath,
   nativeModuleCategories,
   nativeModules,
+  searchNativeModules,
 } from "./nativeModules";
 
 describe("native workspace modules", () => {
@@ -79,5 +83,29 @@ describe("native workspace modules", () => {
     ).toEqual(
       getNativeModulesByCategory("admin").map((module) => module.id),
     );
+  });
+
+  test("searches visible modules across localized metadata", () => {
+    const visibleForSales = getVisibleNativeModules(["view:vehicles", "view:sales"], "Sales");
+
+    expect(getVisibleNativeModules().map((module) => module.id)).toEqual(["messages", "notifications", "quotes"]);
+    expect(visibleForSales.map((module) => module.id)).toEqual(
+      expect.arrayContaining(["vehicles", "messages", "notifications", "sales", "quotes"]),
+    );
+    expect(searchNativeModules(visibleForSales, "", "en")).toEqual(visibleForSales);
+    expect(searchNativeModules(visibleForSales, "inventory", "en").map((module) => module.id)).toEqual([
+      "vehicles",
+    ]);
+    expect(searchNativeModules(visibleForSales, "المبيعات", "ar").map((module) => module.id)).toEqual([
+      "sales",
+    ]);
+    expect(searchNativeModules(visibleForSales, "view:sales", "en").map((module) => module.id)).toEqual([
+      "sales",
+      "applications",
+    ]);
+    expect(searchNativeModules(visibleForSales, "missing", "en")).toEqual([]);
+    expect(moduleSearchText(getNativeModule("vehicles")!, "en")).toContain("inventory");
+    expect(countVisibleNativeModulesByCategory("pipeline")).toBe(2);
+    expect(countVisibleNativeModulesByCategory("operations", ["view:vehicles"], "Sales")).toBe(1);
   });
 });

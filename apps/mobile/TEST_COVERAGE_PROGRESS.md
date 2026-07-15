@@ -553,11 +553,59 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - Patched `.github/workflows/test.yml` to run the root pnpm audit with `--ignore-registry-errors` while preserving the dealer-worker `npm audit --audit-level high` gate.
   - Local validation: `pnpm audit --audit-level high --ignore-registry-errors` exits successfully and still prints the registry error for visibility.
   - Thread-aware review lookup still shows no active inline review threads; the only thread is the old Semgrep false positive, already resolved and outdated.
+- 2026-07-15 03:40 +03: PR checks mostly green after audit fix
+  - Committed and pushed `90a5e8f2` (`Handle pnpm audit registry retirement`) to the non-draft PR.
+  - `dependency-audit` is now passing; SonarCloud, Semgrep, CodeQL, Vercel, lint, type-check, dealer-worker, Checkov, OSV, secret-scan, GitGuardian, and TestSprite E2E are also passing.
+  - Still pending: Cypress, Playwright, unit-and-integration, Nuclei, and ZAP baseline.
+  - CodeRabbit is the only red status so far; no new active inline review threads or fresh CodeRabbit review comments were found after the latest push.
+  - `adb devices -l` is still empty, so installing the fresh release APK remains blocked on the phone reconnecting/exposing USB debugging.
+- 2026-07-15 03:42 +03: final long-running checks still pending
+  - Unit/integration, Playwright, and ZAP baseline have passed on head `90a5e8f2`.
+  - Remaining pending checks are Cypress and Nuclei.
+  - CodeRabbit remains a red external status with no new active inline review thread found in the latest thread-aware lookup.
+  - `adb devices -l` remains empty; the installable release APK is still ready at `C:\h-ui\apps\mobile\android\app\build\outputs\apk\release\app-release.apk`.
+- 2026-07-15 03:45 +03: checks settled, install still waiting on ADB
+  - Cypress and Nuclei passed; all GitHub Actions, Vercel, SonarCloud, GitGuardian, Semgrep, CodeQL, TestSprite, ZAP baseline, Checkov, OSV, lint, type-check, unit/integration, dependency-audit, and dealer-worker checks are green on head `90a5e8f2`.
+  - CodeRabbit remains the only failing status and did not post a fresh PR comment or active inline review thread after the latest push.
+  - Thread-aware review lookup reports 1 review thread total, 0 active; the only thread is the previous resolved/outdated Semgrep false positive.
+  - `adb devices -l` is still empty after repeated checks, so the fresh release APK cannot be installed until the phone reconnects/authorizes USB debugging again.
+- 2026-07-15 03:47 +03: install retry blocked by missing USB device
+  - User confirmed the phone screen is off and no lockscreen is enabled.
+  - Verified the fresh signed release APK is present at `C:\h-ui\apps\mobile\android\app\build\outputs\apk\release\app-release.apk` (104,211,410 bytes, timestamp 2026-07-15 03:32:41 +03).
+  - Restarted the adb server and polled `adb devices -l` every 5 seconds for one minute; no devices appeared.
+  - Windows present-device lookup also does not show the Honor/Android USB device, so the install is blocked before Android package installation can start.
+- 2026-07-15 08:49 +03: fresh production APK installed on phone
+  - `adb devices -l` now shows device `A99JBB5826170023` authorized and online.
+  - Installed the fresh signed release APK with `adb install -r C:\h-ui\apps\mobile\android\app\build\outputs\apk\release\app-release.apk`; install result was `Success`.
+  - Verified package `com.autoflowdealer.mobile` reports `versionName=0.1.0`, `versionCode=1`, `lastUpdateTime=2026-07-15 08:47:42`.
+  - Woke the screen with `adb shell input keyevent 26`, dismissed keyguard, relaunched the app, and confirmed `mCurrentFocus` is `com.autoflowdealer.mobile/com.autoflowdealer.mobile.MainActivity`.
+  - Captured verification screenshot at `C:\h-ui\phone-updated-release-visible.png`; it shows the modernized production AutoFlow mobile app open on the workspace screen.
+- 2026-07-15 09:30 +03: command-center parity pass started
+  - User reported the PWA still feels far ahead of the native app, so the next pass targets product-depth perception, not just colors.
+  - Added native module search helpers for cross-category command lookup, localized metadata matching, and visible-module counts.
+  - Upgraded the workspace launcher from static category cards into a mobile command center with search, clear action, category counts, cross-category search results, and richer module cards.
+  - Upgraded the authenticated home screen with workspace search, quick-open command actions, result counts, and a stronger mobile entry point inspired by the PWA command/navigation model.
+  - Validation is next: mobile typecheck, mobile 100% coverage test gate, then production rebuild/install.
+- 2026-07-15 09:32 +03: command-center pass validated
+  - Fixed a React hook-order issue in `HomeScreen` by moving memoized workspace filtering above the loading return.
+  - `pnpm mobile:typecheck`: passed.
+  - `pnpm mobile:test`: passed with 9 suites, 83 tests, and 100% statements/branches/functions/lines.
+  - `git diff --check`: passed with line-ending normalization warnings only.
+  - Device `A99JBB5826170023` is still visible in `adb devices -l`, so the next production install should be direct.
+- 2026-07-15 09:45 +03: command-center production build installed
+  - Built the command-center UI pass from source commit `cc86e659`; subsequent amend only updates this progress log and does not change app source.
+  - Ran `pnpm mobile:android:production --skip-checks`; Gradle completed `bundleRelease` and `assembleRelease` successfully in 9m 57s.
+  - Play-ready bundle: `C:\h-ui\apps\mobile\android\app\build\outputs\bundle\release\app-release.aab` (12-char SHA-256 fingerprint `7920FD80C8F8`).
+  - Direct phone-test APK: `C:\h-ui\apps\mobile\android\app\build\outputs\apk\release\app-release.apk` (12-char SHA-256 fingerprint `098FF8D09DB0`).
+  - Installed the fresh signed release APK on device `A99JBB5826170023`; install result was `Success`.
+  - Verified package `com.autoflowdealer.mobile` reports `versionName=0.1.0`, `versionCode=1`, `lastUpdateTime=2026-07-15 09:44:14`.
+  - Relaunched the app, confirmed `mCurrentFocus` is `com.autoflowdealer.mobile/com.autoflowdealer.mobile.MainActivity`, and captured visible screenshot `C:\h-ui\phone-command-center-release-visible.png`.
+  - Production build log still reports the Turnstile public site key as missing; marketplace verification flows may remain limited until configured.
 
 ## Next Steps
 
-1. Reconnect/authorize the phone so `adb devices -l` shows device `A99JBB5826170023`, then install the fresh signed release APK.
-2. Commit and push the dependency-audit workflow fix, then watch the fresh non-draft PR checks.
-3. Continue watching CodeRabbit comments, inline comments, and failures after the new commit.
+1. Push the command-center UI pass to PR #70 and watch checks/comments/inline comments/failures.
+2. Continue on-device UI testing against the installed production build and record any screens that still feel behind the PWA.
+3. Continue the next parity pass on marketplace cards, vehicle details, and sales wizard-style flows.
 4. Configure the mobile Turnstile public key if marketplace verification is part of the phone test.
 5. Re-run CodeRabbit after the quota window resets or enable usage-based reviews.

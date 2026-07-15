@@ -3,7 +3,8 @@ import { UserButton } from "@clerk/expo/native";
 import { useAuth } from "@clerk/expo";
 import { useRouter } from "expo-router";
 import { useConvexAuth, useQuery } from "convex/react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useMemo, useState } from "react";
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { api, type MobileOrgSummary } from "../../convexApi";
 import { LocaleToggle } from "../../components/LocaleToggle";
@@ -20,6 +21,10 @@ function workspaceInitials(name: string | undefined): string {
   const first = parts[0]?.[0] ?? "A";
   const second = parts[1]?.[0] ?? parts[0]?.[1] ?? "F";
   return `${first}${second}`.toUpperCase();
+}
+
+function workspaceSearchText(org: MobileOrgSummary): string {
+  return [org.name, org.roleName, org._id].filter(Boolean).join(" ").toLowerCase();
 }
 
 function SignedOutState() {
@@ -127,14 +132,28 @@ function EmptyWorkspaceState() {
 function AuthenticatedHome() {
   const { locale, t, textDirection } = useLocale();
   const router = useRouter();
+  const [workspaceQuery, setWorkspaceQuery] = useState("");
   const orgs = useQuery(api.organizations.listMine, {});
   const isSuperAdmin = useQuery(api.adminAuth.isSuperAdmin, {});
+  const safeOrgs = useMemo(
+    () => (orgs ?? []).filter((org): org is MobileOrgSummary => org !== null),
+    [orgs],
+  );
+  const filteredOrgs = useMemo(() => {
+    const normalizedQuery = workspaceQuery.trim().toLowerCase();
+
+    if (!normalizedQuery) {
+      return safeOrgs;
+    }
+
+    return safeOrgs.filter((org) => workspaceSearchText(org).includes(normalizedQuery));
+  }, [safeOrgs, workspaceQuery]);
 
   if (orgs === undefined || isSuperAdmin === undefined) {
     return <RouteLoadingState label={t("loadingWorkspace")} />;
   }
 
-  const safeOrgs = (orgs ?? []).filter((org): org is MobileOrgSummary => org !== null);
+  const primaryOrg = filteredOrgs[0] ?? safeOrgs[0] ?? null;
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
@@ -163,6 +182,77 @@ function AuthenticatedHome() {
         </Text>
       </View>
 
+      <View style={[styles.commandPanel, { direction: textDirection }]}>
+        <View style={styles.commandHeader}>
+          <View style={styles.commandHeaderText}>
+            <Text style={styles.commandTitle}>
+              {locale === "ar" ? "ابدأ من هنا" : "Start here"}
+            </Text>
+            <Text style={styles.commandBody}>
+              {locale === "ar"
+                ? "ابحث عن مساحة عمل أو افتح السوق مباشرة، مثل شريط أوامر الويب."
+                : "Find a workspace or jump straight to the marketplace, like the web command layer."}
+            </Text>
+          </View>
+          <View style={styles.commandStatus}>
+            <Text style={styles.commandStatusValue}>{filteredOrgs.length}</Text>
+            <Text style={styles.commandStatusLabel}>{locale === "ar" ? "نتيجة" : "results"}</Text>
+          </View>
+        </View>
+
+        <View style={styles.searchShell}>
+          <Text style={styles.searchIcon}>⌕</Text>
+          <TextInput
+            accessibilityLabel={locale === "ar" ? "البحث في مساحات العمل" : "Search workspaces"}
+            autoCorrect={false}
+            onChangeText={setWorkspaceQuery}
+            placeholder={locale === "ar" ? "ابحث باسم المعرض أو الدور..." : "Search showroom or role..."}
+            placeholderTextColor={theme.colors.subtleText}
+            style={[styles.searchInput, { textAlign: locale === "ar" ? "right" : "left" }]}
+            value={workspaceQuery}
+          />
+          {workspaceQuery ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={locale === "ar" ? "مسح البحث" : "Clear search"}
+              style={({ pressed }) => [styles.clearSearch, pressed && styles.cardPressed]}
+              onPress={() => setWorkspaceQuery("")}
+            >
+              <Text style={styles.clearSearchText}>×</Text>
+            </Pressable>
+          ) : null}
+        </View>
+
+        <View style={styles.commandActions}>
+          <Pressable
+            accessibilityRole="button"
+            style={({ pressed }) => [styles.commandActionPrimary, pressed && styles.cardPressed]}
+            onPress={() => {
+              if (!primaryOrg) return;
+              router.push({
+                pathname: "/org/[orgId]",
+                params: { orgId: primaryOrg._id },
+              });
+            }}
+          >
+            <Text style={[styles.commandActionKicker, styles.commandActionKickerOnDark]}>
+              {locale === "ar" ? "فتح سريع" : "Quick open"}
+            </Text>
+            <Text numberOfLines={1} style={[styles.commandActionTitle, styles.commandActionTitleOnDark]}>
+              {primaryOrg?.name || (locale === "ar" ? "لا توجد مساحة" : "No workspace")}
+            </Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            style={({ pressed }) => [styles.commandActionSecondary, pressed && styles.cardPressed]}
+            onPress={() => router.push(nativeRoutes.marketplace)}
+          >
+            <Text style={styles.commandActionKicker}>{locale === "ar" ? "السوق" : "Marketplace"}</Text>
+            <Text style={styles.commandActionTitle}>{t("browseMarketplace")}</Text>
+          </Pressable>
+        </View>
+      </View>
+
       {isSuperAdmin ? (
         <View style={[styles.adminPanel, { direction: textDirection }]}>
           <Text style={styles.adminLabel}>{t("superAdminLabel")}</Text>
@@ -183,9 +273,9 @@ function AuthenticatedHome() {
         <Text style={styles.workspaceMeta}>{t("marketplaceSubtitle")}</Text>
       </Pressable>
 
-      {safeOrgs.length > 0 ? (
+      {filteredOrgs.length > 0 ? (
         <View style={styles.workspaceList}>
-          {safeOrgs.map((org) => (
+          {filteredOrgs.map((org) => (
             <WorkspaceCard
               key={org._id}
               org={org}
@@ -197,6 +287,17 @@ function AuthenticatedHome() {
               }
             />
           ))}
+        </View>
+      ) : safeOrgs.length > 0 ? (
+        <View style={[styles.emptyState, { direction: textDirection }]}>
+          <Text style={styles.emptyTitle}>
+            {locale === "ar" ? "لا توجد نتائج" : "No matching workspaces"}
+          </Text>
+          <Text style={styles.body}>
+            {locale === "ar"
+              ? "جرّب اسم معرض أو دور آخر."
+              : "Try another showroom name or role."}
+          </Text>
         </View>
       ) : (
         <EmptyWorkspaceState />
@@ -452,6 +553,129 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
     fontSize: 17,
     fontWeight: "900",
+  },
+  commandPanel: {
+    gap: theme.spacing.md,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.borderStrong,
+    backgroundColor: theme.colors.surface,
+    padding: theme.spacing.md,
+  },
+  commandHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.md,
+  },
+  commandHeaderText: {
+    flex: 1,
+    minWidth: 0,
+    gap: theme.spacing.xs,
+  },
+  commandTitle: {
+    color: theme.colors.text,
+    fontSize: 18,
+    fontWeight: "900",
+  },
+  commandBody: {
+    color: theme.colors.mutedText,
+    fontSize: 13,
+    fontWeight: "700",
+    lineHeight: 19,
+  },
+  commandStatus: {
+    minWidth: 62,
+    alignItems: "center",
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.primarySoft,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: theme.spacing.sm,
+  },
+  commandStatusValue: {
+    color: theme.colors.primary,
+    fontSize: 21,
+    fontWeight: "900",
+    lineHeight: 24,
+  },
+  commandStatusLabel: {
+    color: theme.colors.mutedText,
+    fontSize: 10,
+    fontWeight: "900",
+    textTransform: "uppercase",
+  },
+  searchShell: {
+    minHeight: 48,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.sm,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.background,
+    paddingHorizontal: theme.spacing.md,
+  },
+  searchIcon: {
+    color: theme.colors.primary,
+    fontSize: 18,
+    fontWeight: "900",
+  },
+  searchInput: {
+    flex: 1,
+    minHeight: 46,
+    color: theme.colors.text,
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  clearSearch: {
+    width: 28,
+    height: 28,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.radius.sm,
+    backgroundColor: theme.colors.surfaceAlt,
+  },
+  clearSearchText: {
+    color: theme.colors.text,
+    fontSize: 18,
+    fontWeight: "900",
+    lineHeight: 20,
+  },
+  commandActions: {
+    flexDirection: "row",
+    gap: theme.spacing.sm,
+  },
+  commandActionPrimary: {
+    flex: 1.2,
+    minHeight: 82,
+    justifyContent: "space-between",
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.hero,
+    padding: theme.spacing.md,
+  },
+  commandActionSecondary: {
+    flex: 1,
+    minHeight: 82,
+    justifyContent: "space-between",
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.accentSoft,
+    padding: theme.spacing.md,
+  },
+  commandActionKicker: {
+    color: theme.colors.mutedText,
+    fontSize: 11,
+    fontWeight: "900",
+    textTransform: "uppercase",
+  },
+  commandActionKickerOnDark: {
+    color: "#a7f3d0",
+  },
+  commandActionTitle: {
+    color: theme.colors.text,
+    fontSize: 15,
+    fontWeight: "900",
+  },
+  commandActionTitleOnDark: {
+    color: theme.colors.onPrimary,
   },
   workspaceCard: {
     gap: theme.spacing.md,
