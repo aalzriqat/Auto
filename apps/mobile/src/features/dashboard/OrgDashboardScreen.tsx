@@ -14,12 +14,18 @@ import {
   type MobileMyMembership,
   type MobileOrgSummary,
 } from "../../convexApi";
+import { Card } from "../../components/Card";
+import { EmptyState } from "../../components/EmptyState";
 import { Icon } from "../../components/Icon";
+import type { SemanticIconName } from "../../components/Icon";
 import { LocaleToggle } from "../../components/LocaleToggle";
 import { RouteLoadingState } from "../../components/RouteState";
 import { Screen } from "../../components/Screen";
+import { SkeletonRow } from "../../components/SkeletonRow";
+import { StatTile, type StatTileTone } from "../../components/StatTile";
+import { useAppFontState } from "../../providers/AppFontContext";
 import { useLocale } from "../../providers/LocaleProvider";
-import { theme } from "../../theme";
+import { getTypographyStyle, theme } from "../../theme";
 import { WorkspaceModuleLauncher } from "../workspace/WorkspaceModuleLauncher";
 
 const TIME_RANGES: ReadonlyArray<{
@@ -31,6 +37,23 @@ const TIME_RANGES: ReadonlyArray<{
   { value: "YEAR", labelKey: "timeRangeYear" },
   { value: "ALL_TIME", labelKey: "timeRangeAllTime" },
 ];
+
+function useDashboardTypography() {
+  const { locale } = useLocale();
+  const { fontsLoaded } = useAppFontState();
+
+  return useMemo(
+    () => ({
+      body: getTypographyStyle("body", locale, fontsLoaded),
+      caption: getTypographyStyle("caption", locale, fontsLoaded),
+      display: getTypographyStyle("display", locale, fontsLoaded),
+      heading: getTypographyStyle("heading", locale, fontsLoaded),
+      label: getTypographyStyle("label", locale, fontsLoaded),
+      title: getTypographyStyle("title", locale, fontsLoaded),
+    }),
+    [fontsLoaded, locale],
+  );
+}
 
 function compactNumber(value: number, locale: "en" | "ar"): string {
   const safeValue = Number.isFinite(value) ? value : 0;
@@ -78,6 +101,7 @@ function getTrendBarHeight(revenue: number, maxRevenue: number): number {
 function Header({ org }: { org: MobileOrgSummary }) {
   const router = useRouter();
   const { t, textDirection } = useLocale();
+  const type = useDashboardTypography();
 
   return (
     <View style={[styles.header, { direction: textDirection }]}>
@@ -90,12 +114,12 @@ function Header({ org }: { org: MobileOrgSummary }) {
         <Icon color="text" name="back" size={22} />
       </Pressable>
       <View style={styles.headerText}>
-        <Text style={styles.brand}>{t("appName")}</Text>
-        <Text numberOfLines={1} style={styles.orgName}>
-          {org.name || "Untitled workspace"}
+        <Text style={[styles.brand, type.label]}>{t("appName")}</Text>
+        <Text numberOfLines={1} style={[styles.orgName, type.title]}>
+          {org.name || t("untitledWorkspace")}
         </Text>
-        <Text style={styles.roleText}>
-          {t("roleLabel")}: {org.roleName || "UNKNOWN"}
+        <Text style={[styles.roleText, type.caption]}>
+          {t("roleLabel")}: {org.roleName || t("unknownRole")}
         </Text>
       </View>
       <View style={styles.headerActions}>
@@ -114,6 +138,7 @@ function TimeRangeControl({
   onChange: (value: MobileDashboardTimeRange) => void;
 }) {
   const { t, textDirection } = useLocale();
+  const type = useDashboardTypography();
 
   return (
     <View style={[styles.segmentedControl, { direction: textDirection }]}>
@@ -131,7 +156,7 @@ function TimeRangeControl({
             ]}
             onPress={() => onChange(range.value)}
           >
-            <Text style={[styles.segmentText, selected && styles.segmentTextSelected]}>
+            <Text style={[styles.segmentText, type.label, selected && styles.segmentTextSelected]}>
               {t(range.labelKey)}
             </Text>
           </Pressable>
@@ -151,21 +176,23 @@ function SalesHero({
   onChangeTimeRange: (value: MobileDashboardTimeRange) => void;
 }) {
   const { locale, t, textDirection } = useLocale();
+  const type = useDashboardTypography();
   const latestTrend = stats.salesTrend.at(-1);
   const trendPoints = stats.salesTrend.length > 0 ? stats.salesTrend.slice(-8) : [{ name: "0", Revenue: 0 }];
   const maxTrendRevenue = Math.max(...trendPoints.map((point) => point.Revenue), 1);
 
   return (
-    <View style={[styles.salesHero, { direction: textDirection }]}>
+    <Card style={[styles.salesHero, { direction: textDirection }]}>
       <View style={styles.heroTopRow}>
         <View style={styles.heroTitleGroup}>
-          <Text style={styles.heroEyebrow}>{t("salesOverview")}</Text>
-          <Text style={styles.heroTitle}>{compactNumber(stats.salesVolumeThisMonth, locale)}</Text>
-          <Text style={styles.heroSubtitle}>{t("revenue")}</Text>
+          <Text style={[styles.heroEyebrow, type.label]}>{t("salesOverview")}</Text>
+          <Text style={[styles.heroTitle, type.display]}>{compactNumber(stats.salesVolumeThisMonth, locale)}</Text>
+          <Text style={[styles.heroSubtitle, type.caption]}>{t("revenue")}</Text>
         </View>
         <View style={styles.soldPill}>
-          <Text style={styles.soldValue}>{plainNumber(stats.salesThisMonth, locale)}</Text>
-          <Text style={styles.soldLabel}>{t("vehiclesSold")}</Text>
+          <Icon color="onPrimary" name="sales" size={18} />
+          <Text style={[styles.soldValue, type.title]}>{plainNumber(stats.salesThisMonth, locale)}</Text>
+          <Text style={[styles.soldLabel, type.caption]}>{t("vehiclesSold")}</Text>
         </View>
       </View>
 
@@ -178,11 +205,11 @@ function SalesHero({
             return <View key={`${point.name}-${index}`} style={[styles.trendBar, { height }]} />;
           })}
         </View>
-        <Text style={styles.trendCaption}>
+        <Text style={[styles.trendCaption, type.caption]}>
           {latestTrend?.name ? `${t("revenue")} ${latestTrend.name}` : t("revenue")}
         </Text>
       </View>
-    </View>
+    </Card>
   );
 }
 
@@ -190,41 +217,30 @@ function MetricCard({
   title,
   value,
   caption,
+  icon,
   tone,
 }: {
   title: string;
   value: string;
   caption: string;
-  tone: "green" | "amber" | "blue" | "slate";
+  icon: SemanticIconName;
+  tone: StatTileTone;
 }) {
-  const toneStyle = getMetricToneStyle(tone);
-
   return (
-    <View style={[styles.metricCard, toneStyle]}>
-      <Text style={styles.metricTitle}>{title}</Text>
-      <Text numberOfLines={1} adjustsFontSizeToFit style={styles.metricValue}>
-        {value}
-      </Text>
-      <Text style={styles.metricCaption}>{caption}</Text>
-    </View>
+    <StatTile
+      caption={caption}
+      icon={icon}
+      label={title}
+      style={styles.metricCard}
+      tone={tone}
+      value={value}
+    />
   );
-}
-
-function getMetricToneStyle(tone: "green" | "amber" | "blue" | "slate") {
-  switch (tone) {
-    case "green":
-      return styles.greenMetric;
-    case "amber":
-      return styles.amberMetric;
-    case "blue":
-      return styles.blueMetric;
-    case "slate":
-      return styles.slateMetric;
-  }
 }
 
 function DataQualityPanel({ dataQuality }: { dataQuality: MobileDataQualityStats }) {
   const { locale, t, textDirection } = useLocale();
+  const type = useDashboardTypography();
   const total = getDataQualityTotal(dataQuality);
 
   if (total === 0) {
@@ -232,8 +248,8 @@ function DataQualityPanel({ dataQuality }: { dataQuality: MobileDataQualityStats
   }
 
   return (
-    <View style={[styles.warningPanel, { direction: textDirection }]}>
-      <Text style={styles.panelTitle}>{t("dataQualityUpper")}</Text>
+    <Card style={[styles.warningPanel, { direction: textDirection }]}>
+      <Text style={[styles.panelTitle, type.label]}>{t("dataQualityUpper")}</Text>
       <View style={styles.qualityGrid}>
         <MetricPill
           label={t("customersMissingPhone")}
@@ -248,61 +264,64 @@ function DataQualityPanel({ dataQuality }: { dataQuality: MobileDataQualityStats
           value={plainNumber(dataQuality.vehiclesWithVinWarning, locale)}
         />
       </View>
-    </View>
+    </Card>
   );
 }
 
 function MetricPill({ label, value }: { label: string; value: string }) {
+  const type = useDashboardTypography();
+
   return (
     <View style={styles.metricPill}>
-      <Text style={styles.metricPillValue}>{value}</Text>
-      <Text style={styles.metricPillLabel}>{label}</Text>
+      <Text style={[styles.metricPillValue, type.heading]}>{value}</Text>
+      <Text style={[styles.metricPillLabel, type.caption]}>{label}</Text>
     </View>
   );
 }
 
 function TeamPanel({ stats }: { stats: MobileDashboardStats }) {
   const { locale, t, textDirection } = useLocale();
+  const type = useDashboardTypography();
   const topTeamTasks = stats.teamTasks.slice(0, 3);
 
   return (
-    <View style={[styles.panel, { direction: textDirection }]}>
-      <Text style={styles.panelTitle}>{t("teamActivity")}</Text>
+    <Card style={[styles.panel, { direction: textDirection }]}>
+      <Text style={[styles.panelTitle, type.label]}>{t("teamActivity")}</Text>
       {stats.topPerformer ? (
         <View style={styles.performerRow}>
           <View style={styles.avatar}>
-            <Text style={styles.avatarText}>
+            <Text style={[styles.avatarText, type.label]}>
               {stats.topPerformer.name.slice(0, 2).toUpperCase() || "AF"}
             </Text>
           </View>
           <View style={styles.performerText}>
-            <Text style={styles.performerName}>{stats.topPerformer.name}</Text>
-            <Text style={styles.performerMeta}>
+            <Text style={[styles.performerName, type.heading]}>{stats.topPerformer.name}</Text>
+            <Text style={[styles.performerMeta, type.caption]}>
               {t("topPerformer")} · {plainNumber(stats.topPerformer.deals, locale)}
             </Text>
           </View>
         </View>
       ) : (
-        <Text style={styles.panelBody}>{t("noTopPerformer")}</Text>
+        <Text style={[styles.panelBody, type.body]}>{t("noTopPerformer")}</Text>
       )}
 
       {topTeamTasks.length > 0 ? (
         <View style={styles.teamList}>
           {topTeamTasks.map((member, index) => (
             <View key={`${member.name}-${index}`} style={styles.teamRow}>
-              <Text numberOfLines={1} style={styles.teamName}>
+              <Text numberOfLines={1} style={[styles.teamName, type.body]}>
                 {member.name}
               </Text>
-              <Text style={styles.teamMeta}>
+              <Text style={[styles.teamMeta, type.caption]}>
                 {plainNumber(member.pending + member.overdue, locale)} {t("pending")}
               </Text>
             </View>
           ))}
         </View>
       ) : (
-        <Text style={styles.panelBody}>{t("noTeamActivity")}</Text>
+        <Text style={[styles.panelBody, type.body]}>{t("noTeamActivity")}</Text>
       )}
-    </View>
+    </Card>
   );
 }
 
@@ -315,25 +334,34 @@ function QuickActionRail({
 }>) {
   const router = useRouter();
   const { t, textDirection } = useLocale();
+  const type = useDashboardTypography();
   const isOwner = roleName.toUpperCase() === "OWNER";
   const actions = [
     {
+      icon: "vehicles",
       label: t("inventory"),
       moduleId: "vehicles",
     },
     {
+      icon: "leads",
       label: t("leads"),
       moduleId: "leads",
     },
     {
+      icon: "messages",
       label: t("messages"),
       moduleId: "messages",
     },
     {
+      icon: isOwner ? "settings" : "team",
       label: t("settings"),
       moduleId: isOwner ? "settings" : "team",
     },
-  ];
+  ] as const satisfies ReadonlyArray<{
+    icon: SemanticIconName;
+    label: string;
+    moduleId: string;
+  }>;
 
   return (
     <View style={[styles.quickRail, { direction: textDirection }]}>
@@ -344,12 +372,13 @@ function QuickActionRail({
           style={({ pressed }) => [styles.quickRailItem, pressed && styles.pressed]}
           onPress={() =>
             router.push({
-              pathname: "/org/[orgId]/module/[moduleId]",
+              pathname: nativeRoutes.orgModule,
               params: { orgId, moduleId: action.moduleId },
             })
           }
         >
-          <Text numberOfLines={1} style={styles.quickRailText}>
+          <Icon color="primary" name={action.icon} size={18} />
+          <Text numberOfLines={1} style={[styles.quickRailText, type.label]}>
             {action.label}
           </Text>
         </Pressable>
@@ -375,24 +404,31 @@ function DashboardContent({
 }) {
   const { locale, t } = useLocale();
   const router = useRouter();
+  const type = useDashboardTypography();
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
       <Header org={org} />
       <QuickActionRail orgId={org._id} roleName={myMembership.roleName} />
-      <Pressable
-        accessibilityRole="button"
-        style={({ pressed }) => [styles.marketplaceLink, pressed && styles.pressed]}
+      <Card
+        accessibilityLabel={t("dealerMarketplace")}
         onPress={() =>
           router.push({
-            pathname: "/org/[orgId]/marketplace",
+            pathname: nativeRoutes.orgMarketplace,
             params: { orgId: org._id },
           })
         }
+        style={styles.marketplaceLink}
       >
-        <Text style={styles.marketplaceLinkTitle}>{t("dealerMarketplace")}</Text>
-        <Text style={styles.marketplaceLinkBody}>{t("dealerMarketplaceSubtitle")}</Text>
-      </Pressable>
+        <View style={styles.marketplaceLinkIcon}>
+          <Icon color="primary" name="marketplace" size={22} />
+        </View>
+        <View style={styles.marketplaceLinkText}>
+          <Text style={[styles.marketplaceLinkTitle, type.heading]}>{t("dealerMarketplace")}</Text>
+          <Text style={[styles.marketplaceLinkBody, type.caption]}>{t("dealerMarketplaceSubtitle")}</Text>
+        </View>
+        <Icon color="primary" name="chevronForward" size={22} />
+      </Card>
       <SalesHero stats={stats} timeRange={timeRange} onChangeTimeRange={onChangeTimeRange} />
 
       <View style={styles.metricGrid}>
@@ -400,25 +436,29 @@ function DashboardContent({
           title={t("vehiclesUpper")}
           value={plainNumber(stats.totalVehicles, locale)}
           caption={`${plainNumber(stats.availableVehicles, locale)} ${t("available")}`}
-          tone="green"
+          icon="vehicles"
+          tone="success"
         />
         <MetricCard
           title={t("leadsUpper")}
           value={plainNumber(stats.activeLeads, locale)}
           caption={t("activeLeads")}
-          tone="amber"
+          icon="leads"
+          tone="warning"
         />
         <MetricCard
           title={t("teamUpper")}
           value={plainNumber(stats.teamMembers, locale)}
           caption={t("activeStaff")}
-          tone="blue"
+          icon="team"
+          tone="info"
         />
         <MetricCard
           title={t("tasksUpper")}
           value={plainNumber(stats.taskStats.total, locale)}
           caption={`${plainNumber(stats.taskStats.overdue, locale)} ${t("overdue")}`}
-          tone="slate"
+          icon="tasks"
+          tone="primary"
         />
       </View>
 
@@ -433,20 +473,40 @@ function DashboardContent({
   );
 }
 
+function DashboardSkeleton({ org }: { org: MobileOrgSummary }) {
+  const { t, textDirection } = useLocale();
+  const type = useDashboardTypography();
+
+  return (
+    <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+      <Header org={org} />
+      <Card style={[styles.skeletonPanel, { direction: textDirection }]}>
+        <Text style={[styles.panelTitle, type.label]}>{t("dashboardLoading")}</Text>
+        <SkeletonRow count={2} />
+      </Card>
+      <View style={styles.metricGrid}>
+        <SkeletonRow count={4} />
+      </View>
+      <Card style={styles.skeletonPanel}>
+        <SkeletonRow count={3} />
+      </Card>
+    </ScrollView>
+  );
+}
+
 function InaccessibleWorkspaceState() {
   const router = useRouter();
   const { t, textDirection } = useLocale();
 
   return (
-    <View style={[styles.emptyState, { direction: textDirection }]}>
-      <Text style={styles.emptyTitle}>{t("inaccessibleWorkspaceTitle")}</Text>
-      <Text style={styles.emptyBody}>{t("inaccessibleWorkspaceBody")}</Text>
-      <Pressable
-        style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
-        onPress={() => router.replace(nativeRoutes.home)}
-      >
-        <Text style={styles.primaryButtonText}>{t("back")}</Text>
-      </Pressable>
+    <View style={[styles.routeStateShell, { direction: textDirection }]}>
+      <EmptyState
+        actionLabel={t("back")}
+        hint={t("inaccessibleWorkspaceBody")}
+        icon="settings"
+        onAction={() => router.replace(nativeRoutes.home)}
+        title={t("inaccessibleWorkspaceTitle")}
+      />
     </View>
   );
 }
@@ -495,7 +555,7 @@ export function OrgDashboardScreen({ orgId }: Readonly<{ orgId: string | null }>
 
     if (moduleId) {
       router.replace({
-        pathname: "/org/[orgId]/module/[moduleId]",
+        pathname: nativeRoutes.orgModule,
         params: { orgId: selectedOrg._id, moduleId },
       });
     }
@@ -528,7 +588,7 @@ export function OrgDashboardScreen({ orgId }: Readonly<{ orgId: string | null }>
   if (stats === undefined || dataQuality === undefined || myMembership === undefined) {
     return (
       <Screen>
-        <RouteLoadingState label={t("dashboardLoading")} />
+        <DashboardSkeleton org={selectedOrg} />
       </Screen>
     );
   }
@@ -566,10 +626,11 @@ const styles = StyleSheet.create({
     height: 40,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: theme.radius.md,
+    borderRadius: theme.radius.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
+    ...theme.shadows.sm,
   },
   headerText: {
     flex: 1,
@@ -606,11 +667,13 @@ const styles = StyleSheet.create({
     minHeight: 42,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: theme.radius.md,
+    gap: theme.spacing.xs,
+    borderRadius: theme.radius.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     paddingHorizontal: theme.spacing.sm,
+    ...theme.shadows.sm,
   },
   quickRailText: {
     color: theme.colors.text,
@@ -618,12 +681,24 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   marketplaceLink: {
-    gap: theme.spacing.xs,
-    borderRadius: theme.radius.md,
-    borderWidth: 1,
-    borderColor: "#c7d2fe",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.md,
+    borderColor: theme.colors.primary,
+    borderRadius: theme.radius.lg,
     backgroundColor: theme.colors.primarySoft,
-    padding: theme.spacing.md,
+  },
+  marketplaceLinkIcon: {
+    width: 44,
+    height: 44,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.surface,
+  },
+  marketplaceLinkText: {
+    flex: 1,
+    minWidth: 0,
   },
   marketplaceLinkTitle: {
     color: theme.colors.text,
@@ -637,9 +712,11 @@ const styles = StyleSheet.create({
   },
   salesHero: {
     gap: theme.spacing.lg,
-    borderRadius: theme.radius.md,
+    borderColor: theme.colors.hero,
+    borderRadius: theme.radius.xl,
     backgroundColor: theme.colors.hero,
     padding: theme.spacing.lg,
+    ...theme.shadows.lg,
   },
   heroTopRow: {
     flexDirection: "row",
@@ -653,7 +730,7 @@ const styles = StyleSheet.create({
     gap: theme.spacing.xs,
   },
   heroEyebrow: {
-    color: "#a7f3d0",
+    color: theme.colors.primarySoft,
     fontSize: 12,
     fontWeight: "800",
     letterSpacing: 0,
@@ -666,14 +743,18 @@ const styles = StyleSheet.create({
     lineHeight: 40,
   },
   heroSubtitle: {
-    color: "#cbd5e1",
+    color: theme.colors.surfaceAlt,
     fontSize: 13,
     fontWeight: "700",
   },
   soldPill: {
     minWidth: 88,
-    borderRadius: theme.radius.md,
-    backgroundColor: "rgba(255,255,255,0.12)",
+    alignItems: "center",
+    gap: theme.spacing.xs,
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.primaryDark,
+    backgroundColor: theme.colors.primaryDark,
     padding: theme.spacing.sm,
   },
   soldValue: {
@@ -683,7 +764,7 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   soldLabel: {
-    color: "#cbd5e1",
+    color: theme.colors.surfaceAlt,
     fontSize: 11,
     fontWeight: "700",
     textAlign: "center",
@@ -691,8 +772,8 @@ const styles = StyleSheet.create({
   segmentedControl: {
     flexDirection: "row",
     gap: theme.spacing.xs,
-    borderRadius: theme.radius.md,
-    backgroundColor: "rgba(255,255,255,0.08)",
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.primaryDark,
     padding: theme.spacing.xs,
   },
   segment: {
@@ -706,7 +787,7 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.onPrimary,
   },
   segmentText: {
-    color: "#cbd5e1",
+    color: theme.colors.surfaceAlt,
     fontSize: 12,
     fontWeight: "800",
   },
@@ -725,10 +806,10 @@ const styles = StyleSheet.create({
   trendBar: {
     flex: 1,
     borderRadius: theme.radius.sm,
-    backgroundColor: "#2dd4bf",
+    backgroundColor: theme.colors.primary,
   },
   trendCaption: {
-    color: "#cbd5e1",
+    color: theme.colors.surfaceAlt,
     fontSize: 12,
     fontWeight: "700",
   },
@@ -739,60 +820,16 @@ const styles = StyleSheet.create({
   },
   metricCard: {
     width: "47.8%",
-    minHeight: 132,
-    justifyContent: "space-between",
-    borderRadius: theme.radius.md,
-    borderWidth: 1,
-    padding: theme.spacing.md,
-  },
-  greenMetric: {
-    borderColor: "#bbf7d0",
-    backgroundColor: "#dcfce7",
-  },
-  amberMetric: {
-    borderColor: "#fed7aa",
-    backgroundColor: "#ffedd5",
-  },
-  blueMetric: {
-    borderColor: "#bae6fd",
-    backgroundColor: "#e0f2fe",
-  },
-  slateMetric: {
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surface,
-  },
-  metricTitle: {
-    color: theme.colors.mutedText,
-    fontSize: 12,
-    fontWeight: "900",
-    textTransform: "uppercase",
-  },
-  metricValue: {
-    color: theme.colors.text,
-    fontSize: 34,
-    fontWeight: "900",
-    lineHeight: 40,
-  },
-  metricCaption: {
-    color: theme.colors.mutedText,
-    fontSize: 13,
-    fontWeight: "700",
   },
   warningPanel: {
     gap: theme.spacing.md,
-    borderRadius: theme.radius.md,
-    borderWidth: 1,
-    borderColor: "#fde68a",
-    backgroundColor: "#fef3c7",
-    padding: theme.spacing.md,
+    borderColor: theme.colors.warning,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.warningSoft,
   },
   panel: {
     gap: theme.spacing.md,
-    borderRadius: theme.radius.md,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surface,
-    padding: theme.spacing.md,
+    borderRadius: theme.radius.lg,
   },
   panelTitle: {
     color: theme.colors.text,
@@ -813,8 +850,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     gap: theme.spacing.md,
-    borderRadius: theme.radius.sm,
-    backgroundColor: "rgba(255,255,255,0.56)",
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.surface,
     paddingHorizontal: theme.spacing.md,
     paddingVertical: theme.spacing.sm,
   },
@@ -839,7 +876,7 @@ const styles = StyleSheet.create({
     height: 44,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: 22,
+    borderRadius: theme.radius.full,
     backgroundColor: theme.colors.surfaceAlt,
   },
   avatarText: {
@@ -880,34 +917,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "700",
   },
-  emptyState: {
+  routeStateShell: {
     flex: 1,
     justifyContent: "center",
-    gap: theme.spacing.md,
     padding: theme.spacing.xl,
   },
-  emptyTitle: {
-    color: theme.colors.text,
-    fontSize: 24,
-    fontWeight: "900",
-  },
-  emptyBody: {
-    color: theme.colors.mutedText,
-    fontSize: 15,
-    lineHeight: 22,
-  },
-  primaryButton: {
-    minHeight: 48,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.primary,
-    paddingHorizontal: theme.spacing.lg,
-  },
-  primaryButtonText: {
-    color: theme.colors.onPrimary,
-    fontSize: 16,
-    fontWeight: "800",
+  skeletonPanel: {
+    borderRadius: theme.radius.lg,
   },
   pressed: {
     opacity: 0.82,

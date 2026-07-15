@@ -1003,9 +1003,16 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `pnpm --filter @autoflow/mobile typecheck`: passed.
   - `pnpm --filter @autoflow/mobile test`: passed with 13 suites, 107 tests, and 100% statements/branches/functions/lines.
   - `pnpm --filter @autoflow/shared test`: passed with 1 suite and 3 tests.
+- 2026-07-15 18:24 +03: mobile UI modernization Phase 6 OrgDashboardScreen validated locally
+  - Replaced bespoke dashboard KPI cards with `StatTile`, added icon-led quick actions, and restyled the sales hero, data-quality panel, team panel, and marketplace callout with card depth and locale-aware typography.
+  - Added a dashboard skeleton state for pending stats/data-quality/membership queries instead of the generic route spinner.
+  - Centralized remaining dashboard module/marketplace navigation through shared native route constants.
+  - `pnpm install --frozen-lockfile`: passed; lockfile already up to date.
+  - `pnpm --filter @autoflow/mobile typecheck`: passed.
+  - `pnpm --filter @autoflow/mobile test`: passed with 13 suites, 107 tests, and 100% statements/branches/functions/lines.
 
 ## Next Steps
 
-1. Commit Phase 6 HomeScreen restyle on top of `agent/mobile-ui-port`.
-2. Continue Phase 6 screen restyling with `src/features/dashboard/OrgDashboardScreen.tsx`.
+1. Commit Phase 6 OrgDashboardScreen restyle on top of `agent/mobile-ui-port`.
+2. Continue Phase 6 screen restyling with `src/features/workspace/WorkspaceModuleLauncher.tsx`.
 3. Continue the later UI/list phases with typecheck and 100% mobile Jest coverage before each commit.
