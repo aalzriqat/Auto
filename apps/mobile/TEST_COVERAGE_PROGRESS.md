@@ -663,10 +663,44 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - Upgraded lead cards with pipeline metrics, owner/source/vehicle chips, and a lead detail bottom sheet.
   - `pnpm mobile:typecheck`: passed.
   - `pnpm mobile:test`: passed with 9 suites, 83 tests, and 100% statements/branches/functions/lines.
+- 2026-07-15 10:30 +03: CRM production build running
+  - Pushed commit `f3463220` (`Upgrade mobile CRM flows`) to non-draft PR #70.
+  - Checked out `C:\h-ui` to the exact pushed commit for the next short-path production build.
+  - Started `pnpm mobile:android:production --skip-checks`; Gradle is active and has reached the app JS bundle step.
+  - Build log: `C:\h-ui\mobile-production-build-20260715-102755.log`.
+- 2026-07-15 10:32 +03: CRM production build still progressing
+  - Release JS bundle completed successfully.
+  - Gradle is through app manifest/resource/dex processing and native module release packaging; app Kotlin compile is running.
+  - Only warnings so far are dependency deprecations, an Expo filesystem manifest replacement warning, and a Gradle daemon metaspace warning.
+- 2026-07-15 10:35 +03: CI and build watch
+  - User called out that the PWA is still far ahead, so the next native passes need to keep adding workflow depth, guided dialogs, searchable choices, and better modern surfaces rather than only visual styling.
+  - PR check watch on head `f3463220`: most checks are green, but `unit-and-integration` failed after Vitest reported all 99 files and 1,120 tests passing, then emitted 1 unhandled teardown error.
+  - The failing CI log shows scheduled Convex email actions running after tests and logging missing test environment/config dependencies (`CLERK_JWT_ISSUER_DOMAIN`, `NEXT_PUBLIC_APP_URL`, and an unregistered `rateLimiter` component); this does not come from the mobile UI patch.
+  - CodeRabbit remains an external red status because its latest review is quota/rate limited; no active inline review thread is currently known.
+  - The CRM production Android build is still running in `C:\h-ui`; Gradle has reached release app lint/resource/native packaging tasks without a release build failure.
+- 2026-07-15 10:37 +03: CRM release installed on phone
+  - CRM production build completed successfully from source commit `f3463220` in 7m 47s.
+  - Play-ready bundle: `C:\h-ui\apps\mobile\android\app\build\outputs\bundle\release\app-release.aab` (12-char SHA-256 fingerprint `CD6CE4DF15A5`).
+  - Direct phone-test APK: `C:\h-ui\apps\mobile\android\app\build\outputs\apk\release\app-release.apk` (12-char SHA-256 fingerprint `CB6135F0F325`).
+  - Installed the fresh signed release APK on device `A99JBB5826170023`; install result was `Success`.
+  - Verified package `com.autoflowdealer.mobile` reports `versionName=0.1.0`, `versionCode=1`, `lastUpdateTime=2026-07-15 10:36:25`.
+  - Relaunched the app, confirmed `mCurrentFocus` is `com.autoflowdealer.mobile/com.autoflowdealer.mobile.MainActivity`, and captured visible screenshot `C:\h-ui\phone-crm-parity-release.png`.
+  - Visual check of the installed home screen confirms the app shell still needs a stronger PWA-parity pass: first screen navigation, module discovery, dialogs, and workflow launchers still feel too sparse.
+- 2026-07-15 10:44 +03: first-screen command shell upgraded
+  - Reworked the authenticated home screen from a simple workspace list into a mobile work center with active-workspace spotlight, compact access metrics, dashboard/open-command actions, workflow cards, and a bottom-sheet workspace command deck.
+  - Added direct workflow launchers for dashboard, inventory, leads, sales, messages, and marketplace so users do not have to manually drill through a plain list.
+  - Added `src/features/home/homeCommandModel.ts` and `homeCommandModel.test.ts` for tested workspace filtering, initials, primary workspace selection, and bilingual workflow metadata.
+  - Added the new home command model to the Jest coverage gate.
+  - Guard pass fixed the workspace command sheet so tapping commands on a specific workspace opens the sheet with that workspace selected instead of defaulting to the first workspace.
+  - `pnpm mobile:typecheck`: passed.
+  - `pnpm mobile:test`: passed with 10 suites, 87 tests, and 100% statements/branches/functions/lines.
+  - `git diff --check`: passed with line-ending normalization warnings only.
+  - GitHub rerun for `unit-and-integration` on PR #70 passed; all non-CodeRabbit checks are green again on current pushed head `f3463220`.
 
 ## Next Steps
 
-1. Build and install the CRM parity release APK on the phone.
-2. Continue on-device UI testing against the installed production build and record any screens that still feel behind the PWA.
-3. Re-run CodeRabbit after the quota window resets or enable usage-based reviews.
-4. Configure the mobile Turnstile public key if marketplace verification is part of the phone test.
+1. Commit and push the first-screen command shell upgrade to PR #70.
+2. Build and install the updated production release APK on the phone.
+3. Continue module-level parity passes for dialogs, searchable choices, and guided workflows.
+4. Re-run CodeRabbit after the quota window resets or enable usage-based reviews.
+5. Configure the mobile Turnstile public key if marketplace verification is part of the phone test.

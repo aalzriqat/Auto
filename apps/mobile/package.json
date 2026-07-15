@@ -50,6 +50,7 @@
       "!app/**/*.test.tsx",
       "src/components/*.tsx",
       "src/config/env.ts",
+      "src/features/home/homeCommandModel.ts",
       "src/features/marketplace/marketplaceFingerprint.ts",
       "src/features/marketplace/TurnstileVerification.tsx",
       "src/features/marketplace/marketplaceUtils.ts",
