@@ -1,5 +1,5 @@
-import { WorkspaceCategoryScreen } from "../../../../../src/features/workspace/WorkspaceCategoryScreen";
+import { MoreTabScreen } from "../../../../../src/features/workspace/tabScreens";
 
 export default function OrgWorkspaceAdminRoute() {
-  return <WorkspaceCategoryScreen category="admin" />;
+  return <MoreTabScreen />;
 }

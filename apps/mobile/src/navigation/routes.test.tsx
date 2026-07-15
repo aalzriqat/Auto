@@ -108,13 +108,16 @@ jest.mock("../features/workspace/WorkspaceTabsLayout", () => {
   };
 });
 
-jest.mock("../features/workspace/WorkspaceCategoryScreen", () => {
+jest.mock("../features/workspace/tabScreens", () => {
   const React = jest.requireActual<typeof import("react")>("react");
   const { Text } = jest.requireActual<typeof import("react-native")>("react-native");
+  const tabScreen = (testID: string) => () => React.createElement(Text, { testID }, testID);
 
   return {
-    WorkspaceCategoryScreen: ({ category }: { category: string }) =>
-      React.createElement(Text, { testID: `workspace-category-${category}` }, category),
+    InventoryTabScreen: tabScreen("inventory-tab-screen"),
+    SalesTabScreen: tabScreen("sales-tab-screen"),
+    InboxTabScreen: tabScreen("inbox-tab-screen"),
+    MoreTabScreen: tabScreen("more-tab-screen"),
   };
 });
 
@@ -248,18 +251,10 @@ describe("mobile Expo routes", () => {
   });
 
   test("renders workspace category tab routes", async () => {
-    expect((await render(<OrgWorkspaceOperationsRoute />)).getByTestId("workspace-category-operations").props.children).toBe(
-      "operations",
-    );
-    expect((await render(<OrgWorkspacePipelineRoute />)).getByTestId("workspace-category-pipeline").props.children).toBe(
-      "pipeline",
-    );
-    expect((await render(<OrgWorkspaceFinanceRoute />)).getByTestId("workspace-category-finance").props.children).toBe(
-      "finance",
-    );
-    expect((await render(<OrgWorkspaceAdminRoute />)).getByTestId("workspace-category-admin").props.children).toBe(
-      "admin",
-    );
+    expect((await render(<OrgWorkspaceOperationsRoute />)).getByTestId("inventory-tab-screen")).toBeTruthy();
+    expect((await render(<OrgWorkspacePipelineRoute />)).getByTestId("sales-tab-screen")).toBeTruthy();
+    expect((await render(<OrgWorkspaceFinanceRoute />)).getByTestId("inbox-tab-screen")).toBeTruthy();
+    expect((await render(<OrgWorkspaceAdminRoute />)).getByTestId("more-tab-screen")).toBeTruthy();
   });
 
   test("normalizes dealer marketplace route params", async () => {

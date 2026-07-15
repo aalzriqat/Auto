@@ -1,5 +1,5 @@
-import { WorkspaceCategoryScreen } from "../../../../../src/features/workspace/WorkspaceCategoryScreen";
+import { SalesTabScreen } from "../../../../../src/features/workspace/tabScreens";
 
 export default function OrgWorkspacePipelineRoute() {
-  return <WorkspaceCategoryScreen category="pipeline" />;
+  return <SalesTabScreen />;
 }

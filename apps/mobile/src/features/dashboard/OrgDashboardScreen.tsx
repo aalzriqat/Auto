@@ -98,10 +98,21 @@ function getTrendBarHeight(revenue: number, maxRevenue: number): number {
   return 10 + (normalizedRevenue / scale) * 38;
 }
 
+function getGreeting(locale: string, hour: number): string {
+  if (hour < 12) {
+    return locale === "ar" ? "صباح الخير" : "Good morning";
+  }
+  if (hour < 17) {
+    return locale === "ar" ? "طاب يومك" : "Good afternoon";
+  }
+  return locale === "ar" ? "مساء الخير" : "Good evening";
+}
+
 function Header({ org }: { org: MobileOrgSummary }) {
   const router = useRouter();
-  const { t, textDirection } = useLocale();
+  const { locale, t, textDirection } = useLocale();
   const type = useDashboardTypography();
+  const greeting = getGreeting(locale, new Date().getHours());
 
   return (
     <View style={[styles.header, { direction: textDirection }]}>
@@ -111,15 +122,14 @@ function Header({ org }: { org: MobileOrgSummary }) {
         style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
         onPress={() => router.replace(nativeRoutes.home)}
       >
-        <Icon color="text" name="back" size={22} />
+        <Icon color="text" name="back" size={20} />
       </Pressable>
       <View style={styles.headerText}>
-        <Text style={[styles.brand, type.label]}>{t("appName")}</Text>
         <Text numberOfLines={1} style={[styles.orgName, type.title]}>
-          {org.name || t("untitledWorkspace")}
+          {greeting}
         </Text>
-        <Text style={[styles.roleText, type.caption]}>
-          {t("roleLabel")}: {org.roleName || t("unknownRole")}
+        <Text numberOfLines={1} style={[styles.roleText, type.caption]}>
+          {org.name || t("untitledWorkspace")}
         </Text>
       </View>
       <View style={styles.headerActions}>
@@ -622,15 +632,12 @@ const styles = StyleSheet.create({
     gap: theme.spacing.md,
   },
   backButton: {
-    width: 40,
-    height: 40,
+    width: 38,
+    height: 38,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: theme.radius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surface,
-    ...theme.shadows.sm,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.surfaceAlt,
   },
   headerText: {
     flex: 1,

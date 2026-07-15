@@ -1,5 +1,5 @@
-import { WorkspaceCategoryScreen } from "../../../../../src/features/workspace/WorkspaceCategoryScreen";
+import { InboxTabScreen } from "../../../../../src/features/workspace/tabScreens";
 
 export default function OrgWorkspaceFinanceRoute() {
-  return <WorkspaceCategoryScreen category="finance" />;
+  return <InboxTabScreen />;
 }

@@ -1,5 +1,5 @@
-import { WorkspaceCategoryScreen } from "../../../../../src/features/workspace/WorkspaceCategoryScreen";
+import { InventoryTabScreen } from "../../../../../src/features/workspace/tabScreens";
 
 export default function OrgWorkspaceOperationsRoute() {
-  return <WorkspaceCategoryScreen category="operations" />;
+  return <InventoryTabScreen />;
 }

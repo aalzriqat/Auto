@@ -42,11 +42,11 @@ type WorkspaceTabConfig = Readonly<{
 }>;
 
 const workspaceTabConfigs: ReadonlyArray<WorkspaceTabConfig> = [
-  { name: "home", icon: "dashboard", labelKey: "workspaceTabHome" },
-  { name: "operations", category: "operations", icon: "operations", labelKey: "workspaceTabOperations" },
-  { name: "pipeline", category: "pipeline", icon: "pipeline", labelKey: "workspaceTabPipeline" },
-  { name: "finance", category: "finance", icon: "finance", labelKey: "workspaceTabFinance" },
-  { name: "admin", category: "admin", icon: "admin", labelKey: "workspaceTabAdmin" },
+  { name: "home", icon: "today", labelKey: "workspaceTabHome" },
+  { name: "operations", category: "operations", icon: "vehicles", labelKey: "workspaceTabOperations" },
+  { name: "pipeline", category: "pipeline", icon: "sales", labelKey: "workspaceTabPipeline" },
+  { name: "finance", icon: "inbox", labelKey: "workspaceTabFinance" },
+  { name: "admin", icon: "more", labelKey: "workspaceTabAdmin" },
 ];
 
 const WorkspaceTabsDataContext = createContext<WorkspaceTabsData | null>(null);
