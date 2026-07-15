@@ -737,6 +737,13 @@ export const reverseExpense = mutation({
     const identity = await ctx.auth.getUserIdentity();
     if (!identity) throw new ConvexError("Unauthenticated");
 
+    // Stamp the reversal's accounting date before the soft delete: the same
+    // `now` handed to reverseAccountingEvent above, so the operational P&L
+    // credits this back in exactly the month the ledger's reversing entry
+    // lands in. Deriving it from deletedAt instead would drift whenever the
+    // two straddle a month boundary.
+    await ctx.db.patch(args.expenseId, { reversedAt: now });
+
     await softDeleteExpenseRecord(ctx, {
       orgId: args.orgId,
       expenseId: args.expenseId,

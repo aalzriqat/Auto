@@ -64,10 +64,14 @@ export function yearMonthFromIndex(idx: number): string {
  * run so a caught-up schedule dates each recognition to its own month either way.
  */
 export function occurredAtForMonthIndex(idx: number, now: number): number {
+  return Math.min(endOfMonthMs(idx), now);
+}
+
+/** Last millisecond of calendar month `idx` (year*12 + 0-based month). */
+export function endOfMonthMs(idx: number): number {
   const year = Math.floor(idx / 12);
   const month = idx % 12;
-  const endOfMonth = Date.UTC(year, month + 1, 0, 23, 59, 59, 999);
-  return Math.min(endOfMonth, now);
+  return Date.UTC(year, month + 1, 0, 23, 59, 59, 999);
 }
 
 function clampMonths(value: number, max: number): number {
@@ -281,4 +285,42 @@ export function recognizedAmountInRange(
     recognizedThroughMonthsMinor(netMinor, months, monthsElapsedBeforeStart);
   if (recognizedMinor <= 0) return 0;
   return fromMinorUnits(recognizedMinor, currency);
+}
+
+/**
+ * recognizedAmountInRange for an expense that may have been reversed, mirroring
+ * how the ledger treats a reversal: the expense really was recognized in its own
+ * month(s) and keeps reporting there, and the offsetting credit lands in the
+ * month the reversal itself is dated — never as a retroactive erasure of the
+ * original month.
+ *
+ * Only for the expense-doc path (an ordinary expense, or a legacy prepaid with
+ * no schedule row). A scheduled prepaid's reversal is already carried by its own
+ * GL events via prepaidRecognitionEvents.ts, and its EXPENSE_POSTED reversal
+ * moves Prepaid/Cash rather than any expense account — netting it here too would
+ * double-count the credit.
+ *
+ * Over any window spanning both months this nets to zero, exactly as the ledger does.
+ */
+export function recognizedAmountInRangeWithReversal(
+  expense: ExpenseLike & { reversedAt?: number },
+  startDate: number,
+  endDate: number,
+  currency: string
+): number {
+  const reversedAt = expense.reversedAt;
+  if (reversedAt === undefined) return recognizedAmountInRange(expense, startDate, endDate, currency);
+
+  // Recognition stops at the reversal month — a reversed prepayment doesn't keep
+  // amortizing past the month its balance was credited back.
+  const reversalMonthEnd = endOfMonthMs(yearMonthIndex(reversedAt));
+  const cappedEnd = Math.min(endDate, reversalMonthEnd);
+  let amount = cappedEnd >= startDate ? recognizedAmountInRange(expense, startDate, cappedEnd, currency) : 0;
+
+  // The reversing credit: everything recognized through the reversal month,
+  // booked in that month.
+  if (reversedAt >= startDate && reversedAt <= endDate) {
+    amount -= recognizedAmountInRange(expense, expense.date, reversalMonthEnd, currency);
+  }
+  return amount;
 }
