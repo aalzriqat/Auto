@@ -5,7 +5,11 @@
   "main": "expo-router/entry",
   "expo": {
     "autolinking": {
-      "exclude": ["react-native-worklets", "react-native-reanimated"]
+      "exclude": [
+        "react-native-worklets",
+        "react-native-reanimated",
+        "@solana-mobile/mobile-wallet-adapter-protocol"
+      ]
     }
   },
   "scripts": {
