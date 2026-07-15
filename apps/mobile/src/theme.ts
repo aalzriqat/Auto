@@ -45,6 +45,8 @@ export const theme = {
     successSoft: "#dcfce7",
     info: "#0284c7",
     infoSoft: "#e0f2fe",
+    indigo: "#4f46e5",
+    indigoSoft: "#e0e7ff",
     warning: "#d97706",
     warningSoft: "#fef3c7",
     hero: "#0f172a",

@@ -588,7 +588,25 @@ export interface MobileFinanceCompany {
   commission?: number;
   includesCommissionInDebt?: boolean;
   maxFinancingLTV?: number;
+  acceptedStatuses?: string[];
   isActive: boolean;
+}
+
+export interface MobileCustomerStatus {
+  _id: string;
+  label: string;
+  isActive: boolean;
+}
+
+export interface MobileVehicleValuation {
+  _id: string;
+  companyId: string;
+  valuationAmount: number;
+}
+
+export interface MobileProfitApprovalCheck {
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  requestedProfit: number;
 }
 
 export interface MobileQuote {
@@ -933,7 +951,10 @@ export interface MobileVehiclePickerItem {
   make: string;
   model: string;
   trim?: string;
+  vin?: string;
   sellingPrice?: number;
+  purchasePrice?: number;
+  minimumProfit?: number;
   status: string;
 }
 
@@ -1710,7 +1731,17 @@ export const api = {
       null
     >("branches:update"),
   },
+  orgCustomerStatuses: {
+    list: makeFunctionReference<"query", OrgScopedArgs, MobileCustomerStatus[]>(
+      "orgCustomerStatuses:list",
+    ),
+  },
   finance: {
+    listValuations: makeFunctionReference<
+      "query",
+      OrgScopedArgs & { vehicleId: string },
+      MobileVehicleValuation[]
+    >("finance:listValuations"),
     listCompanies: makeFunctionReference<"query", OrgScopedArgs, MobileFinanceCompany[]>(
       "finance:listCompanies",
     ),
@@ -1917,6 +1948,21 @@ export const api = {
     >("applications:list"),
   },
   approvals: {
+    checkPendingApproval: makeFunctionReference<
+      "query",
+      OrgScopedArgs & { vehicleId: string },
+      MobileProfitApprovalCheck | null
+    >("approvals:checkPendingApproval"),
+    requestProfitApproval: makeFunctionReference<
+      "mutation",
+      OrgScopedArgs & {
+        vehicleId: string;
+        requestedProfit: number;
+        minimumProfit: number;
+        wizardSnapshot: Record<string, unknown>;
+      },
+      unknown
+    >("approvals:requestProfitApproval"),
     listPendingApprovals: makeFunctionReference<
       "query",
       OrgScopedArgs,
@@ -2209,7 +2255,16 @@ export const api = {
     add: FunctionReference<"mutation", "public", BranchMutationArgs, null>;
     update: FunctionReference<"mutation", "public", BranchMutationArgs & { id: string }, null>;
   };
+  orgCustomerStatuses: {
+    list: FunctionReference<"query", "public", OrgScopedArgs, MobileCustomerStatus[]>;
+  };
   finance: {
+    listValuations: FunctionReference<
+      "query",
+      "public",
+      OrgScopedArgs & { vehicleId: string },
+      MobileVehicleValuation[]
+    >;
     listCompanies: FunctionReference<"query", "public", OrgScopedArgs, MobileFinanceCompany[]>;
     createCompany: FunctionReference<"mutation", "public", FinanceCompanyMutationArgs, string>;
     updateCompany: FunctionReference<"mutation", "public", FinanceCompanyMutationArgs & { id: string }, null>;
@@ -2368,6 +2423,23 @@ export const api = {
     >;
   };
   approvals: {
+    checkPendingApproval: FunctionReference<
+      "query",
+      "public",
+      OrgScopedArgs & { vehicleId: string },
+      MobileProfitApprovalCheck | null
+    >;
+    requestProfitApproval: FunctionReference<
+      "mutation",
+      "public",
+      OrgScopedArgs & {
+        vehicleId: string;
+        requestedProfit: number;
+        minimumProfit: number;
+        wizardSnapshot: Record<string, unknown>;
+      },
+      unknown
+    >;
     listPendingApprovals: FunctionReference<"query", "public", OrgScopedArgs, MobileApprovalRequest[]>;
     respondToApproval: FunctionReference<"mutation", "public", ApprovalRespondArgs, null>;
   };

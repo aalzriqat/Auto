@@ -1,12 +1,13 @@
 import { useRouter } from "expo-router";
 import { useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { Icon, type SemanticIconName } from "../../components/Icon";
 import { Screen } from "../../components/Screen";
 import { useLocale } from "../../providers/LocaleProvider";
 import { theme } from "../../theme";
 import { LeadsModule } from "./modules/leads";
+import { SalesWizardScreen, type WizardPaymentType } from "./salesWizard/SalesWizardScreen";
 import { MessagesModule } from "./modules/messages";
 import { NotificationsModule } from "./modules/notifications";
 import { SalesModule } from "./modules/sales";
@@ -122,6 +123,7 @@ export function SalesTabScreen() {
   const active: SalesSegment = segments.some((item) => item.value === segment)
     ? segment
     : (segments[0]?.value ?? "leads");
+  const [wizard, setWizard] = useState<WizardPaymentType | null>(null);
 
   return (
     <Screen>
@@ -129,11 +131,36 @@ export function SalesTabScreen() {
         caption={org.name || undefined}
         title={locale === "ar" ? "المبيعات" : "Sales"}
       />
+      {canSeeSales ? (
+        <View style={styles.wizardButtonRow}>
+          <Pressable
+            accessibilityRole="button"
+            style={({ pressed }) => [styles.wizardButton, styles.wizardButtonCash, pressed && styles.wizardButtonPressed]}
+            onPress={() => setWizard("CASH")}
+          >
+            <Icon color="onPrimary" name="sales" size={16} />
+            <Text style={styles.wizardButtonText}>{locale === "ar" ? "عرض نقدي" : "Cash quote"}</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            style={({ pressed }) => [styles.wizardButton, styles.wizardButtonFinance, pressed && styles.wizardButtonPressed]}
+            onPress={() => setWizard("INSTALLMENT")}
+          >
+            <Icon color="onPrimary" name="billing" size={16} />
+            <Text style={styles.wizardButtonText}>{locale === "ar" ? "عرض تقسيط" : "Installment quote"}</Text>
+          </Pressable>
+        </View>
+      ) : null}
       {segments.length > 1 ? (
         <View style={styles.segmentWrap}>
           <TabSegments segments={segments} value={active} onChange={setSegment} />
         </View>
       ) : null}
+      <Modal animationType="slide" visible={wizard !== null} onRequestClose={() => setWizard(null)}>
+        {wizard ? (
+          <SalesWizardScreen orgId={orgId} paymentType={wizard} onClose={() => setWizard(null)} />
+        ) : null}
+      </Modal>
       {active === "leads" && canSeeLeads ? <LeadsModule orgId={orgId} /> : null}
       {active === "deals" && canSeeSales ? (
         <SalesModule myMembership={myMembership} orgId={orgId} />
@@ -309,6 +336,35 @@ const styles = StyleSheet.create({
   segmentWrap: {
     paddingHorizontal: theme.spacing.lg,
     paddingBottom: theme.spacing.sm,
+  },
+  wizardButtonRow: {
+    flexDirection: "row",
+    gap: theme.spacing.sm,
+    paddingHorizontal: theme.spacing.lg,
+    paddingBottom: theme.spacing.sm,
+  },
+  wizardButton: {
+    flex: 1,
+    minHeight: 44,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: theme.spacing.sm,
+    borderRadius: theme.radius.full,
+  },
+  wizardButtonCash: {
+    backgroundColor: theme.colors.primary,
+  },
+  wizardButtonFinance: {
+    backgroundColor: theme.colors.indigo,
+  },
+  wizardButtonPressed: {
+    opacity: 0.85,
+  },
+  wizardButtonText: {
+    color: theme.colors.onPrimary,
+    fontSize: 14,
+    fontWeight: "600",
   },
   segmentTrack: {
     flexDirection: "row",
