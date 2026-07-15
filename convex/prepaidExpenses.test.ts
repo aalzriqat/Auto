@@ -808,6 +808,187 @@ describe("listSchedules — pending/failed totals only count amortization, not c
     const schedules = await asOwner.query(api.prepaidExpenses.listSchedules, { orgId });
     const row = schedules.find((s) => s._id === schedule!._id)!;
     expect(row.pendingMinor).toBe(0); // the pending REFUND must not inflate pending amortization
+    expect(row.pendingCorrectionMinor).toBe(500_000); // but it IS visible in its own bucket
+  });
+
+  test("a failed write-off event is counted as a failed correction, not failed amortization", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("failed-correction-filter");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    await t.run((ctx) =>
+      ctx.db.insert("pendingAccountingEvents", {
+        orgId, kind: "POST", status: "FAILED", idempotencyKey: "test-failed-writeoff-1",
+        accountingDate: Date.UTC(2026, 1, 1), actorId: userId, attempts: 10, createdAt: Date.now(),
+        eventType: "PREPAID_EXPENSE_WRITTEN_OFF", sourceType: "prepaidExpenseSchedules",
+        sourceId: `prepaid_writeoff_test`, payload: { scheduleId: schedule!._id.toString(), amountMinor: 300_000 },
+      })
+    );
+
+    const schedules = await asOwner.query(api.prepaidExpenses.listSchedules, { orgId });
+    const row = schedules.find((s) => s._id === schedule!._id)!;
+    expect(row.failedMinor).toBe(0);
+    expect(row.failedCorrectionMinor).toBe(300_000);
+  });
+});
+
+describe("Phase 3 — runAmortizationNow isolates per-schedule failures and reports blocked schedules", () => {
+  test("one schedule's posting failure doesn't roll back its own progress or block the others", async () => {
+    const { t, orgId, asOwner } = await seedDealer("run-now-isolation");
+    const goodExpenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Good Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const goodSchedule = await scheduleForExpense(t, goodExpenseId);
+
+    const badExpenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Broken Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const badSchedule = await scheduleForExpense(t, badExpenseId);
+    // Simulates a real posting-time failure (e.g. a since-unmapped account)
+    // without mocking any internals — the account resolver throws when it
+    // can't find this system key in the org's chart.
+    await t.run((ctx) => ctx.db.patch(badSchedule!._id, { expenseSystemKey: "NOT_A_REAL_SYSTEM_KEY" }));
+
+    const result = await asOwner.action(api.prepaidExpenses.runAmortizationNow, { orgId });
+
+    expect(result.posted.some((r) => r.scheduleId === goodSchedule!._id)).toBe(true);
+    expect(result.failed.some((r) => r.scheduleId === badSchedule!._id)).toBe(true);
+
+    // The good schedule caught up through the real current month despite the
+    // other schedule's failure — one mutation call per schedule means no
+    // atomicity crossover between them. (Elapsed months computed from wall
+    // clock, same as the Fix B3 catch-up test above — the schedule starts
+    // January of the current fiscal year and runAmortizationNow catches it
+    // all the way up to "now".)
+    const elapsedMonths = Math.min(new Date().getUTCMonth() + 1, 12);
+    expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(elapsedMonths * 100_000);
+
+    // The failing schedule's own mutation call threw, so its progress-bump
+    // rolled back too — never left half-applied.
+    const finalBadSchedule = await scheduleForExpense(t, badExpenseId);
+    expect(finalBadSchedule!.recognizedMinor).toBe(0);
+
+    // A durable failure record exists for the accountant to see/retry.
+    const failures = await t.run((ctx) =>
+      ctx.db.query("prepaidAmortizationFailures").withIndex("by_schedule", (q) => q.eq("scheduleId", badSchedule!._id)).collect()
+    );
+    expect(failures.filter((f) => f.resolvedAt === undefined)).toHaveLength(1);
+  });
+
+  test("a schedule blocked on its source expense is reported in `blocked`, not silently swallowed", async () => {
+    const { t, orgId, asOwner } = await seedDealer("run-now-blocked");
+    const expenseId = await t.run((ctx) =>
+      ctx.db.insert("expenses", {
+        orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+        category: "FEES", status: "PAID", isPrepaid: true, amortizationMonths: 12,
+      })
+    );
+    const scheduleId = await t.run((ctx) =>
+      ctx.db.insert("prepaidExpenseSchedules", {
+        orgId, expenseId, currency: "JOD", totalMinor: 1_200_000, termMonths: 12,
+        expenseSystemKey: "PROFESSIONAL_FEES_EXPENSE", startYearMonth: "2026-01",
+        recognizedMinor: 0, monthsRecognized: 0, status: "ACTIVE", createdAt: Date.now(),
+      })
+    );
+
+    const result = await asOwner.action(api.prepaidExpenses.runAmortizationNow, { orgId });
+
+    expect(result.blocked).toHaveLength(1);
+    expect(result.blocked[0].scheduleId).toBe(scheduleId);
+    expect(result.blocked[0].reason).toBe("source_expense_not_posted");
+    expect(result.failed).toHaveLength(0);
+  });
+});
+
+describe("Phase 3 — redriveScheduleEvents", () => {
+  test("redrives only the target schedule's own queued/dead-lettered rows, resetting a dead-lettered row's attempts", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("redrive-scoped");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    // A different schedule's own stuck row must be left untouched.
+    const otherExpenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Other Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const otherSchedule = await scheduleForExpense(t, otherExpenseId);
+    await t.run((ctx) =>
+      ctx.db.insert("pendingAccountingEvents", {
+        orgId, kind: "POST", status: "FAILED", idempotencyKey: "other-schedule-stuck",
+        accountingDate: Date.UTC(2026, 1, 1), actorId: userId, attempts: 10, createdAt: Date.now(),
+        eventType: "PREPAID_EXPENSE_AMORTIZED", sourceType: "prepaidExpenseSchedules", currency: "JOD",
+        sourceId: `prepaid_amort_${otherSchedule!._id}_2026-02`,
+        payload: {
+          scheduleId: otherSchedule!._id.toString(), amountMinor: 100_000, currency: "JOD",
+          expenseSystemKey: "PROFESSIONAL_FEES_EXPENSE", yearMonth: "2026-02",
+        },
+      })
+    );
+
+    // The target schedule's own dead-lettered row — attempts already at the
+    // retry ceiling, simulating a since-resolved blocker (e.g. the chart was
+    // missing an account that's since been mapped).
+    await t.run((ctx) =>
+      ctx.db.insert("pendingAccountingEvents", {
+        orgId, kind: "POST", status: "FAILED", idempotencyKey: `prepaid_amort_${schedule!._id}_2026-02`,
+        accountingDate: Date.UTC(2026, 1, 1), actorId: userId, attempts: 10, createdAt: Date.now(),
+        eventType: "PREPAID_EXPENSE_AMORTIZED", sourceType: "prepaidExpenseSchedules", currency: "JOD",
+        sourceId: `prepaid_amort_${schedule!._id}_2026-02`,
+        payload: {
+          scheduleId: schedule!._id.toString(), amountMinor: 100_000, currency: "JOD",
+          expenseSystemKey: "PROFESSIONAL_FEES_EXPENSE", yearMonth: "2026-02",
+        },
+      })
+    );
+
+    const result = await asOwner.mutation(api.prepaidExpenses.redriveScheduleEvents, {
+      orgId, scheduleId: schedule!._id,
+    });
+    expect(result.posted).toBe(1);
+    expect(result.failed).toBe(0);
+
+    const targetRow = await t.run((ctx) =>
+      ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", `prepaid_amort_${schedule!._id}_2026-02`))
+        .unique()
+    );
+    expect(targetRow!.status).toBe("POSTED");
+
+    // The OTHER schedule's stuck row is untouched — still FAILED, attempts unchanged.
+    const otherRow = await t.run((ctx) =>
+      ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_idempotency", (q) => q.eq("orgId", orgId).eq("idempotencyKey", "other-schedule-stuck"))
+        .unique()
+    );
+    expect(otherRow!.status).toBe("FAILED");
+    expect(otherRow!.attempts).toBe(10);
+  });
+
+  test("nothing queued for a clean schedule redrives zero rows", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("redrive-clean");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    const result = await asOwner.mutation(api.prepaidExpenses.redriveScheduleEvents, {
+      orgId, scheduleId: schedule!._id,
+    });
+    expect(result).toEqual({ posted: 0, failed: 0 });
   });
 });
 

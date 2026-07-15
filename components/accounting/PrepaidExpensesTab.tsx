@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useMutation, useQuery } from "convex/react";
+import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
@@ -14,7 +14,7 @@ import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { toast } from "@/components/ui/sonner";
 import { format } from "date-fns";
-import { RotateCcw, History, Wrench, PlayCircle, Loader2 } from "lucide-react";
+import { RotateCcw, History, Wrench, PlayCircle, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -22,6 +22,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Dialog,
   DialogContent,
@@ -57,6 +58,8 @@ type ScheduleRow = {
   postedMinor: number;
   pendingMinor: number;
   failedMinor: number;
+  pendingCorrectionMinor: number;
+  failedCorrectionMinor: number;
   openFailureCount: number;
   termMonths: number;
   monthsRecognized: number;
@@ -67,11 +70,20 @@ type ScheduleRow = {
   createdAt: number;
 };
 
+type RunAmortizationNowResult = {
+  posted: Array<{ scheduleId: Id<"prepaidExpenseSchedules">; title: string; monthsPosted: number }>;
+  blocked: Array<{ scheduleId: Id<"prepaidExpenseSchedules">; title: string; reason: string }>;
+  failed: Array<{ scheduleId: Id<"prepaidExpenseSchedules">; title: string; error: string }>;
+  upToDateCount: number;
+  scheduleCount: number;
+};
+
+/** FAILED > PENDING > DUE > CANCELLED/COMPLETE > UP TO DATE — a correction's queued or dead-lettered posting is exactly as urgent as amortization's own, so it carries the same weight in this precedence. */
 function ScheduleStatusBadge({ t, schedule }: Readonly<{ t: (key: any) => string; schedule: ScheduleRow }>) {
-  if (schedule.openFailureCount > 0) {
+  if (schedule.openFailureCount > 0 || schedule.failedMinor > 0 || schedule.failedCorrectionMinor > 0) {
     return <Badge variant="outline" className="bg-rose-500/10 text-rose-600 border-rose-500/20">{t("PrepaidGlStatus_FAILED")}</Badge>;
   }
-  if (schedule.pendingMinor > 0) {
+  if (schedule.pendingMinor > 0 || schedule.pendingCorrectionMinor > 0) {
     return <Badge variant="outline" className="bg-amber-500/10 text-amber-600 border-amber-500/20">{t("PrepaidGlStatus_PENDING")}</Badge>;
   }
   if (schedule.status === "ACTIVE" && schedule.dueMinor > schedule.recognizedMinor) {
@@ -86,6 +98,154 @@ function ScheduleStatusBadge({ t, schedule }: Readonly<{ t: (key: any) => string
   return <Badge variant="outline" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/20">{t("PrepaidGlStatus_UPTODATE")}</Badge>;
 }
 
+/** Click-to-open detail behind the badge: posted/pending/failed amortization, pending/failed corrections, and any unresolved failure messages — plus a redrive action when something's queued or dead-lettered. */
+function ScheduleStatusPopover({
+  schedule,
+  orgId,
+  canManage,
+  factor,
+  scale,
+  formatCurrency,
+}: Readonly<{
+  schedule: ScheduleRow;
+  orgId: Id<"organizations">;
+  canManage: boolean;
+  factor: number;
+  scale: number;
+  formatCurrency: CurrencyFormatter;
+}>) {
+  const { t } = useLanguage();
+  const [open, setOpen] = useState(false);
+  const failures = useQuery(
+    api.prepaidExpenses.listOpenFailures,
+    open ? { orgId, scheduleId: schedule._id } : "skip"
+  ) as Doc<"prepaidAmortizationFailures">[] | undefined;
+  const redrive = useMutation(api.prepaidExpenses.redriveScheduleEvents);
+  const { submitting, submitWithFeedback } = useAccountingSubmit();
+
+  const hasQueuedWork =
+    schedule.pendingMinor > 0 || schedule.failedMinor > 0 || schedule.pendingCorrectionMinor > 0 || schedule.failedCorrectionMinor > 0;
+
+  async function handleRedrive() {
+    await submitWithFeedback(async () => {
+      const result = await redrive({ orgId, scheduleId: schedule._id });
+      if (result.posted === 0 && result.failed === 0) {
+        toast.success(t("PrepaidRedriveNothingToDo" as any));
+      } else {
+        toast.success(
+          t("PrepaidRedriveSuccess" as any)
+            .replace("{posted}", String(result.posted))
+            .replace("{failed}", String(result.failed))
+        );
+      }
+    });
+  }
+
+  const fmt = (minor: number) => formatCurrency(minor / factor, scale);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button type="button" className="cursor-pointer">
+          <ScheduleStatusBadge t={t as any} schedule={schedule} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-80 space-y-2 text-sm" align="start">
+        <p className="font-medium text-slate-900">{t("GlStatusDetails" as any)}</p>
+        <div className="space-y-1 text-slate-600">
+          <div className="flex justify-between"><span>{t("PostedAmortizationLabel" as any)}</span><span>{fmt(schedule.postedMinor)}</span></div>
+          <div className="flex justify-between"><span>{t("PendingAmortizationLabel" as any)}</span><span>{fmt(schedule.pendingMinor)}</span></div>
+          <div className="flex justify-between"><span>{t("FailedAmortizationLabel" as any)}</span><span>{fmt(schedule.failedMinor)}</span></div>
+          <div className="flex justify-between"><span>{t("PendingCorrectionLabel" as any)}</span><span>{fmt(schedule.pendingCorrectionMinor)}</span></div>
+          <div className="flex justify-between"><span>{t("FailedCorrectionLabel" as any)}</span><span>{fmt(schedule.failedCorrectionMinor)}</span></div>
+        </div>
+
+        {schedule.openFailureCount > 0 && (
+          <div className="border-t pt-2 space-y-1">
+            <p className="font-medium text-rose-600">{t("UnresolvedFailuresLabel" as any)}</p>
+            {failures === undefined ? (
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            ) : (
+              failures.map((f) => (
+                <p key={f._id} className="text-xs text-slate-500">
+                  {f.yearMonth}: {f.errorMessage}
+                </p>
+              ))
+            )}
+          </div>
+        )}
+
+        {canManage && hasQueuedWork && (
+          <Button size="sm" variant="outline" className="gap-2 w-full" disabled={submitting} onClick={handleRedrive}>
+            {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+            {t("RedriveSchedule" as any)}
+          </Button>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function RunNowResultsDialog({
+  result,
+  onOpenChange,
+}: Readonly<{
+  result: RunAmortizationNowResult;
+  onOpenChange: (open: boolean) => void;
+}>) {
+  const { t } = useLanguage();
+  return (
+    <Dialog open onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{t("RunNowResultsTitle" as any)}</DialogTitle>
+        </DialogHeader>
+        <div className="space-y-4 text-sm">
+          {result.posted.length > 0 && (
+            <div className="space-y-1">
+              <p className="font-medium text-emerald-600">{t("RunNowPostedSection" as any)}</p>
+              {result.posted.map((r) => (
+                <div key={r.scheduleId} className="flex justify-between text-slate-600">
+                  <span>{r.title}</span>
+                  <span>{t("RunNowMonthsPosted" as any).replace("{count}", String(r.monthsPosted))}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {result.blocked.length > 0 && (
+            <div className="space-y-1">
+              <p className="font-medium text-amber-600">{t("RunNowBlockedSection" as any)}</p>
+              {result.blocked.map((r) => (
+                <div key={r.scheduleId} className="text-slate-600">
+                  <span className="font-medium">{r.title}</span>: {r.reason}
+                </div>
+              ))}
+            </div>
+          )}
+          {result.failed.length > 0 && (
+            <div className="space-y-1">
+              <p className="font-medium text-rose-600">{t("RunNowFailedSection" as any)}</p>
+              {result.failed.map((r) => (
+                <div key={r.scheduleId} className="text-slate-600">
+                  <span className="font-medium">{r.title}</span>: {r.error}
+                </div>
+              ))}
+            </div>
+          )}
+          {result.upToDateCount > 0 && (
+            <p className="text-slate-500">{t("RunNowUpToDateCount" as any).replace("{count}", String(result.upToDateCount))}</p>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            {t("Close" as any)}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function PrepaidExpensesTab() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
@@ -97,12 +257,16 @@ export function PrepaidExpensesTab() {
     activeOrgId ? { orgId: activeOrgId } : "skip"
   ) as ScheduleRow[] | undefined;
 
-  const runAmortizationNow = useMutation(api.prepaidExpenses.runAmortizationNow);
+  // An action, not a mutation — it orchestrates one mutation call per
+  // schedule so a single schedule's failure can't roll back or block the
+  // others (see runAmortizationNow's own doc comment in prepaidExpenses.ts).
+  const runAmortizationNow = useAction(api.prepaidExpenses.runAmortizationNow);
   const retryAmortizationFailure = useMutation(api.prepaidExpenses.retryAmortizationFailure);
   const { submitting: runningNow, submitWithFeedback: runWithFeedback } = useAccountingSubmit();
   const [retryingId, setRetryingId] = useState<Id<"prepaidExpenseSchedules"> | null>(null);
   const [correctSchedule, setCorrectSchedule] = useState<ScheduleRow | null>(null);
   const [historySchedule, setHistorySchedule] = useState<ScheduleRow | null>(null);
+  const [runNowResult, setRunNowResult] = useState<RunAmortizationNowResult | null>(null);
   const { code: currencyCode } = useCurrency();
   const formatCurrency = useCurrencyFormatter();
 
@@ -110,11 +274,16 @@ export function PrepaidExpensesTab() {
     if (!activeOrgId) return;
     await runWithFeedback(async () => {
       const result = await runAmortizationNow({ orgId: activeOrgId });
-      toast.success(
-        t("PrepaidRunNowResult" as any)
-          .replace("{posted}", String(result.monthsPosted))
-          .replace("{total}", String(result.scheduleCount))
-      );
+      if (result.blocked.length === 0 && result.failed.length === 0) {
+        const monthsPosted = result.posted.reduce((sum, r) => sum + r.monthsPosted, 0);
+        toast.success(
+          t("PrepaidRunNowResult" as any)
+            .replace("{posted}", String(monthsPosted))
+            .replace("{total}", String(result.scheduleCount))
+        );
+      } else {
+        setRunNowResult(result);
+      }
     });
   }
 
@@ -191,7 +360,16 @@ export function PrepaidExpensesTab() {
                     {formatCurrency(schedule.remainingMinor / factor, scale)}
                   </TableCell>
                   <TableCell>
-                    <ScheduleStatusBadge t={t as any} schedule={schedule} />
+                    {activeOrgId && (
+                      <ScheduleStatusPopover
+                        schedule={schedule}
+                        orgId={activeOrgId}
+                        canManage={canManage}
+                        factor={factor}
+                        scale={scale}
+                        formatCurrency={formatCurrency}
+                      />
+                    )}
                   </TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
@@ -236,6 +414,10 @@ export function PrepaidExpensesTab() {
           </TableBody>
         </Table>
       </AccountingTableFrame>
+
+      {runNowResult && (
+        <RunNowResultsDialog result={runNowResult} onOpenChange={(open) => !open && setRunNowResult(null)} />
+      )}
 
       {activeOrgId && correctSchedule && (
         <CorrectScheduleDialog

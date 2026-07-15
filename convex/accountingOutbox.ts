@@ -16,7 +16,7 @@
 import { v, ConvexError } from "convex/values";
 import { internalMutation, mutation, query } from "./_generated/server";
 import { MutationCtx } from "./_generated/server";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { PostCommand, postAccountingEvent } from "./accounting/postingEngine";
 import { reverseAccountingEvent } from "./accounting/reversals";
 import { requireTenantAuth } from "./utils/tenancy";
@@ -163,20 +163,21 @@ const MAX_ATTEMPTS = 10;
 
 // ─── Drain core (plain function, reused by the mutation + schedulers) ──────────
 
-export async function drainPendingForOrg(
+/**
+ * Attempts to post/reverse a batch of already-fetched outbox rows, one at a
+ * time, isolating each row's failure from the rest. Factored out of
+ * drainPendingForOrg so a narrower, pre-filtered subset (e.g. one prepaid
+ * schedule's own rows — see prepaidExpenses.redriveScheduleEvents) can share
+ * the exact same posting/retry/dead-letter logic instead of re-implementing it.
+ */
+export async function drainEntries(
   ctx: MutationCtx,
-  orgId: Id<"organizations">,
-  limit = 50
+  entries: Doc<"pendingAccountingEvents">[]
 ): Promise<{ posted: number; failed: number }> {
-  const pending = await ctx.db
-    .query("pendingAccountingEvents")
-    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
-    .take(Math.min(limit, 200));
-
   let posted = 0;
   let failed = 0;
 
-  for (const p of pending) {
+  for (const p of entries) {
     try {
       if (p.kind === "POST") {
         if (!p.eventType) throw new Error("Pending POST record missing eventType");
@@ -235,6 +236,19 @@ export async function drainPendingForOrg(
   }
 
   return { posted, failed };
+}
+
+export async function drainPendingForOrg(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  limit = 50
+): Promise<{ posted: number; failed: number }> {
+  const pending = await ctx.db
+    .query("pendingAccountingEvents")
+    .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
+    .take(Math.min(limit, 200));
+
+  return drainEntries(ctx, pending);
 }
 
 // ─── Internal mutation (scheduler target) ─────────────────────────────────────

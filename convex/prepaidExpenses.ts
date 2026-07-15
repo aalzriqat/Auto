@@ -26,7 +26,8 @@
  * the accountant-facing status.
  */
 import { v, ConvexError } from "convex/values";
-import { internalMutation, internalQuery, query, mutation, MutationCtx } from "./_generated/server";
+import { internalMutation, internalQuery, query, mutation, action, MutationCtx } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { Id, Doc } from "./_generated/dataModel";
 import {
   hookPrepaidExpenseAmortized,
@@ -46,6 +47,7 @@ import { auditLog } from "./financialAudit";
 import { notifyOwner } from "./utils/notifications";
 import { paymentMethodValidator } from "./utils/paymentMethods";
 import { runWithIdempotency } from "./utils/idempotency";
+import { drainEntries } from "./accountingOutbox";
 
 /** UTC "YYYY-MM" for a timestamp — the month recognition of that expense begins. */
 export function toYearMonth(timestamp: number): string {
@@ -411,40 +413,146 @@ export const retryAmortizationFailure = mutation({
 // ─── Accountant-triggered manual run (item: no longer cron-only) ─────────────
 
 /**
- * Runs prepaid amortization immediately for every ACTIVE schedule in one org,
- * instead of waiting for the 1st-of-month cron. The accountant, not a
- * background job impersonating the owner, is the actor on every posting.
+ * Auth + the org's ACTIVE schedule list for the manual run action below —
+ * split out because an action can't touch ctx.db directly, and doing the
+ * auth/feature check here (not in the action) means it runs inside a real
+ * query/mutation context, matching how every other tenant-auth check in this
+ * codebase works.
  */
-export const runAmortizationNow = mutation({
+export const listActiveForManualRun = internalQuery({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
-
-    const now = Date.now();
-    const currentYearMonth = toYearMonth(now);
 
     const schedules = await ctx.db
       .query("prepaidExpenseSchedules")
       .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
       .filter((q) => q.eq(q.field("status"), "ACTIVE"))
       .collect();
-
-    const results: Array<{ scheduleId: Id<"prepaidExpenseSchedules">; monthsPosted: number; stoppedReason?: string }> = [];
-    for (const schedule of schedules) {
-      const result = await catchUpPrepaidSchedule(ctx, schedule, {
-        throughYearMonth: currentYearMonth,
-        now,
-        systemActorId: user._id,
-      });
-      results.push({ scheduleId: schedule._id, ...result });
-    }
+    const expenses = await Promise.all(schedules.map((s) => ctx.db.get(s.expenseId)));
 
     return {
-      scheduleCount: schedules.length,
-      monthsPosted: results.reduce((sum, r) => sum + r.monthsPosted, 0),
-      results,
+      userId: user._id,
+      schedules: schedules.map((s, i) => ({
+        id: s._id,
+        expenseTitle: expenses[i]?.title ?? "Prepaid expense",
+      })),
     };
+  },
+});
+
+/**
+ * Runs prepaid amortization immediately for every ACTIVE schedule in one org,
+ * instead of waiting for the 1st-of-month cron. The accountant, not a
+ * background job impersonating the owner, is the actor on every posting.
+ *
+ * An action orchestrating one mutation call per schedule — same shape as the
+ * cron (crons.ts's runPrepaidExpenseAmortization) — so one schedule's failure
+ * can no longer roll back or block every other schedule in the org, the way a
+ * single all-schedules mutation would (a throw inside a Convex mutation rolls
+ * back every write in that call, per feedback_convex_mutation_atomicity).
+ * Every failure is persisted to the same prepaidAmortizationFailures table the
+ * cron uses, so retry (retryAmortizationFailure) and the accountant-facing
+ * failure badge work identically regardless of which path caused the failure.
+ */
+export const runAmortizationNow = action({
+  args: { orgId: v.id("organizations") },
+  handler: async (
+    ctx,
+    args
+  ): Promise<{
+    posted: Array<{ scheduleId: Id<"prepaidExpenseSchedules">; title: string; monthsPosted: number }>;
+    blocked: Array<{ scheduleId: Id<"prepaidExpenseSchedules">; title: string; reason: string }>;
+    failed: Array<{ scheduleId: Id<"prepaidExpenseSchedules">; title: string; error: string }>;
+    upToDateCount: number;
+    scheduleCount: number;
+  }> => {
+    const { userId, schedules } = await ctx.runQuery(internal.prepaidExpenses.listActiveForManualRun, {
+      orgId: args.orgId,
+    });
+
+    const now = Date.now();
+    const currentYearMonth = toYearMonth(now);
+
+    const posted: Array<{ scheduleId: Id<"prepaidExpenseSchedules">; title: string; monthsPosted: number }> = [];
+    const blocked: Array<{ scheduleId: Id<"prepaidExpenseSchedules">; title: string; reason: string }> = [];
+    const failed: Array<{ scheduleId: Id<"prepaidExpenseSchedules">; title: string; error: string }> = [];
+    let upToDateCount = 0;
+
+    for (const schedule of schedules) {
+      try {
+        const result = await ctx.runMutation(internal.prepaidExpenses.catchUpScheduleMutation, {
+          orgId: args.orgId,
+          scheduleId: schedule.id,
+          throughYearMonth: currentYearMonth,
+          now,
+          systemActorId: userId,
+        });
+        if (result.stoppedReason) {
+          blocked.push({ scheduleId: schedule.id, title: schedule.expenseTitle, reason: result.stoppedReason });
+        } else if (result.monthsPosted > 0) {
+          posted.push({ scheduleId: schedule.id, title: schedule.expenseTitle, monthsPosted: result.monthsPosted });
+        } else {
+          upToDateCount++;
+        }
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        failed.push({ scheduleId: schedule.id, title: schedule.expenseTitle, error: errorMessage });
+        await ctx.runMutation(internal.prepaidExpenses.recordAmortizationFailure, {
+          orgId: args.orgId,
+          scheduleId: schedule.id,
+          yearMonth: currentYearMonth,
+          errorMessage,
+        });
+      }
+    }
+
+    return { posted, blocked, failed, upToDateCount, scheduleCount: schedules.length };
+  },
+});
+
+// ─── Schedule-scoped redrive (item: full GL-status visibility) ───────────────
+
+/**
+ * Re-drives just ONE schedule's own PENDING/FAILED outbox rows (amortization
+ * months and/or corrections) — the accountant-facing counterpart to the
+ * cron/period-open re-drive, for a schedule stuck behind a since-resolved
+ * blocker (chart just initialized, period just reopened) without waiting for
+ * the next org-wide drain. Shares accountingOutbox.drainEntries with
+ * drainPendingForOrg, so posting/retry/dead-letter behavior is identical.
+ */
+export const redriveScheduleEvents = mutation({
+  args: { orgId: v.id("organizations"), scheduleId: v.id("prepaidExpenseSchedules") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+
+    const schedule = await ctx.db.get(args.scheduleId);
+    if (!schedule || schedule.orgId !== args.orgId) {
+      throw new ConvexError("Prepaid schedule not found in this organization.");
+    }
+
+    const scheduleKey = args.scheduleId.toString();
+    const matches: Doc<"pendingAccountingEvents">[] = [];
+    for (const status of ["PENDING", "FAILED"] as const) {
+      const rows = await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", status))
+        .collect();
+      for (const row of rows) {
+        if (row.sourceType !== "prepaidExpenseSchedules") continue;
+        if ((row.payload as { scheduleId?: string })?.scheduleId !== scheduleKey) continue;
+        matches.push(row);
+      }
+    }
+
+    // A dead-lettered row's attempts counter is already at/above the retry
+    // threshold — reset it so drainEntries gives it a real attempt instead of
+    // immediately re-dead-lettering on what looks like an already-exhausted try.
+    const toDrain = matches.map((row) => (row.status === "FAILED" ? { ...row, attempts: 0 } : row));
+
+    return await drainEntries(ctx, toDrain);
   },
 });
 
@@ -626,6 +734,28 @@ export const listCorrections = query({
   },
 });
 
+/**
+ * A schedule's unresolved cron/manual-run catch-up failures, newest first —
+ * the accountant-facing detail behind listSchedules' openFailureCount, loaded
+ * on demand (e.g. a status-detail popover) rather than embedded in the
+ * broader org-wide schedule list.
+ */
+export const listOpenFailures = query({
+  args: { orgId: v.id("organizations"), scheduleId: v.id("prepaidExpenseSchedules") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+
+    const rows = await ctx.db
+      .query("prepaidAmortizationFailures")
+      .withIndex("by_schedule", (q) => q.eq("scheduleId", args.scheduleId))
+      .collect();
+    return rows
+      .filter((r) => r.orgId === args.orgId && r.resolvedAt === undefined)
+      .sort((a, b) => b.createdAt - a.createdAt);
+  },
+});
+
 // ─── Accountant-facing schedule list + status ────────────────────────────────
 
 /**
@@ -671,30 +801,35 @@ export const listSchedules = query({
       postedByScheduleId.set(scheduleId, (postedByScheduleId.get(scheduleId) ?? 0) + amountMinor);
     }
 
+    // Refund/write-off corrections share sourceType + scheduleId with ordinary
+    // monthly amortization but are their own eventTypes — routed into their
+    // own pendingCorrection/failedCorrection buckets (not the plain
+    // pending/failed ones) so a queued or dead-lettered correction is visible
+    // to the accountant instead of silently missing from every total, while
+    // still never being miscounted as pending/failed amortization.
     const pendingByScheduleId = new Map<string, number>();
     const failedByScheduleId = new Map<string, number>();
+    const pendingCorrectionByScheduleId = new Map<string, number>();
+    const failedCorrectionByScheduleId = new Map<string, number>();
     for (const status of ["PENDING", "FAILED"] as const) {
-      const target = status === "PENDING" ? pendingByScheduleId : failedByScheduleId;
+      const isPending = status === "PENDING";
       const queued = await ctx.db
         .query("pendingAccountingEvents")
         .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", status))
         .collect();
       for (const entry of queued) {
-        // Refund/write-off corrections share sourceType + scheduleId with
-        // ordinary monthly amortization but are a separate eventType — without
-        // this check a pending/failed refund or write-off would be miscounted
-        // into the "amortization" pending/failed totals shown to the accountant.
-        if (
-          entry.sourceType !== "prepaidExpenseSchedules" ||
-          entry.kind !== "POST" ||
-          entry.eventType !== "PREPAID_EXPENSE_AMORTIZED"
-        ) {
-          continue;
-        }
+        if (entry.sourceType !== "prepaidExpenseSchedules" || entry.kind !== "POST") continue;
         const scheduleId = (entry.payload as { scheduleId?: string })?.scheduleId;
         const amountMinor = (entry.payload as { amountMinor?: number })?.amountMinor ?? 0;
         if (!scheduleId) continue;
-        target.set(scheduleId, (target.get(scheduleId) ?? 0) + amountMinor);
+
+        if (entry.eventType === "PREPAID_EXPENSE_AMORTIZED") {
+          const target = isPending ? pendingByScheduleId : failedByScheduleId;
+          target.set(scheduleId, (target.get(scheduleId) ?? 0) + amountMinor);
+        } else if (entry.eventType === "PREPAID_EXPENSE_REFUNDED" || entry.eventType === "PREPAID_EXPENSE_WRITTEN_OFF") {
+          const target = isPending ? pendingCorrectionByScheduleId : failedCorrectionByScheduleId;
+          target.set(scheduleId, (target.get(scheduleId) ?? 0) + amountMinor);
+        }
       }
     }
 
@@ -735,6 +870,8 @@ export const listSchedules = query({
         postedMinor: postedByScheduleId.get(key) ?? 0,
         pendingMinor: pendingByScheduleId.get(key) ?? 0,
         failedMinor: failedByScheduleId.get(key) ?? 0,
+        pendingCorrectionMinor: pendingCorrectionByScheduleId.get(key) ?? 0,
+        failedCorrectionMinor: failedCorrectionByScheduleId.get(key) ?? 0,
         openFailureCount: failureCountByScheduleId.get(key) ?? 0,
         termMonths: schedule.termMonths,
         monthsRecognized,
