@@ -9,13 +9,13 @@
  * operationally final without a captured, retryable GL record. The queue is
  * re-driven idempotently when a chart is initialized or a period is opened.
  */
-import { Id } from "../_generated/dataModel";
+import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 import { postAccountingEvent, PostCommand } from "./postingEngine";
-import { EventType, ReceivableCreditKey, AcquisitionCorrectionType } from "./postingRules";
+import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting } from "./postingRules";
 import { reverseAccountingEvent } from "./reversals";
 import { getOpenPeriodForDate } from "../accountingPeriods";
-import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureExpenseCategoryAccounts } from "../chartOfAccounts";
+import { isChartInitialized, ensureGeneralExpenseAccount, ensureSupplierAPAccount, ensureFixedAssetAccounts, ensurePartnerEquityAccounts, ensureClaimAccounts, ensureVatReceivableAccount, ensureMiscIncomeAccount, ensureSaleFiAccounts, ensureExpenseCategoryAccounts, ensurePrepaidExpensesAccount } from "../chartOfAccounts";
 import {
   enqueuePendingPost,
   enqueuePendingReversal,
@@ -429,16 +429,24 @@ export async function hookExpensePosted(
     occurredAt: number;
     vehicleId?: Id<"vehicles">;
     capitalizeToInventory?: boolean;
+    isPrepaid?: boolean;
   }
 ) {
+  const { capitalize, prepaid } = classifyExpensePosting(args);
   if (args.taxMinor && args.taxMinor > 0) {
     await ensureVatReceivableAccountIfChartReady(ctx, args.orgId, args.actorId);
   }
-  // Not capitalized expenses resolve expenseAccountKeyForCategory, which can
-  // now point at a dedicated per-category account instead of always
-  // GENERAL_EXPENSE — self-heal for charts initialized before this addition.
-  if (!(args.capitalizeToInventory === true && args.vehicleId) && await isChartInitialized(ctx, args.orgId)) {
+  if (!capitalize && await isChartInitialized(ctx, args.orgId)) {
+    // A prepaid expense debits the Prepaid Expenses asset now and releases it
+    // to a per-category expense account later, so both must exist. A normal
+    // expense resolves expenseAccountKeyForCategory, which can point at a
+    // dedicated per-category account instead of always GENERAL_EXPENSE — either
+    // way, self-heal the category accounts for charts initialized before those
+    // additions.
     await ensureExpenseCategoryAccounts(ctx, args.orgId, args.actorId);
+    if (prepaid) {
+      await ensurePrepaidExpensesAccount(ctx, args.orgId, args.actorId);
+    }
   }
   await postDomainEvent(ctx, {
     orgId: args.orgId,
@@ -458,6 +466,7 @@ export async function hookExpensePosted(
       paymentMethod: args.paymentMethod,
       vehicleId: args.vehicleId?.toString(),
       capitalizeToInventory: args.capitalizeToInventory,
+      isPrepaid: prepaid,
     },
   });
 }
@@ -1052,6 +1061,142 @@ export async function hookFiCommissionRecognized(
 }
 
 /**
+ * Monthly release of one term-month of a prepaid expense from the Prepaid
+ * Expenses asset into its operating-expense account. Exact same shape as
+ * hookFiCommissionRecognized — idempotent per (schedule, yearMonth) — see
+ * prepaidExpenses.amortizePrepaidExpenseForMonth.
+ */
+export async function hookPrepaidExpenseAmortized(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    scheduleId: Id<"prepaidExpenseSchedules">;
+    yearMonth: string; // "YYYY-MM", used only for the idempotency key
+    amountMinor: number;
+    currency: string;
+    expenseSystemKey: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  if (await isChartInitialized(ctx, args.orgId)) {
+    await ensurePrepaidExpensesAccount(ctx, args.orgId, args.actorId);
+    await ensureExpenseCategoryAccounts(ctx, args.orgId, args.actorId);
+  }
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "PREPAID_EXPENSE_AMORTIZED",
+    sourceType: "prepaidExpenseSchedules",
+    // Per-month sourceId (same idiom as the monthly depreciation posting): each
+    // recognition is a distinct GL event on the source-identity dedup index, so
+    // month 2+ can't be mistaken for a duplicate of month 1. The reversal
+    // clawback below finds all of a schedule's months via payload.scheduleId.
+    sourceId: `prepaid_amort_${args.scheduleId}_${args.yearMonth}`,
+    idempotencyKey: `prepaid_amort_${args.scheduleId}_${args.yearMonth}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      scheduleId: args.scheduleId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      expenseSystemKey: args.expenseSystemKey,
+      // Explicit recognition month for the report's event-derived bucketing
+      // (utils/prepaidRecognitionEvents.ts) — previously only encoded in the
+      // sourceId suffix, which the report parses as a fallback for events
+      // posted before this field existed.
+      yearMonth: args.yearMonth,
+    },
+  });
+}
+
+/**
+ * Posts the cash-in entry for a partial refund of a prepaid schedule's unused
+ * portion — called from prepaidExpenses.correctSchedule. `correctionId` (the
+ * prepaidScheduleCorrections row) makes the idempotency key unique per
+ * correction, distinct from the per-month keys hookPrepaidExpenseAmortized uses.
+ */
+export async function hookPrepaidExpenseRefunded(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    scheduleId: Id<"prepaidExpenseSchedules">;
+    correctionId: Id<"prepaidScheduleCorrections">;
+    amountMinor: number;
+    taxMinor?: number;
+    currency: string;
+    paymentMethod?: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  if (await isChartInitialized(ctx, args.orgId)) {
+    await ensurePrepaidExpensesAccount(ctx, args.orgId, args.actorId);
+  }
+  if (args.taxMinor && args.taxMinor > 0) {
+    await ensureVatReceivableAccountIfChartReady(ctx, args.orgId, args.actorId);
+  }
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "PREPAID_EXPENSE_REFUNDED",
+    sourceType: "prepaidExpenseSchedules",
+    sourceId: `prepaid_refund_${args.correctionId}`,
+    idempotencyKey: `prepaid_refund_${args.correctionId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      scheduleId: args.scheduleId.toString(),
+      amountMinor: args.amountMinor,
+      taxMinor: args.taxMinor,
+      currency: args.currency,
+      paymentMethod: args.paymentMethod,
+    },
+  });
+}
+
+/**
+ * Posts the accelerated write-off of a prepaid schedule's non-refundable
+ * unused portion — same GL shape as hookPrepaidExpenseAmortized (release the
+ * asset into its expense account) but as a distinct eventType and a one-off
+ * per-correction idempotency key rather than a per-month one.
+ */
+export async function hookPrepaidExpenseWrittenOff(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    scheduleId: Id<"prepaidExpenseSchedules">;
+    correctionId: Id<"prepaidScheduleCorrections">;
+    amountMinor: number;
+    currency: string;
+    expenseSystemKey: string;
+    actorId: Id<"users">;
+    occurredAt: number;
+  }
+) {
+  if (await isChartInitialized(ctx, args.orgId)) {
+    await ensurePrepaidExpensesAccount(ctx, args.orgId, args.actorId);
+    await ensureExpenseCategoryAccounts(ctx, args.orgId, args.actorId);
+  }
+  await postDomainEvent(ctx, {
+    orgId: args.orgId,
+    eventType: "PREPAID_EXPENSE_WRITTEN_OFF",
+    sourceType: "prepaidExpenseSchedules",
+    sourceId: `prepaid_writeoff_${args.correctionId}`,
+    idempotencyKey: `prepaid_writeoff_${args.correctionId}`,
+    currency: args.currency,
+    occurredAt: args.occurredAt,
+    actorId: args.actorId,
+    payload: {
+      scheduleId: args.scheduleId.toString(),
+      amountMinor: args.amountMinor,
+      currency: args.currency,
+      expenseSystemKey: args.expenseSystemKey,
+    },
+  });
+}
+
+/**
  * Claws back every month of F&I commission already recognized for a
  * deferral whose sale was cancelled — unlike makeReversalHook's single-event
  * lookup, a deferral can have one FI_COMMISSION_RECOGNIZED event per
@@ -1111,6 +1256,96 @@ export async function hookFiCommissionRecognitionsReversed(
   // sweep here would leave it behind: a later manual retry could then post F&I
   // revenue for a deferral whose sale was already cancelled.
   await cancelPendingPostsBySource(ctx, args.orgId, "dealerProductDeferrals", args.deferralId.toString());
+}
+
+/**
+ * Reverses every prepaid GL event already posted for a schedule whose expense
+ * is being reversed — every monthly amortization release AND every correction
+ * (partial refund, accelerated write-off), same per-event clawback shape as
+ * hookFiCommissionRecognitionsReversed. Together with reversing the original
+ * EXPENSE_POSTED entry (which reverseExpense already does), this unwinds the
+ * whole prepaid lifecycle to zero: the asset debit, the cash credit, every
+ * asset→expense release, and any correction's cash refund or accelerated
+ * write-off. Without covering the correction event types too, a schedule that
+ * had a refund or write-off posted before its expense was reversed would keep
+ * that correction's postings live in the GL — orphaned cash/prepaid/VAT
+ * balances with no corresponding expense. Idempotent (reverseAccountingEvent
+ * no-ops on an already-reversed event) and also drops any not-yet-posted
+ * queued event (amortization or correction alike).
+ */
+export async function hookPrepaidExpenseAmortizationsReversed(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    scheduleId: Id<"prepaidExpenseSchedules">;
+    reason: string;
+    actorId: Id<"users">;
+    reversalDate: number;
+  }
+): Promise<void> {
+  const scheduleIdStr = args.scheduleId.toString();
+  const REVERSIBLE_EVENT_TYPES = [
+    "PREPAID_EXPENSE_AMORTIZED",
+    "PREPAID_EXPENSE_REFUNDED",
+    "PREPAID_EXPENSE_WRITTEN_OFF",
+  ] as const;
+  // Each event type uses a per-event (per-month, or per-correction) sourceId,
+  // so they're gathered by their (stable) payload.scheduleId rather than an
+  // exact sourceId match.
+  const postedEvents: Doc<"accountingEvents">[] = [];
+  for (const eventType of REVERSIBLE_EVENT_TYPES) {
+    const events = await ctx.db
+      .query("accountingEvents")
+      .withIndex("by_org_eventType", (q) => q.eq("orgId", args.orgId).eq("eventType", eventType))
+      .filter((q) => q.eq(q.field("status"), "POSTED"))
+      .collect();
+    postedEvents.push(...events.filter((e) => (e.payload as { scheduleId?: string })?.scheduleId === scheduleIdStr));
+  }
+
+  const period = await getOpenPeriodForDate(ctx, args.orgId, args.reversalDate);
+  for (const event of postedEvents) {
+    const reversalIdempotencyKey = `prepaid_reversed_${event._id}`;
+    if (period) {
+      await reverseAccountingEvent(ctx, {
+        orgId: args.orgId,
+        originalEventId: event._id,
+        reversalDate: args.reversalDate,
+        reason: args.reason,
+        actorId: args.actorId,
+        idempotencyKey: reversalIdempotencyKey,
+      });
+    } else {
+      await enqueuePendingReversal(ctx, {
+        orgId: args.orgId,
+        originalEventId: event._id,
+        reversalDate: args.reversalDate,
+        reason: args.reason,
+        actorId: args.actorId,
+        idempotencyKey: reversalIdempotencyKey,
+        sourceType: "prepaidExpenseSchedules",
+        sourceId: event.sourceId,
+      });
+    }
+  }
+
+  // Drop any not-yet-posted queued amortization months for this schedule
+  // (PENDING or FAILED), so a later retry can't post a month for a reversed
+  // prepayment — same reasoning as the F&I clawback.
+  for (const status of ["PENDING", "FAILED"] as const) {
+    const queued = (
+      await ctx.db
+        .query("pendingAccountingEvents")
+        .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", status))
+        .collect()
+    ).filter(
+      (p) =>
+        p.sourceType === "prepaidExpenseSchedules" &&
+        (p.payload as { scheduleId?: string })?.scheduleId === scheduleIdStr
+    );
+    for (const entry of queued) {
+      if (entry.kind === "POST") await ctx.db.delete(entry._id);
+    }
+  }
 }
 
 export async function hookAssetImpaired(

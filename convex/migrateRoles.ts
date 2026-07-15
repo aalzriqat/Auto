@@ -120,6 +120,38 @@ export const backfillFinanceApplicationPermissions = internalMutation({
 });
 
 /**
+ * One-time backfill for the new REOPEN_PERIODS permission (accounting
+ * autonomy remediation, Phase 7). Deliberately narrower than every backfill
+ * above: this permission is NOT granted to any capability-matched role, only
+ * to OWNER rows — the whole point is that an org grants it to a controller
+ * role explicitly, not automatically to whoever already holds MANAGE_FINANCE
+ * (the default ACCOUNTANT template shouldn't gain the ability to reopen a
+ * closed period just because this migration ran). Still needed for every
+ * OWNER row regardless: any legacy OWNER row missing the explicit
+ * isSystemOwnerRole flag fails the isSystemOwnerRole() fallback check the
+ * instant ANY new permission is added to the PERMISSIONS registry, not just
+ * this one — see patchRoleIfNeeded's own comment.
+ */
+export const backfillReopenPeriodsPermission = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const roles = await ctx.db.query("roles").collect();
+    let updatedCount = 0;
+    const updates: string[] = [];
+
+    for (const role of roles) {
+      if (role.isDeleted) continue;
+      if (!(isSystemOwnerRole(role) || normalizeRoleName(role.name) === SYSTEM_OWNER_ROLE_NAME)) continue;
+
+      const toAdd = new Set<string>([PERMISSIONS.REOPEN_PERIODS]);
+      if (await patchRoleIfNeeded(ctx, role, toAdd, updates)) updatedCount++;
+    }
+
+    return { updatedCount, updates };
+  },
+});
+
+/**
  * One-time backfill for the new Dealer Network Marketplace permissions
  * (Phase 56/57, PR #52). Same capability-matching approach as
  * backfillFinanceApplicationPermissions above: any org whose OWNER role
@@ -203,5 +235,56 @@ export const backfillAccountantExpensePermissions = internalMutation({
     }
 
     return { updatedCount, updates };
+  },
+});
+
+/**
+ * One-time backfill for the new SENIOR_ACCOUNTANT role template (founder-
+ * independence readiness review). Unlike the backfills above, this doesn't
+ * patch an existing role's permissions — it INSERTS the new role for every
+ * org that already runs finance day-to-day (has an ACCOUNTANT-capable role,
+ * i.e. one holding manage:finance) but has no SENIOR_ACCOUNTANT row yet, so
+ * the role is selectable in Team settings without waiting for the org to
+ * create it manually. Idempotent: an org that already has a role named
+ * SENIOR_ACCOUNTANT (however its permissions were customized) is skipped
+ * rather than getting a duplicate. Assigning any member to the new role is
+ * left to the org — this only makes the role available.
+ */
+export const backfillSeniorAccountantRole = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const allRoles = await ctx.db.query("roles").collect();
+    const rolesByOrg = new Map<string, Doc<"roles">[]>();
+    for (const role of allRoles) {
+      if (role.isDeleted) continue;
+      const key = role.orgId.toString();
+      const list = rolesByOrg.get(key);
+      if (list) list.push(role);
+      else rolesByOrg.set(key, [role]);
+    }
+
+    const template = DEFAULT_ROLE_TEMPLATES.find((t) => t.name === "SENIOR_ACCOUNTANT");
+    if (!template) throw new Error("SENIOR_ACCOUNTANT template not found in DEFAULT_ROLE_TEMPLATES.");
+
+    let createdCount = 0;
+    const created: string[] = [];
+
+    for (const [orgId, orgRoles] of rolesByOrg) {
+      const hasAccountantCapability = orgRoles.some((r) => r.permissions.includes(PERMISSIONS.MANAGE_FINANCE));
+      const hasSeniorAccountantAlready = orgRoles.some(
+        (r) => normalizeRoleName(r.name) === normalizeRoleName("SENIOR_ACCOUNTANT")
+      );
+      if (!hasAccountantCapability || hasSeniorAccountantAlready) continue;
+
+      await ctx.db.insert("roles", {
+        orgId: orgRoles[0].orgId,
+        name: template.name,
+        permissions: [...template.permissions],
+      });
+      createdCount++;
+      created.push(orgId);
+    }
+
+    return { createdCount, created };
   },
 });

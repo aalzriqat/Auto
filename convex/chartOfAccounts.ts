@@ -1,12 +1,13 @@
 import { v, ConvexError } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { Id } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { MutationCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
 import { DEFAULT_CHART, REQUIRED_SYSTEM_KEYS, SystemKey, SYSTEM_KEYS } from "./utils/defaultChart";
 import { requireFeature } from "./subscriptions";
+import { auditLog } from "./financialAudit";
 
 const accountTypeValidator = v.union(
   v.literal("ASSET"),
@@ -26,15 +27,27 @@ export async function resolveSystemAccount(
   orgId: Id<"organizations">,
   systemKey: SystemKey
 ): Promise<Id<"chartOfAccounts">> {
-  const account = await ctx.db
+  // .collect(), not .unique(): this runs on every posting for the org, and a
+  // pre-existing org (from before ensureSystemAccount started guarding against
+  // duplicate systemKey rows) may still carry more than one row from the old
+  // blind self-heal. A hot posting path must never hard-crash on dirty legacy
+  // data — deterministically pick the earliest-created ACTIVE row (the
+  // original mapping) so every posting keeps resolving to the same account
+  // instead of failing or picking randomly. The duplicate itself still needs
+  // a one-time cleanup, but that's a data-hygiene task, not a reason to block
+  // every future posting until someone gets to it.
+  const accounts = await ctx.db
     .query("chartOfAccounts")
     .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", systemKey))
-    .unique();
-  if (!account) {
+    .collect();
+  if (accounts.length === 0) {
     throw new ConvexError(
       `System account "${systemKey}" is not mapped for this organization. Initialize the chart of accounts first.`
     );
   }
+  const active = accounts.filter((a) => a.active);
+  const candidates = active.length > 0 ? active : accounts;
+  const account = candidates.reduce((oldest, a) => (a._creationTime < oldest._creationTime ? a : oldest));
   if (!account.active) {
     throw new ConvexError(`System account "${systemKey}" is inactive.`);
   }
@@ -68,13 +81,15 @@ export async function ensureGeneralExpenseAccount(
   orgId: Id<"organizations">,
   actorId: Id<"users">
 ): Promise<void> {
+  // .collect(), not .unique() — see resolveSystemAccount's comment: this runs
+  // on the expense-posting hot path and must not crash on a legacy duplicate.
   const mapped = await ctx.db
     .query("chartOfAccounts")
     .withIndex("by_org_systemKey", (q) =>
       q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.GENERAL_EXPENSE)
     )
-    .unique();
-  if (mapped) return;
+    .collect();
+  if (mapped.length > 0) return;
 
   const now = Date.now();
   const byCode = await ctx.db
@@ -122,13 +137,15 @@ export async function ensureSupplierAPAccount(
   orgId: Id<"organizations">,
   actorId: Id<"users">
 ): Promise<void> {
+  // .collect(), not .unique() — see resolveSystemAccount's comment: this runs
+  // on the sourced-vehicle posting hot path and must not crash on a legacy duplicate.
   const mapped = await ctx.db
     .query("chartOfAccounts")
     .withIndex("by_org_systemKey", (q) =>
       q.eq("orgId", orgId).eq("systemKey", SYSTEM_KEYS.ACCOUNTS_PAYABLE_SUPPLIERS)
     )
-    .unique();
-  if (mapped) return;
+    .collect();
+  if (mapped.length > 0) return;
 
   const now = Date.now();
   const byCode = await ctx.db
@@ -181,14 +198,63 @@ async function ensureSystemAccount(
   systemKey: SystemKey,
   code: string
 ): Promise<void> {
+  // .collect(), not .unique(): a legacy duplicate systemKey row (see
+  // resolveSystemAccount above) must not crash the self-heal either — the
+  // system account already exists in some form, so there's nothing to insert
+  // regardless of how many rows currently share the key.
   const mapped = await ctx.db
     .query("chartOfAccounts")
     .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", systemKey))
-    .unique();
-  if (mapped) return;
+    .collect();
+  if (mapped.length > 0) return;
 
   const now = Date.now();
   const def = DEFAULT_CHART.find((d) => d.code === code)!;
+
+  // Codes are unique within an org (see the `create` mutation). This self-heal
+  // used to insert `code` blindly, which — if an org had already created a
+  // custom account on one of these reserved codes (e.g. a hand-made 6800) —
+  // produced a duplicate code the normal create path would have rejected.
+  // `collect()` (not `unique()`) because a chart the old blind-insert already
+  // corrupted may hold more than one row on this code; unique() would throw
+  // before we could diagnose it.
+  const byCode = await ctx.db
+    .query("chartOfAccounts")
+    .withIndex("by_org_code", (q) => q.eq("orgId", orgId).eq("code", code))
+    .collect();
+
+  if (byCode.length > 0) {
+    // Already the right system account under a slightly different lookup? done.
+    if (byCode.some((a) => a.systemKey === systemKey)) return;
+    // Occupied by a *different* system account — cannot silently steal its code.
+    const conflictingSystem = byCode.find((a) => a.systemKey && a.systemKey !== systemKey);
+    if (conflictingSystem) {
+      throw new ConvexError(
+        `Chart of accounts conflict: code ${code} is already the "${conflictingSystem.systemKey}" system account, but "${systemKey}" also needs it. Resolve the conflicting code before this posting can proceed.`
+      );
+    }
+    // Only plain custom accounts remain. A shape-compatible one (same
+    // type/normalBalance) COULD be adopted as the system account, but doing
+    // that silently — as this used to — changes what a manually-created
+    // account means without anyone deciding to, and never confirms the
+    // account's existing purpose/balance. Block instead and point at the
+    // Resolve Conflicts panel (listSystemAccountAdoptionRequests), which
+    // detects this same conflict live rather than from a stored row: a
+    // mutation that throws rolls back every write it made this call,
+    // including an "I found a conflict" row inserted moments earlier — so
+    // there is no way to durably persist that fact from inside this call.
+    const compatible = byCode.some((a) => a.type === def.type && a.normalBalance === def.normalBalance);
+    if (!compatible) {
+      const shapes = byCode.map((a) => `${a.type}/${a.normalBalance}`).join(", ");
+      throw new ConvexError(
+        `Chart of accounts conflict: code ${code} exists as ${shapes}, but system account "${systemKey}" requires ${def.type}/${def.normalBalance}. Move the custom account to a different code.`
+      );
+    }
+    throw new ConvexError(
+      `System account "${systemKey}" needs an explicit mapping decision: an existing account (code ${code}) matches its required shape but has never been confirmed as that system account. Go to Accounting > Chart of Accounts > Resolve Conflicts to adopt it or remap it.`
+    );
+  }
+
   await ctx.db.insert("chartOfAccounts", {
     orgId,
     code: def.code,
@@ -262,6 +328,20 @@ export async function ensureExpenseCategoryAccounts(
   await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.MARKETING_EXPENSE, "6830");
   await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.OFFICE_EXPENSE, "6840");
   await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.PROFESSIONAL_FEES_EXPENSE, "6850");
+}
+
+/**
+ * Self-heal for the Prepaid Expenses asset account: a prepaid expense debits
+ * this at payment and releases it to an operating-expense account monthly.
+ * Scoped to the prepaid posting + amortization hooks only — nothing else
+ * resolves this key.
+ */
+export async function ensurePrepaidExpensesAccount(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  actorId: Id<"users">
+): Promise<void> {
+  await ensureSystemAccount(ctx, orgId, actorId, SYSTEM_KEYS.PREPAID_EXPENSES, "1450");
 }
 
 /** GL Phase 13 self-heal: finance-company AR (very old charts may predate it) plus the claim write-off expense account. */
@@ -520,5 +600,116 @@ export const validateSystemAccounts = query({
       }
     }
     return { valid: missing.length === 0, missing };
+  },
+});
+
+// ─── Chart-conflict resolution (explicit mapping instead of silent adopt) ────
+
+/**
+ * A shape-compatible, unmapped custom account sitting on a reserved system
+ * code, for one (orgId, systemKey) pair — the exact conflict ensureSystemAccount
+ * blocks posting on. Read-only and computed fresh every call rather than
+ * backed by a stored "pending request" row: a posting mutation that detects
+ * this conflict must also throw (to actually block the posting), and a thrown
+ * mutation rolls back every write it made in the same call — so a row
+ * inserted moments before the throw can never durably persist. Recomputing
+ * live is the only way to surface an accurate, up-to-date conflict list.
+ */
+async function findSystemAccountAdoptionCandidate(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">,
+  systemKey: SystemKey,
+  code: string
+): Promise<Doc<"chartOfAccounts"> | null> {
+  const alreadyMapped = await ctx.db
+    .query("chartOfAccounts")
+    .withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", systemKey))
+    .first();
+  if (alreadyMapped) return null;
+
+  const def = DEFAULT_CHART.find((d) => d.code === code);
+  if (!def) return null;
+
+  const byCode = await ctx.db
+    .query("chartOfAccounts")
+    .withIndex("by_org_code", (q) => q.eq("orgId", orgId).eq("code", code))
+    .collect();
+  if (byCode.some((a) => a.systemKey)) return null; // occupied by a system account (itself or another key) — not this conflict
+
+  return byCode.find((a) => a.type === def.type && a.normalBalance === def.normalBalance) ?? null;
+}
+
+/** Every live system-account adoption conflict for the org, with the candidate account's current details. */
+export const listSystemAccountAdoptionRequests = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+
+    const defsWithSystemKey = DEFAULT_CHART.filter((d) => !!d.systemKey) as Array<
+      typeof DEFAULT_CHART[number] & { systemKey: SystemKey }
+    >;
+    const results = await Promise.all(
+      defsWithSystemKey.map(async (def) => {
+        const candidateAccount = await findSystemAccountAdoptionCandidate(ctx, args.orgId, def.systemKey, def.code);
+        if (!candidateAccount) return null;
+        return { systemKey: def.systemKey, code: def.code, candidateAccount };
+      })
+    );
+    return results.filter((r): r is NonNullable<typeof r> => r !== null);
+  },
+});
+
+/**
+ * Resolves a live adoption conflict. "ADOPT" performs the same mapping the
+ * old silent self-heal used to do automatically — tag the candidate account
+ * as the system account and normalize its posting-safety flags to the
+ * DEFAULT_CHART shape. "REJECT" leaves the candidate account untouched and
+ * records nothing; the owner is expected to move it to a different code, at
+ * which point the conflict stops appearing on its own (findSystemAccountAdoptionCandidate
+ * recomputes live) — otherwise it correctly keeps blocking posting and keeps
+ * showing up here, since the underlying conflict genuinely still exists.
+ */
+export const confirmSystemAccountAdoption = mutation({
+  args: {
+    orgId: v.id("organizations"),
+    systemKey: v.string(),
+    decision: v.union(v.literal("ADOPT"), v.literal("REJECT")),
+  },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+
+    const def = DEFAULT_CHART.find((d) => d.systemKey === args.systemKey);
+    if (!def) throw new ConvexError(`Unknown system account key "${args.systemKey}".`);
+
+    const candidate = await findSystemAccountAdoptionCandidate(ctx, args.orgId, args.systemKey as SystemKey, def.code);
+    if (!candidate) {
+      throw new ConvexError("No pending adoption conflict found for this system account — it may already be resolved.");
+    }
+
+    const now = Date.now();
+    if (args.decision === "ADOPT") {
+      await ctx.db.patch(candidate._id, {
+        systemKey: args.systemKey as SystemKey,
+        active: true,
+        isControlAccount: def.isControlAccount,
+        allowManualPosting: def.allowManualPosting,
+        subtype: def.subtype,
+        updatedAt: now,
+        updatedBy: user._id,
+      });
+    }
+
+    await auditLog(ctx, {
+      orgId: args.orgId,
+      actorId: user._id,
+      actionType: "RESOLVE_SYSTEM_ACCOUNT_ADOPTION",
+      resourceType: "chartOfAccounts",
+      resourceId: candidate._id.toString(),
+      description: `${args.decision === "ADOPT" ? "Adopted" : "Rejected"} candidate account (code ${def.code}) as system account "${args.systemKey}".`,
+    });
+
+    return null;
   },
 });

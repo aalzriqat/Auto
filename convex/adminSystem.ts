@@ -112,6 +112,7 @@ const webhookSourceValidator = v.union(
   v.literal("social-auto-reply-retry"),
   v.literal("fixed-asset-depreciation"),
   v.literal("fi-commission-recognition"),
+  v.literal("prepaid-expense-amortization"),
   v.literal("marketplace-weekly-report"),
   v.literal("marketplace-whatsapp")
 );

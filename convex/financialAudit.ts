@@ -30,7 +30,13 @@ type AuditActionType =
   | "MIGRATE_TRANSACTION"
   | "ALLOCATE_PAYMENT"
   | "REVERSE_ALLOCATION"
-  | "IGNORE_BANK_STATEMENT_LINE";
+  | "IGNORE_BANK_STATEMENT_LINE"
+  | "CORRECT_PREPAID_SCHEDULE"
+  | "REQUEST_PREPAID_CORRECTION"
+  | "APPROVE_PREPAID_CORRECTION"
+  | "REJECT_PREPAID_CORRECTION"
+  | "RESOLVE_SYSTEM_ACCOUNT_ADOPTION"
+  | "ACKNOWLEDGE_CLOSE_WARNINGS";
 
 // ─── Internal: write audit entry ─────────────────────────────────────────────
 
@@ -211,6 +217,9 @@ async function resolveManualJournalCurrency(
     const account = await ctx.db.get(line.accountId);
     if (!account || account.orgId !== orgId) {
       throw new ConvexError(`Account ${line.accountId} not found in this org.`);
+    }
+    if (!account.active) {
+      throw new ConvexError(`Account "${account.name}" is inactive and cannot be posted to. Reactivate it first or use a different account.`);
     }
     if (!account.allowManualPosting) {
       throw new ConvexError(`Account "${account.name}" does not allow manual posting.`);

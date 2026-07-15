@@ -1,7 +1,7 @@
 import { convexTest } from "convex-test";
 import { expect, test, describe, vi } from "vitest";
 import schema from "../schema";
-import { notifyUser, notifyManagers, notifyAllMembers, notifyOwner, notifyByPermission, getActorName } from "./notifications";
+import { notifyUser, notifyManagers, notifyAllMembers, notifyOwner, notifyByPermission, notifyFinanceManagers, getActorName } from "./notifications";
 import { PERMISSIONS } from "./permissions";
 
 vi.mock("../rateLimit", () => ({
@@ -27,6 +27,29 @@ async function seedOrg(t: ReturnType<typeof convexTest>) {
   await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: salesId, roleId: salesRoleId }));
 
   return { orgId, ownerId, managerId, salesId };
+}
+
+/** Owner + accountant (holds manage:finance) + sales (doesn't) — for notifyFinanceManagers tests. */
+async function seedFinanceOrg(t: ReturnType<typeof convexTest>) {
+  const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Finance Org", createdAt: Date.now() }));
+
+  const ownerRoleId = await t.run((ctx) =>
+    ctx.db.insert("roles", { orgId, name: "OWNER", permissions: ["manage:finance"], isSystemOwnerRole: true })
+  );
+  const accountantRoleId = await t.run((ctx) =>
+    ctx.db.insert("roles", { orgId, name: "ACCOUNTANT", permissions: ["manage:finance", "view:finance"] })
+  );
+  const salesRoleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "SALES", permissions: ["view:vehicles"] }));
+
+  const ownerId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "fin_owner_001", email: "owner@finance.test" }));
+  const accountantId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "fin_acct_001", email: "acct@finance.test" }));
+  const salesId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "fin_sales_001", email: "sales@finance.test" }));
+
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: ownerId, roleId: ownerRoleId }));
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: accountantId, roleId: accountantRoleId }));
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: salesId, roleId: salesRoleId }));
+
+  return { orgId, ownerId, accountantId, salesId };
 }
 
 describe("dispatch helpers", () => {
@@ -85,6 +108,71 @@ describe("dispatch helpers", () => {
 
     expect(ownerRows).toHaveLength(1);
     expect(managerRows).toHaveLength(0);
+    expect(salesRows).toHaveLength(0);
+  });
+
+  test("notifyFinanceManagers fans out to every MANAGE_FINANCE holder (including the owner), not to a non-finance member", async () => {
+    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, ownerId, accountantId, salesId } = await seedFinanceOrg(t);
+
+    await t.run((ctx) =>
+      notifyFinanceManagers(ctx, orgId, "accounting.prepaidAmortizationFailed", {
+        expenseTitle: "Insurance",
+        yearMonth: "2026-01",
+        errorMessage: "boom",
+      })
+    );
+
+    const ownerRows = await t.run((ctx) => ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", ownerId)).collect());
+    const accountantRows = await t.run((ctx) => ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", accountantId)).collect());
+    const salesRows = await t.run((ctx) => ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", salesId)).collect());
+
+    expect(ownerRows).toHaveLength(1); // isSystemOwnerRole always included, even without manage:finance
+    expect(accountantRows).toHaveLength(1); // holds manage:finance
+    expect(salesRows).toHaveLength(0);
+  });
+
+  test("notifyFinanceManagers honors excludeUserId — the maker isn't notified about their own request", async () => {
+    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const { orgId, ownerId, accountantId } = await seedFinanceOrg(t);
+
+    await t.run((ctx) =>
+      notifyFinanceManagers(
+        ctx,
+        orgId,
+        "accounting.prepaidCorrectionRequested",
+        { actorName: "Accountant", expenseTitle: "Insurance", amount: "300" },
+        { excludeUserId: accountantId }
+      )
+    );
+
+    const ownerRows = await t.run((ctx) => ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", ownerId)).collect());
+    const accountantRows = await t.run((ctx) => ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", accountantId)).collect());
+
+    expect(ownerRows).toHaveLength(1);
+    expect(accountantRows).toHaveLength(0); // excluded
+  });
+
+  test("notifyFinanceManagers falls back to notifyOwner's no-op behavior when literally nobody in the org holds MANAGE_FINANCE or the owner role", async () => {
+    const t = convexTest(schema, import.meta.glob("./../**/*.*s"));
+    const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "No-Finance Org", createdAt: Date.now() }));
+    const salesRoleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "SALES", permissions: ["view:vehicles"] }));
+    const salesId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "nf_sales_001", email: "sales@nofinance.test" }));
+    await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: salesId, roleId: salesRoleId }));
+
+    // No MANAGE_FINANCE holder and no owner membership at all — the fallback
+    // path must not throw even though there's nobody for notifyOwner to reach.
+    await expect(
+      t.run((ctx) =>
+        notifyFinanceManagers(ctx, orgId, "accounting.prepaidAmortizationFailed", {
+          expenseTitle: "Insurance",
+          yearMonth: "2026-01",
+          errorMessage: "boom",
+        })
+      )
+    ).resolves.not.toThrow();
+
+    const salesRows = await t.run((ctx) => ctx.db.query("notifications").withIndex("by_user", (q) => q.eq("userId", salesId)).collect());
     expect(salesRows).toHaveLength(0);
   });
 

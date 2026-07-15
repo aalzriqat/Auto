@@ -126,6 +126,18 @@ crons.cron(
   {}
 );
 
+// Post one calendar month of prepaid-expense amortization for every ACTIVE
+// prepaid schedule, across every org. Same monthly shape and idempotency
+// reasoning as the two crons above — amortizePrepaidExpenseForMonth recognizes
+// the delta due through its calendar month, so a re-run posts nothing and a
+// missed month is caught up.
+crons.cron(
+  "prepaid-expense-amortization",
+  "0 5 1 * *",
+  internal.crons.triggerPrepaidExpenseAmortization,
+  {}
+);
+
 export default crons;
 
 export const triggerAlarms = internalMutation({
@@ -533,6 +545,129 @@ export const triggerFiCommissionRecognition = internalAction({
         source: "fi-commission-recognition",
         status: "error",
         summary: "fi-commission-recognition cron failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+  },
+});
+
+// ─── Monthly prepaid-expense amortization cron ───────────────────────────────
+// Same shape as the F&I commission recognition cron above — paginated cross-org
+// scan, cached per-org owner resolution, one mutation call per schedule row,
+// admin audit log on completion/failure.
+
+type PrepaidAmortizationOutcome = "posted" | "skippedNoOwner" | "skippedOther";
+
+type PrepaidAmortizationRunStats = {
+  total: number;
+  posted: number;
+  skippedNoOwner: number;
+  skippedOther: number;
+  failed: number;
+};
+
+async function amortizeCronSchedule(
+  ctx: ActionCtx,
+  schedule: Doc<"prepaidExpenseSchedules">,
+  args: {
+    ownerByOrg: Map<string, Id<"users"> | null>;
+    currentYearMonth: string;
+    now: number;
+  }
+): Promise<PrepaidAmortizationOutcome> {
+  const systemActorId = await getCachedOrgOwnerUserId(ctx, args.ownerByOrg, schedule.orgId);
+  if (!systemActorId) {
+    return "skippedNoOwner";
+  }
+
+  // Recognize every missing calendar month in its OWN month — from the first
+  // month not yet recognized through the current month — never lumping missed
+  // months into the present. catchUpScheduleMutation shares its recognition
+  // logic (catchUpPrepaidSchedule) with the accountant-triggered manual run, is
+  // idempotent per month, refuses months at/before the last recognized one, and
+  // each posting is dated to its month, so a month whose period is already
+  // closed parks in the outbox (postOrEnqueue) rather than posting into a
+  // closed period. Re-drives are safe.
+  const result = await ctx.runMutation(internal.prepaidExpenses.catchUpScheduleMutation, {
+    orgId: schedule.orgId,
+    scheduleId: schedule._id,
+    throughYearMonth: args.currentYearMonth,
+    now: args.now,
+    systemActorId,
+  });
+  return result.monthsPosted > 0 ? "posted" : "skippedOther";
+}
+
+async function runPrepaidExpenseAmortization(
+  ctx: ActionCtx,
+  args: { currentYearMonth: string; now: number }
+): Promise<PrepaidAmortizationRunStats> {
+  const ownerByOrg = new Map<string, Id<"users"> | null>();
+  const stats: PrepaidAmortizationRunStats = {
+    total: 0,
+    posted: 0,
+    skippedNoOwner: 0,
+    skippedOther: 0,
+    failed: 0,
+  };
+
+  let cursor: string | undefined;
+  do {
+    const page = await ctx.runQuery(internal.prepaidExpenses.listActivePrepaidSchedulesForRecognition, { cursor });
+    for (const schedule of page.page) {
+      stats.total++;
+      try {
+        // One malformed schedule (e.g. a chart-of-accounts conflict) must not
+        // abort the whole cross-org run and starve every later organization —
+        // isolate the failure, count it, and keep going.
+        const outcome = await amortizeCronSchedule(ctx, schedule, {
+          ownerByOrg,
+          currentYearMonth: args.currentYearMonth,
+          now: args.now,
+        });
+        stats[outcome]++;
+      } catch (err) {
+        stats.failed++;
+        // Previously only the aggregate counter above recorded this — the
+        // schedule, org, and error itself were discarded, leaving nothing an
+        // accountant or support engineer could act on. Record the specifics
+        // and alert the org owner so a stuck schedule doesn't sit silent until
+        // someone happens to notice a missing month in a report.
+        await ctx.runMutation(internal.prepaidExpenses.recordAmortizationFailure, {
+          orgId: schedule.orgId,
+          scheduleId: schedule._id,
+          yearMonth: args.currentYearMonth,
+          errorMessage: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    cursor = page.isDone ? undefined : page.continueCursor;
+  } while (cursor);
+
+  return stats;
+}
+
+export const triggerPrepaidExpenseAmortization = internalAction({
+  args: {},
+  handler: async (ctx: ActionCtx): Promise<string> => {
+    try {
+      const now = Date.now();
+      const d = new Date(now);
+      const currentYearMonth = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+      const stats = await runPrepaidExpenseAmortization(ctx, { currentYearMonth, now });
+      const summary = `Prepaid expense amortization ${currentYearMonth}: posted ${stats.posted}/${stats.total} schedule(s), ${stats.skippedNoOwner} skipped (no org owner), ${stats.skippedOther} skipped (already run / fully amortized / not active), ${stats.failed} failed.`;
+      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+        source: "prepaid-expense-amortization",
+        status: "success",
+        summary,
+      });
+      return summary;
+    } catch (err) {
+      await ctx.runMutation(internal.adminSystem.logWebhookEvent, {
+        source: "prepaid-expense-amortization",
+        status: "error",
+        summary: "prepaid-expense-amortization cron failed",
         error: err instanceof Error ? err.message : String(err),
       });
       throw err;

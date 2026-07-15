@@ -24,6 +24,7 @@ export const CreateExpenseSchema = z.object({
   ]),
   isPrepaid: z.boolean().optional(),
   amortizationMonths: z.number().min(1).optional(),
+  amortizationStartDate: z.number().optional(),
   status: z.enum(["PENDING", "PAID"]).optional(),
   vendor: z.string().optional(),
   payerId: z.string().optional(),

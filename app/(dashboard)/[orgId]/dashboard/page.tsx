@@ -88,7 +88,7 @@ export default function DashboardPage() {
         router.replace(`/${activeOrgId}/sales`);
       } else if (role === "RECEPTION") {
         router.replace(`/${activeOrgId}/leads`);
-      } else if (role === "ACCOUNTANT") {
+      } else if (role === "ACCOUNTANT" || role === "SENIOR_ACCOUNTANT") {
         router.replace(`/${activeOrgId}/accounting`);
       }
     }

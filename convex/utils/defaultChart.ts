@@ -41,6 +41,11 @@ export const SYSTEM_KEYS = {
   MARKETING_EXPENSE: "MARKETING_EXPENSE",
   OFFICE_EXPENSE: "OFFICE_EXPENSE",
   PROFESSIONAL_FEES_EXPENSE: "PROFESSIONAL_FEES_EXPENSE",
+  // Balance-sheet asset holding the unamortized portion of a prepaid expense
+  // (e.g. rent/insurance paid up front). Debited in full when the expense is
+  // paid, then released to the matching operating-expense account ratably over
+  // amortizationMonths — see prepaidExpenses.ts and rulePrepaidExpenseAmortized.
+  PREPAID_EXPENSES: "PREPAID_EXPENSES",
 } as const;
 
 export type SystemKey = typeof SYSTEM_KEYS[keyof typeof SYSTEM_KEYS];
@@ -170,6 +175,16 @@ export const DEFAULT_CHART: DefaultAccountDef[] = [
     isControlAccount: true,
     allowManualPosting: false,
     systemKey: SYSTEM_KEYS.VEHICLE_INVENTORY,
+  },
+  {
+    code: "1450",
+    name: "Prepaid Expenses",
+    nameAr: "مصروفات مدفوعة مقدماً",
+    type: "ASSET",
+    normalBalance: "DEBIT",
+    isControlAccount: true,
+    allowManualPosting: false,
+    systemKey: SYSTEM_KEYS.PREPAID_EXPENSES,
   },
   {
     code: "1500",

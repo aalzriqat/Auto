@@ -90,6 +90,12 @@ export const PERMISSIONS = {
   // Finance / Accounting
   VIEW_FINANCE: "view:finance",
   MANAGE_FINANCE: "manage:finance",
+  // Reopening a closed period undoes every one of the close's own protections
+  // (pending events, AR/subledger reconciliation, unmatched bank lines all
+  // stop blocking anything) — deliberately narrower than MANAGE_FINANCE, not
+  // granted to the default ACCOUNTANT template. An org grants it to a
+  // controller role explicitly; the owner always has it via ALL_PERMISSIONS.
+  REOPEN_PERIODS: "reopen:accounting_periods",
 
   // Financial — sensitive field visibility
   VIEW_COST_PRICE: "view:cost_price",
@@ -298,6 +304,35 @@ export const DEFAULT_ROLE_TEMPLATES: { name: string; permissions: Permission[] }
       PERMISSIONS.MANAGE_FINANCE,
       PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
       PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
+    ],
+  },
+  {
+    // Everything ACCOUNTANT has, plus the day-to-day authority a lone
+    // accountant needs to operate without a second person: cleaning up their
+    // own unposted mistakes, and reviewing/paying commissions. Deliberately
+    // still without REOPEN_PERIODS (see that permission's own comment above)
+    // — that stays a separate Finance Controller grant, not bundled here.
+    name: "SENIOR_ACCOUNTANT",
+    permissions: [
+      PERMISSIONS.VIEW_ORG,
+      PERMISSIONS.VIEW_USERS,
+      PERMISSIONS.VIEW_VEHICLES,
+      PERMISSIONS.VIEW_VEHICLE_INFO,
+      PERMISSIONS.VIEW_VEHICLE_EXPENSES,
+      PERMISSIONS.VIEW_CUSTOMERS,
+      PERMISSIONS.VIEW_SALES,
+      PERMISSIONS.VIEW_EXPENSES,
+      PERMISSIONS.CREATE_EXPENSES,
+      PERMISSIONS.EDIT_EXPENSES,
+      PERMISSIONS.DELETE_EXPENSES,
+      PERMISSIONS.VIEW_REPORTS,
+      PERMISSIONS.VIEW_FINANCE,
+      PERMISSIONS.MANAGE_FINANCE,
+      PERMISSIONS.VIEW_FINANCE_APPLICATIONS,
+      PERMISSIONS.CONFIRM_FINANCE_DISBURSEMENT,
+      PERMISSIONS.VIEW_COST_PRICE,
+      PERMISSIONS.VIEW_COMMISSIONS,
+      PERMISSIONS.MANAGE_COMMISSIONS,
     ],
   },
 ];

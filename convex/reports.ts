@@ -6,10 +6,14 @@ import { PERMISSIONS } from "./utils/permissions";
 import { rateLimiter } from "./rateLimit";
 import {
   computeAmortizationInfo,
+  amortizationInfoFromScheduleProgress,
   recognizedAmountInRange,
+  recognizedAmountInRangeWithReversal,
   PREPAID_LOOKBACK_MS,
 } from "./utils/expenseAmortization";
+import { loadOrgPrepaidRecognitionByMonth, recognizedAmountInRangeFromEvents } from "./utils/prepaidRecognitionEvents";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
+import { getOrgCurrency } from "./accounting/workflowHooks";
 
 export const getSalesAndProfitReport = query({
   args: {
@@ -200,21 +204,86 @@ export const getExpensesReport = query({
       throw new ConvexError(`Rate limit exceeded. Try again in ${Math.ceil(rateStatus.retryAfter / 1000)}s`);
     }
 
-    // Use index range — avoids collecting ALL org expenses
+    // The net-of-VAT fallback (a prepaid expense with no schedule row yet) is
+    // computed on the same integer minor-unit basis as the GL (see
+    // expenseAmortization.ts), so the org currency is required to convert each
+    // expense's amount to minor units identically.
+    const currency = await getOrgCurrency(ctx, args.orgId);
+
+    // Use index range — avoids collecting ALL org expenses. Only PAID expenses
+    // count: a PENDING expense has no GL impact yet, so including it would make
+    // this operational P&L disagree with the ledger.
+    //
+    // A reversed expense is soft-deleted but stays in scope (`reversedAt` set):
+    // it really did post to the ledger in its own month, and the ledger still
+    // reports it there — the reversing entry is dated separately. Excluding it
+    // on isDeleted alone retroactively restated already-posted (and possibly
+    // already-closed) months to zero while the income statement kept them. An
+    // expense deleted *before* it ever posted has no reversedAt and no GL
+    // footprint, so it stays correctly invisible.
     const expensesInDateRange = await ctx.db
       .query("expenses")
       .withIndex("by_org_date", (q) =>
         q.eq("orgId", args.orgId).gte("date", args.startDate)
       )
-      .filter((q) => q.and(q.lte(q.field("date"), args.endDate), q.neq(q.field("isDeleted"), true)))
+      .filter((q) =>
+        q.and(
+          q.lte(q.field("date"), args.endDate),
+          q.or(q.neq(q.field("isDeleted"), true), q.neq(q.field("reversedAt"), undefined)),
+          q.neq(q.field("status"), "PENDING")
+        )
+      )
       .collect();
+
+    // Authoritative prepaid schedules for this org — one row per prepaid
+    // expense (low-volume: rent/insurance/licences, not per-transaction). The
+    // report reads recognition from the schedule's posted GL events (below),
+    // not the row's mutable totalMinor/termMonths, so it can never diverge
+    // from the GL and a long-term prepaid dated well before the window is
+    // still found without an arbitrary date-lookback cap.
+    const schedules = await ctx.db
+      .query("prepaidExpenseSchedules")
+      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    const scheduleByExpenseId = new Map(schedules.map((s) => [s.expenseId, s]));
+    const recognitionEvents = await loadOrgPrepaidRecognitionByMonth(ctx, args.orgId, args.startDate, args.endDate);
+
+    // Any status, INCLUDING CANCELLED: cancellation only stops future
+    // recognition, it never un-happens history. A cancelled schedule's
+    // already-posted months (and an accelerated write-off's own month) must
+    // keep showing up in the report they originally posted into, so it always
+    // stays the event path — never the expense-doc fallback, which would
+    // double count months the schedule already reported before cancellation.
+    const scheduledRecognitionFor = (exp: Doc<"expenses">) => {
+      const schedule = scheduleByExpenseId.get(exp._id);
+      return exp.isPrepaid && schedule ? schedule : null;
+    };
 
     // A PREPAID expense (e.g. 6 months of rent paid up front) recognizes only
     // 1/6th per month, so its `date` — the day it was paid — can fall well
     // before this report's startDate while it's still amortizing into this
-    // window. Pull those separately (bounded lookback, not a full table scan)
-    // since the range query above only sees expenses dated inside the window.
-    const priorPrepaidExpenses = await ctx.db
+    // window. The range query above only sees expenses dated inside the window,
+    // so pull each still-amortizing prior expense two ways, deduped by id:
+    //   (1) every non-cancelled schedule (authoritative, uncapped), and
+    //   (2) a bounded lookback for prepaid expenses that have NO schedule row
+    //       (legacy / not-yet-backfilled) — the net-of-VAT fallback.
+    const inRangeIds = new Set(expensesInDateRange.map((e) => e._id));
+    const priorById = new Map<Id<"expenses">, Doc<"expenses">>();
+
+    for (const schedule of schedules) {
+      if (inRangeIds.has(schedule.expenseId)) continue;
+      // `=== 0`, not `<= 0`: a window holding only this schedule's reversal nets
+      // negative and still has to report that credit.
+      if (
+        recognizedAmountInRangeFromEvents(recognitionEvents, schedule._id, args.startDate, args.endDate, schedule.currency) === 0
+      ) {
+        continue;
+      }
+      const exp = await ctx.db.get(schedule.expenseId);
+      if (exp && (exp.isDeleted !== true || exp.reversedAt !== undefined)) priorById.set(exp._id, exp);
+    }
+
+    const priorUnscheduledPrepaid = await ctx.db
       .query("expenses")
       .withIndex("by_org_date", (q) =>
         q.eq("orgId", args.orgId).gte("date", args.startDate - PREPAID_LOOKBACK_MS)
@@ -223,16 +292,39 @@ export const getExpensesReport = query({
         q.and(
           q.lt(q.field("date"), args.startDate),
           q.eq(q.field("isPrepaid"), true),
-          q.neq(q.field("isDeleted"), true)
+          q.or(q.neq(q.field("isDeleted"), true), q.neq(q.field("reversedAt"), undefined)),
+          q.neq(q.field("status"), "PENDING")
         )
       )
       .collect();
+    for (const exp of priorUnscheduledPrepaid) {
+      // A scheduled prepaid (any status) is handled above via its GL events;
+      // skip anything with a schedule row so it's never double-counted here.
+      if (scheduleByExpenseId.has(exp._id) || inRangeIds.has(exp._id) || priorById.has(exp._id)) continue;
+      if (recognizedAmountInRangeWithReversal(exp, args.startDate, args.endDate, currency) === 0) continue;
+      priorById.set(exp._id, exp);
+    }
 
-    const stillAmortizing = priorPrepaidExpenses.filter(
-      (exp) => recognizedAmountInRange(exp, args.startDate, args.endDate) > 0
-    );
+    // An expense dated before this window but REVERSED inside it: the reversing
+    // credit belongs in this window, yet a `by_org_date` range scan can never
+    // reach the row (its own date is far behind startDate). Indexed on
+    // reversedAt, so the cost is proportional to reversals in the window, not to
+    // history. Scheduled prepaids are skipped — their reversal already arrives
+    // through the GL-event path above.
+    const reversedIntoWindow = await ctx.db
+      .query("expenses")
+      .withIndex("by_org_reversedAt", (q) =>
+        q.eq("orgId", args.orgId).gte("reversedAt", args.startDate).lte("reversedAt", args.endDate)
+      )
+      .collect();
+    for (const exp of reversedIntoWindow) {
+      if (scheduleByExpenseId.has(exp._id) || inRangeIds.has(exp._id) || priorById.has(exp._id)) continue;
+      if (exp.status === "PENDING") continue;
+      if (recognizedAmountInRangeWithReversal(exp, args.startDate, args.endDate, currency) === 0) continue;
+      priorById.set(exp._id, exp);
+    }
 
-    const allExpenses: Doc<"expenses">[] = [...expensesInDateRange, ...stillAmortizing];
+    const allExpenses: Doc<"expenses">[] = [...expensesInDateRange, ...priorById.values()];
 
     let totalExpenses = 0;
 
@@ -245,7 +337,13 @@ export const getExpensesReport = query({
     );
 
     const enrichedExpenses = allExpenses.map((exp) => {
-      const recognizedAmount = recognizedAmountInRange(exp, args.startDate, args.endDate);
+      // Prefer the authoritative schedule's own GL events; fall back to the
+      // net-of-VAT expense doc only for a prepaid expense that has no
+      // schedule row yet.
+      const schedule = scheduledRecognitionFor(exp);
+      const recognizedAmount = schedule
+        ? recognizedAmountInRangeFromEvents(recognitionEvents, schedule._id, args.startDate, args.endDate, schedule.currency)
+        : recognizedAmountInRangeWithReversal(exp, args.startDate, args.endDate, currency);
       totalExpenses += recognizedAmount;
       let vehicleDesc = "General";
 
@@ -260,7 +358,9 @@ export const getExpensesReport = query({
         ...exp,
         vehicleDesc,
         recognizedAmount,
-        amortization: computeAmortizationInfo(exp, args.endDate),
+        amortization: schedule
+          ? amortizationInfoFromScheduleProgress(schedule)
+          : computeAmortizationInfo(exp, args.endDate, currency),
       };
     });
 

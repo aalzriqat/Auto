@@ -38,6 +38,9 @@ export type EventType =
   | "VEHICLE_PREP_EXPENSE_RECLASSIFIED"
   | "TRADE_IN_ACCEPTED"
   | "FI_COMMISSION_RECOGNIZED"
+  | "PREPAID_EXPENSE_AMORTIZED"
+  | "PREPAID_EXPENSE_REFUNDED"
+  | "PREPAID_EXPENSE_WRITTEN_OFF"
   | "RECEIVABLE_CREATED"
   | "JOURNAL_REVERSAL";
 
@@ -55,6 +58,9 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "VEHICLE_ACQUIRED", "VEHICLE_LANDED_COST_CAPITALIZED", "VEHICLE_INVENTORY_OPENING_BALANCE",
   "VEHICLE_ACQUISITION_COST_CORRECTED", "VEHICLE_PREP_EXPENSE_RECLASSIFIED", "TRADE_IN_ACCEPTED",
   "FI_COMMISSION_RECOGNIZED",
+  "PREPAID_EXPENSE_AMORTIZED",
+  "PREPAID_EXPENSE_REFUNDED",
+  "PREPAID_EXPENSE_WRITTEN_OFF",
   "RECEIVABLE_CREATED",
   // JOURNAL_REVERSAL is intentionally excluded: it is written directly by
   // reverseAccountingEvent() in reversals.ts and never goes through postAccountingEvent().
@@ -222,6 +228,14 @@ export interface ExpensePostedPayload {
   vehicleId?: string;
   /** When true (vehicleId must also be set), the net amount capitalizes into Vehicle Inventory instead of hitting GENERAL_EXPENSE. */
   capitalizeToInventory?: boolean;
+  /**
+   * When true, the net amount is a balance-sheet asset (Prepaid Expenses),
+   * released to the expense account ratably over its term — not an immediate
+   * expense. Takes precedence over category routing but NOT over inventory
+   * capitalization (a vehicle recon cost is never "prepaid"; the two are
+   * mutually exclusive and prepaid only ever applies to non-vehicle expenses).
+   */
+  isPrepaid?: boolean;
 }
 
 /**
@@ -470,13 +484,36 @@ export function ruleCollectionRefund(p: CollectionRefundPayload): RuleResult {
   };
 }
 
+/**
+ * Single source of truth for how a paid expense is booked, so ruleExpensePosted
+ * (which posts it) and hookExpensePosted (which self-heals the target accounts)
+ * can never disagree: a vehicle-linked recon cost capitalizes into inventory;
+ * otherwise a prepaid expense becomes a balance-sheet asset; otherwise it's an
+ * immediate period expense. Inventory capitalization wins over prepaid.
+ */
+export function classifyExpensePosting(args: {
+  capitalizeToInventory?: boolean;
+  vehicleId?: unknown;
+  isPrepaid?: boolean;
+}): { capitalize: boolean; prepaid: boolean } {
+  const capitalize = args.capitalizeToInventory === true && !!args.vehicleId;
+  const prepaid = args.isPrepaid === true && !capitalize;
+  return { capitalize, prepaid };
+}
+
 export function ruleExpensePosted(p: ExpensePostedPayload): RuleResult {
   const cashKey = cashAccountKey(p.paymentMethod);
-  const capitalize = p.capitalizeToInventory === true && !!p.vehicleId;
-  const debitKey = capitalize ? SYSTEM_KEYS.VEHICLE_INVENTORY : expenseAccountKeyForCategory(p.category);
+  const { capitalize, prepaid } = classifyExpensePosting(p);
+  const debitKey = capitalize
+    ? SYSTEM_KEYS.VEHICLE_INVENTORY
+    : prepaid
+      ? SYSTEM_KEYS.PREPAID_EXPENSES
+      : expenseAccountKeyForCategory(p.category);
   const label = capitalize
     ? "Vehicle reconditioning cost capitalized"
-    : p.category ? `Expense (${p.category})` : "General expense";
+    : prepaid
+      ? "Prepaid expense capitalized"
+      : p.category ? `Expense (${p.category})` : "General expense";
   // No prior liability exists for a plain expense (unlike the supplier-payable
   // settlement flow), so the net/tax split can happen directly here. A line
   // with a zero debit/credit is rejected by validateBalance, so only emit the
@@ -492,7 +529,80 @@ export function ruleExpensePosted(p: ExpensePostedPayload): RuleResult {
   lines.push(line(cashKey, 0, p.amountMinor, "Cash payment"));
   return {
     lines,
-    memo: capitalize ? "Vehicle reconditioning cost posted" : "Expense posted",
+    memo: capitalize
+      ? "Vehicle reconditioning cost posted"
+      : prepaid ? "Prepaid expense posted" : "Expense posted",
+    category: "SYSTEM",
+  };
+}
+
+/**
+ * Monthly release of one term-month of a prepaid expense from the Prepaid
+ * Expenses asset into its operating-expense account — the balance-sheet-to-P&L
+ * half of the prepaid lifecycle whose asset half ruleExpensePosted booked.
+ * `expenseSystemKey` is the exact expense account the original expense would
+ * have hit, carried on the schedule so recognition never re-derives it. Same
+ * debit-the-thing-being-released / credit-nothing-new shape as
+ * ruleFiCommissionRecognized.
+ */
+export function rulePrepaidExpenseAmortized(p: PrepaidExpenseAmortizedPayload): RuleResult {
+  return {
+    lines: [
+      line(p.expenseSystemKey as SystemKey, p.amountMinor, 0, "Prepaid expense amortized"),
+      line(SYSTEM_KEYS.PREPAID_EXPENSES, 0, p.amountMinor, "Prepaid expense asset released"),
+    ],
+    memo: "Monthly prepaid expense amortization",
+    category: "SYSTEM",
+  };
+}
+
+export interface PrepaidExpenseRefundedPayload {
+  scheduleId: string;
+  amountMinor: number; // net (ex-VAT) refund, released from the Prepaid Expenses asset
+  taxMinor?: number; // VAT portion of the refund, reclaimed from VAT_RECEIVABLE
+  currency: string;
+  paymentMethod?: string;
+}
+
+/**
+ * A vendor refunds the unused (not-yet-recognized) portion of a prepaid
+ * expense in cash/bank — the reverse cash-flow of ruleExpensePosted's prepaid
+ * line, for exactly the unused remainder rather than the whole asset. When the
+ * refund includes VAT (the vendor returns the input tax too, not just the net
+ * cost), a third line reclaims it from VAT_RECEIVABLE — same net/tax split
+ * ruleExpensePosted uses on the way in, mirrored on the way out. Byte-identical
+ * two-line output for the tax-free case (taxMinor 0/undefined).
+ */
+export function rulePrepaidExpenseRefunded(p: PrepaidExpenseRefundedPayload): RuleResult {
+  const taxMinor = p.taxMinor ?? 0;
+  const lines: LineSpec[] = [
+    line(cashAccountKey(p.paymentMethod), p.amountMinor + taxMinor, 0, "Prepaid expense refund received"),
+    line(SYSTEM_KEYS.PREPAID_EXPENSES, 0, p.amountMinor, "Prepaid expense asset released (refund)"),
+  ];
+  if (taxMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.VAT_RECEIVABLE, 0, taxMinor, "Input VAT reclaimed on refund"));
+  }
+  return {
+    lines,
+    memo: "Prepaid expense partially refunded",
+    category: "SYSTEM",
+  };
+}
+
+/**
+ * Same shape as rulePrepaidExpenseAmortized (release the asset into its
+ * operating-expense account) but for a non-refundable unused remainder being
+ * expensed immediately on early cancellation/write-off, rather than ratably
+ * over the remaining term — a distinct eventType so the GL and reports can
+ * tell an accelerated write-off apart from ordinary monthly recognition.
+ */
+export function rulePrepaidExpenseWrittenOff(p: PrepaidExpenseAmortizedPayload): RuleResult {
+  return {
+    lines: [
+      line(p.expenseSystemKey as SystemKey, p.amountMinor, 0, "Prepaid expense written off"),
+      line(SYSTEM_KEYS.PREPAID_EXPENSES, 0, p.amountMinor, "Prepaid expense asset released (write-off)"),
+    ],
+    memo: "Prepaid expense unused balance written off",
     category: "SYSTEM",
   };
 }
@@ -998,6 +1108,14 @@ export interface FiCommissionRecognizedPayload {
   currency: string;
 }
 
+export interface PrepaidExpenseAmortizedPayload {
+  scheduleId: string;
+  amountMinor: number;
+  currency: string;
+  /** The operating-expense system key the released amount is booked to (e.g. RENT_EXPENSE). */
+  expenseSystemKey: string;
+}
+
 /**
  * Monthly ratable recognition of a resold warranty/GAP product's margin —
  * exact same shape as ruleDepreciationPosted (debit the liability being
@@ -1202,6 +1320,9 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "ASSET_CAPITALIZED": return ruleAssetCapitalized(payload as unknown as AssetCapitalizedPayload);
     case "DEPRECIATION_POSTED": return ruleDepreciationPosted(payload as unknown as DepreciationPostedPayload);
     case "FI_COMMISSION_RECOGNIZED": return ruleFiCommissionRecognized(payload as unknown as FiCommissionRecognizedPayload);
+    case "PREPAID_EXPENSE_AMORTIZED": return rulePrepaidExpenseAmortized(payload as unknown as PrepaidExpenseAmortizedPayload);
+    case "PREPAID_EXPENSE_REFUNDED": return rulePrepaidExpenseRefunded(payload as unknown as PrepaidExpenseRefundedPayload);
+    case "PREPAID_EXPENSE_WRITTEN_OFF": return rulePrepaidExpenseWrittenOff(payload as unknown as PrepaidExpenseAmortizedPayload);
     case "ASSET_IMPAIRED": return ruleAssetImpaired(payload as unknown as AssetImpairedPayload);
     case "ASSET_DISPOSED": return ruleAssetDisposed(payload as unknown as AssetDisposedPayload);
     case "CAPITAL_CONTRIBUTED": return ruleCapitalContributed(payload as unknown as PartnerEquityMovementPayload);

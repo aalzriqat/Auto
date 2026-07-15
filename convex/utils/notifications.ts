@@ -200,6 +200,48 @@ export async function notifyOwner(
 }
 
 /**
+ * Notifies every member holding MANAGE_FINANCE — the audience for financial
+ * governance events (a prepaid write-off needing approval, an amortization
+ * failure needing attention) that shouldn't route to the owner personally by
+ * default. That's the whole point of "founder independence": an org that has
+ * delegated finance shouldn't need the owner to be the one who notices.
+ * Falls back to notifyOwner when the org has no MANAGE_FINANCE holder at all
+ * (a fresh org, or one that hasn't delegated finance yet), so the event is
+ * never silently unrouted. isSystemOwnerRole is checked explicitly (not just
+ * a permissions-array lookup) so a legacy owner row missing this or a future
+ * permission in its stored array still always gets included — the same
+ * fallback the rest of the codebase relies on (see utils/permissions.ts).
+ */
+export async function notifyFinanceManagers(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  type: NotificationType,
+  data?: NotificationData,
+  opts?: DispatchOpts & { excludeUserId?: Id<"users"> }
+) {
+  const memberships = await ctx.db
+    .query("memberships")
+    .withIndex("by_org", (q) => q.eq("orgId", orgId))
+    .collect();
+
+  const notified = new Set<Id<"users">>();
+  for (const membership of memberships) {
+    if (opts?.excludeUserId && membership.userId === opts.excludeUserId) continue;
+    if (notified.has(membership.userId)) continue;
+    const role = await ctx.db.get(membership.roleId);
+    if (!role) continue;
+    if (isSystemOwnerRole(role) || role.permissions.includes(PERMISSIONS.MANAGE_FINANCE)) {
+      notified.add(membership.userId);
+      await dispatch(ctx, orgId, membership.userId, type, data, opts);
+    }
+  }
+
+  if (notified.size === 0) {
+    await notifyOwner(ctx, orgId, type, data, opts);
+  }
+}
+
+/**
  * Helper to get the name of the actor performing the action.
  */
 export async function getActorName(ctx: MutationCtx): Promise<string> {
