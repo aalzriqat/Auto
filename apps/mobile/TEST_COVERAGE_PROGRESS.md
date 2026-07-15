@@ -1,6 +1,6 @@
 # Mobile Test Coverage Progress
 
-Last updated: 2026-07-15 12:24:09 +03:00
+Last updated: 2026-07-15 17:34:32 +03:00
 
 ## Context
 
@@ -37,6 +37,7 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
 - Added locale provider tests for default locale, stored LTR locale, persistence failures, load failures, and provider enforcement.
 - Added Turnstile verification tests for missing config, base URL fallback, safe HTML generation, Arabic/English language rendering, token/expired/error messages, and WebView error handling.
 - Extracted tiny pressed-state style helpers in `+not-found.tsx`, `RouteState.tsx`, and `LocaleToggle.tsx` so React Native pressed-state branches can be tested directly without brittle renderer internals.
+- Started the mobile UI modernization pass by extending `src/theme.ts` with larger radius tokens, subtle slate shadows, Inter/Cairo font-family tokens, and locale-aware typography helpers.
 
 ## Validation Log
 
@@ -902,13 +903,65 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `pnpm mobile:test`: passed with 11 suites, 93 tests, and 100% statements/branches/functions/lines.
   - Pushed head `cfa2ed06` has all non-CodeRabbit GitHub checks green; CodeRabbit is still failing because of quota/rate-limit status.
   - `adb devices -l` still returns no connected devices.
+- 2026-07-15 12:25 +03: follow-up cleanup pushed and fresh production build started
+  - Committed and pushed `edd37919` (`Tighten mobile wizard validation`) to non-draft PR #70.
+  - PR #70 head is confirmed as `edd37919` and `isDraft=false`.
+  - Fresh GitHub checks are queued/running again; CodeRabbit is pending on the new non-draft head.
+  - Checked out short Android worktree `C:\h-ui` to exact commit `edd37919`.
+  - Started production Android build `pnpm mobile:android:production --skip-checks`; PID `11416`.
+  - Build log: `C:\h-ui\mobile-production-build-20260715-122504.log`.
+  - `adb devices -l` still returns no connected devices, so install remains blocked until USB debugging enumerates the phone again.
+- 2026-07-15 12:28 +03: CI/build watch heartbeat
+  - Production Android build from `edd37919` completed release JS bundling successfully: 1,896 modules bundled and 29 assets copied.
+  - Gradle is continuing through native release packaging.
+  - GitHub checks already green: CodeQL, Checkov, Convex backend, dealer-worker, dependency-audit, TestSprite E2E, GitGuardian, lint, OSV, Semgrep, SonarCloud, type-check, Vercel, Vercel Preview Comments, and ZAP baseline.
+  - Still running: Cypress, Playwright, Nuclei, and unit-and-integration.
+  - CodeRabbit remains quota/rate-limit red and still reports the next review window in the edited status comment.
+  - Active thread lookup returns no unresolved non-outdated inline review threads.
+  - `adb devices -l` still returns no connected devices.
+- 2026-07-15 12:29 +03: CI/build watch heartbeat
+  - Playwright and unit-and-integration are now green on head `edd37919`.
+  - Remaining non-CodeRabbit pending checks: Cypress and Nuclei.
+  - Production Android build is still running in native release packaging.
+  - ADB restart succeeded, but `adb devices -l` still returns no connected devices.
+  - Windows PnP still exposes the phone only as a generic `HID-compliant phone`, not an Android/ADB interface.
+- 2026-07-15 12:31 +03: non-CodeRabbit PR checks green
+  - All non-CodeRabbit PR checks are green on head `edd37919`, including Cypress, Playwright, Nuclei, unit-and-integration, SonarCloud, CodeQL, Vercel, security scans, lint, and type-check.
+  - CodeRabbit remains the only red context and is still quota/rate-limit related.
+  - Active thread lookup returns 0 unresolved non-outdated inline review threads.
+  - Production Android build from `edd37919` is still running.
+  - `adb devices -l` still returns no connected devices.
+- 2026-07-15 12:33 +03: production build ready, install still blocked by ADB visibility
+  - Production Android build from exact source commit `edd37919` completed successfully.
+  - Release APK: `C:\h-ui\apps\mobile\android\app\build\outputs\apk\release\app-release.apk`, size 104,286,686 bytes, SHA-256 prefix `159A3A9C1C2B`.
+  - Play-ready AAB: `C:\h-ui\apps\mobile\android\app\build\outputs\bundle\release\app-release.aab`, size 73,964,599 bytes, SHA-256 prefix `22CAE5B4C16E`.
+  - All non-CodeRabbit PR checks remain green on head `edd37919`.
+  - CodeRabbit remains quota/rate-limit red and still shows no active unresolved current inline threads.
+  - `adb devices -l` still returns no connected devices, so the release APK is ready but cannot be installed until the phone enumerates as an ADB device.
+- 2026-07-15 12:36 +03: manual CodeRabbit trigger completed
+  - Posted a manual `@coderabbitai review` trigger after the quota window appeared to open.
+  - CodeRabbit replied with "Review finished" at https://github.com/aalzriqat/Auto/pull/70#issuecomment-4979101418.
+  - Thread-aware lookup still returns 0 active unresolved non-outdated review threads.
+  - The CodeRabbit required status context still shows the earlier quota/rate-limit failure despite the successful manual reply.
+  - All other PR checks remain green.
+  - `adb devices -l` still returns no connected devices.
+- 2026-07-15 15:58 +03: production release installed on phone
+  - ADB enumerated phone `A99JBB5826170023` as `device` after restarting the local ADB daemon.
+  - Installed production release APK from head `edd37919`: `C:\h-ui\apps\mobile\android\app\build\outputs\apk\release\app-release.apk`.
+  - `adb install -r`: succeeded.
+  - Installed package: `com.autoflowdealer.mobile`, `versionName=0.1.0`, `versionCode=1`, `lastUpdateTime=2026-07-15 15:58:12`.
+  - Launched package with `adb shell monkey -p com.autoflowdealer.mobile 1`.
+  - Foreground check shows focused app `com.autoflowdealer.mobile/.MainActivity`; notification shade is currently the top focused window.
+- 2026-07-15 17:34 +03: mobile UI modernization Phase 1 validated locally
+  - Added radius, shadow, font-family, and typography tokens in `src/theme.ts` without changing the existing brand palette.
+  - Added `src/theme.test.ts` coverage for token shape and locale-aware font fallback behavior.
+  - `pnpm install`: passed; lockfile already up to date.
+  - `pnpm --filter @autoflow/mobile typecheck`: passed.
+  - `pnpm --filter @autoflow/mobile test`: passed with 12 suites, 95 tests, and 100% statements/branches/functions/lines.
 
 ## Next Steps
 
-1. Run `pnpm mobile:typecheck`, focused ESLint, `pnpm mobile:test`, and `git diff --check` for the current review-thread patch.
-2. Commit and push the remaining review-thread fixes to non-draft PR #70.
-3. Watch the fresh PR checks and CodeRabbit result after the push; resolve any fixed active review threads.
-4. Rebuild a production Android APK/AAB from the new pushed runtime commit.
-5. Install the fresh release APK when ADB lists device `A99JBB5826170023`.
-6. Continue module-level parity passes for dialogs, searchable choices, and guided workflows.
-7. Configure the mobile Turnstile public key if marketplace verification is part of the phone test.
+1. Commit Phase 1 UI tokens on top of `agent/mobile-ui-port`.
+2. Continue Phase 2 by installing/loading Inter and Cairo with splash-screen fallback handling.
+3. Continue Phase 3 by adding the Ionicons wrapper and replacing text-glyph navigation affordances.
+4. Continue the later UI phases with typecheck and 100% mobile Jest coverage before each commit.

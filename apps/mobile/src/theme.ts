@@ -1,3 +1,27 @@
+export type FontLocale = "en" | "ar";
+export type TypographyWeight = "regular" | "medium" | "semibold" | "bold";
+
+const fontFamilies = {
+  en: {
+    regular: "Inter_400Regular",
+    medium: "Inter_500Medium",
+    semibold: "Inter_600SemiBold",
+    bold: "Inter_700Bold",
+  },
+  ar: {
+    regular: "Cairo_400Regular",
+    medium: "Cairo_600SemiBold",
+    semibold: "Cairo_600SemiBold",
+    bold: "Cairo_700Bold",
+  },
+  system: {
+    regular: undefined,
+    medium: undefined,
+    semibold: undefined,
+    bold: undefined,
+  },
+} as const;
+
 export const theme = {
   colors: {
     background: "#f8fafc",
@@ -35,7 +59,108 @@ export const theme = {
     xxl: 32,
   },
   radius: {
-    sm: 6,
-    md: 8,
+    sm: 8,
+    md: 12,
+    lg: 16,
+    xl: 20,
+    full: 999,
+  },
+  shadows: {
+    sm: {
+      shadowColor: "#0f172a",
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.06,
+      shadowRadius: 8,
+      elevation: 2,
+    },
+    md: {
+      shadowColor: "#0f172a",
+      shadowOffset: { width: 0, height: 8 },
+      shadowOpacity: 0.08,
+      shadowRadius: 16,
+      elevation: 4,
+    },
+    lg: {
+      shadowColor: "#0f172a",
+      shadowOffset: { width: 0, height: 14 },
+      shadowOpacity: 0.12,
+      shadowRadius: 28,
+      elevation: 8,
+    },
+  },
+  fontFamilies,
+  typography: {
+    display: {
+      fontFamily: fontFamilies.en.bold,
+      fontSize: 28,
+      fontWeight: "700",
+      lineHeight: 34,
+    },
+    title: {
+      fontFamily: fontFamilies.en.bold,
+      fontSize: 22,
+      fontWeight: "700",
+      lineHeight: 28,
+    },
+    heading: {
+      fontFamily: fontFamilies.en.semibold,
+      fontSize: 17,
+      fontWeight: "600",
+      lineHeight: 24,
+    },
+    body: {
+      fontFamily: fontFamilies.en.regular,
+      fontSize: 15,
+      fontWeight: "400",
+      lineHeight: 22,
+    },
+    caption: {
+      fontFamily: fontFamilies.en.regular,
+      fontSize: 13,
+      fontWeight: "400",
+      lineHeight: 18,
+    },
+    label: {
+      fontFamily: fontFamilies.en.medium,
+      fontSize: 12,
+      fontWeight: "500",
+      letterSpacing: 0,
+      lineHeight: 16,
+      textTransform: "uppercase",
+    },
   },
 } as const;
+
+const typographyWeights = {
+  display: "bold",
+  title: "bold",
+  heading: "semibold",
+  body: "regular",
+  caption: "regular",
+  label: "medium",
+} as const satisfies Record<keyof typeof theme.typography, TypographyWeight>;
+
+export type TypographyVariant = keyof typeof theme.typography;
+
+export function getFontFamily(
+  locale: FontLocale,
+  weight: TypographyWeight,
+  fontsLoaded = true,
+): string | undefined {
+  if (!fontsLoaded) {
+    return theme.fontFamilies.system[weight];
+  }
+
+  return theme.fontFamilies[locale][weight];
+}
+
+export function getTypographyStyle(
+  variant: TypographyVariant,
+  locale: FontLocale,
+  fontsLoaded = true,
+) {
+  return {
+    ...theme.typography[variant],
+    fontFamily: getFontFamily(locale, typographyWeights[variant], fontsLoaded),
+  };
+}
