@@ -696,11 +696,53 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `pnpm mobile:test`: passed with 10 suites, 87 tests, and 100% statements/branches/functions/lines.
   - `git diff --check`: passed with line-ending normalization warnings only.
   - GitHub rerun for `unit-and-integration` on PR #70 passed; all non-CodeRabbit checks are green again on current pushed head `f3463220`.
+- 2026-07-15 10:48 +03: first-screen pass pushed and production build running
+  - Pushed commit `0f03ac39` (`Upgrade mobile home command shell`) to non-draft PR #70.
+  - Checked out short-path Android build worktree `C:\h-ui` to exact pushed commit `0f03ac39`.
+  - Started production Android build `pnpm mobile:android:production --skip-checks` in the background.
+  - Build log: `C:\h-ui\mobile-production-build-20260715-104649.log`.
+  - PR checks are running for the new head; early passes include Checkov, OSV, secret scan, dealer-worker, GitGuardian, and Vercel Preview Comments.
+  - CodeRabbit updated its PR comment with the quota/rate-limit notice for the latest head; thread-aware lookup still reports 0 active inline review threads.
+- 2026-07-15 10:50 +03: build/check watch
+  - Production build is still running and has advanced through React Native/Expo release module compilation, lint metadata generation, and native library packaging; no build failure has appeared.
+  - PR checks now passing include SonarCloud, type-check, lint, dependency-audit, Convex backend, dealer-worker, secret-scan, GitGuardian, Semgrep, Checkov, OSV, ZAP baseline, TestSprite E2E, Vercel, and CodeQL action/python/javascript contexts.
+  - Still running: unit-and-integration, Cypress, Playwright, and Nuclei.
+  - CodeRabbit remains the only external red status due to quota/rate limiting, with no active inline review threads found.
+- 2026-07-15 10:53 +03: PR checks green, production build still running
+  - All non-CodeRabbit PR checks for head `0f03ac39` are now green, including unit-and-integration, Cypress, Playwright, Nuclei, SonarCloud, CodeQL, Vercel, ZAP, TestSprite, Semgrep, Checkov, OSV, GitGuardian, and secret scanning.
+  - Thread-aware GitHub review lookup still reports 0 active unresolved inline threads; the only review thread returned is resolved and outdated.
+  - CodeRabbit is still blocked by its review quota/rate-limit status, not by an actionable code failure.
+  - Production Android build is still active in `C:\h-ui` and has progressed through release JS bundling, app manifest/resource processing, native release builds for Reanimated/Gesture Handler, and app native CMake work.
+  - Next action remains installing the `0f03ac39` release APK as soon as Gradle completes, then capturing a phone screenshot of the new command-shell home screen.
+- 2026-07-15 10:57 +03: production build complete, phone install blocked by ADB visibility
+  - Production Android build from exact source commit `0f03ac39` completed successfully in 8m 13s.
+  - Release APK: `C:\h-ui\apps\mobile\android\app\build\outputs\apk\release\app-release.apk`, size 104,247,582 bytes, SHA-256 `B34C595FF853F7DA9D41F7B02FFF9A080B8C91A34C120B4C2C825D7FED265492`.
+  - Play-ready AAB: `C:\h-ui\apps\mobile\android\app\build\outputs\bundle\release\app-release.aab`, size 73,943,022 bytes, SHA-256 `4432AB95EE8435242508FB57BC05C7E5695AA8C59C858FACB002C9D0DB5F2369`.
+  - `adb devices -l` is currently returning no devices even after restarting the ADB daemon and retrying six times.
+  - Windows PnP sees only a generic `HID-compliant phone`, not an ADB interface, so install is waiting for the phone/USB debugging connection to reappear.
+  - PR check state remains 26 passing contexts and 1 external CodeRabbit quota/rate-limit failure.
+- 2026-07-15 11:02 +03: vehicle intake parity pass underway
+  - Added `src/features/workspace/mobileVinDecode.ts` and `mobileVinDecode.test.ts` to bring the web vehicle dialog's VIN intelligence into native inventory intake.
+  - Native vehicle form now has a guided intake flow with VIN normalization/decoding, trim support, decoded make/model/year/fuel auto-fill, searchable make/color/fuel/transmission choices, and a review step before save.
+  - The helper safely handles unknown NHTSA response shapes, bad VIN characters, checksum warnings, fallback model years, WMI manufacturer cleanup, and fuel mapping without trusting frontend data as backend truth.
+  - Added the VIN helper to the Jest coverage gate.
+  - `pnpm mobile:typecheck`: passed.
+  - First coverage rerun exposed missing helper branches; expanded tests rather than lowering thresholds.
+  - `pnpm mobile:test`: passed with 11 suites, 92 tests, and 100% statements/branches/functions/lines.
+  - ADB device watch still returns no devices, so the next production install is blocked until USB debugging appears again.
+- 2026-07-15 11:04 +03: vehicle intake guard and validation complete
+  - Ran clean-code/test guard review on the vehicle intake pass; split the VIN decode screen handler into smaller message/fetch/decode helpers before committing.
+  - `pnpm mobile:typecheck`: passed after the refactor.
+  - `pnpm mobile:test`: passed with 11 suites, 92 tests, and 100% statements/branches/functions/lines after the refactor.
+  - `git diff --check`: passed with line-ending normalization warnings only.
+  - PR #70 still has 26 passing checks and the same external CodeRabbit quota/rate-limit failure on the previously pushed head; new vehicle pass is ready to commit/push.
+  - `adb devices -l` still returns no devices.
 
 ## Next Steps
 
-1. Commit and push the first-screen command shell upgrade to PR #70.
-2. Build and install the updated production release APK on the phone.
-3. Continue module-level parity passes for dialogs, searchable choices, and guided workflows.
-4. Re-run CodeRabbit after the quota window resets or enable usage-based reviews.
-5. Configure the mobile Turnstile public key if marketplace verification is part of the phone test.
+1. Reconnect/wake the phone so ADB lists device `A99JBB5826170023`, then rebuild/install the latest release APK and capture a screenshot.
+2. Commit and push the vehicle intake parity pass once final validation is complete.
+3. Watch PR checks for the new head and inspect any failures or review threads.
+4. Continue module-level parity passes for dialogs, searchable choices, and guided workflows.
+5. Re-run CodeRabbit after the quota window resets or enable usage-based reviews.
+6. Configure the mobile Turnstile public key if marketplace verification is part of the phone test.

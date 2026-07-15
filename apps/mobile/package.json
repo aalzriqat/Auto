@@ -54,6 +54,7 @@
       "src/features/marketplace/marketplaceFingerprint.ts",
       "src/features/marketplace/TurnstileVerification.tsx",
       "src/features/marketplace/marketplaceUtils.ts",
+      "src/features/workspace/mobileVinDecode.ts",
       "src/providers/LocaleProvider.tsx",
       "src/navigation/*.ts",
       "src/theme.ts",

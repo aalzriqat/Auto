@@ -87,6 +87,15 @@ import {
 import { useLocale } from "../../providers/LocaleProvider";
 import { theme } from "../../theme";
 import {
+  getFirstNhtsaResult,
+  getFirstNhtsaWmiName,
+  getMobileVinReadiness,
+  mapNhtsaVinPayload,
+  normalizeVinInput,
+  type MobileVinDecodedFields,
+  type MobileVinReadiness,
+} from "./mobileVinDecode";
+import {
   canAccessNativeModule,
   compactInitials,
   getNativeModule,
@@ -105,6 +114,7 @@ type Option<T extends string> = {
 };
 
 type SelectableOption = SearchableSelectOption;
+type AppLocale = "en" | "ar";
 
 type FormFieldProps = {
   keyboardType?: "default" | "email-address" | "numeric" | "phone-pad";
@@ -114,6 +124,51 @@ type FormFieldProps = {
   placeholder?: string;
   value: string;
 };
+
+function vinNotReadyMessage(readiness: MobileVinReadiness, locale: AppLocale): string | null {
+  if (readiness === "invalid-characters") {
+    return locale === "ar" ? "رقم الشاصي لا يمكن أن يحتوي I أو O أو Q." : "VIN cannot contain I, O, or Q.";
+  }
+
+  if (readiness === "empty" || readiness === "incomplete") {
+    return locale === "ar" ? "أدخل رقم شاصي كامل من 17 خانة." : "Enter a complete 17-character VIN.";
+  }
+
+  return null;
+}
+
+function vinChecksumWarningMessage(locale: AppLocale): string {
+  return locale === "ar"
+    ? "تحذير: رقم الشاصي لا يطابق رقم التحقق، سنحاول فكّه كمعلومة إرشادية."
+    : "Warning: VIN checksum did not match, decoding as advisory data.";
+}
+
+function vinDecodeResultMessage(decoded: MobileVinDecodedFields, locale: AppLocale): string {
+  if (decoded.make || decoded.model || decoded.year) {
+    return locale === "ar" ? "تمت تعبئة بيانات السيارة من رقم الشاصي." : "Vehicle details filled from VIN.";
+  }
+
+  return locale === "ar"
+    ? "لم نجد بيانات كافية لهذا الرقم، أكمل الحقول يدوياً."
+    : "No usable VIN data found, complete the fields manually.";
+}
+
+async function fetchDecodedMobileVin(vin: string): Promise<MobileVinDecodedFields> {
+  const vinResponse = await fetch(
+    `https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/${encodeURIComponent(vin)}?format=json`,
+  );
+  const wmiResponse = await fetch(
+    `https://vpic.nhtsa.dot.gov/api/vehicles/DecodeWMI/${encodeURIComponent(vin.slice(0, 3))}?format=json`,
+  );
+  const vinPayload: unknown = await vinResponse.json();
+  const wmiPayload: unknown = await wmiResponse.json();
+
+  return mapNhtsaVinPayload({
+    vin,
+    vinValues: getFirstNhtsaResult(vinPayload),
+    wmiName: getFirstNhtsaWmiName(wmiPayload),
+  });
+}
 
 function firstAvailableOrg(orgs: Array<MobileOrgSummary | null> | undefined): MobileOrgSummary[] {
   return (orgs ?? []).filter((org): org is MobileOrgSummary => org !== null);
@@ -970,11 +1025,15 @@ function VehiclesModule({ orgId }: { orgId: string }) {
   const [editing, setEditing] = useState<MobileVehicle | null>(null);
   const [detailVehicle, setDetailVehicle] = useState<MobileVehicle | null>(null);
   const [open, setOpen] = useState(false);
+  const [vehicleStep, setVehicleStep] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [decodingVin, setDecodingVin] = useState(false);
+  const [vinDecodeMessage, setVinDecodeMessage] = useState<string | null>(null);
   const [form, setForm] = useState({
     vin: "",
     make: "",
     model: "",
+    trim: "",
     year: "",
     mileage: "",
     color: "",
@@ -1008,13 +1067,39 @@ function VehiclesModule({ orgId }: { orgId: string }) {
   const fuelTypeOptions = getFuelTypeOptions(locale);
   const transmissionOptions = getTransmissionOptions(locale);
   const customValueLabel = locale === "ar" ? 'استخدام "{value}"' : 'Use "{value}"';
+  const vehicleSteps: GuidedStep[] = [
+    {
+      title: locale === "ar" ? "تعريف السيارة" : "Identify vehicle",
+      subtitle: locale === "ar" ? "افحص رقم الشاصي واملأ بيانات السيارة تلقائياً." : "Decode the VIN and auto-fill core vehicle details.",
+    },
+    {
+      title: locale === "ar" ? "المواصفات والسعر" : "Specs and pricing",
+      subtitle: locale === "ar" ? "أكمل اللون، القير، السعر، والحالة." : "Complete color, transmission, pricing, and status.",
+    },
+    {
+      title: locale === "ar" ? "المراجعة" : "Review",
+      subtitle: locale === "ar" ? "راجع البطاقة قبل إضافتها للمخزون." : "Check the inventory card before saving.",
+    },
+  ];
+  const vehicleVinReadiness = getMobileVinReadiness(form.vin);
+  const selectedVehicleStatusLabel = getOptionLabel(
+    statusOptions.filter((option) => option.value !== "ALL").map((option) => ({
+      label: option.label,
+      value: option.value,
+    })),
+    form.status,
+    form.status,
+  );
 
   function openCreate() {
     setEditing(null);
+    setVehicleStep(0);
+    setVinDecodeMessage(null);
     setForm({
       vin: "",
       make: "",
       model: "",
+      trim: "",
       year: "",
       mileage: "",
       color: "",
@@ -1031,10 +1116,13 @@ function VehiclesModule({ orgId }: { orgId: string }) {
   function openEdit(vehicle: MobileVehicle) {
     setEditing(vehicle);
     setDetailVehicle(null);
+    setVehicleStep(0);
+    setVinDecodeMessage(null);
     setForm({
       vin: vehicle.vin,
       make: vehicle.make,
       model: vehicle.model,
+      trim: vehicle.trim ?? "",
       year: String(vehicle.year),
       mileage: String(vehicle.mileage),
       color: vehicle.color,
@@ -1051,6 +1139,47 @@ function VehiclesModule({ orgId }: { orgId: string }) {
   function closeVehicleForm() {
     setOpen(false);
     setEditing(null);
+    setVehicleStep(0);
+    setVinDecodeMessage(null);
+  }
+
+  async function decodeVehicleVin() {
+    const vin = normalizeVinInput(form.vin);
+    const readiness = getMobileVinReadiness(vin);
+    const readinessMessage = vinNotReadyMessage(readiness, locale);
+    setForm((prev) => ({ ...prev, vin }));
+
+    if (readinessMessage) {
+      setVinDecodeMessage(readinessMessage);
+      Alert.alert(locale === "ar" ? "رقم الشاصي غير جاهز" : "VIN is not ready", readinessMessage);
+      return;
+    }
+
+    setDecodingVin(true);
+    setVinDecodeMessage(
+      readiness === "checksum-warning"
+        ? vinChecksumWarningMessage(locale)
+        : null,
+    );
+
+    try {
+      const decoded = await fetchDecodedMobileVin(vin);
+      setForm((prev) => ({
+        ...prev,
+        vin: decoded.vin,
+        make: decoded.make ?? prev.make,
+        model: decoded.model ?? prev.model,
+        trim: decoded.trim ?? prev.trim,
+        year: decoded.year ? String(decoded.year) : prev.year,
+        fuelType: decoded.fuelType ?? prev.fuelType,
+      }));
+      setVinDecodeMessage(vinDecodeResultMessage(decoded, locale));
+    } catch (error) {
+      reportError("Mobile VIN decode failed", error);
+      setVinDecodeMessage(locale === "ar" ? "تعذر فك رقم الشاصي الآن." : "Could not decode VIN right now.");
+    } finally {
+      setDecodingVin(false);
+    }
   }
 
   async function save() {
@@ -1072,6 +1201,7 @@ function VehiclesModule({ orgId }: { orgId: string }) {
         vin: maybeText(form.vin),
         make: form.make,
         model: form.model,
+        trim: maybeText(form.trim),
         year,
         mileage,
         color: form.color || "-",
@@ -1174,24 +1304,86 @@ function VehiclesModule({ orgId }: { orgId: string }) {
       }) : <EmptyList label={locale === "ar" ? "لا توجد سيارات." : "No vehicles found."} />}
       <LoadMoreFooter loadMore={loadMore} status={status} />
       <FormModal title={editing ? (locale === "ar" ? "تعديل سيارة" : "Edit vehicle") : (locale === "ar" ? "سيارة جديدة" : "New vehicle")} visible={open} onClose={closeVehicleForm}>
-        <FormField label="VIN" value={form.vin} onChangeText={(vin) => setForm((prev) => ({ ...prev, vin }))} />
-        <SelectField allowCustomValue customValueLabel={customValueLabel} label={locale === "ar" ? "الماركة" : "Make"} value={form.make} options={vehicleMakeOptions} onChange={(make) => setForm((prev) => ({ ...prev, make }))} />
-        <FormField label={locale === "ar" ? "الموديل" : "Model"} value={form.model} onChangeText={(model) => setForm((prev) => ({ ...prev, model }))} />
-        <FormField keyboardType="numeric" label={locale === "ar" ? "السنة" : "Year"} value={form.year} onChangeText={(year) => setForm((prev) => ({ ...prev, year }))} />
-        <FormField keyboardType="numeric" label={locale === "ar" ? "الممشى" : "Mileage"} value={form.mileage} onChangeText={(mileage) => setForm((prev) => ({ ...prev, mileage }))} />
-        <SelectField allowCustomValue customValueLabel={customValueLabel} label={locale === "ar" ? "اللون" : "Color"} value={form.color} options={vehicleColorOptions} onChange={(color) => setForm((prev) => ({ ...prev, color }))} />
-        <SelectField allowCustomValue customValueLabel={customValueLabel} label={locale === "ar" ? "الوقود" : "Fuel"} value={form.fuelType} options={fuelTypeOptions} onChange={(fuelType) => setForm((prev) => ({ ...prev, fuelType }))} />
-        <SelectField allowCustomValue customValueLabel={customValueLabel} label={locale === "ar" ? "القير" : "Transmission"} value={form.transmission} options={transmissionOptions} onChange={(transmission) => setForm((prev) => ({ ...prev, transmission }))} />
-        <FormField keyboardType="numeric" label={locale === "ar" ? "سعر الشراء" : "Purchase price"} value={form.purchasePrice} onChangeText={(purchasePrice) => setForm((prev) => ({ ...prev, purchasePrice }))} />
-        <FormField keyboardType="numeric" label={locale === "ar" ? "سعر البيع" : "Selling price"} value={form.sellingPrice} onChangeText={(sellingPrice) => setForm((prev) => ({ ...prev, sellingPrice }))} />
-        <SelectField
-          label={locale === "ar" ? "الحالة" : "Status"}
-          value={form.status}
-          onChange={(value) => setForm((prev) => ({ ...prev, status: value as MobileVehicleStatus }))}
-          options={statusOptions.filter((option) => option.value !== "ALL").map((option) => ({ label: option.label, value: option.value }))}
-        />
-        <FormField multiline label={locale === "ar" ? "ملاحظات" : "Notes"} value={form.notes} onChangeText={(notes) => setForm((prev) => ({ ...prev, notes }))} />
-        <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ" : "Save")} onPress={save} />
+        <GuidedStepFlow activeIndex={vehicleStep} steps={vehicleSteps}>
+          {vehicleStep === 0 ? (
+            <>
+              <View style={styles.inlineActionGroup}>
+                <View style={styles.inlineActionField}>
+                  <FormField
+                    label="VIN"
+                    value={form.vin}
+                    onChangeText={(vin) => {
+                      setVinDecodeMessage(null);
+                      setForm((prev) => ({ ...prev, vin: normalizeVinInput(vin) }));
+                    }}
+                  />
+                </View>
+                <PrimaryButton
+                  disabled={decodingVin}
+                  label={decodingVin ? (locale === "ar" ? "جاري الفحص..." : "Decoding...") : (locale === "ar" ? "فك الرقم" : "Decode VIN")}
+                  tone="muted"
+                  onPress={decodeVehicleVin}
+                />
+              </View>
+              {vehicleVinReadiness === "checksum-warning" ? (
+                <Text style={styles.warningText}>
+                  {locale === "ar"
+                    ? "رقم التحقق لا يطابق هذا الشاصي، لكنه قد يكون صحيحاً لبعض الأسواق."
+                    : "Checksum does not match; this can still be valid for some markets."}
+                </Text>
+              ) : null}
+              {vinDecodeMessage ? <Text style={styles.recordMeta}>{vinDecodeMessage}</Text> : null}
+              <SelectField allowCustomValue customValueLabel={customValueLabel} label={locale === "ar" ? "الماركة" : "Make"} value={form.make} options={vehicleMakeOptions} onChange={(make) => setForm((prev) => ({ ...prev, make }))} />
+              <FormField label={locale === "ar" ? "الموديل" : "Model"} value={form.model} onChangeText={(model) => setForm((prev) => ({ ...prev, model }))} />
+              <FormField label={locale === "ar" ? "الفئة" : "Trim"} value={form.trim} onChangeText={(trim) => setForm((prev) => ({ ...prev, trim }))} />
+              <FormField keyboardType="numeric" label={locale === "ar" ? "السنة" : "Year"} value={form.year} onChangeText={(year) => setForm((prev) => ({ ...prev, year }))} />
+            </>
+          ) : null}
+          {vehicleStep === 1 ? (
+            <>
+              <FormField keyboardType="numeric" label={locale === "ar" ? "الممشى" : "Mileage"} value={form.mileage} onChangeText={(mileage) => setForm((prev) => ({ ...prev, mileage }))} />
+              <SelectField allowCustomValue customValueLabel={customValueLabel} label={locale === "ar" ? "اللون" : "Color"} value={form.color} options={vehicleColorOptions} onChange={(color) => setForm((prev) => ({ ...prev, color }))} />
+              <SelectField allowCustomValue customValueLabel={customValueLabel} label={locale === "ar" ? "الوقود" : "Fuel"} value={form.fuelType} options={fuelTypeOptions} onChange={(fuelType) => setForm((prev) => ({ ...prev, fuelType }))} />
+              <SelectField allowCustomValue customValueLabel={customValueLabel} label={locale === "ar" ? "القير" : "Transmission"} value={form.transmission} options={transmissionOptions} onChange={(transmission) => setForm((prev) => ({ ...prev, transmission }))} />
+              <FormField keyboardType="numeric" label={locale === "ar" ? "سعر الشراء" : "Purchase price"} value={form.purchasePrice} onChangeText={(purchasePrice) => setForm((prev) => ({ ...prev, purchasePrice }))} />
+              <FormField keyboardType="numeric" label={locale === "ar" ? "سعر البيع" : "Selling price"} value={form.sellingPrice} onChangeText={(sellingPrice) => setForm((prev) => ({ ...prev, sellingPrice }))} />
+              <SelectField
+                label={locale === "ar" ? "الحالة" : "Status"}
+                value={form.status}
+                onChange={(value) => setForm((prev) => ({ ...prev, status: value as MobileVehicleStatus }))}
+                options={statusOptions.filter((option) => option.value !== "ALL").map((option) => ({ label: option.label, value: option.value }))}
+              />
+            </>
+          ) : null}
+          {vehicleStep === 2 ? (
+            <>
+              <FormField multiline label={locale === "ar" ? "ملاحظات" : "Notes"} value={form.notes} onChangeText={(notes) => setForm((prev) => ({ ...prev, notes }))} />
+              <SummaryPanel
+                title={locale === "ar" ? "بطاقة المخزون" : "Inventory card"}
+                subtitle={locale === "ar" ? "هذه هي البيانات التي ستظهر في المخزون." : "These details will be saved into inventory."}
+              >
+                <SummaryRow label={locale === "ar" ? "السيارة" : "Vehicle"} value={`${form.year || "-"} ${form.make || "-"} ${form.model || "-"}`} />
+                <SummaryRow label={locale === "ar" ? "الفئة" : "Trim"} value={form.trim || "-"} />
+                <SummaryRow label="VIN" value={form.vin || "-"} />
+                <SummaryRow label={locale === "ar" ? "المواصفات" : "Specs"} value={`${form.color || "-"} · ${form.fuelType || "-"} · ${form.transmission || "-"}`} />
+                <SummaryRow label={locale === "ar" ? "الممشى" : "Mileage"} value={form.mileage ? `${form.mileage} km` : "-"} />
+                <SummaryRow label={locale === "ar" ? "سعر البيع" : "Selling price"} value={money(parseOptionalNumber(form.sellingPrice), locale)} />
+                <SummaryRow label={locale === "ar" ? "الحالة" : "Status"} value={selectedVehicleStatusLabel} />
+              </SummaryPanel>
+            </>
+          ) : null}
+          <WizardActions
+            activeStep={vehicleStep}
+            backLabel={locale === "ar" ? "السابق" : "Back"}
+            nextLabel={locale === "ar" ? "التالي" : "Next"}
+            saveLabel={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ السيارة" : "Save vehicle")}
+            saving={saving}
+            totalSteps={vehicleSteps.length}
+            onBack={() => setVehicleStep((step) => Math.max(0, step - 1))}
+            onNext={() => setVehicleStep((step) => Math.min(vehicleSteps.length - 1, step + 1))}
+            onSave={save}
+          />
+        </GuidedStepFlow>
       </FormModal>
       <FormModal
         title={detailVehicle ? `${detailVehicle.year} ${detailVehicle.make} ${detailVehicle.model}` : ""}
@@ -5135,6 +5327,15 @@ const styles = StyleSheet.create({
     color: theme.colors.accent,
     fontSize: 13,
     fontWeight: "800",
+  },
+  inlineActionGroup: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    gap: theme.spacing.sm,
+  },
+  inlineActionField: {
+    flex: 1,
+    minWidth: 0,
   },
   formField: {
     gap: theme.spacing.xs,
