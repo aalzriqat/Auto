@@ -1,6 +1,6 @@
 # Mobile Test Coverage Progress
 
-Last updated: 2026-07-15 17:34:32 +03:00
+Last updated: 2026-07-15 17:41:48 +03:00
 
 ## Context
 
@@ -38,6 +38,7 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
 - Added Turnstile verification tests for missing config, base URL fallback, safe HTML generation, Arabic/English language rendering, token/expired/error messages, and WebView error handling.
 - Extracted tiny pressed-state style helpers in `+not-found.tsx`, `RouteState.tsx`, and `LocaleToggle.tsx` so React Native pressed-state branches can be tested directly without brittle renderer internals.
 - Started the mobile UI modernization pass by extending `src/theme.ts` with larger radius tokens, subtle slate shadows, Inter/Cairo font-family tokens, and locale-aware typography helpers.
+- Added the Inter/Cairo runtime font dependencies and splash-screen-protected loading in `AppProviders`, with a system-font fallback path if font loading fails.
 
 ## Validation Log
 
@@ -958,10 +959,17 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `pnpm install`: passed; lockfile already up to date.
   - `pnpm --filter @autoflow/mobile typecheck`: passed.
   - `pnpm --filter @autoflow/mobile test`: passed with 12 suites, 95 tests, and 100% statements/branches/functions/lines.
+- 2026-07-15 17:41 +03: mobile UI modernization Phase 2 validated locally
+  - Added `expo-font`, `@expo-google-fonts/inter`, and `@expo-google-fonts/cairo` to the mobile package.
+  - Loaded Inter and Cairo in `AppProviders` behind `expo-splash-screen`; font-load failures log with `console.error` and render using system fonts.
+  - Added `src/providers/AppProviders.test.tsx` for successful font loading and system-font fallback behavior.
+  - `pnpm install`: passed; lockfile already up to date.
+  - `pnpm --filter @autoflow/mobile typecheck`: passed.
+  - `pnpm --filter @autoflow/mobile test`: passed with 13 suites, 97 tests, and 100% statements/branches/functions/lines.
+  - `JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'; .\gradlew.bat help` from `apps/mobile/android`: passed; existing Gradle verification metadata did not need regeneration.
 
 ## Next Steps
 
-1. Commit Phase 1 UI tokens on top of `agent/mobile-ui-port`.
-2. Continue Phase 2 by installing/loading Inter and Cairo with splash-screen fallback handling.
-3. Continue Phase 3 by adding the Ionicons wrapper and replacing text-glyph navigation affordances.
-4. Continue the later UI phases with typecheck and 100% mobile Jest coverage before each commit.
+1. Commit Phase 2 font loading on top of `agent/mobile-ui-port`.
+2. Continue Phase 3 by adding the Ionicons wrapper and replacing text-glyph navigation affordances.
+3. Continue the later UI phases with typecheck and 100% mobile Jest coverage before each commit.
