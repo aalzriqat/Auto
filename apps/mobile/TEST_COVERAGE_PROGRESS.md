@@ -643,11 +643,30 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - Verified package `com.autoflowdealer.mobile` reports `versionName=0.1.0`, `versionCode=1`, `lastUpdateTime=2026-07-15 10:15:43`.
   - Relaunched the app, confirmed `mCurrentFocus` is `com.autoflowdealer.mobile/com.autoflowdealer.mobile.MainActivity`, and captured visible screenshot `C:\h-ui\phone-sales-inventory-parity-release.png`.
   - Production build log still reports the Turnstile public site key as missing; marketplace verification flows may remain limited until configured.
+- 2026-07-15 10:19 +03: PR checks after install heartbeat
+  - Pushed docs heartbeat commit `dafb9526`; PR #70 remains open, mergeable, and not draft.
+  - Passing so far: SonarCloud, lint, type-check, dependency-audit, secret-scan, dealer-worker, Convex backend, Semgrep, Checkov, OSV, GitGuardian, TestSprite E2E, and CodeQL actions/python/javascript analysis.
+  - Still pending: Cypress, Playwright, unit-and-integration, Nuclei, ZAP baseline, and Vercel.
+  - CodeRabbit remains red because the latest review is quota/rate limited; thread-aware lookup still shows 0 active inline review threads.
+- 2026-07-15 10:22 +03: PR checks almost settled
+  - Additional checks now passing: unit-and-integration, ZAP baseline, Vercel, and Playwright.
+  - Remaining pending checks: Cypress and Nuclei.
+  - CodeRabbit remains the only red status, still due to quota/rate limiting rather than an actionable inline thread.
+- 2026-07-15 10:24 +03: PR check watch settled
+  - All non-CodeRabbit checks are passing on head `dafb9526`: Vercel, SonarCloud, lint, type-check, dependency-audit, unit-and-integration, Convex backend, dealer-worker, secret-scan, GitGuardian, Semgrep, CodeQL, Checkov, OSV, TestSprite E2E, Cypress, Playwright, Nuclei, and ZAP baseline.
+  - CodeRabbit remains the only failing status; the latest CodeRabbit comment is the quota/rate-limit notice and says the next review window is later.
+  - Final thread-aware review lookup reports 1 total review thread and 0 active threads; the only thread is the previous resolved/outdated Semgrep false positive.
+  - This final check-watch heartbeat is intentionally local-only for now to avoid retriggering CI with a documentation-only push.
+- 2026-07-15 10:27 +03: CRM parity pass validated locally
+  - Upgraded customer cards with profile avatars, contact chips, contact-readiness metrics, and a customer detail bottom sheet.
+  - Reworked lead capture into a guided three-step flow with customer/vehicle linking, qualification, and review.
+  - Upgraded lead cards with pipeline metrics, owner/source/vehicle chips, and a lead detail bottom sheet.
+  - `pnpm mobile:typecheck`: passed.
+  - `pnpm mobile:test`: passed with 9 suites, 83 tests, and 100% statements/branches/functions/lines.
 
 ## Next Steps
 
-1. Push the install/progress heartbeat and watch the fresh PR checks/comments/inline comments/failures.
+1. Build and install the CRM parity release APK on the phone.
 2. Continue on-device UI testing against the installed production build and record any screens that still feel behind the PWA.
-3. Continue the next parity pass on marketplace cards, lead/customer detail flows, and deeper mobile dialogs.
+3. Re-run CodeRabbit after the quota window resets or enable usage-based reviews.
 4. Configure the mobile Turnstile public key if marketplace verification is part of the phone test.
-5. Re-run CodeRabbit after the quota window resets or enable usage-based reviews.
