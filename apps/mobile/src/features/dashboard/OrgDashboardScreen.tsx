@@ -3,8 +3,19 @@ import { useAuth } from "@clerk/expo";
 import { UserButton } from "@clerk/expo/native";
 import { useConvexAuth, useQuery } from "convex/react";
 import { useRouter } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { StatusBar } from "expo-status-bar";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  Animated,
+  Easing,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+  type StyleProp,
+  type ViewStyle,
+} from "react-native";
 
 import {
   api,
@@ -81,6 +92,22 @@ function plainNumber(value: number, locale: "en" | "ar"): string {
   }
 }
 
+type QuickActionTone = "success" | "warning" | "info" | "indigo";
+
+const quickActionToneSoft: Record<QuickActionTone, "successSoft" | "warningSoft" | "infoSoft" | "indigoSoft"> = {
+  success: "successSoft",
+  warning: "warningSoft",
+  info: "infoSoft",
+  indigo: "indigoSoft",
+};
+
+const quickActionToneFg: Record<QuickActionTone, QuickActionTone> = {
+  success: "success",
+  warning: "warning",
+  info: "info",
+  indigo: "indigo",
+};
+
 function getDataQualityTotal(dataQuality: MobileDataQualityStats): number {
   return (
     dataQuality.customersMissingPhone +
@@ -109,6 +136,69 @@ function getGreeting(locale: string, hour: number): string {
   return locale === "ar" ? "مساء الخير" : "Good evening";
 }
 
+function FadeSlideIn({
+  children,
+  delay = 0,
+  style,
+}: {
+  children: ReactNode;
+  delay?: number;
+  style?: StyleProp<ViewStyle>;
+}) {
+  const progress = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const animation = Animated.timing(progress, {
+      toValue: 1,
+      duration: 420,
+      delay,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: true,
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [delay, progress]);
+
+  return (
+    <Animated.View
+      style={[
+        style,
+        {
+          opacity: progress,
+          transform: [{ translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) }],
+        },
+      ]}
+    >
+      {children}
+    </Animated.View>
+  );
+}
+
+function useCountUp(target: number, duration = 700): number {
+  const [display, setDisplay] = useState(0);
+  const progress = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    progress.setValue(0);
+    const listenerId = progress.addListener(({ value }) => {
+      setDisplay(Math.round(value * target));
+    });
+    const animation = Animated.timing(progress, {
+      toValue: 1,
+      duration,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false,
+    });
+    animation.start();
+    return () => {
+      animation.stop();
+      progress.removeListener(listenerId);
+    };
+  }, [target, duration, progress]);
+
+  return display;
+}
+
 function Header({ org }: { org: MobileOrgSummary }) {
   const router = useRouter();
   const { locale, t, textDirection } = useLocale();
@@ -116,26 +206,32 @@ function Header({ org }: { org: MobileOrgSummary }) {
   const greeting = getGreeting(locale, new Date().getHours());
 
   return (
-    <View style={[styles.header, { direction: textDirection }]}>
-      <Pressable
-        accessibilityLabel={t("back")}
-        accessibilityRole="button"
-        style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
-        onPress={() => router.replace(nativeRoutes.home)}
-      >
-        <Icon color="text" name="back" size={20} />
-      </Pressable>
-      <View style={styles.headerText}>
-        <Text numberOfLines={1} style={[styles.orgName, type.title]}>
+    <View style={styles.heroBand}>
+      <StatusBar style="light" />
+      <View style={[styles.header, { direction: textDirection }]}>
+        <Pressable
+          accessibilityLabel={t("back")}
+          accessibilityRole="button"
+          style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
+          onPress={() => router.replace(nativeRoutes.home)}
+        >
+          <Icon color="text" name="back" size={20} />
+        </Pressable>
+        <View style={styles.headerActions}>
+          <LocaleToggle />
+          <UserButton />
+        </View>
+      </View>
+      <View style={[styles.headerText, { direction: textDirection }]}>
+        <Text numberOfLines={1} style={[type.display, styles.greetingText]}>
           {greeting}
         </Text>
-        <Text numberOfLines={1} style={[styles.roleText, type.caption]}>
-          {org.name || t("untitledWorkspace")}
-        </Text>
-      </View>
-      <View style={styles.headerActions}>
-        <LocaleToggle />
-        <UserButton />
+        <View style={styles.orgPill}>
+          <Icon color="onPrimary" name="dashboard" size={13} />
+          <Text numberOfLines={1} style={[type.label, styles.orgPillText]}>
+            {org.name || t("untitledWorkspace")}
+          </Text>
+        </View>
       </View>
     </View>
   );
@@ -191,18 +287,33 @@ function SalesHero({
   const latestTrend = stats.salesTrend.at(-1);
   const trendPoints = stats.salesTrend.length > 0 ? stats.salesTrend.slice(-8) : [{ name: "0", Revenue: 0 }];
   const maxTrendRevenue = Math.max(...trendPoints.map((point) => point.Revenue), 1);
+  const animatedRevenue = useCountUp(stats.salesVolumeThisMonth);
+  const animatedSoldCount = useCountUp(stats.salesThisMonth);
+  const barProgress = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    barProgress.setValue(0);
+    const animation = Animated.timing(barProgress, {
+      toValue: 1,
+      duration: 650,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false,
+    });
+    animation.start();
+    return () => animation.stop();
+  }, [barProgress, timeRange, trendPoints.length]);
 
   return (
     <Card style={[styles.salesHero, { direction: textDirection }]}>
       <View style={styles.heroTopRow}>
         <View style={styles.heroTitleGroup}>
           <Text style={[styles.heroEyebrow, type.label]}>{t("salesOverview")}</Text>
-          <Text style={[styles.heroTitle, type.display]}>{compactNumber(stats.salesVolumeThisMonth, locale)}</Text>
+          <Text style={[styles.heroTitle, type.display]}>{compactNumber(animatedRevenue, locale)}</Text>
           <Text style={[styles.heroSubtitle, type.caption]}>{t("revenue")}</Text>
         </View>
         <View style={styles.soldPill}>
           <Icon color="primaryDark" name="sales" size={18} />
-          <Text style={[styles.soldValue, type.title]}>{plainNumber(stats.salesThisMonth, locale)}</Text>
+          <Text style={[styles.soldValue, type.title]}>{plainNumber(animatedSoldCount, locale)}</Text>
           <Text style={[styles.soldLabel, type.caption]}>{t("vehiclesSold")}</Text>
         </View>
       </View>
@@ -213,7 +324,12 @@ function SalesHero({
         <View style={styles.trendLine}>
           {trendPoints.map((point, index) => {
             const height = getTrendBarHeight(point.Revenue, maxTrendRevenue);
-            return <View key={`${point.name}-${index}`} style={[styles.trendBar, { height }]} />;
+            return (
+              <Animated.View
+                key={`${point.name}-${index}`}
+                style={[styles.trendBar, { height: Animated.multiply(barProgress, height) }]}
+              />
+            );
           })}
         </View>
         <Text style={[styles.trendCaption, type.caption]}>
@@ -352,26 +468,31 @@ function QuickActionRail({
       icon: "vehicles",
       label: t("inventory"),
       moduleId: "vehicles",
+      tone: "success",
     },
     {
       icon: "leads",
       label: t("leads"),
       moduleId: "leads",
+      tone: "warning",
     },
     {
       icon: "messages",
       label: t("messages"),
       moduleId: "messages",
+      tone: "info",
     },
     {
       icon: isOwner ? "settings" : "team",
       label: t("settings"),
       moduleId: isOwner ? "settings" : "team",
+      tone: "indigo",
     },
   ] as const satisfies ReadonlyArray<{
     icon: SemanticIconName;
     label: string;
     moduleId: string;
+    tone: QuickActionTone;
   }>;
 
   return (
@@ -388,7 +509,9 @@ function QuickActionRail({
             })
           }
         >
-          <Icon color="primary" name={action.icon} size={18} />
+          <View style={[styles.quickRailIconShell, { backgroundColor: theme.colors[quickActionToneSoft[action.tone]] }]}>
+            <Icon color={quickActionToneFg[action.tone]} name={action.icon} size={20} />
+          </View>
           <Text numberOfLines={1} style={[styles.quickRailText, type.label]}>
             {action.label}
           </Text>
@@ -418,10 +541,16 @@ function DashboardContent({
   const type = useDashboardTypography();
 
   return (
-    <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+    <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContentFull}>
       <Header org={org} />
-      <TodayAgenda orgId={org._id} myMembership={myMembership} />
-      <QuickActionRail orgId={org._id} roleName={myMembership.roleName} />
+      <View style={styles.contentBody}>
+      <FadeSlideIn delay={0}>
+        <TodayAgenda orgId={org._id} myMembership={myMembership} />
+      </FadeSlideIn>
+      <FadeSlideIn delay={70}>
+        <QuickActionRail orgId={org._id} roleName={myMembership.roleName} />
+      </FadeSlideIn>
+      <FadeSlideIn delay={140}>
       <Card
         accessibilityLabel={t("dealerMarketplace")}
         onPress={() =>
@@ -441,6 +570,8 @@ function DashboardContent({
         </View>
         <Icon color="primary" name="chevronForward" size={22} />
       </Card>
+      </FadeSlideIn>
+      <FadeSlideIn delay={210} style={styles.performanceSection}>
       <Text style={[styles.performanceEyebrow, type.label]}>{t("performanceUpper")}</Text>
       <SalesHero stats={stats} timeRange={timeRange} onChangeTimeRange={onChangeTimeRange} />
 
@@ -482,6 +613,8 @@ function DashboardContent({
         roleName={myMembership.roleName}
       />
       <TeamPanel stats={stats} />
+      </FadeSlideIn>
+      </View>
     </ScrollView>
   );
 }
@@ -491,18 +624,20 @@ function DashboardSkeleton({ org }: { org: MobileOrgSummary }) {
   const type = useDashboardTypography();
 
   return (
-    <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+    <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContentFull}>
       <Header org={org} />
-      <Card style={[styles.skeletonPanel, { direction: textDirection }]}>
-        <Text style={[styles.panelTitle, type.label]}>{t("dashboardLoading")}</Text>
-        <SkeletonRow count={2} />
-      </Card>
-      <View style={styles.metricGrid}>
-        <SkeletonRow count={4} />
+      <View style={styles.contentBody}>
+        <Card style={[styles.skeletonPanel, { direction: textDirection }]}>
+          <Text style={[styles.panelTitle, type.label]}>{t("dashboardLoading")}</Text>
+          <SkeletonRow count={2} />
+        </Card>
+        <View style={styles.metricGrid}>
+          <SkeletonRow count={4} />
+        </View>
+        <Card style={styles.skeletonPanel}>
+          <SkeletonRow count={3} />
+        </Card>
       </View>
-      <Card style={styles.skeletonPanel}>
-        <SkeletonRow count={3} />
-      </Card>
     </ScrollView>
   );
 }
@@ -624,14 +759,29 @@ const styles = StyleSheet.create({
   scroll: {
     flex: 1,
   },
-  scrollContent: {
+  scrollContentFull: {
+    paddingBottom: theme.spacing.xxl,
+  },
+  contentBody: {
     gap: theme.spacing.lg,
     padding: theme.spacing.lg,
-    paddingBottom: theme.spacing.xxl,
+  },
+  performanceSection: {
+    gap: theme.spacing.lg,
+  },
+  heroBand: {
+    gap: theme.spacing.xl,
+    backgroundColor: theme.colors.hero,
+    paddingHorizontal: theme.spacing.lg,
+    paddingBottom: theme.spacing.xl,
+    borderBottomLeftRadius: theme.radius.xl,
+    borderBottomRightRadius: theme.radius.xl,
+    ...theme.shadows.md,
   },
   header: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
     gap: theme.spacing.md,
   },
   backButton: {
@@ -643,30 +793,30 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.surfaceAlt,
   },
   headerText: {
-    flex: 1,
-    minWidth: 0,
+    gap: theme.spacing.sm,
   },
   headerActions: {
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing.sm,
   },
-  brand: {
-    color: theme.colors.primary,
-    fontSize: 12,
-    fontWeight: "600",
+  greetingText: {
+    color: theme.colors.onPrimary,
+  },
+  orgPill: {
+    alignSelf: "flex-start",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.xs,
+    borderRadius: theme.radius.full,
+    backgroundColor: "rgba(255,255,255,0.16)",
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.xs,
+  },
+  orgPillText: {
+    color: theme.colors.onPrimary,
+    textTransform: "none",
     letterSpacing: 0,
-    textTransform: "uppercase",
-  },
-  orgName: {
-    color: theme.colors.text,
-    fontSize: 24,
-    fontWeight: "600",
-    lineHeight: 30,
-  },
-  roleText: {
-    color: theme.colors.mutedText,
-    fontSize: 13,
   },
   quickRail: {
     flexDirection: "row",
@@ -674,16 +824,21 @@ const styles = StyleSheet.create({
   },
   quickRailItem: {
     flex: 1,
-    minHeight: 42,
+    minHeight: 76,
     alignItems: "center",
     justifyContent: "center",
     gap: theme.spacing.xs,
     borderRadius: theme.radius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
-    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: theme.spacing.sm,
     ...theme.shadows.sm,
+  },
+  quickRailIconShell: {
+    width: 40,
+    height: 40,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.radius.md,
   },
   quickRailText: {
     color: theme.colors.text,

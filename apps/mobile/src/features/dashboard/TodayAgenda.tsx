@@ -11,6 +11,14 @@ import { theme } from "../../theme";
 
 const AGENDA_TASK_PAGE_SIZE = 25;
 
+type AgendaTone = "warning" | "indigo" | "info";
+
+const rowToneSoft: Record<AgendaTone, string> = {
+  warning: theme.colors.warningSoft,
+  indigo: theme.colors.indigoSoft,
+  info: theme.colors.infoSoft,
+};
+
 function getTodayBounds(): { todayStart: number; todayEnd: number } {
   const start = new Date();
   start.setHours(0, 0, 0, 0);
@@ -22,6 +30,7 @@ function getTodayBounds(): { todayStart: number; todayEnd: number } {
 type AgendaRow = Readonly<{
   key: string;
   icon: SemanticIconName;
+  tone: AgendaTone;
   text: string;
   onPress: () => void;
 }>;
@@ -57,7 +66,8 @@ export function TodayAgenda({
   if (overdueCount > 0) {
     rows.push({
       key: "tasks-overdue",
-      icon: "tasks",
+      icon: "tasksFilled",
+      tone: "warning",
       text: `${overdueCount} ${t("todayAgendaOverdueTasks")}`,
       onPress: () =>
         router.push({ pathname: nativeRoutes.orgModule, params: { orgId, moduleId: "tasks" } }),
@@ -65,7 +75,8 @@ export function TodayAgenda({
   } else if (dueTodayCount > 0) {
     rows.push({
       key: "tasks-due-today",
-      icon: "tasks",
+      icon: "tasksFilled",
+      tone: "warning",
       text: `${dueTodayCount} ${t("todayAgendaDueTodayTasks")}`,
       onPress: () =>
         router.push({ pathname: nativeRoutes.orgModule, params: { orgId, moduleId: "tasks" } }),
@@ -74,7 +85,8 @@ export function TodayAgenda({
   if (approvalsCount > 0) {
     rows.push({
       key: "approvals",
-      icon: "approvals",
+      icon: "approvalsFilled",
+      tone: "indigo",
       text: `${approvalsCount} ${t("todayAgendaApprovalsWaiting")}`,
       onPress: () =>
         router.push({ pathname: nativeRoutes.orgModule, params: { orgId, moduleId: "approvals" } }),
@@ -83,7 +95,8 @@ export function TodayAgenda({
   if ((unreadCount ?? 0) > 0) {
     rows.push({
       key: "notifications",
-      icon: "notifications",
+      icon: "notificationsFilled",
+      tone: "info",
       text: `${unreadCount} ${t("todayAgendaUnreadNotifications")}`,
       onPress: () =>
         router.push({ pathname: nativeRoutes.orgFinance, params: { orgId, segment: "alerts" } }),
@@ -112,8 +125,8 @@ export function TodayAgenda({
               ]}
               onPress={row.onPress}
             >
-              <View style={styles.rowIconShell}>
-                <Icon color="primary" name={row.icon} size={16} />
+              <View style={[styles.rowIconShell, { backgroundColor: rowToneSoft[row.tone] }]}>
+                <Icon color={row.tone} name={row.icon} size={17} />
               </View>
               <Text numberOfLines={1} style={styles.rowText}>
                 {row.text}
@@ -125,7 +138,7 @@ export function TodayAgenda({
       ) : (
         <View style={[styles.caughtUp, { direction: textDirection }]}>
           <View style={styles.caughtUpIconShell}>
-            <Icon color="success" name="check" size={18} />
+            <Icon color="onPrimary" name="check" size={18} />
           </View>
           <View style={styles.caughtUpText}>
             <Text style={styles.caughtUpTitle}>{t("todayAgendaAllCaughtUpTitle")}</Text>
@@ -165,7 +178,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderRadius: theme.radius.sm,
-    backgroundColor: theme.colors.primarySoft,
   },
   rowText: {
     flex: 1,
@@ -178,14 +190,15 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: theme.spacing.md,
     padding: theme.spacing.md,
+    backgroundColor: theme.colors.successSoft,
   },
   caughtUpIconShell: {
-    width: 36,
-    height: 36,
+    width: 40,
+    height: 40,
     alignItems: "center",
     justifyContent: "center",
     borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.successSoft,
+    backgroundColor: theme.colors.success,
   },
   caughtUpText: {
     flex: 1,
