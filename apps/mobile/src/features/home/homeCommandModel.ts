@@ -1,4 +1,5 @@
 import type { MobileOrgSummary } from "../../convexApi";
+import { canAccessNativeModule, getNativeModule } from "../workspace/nativeModules";
 
 export type HomeLocale = "en" | "ar";
 
@@ -170,4 +171,26 @@ export function getHomeWorkflowActions(locale: HomeLocale): HomeWorkflowAction[]
       tone: definition.tone,
     };
   });
+}
+
+export function canOpenHomeWorkflowAction(
+  action: HomeWorkflowAction,
+  org: MobileOrgSummary | null,
+): boolean {
+  if (action.target === "marketplace") return true;
+  if (!org) return true;
+  if (action.target === "dashboard") return true;
+  if (!action.moduleId) return false;
+
+  const moduleDefinition = getNativeModule(action.moduleId);
+  return moduleDefinition
+    ? canAccessNativeModule(moduleDefinition, org.permissions, org.roleName)
+    : false;
+}
+
+export function getVisibleHomeWorkflowActions(
+  actions: readonly HomeWorkflowAction[],
+  org: MobileOrgSummary | null,
+): HomeWorkflowAction[] {
+  return actions.filter((action) => canOpenHomeWorkflowAction(action, org));
 }

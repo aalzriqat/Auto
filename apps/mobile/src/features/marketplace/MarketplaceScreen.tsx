@@ -26,7 +26,6 @@ import { FormField } from "../../components/FormField";
 import { RouteLoadingState } from "../../components/RouteState";
 import { SearchableSelectField } from "../../components/SearchableSelectField";
 import { Screen } from "../../components/Screen";
-import { getJordanCityOptions, getVehicleMakeOptions } from "../../data/mobileOptions";
 import { useLocale } from "../../providers/LocaleProvider";
 import { theme } from "../../theme";
 import {
@@ -44,6 +43,7 @@ import {
   parseOptionalPositiveNumber,
   trimOrUndefined,
 } from "./marketplaceUtils";
+import { getMarketplaceSelectOptions } from "./marketplaceSelectOptions";
 
 type BuyerTab = "cars" | "request" | "tradein" | "dealers" | "status";
 
@@ -185,36 +185,32 @@ function SearchPanel({
   onReset: () => void;
 }>) {
   const { locale, t, textDirection } = useLocale();
-  const closeLabel = locale === "ar" ? "إغلاق" : "Close";
-  const customValueLabel = locale === "ar" ? 'استخدام "{value}"' : 'Use "{value}"';
-  const emptyLabel = locale === "ar" ? "لا توجد نتائج." : "No results found.";
-  const makeOptions = getVehicleMakeOptions();
-  const cityOptions = getJordanCityOptions(locale);
+  const selectOptions = getMarketplaceSelectOptions(locale);
 
   return (
     <View style={[styles.searchPanel, { direction: textDirection }]}>
       <View style={styles.formGrid}>
         <SearchableSelectField
           allowCustomValue
-          closeLabel={closeLabel}
-          customValueLabel={customValueLabel}
-          emptyLabel={emptyLabel}
+          closeLabel={selectOptions.closeLabel}
+          customValueLabel={selectOptions.customValueLabel}
+          emptyLabel={selectOptions.emptyLabel}
           label={t("marketplaceMake")}
-          options={makeOptions}
-          placeholder={locale === "ar" ? "كل الماركات" : "Any make"}
-          searchPlaceholder={locale === "ar" ? "بحث الماركات" : "Search makes"}
+          options={selectOptions.makeOptions}
+          placeholder={selectOptions.makeAnyPlaceholder}
+          searchPlaceholder={selectOptions.makeSearchPlaceholder}
           value={fields.make}
           onChange={(make) => setFields({ ...fields, make })}
         />
         <SearchableSelectField
           allowCustomValue
-          closeLabel={closeLabel}
-          customValueLabel={customValueLabel}
-          emptyLabel={emptyLabel}
+          closeLabel={selectOptions.closeLabel}
+          customValueLabel={selectOptions.customValueLabel}
+          emptyLabel={selectOptions.emptyLabel}
           label={t("marketplaceCity")}
-          options={cityOptions}
-          placeholder={locale === "ar" ? "كل المدن" : "Any city"}
-          searchPlaceholder={locale === "ar" ? "بحث المدن" : "Search cities"}
+          options={selectOptions.cityOptions}
+          placeholder={selectOptions.cityAnyPlaceholder}
+          searchPlaceholder={selectOptions.citySearchPlaceholder}
           value={fields.city}
           onChange={(city) => setFields({ ...fields, city })}
         />

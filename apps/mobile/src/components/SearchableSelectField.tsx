@@ -163,8 +163,8 @@ export function SearchableSelectField({
         <View style={[styles.chevron, open && styles.chevronOpen]} />
       </Pressable>
 
-      {open ? (
-        <Modal animationType="slide" transparent visible onRequestClose={closeSheet}>
+      <Modal animationType="slide" transparent visible={open} onRequestClose={closeSheet}>
+        {open ? (
           <View style={styles.modalRoot}>
             <View style={[styles.sheet, { direction: textDirection }]}>
               <View style={styles.sheetHeader}>
@@ -218,8 +218,8 @@ export function SearchableSelectField({
               </ScrollView>
             </View>
           </View>
-        </Modal>
-      ) : null}
+        ) : null}
+      </Modal>
     </View>
   );
 }

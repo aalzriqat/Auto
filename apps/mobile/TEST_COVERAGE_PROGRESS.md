@@ -1,6 +1,6 @@
 # Mobile Test Coverage Progress
 
-Last updated: 2026-07-15 12:00:00 +03:00
+Last updated: 2026-07-15 12:16:09 +03:00
 
 ## Context
 
@@ -853,12 +853,37 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `pnpm mobile:test`: passed with 11 suites, 92 tests, and 100% statements/branches/functions/lines.
   - Previous pushed head `0a276ecc` has all GitHub Actions/Vercel/SonarCloud checks green; CodeRabbit is currently rate-limited and the local fixes are ready for commit/push.
   - `adb devices -l` still returns no connected devices, so the production APK install remains blocked by USB debugging enumeration.
+- 2026-07-15 12:02 +03: parity pass pushed and production build started
+  - Committed and pushed `4584e7a9` (`Advance mobile finance and website UI`) to non-draft PR #70.
+  - PR #70 head is confirmed as `4584e7a9b85eba7173bfa34002eab77d72eb95da` and `isDraft=false`.
+  - Fresh PR checks are running for the new head; CodeRabbit is pending again after the push.
+  - Checked out short Android worktree `C:\h-ui` to exact commit `4584e7a9b85eba7173bfa34002eab77d72eb95da`.
+  - Started production Android build `pnpm mobile:android:production --skip-checks`; PID `2224`.
+  - Build log: `C:\h-ui\mobile-production-build-20260715-120229.log`.
+  - `adb devices -l` still returns no connected devices, so install remains blocked until USB debugging enumerates the phone again.
+- 2026-07-15 12:14 +03: remaining active review-thread fixes in progress
+  - Production build from `4584e7a9` completed successfully, but it is now obsolete because new runtime fixes are being applied.
+  - Added mobile org-summary permissions from `organizations.listMine` so the native home command surface can reuse the same permission model as `WorkspaceModuleLauncher`.
+  - Patched the native home command sheet to hide inaccessible module shortcuts for the selected workspace, keep marketplace available, guard direct navigation, add a named dismiss button, and make the sheet body scroll under a fixed header.
+  - Patched `GuidedStepFlow` progress accessibility metadata and kept `SearchableSelectField` mounted while toggling `visible` so close animations can play.
+  - Extracted marketplace select labels/placeholders and make/city option builders into a shared helper used by buyer request, trade-in, and marketplace search forms.
+  - Added home command model tests for permission-filtered shortcuts and defensive malformed-action branches to preserve the 100% mobile coverage gate.
+  - `adb devices -l` still returns no connected devices, so install remains blocked until the phone enumerates over USB.
+- 2026-07-15 12:16 +03: remaining review-thread fixes validated locally
+  - `pnpm typecheck:convex`: passed after adding permissions to `organizations.listMine`.
+  - `pnpm mobile:typecheck`: passed.
+  - Focused ESLint on edited mobile/Convex files: passed.
+  - `pnpm mobile:test`: passed with 11 suites, 93 tests, and 100% statements/branches/functions/lines.
+  - `git diff --check`: passed with line-ending normalization warnings only.
+  - Previous pushed PR head `4584e7a9` has all listed GitHub checks green except CodeRabbit, whose active review threads this local patch is addressing.
+  - `adb devices -l` still returns no connected devices.
 
 ## Next Steps
 
-1. Commit and push the finance/website parity pass plus review-thread fixes to non-draft PR #70.
-2. Watch the fresh PR checks and CodeRabbit result after the push; resolve any remaining active review threads.
-3. Rebuild a production Android APK/AAB from the pushed runtime commit.
-4. Install the fresh release APK when ADB lists device `A99JBB5826170023`.
-5. Continue module-level parity passes for dialogs, searchable choices, and guided workflows.
-6. Configure the mobile Turnstile public key if marketplace verification is part of the phone test.
+1. Run `pnpm mobile:typecheck`, focused ESLint, `pnpm mobile:test`, and `git diff --check` for the current review-thread patch.
+2. Commit and push the remaining review-thread fixes to non-draft PR #70.
+3. Watch the fresh PR checks and CodeRabbit result after the push; resolve any fixed active review threads.
+4. Rebuild a production Android APK/AAB from the new pushed runtime commit.
+5. Install the fresh release APK when ADB lists device `A99JBB5826170023`.
+6. Continue module-level parity passes for dialogs, searchable choices, and guided workflows.
+7. Configure the mobile Turnstile public key if marketplace verification is part of the phone test.

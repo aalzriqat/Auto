@@ -103,6 +103,7 @@ export interface MobileOrgSummary {
   createdAt: number;
   roleName: string;
   membershipId: string;
+  permissions: string[];
 }
 
 export type MobileDashboardTimeRange = "DAY" | "MONTH" | "YEAR" | "ALL_TIME";

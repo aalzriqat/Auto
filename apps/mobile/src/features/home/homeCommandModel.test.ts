@@ -2,10 +2,13 @@
 
 import type { MobileOrgSummary } from "../../convexApi";
 import {
+  canOpenHomeWorkflowAction,
   filterWorkspaces,
   getHomeWorkflowActions,
   getPrimaryWorkspace,
   getSafeWorkspaces,
+  getVisibleHomeWorkflowActions,
+  type HomeWorkflowAction,
   workspaceInitials,
   workspaceSearchText,
 } from "./homeCommandModel";
@@ -17,6 +20,7 @@ function org(overrides: Partial<MobileOrgSummary>): MobileOrgSummary {
     membershipId: "membership-default",
     name: "Bloom Cars",
     roleName: "OWNER",
+    permissions: ["view:vehicles", "view:leads", "view:sales"],
     ...overrides,
   };
 }
@@ -68,5 +72,24 @@ describe("home command model", () => {
     expect(englishActions.find((action) => action.target === "sales")?.moduleId).toBe("sales");
     expect(arabicActions.find((action) => action.target === "marketplace")?.title).toBe("تصفح السوق");
     expect(arabicActions.every((action) => action.title.length > 0 && action.subtitle.length > 0)).toBe(true);
+  });
+
+  test("filters workflow actions by selected workspace permissions", () => {
+    const actions = getHomeWorkflowActions("en");
+    const sales = org({
+      roleName: "SALES",
+      permissions: ["view:vehicles", "view:sales"],
+    });
+    const visibleTargets = getVisibleHomeWorkflowActions(actions, sales).map((action) => action.target);
+
+    expect(visibleTargets).toEqual(["dashboard", "vehicles", "sales", "messages", "marketplace"]);
+    expect(canOpenHomeWorkflowAction(actions.find((action) => action.target === "leads")!, sales)).toBe(false);
+    expect(canOpenHomeWorkflowAction(actions.find((action) => action.target === "marketplace")!, null)).toBe(true);
+    expect(getVisibleHomeWorkflowActions(actions, null)).toHaveLength(actions.length);
+
+    const missingModule = { ...actions[1], moduleId: undefined };
+    const unknownModule = { ...actions[1], moduleId: "unknown" } as unknown as HomeWorkflowAction;
+    expect(canOpenHomeWorkflowAction(missingModule, sales)).toBe(false);
+    expect(canOpenHomeWorkflowAction(unknownModule, sales)).toBe(false);
   });
 });

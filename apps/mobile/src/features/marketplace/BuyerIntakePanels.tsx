@@ -22,10 +22,10 @@ import { GuidedStepFlow, type GuidedStep } from "../../components/GuidedStepFlow
 import { RouteLoadingState } from "../../components/RouteState";
 import { SearchableSelectField } from "../../components/SearchableSelectField";
 import { getMobileEnv } from "../../config/env";
-import { getJordanCityOptions, getVehicleMakeOptions } from "../../data/mobileOptions";
 import { useLocale } from "../../providers/LocaleProvider";
 import { theme } from "../../theme";
 import { getMarketplaceClientFingerprint } from "./marketplaceFingerprint";
+import { getMarketplaceSelectOptions } from "./marketplaceSelectOptions";
 import {
   formatNumber,
   parseOptionalWholeNumber,
@@ -300,9 +300,7 @@ export function BuyerRequestPanel() {
   const [submittedRequest, setSubmittedRequest] = useState<{ requestId: string; matchedCount: number } | null>(null);
   const [activeStep, setActiveStep] = useState(0);
   const turnstileSiteKey = getTurnstileSiteKey();
-  const closeLabel = locale === "ar" ? "إغلاق" : "Close";
-  const customValueLabel = locale === "ar" ? 'استخدام "{value}"' : 'Use "{value}"';
-  const emptyLabel = locale === "ar" ? "لا توجد نتائج." : "No results found.";
+  const selectOptions = getMarketplaceSelectOptions(locale);
   const requestSteps: GuidedStep[] = [
     {
       title: locale === "ar" ? "بيانات المشتري" : "Buyer details",
@@ -321,9 +319,6 @@ export function BuyerRequestPanel() {
       subtitle: locale === "ar" ? "أكد الموافقة ثم أرسل الطلب." : "Confirm consent, verify, and send.",
     },
   ];
-  const cityOptions = getJordanCityOptions(locale);
-  const makeOptions = getVehicleMakeOptions();
-
   function setField<TKey extends keyof RequestFields>(key: TKey, value: RequestFields[TKey]) {
     setFields((current) => ({ ...current, [key]: value }));
   }
@@ -438,13 +433,13 @@ export function BuyerRequestPanel() {
             />
             <SearchableSelectField
               allowCustomValue
-              closeLabel={closeLabel}
-              customValueLabel={customValueLabel}
-              emptyLabel={emptyLabel}
+              closeLabel={selectOptions.closeLabel}
+              customValueLabel={selectOptions.customValueLabel}
+              emptyLabel={selectOptions.emptyLabel}
               label={t("marketplaceCity")}
-              options={cityOptions}
-              placeholder={locale === "ar" ? "اختر المدينة" : "Choose city"}
-              searchPlaceholder={locale === "ar" ? "بحث المدن" : "Search cities"}
+              options={selectOptions.cityOptions}
+              placeholder={selectOptions.cityPlaceholder}
+              searchPlaceholder={selectOptions.citySearchPlaceholder}
               value={fields.buyerCity}
               onChange={(value) => setField("buyerCity", value)}
             />
@@ -454,13 +449,13 @@ export function BuyerRequestPanel() {
           <View style={styles.formGrid}>
             <SearchableSelectField
               allowCustomValue
-              closeLabel={closeLabel}
-              customValueLabel={customValueLabel}
-              emptyLabel={emptyLabel}
+              closeLabel={selectOptions.closeLabel}
+              customValueLabel={selectOptions.customValueLabel}
+              emptyLabel={selectOptions.emptyLabel}
               label={t("marketplaceMake")}
-              options={makeOptions}
-              placeholder={locale === "ar" ? "اختر الماركة" : "Choose make"}
-              searchPlaceholder={locale === "ar" ? "بحث الماركات" : "Search makes"}
+              options={selectOptions.makeOptions}
+              placeholder={selectOptions.makePlaceholder}
+              searchPlaceholder={selectOptions.makeSearchPlaceholder}
               value={fields.make}
               onChange={(value) => setField("make", value)}
             />
@@ -624,10 +619,7 @@ export function TradeInRequestPanel({
   const [submittedTradeIn, setSubmittedTradeIn] = useState<{ tradeInRequestId: string } | null>(null);
   const [activeStep, setActiveStep] = useState(0);
   const turnstileSiteKey = getTurnstileSiteKey();
-  const closeLabel = locale === "ar" ? "إغلاق" : "Close";
-  const customValueLabel = locale === "ar" ? 'استخدام "{value}"' : 'Use "{value}"';
-  const emptyLabel = locale === "ar" ? "لا توجد نتائج." : "No results found.";
-  const makeOptions = getVehicleMakeOptions();
+  const selectOptions = getMarketplaceSelectOptions(locale);
   const tradeInSteps: GuidedStep[] = [
     {
       title: locale === "ar" ? "بيانات المالك" : "Owner details",
@@ -774,13 +766,13 @@ export function TradeInRequestPanel({
               <View style={styles.formGrid}>
                 <SearchableSelectField
                   allowCustomValue
-                  closeLabel={closeLabel}
-                  customValueLabel={customValueLabel}
-                  emptyLabel={emptyLabel}
+                  closeLabel={selectOptions.closeLabel}
+                  customValueLabel={selectOptions.customValueLabel}
+                  emptyLabel={selectOptions.emptyLabel}
                   label={t("marketplaceCurrentMake")}
-                  options={makeOptions}
-                  placeholder={locale === "ar" ? "اختر الماركة" : "Choose make"}
-                  searchPlaceholder={locale === "ar" ? "بحث الماركات" : "Search makes"}
+                  options={selectOptions.makeOptions}
+                  placeholder={selectOptions.makePlaceholder}
+                  searchPlaceholder={selectOptions.makeSearchPlaceholder}
                   value={fields.currentMake}
                   onChange={(value) => setField("currentMake", value)}
                 />

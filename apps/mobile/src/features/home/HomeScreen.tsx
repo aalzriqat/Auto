@@ -13,10 +13,12 @@ import { Screen } from "../../components/Screen";
 import { useLocale } from "../../providers/LocaleProvider";
 import { theme } from "../../theme";
 import {
+  canOpenHomeWorkflowAction,
   filterWorkspaces,
   getHomeWorkflowActions,
   getPrimaryWorkspace,
   getSafeWorkspaces,
+  getVisibleHomeWorkflowActions,
   workspaceInitials,
   type HomeWorkflowAction,
   type HomeWorkflowTarget,
@@ -192,11 +194,20 @@ function WorkspaceCommandSheet({
   const { locale, textDirection } = useLocale();
   const actions = useMemo(() => getHomeWorkflowActions(locale), [locale]);
   const selectedOrg = orgs.find((org) => org._id === selectedOrgId) ?? orgs[0] ?? null;
+  const visibleActions = useMemo(
+    () => getVisibleHomeWorkflowActions(actions, selectedOrg),
+    [actions, selectedOrg],
+  );
 
   return (
     <Modal animationType="slide" transparent visible={visible} onRequestClose={onClose}>
       <View style={styles.sheetBackdrop}>
-        <Pressable accessibilityRole="button" style={styles.sheetDismissArea} onPress={onClose} />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={locale === "ar" ? "إغلاق قائمة الأوامر" : "Close command sheet"}
+          style={styles.sheetDismissArea}
+          onPress={onClose}
+        />
         <View style={[styles.commandSheet, { direction: textDirection }]}>
           <View style={styles.sheetGrabber} />
           <View style={styles.sheetHeader}>
@@ -219,42 +230,49 @@ function WorkspaceCommandSheet({
             </Pressable>
           </View>
 
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.sheetOrgRail}>
-            {orgs.map((org) => {
-              const selected = org._id === selectedOrg?._id;
-              return (
-                <Pressable
-                  key={org._id}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected }}
-                  style={({ pressed }) => [
-                    styles.sheetOrgChip,
-                    selected && styles.sheetOrgChipSelected,
-                    pressed && styles.cardPressed,
-                  ]}
-                  onPress={() => onSelectOrg(org._id)}
-                >
-                  <Text style={[styles.sheetOrgText, selected && styles.sheetOrgTextSelected]}>
-                    {org.name || "Untitled workspace"}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+            style={styles.sheetBodyScroll}
+            contentContainerStyle={styles.sheetBodyContent}
+          >
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.sheetOrgRail}>
+              {orgs.map((org) => {
+                const selected = org._id === selectedOrg?._id;
+                return (
+                  <Pressable
+                    key={org._id}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                    style={({ pressed }) => [
+                      styles.sheetOrgChip,
+                      selected && styles.sheetOrgChipSelected,
+                      pressed && styles.cardPressed,
+                    ]}
+                    onPress={() => onSelectOrg(org._id)}
+                  >
+                    <Text style={[styles.sheetOrgText, selected && styles.sheetOrgTextSelected]}>
+                      {org.name || "Untitled workspace"}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
 
-          <View style={styles.sheetActionGrid}>
-            {actions.map((action) => (
-              <WorkflowActionCard
-                key={action.target}
-                action={action}
-                disabled={!selectedOrg && action.target !== "marketplace"}
-                onPress={() => {
-                  onOpenWorkflow(action.target, selectedOrg);
-                  onClose();
-                }}
-              />
-            ))}
-          </View>
+            <View style={styles.sheetActionGrid}>
+              {visibleActions.map((action) => (
+                <WorkflowActionCard
+                  key={action.target}
+                  action={action}
+                  disabled={!selectedOrg && action.target !== "marketplace"}
+                  onPress={() => {
+                    onOpenWorkflow(action.target, selectedOrg);
+                    onClose();
+                  }}
+                />
+              ))}
+            </View>
+          </ScrollView>
         </View>
       </View>
     </Modal>
@@ -290,6 +308,7 @@ function AuthenticatedHome() {
 
   const primaryOrg = getPrimaryWorkspace(filteredOrgs, safeOrgs);
   const canOpenWorkspace = Boolean(primaryOrg);
+  const visibleWorkflowActions = getVisibleHomeWorkflowActions(workflowActions, primaryOrg);
   const openCommandSheet = (org: MobileOrgSummary | null = primaryOrg) => {
     setCommandSheetOrgId(org?._id ?? null);
     setCommandSheetOpen(true);
@@ -301,6 +320,8 @@ function AuthenticatedHome() {
     }
 
     if (!org) return;
+    const action = workflowActions.find((item) => item.target === target);
+    if (action && !canOpenHomeWorkflowAction(action, org)) return;
 
     if (target === "dashboard") {
       router.push({
@@ -361,7 +382,7 @@ function AuthenticatedHome() {
               <Text style={styles.cockpitMetricLabel}>{locale === "ar" ? "مطابقة" : "matched"}</Text>
             </View>
             <View style={styles.cockpitMetric}>
-              <Text style={styles.cockpitMetricValue}>{workflowActions.length}</Text>
+              <Text style={styles.cockpitMetricValue}>{visibleWorkflowActions.length}</Text>
               <Text style={styles.cockpitMetricLabel}>{locale === "ar" ? "أوامر" : "workflows"}</Text>
             </View>
             <View style={styles.cockpitMetric}>
@@ -440,7 +461,7 @@ function AuthenticatedHome() {
           </View>
 
           <View style={styles.workflowGrid}>
-            {workflowActions.slice(0, 4).map((action) => (
+            {visibleWorkflowActions.slice(0, 4).map((action) => (
               <WorkflowActionCard
                 key={action.target}
                 action={action}
@@ -1252,6 +1273,13 @@ const styles = StyleSheet.create({
   },
   sheetOrgRail: {
     gap: theme.spacing.sm,
+  },
+  sheetBodyScroll: {
+    flexShrink: 1,
+  },
+  sheetBodyContent: {
+    gap: theme.spacing.md,
+    paddingBottom: theme.spacing.sm,
   },
   sheetOrgChip: {
     minHeight: 40,

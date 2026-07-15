@@ -41,7 +41,16 @@ export function GuidedStepFlow({
             <Text style={styles.title}>{activeStep.title}</Text>
             {activeStep.subtitle ? <Text style={styles.subtitle}>{activeStep.subtitle}</Text> : null}
           </View>
-          <View style={styles.rail} accessibilityRole="progressbar">
+          <View
+            accessibilityRole="progressbar"
+            accessibilityValue={{
+              min: 1,
+              max: steps.length,
+              now: safeIndex + 1,
+              text: progressLabel,
+            }}
+            style={styles.rail}
+          >
             {steps.map((step, index) => {
               const selected = index === safeIndex;
               const completed = index < safeIndex;
