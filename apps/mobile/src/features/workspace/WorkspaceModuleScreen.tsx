@@ -65,6 +65,7 @@ import {
   type MobileQuoteStatus,
   type MobileRole,
   type MobileSale,
+  type MobileSaleStatus,
   type MobileSocialConversation,
   type MobileSocialConversationEvent,
   type MobileSocialConversationKind,
@@ -115,6 +116,7 @@ type Option<T extends string> = {
 
 type SelectableOption = SearchableSelectOption;
 type AppLocale = "en" | "ar";
+type MobileSaleStatusFilter = MobileSaleStatus | "ALL";
 
 type FormFieldProps = {
   keyboardType?: "default" | "email-address" | "numeric" | "phone-pad";
@@ -666,6 +668,44 @@ function getOptionLabel(
   fallback: string,
 ): string {
   return options.find((option) => option.value === value)?.label ?? fallback;
+}
+
+function saleMatchesView(
+  sale: MobileSale,
+  statusFilter: MobileSaleStatusFilter,
+  search: string,
+): boolean {
+  const query = search.trim().toLowerCase();
+  const matchesStatus = statusFilter === "ALL" || sale.status === statusFilter;
+  if (!query) return matchesStatus;
+
+  const searchIndex = [
+    sale.vehicleSummary,
+    sale.vehicleVin,
+    sale.customerName,
+    sale.salespersonName,
+    sale.financingType ?? "",
+  ].join(" ");
+
+  return matchesStatus && searchIndex.toLowerCase().includes(query);
+}
+
+function averageSalePrice(sales: readonly MobileSale[]): number {
+  if (sales.length === 0) return 0;
+  return sales.reduce((total, sale) => total + sale.salePrice, 0) / sales.length;
+}
+
+function saleRemainingBalance(sale: MobileSale): number {
+  return Math.max(0, sale.salePrice - (sale.downPayment ?? 0));
+}
+
+function vehicleListPriceLabel(
+  sellingPrice: number | undefined,
+  locale: AppLocale,
+): string {
+  return sellingPrice != null
+    ? money(sellingPrice, locale)
+    : locale === "ar" ? "بدون سعر" : "No list price";
 }
 
 function firstVehicleImageUrl(vehicle: MobileVehicle): string | undefined {
@@ -1784,8 +1824,11 @@ function SalesModule({ myMembership, orgId }: { myMembership: MobileMyMembership
   const customers = useQuery(api.customers.list, { orgId, paginationOpts: { cursor: null, numItems: SELECTOR_PAGE_SIZE } });
   const vehicles = useQuery(api.vehicles.listAll, { orgId, status: "AVAILABLE", includeReserved: true });
   const members = useQuery(api.memberships.list, { orgId, paginationOpts: { cursor: null, numItems: SELECTOR_PAGE_SIZE } });
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<MobileSaleStatusFilter>("ALL");
   const [open, setOpen] = useState(false);
   const [draftStep, setDraftStep] = useState(0);
+  const [detailSale, setDetailSale] = useState<MobileSale | null>(null);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     customerId: "",
@@ -1795,15 +1838,38 @@ function SalesModule({ myMembership, orgId }: { myMembership: MobileMyMembership
     downPayment: "",
     financingType: "CASH" as MobileFinancingType,
   });
-  const customerOptions = (customers?.page ?? []).map((customer) => ({ label: `${customer.firstName} ${customer.lastName}`, value: customer._id }));
-  const vehicleOptions = (vehicles ?? []).map((vehicle) => ({ label: `${vehicle.year} ${vehicle.make} ${vehicle.model}`, value: vehicle._id }));
-  const memberOptions = (members?.page ?? []).map((member) => ({ label: member.userName, value: member.userId }));
+  const statusOptions: Array<Option<MobileSaleStatusFilter>> = [
+    { value: "ALL", label: locale === "ar" ? "الكل" : "All" },
+    { value: "PENDING", label: locale === "ar" ? "معلقة" : "Pending" },
+    { value: "COMPLETED", label: locale === "ar" ? "مكتملة" : "Completed" },
+    { value: "CANCELLED", label: locale === "ar" ? "ملغاة" : "Cancelled" },
+  ];
+  const customerOptions = (customers?.page ?? []).map((customer) => ({
+    label: `${customer.firstName} ${customer.lastName}`,
+    subLabel: customer.phone || customer.whatsapp || customer.email || customer.address,
+    value: customer._id,
+  }));
+  const vehicleOptions = (vehicles ?? []).map((vehicle) => ({
+    label: `${vehicle.year} ${vehicle.make} ${vehicle.model}`,
+    subLabel: `${vehicleListPriceLabel(vehicle.sellingPrice, locale)} · ${vehicle.trim || vehicle.status}`,
+    value: vehicle._id,
+  }));
+  const memberOptions = (members?.page ?? []).map((member) => ({
+    label: member.userName,
+    subLabel: member.roleName,
+    value: member.userId,
+  }));
+  const selectedVehicle = (vehicles ?? []).find((vehicle) => vehicle._id === form.vehicleId) ?? null;
   const selectedCustomerLabel = getOptionLabel(customerOptions, form.customerId, locale === "ar" ? "لم يتم الاختيار" : "Not selected");
   const selectedVehicleLabel = getOptionLabel(vehicleOptions, form.vehicleId, locale === "ar" ? "لم يتم الاختيار" : "Not selected");
   const selectedSalespersonLabel = getOptionLabel(memberOptions, form.salespersonId, locale === "ar" ? "لم يتم الاختيار" : "Not selected");
   const salePricePreview = parseOptionalNumber(form.salePrice) ?? 0;
   const downPaymentPreview = parseOptionalNumber(form.downPayment) ?? 0;
   const remainingBalancePreview = Math.max(0, salePricePreview - downPaymentPreview);
+  const filteredSales = results.filter((sale) => saleMatchesView(sale, statusFilter, search));
+  const pendingSalesCount = results.filter((sale) => sale.status === "PENDING").length;
+  const completedSalesCount = results.filter((sale) => sale.status === "COMPLETED").length;
+  const averageVisibleDeal = averageSalePrice(filteredSales);
   const salesSteps: GuidedStep[] = [
     {
       title: locale === "ar" ? "العميل والسيارة" : "Customer and vehicle",
@@ -1835,6 +1901,25 @@ function SalesModule({ myMembership, orgId }: { myMembership: MobileMyMembership
   function closeDraft() {
     setDraftStep(0);
     setOpen(false);
+  }
+
+  function selectVehicle(vehicleId: string) {
+    const vehicle = (vehicles ?? []).find((candidate) => candidate._id === vehicleId);
+    setForm((prev) => ({
+      ...prev,
+      vehicleId,
+      salePrice: vehicle?.sellingPrice != null ? String(vehicle.sellingPrice) : prev.salePrice,
+    }));
+  }
+
+  function applyVehiclePrice() {
+    if (selectedVehicle?.sellingPrice == null) return;
+    setForm((prev) => ({ ...prev, salePrice: String(selectedVehicle.sellingPrice) }));
+  }
+
+  function applySuggestedDeposit(percent: number) {
+    const deposit = Math.round((salePricePreview * percent) / 100);
+    setForm((prev) => ({ ...prev, downPayment: String(deposit) }));
   }
 
   async function saveDraft() {
@@ -1884,8 +1969,22 @@ function SalesModule({ myMembership, orgId }: { myMembership: MobileMyMembership
 
   return (
     <ModuleScroll>
-      <PrimaryButton label={locale === "ar" ? "مسودة بيع جديدة" : "New sale draft"} onPress={openDraft} />
-      {results.length ? results.map((sale) => (
+      <View style={styles.actionRow}>
+        <SearchInput
+          placeholder={locale === "ar" ? "بحث المبيعات" : "Search sales"}
+          value={search}
+          onChangeText={setSearch}
+        />
+        <PrimaryButton label={locale === "ar" ? "مسودة" : "Draft"} onPress={openDraft} />
+      </View>
+      <SegmentedControl options={statusOptions} value={statusFilter} onChange={setStatusFilter} />
+      <View style={styles.metricGrid}>
+        <MetricCard title={locale === "ar" ? "ظاهرة" : "Visible"} value={compactNumber(filteredSales.length, locale)} caption={locale === "ar" ? "حسب الفلتر" : "after filters"} />
+        <MetricCard title={locale === "ar" ? "معلقة" : "Pending"} value={compactNumber(pendingSalesCount, locale)} caption={locale === "ar" ? "تحتاج إجراء" : "need action"} />
+        <MetricCard title={locale === "ar" ? "مكتملة" : "Closed"} value={compactNumber(completedSalesCount, locale)} caption={locale === "ar" ? "صفقات منتهية" : "completed deals"} />
+        <MetricCard title={locale === "ar" ? "متوسط" : "Avg deal"} value={money(averageVisibleDeal, locale)} caption={locale === "ar" ? "للقائمة الحالية" : "visible list"} />
+      </View>
+      {filteredSales.length ? filteredSales.map((sale) => (
         <RecordCard key={sale._id}>
           <View style={styles.recordHeader}>
             <Text style={styles.recordTitle}>{sale.vehicleSummary}</Text>
@@ -1901,21 +2000,31 @@ function SalesModule({ myMembership, orgId }: { myMembership: MobileMyMembership
             <Text style={styles.recordMeta}>{locale === "ar" ? "الدفعة" : "Down payment"}: {money(sale.downPayment, locale)}</Text>
           ) : null}
           <View style={styles.cardActions}>
+            <PrimaryButton label={locale === "ar" ? "تفاصيل" : "Details"} tone="muted" onPress={() => setDetailSale(sale)} />
             {sale.status === "PENDING" ? <PrimaryButton label={locale === "ar" ? "إتمام" : "Complete"} tone="muted" onPress={() => complete(sale)} /> : null}
             {sale.status !== "CANCELLED" ? <PrimaryButton label={locale === "ar" ? "إلغاء" : "Cancel"} tone="danger" onPress={() => cancel(sale)} /> : null}
           </View>
         </RecordCard>
-      )) : <EmptyList label={locale === "ar" ? "لا توجد مبيعات." : "No sales found."} />}
+      )) : <EmptyList label={locale === "ar" ? "لا توجد مبيعات لهذا الفلتر." : "No sales match this view."} />}
       <LoadMoreFooter loadMore={loadMore} status={status} />
       <FormModal title={locale === "ar" ? "مسودة بيع" : "Sale draft"} visible={open} onClose={closeDraft}>
         <GuidedStepFlow activeIndex={draftStep} steps={salesSteps}>
           {draftStep === 0 ? (
             <>
               <SelectField label={locale === "ar" ? "العميل" : "Customer"} value={form.customerId} options={customerOptions} onChange={(customerId) => setForm((prev) => ({ ...prev, customerId }))} />
-              <SelectField label={locale === "ar" ? "السيارة" : "Vehicle"} value={form.vehicleId} options={vehicleOptions} onChange={(vehicleId) => setForm((prev) => ({ ...prev, vehicleId }))} />
-              <SummaryPanel title={locale === "ar" ? "اختيار الصفقة" : "Deal selection"}>
+              <SelectField label={locale === "ar" ? "السيارة" : "Vehicle"} value={form.vehicleId} options={vehicleOptions} onChange={selectVehicle} />
+              <SummaryPanel
+                title={locale === "ar" ? "اختيار الصفقة" : "Deal selection"}
+                subtitle={locale === "ar" ? "اختيار السيارة يعبئ سعر القائمة تلقائياً." : "Picking a vehicle auto-fills its current list price."}
+              >
                 <SummaryRow label={locale === "ar" ? "العميل" : "Customer"} value={selectedCustomerLabel} />
                 <SummaryRow label={locale === "ar" ? "السيارة" : "Vehicle"} value={selectedVehicleLabel} />
+                {selectedVehicle ? (
+                  <>
+                    <SummaryRow label={locale === "ar" ? "السعر الحالي" : "List price"} value={vehicleListPriceLabel(selectedVehicle.sellingPrice, locale)} />
+                    <SummaryRow label={locale === "ar" ? "الحالة" : "Status"} value={selectedVehicle.status} />
+                  </>
+                ) : null}
               </SummaryPanel>
             </>
           ) : null}
@@ -1923,6 +2032,33 @@ function SalesModule({ myMembership, orgId }: { myMembership: MobileMyMembership
             <>
               <FormField keyboardType="numeric" label={locale === "ar" ? "سعر البيع" : "Sale price"} value={form.salePrice} onChangeText={(salePrice) => setForm((prev) => ({ ...prev, salePrice }))} />
               <FormField keyboardType="numeric" label={locale === "ar" ? "الدفعة" : "Down payment"} value={form.downPayment} onChangeText={(downPayment) => setForm((prev) => ({ ...prev, downPayment }))} />
+              <SummaryPanel
+                title={locale === "ar" ? "مساعد التسعير" : "Pricing assist"}
+                subtitle={locale === "ar" ? "اختصارات سريعة بدلاً من إدخال كل شيء يدوياً." : "Fast pricing actions instead of manual entry for every deal."}
+              >
+                <SummaryRow label={locale === "ar" ? "المركبة" : "Vehicle"} value={selectedVehicleLabel} />
+                <SummaryRow label={locale === "ar" ? "الرصيد بعد الدفعة" : "Balance after deposit"} value={money(remainingBalancePreview, locale)} />
+                <View style={styles.cardActions}>
+                  <PrimaryButton
+                    disabled={!selectedVehicle}
+                    label={locale === "ar" ? "سعر القائمة" : "Use list price"}
+                    tone="muted"
+                    onPress={applyVehiclePrice}
+                  />
+                  <PrimaryButton
+                    disabled={salePricePreview <= 0}
+                    label={locale === "ar" ? "دفعة 10%" : "10% down"}
+                    tone="muted"
+                    onPress={() => applySuggestedDeposit(10)}
+                  />
+                  <PrimaryButton
+                    disabled={salePricePreview <= 0}
+                    label={locale === "ar" ? "دفعة 20%" : "20% down"}
+                    tone="muted"
+                    onPress={() => applySuggestedDeposit(20)}
+                  />
+                </View>
+              </SummaryPanel>
               <SelectField label={locale === "ar" ? "طريقة التمويل" : "Financing"} value={form.financingType} options={[
                 { label: locale === "ar" ? "نقدا" : "Cash", value: "CASH" },
                 { label: locale === "ar" ? "تمويل" : "Financed", value: "FINANCED" },
@@ -1961,6 +2097,53 @@ function SalesModule({ myMembership, orgId }: { myMembership: MobileMyMembership
             onSave={saveDraft}
           />
         </GuidedStepFlow>
+      </FormModal>
+      <FormModal
+        title={detailSale ? detailSale.vehicleSummary : ""}
+        visible={Boolean(detailSale)}
+        onClose={() => setDetailSale(null)}
+      >
+        {detailSale ? (
+          <>
+            <View style={styles.metricGrid}>
+              <MetricCard title={locale === "ar" ? "السعر" : "Sale price"} value={money(detailSale.salePrice, locale)} caption={detailSale.financingType ?? "CASH"} />
+              <MetricCard title={locale === "ar" ? "الدفعة" : "Deposit"} value={money(detailSale.downPayment, locale)} caption={locale === "ar" ? "مدفوعة مقدماً" : "up front"} />
+              <MetricCard title={locale === "ar" ? "الرصيد" : "Balance"} value={money(saleRemainingBalance(detailSale), locale)} caption={locale === "ar" ? "بعد الدفعة" : "after deposit"} />
+              <MetricCard title={locale === "ar" ? "العمولة" : "Commission"} value={money(detailSale.commissionAmount, locale)} caption={detailSale.commissionPaidAt ? dateLabel(detailSale.commissionPaidAt, locale) : (locale === "ar" ? "غير مدفوعة" : "unpaid")} />
+            </View>
+            <SummaryPanel
+              title={locale === "ar" ? "ملخص الصفقة" : "Deal summary"}
+              subtitle={locale === "ar" ? "تفاصيل سريعة قبل تغيير الحالة." : "Fast context before changing the status."}
+            >
+              <SummaryRow label={locale === "ar" ? "الحالة" : "Status"} value={detailSale.status} />
+              <SummaryRow label={locale === "ar" ? "العميل" : "Customer"} value={detailSale.customerName} />
+              <SummaryRow label={locale === "ar" ? "البائع" : "Salesperson"} value={detailSale.salespersonName} />
+              <SummaryRow label="VIN" value={detailSale.vehicleVin} />
+              <SummaryRow label={locale === "ar" ? "التاريخ" : "Date"} value={dateLabel(detailSale.saleDate, locale)} />
+            </SummaryPanel>
+            <View style={styles.cardActions}>
+              {detailSale.status === "PENDING" ? (
+                <PrimaryButton
+                  label={locale === "ar" ? "إتمام البيع" : "Complete sale"}
+                  onPress={() => {
+                    complete(detailSale);
+                    setDetailSale(null);
+                  }}
+                />
+              ) : null}
+              {detailSale.status !== "CANCELLED" ? (
+                <PrimaryButton
+                  label={locale === "ar" ? "إلغاء البيع" : "Cancel sale"}
+                  tone="danger"
+                  onPress={() => {
+                    cancel(detailSale);
+                    setDetailSale(null);
+                  }}
+                />
+              ) : null}
+            </View>
+          </>
+        ) : null}
       </FormModal>
     </ModuleScroll>
   );

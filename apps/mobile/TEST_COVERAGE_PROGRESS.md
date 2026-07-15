@@ -1,6 +1,6 @@
 # Mobile Test Coverage Progress
 
-Last updated: 2026-07-15 11:23:00 +03:00
+Last updated: 2026-07-15 11:36:00 +03:00
 
 ## Context
 
@@ -780,12 +780,44 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `pnpm mobile:test`: passed with 11 suites, 92 tests, and 100% statements/branches/functions/lines.
   - `pnpm typecheck:cypress`: passed.
   - `adb devices -l` still returns no devices.
+- 2026-07-15 11:25 +03: pushed Cypress stabilization and started PR watch
+  - Committed and pushed `db47b93c` (`Stabilize sales Cypress flow`) to non-draft PR #70.
+  - New head is `db47b93cab03e022c4cdfde76888dfccaae8ced0`.
+  - GitHub Actions checks are running again; early passing contexts are GitGuardian and Vercel Preview Comments.
+  - CodeRabbit immediately returned to its quota/rate-limit failure for the new push, currently reporting the next review window in about 14 minutes.
+  - Thread-aware review lookup remains clean except for the old resolved/outdated Semgrep thread on this progress file.
+  - `adb devices -l` still returns no connected devices, so the production APK install remains blocked by USB debugging visibility.
+- 2026-07-15 11:31 +03: native sales parity pass validated locally
+  - Upgraded the native sales module from a plain draft list into a sales cockpit with search, status filters, visible/pending/closed/average-deal metrics, and a sale detail dialog.
+  - Upgraded the sale draft wizard with searchable customer/vehicle/salesperson sheets that include contextual sublabels, automatic list-price fill from the selected vehicle, quick 10%/20% deposit actions, and a richer review path.
+  - Kept backend mutations as the source of truth; the new pricing/deposit actions are UI convenience only.
+  - `pnpm mobile:typecheck`: passed.
+  - `pnpm mobile:test`: passed with 11 suites, 92 tests, and 100% statements/branches/functions/lines.
+  - `pnpm exec eslint apps/mobile/src/features/workspace/WorkspaceModuleScreen.tsx --quiet`: passed.
+  - Latest PR check watch on pushed head `db47b93c`: SonarCloud, type-check, lint, unit-and-integration, Playwright, TestSprite E2E, Vercel, CodeQL, Semgrep, Checkov, OSV, ZAP, GitGuardian, dealer-worker, dependency-audit, secret-scan, and Convex backend are green; Cypress and Nuclei are still running; CodeRabbit remains quota-limited.
+  - `adb devices -l` still returns no connected devices.
+- 2026-07-15 11:34 +03: Cypress dealer-site failure isolated and patched locally
+  - The new Cypress failure on pushed head `db47b93c` is in `dealer-site.cy.ts`, not the native mobile code and not the previously fixed sales wizard flow.
+  - CI log root cause: `cy.click()` detached because the public dealer form submit button disappeared while Cypress was waiting for actionability after a page update.
+  - Patched the test to inject the Turnstile token, assert the real submit button is visible/enabled, re-query it, and invoke the native button click before asserting the `Thank you!` success state.
+  - Review comments remain unchanged: CodeRabbit is quota-limited and the only active thread-aware review item is the old resolved/outdated Semgrep thread.
+  - `adb devices -l` still returns no connected devices.
+- 2026-07-15 11:36 +03: local validation ready for commit
+  - Guard pass tightened the Cypress helper with an explicit rationale for the native click after Cypress actionability checks.
+  - Guard pass tightened native sales vehicle pricing labels so vehicles without a selling price show `No list price` / `بدون سعر` instead of a misleading `0 JOD`.
+  - `pnpm typecheck:cypress`: passed.
+  - `pnpm exec eslint cypress/e2e/dealer-site.cy.ts apps/mobile/src/features/workspace/WorkspaceModuleScreen.tsx --quiet`: passed.
+  - `pnpm mobile:typecheck`: passed.
+  - `pnpm mobile:test`: passed with 11 suites, 92 tests, and 100% statements/branches/functions/lines.
+  - `git diff --check`: passed with line-ending normalization warnings only.
+  - `adb devices -l` still returns no connected devices.
 
 ## Next Steps
 
-1. Reconnect/wake the phone so ADB lists device `A99JBB5826170023`, then rebuild/install the latest release APK and capture a screenshot.
-2. Commit and push the vehicle intake parity pass once final validation is complete.
+1. Run Cypress/mobile validation for the local dealer-site patch and sales cockpit pass.
+2. Commit and push the local sales cockpit plus Cypress stabilization changes to non-draft PR #70.
 3. Watch PR checks for the new head and inspect any failures or review threads.
-4. Continue module-level parity passes for dialogs, searchable choices, and guided workflows.
-5. Re-run CodeRabbit after the quota window resets or enable usage-based reviews.
-6. Configure the mobile Turnstile public key if marketplace verification is part of the phone test.
+4. Rebuild a fresh production APK/AAB from the pushed head, then install when ADB lists device `A99JBB5826170023`.
+5. Continue module-level parity passes for dialogs, searchable choices, and guided workflows.
+6. Re-run CodeRabbit after the quota window resets or enable usage-based reviews.
+7. Configure the mobile Turnstile public key if marketplace verification is part of the phone test.
