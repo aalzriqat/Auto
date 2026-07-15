@@ -23,6 +23,7 @@ import {
   type MobileMarketplaceVehicle,
 } from "../../convexApi";
 import { FormField } from "../../components/FormField";
+import { Icon } from "../../components/Icon";
 import { RouteLoadingState } from "../../components/RouteState";
 import { SearchableSelectField } from "../../components/SearchableSelectField";
 import { Screen } from "../../components/Screen";
@@ -112,6 +113,7 @@ function Header() {
         style={({ pressed }) => [styles.secondaryIconButton, pressed && styles.pressed]}
         onPress={() => router.replace(nativeRoutes.home)}
       >
+        <Icon color="primary" name="dashboard" size={18} />
         <Text style={styles.secondaryIconText}>{t("home")}</Text>
       </Pressable>
     </View>
@@ -238,7 +240,7 @@ function SearchPanel({
         <Switch
           value={fields.financeOnly}
           onValueChange={(financeOnly) => setFields({ ...fields, financeOnly })}
-          trackColor={{ false: "#cbd5e1", true: "#99f6e4" }}
+          trackColor={{ false: theme.colors.borderStrong, true: theme.colors.primarySoft }}
           thumbColor={fields.financeOnly ? theme.colors.primary : theme.colors.surface}
         />
         <Text style={styles.switchText}>{t("marketplaceFinanceOnly")}</Text>
@@ -311,6 +313,11 @@ function VehicleCard({
         ) : (
           <Text style={styles.noImageText}>{t("marketplaceNoImage")}</Text>
         )}
+        {price ? (
+          <View style={styles.priceBadge}>
+            <Text style={styles.priceBadgeText}>{price}</Text>
+          </View>
+        ) : null}
       </View>
       <View style={styles.cardBody}>
         <Text style={styles.cardTitle}>{title}</Text>
@@ -320,7 +327,6 @@ function VehicleCard({
             {formatNumber(vehicle.mileage, locale)} {t("marketplaceMileage")}
           </Text>
         ) : null}
-        {price ? <Text style={styles.priceText}>{price}</Text> : null}
         {monthly ? (
           <Text style={styles.cardMeta}>
             {t("marketplaceFromPerMonth")} {monthly}/{t("marketplaceMonth")}
@@ -783,15 +789,19 @@ const styles = StyleSheet.create({
   secondaryIconButton: {
     minWidth: 58,
     height: 42,
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: theme.radius.md,
+    gap: theme.spacing.xs,
+    borderRadius: theme.radius.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
+    paddingHorizontal: theme.spacing.sm,
+    ...theme.shadows.sm,
   },
   secondaryIconText: {
-    color: theme.colors.text,
+    color: theme.colors.primary,
     fontSize: 12,
     fontWeight: "900",
   },
@@ -894,10 +904,11 @@ const styles = StyleSheet.create({
   },
   vehicleCard: {
     overflow: "hidden",
-    borderRadius: theme.radius.md,
+    borderRadius: theme.radius.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
+    ...theme.shadows.sm,
   },
   vehicleImageWrap: {
     aspectRatio: 16 / 9,
@@ -913,6 +924,20 @@ const styles = StyleSheet.create({
     color: theme.colors.mutedText,
     fontSize: 13,
     fontWeight: "800",
+  },
+  priceBadge: {
+    position: "absolute",
+    bottom: theme.spacing.md,
+    left: theme.spacing.md,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.hero,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+  },
+  priceBadgeText: {
+    color: theme.colors.onPrimary,
+    fontSize: 15,
+    fontWeight: "900",
   },
   cardBody: {
     gap: theme.spacing.sm,
@@ -940,16 +965,16 @@ const styles = StyleSheet.create({
     gap: theme.spacing.xs,
   },
   badge: {
-    borderRadius: 999,
-    backgroundColor: "#dcfce7",
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.successSoft,
     paddingHorizontal: theme.spacing.sm,
     paddingVertical: theme.spacing.xs,
   },
   amberBadge: {
-    backgroundColor: "#fef3c7",
+    backgroundColor: theme.colors.warningSoft,
   },
   blueBadge: {
-    backgroundColor: "#e0f2fe",
+    backgroundColor: theme.colors.infoSoft,
   },
   badgeText: {
     color: theme.colors.text,
@@ -969,7 +994,7 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: theme.radius.sm,
+    borderRadius: theme.radius.md,
     backgroundColor: theme.colors.text,
     paddingHorizontal: theme.spacing.md,
   },
@@ -980,11 +1005,12 @@ const styles = StyleSheet.create({
   },
   dealerCard: {
     gap: theme.spacing.md,
-    borderRadius: theme.radius.md,
+    borderRadius: theme.radius.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.md,
+    ...theme.shadows.sm,
   },
   dealerTopRow: {
     flexDirection: "row",
@@ -997,7 +1023,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: 24,
+    borderRadius: theme.radius.full,
     backgroundColor: theme.colors.surfaceAlt,
   },
   dealerLogoImage: {

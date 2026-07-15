@@ -1022,9 +1022,16 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `pnpm install --frozen-lockfile`: passed; lockfile already up to date.
   - `pnpm --filter @autoflow/mobile typecheck`: passed.
   - `pnpm --filter @autoflow/mobile test`: passed with 13 suites, 107 tests, and 100% statements/branches/functions/lines.
+- 2026-07-15 18:43 +03: mobile UI modernization Phase 6 marketplace screens validated locally
+  - Restyled marketplace vehicle cards with larger image-led cards, soft shadows, tokenized badges, and a price badge over the vehicle photo.
+  - Restyled dealer marketplace request/trade-in cards, selector controls, and buyer intake panels with larger radii, depth tokens, and tokenized soft states.
+  - Updated dealer marketplace back navigation to the new workspace Home tab route.
+  - `pnpm install --frozen-lockfile`: passed; lockfile already up to date.
+  - `pnpm --filter @autoflow/mobile typecheck`: passed.
+  - `pnpm --filter @autoflow/mobile test`: passed with 13 suites, 107 tests, and 100% statements/branches/functions/lines.
 
 ## Next Steps
 
-1. Commit Phase 6 WorkspaceModuleScreen extraction on top of `agent/mobile-ui-port`.
-2. Continue Phase 6 by restyling the extracted workspace module implementation and then the marketplace screens.
+1. Commit Phase 6 marketplace screen restyle on top of `agent/mobile-ui-port`.
+2. Continue Phase 6 with `app/(auth)/sign-in.tsx` and `app/+not-found.tsx`.
 3. Continue the later UI/list phases with typecheck and 100% mobile Jest coverage before each commit.

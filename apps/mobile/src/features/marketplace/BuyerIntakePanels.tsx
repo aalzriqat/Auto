@@ -192,7 +192,7 @@ function ConsentRow({
       <Switch
         value={value}
         onValueChange={onChange}
-        trackColor={{ false: "#cbd5e1", true: "#99f6e4" }}
+        trackColor={{ false: theme.colors.borderStrong, true: theme.colors.primarySoft }}
         thumbColor={value ? theme.colors.primary : theme.colors.surface}
       />
       <Text style={styles.consentText}>{label}</Text>
@@ -906,11 +906,12 @@ export function TradeInRequestPanel({
 const styles = StyleSheet.create({
   panel: {
     gap: theme.spacing.md,
-    borderRadius: theme.radius.md,
+    borderRadius: theme.radius.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.md,
+    ...theme.shadows.sm,
   },
   panelHeader: {
     gap: theme.spacing.xs,
@@ -947,7 +948,7 @@ const styles = StyleSheet.create({
     minWidth: 92,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: theme.radius.sm,
+    borderRadius: theme.radius.md,
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
@@ -955,7 +956,7 @@ const styles = StyleSheet.create({
   },
   choiceButtonSelected: {
     borderColor: theme.colors.primary,
-    backgroundColor: "#ccfbf1",
+    backgroundColor: theme.colors.primarySoft,
   },
   choiceText: {
     color: theme.colors.mutedText,
@@ -979,8 +980,8 @@ const styles = StyleSheet.create({
   },
   notice: {
     gap: theme.spacing.xs,
-    borderRadius: theme.radius.sm,
-    backgroundColor: "#dcfce7",
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.successSoft,
     padding: theme.spacing.md,
   },
   noticeTitle: {
@@ -995,7 +996,7 @@ const styles = StyleSheet.create({
   },
   idBox: {
     gap: theme.spacing.xs,
-    borderRadius: theme.radius.sm,
+    borderRadius: theme.radius.md,
     backgroundColor: theme.colors.surfaceAlt,
     padding: theme.spacing.md,
   },
@@ -1008,7 +1009,7 @@ const styles = StyleSheet.create({
     minHeight: 46,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: theme.radius.md,
+    borderRadius: theme.radius.lg,
     backgroundColor: theme.colors.primary,
     paddingHorizontal: theme.spacing.md,
   },
@@ -1022,7 +1023,7 @@ const styles = StyleSheet.create({
     minHeight: 46,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: theme.radius.md,
+    borderRadius: theme.radius.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
@@ -1062,19 +1063,23 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing.md,
-    borderRadius: theme.radius.sm,
+    borderRadius: theme.radius.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.md,
+    ...theme.shadows.sm,
   },
   selectedDealerCard: {
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing.md,
-    borderRadius: theme.radius.sm,
-    backgroundColor: theme.colors.surfaceAlt,
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
     padding: theme.spacing.md,
+    ...theme.shadows.sm,
   },
   selectorText: {
     flex: 1,

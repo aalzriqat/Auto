@@ -55,7 +55,7 @@ function Header({ org }: Readonly<{ org: MobileOrgSummary }>) {
         style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
         onPress={() =>
           router.replace({
-            pathname: "/org/[orgId]",
+            pathname: nativeRoutes.orgHome,
             params: { orgId: org._id },
           })
         }
@@ -599,11 +599,12 @@ const styles = StyleSheet.create({
   },
   card: {
     gap: theme.spacing.md,
-    borderRadius: theme.radius.md,
+    borderRadius: theme.radius.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.md,
+    ...theme.shadows.sm,
   },
   cardTopRow: {
     flexDirection: "row",
@@ -634,19 +635,19 @@ const styles = StyleSheet.create({
   },
   pill: {
     maxWidth: 132,
-    borderRadius: 999,
+    borderRadius: theme.radius.full,
     backgroundColor: theme.colors.surfaceAlt,
     paddingHorizontal: theme.spacing.sm,
     paddingVertical: theme.spacing.xs,
   },
   greenPill: {
-    backgroundColor: "#dcfce7",
+    backgroundColor: theme.colors.successSoft,
   },
   amberPill: {
-    backgroundColor: "#fef3c7",
+    backgroundColor: theme.colors.warningSoft,
   },
   rosePill: {
-    backgroundColor: "#ffe4e6",
+    backgroundColor: theme.colors.dangerSoft,
   },
   pillText: {
     color: theme.colors.text,
@@ -658,7 +659,7 @@ const styles = StyleSheet.create({
     minHeight: 42,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: theme.radius.md,
+    borderRadius: theme.radius.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
@@ -674,7 +675,7 @@ const styles = StyleSheet.create({
     minHeight: 44,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: theme.radius.md,
+    borderRadius: theme.radius.lg,
     backgroundColor: theme.colors.primary,
     paddingHorizontal: theme.spacing.md,
   },
@@ -709,7 +710,7 @@ const styles = StyleSheet.create({
     flexGrow: 1,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: theme.radius.sm,
+    borderRadius: theme.radius.md,
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
@@ -717,7 +718,7 @@ const styles = StyleSheet.create({
   },
   optionButtonSelected: {
     borderColor: theme.colors.primary,
-    backgroundColor: "#ccfbf1",
+    backgroundColor: theme.colors.primarySoft,
   },
   optionButtonText: {
     color: theme.colors.mutedText,
@@ -730,7 +731,7 @@ const styles = StyleSheet.create({
   },
   vehicleOption: {
     gap: theme.spacing.xs,
-    borderRadius: theme.radius.sm,
+    borderRadius: theme.radius.md,
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
@@ -738,7 +739,7 @@ const styles = StyleSheet.create({
   },
   vehicleOptionSelected: {
     borderColor: theme.colors.primary,
-    backgroundColor: "#ccfbf1",
+    backgroundColor: theme.colors.primarySoft,
   },
   vehicleOptionText: {
     color: theme.colors.text,
