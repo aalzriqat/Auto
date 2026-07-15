@@ -12,6 +12,12 @@ import MarketplaceRoute from "../../app/(app)/marketplace";
 import OrgDashboardRoute from "../../app/(app)/org/[orgId]";
 import DealerMarketplaceRoute from "../../app/(app)/org/[orgId]/marketplace";
 import WorkspaceModuleRoute from "../../app/(app)/org/[orgId]/module/[moduleId]";
+import OrgWorkspaceTabsRoute from "../../app/(app)/org/[orgId]/(tabs)/_layout";
+import OrgWorkspaceAdminRoute from "../../app/(app)/org/[orgId]/(tabs)/admin";
+import OrgWorkspaceFinanceRoute from "../../app/(app)/org/[orgId]/(tabs)/finance";
+import OrgWorkspaceHomeRoute from "../../app/(app)/org/[orgId]/(tabs)/home";
+import OrgWorkspaceOperationsRoute from "../../app/(app)/org/[orgId]/(tabs)/operations";
+import OrgWorkspacePipelineRoute from "../../app/(app)/org/[orgId]/(tabs)/pipeline";
 import AuthLayout from "../../app/(auth)/_layout";
 import SignInRoute from "../../app/(auth)/sign-in";
 
@@ -23,6 +29,8 @@ jest.mock("expo-router", () => {
   const { Text } = jest.requireActual<typeof import("react-native")>("react-native");
 
   return {
+    Redirect: ({ href }: { href: unknown }) =>
+      React.createElement(Text, { testID: "redirect" }, JSON.stringify(href)),
     Stack: ({ screenOptions }: { screenOptions?: Record<string, unknown> }) =>
       React.createElement(Text, { testID: "stack" }, JSON.stringify(screenOptions ?? {})),
     useLocalSearchParams: () => mockParams,
@@ -83,6 +91,26 @@ jest.mock("../features/dashboard/OrgDashboardScreen", () => {
   return {
     OrgDashboardScreen: ({ orgId }: { orgId: string | null }) =>
       React.createElement(Text, { testID: "org-dashboard-screen" }, orgId ?? "null"),
+  };
+});
+
+jest.mock("../features/workspace/WorkspaceTabsLayout", () => {
+  const React = jest.requireActual<typeof import("react")>("react");
+  const { Text } = jest.requireActual<typeof import("react-native")>("react-native");
+
+  return {
+    WorkspaceTabsLayout: ({ orgId }: { orgId: string | null }) =>
+      React.createElement(Text, { testID: "workspace-tabs-layout" }, orgId ?? "null"),
+  };
+});
+
+jest.mock("../features/workspace/WorkspaceCategoryScreen", () => {
+  const React = jest.requireActual<typeof import("react")>("react");
+  const { Text } = jest.requireActual<typeof import("react-native")>("react-native");
+
+  return {
+    WorkspaceCategoryScreen: ({ category }: { category: string }) =>
+      React.createElement(Text, { testID: `workspace-category-${category}` }, category),
   };
 });
 
@@ -160,22 +188,74 @@ describe("mobile Expo routes", () => {
     expect(mockReplace).toHaveBeenCalledWith("/");
   });
 
-  test("normalizes org route params", async () => {
+  test("redirects old org route params into the home tab", async () => {
     mockParams = { orgId: "org-string" };
-    expect((await render(<OrgDashboardRoute />)).getByTestId("org-dashboard-screen").props.children).toBe(
+    expect((await render(<OrgDashboardRoute />)).getByTestId("redirect").props.children).toContain(
+      nativeRoutes.orgHome,
+    );
+    expect((await render(<OrgDashboardRoute />)).getByTestId("redirect").props.children).toContain(
       "org-string",
     );
 
     mockParams = { orgId: ["org-array"] };
-    expect((await render(<OrgDashboardRoute />)).getByTestId("org-dashboard-screen").props.children).toBe(
+    expect((await render(<OrgDashboardRoute />)).getByTestId("redirect").props.children).toContain(
       "org-array",
     );
 
     mockParams = { orgId: [] };
-    expect((await render(<OrgDashboardRoute />)).getByTestId("org-dashboard-screen").props.children).toBe("null");
+    expect((await render(<OrgDashboardRoute />)).getByTestId("redirect").props.children).toBe(
+      JSON.stringify(nativeRoutes.home),
+    );
 
     mockParams = {};
-    expect((await render(<OrgDashboardRoute />)).getByTestId("org-dashboard-screen").props.children).toBe("null");
+    expect((await render(<OrgDashboardRoute />)).getByTestId("redirect").props.children).toBe(
+      JSON.stringify(nativeRoutes.home),
+    );
+  });
+
+  test("normalizes org tab layout and home tab route params", async () => {
+    mockParams = { orgId: "org-string" };
+    expect((await render(<OrgWorkspaceTabsRoute />)).getByTestId("workspace-tabs-layout").props.children).toBe(
+      "org-string",
+    );
+    expect((await render(<OrgWorkspaceHomeRoute />)).getByTestId("org-dashboard-screen").props.children).toBe(
+      "org-string",
+    );
+
+    mockParams = { orgId: ["org-array"] };
+    expect((await render(<OrgWorkspaceTabsRoute />)).getByTestId("workspace-tabs-layout").props.children).toBe(
+      "org-array",
+    );
+    expect((await render(<OrgWorkspaceHomeRoute />)).getByTestId("org-dashboard-screen").props.children).toBe(
+      "org-array",
+    );
+
+    mockParams = { orgId: [] };
+    expect((await render(<OrgWorkspaceTabsRoute />)).getByTestId("workspace-tabs-layout").props.children).toBe(
+      "null",
+    );
+    expect((await render(<OrgWorkspaceHomeRoute />)).getByTestId("org-dashboard-screen").props.children).toBe("null");
+
+    mockParams = {};
+    expect((await render(<OrgWorkspaceTabsRoute />)).getByTestId("workspace-tabs-layout").props.children).toBe(
+      "null",
+    );
+    expect((await render(<OrgWorkspaceHomeRoute />)).getByTestId("org-dashboard-screen").props.children).toBe("null");
+  });
+
+  test("renders workspace category tab routes", async () => {
+    expect((await render(<OrgWorkspaceOperationsRoute />)).getByTestId("workspace-category-operations").props.children).toBe(
+      "operations",
+    );
+    expect((await render(<OrgWorkspacePipelineRoute />)).getByTestId("workspace-category-pipeline").props.children).toBe(
+      "pipeline",
+    );
+    expect((await render(<OrgWorkspaceFinanceRoute />)).getByTestId("workspace-category-finance").props.children).toBe(
+      "finance",
+    );
+    expect((await render(<OrgWorkspaceAdminRoute />)).getByTestId("workspace-category-admin").props.children).toBe(
+      "admin",
+    );
   });
 
   test("normalizes dealer marketplace route params", async () => {

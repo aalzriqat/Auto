@@ -18,18 +18,23 @@ import {
 } from "./nativeModules";
 
 export function WorkspaceModuleLauncher({
+  initialCategory = "operations",
+  lockedCategory,
   orgId,
   permissions = [],
   roleName,
 }: {
+  initialCategory?: NativeModuleCategory;
+  lockedCategory?: NativeModuleCategory;
   orgId: string;
   permissions?: readonly string[];
   roleName?: string;
 }) {
   const router = useRouter();
-  const { locale, textDirection } = useLocale();
-  const [category, setCategory] = useState<NativeModuleCategory>("operations");
+  const { locale, t, textDirection } = useLocale();
+  const [category, setCategory] = useState<NativeModuleCategory>(initialCategory);
   const [query, setQuery] = useState("");
+  const activeCategory = lockedCategory ?? category;
   const isSearching = query.trim().length > 0;
   const visibleCategories = useMemo(
     () =>
@@ -46,23 +51,28 @@ export function WorkspaceModuleLauncher({
     [permissions, roleName],
   );
   const modules = useMemo(
-    () => getVisibleNativeModulesByCategory(category, permissions, roleName),
-    [category, permissions, roleName],
+    () => getVisibleNativeModulesByCategory(activeCategory, permissions, roleName),
+    [activeCategory, permissions, roleName],
   );
+  const searchableModules = lockedCategory ? modules : allVisibleModules;
   const searchedModules = useMemo(
-    () => searchNativeModules(allVisibleModules, query, locale),
-    [allVisibleModules, locale, query],
+    () => searchNativeModules(searchableModules, query, locale),
+    [locale, query, searchableModules],
   );
   const displayedModules = isSearching ? searchedModules : modules;
-  const moduleCount = visibleCategories.reduce((total, item) => total + item.modules.length, 0);
+  const moduleCount = lockedCategory
+    ? modules.length
+    : visibleCategories.reduce((total, item) => total + item.modules.length, 0);
+  const activeCategoryDefinition = nativeModuleCategories.find((item) => item.id === activeCategory);
 
   useEffect(() => {
+    if (lockedCategory) return;
     if (modules.length > 0) return;
     const firstCategory = visibleCategories[0]?.id;
     if (firstCategory && firstCategory !== category) {
       setCategory(firstCategory);
     }
-  }, [category, modules.length, visibleCategories]);
+  }, [category, lockedCategory, modules.length, visibleCategories]);
 
   return (
     <View style={[styles.panel, { direction: textDirection }]}>
@@ -70,17 +80,17 @@ export function WorkspaceModuleLauncher({
         <View style={styles.headingRow}>
           <View style={styles.headingText}>
             <Text style={styles.panelTitle}>
-              {locale === "ar" ? "مركز الأوامر" : "Command center"}
+              {lockedCategory && activeCategoryDefinition
+                ? labelFor(activeCategoryDefinition.title, locale)
+                : t("workspaceCommandCenterTitle")}
             </Text>
             <Text style={styles.panelBody}>
-              {locale === "ar"
-                ? "ابحث عن أي قسم أو انتقل بين أدوات الويب من مكان واحد."
-                : "Search every workspace tool and jump across the web-grade operating system."}
+              {lockedCategory ? t("workspaceCategoryCenterBody") : t("workspaceCommandCenterBody")}
             </Text>
           </View>
           <View style={styles.countBadge}>
             <Text style={styles.countBadgeValue}>{moduleCount}</Text>
-            <Text style={styles.countBadgeLabel}>{locale === "ar" ? "قسم" : "tools"}</Text>
+            <Text style={styles.countBadgeLabel}>{t("workspaceToolsCount")}</Text>
           </View>
         </View>
       </View>
@@ -88,10 +98,10 @@ export function WorkspaceModuleLauncher({
       <View style={styles.searchShell}>
         <Icon color="primary" name="search" size={18} />
         <TextInput
-          accessibilityLabel={locale === "ar" ? "البحث في الأقسام" : "Search workspace tools"}
+          accessibilityLabel={t("workspaceSearchTools")}
           autoCorrect={false}
           onChangeText={setQuery}
-          placeholder={locale === "ar" ? "ابحث: سيارات، مبيعات، رسائل..." : "Search: inventory, sales, messages..."}
+          placeholder={t("workspaceSearchPlaceholder")}
           placeholderTextColor={theme.colors.subtleText}
           style={[styles.searchInput, { textAlign: locale === "ar" ? "right" : "left" }]}
           value={query}
@@ -99,7 +109,7 @@ export function WorkspaceModuleLauncher({
         {query ? (
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel={locale === "ar" ? "مسح البحث" : "Clear search"}
+            accessibilityLabel={t("workspaceClearSearch")}
             style={({ pressed }) => [styles.clearSearch, pressed && styles.pressed]}
             onPress={() => setQuery("")}
           >
@@ -108,8 +118,9 @@ export function WorkspaceModuleLauncher({
         ) : null}
       </View>
 
-      <View style={styles.tabs}>
-        {visibleCategories.map((item) => {
+      {lockedCategory ? null : (
+        <View style={styles.tabs}>
+          {visibleCategories.map((item) => {
           const selected = item.id === category;
           const visibleCount = countVisibleNativeModulesByCategory(item.id, permissions, roleName);
           return (
@@ -140,8 +151,9 @@ export function WorkspaceModuleLauncher({
               </View>
             </Pressable>
           );
-        })}
-      </View>
+          })}
+        </View>
+      )}
 
       {displayedModules.length > 0 ? (
         <View style={styles.grid}>
@@ -172,7 +184,7 @@ export function WorkspaceModuleLauncher({
                     <Text numberOfLines={1} style={styles.moduleCategory}>
                       {categoryTitle}
                     </Text>
-                    <Text style={styles.moduleAction}>{locale === "ar" ? "فتح" : "Open"}</Text>
+                    <Text style={styles.moduleAction}>{t("workspaceOpenModule")}</Text>
                   </View>
                 </View>
                 <View style={styles.moduleText}>
@@ -191,12 +203,8 @@ export function WorkspaceModuleLauncher({
         <View style={styles.emptyState}>
           <Text style={styles.emptyText}>
             {isSearching
-              ? locale === "ar"
-                ? "لا توجد نتائج مطابقة. جرّب اسم قسم أو عملية أخرى."
-                : "No matching tools. Try another module name or workflow."
-              : locale === "ar"
-                ? "لا توجد أقسام متاحة لهذا الدور."
-                : "No tools are available for this role."}
+              ? t("workspaceNoSearchResults")
+              : t("workspaceNoRoleTools")}
           </Text>
         </View>
       )}

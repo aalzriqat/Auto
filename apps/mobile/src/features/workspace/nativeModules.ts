@@ -1,3 +1,5 @@
+import { nativeRoutes } from "@autoflow/shared";
+
 import type { SemanticIconName } from "../../components/Icon";
 
 export type NativeModuleCategory = "operations" | "pipeline" | "finance" | "admin";
@@ -150,8 +152,8 @@ export function compactInitials(value: string): string {
 
 export function nativeModulePath(
   moduleId: NativeModuleId | string,
-): "/org/[orgId]/marketplace" | "/org/[orgId]/module/[moduleId]" {
-  return moduleId === "marketplace" ? "/org/[orgId]/marketplace" : "/org/[orgId]/module/[moduleId]";
+): typeof nativeRoutes.orgMarketplace | typeof nativeRoutes.orgModule {
+  return moduleId === "marketplace" ? nativeRoutes.orgMarketplace : nativeRoutes.orgModule;
 }
 
 export function getNativeModule(moduleId: string | null | undefined): NativeModuleDefinition | null {

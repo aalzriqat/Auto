@@ -17,6 +17,8 @@ describe("shared helpers", () => {
   test("exposes native route constants", () => {
     expect(nativeRoutes.home).toBe("/");
     expect(nativeRoutes.signIn).toBe("/sign-in");
+    expect(nativeRoutes.orgHome).toBe("/org/[orgId]/home");
+    expect(nativeRoutes.orgModule).toBe("/org/[orgId]/module/[moduleId]");
   });
 
   test("builds WhatsApp human-send links", () => {

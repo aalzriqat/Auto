@@ -1,9 +1,22 @@
-import { useLocalSearchParams } from "expo-router";
+import { nativeRoutes } from "@autoflow/shared";
+import { Redirect, useLocalSearchParams } from "expo-router";
 
 import { firstParam } from "../../../src/navigation/routeParams";
-import { OrgDashboardScreen } from "../../../src/features/dashboard/OrgDashboardScreen";
 
 export default function OrgDashboardRoute() {
   const params = useLocalSearchParams<{ orgId?: string | string[] }>();
-  return <OrgDashboardScreen orgId={firstParam(params.orgId)} />;
+  const orgId = firstParam(params.orgId);
+
+  if (!orgId) {
+    return <Redirect href={nativeRoutes.home} />;
+  }
+
+  return (
+    <Redirect
+      href={{
+        pathname: nativeRoutes.orgHome,
+        params: { orgId },
+      }}
+    />
+  );
 }

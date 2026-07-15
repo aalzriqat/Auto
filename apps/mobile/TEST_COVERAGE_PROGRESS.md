@@ -986,9 +986,18 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `pnpm install`: passed; lockfile already up to date.
   - `pnpm --filter @autoflow/mobile typecheck`: passed.
   - `pnpm --filter @autoflow/mobile test`: passed with 13 suites, 100 tests, and 100% statements/branches/functions/lines.
+- 2026-07-15 18:09 +03: mobile UI modernization Phase 5 validated locally
+  - Added the org workspace Expo Router tabs layout with Home, Operations, Pipeline, Finance, and Admin tabs, Ionicons labels, locale-aware font labels, safe-area padding, and permission-based tab hiding.
+  - Preserved the legacy `/org/[orgId]` entry point by redirecting it into the Home tab while keeping module and dealer-marketplace deep-link paths unchanged through shared route constants.
+  - Added category tab routes that reuse the existing module launcher in a locked-category mode, plus shared i18n keys for all new tab and launcher copy.
+  - Expanded route-param and route-wrapper tests so every new `app/**/*.tsx` route remains at 100% coverage.
+  - `pnpm install --frozen-lockfile`: passed; lockfile already up to date.
+  - `pnpm --filter @autoflow/mobile typecheck`: passed.
+  - `pnpm --filter @autoflow/mobile test`: passed with 13 suites, 107 tests, and 100% statements/branches/functions/lines.
+  - `pnpm --filter @autoflow/shared test`: passed with 1 suite and 3 tests.
 
 ## Next Steps
 
-1. Commit Phase 4 component kit on top of `agent/mobile-ui-port`.
-2. Continue Phase 5 by introducing the org workspace bottom tab layout while preserving legacy deep links.
-3. Continue the later UI phases with typecheck and 100% mobile Jest coverage before each commit.
+1. Commit Phase 5 bottom tab navigation on top of `agent/mobile-ui-port`.
+2. Continue Phase 6 screen restyling, starting with `src/features/home/HomeScreen.tsx`.
+3. Continue the later UI/list phases with typecheck and 100% mobile Jest coverage before each commit.
