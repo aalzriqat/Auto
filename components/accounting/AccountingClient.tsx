@@ -3,12 +3,13 @@
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { BarChart3, BookOpen, Briefcase, Landmark, HandCoins, WalletCards, ScrollText, Settings, Building2 } from "lucide-react";
+import { BarChart3, BookOpen, Briefcase, Landmark, HandCoins, WalletCards, ScrollText, Settings, Building2, CalendarClock } from "lucide-react";
 import { AccountingSetupTab } from "./AccountingSetupTab";
 import { BankAccountsTab } from "./BankAccountsTab";
 import { FinancialReportsTab } from "./FinancialReportsTab";
 import { GeneralLedgerTab } from "./GeneralLedgerTab";
 import { FixedAssetsTab } from "./FixedAssetsTab";
+import { PrepaidExpensesTab } from "./PrepaidExpensesTab";
 import { PartnerEquityTab } from "./PartnerEquityTab";
 import { ClaimsTab } from "./ClaimsTab";
 import { CollectionsTab } from "./CollectionsTab";
@@ -53,6 +54,10 @@ export function AccountingClient() {
               <Briefcase className="w-4 h-4" />
               {t("FixedAssets" as any)}
             </TabsTrigger>
+            <TabsTrigger value="prepaid" className="gap-2 data-[state=active]:bg-primary/5 data-[state=active]:text-primary data-[state=active]:shadow-none px-4">
+              <CalendarClock className="w-4 h-4" />
+              {t("PrepaidExpenses" as any)}
+            </TabsTrigger>
             <TabsTrigger value="equity" className="gap-2 data-[state=active]:bg-primary/5 data-[state=active]:text-primary data-[state=active]:shadow-none px-4">
               <HandCoins className="w-4 h-4" />
               {t("PartnerEquity" as any)}
@@ -88,6 +93,9 @@ export function AccountingClient() {
           </TabsContent>
           <TabsContent value="assets" className="h-full m-0 data-[state=inactive]:hidden">
             <FixedAssetsTab />
+          </TabsContent>
+          <TabsContent value="prepaid" className="h-full m-0 data-[state=inactive]:hidden">
+            <PrepaidExpensesTab />
           </TabsContent>
           <TabsContent value="equity" className="h-full m-0 data-[state=inactive]:hidden">
             <PartnerEquityTab />

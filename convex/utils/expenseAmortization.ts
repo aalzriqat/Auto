@@ -46,6 +46,26 @@ export function yearMonthStringIndex(ym: string): number {
   return year * 12 + (month - 1);
 }
 
+/** "YYYY-MM" for an absolute month index (year*12 + 0-based month) — inverse of yearMonthStringIndex. */
+export function yearMonthFromIndex(idx: number): string {
+  const year = Math.floor(idx / 12);
+  const month = idx % 12;
+  return `${year}-${String(month + 1).padStart(2, "0")}`;
+}
+
+/**
+ * A timestamp that falls inside calendar month `idx` (its last millisecond),
+ * clamped to `now` so the in-progress current month posts as-of-now rather
+ * than a future date. Shared by the cron and the accountant-triggered manual
+ * run so a caught-up schedule dates each recognition to its own month either way.
+ */
+export function occurredAtForMonthIndex(idx: number, now: number): number {
+  const year = Math.floor(idx / 12);
+  const month = idx % 12;
+  const endOfMonth = Date.UTC(year, month + 1, 0, 23, 59, 59, 999);
+  return Math.min(endOfMonth, now);
+}
+
 function clampMonths(value: number, max: number): number {
   return Math.min(Math.max(value, 0), max);
 }
@@ -161,18 +181,50 @@ export function computeAmortizationInfoFromSchedule(
   };
 }
 
+/** A schedule's current recognition anchor — how far it's actually gotten, as of right now. */
+export interface ScheduleProgress {
+  recognizedMinor: number;
+  monthsRecognized: number;
+}
+
 /**
  * Cumulative recognition a schedule is DUE to have posted through the calendar
  * month containing `asOfDate` — the "should have recognized by now" figure the
  * period-close blocker compares against `recognizedMinor` to catch a schedule
  * that has silently fallen behind (a missed cron month within the period).
+ *
+ * Anchored at the schedule's CURRENT progress (recognizedMinor/monthsRecognized)
+ * and projected forward month by month using the same remaining-balance /
+ * remaining-months share amortizeScheduleForMonth actually posts — not a
+ * whole-curve recompute from month 0. A pure recompute would silently
+ * misstate this the moment correctSchedule changes totalMinor/termMonths: it
+ * would compare against what the schedule "should" have recognized under the
+ * NEW total from the very start, which the schedule's already-posted months
+ * never followed (they posted at the OLD rate) — producing a false shortfall
+ * that blocks a period close even though the schedule is fully caught up.
  */
-export function recognizedDueThroughDateMinor(schedule: ScheduleLike, asOfDate: number): number {
-  const monthsElapsed = clampMonths(
+export function recognizedDueThroughDateMinor(
+  schedule: ScheduleLike,
+  progress: ScheduleProgress,
+  asOfDate: number
+): number {
+  const monthsElapsedTarget = clampMonths(
     yearMonthIndex(asOfDate) - yearMonthStringIndex(schedule.startYearMonth) + 1,
     schedule.termMonths
   );
-  return recognizedThroughMonthsMinor(schedule.totalMinor, schedule.termMonths, monthsElapsed);
+  const alreadyRecognizedMonths = clampMonths(progress.monthsRecognized, schedule.termMonths);
+  if (monthsElapsedTarget <= alreadyRecognizedMonths) return progress.recognizedMinor;
+
+  let dueMinor = progress.recognizedMinor;
+  let remainingMinor = schedule.totalMinor - progress.recognizedMinor;
+  let remainingMonths = schedule.termMonths - alreadyRecognizedMonths;
+  for (let m = alreadyRecognizedMonths + 1; m <= monthsElapsedTarget; m++) {
+    const monthShare = remainingMonths <= 1 ? remainingMinor : Math.floor(remainingMinor / remainingMonths);
+    dueMinor += monthShare;
+    remainingMinor -= monthShare;
+    remainingMonths -= 1;
+  }
+  return dueMinor;
 }
 
 /**

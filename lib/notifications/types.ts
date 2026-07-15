@@ -75,6 +75,7 @@ export const NOTIFICATION_TYPES = {
   "claim.updated": { category: "finance", priority: "normal", criticalDefault: false },
   "fixedAsset.changed": { category: "finance", priority: "normal", criticalDefault: false },
   "vehicle.cost_corrected": { category: "finance", priority: "urgent", criticalDefault: true },
+  "accounting.prepaidAmortizationFailed": { category: "finance", priority: "urgent", criticalDefault: true },
   "partnerEquity.changed": { category: "finance", priority: "normal", criticalDefault: false },
   "approval.requested": { category: "finance", priority: "urgent", criticalDefault: true },
   "approval.responded": { category: "finance", priority: "urgent", criticalDefault: true },

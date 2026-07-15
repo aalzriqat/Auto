@@ -28,6 +28,10 @@ export const expenseSchema = z
     notes: z.string().optional(),
     isPrepaid: z.boolean().optional(),
     amortizationMonths: z.coerce.number().int().min(1).max(600).optional(),
+    // When the covered service/coverage period actually starts, if later than
+    // the payment date (e.g. insurance paid in June covering July onward).
+    // Left empty, recognition begins the month the expense was paid.
+    amortizationStartDate: z.string().optional(),
   })
   .refine((v) => !v.isPrepaid || (v.amortizationMonths !== undefined && v.amortizationMonths >= 1), {
     message: "Enter how many months to amortize over",

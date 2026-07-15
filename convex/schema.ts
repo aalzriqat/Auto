@@ -422,6 +422,9 @@ export default defineSchema({
       v.literal("ALLOCATE_PAYMENT"),
       v.literal("REVERSE_ALLOCATION"),
       v.literal("IGNORE_BANK_STATEMENT_LINE"),
+      v.literal("CORRECT_PREPAID_SCHEDULE"),
+      v.literal("RESOLVE_SYSTEM_ACCOUNT_ADOPTION"),
+      v.literal("ACKNOWLEDGE_CLOSE_WARNINGS"),
     ),
     resourceType: v.string(),
     resourceId: v.string(),
@@ -995,7 +998,7 @@ export default defineSchema({
     // RENT_EXPENSE). Stored so recognition posts to the same account the
     // original expense would have hit, without re-deriving from category later.
     expenseSystemKey: v.string(),
-    startYearMonth: v.string(), // "YYYY-MM" — the month recognition begins (expense.date's month)
+    startYearMonth: v.string(), // "YYYY-MM" — the month recognition begins (expense.date's month, or expense.amortizationStartDate's if given)
     recognizedMinor: v.number(),
     // Contractual month count actually recognized so far — distinct from
     // recognizedMinor/lastRecognizedYearMonth, which alone can't tell the
@@ -1014,6 +1017,41 @@ export default defineSchema({
     .index("by_org", ["orgId"])
     .index("by_status", ["status"])
     .index("by_expense", ["expenseId"]),
+
+  // One row per failed cron catch-up attempt on a schedule — the cron's
+  // aggregate stats.failed counter used to discard which schedule/org/error
+  // caused a failure, leaving nothing an accountant or support engineer could
+  // act on. Kept until resolvedAt is set (by a successful manual retry).
+  prepaidAmortizationFailures: defineTable({
+    orgId: v.id("organizations"),
+    scheduleId: v.id("prepaidExpenseSchedules"),
+    yearMonth: v.string(), // the run's target month when the failure occurred
+    errorMessage: v.string(),
+    createdAt: v.number(),
+    resolvedAt: v.optional(v.number()),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_schedule", ["scheduleId"]),
+
+  // Audit trail for a schedule correction (partial refund, non-refundable
+  // write-off, or term change) — the only way to adjust a schedule short of
+  // the full reversal path. One row per correction event; scheduleView reads
+  // the schedule's own totalMinor/termMonths for current state, this table is
+  // the "what happened and why" history for the accountant-facing UI.
+  prepaidScheduleCorrections: defineTable({
+    orgId: v.id("organizations"),
+    scheduleId: v.id("prepaidExpenseSchedules"),
+    refundMinor: v.number(), // cash/bank refund received for the unused portion, 0 if none
+    refundPaymentMethod: v.optional(paymentMethodValidator),
+    writeOffMinor: v.number(), // non-refundable unused portion expensed immediately, 0 if none
+    previousTermMonths: v.number(),
+    newTermMonths: v.number(),
+    reason: v.string(),
+    actorId: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_org", ["orgId"])
+    .index("by_schedule", ["scheduleId"]),
 
   expenses: defineTable({
     orgId: v.id("organizations"),
@@ -1038,6 +1076,10 @@ export default defineSchema({
     ),
     isPrepaid: v.optional(v.boolean()),
     amortizationMonths: v.optional(v.number()),
+    // When the prepaid coverage/service actually begins, if later than `date`
+    // (e.g. insurance paid in June covering July onward). Optional — defaults
+    // to `date` when absent, preserving old behavior for every existing row.
+    amortizationStartDate: v.optional(v.number()),
     // Portion of amount that is input VAT paid (tax-inclusive, not additive) —
     // feeds the VAT return's input side. Optional/backward compatible.
     taxAmount: v.optional(v.number()),

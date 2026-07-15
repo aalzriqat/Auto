@@ -19,6 +19,7 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { recognizedThroughMonthsMinor, monthAmountMinor } from "./utils/expenseAmortization";
+import { computePrepaidRecognitionShortfall } from "./accountingReports";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -412,6 +413,86 @@ describe("Fix B3 — catch-up recognizes each missed month in its own month, nev
   });
 });
 
+// ─── Corrections stay consistent with future recognition ──────────────────────
+
+describe("correctSchedule — a partial correction stays consistent with future recognition", () => {
+  test("a write-off that doesn't end the schedule re-bases future months off the remaining balance, not the original curve", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("correct-writeoff");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+
+    // 3 months recognized the normal way: 100/month, 300 total.
+    for (const m of ["2026-01", "2026-02", "2026-03"]) {
+      await amortize(t, orgId, schedule!._id, userId, m);
+    }
+    expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(300_000);
+
+    // Write off 300 (minor units: 300_000) of the unrecognized remainder
+    // (900_000 - 300_000 = 600_000 left), term unchanged — the schedule
+    // keeps recognizing for 9 more months.
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Early cancellation, non-refundable portion",
+    });
+
+    // A naive recompute from the ORIGINAL (now-stale) curve would give
+    // floor(900_000*4/12) - floor(900_000*3/12) = 300_000 - 225_000 = 75_000
+    // for month 4 — wrong, because months 1-3 were already posted at the OLD
+    // 100_000/month rate and can't be restated. The correct month-4 amount
+    // re-derives from what's actually left: 600_000 over 9 remaining months.
+    const april = await amortize(t, orgId, schedule!._id, userId, "2026-04");
+    expect(april.posted).toBe(true);
+    expect(april.amountMinor).toBe(66_666); // floor(600_000 / 9)
+    expect(april.amountMinor).not.toBe(75_000);
+
+    // Run every remaining month through the schedule's original 12-month
+    // term; the corrected total (900) must be recognized exactly — no more,
+    // no less — regardless of the rate change partway through.
+    for (const m of ["2026-05", "2026-06", "2026-07", "2026-08", "2026-09", "2026-10", "2026-11", "2026-12"]) {
+      await amortize(t, orgId, schedule!._id, userId, m);
+    }
+    const finalSchedule = await scheduleForExpense(t, expenseId);
+    expect(finalSchedule!.status).toBe("FULLY_AMORTIZED");
+    expect(finalSchedule!.recognizedMinor).toBe(900_000);
+    expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(0);
+    // 300_000 recognized months 1-3 (unchanged) + 300_000 write-off (its own GL
+    // line, posted immediately) + 600_000 recognized months 4-12 post-correction
+    // = the full original 1_200_000 net expense, just reclassified in timing.
+    expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(1_200_000);
+  });
+
+  test("shortening the term doesn't produce a false shortfall once caught up under the new term", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("correct-shorten");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    for (const m of ["2026-01", "2026-02", "2026-03"]) {
+      await amortize(t, orgId, schedule!._id, userId, m);
+    }
+
+    // Shorten the remaining term from 12 to 6 months — a naive "due" estimate
+    // recomputed from the new term as if it applied from month 1 would say
+    // floor(1_200_000*4/6) = 800_000 is due by month 4, when only 600_000
+    // (300_000 already posted + the correctly re-based month-4 share) can
+    // legitimately exist yet — checked at month 4 specifically (not the
+    // eventual final month, where both formulas converge to the same total
+    // by construction and so wouldn't distinguish the bug).
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, newTermMonths: 6, reason: "Contract shortened to 6 months",
+    });
+    await amortize(t, orgId, schedule!._id, userId, "2026-04");
+
+    const shortfall = await t.run((ctx) =>
+      computePrepaidRecognitionShortfall(ctx, orgId, Date.UTC(2026, 3, 30, 23, 59, 59, 999))
+    );
+    expect(shortfall.hasShortfall).toBe(false);
+  });
+});
+
 // ─── Fix #4: chart self-heal code-collision safety ────────────────────────────
 
 describe("Fix #4 — chart self-heal never duplicates or hijacks a code", () => {
@@ -438,7 +519,7 @@ describe("Fix #4 — chart self-heal never duplicates or hijacks a code", () => 
     ).rejects.toThrow(/conflict/i);
   });
 
-  test("a compatible unmapped account on the reserved code is adopted, not duplicated, and its posting-safety flags are normalized (Fix #10)", async () => {
+  test("a compatible unmapped account on the reserved code parks an adoption request instead of silently adopting (Fix #10)", async () => {
     const { t, orgId, asOwner } = await seedDealer("adopt");
     await t.run(async (ctx) => {
       const mapped = await ctx.db.query("chartOfAccounts").withIndex("by_org_systemKey", (q) => q.eq("orgId", orgId).eq("systemKey", "PREPAID_EXPENSES")).unique();
@@ -453,6 +534,27 @@ describe("Fix #4 — chart self-heal never duplicates or hijacks a code", () => 
       });
     });
 
+    // Silently adopting a shape-compatible account used to happen inline —
+    // now it's an explicit decision: posting is blocked with a clear pointer
+    // to Chart of Accounts > Resolve Conflicts until an owner/finance user
+    // resolves the parked request (confirmSystemAccountAdoption).
+    await expect(
+      asOwner.mutation(api.expenses.create, {
+        orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+        category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+      })
+    ).rejects.toThrow(/explicit mapping decision/i);
+
+    const conflicts = await asOwner.query(api.chartOfAccounts.listSystemAccountAdoptionRequests, { orgId });
+    expect(conflicts).toHaveLength(1);
+    expect(conflicts[0].systemKey).toBe("PREPAID_EXPENSES");
+    expect(conflicts[0].code).toBe("1450");
+
+    await asOwner.mutation(api.chartOfAccounts.confirmSystemAccountAdoption, {
+      orgId, systemKey: "PREPAID_EXPENSES", decision: "ADOPT",
+    });
+
+    // Once resolved, the same posting succeeds and reuses the adopted account.
     await asOwner.mutation(api.expenses.create, {
       orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
       category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
@@ -470,6 +572,10 @@ describe("Fix #4 — chart self-heal never duplicates or hijacks a code", () => 
     expect(on1450[0].allowManualPosting).toBe(false);
     expect(on1450[0].name).toBe("Prepaids (hand-made)"); // user-chosen name kept
     expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(1_200_000);
+
+    // Resolved: the conflict no longer appears (the account is now mapped).
+    const conflictsAfter = await asOwner.query(api.chartOfAccounts.listSystemAccountAdoptionRequests, { orgId });
+    expect(conflictsAfter).toHaveLength(0);
   });
 });
 
@@ -493,8 +599,12 @@ describe("Fix #1 — a current-state subledger discrepancy warns but does not bl
     expect(checklist.blockers.some((b: string) => /Vehicle Inventory/i.test(b))).toBe(false);
     expect(checklist.warnings.some((w: string) => /Vehicle Inventory/i.test(w))).toBe(true);
 
-    // And the close actually succeeds without an override.
-    await asOwner.mutation(api.accountingPeriods.close, { orgId, periodId: period._id });
+    // And the close actually succeeds without an override, once every warning
+    // is acknowledged (the review dialog is the only realistic caller — see
+    // ClosePeriodReviewDialog.tsx — but the backend re-validates independently).
+    await asOwner.mutation(api.accountingPeriods.close, {
+      orgId, periodId: period._id, acknowledgedWarnings: checklist.warnings,
+    });
     const closed = await asOwner.query(api.accountingPeriods.get, { orgId, periodId: period._id });
     expect(closed!.status).toBe("CLOSED");
   });

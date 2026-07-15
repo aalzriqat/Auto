@@ -30,7 +30,10 @@ type AuditActionType =
   | "MIGRATE_TRANSACTION"
   | "ALLOCATE_PAYMENT"
   | "REVERSE_ALLOCATION"
-  | "IGNORE_BANK_STATEMENT_LINE";
+  | "IGNORE_BANK_STATEMENT_LINE"
+  | "CORRECT_PREPAID_SCHEDULE"
+  | "RESOLVE_SYSTEM_ACCOUNT_ADOPTION"
+  | "ACKNOWLEDGE_CLOSE_WARNINGS";
 
 // ─── Internal: write audit entry ─────────────────────────────────────────────
 

@@ -435,6 +435,12 @@ export const close = mutation({
     // override + reason, for cases the checklist can't model (e.g. a known,
     // accepted rounding discrepancy) — but the override is always audited.
     overrideReason: v.optional(v.string()),
+    // Every current warning's exact text (from closeChecklist), required
+    // before a close proceeds when warnings exist. This is what forces the
+    // caller to have actually fetched and displayed the checklist rather than
+    // calling close() directly — the review dialog is the only realistic way
+    // to produce this list.
+    acknowledgedWarnings: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -469,6 +475,16 @@ export const close = mutation({
       overrideReason = trimmedReason;
     }
 
+    if (checklist.warnings.length > 0) {
+      const acknowledged = new Set(args.acknowledgedWarnings ?? []);
+      const missing = checklist.warnings.filter((w) => !acknowledged.has(w));
+      if (missing.length > 0) {
+        throw new ConvexError(
+          `Review and acknowledge every warning before closing: ${missing.join(" ")}`
+        );
+      }
+    }
+
     const now = Date.now();
     await ctx.db.patch(args.periodId, {
       status: "CLOSED",
@@ -478,9 +494,11 @@ export const close = mutation({
     await auditLog(ctx, {
       orgId: args.orgId, actorId: user._id, actionType: "CLOSE_PERIOD",
       resourceType: "accountingPeriods", resourceId: args.periodId.toString(),
-      description: overrideReason
-        ? `Closed period ${period.fiscalYear}-${String(period.periodNumber).padStart(2, "0")} despite open blockers (${checklist.blockers.join(" ")}) — override: ${overrideReason}`
-        : `Closed period ${period.fiscalYear}-${String(period.periodNumber).padStart(2, "0")}`,
+      description:
+        (overrideReason
+          ? `Closed period ${period.fiscalYear}-${String(period.periodNumber).padStart(2, "0")} despite open blockers (${checklist.blockers.join(" ")}) — override: ${overrideReason}`
+          : `Closed period ${period.fiscalYear}-${String(period.periodNumber).padStart(2, "0")}`) +
+        (checklist.warnings.length > 0 ? ` Acknowledged warnings: ${checklist.warnings.join(" | ")}` : ""),
     });
     return args.periodId;
   },

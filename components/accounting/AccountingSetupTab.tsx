@@ -13,13 +13,16 @@ import { toast } from "@/components/ui/sonner";
 import { errorMessage, LoadingAccountingState } from "./AccountingTabShared";
 import { AccountingPeriodsTable, accountingPeriodActionKey } from "./setup/AccountingPeriodsTable";
 import { CreateAccountingPeriodDialog } from "./setup/CreateAccountingPeriodDialog";
+import { ClosePeriodReviewDialog } from "./setup/ClosePeriodReviewDialog";
 import { PendingAccountingEventsTable } from "./setup/PendingAccountingEventsTable";
 import { SetupStatusCards } from "./setup/SetupStatusCards";
+import { SystemAccountConflictsPanel } from "./setup/SystemAccountConflictsPanel";
 import {
   dateInputToEndOfDayMs,
   dateInputToStartOfDayMs,
   defaultPeriodForm,
   type PeriodFormState,
+  type PeriodSummary,
 } from "./setup/types";
 
 type SetupActionMessage<T> = (outcome: T) => string;
@@ -31,6 +34,7 @@ export function AccountingSetupTab() {
   const [periodDialogOpen, setPeriodDialogOpen] = useState(false);
   const [periodForm, setPeriodForm] = useState<PeriodFormState>(defaultPeriodForm);
   const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [closeReviewPeriod, setCloseReviewPeriod] = useState<PeriodSummary | null>(null);
 
   const setupStatus = useQuery(
     api.accountingSetup.status,
@@ -39,7 +43,6 @@ export function AccountingSetupTab() {
   const initializeChart = useMutation(api.chartOfAccounts.initialize);
   const createPeriod = useMutation(api.accountingPeriods.create);
   const openPeriod = useMutation(api.accountingPeriods.open);
-  const closePeriod = useMutation(api.accountingPeriods.close);
   const lockPeriod = useMutation(api.accountingPeriods.lock);
   const redriveOutbox = useMutation(api.accountingOutbox.redrive);
 
@@ -154,6 +157,8 @@ export function AccountingSetupTab() {
         </div>
       )}
 
+      <SystemAccountConflictsPanel orgId={activeOrgId} canManageFinance={canManageFinance} t={t} />
+
       <AccountingPeriodsTable
         periods={setupStatus.recentPeriods}
         canManageFinance={canManageFinance}
@@ -167,14 +172,10 @@ export function AccountingSetupTab() {
             "AccountingPeriodOpened"
           )
         }
-        onClose={(periodId) =>
-          periodAction(
-            periodId,
-            "close",
-            () => closePeriod({ orgId: activeOrgId, periodId }),
-            "AccountingPeriodClosed"
-          )
-        }
+        onClose={(periodId) => {
+          const period = setupStatus.recentPeriods.find((p) => p._id === periodId);
+          if (period) setCloseReviewPeriod(period);
+        }}
         onLock={(periodId) =>
           periodAction(
             periodId,
@@ -188,6 +189,17 @@ export function AccountingSetupTab() {
       <PendingAccountingEventsTable
         events={setupStatus.pendingEvents}
         hasMore={setupStatus.hasMorePendingEvents}
+        t={t}
+      />
+
+      <ClosePeriodReviewDialog
+        orgId={activeOrgId}
+        period={closeReviewPeriod}
+        open={closeReviewPeriod !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen) setCloseReviewPeriod(null);
+        }}
+        onClosed={() => setCloseReviewPeriod(null)}
         t={t}
       />
     </div>

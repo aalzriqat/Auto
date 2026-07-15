@@ -39,6 +39,8 @@ export type EventType =
   | "TRADE_IN_ACCEPTED"
   | "FI_COMMISSION_RECOGNIZED"
   | "PREPAID_EXPENSE_AMORTIZED"
+  | "PREPAID_EXPENSE_REFUNDED"
+  | "PREPAID_EXPENSE_WRITTEN_OFF"
   | "RECEIVABLE_CREATED"
   | "JOURNAL_REVERSAL";
 
@@ -57,6 +59,8 @@ export const ALL_EVENT_TYPES = new Set<string>([
   "VEHICLE_ACQUISITION_COST_CORRECTED", "VEHICLE_PREP_EXPENSE_RECLASSIFIED", "TRADE_IN_ACCEPTED",
   "FI_COMMISSION_RECOGNIZED",
   "PREPAID_EXPENSE_AMORTIZED",
+  "PREPAID_EXPENSE_REFUNDED",
+  "PREPAID_EXPENSE_WRITTEN_OFF",
   "RECEIVABLE_CREATED",
   // JOURNAL_REVERSAL is intentionally excluded: it is written directly by
   // reverseAccountingEvent() in reversals.ts and never goes through postAccountingEvent().
@@ -548,6 +552,47 @@ export function rulePrepaidExpenseAmortized(p: PrepaidExpenseAmortizedPayload): 
       line(SYSTEM_KEYS.PREPAID_EXPENSES, 0, p.amountMinor, "Prepaid expense asset released"),
     ],
     memo: "Monthly prepaid expense amortization",
+    category: "SYSTEM",
+  };
+}
+
+export interface PrepaidExpenseRefundedPayload {
+  scheduleId: string;
+  amountMinor: number;
+  currency: string;
+  paymentMethod?: string;
+}
+
+/**
+ * A vendor refunds the unused (not-yet-recognized) portion of a prepaid
+ * expense in cash/bank — the reverse cash-flow of ruleExpensePosted's prepaid
+ * line, for exactly the unused remainder rather than the whole asset.
+ */
+export function rulePrepaidExpenseRefunded(p: PrepaidExpenseRefundedPayload): RuleResult {
+  return {
+    lines: [
+      line(cashAccountKey(p.paymentMethod), p.amountMinor, 0, "Prepaid expense refund received"),
+      line(SYSTEM_KEYS.PREPAID_EXPENSES, 0, p.amountMinor, "Prepaid expense asset released (refund)"),
+    ],
+    memo: "Prepaid expense partially refunded",
+    category: "SYSTEM",
+  };
+}
+
+/**
+ * Same shape as rulePrepaidExpenseAmortized (release the asset into its
+ * operating-expense account) but for a non-refundable unused remainder being
+ * expensed immediately on early cancellation/write-off, rather than ratably
+ * over the remaining term — a distinct eventType so the GL and reports can
+ * tell an accelerated write-off apart from ordinary monthly recognition.
+ */
+export function rulePrepaidExpenseWrittenOff(p: PrepaidExpenseAmortizedPayload): RuleResult {
+  return {
+    lines: [
+      line(p.expenseSystemKey as SystemKey, p.amountMinor, 0, "Prepaid expense written off"),
+      line(SYSTEM_KEYS.PREPAID_EXPENSES, 0, p.amountMinor, "Prepaid expense asset released (write-off)"),
+    ],
+    memo: "Prepaid expense unused balance written off",
     category: "SYSTEM",
   };
 }
@@ -1266,6 +1311,8 @@ export function applyPostingRule(eventType: string, payload: Record<string, unkn
     case "DEPRECIATION_POSTED": return ruleDepreciationPosted(payload as unknown as DepreciationPostedPayload);
     case "FI_COMMISSION_RECOGNIZED": return ruleFiCommissionRecognized(payload as unknown as FiCommissionRecognizedPayload);
     case "PREPAID_EXPENSE_AMORTIZED": return rulePrepaidExpenseAmortized(payload as unknown as PrepaidExpenseAmortizedPayload);
+    case "PREPAID_EXPENSE_REFUNDED": return rulePrepaidExpenseRefunded(payload as unknown as PrepaidExpenseRefundedPayload);
+    case "PREPAID_EXPENSE_WRITTEN_OFF": return rulePrepaidExpenseWrittenOff(payload as unknown as PrepaidExpenseAmortizedPayload);
     case "ASSET_IMPAIRED": return ruleAssetImpaired(payload as unknown as AssetImpairedPayload);
     case "ASSET_DISPOSED": return ruleAssetDisposed(payload as unknown as AssetDisposedPayload);
     case "CAPITAL_CONTRIBUTED": return ruleCapitalContributed(payload as unknown as PartnerEquityMovementPayload);
