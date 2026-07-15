@@ -1101,6 +1101,11 @@ export async function hookPrepaidExpenseAmortized(
       amountMinor: args.amountMinor,
       currency: args.currency,
       expenseSystemKey: args.expenseSystemKey,
+      // Explicit recognition month for the report's event-derived bucketing
+      // (utils/prepaidRecognitionEvents.ts) — previously only encoded in the
+      // sourceId suffix, which the report parses as a fallback for events
+      // posted before this field existed.
+      yearMonth: args.yearMonth,
     },
   });
 }

@@ -20,6 +20,7 @@ import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { recognizedThroughMonthsMinor, monthAmountMinor } from "./utils/expenseAmortization";
 import { computePrepaidRecognitionShortfall } from "./accountingReports";
+import { toYearMonth } from "./prepaidExpenses";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -325,6 +326,163 @@ describe("prepaid expense — operational report matches the GL", () => {
     });
     expect(report.totalExpenses).toBeCloseTo(100, 6); // March's 1/12
     expect(report.expenses.some((e: { _id: Id<"expenses"> }) => e._id === expenseId)).toBe(true);
+  });
+});
+
+// ─── Phase 1 — report derives from GL events, not a curve recompute ───────────
+
+/** UTC month bounds for a "YYYY-MM" string, for report startDate/endDate. */
+function monthRange(yearMonth: string): { start: number; end: number } {
+  const [year, month] = yearMonth.split("-").map(Number);
+  return { start: Date.UTC(year, month - 1, 1), end: Date.UTC(year, month, 0, 23, 59, 59, 999) };
+}
+
+describe("Phase 1 — report derives from posted/parked recognition events, never a curve recompute", () => {
+  test("a write-off's accelerated expense shows up in its own correction month, never restating already-posted months", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("evt-writeoff");
+    await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await t.run((ctx) => ctx.db.query("prepaidExpenseSchedules").first());
+    for (const m of ["2026-01", "2026-02", "2026-03"]) {
+      await amortize(t, orgId, schedule!._id, userId, m);
+    }
+    for (const monthIdx of [0, 1, 2]) {
+      const report = await asOwner.query(api.reports.getExpensesReport, {
+        orgId, startDate: Date.UTC(2026, monthIdx, 1), endDate: Date.UTC(2026, monthIdx, 28, 23, 59, 59, 999),
+      });
+      expect(report.totalExpenses).toBeCloseTo(100, 6);
+    }
+
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Early cancellation, non-refundable portion",
+    });
+
+    // correctSchedule dates its GL event at real wall-clock "now" — the
+    // write-off shows up there, in full, and nowhere else.
+    const { start, end } = monthRange(toYearMonth(Date.now()));
+    const correctionReport = await asOwner.query(api.reports.getExpensesReport, { orgId, startDate: start, endDate: end });
+    expect(correctionReport.totalExpenses).toBeCloseTo(300, 6);
+
+    // Jan-Mar still report exactly what they always did — the correction
+    // never leaks backward into an already-reported month.
+    for (const monthIdx of [0, 1, 2]) {
+      const report = await asOwner.query(api.reports.getExpensesReport, {
+        orgId, startDate: Date.UTC(2026, monthIdx, 1), endDate: Date.UTC(2026, monthIdx, 28, 23, 59, 59, 999),
+      });
+      expect(report.totalExpenses).toBeCloseTo(100, 6);
+    }
+
+    // Finish out the corrected schedule; a lifetime report totals exactly
+    // what the GL posted (300 amortized + 300 write-off + 600 amortized) —
+    // the original 1200, just reclassified in timing, never more or less.
+    for (const m of ["2026-04", "2026-05", "2026-06", "2026-07", "2026-08", "2026-09", "2026-10", "2026-11", "2026-12"]) {
+      await amortize(t, orgId, schedule!._id, userId, m);
+    }
+    const lifetimeReport = await asOwner.query(api.reports.getExpensesReport, {
+      orgId, startDate: Date.UTC(2000, 0, 1), endDate: Date.UTC(2100, 0, 1),
+    });
+    expect(lifetimeReport.totalExpenses).toBeCloseTo(1200, 6);
+    expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(1_200_000);
+  });
+
+  test("a refund never appears in the P&L (cash vs asset, not an expense), and history/future months are unaffected", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("evt-refund");
+    await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await t.run((ctx) => ctx.db.query("prepaidExpenseSchedules").first());
+    for (const m of ["2026-01", "2026-02", "2026-03"]) {
+      await amortize(t, orgId, schedule!._id, userId, m);
+    }
+
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, refundMinor: 300_000, refundPaymentMethod: "CASH", reason: "Early cancellation, refunded",
+    });
+
+    const { start, end } = monthRange(toYearMonth(Date.now()));
+    const correctionReport = await asOwner.query(api.reports.getExpensesReport, { orgId, startDate: start, endDate: end });
+    expect(correctionReport.totalExpenses).toBe(0);
+
+    for (const monthIdx of [0, 1, 2]) {
+      const report = await asOwner.query(api.reports.getExpensesReport, {
+        orgId, startDate: Date.UTC(2026, monthIdx, 1), endDate: Date.UTC(2026, monthIdx, 28, 23, 59, 59, 999),
+      });
+      expect(report.totalExpenses).toBeCloseTo(100, 6);
+    }
+
+    // Future recognition re-bases off what's actually left (900 over 9
+    // remaining months), same as the write-off case, and reports correctly.
+    const april = await amortize(t, orgId, schedule!._id, userId, "2026-04");
+    expect(april.amountMinor).toBe(66_666);
+    const aprilReport = await asOwner.query(api.reports.getExpensesReport, {
+      orgId, startDate: Date.UTC(2026, 3, 1), endDate: Date.UTC(2026, 3, 30, 23, 59, 59, 999),
+    });
+    expect(aprilReport.totalExpenses).toBeCloseTo(66.666, 3);
+  });
+
+  test("a correction that consumes the full remainder cancels the schedule, but prior months still report with no expense-doc double count", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("evt-full-writeoff");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, writeOffMinor: 1_100_000, reason: "Full write-off, contract voided",
+    });
+    expect((await scheduleForExpense(t, expenseId))!.status).toBe("CANCELLED");
+
+    // January's already-posted month still reports exactly 100 — cancellation
+    // stops future recognition, it doesn't erase history or fall back to the
+    // raw expense-doc curve (which would show the full 1200 for January).
+    const januaryReport = await asOwner.query(api.reports.getExpensesReport, {
+      orgId, startDate: Date.UTC(2026, 0, 1), endDate: Date.UTC(2026, 0, 31, 23, 59, 59, 999),
+    });
+    expect(januaryReport.totalExpenses).toBeCloseTo(100, 6);
+
+    // Lifetime total equals the GL total exactly once (no double count from
+    // the CANCELLED-schedule doc fallback, no dropped write-off).
+    const lifetimeReport = await asOwner.query(api.reports.getExpensesReport, {
+      orgId, startDate: Date.UTC(2000, 0, 1), endDate: Date.UTC(2100, 0, 1),
+    });
+    expect(lifetimeReport.totalExpenses).toBeCloseTo(1200, 6);
+  });
+
+  test("a month parked in the outbox behind a closed period still reports in its own month", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("evt-parked");
+    await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await t.run((ctx) => ctx.db.query("prepaidExpenseSchedules").first());
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    // Simulate February's recognition having operationally happened
+    // (recognizedMinor bumped, same as amortizeScheduleForMonth) but its GL
+    // posting queued behind a closed period instead of posted immediately —
+    // the same outbox shape a real deferred posting produces.
+    await t.run((ctx) =>
+      ctx.db.patch(schedule!._id, { recognizedMinor: 200_000, monthsRecognized: 2, lastRecognizedYearMonth: "2026-02" })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("pendingAccountingEvents", {
+        orgId, kind: "POST", status: "PENDING", idempotencyKey: `prepaid_amort_${schedule!._id}_2026-02`,
+        accountingDate: Date.UTC(2026, 1, 28), actorId: userId, attempts: 0, createdAt: Date.now(),
+        eventType: "PREPAID_EXPENSE_AMORTIZED", sourceType: "prepaidExpenseSchedules",
+        sourceId: `prepaid_amort_${schedule!._id}_2026-02`,
+        payload: { scheduleId: schedule!._id.toString(), amountMinor: 100_000, currency: "JOD", yearMonth: "2026-02" },
+      })
+    );
+
+    const report = await asOwner.query(api.reports.getExpensesReport, {
+      orgId, startDate: Date.UTC(2026, 1, 1), endDate: Date.UTC(2026, 1, 28, 23, 59, 59, 999),
+    });
+    expect(report.totalExpenses).toBeCloseTo(100, 6);
   });
 });
 
