@@ -36,7 +36,22 @@ export const expenseSchema = z
   .refine((v) => !v.isPrepaid || (v.amortizationMonths !== undefined && v.amortizationMonths >= 1), {
     message: "Enter how many months to amortize over",
     path: ["amortizationMonths"],
-  });
+  })
+  // Month-level comparison (not day-level): recognition is bucketed by
+  // calendar month, so a start date a few days earlier in the same month as
+  // the expense changes nothing — the backend (expenses.ts
+  // normalizePrepaidFields) applies the same rule and is the real authority.
+  .refine(
+    (v) =>
+      !v.isPrepaid ||
+      !v.amortizationStartDate ||
+      !v.date ||
+      v.amortizationStartDate.slice(0, 7) >= v.date.slice(0, 7),
+    {
+      message: "Amortization can't start before the month the expense was paid",
+      path: ["amortizationStartDate"],
+    }
+  );
 
 export type ExpenseFormValues = z.infer<typeof expenseSchema>;
 

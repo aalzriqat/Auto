@@ -79,6 +79,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
   });
   const paymentStatus = form.watch("status");
   const isPrepaid = form.watch("isPrepaid");
+  const expenseDateValue = form.watch("date");
 
   useEffect(() => {
     if (expense && open) {
@@ -445,7 +446,7 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
                           <FormItem className="max-w-[220px]">
                             <FormLabel>{t("AmortizationStartDateLabel" as any)}</FormLabel>
                             <FormControl>
-                              <Input type="date" {...field} />
+                              <Input type="date" min={expenseDateValue || undefined} {...field} />
                             </FormControl>
                             <p className="text-xs text-muted-foreground">{t("AmortizationStartDateHint" as any)}</p>
                             <FormMessage />

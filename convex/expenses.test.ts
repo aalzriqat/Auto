@@ -265,6 +265,68 @@ describe("expenses.update", () => {
   });
 });
 
+describe("Phase 2 — amortization start date can't predate the expense's month", () => {
+  test("create rejects a start date in an earlier calendar month than the expense", async () => {
+    const { orgId, asUser } = await setup();
+    await expect(
+      asUser.mutation(api.expenses.create, {
+        orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 2, 1), // March 2026
+        category: "FEES", isPrepaid: true, amortizationMonths: 12,
+        amortizationStartDate: Date.UTC(2026, 1, 15), // February — before March
+      })
+    ).rejects.toThrow(/cannot be earlier/i);
+  });
+
+  test("create accepts a start date earlier in the SAME calendar month as the expense (month-level, not day-level)", async () => {
+    const { orgId, asUser } = await setup();
+    const expenseId = await asUser.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 2, 20),
+      category: "FEES", isPrepaid: true, amortizationMonths: 12,
+      amortizationStartDate: Date.UTC(2026, 2, 1), // same month, earlier day — allowed
+    });
+    expect(expenseId).toBeDefined();
+  });
+
+  test("create accepts a start date after the expense's month (coverage begins later)", async () => {
+    const { orgId, asUser } = await setup();
+    const expenseId = await asUser.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 2, 1),
+      category: "FEES", isPrepaid: true, amortizationMonths: 12,
+      amortizationStartDate: Date.UTC(2026, 4, 1), // May — allowed
+    });
+    expect(expenseId).toBeDefined();
+  });
+
+  test("update rejects a start date earlier than the (unchanged) expense's month", async () => {
+    const { orgId, asUser } = await setup();
+    // PENDING so the update isn't blocked by the separate "posted expenses are
+    // locked" guard, which would otherwise fire first and mask this check.
+    const expenseId = await asUser.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 2, 1),
+      category: "FEES", status: "PENDING", isPrepaid: true, amortizationMonths: 12,
+    });
+    await expect(
+      asUser.mutation(api.expenses.update, {
+        orgId, expenseId, amortizationStartDate: Date.UTC(2026, 1, 1), // February — before March
+      })
+    ).rejects.toThrow(/cannot be earlier/i);
+  });
+
+  test("update rejects moving the expense date later than an already-set start date", async () => {
+    const { orgId, asUser } = await setup();
+    const expenseId = await asUser.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 2, 1),
+      category: "FEES", status: "PENDING", isPrepaid: true, amortizationMonths: 12,
+      amortizationStartDate: Date.UTC(2026, 2, 1),
+    });
+    await expect(
+      asUser.mutation(api.expenses.update, {
+        orgId, expenseId, date: Date.UTC(2026, 3, 1), // April — now after the existing March start date
+      })
+    ).rejects.toThrow(/cannot be earlier/i);
+  });
+});
+
 describe("expenses.remove", () => {
   test("rejects deletion after an expense is posted", async () => {
     const { t, orgId, asUser } = await setup();

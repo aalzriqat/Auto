@@ -45,6 +45,7 @@ import { requireFeature } from "./subscriptions";
 import { auditLog } from "./financialAudit";
 import { notifyOwner } from "./utils/notifications";
 import { paymentMethodValidator } from "./utils/paymentMethods";
+import { runWithIdempotency } from "./utils/idempotency";
 
 /** UTC "YYYY-MM" for a timestamp — the month recognition of that expense begins. */
 export function toYearMonth(timestamp: number): string {
@@ -469,6 +470,12 @@ export const correctSchedule = mutation({
     writeOffMinor: v.optional(v.number()),
     newTermMonths: v.optional(v.number()),
     reason: v.string(),
+    // A double-click, dialog re-submit, or client retry must not create two
+    // corrections (two refunds, two write-offs) for what the accountant only
+    // intended once — same idempotency discipline expenses.create already
+    // uses. The dialog mints one fresh key per open, so a retry within one
+    // open replays safely and a second, deliberate open gets a new key.
+    idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
@@ -477,111 +484,130 @@ export const correctSchedule = mutation({
     const reason = args.reason.trim();
     if (!reason) throw new ConvexError("A reason is required for a schedule correction.");
 
-    const schedule = await ctx.db.get(args.scheduleId);
-    if (!schedule || schedule.orgId !== args.orgId) {
-      throw new ConvexError("Prepaid schedule not found in this organization.");
-    }
-    if (schedule.status !== "ACTIVE") {
-      throw new ConvexError(`Cannot correct a schedule with status "${schedule.status}".`);
-    }
-
     const refundMinor = Math.round(args.refundMinor ?? 0);
     const writeOffMinor = Math.round(args.writeOffMinor ?? 0);
-    if (refundMinor < 0 || writeOffMinor < 0) {
-      throw new ConvexError("Refund and write-off amounts cannot be negative.");
-    }
-    if (refundMinor > 0 && !args.refundPaymentMethod) {
-      throw new ConvexError("A payment method is required to record a refund.");
-    }
 
-    const newTermMonths = args.newTermMonths ?? schedule.termMonths;
-    const termChanged = newTermMonths !== schedule.termMonths;
-    if (refundMinor === 0 && writeOffMinor === 0 && !termChanged) {
-      throw new ConvexError("No change specified — provide a refund, write-off, or new term.");
-    }
-    if (!Number.isInteger(newTermMonths) || newTermMonths < 1) {
-      throw new ConvexError("Term must be a whole number of months, at least 1.");
-    }
-    const monthsRecognized = schedule.monthsRecognized ?? 0;
-    if (newTermMonths < monthsRecognized) {
-      throw new ConvexError(
-        `Term cannot be shortened below the ${monthsRecognized} month(s) already recognized. Use a write-off for the remainder instead.`
-      );
-    }
-
-    const remainingMinor = Math.max(schedule.totalMinor - schedule.recognizedMinor, 0);
-    if (refundMinor + writeOffMinor > remainingMinor) {
-      throw new ConvexError(
-        `Refund + write-off (${refundMinor + writeOffMinor}) cannot exceed the unrecognized remainder (${remainingMinor}).`
-      );
-    }
-
-    // A term equal to monthsRecognized leaves zero future months for
-    // amortizeScheduleForMonth to ever recognize — if the refund/write-off
-    // doesn't also cover the entire remainder, the leftover balance would sit
-    // ACTIVE in the Prepaid Expenses asset forever with no path to expense it.
-    if (newTermMonths <= monthsRecognized && refundMinor + writeOffMinor < remainingMinor) {
-      throw new ConvexError(
-        "The corrected term leaves no future month to recognize the remaining balance — either keep at least one month beyond what's already recognized, or write off/refund the full remainder."
-      );
-    }
-
-    const now = Date.now();
-    const correctionId = await ctx.db.insert("prepaidScheduleCorrections", {
-      orgId: args.orgId,
-      scheduleId: args.scheduleId,
-      refundMinor,
-      refundPaymentMethod: refundMinor > 0 ? args.refundPaymentMethod : undefined,
-      writeOffMinor,
-      previousTermMonths: schedule.termMonths,
-      newTermMonths,
-      reason,
-      actorId: user._id,
-      createdAt: now,
-    });
-
-    const newTotalMinor = schedule.totalMinor - refundMinor - writeOffMinor;
-    await ctx.db.patch(args.scheduleId, {
-      totalMinor: newTotalMinor,
-      termMonths: newTermMonths,
-      status: newTotalMinor <= schedule.recognizedMinor ? "CANCELLED" : "ACTIVE",
-    });
-
-    if (refundMinor > 0) {
-      await hookPrepaidExpenseRefunded(ctx, {
+    return await runWithIdempotency(
+      ctx,
+      {
         orgId: args.orgId,
-        scheduleId: args.scheduleId,
-        correctionId,
-        amountMinor: refundMinor,
-        currency: schedule.currency,
-        paymentMethod: args.refundPaymentMethod,
+        operation: "correctPrepaidSchedule",
+        idempotencyKey: args.idempotencyKey,
         actorId: user._id,
-        occurredAt: now,
-      });
-    }
-    if (writeOffMinor > 0) {
-      await hookPrepaidExpenseWrittenOff(ctx, {
-        orgId: args.orgId,
-        scheduleId: args.scheduleId,
-        correctionId,
-        amountMinor: writeOffMinor,
-        currency: schedule.currency,
-        expenseSystemKey: schedule.expenseSystemKey,
-        actorId: user._id,
-        occurredAt: now,
-      });
-    }
+        fingerprint: JSON.stringify({
+          scheduleId: args.scheduleId,
+          refundMinor,
+          writeOffMinor,
+          newTermMonths: args.newTermMonths ?? null,
+          reason,
+        }),
+      },
+      async () => {
+        const schedule = await ctx.db.get(args.scheduleId);
+        if (!schedule || schedule.orgId !== args.orgId) {
+          throw new ConvexError("Prepaid schedule not found in this organization.");
+        }
+        if (schedule.status !== "ACTIVE") {
+          throw new ConvexError(`Cannot correct a schedule with status "${schedule.status}".`);
+        }
 
-    await auditLog(ctx, {
-      orgId: args.orgId,
-      actorId: user._id,
-      actionType: "CORRECT_PREPAID_SCHEDULE",
-      resourceType: "prepaidExpenseSchedules",
-      resourceId: args.scheduleId.toString(),
-      description: `Corrected prepaid schedule: refund ${refundMinor}, write-off ${writeOffMinor}, term ${schedule.termMonths} -> ${newTermMonths}. Reason: ${reason}`,
-    });
+        if (refundMinor < 0 || writeOffMinor < 0) {
+          throw new ConvexError("Refund and write-off amounts cannot be negative.");
+        }
+        if (refundMinor > 0 && !args.refundPaymentMethod) {
+          throw new ConvexError("A payment method is required to record a refund.");
+        }
 
-    return correctionId;
+        const newTermMonths = args.newTermMonths ?? schedule.termMonths;
+        const termChanged = newTermMonths !== schedule.termMonths;
+        if (refundMinor === 0 && writeOffMinor === 0 && !termChanged) {
+          throw new ConvexError("No change specified — provide a refund, write-off, or new term.");
+        }
+        if (!Number.isInteger(newTermMonths) || newTermMonths < 1 || newTermMonths > 600) {
+          throw new ConvexError("Term must be a whole number of months, between 1 and 600.");
+        }
+        const monthsRecognized = schedule.monthsRecognized ?? 0;
+        if (newTermMonths < monthsRecognized) {
+          throw new ConvexError(
+            `Term cannot be shortened below the ${monthsRecognized} month(s) already recognized. Use a write-off for the remainder instead.`
+          );
+        }
+
+        const remainingMinor = Math.max(schedule.totalMinor - schedule.recognizedMinor, 0);
+        if (refundMinor + writeOffMinor > remainingMinor) {
+          throw new ConvexError(
+            `Refund + write-off (${refundMinor + writeOffMinor}) cannot exceed the unrecognized remainder (${remainingMinor}).`
+          );
+        }
+
+        // A term equal to monthsRecognized leaves zero future months for
+        // amortizeScheduleForMonth to ever recognize — if the refund/write-off
+        // doesn't also cover the entire remainder, the leftover balance would sit
+        // ACTIVE in the Prepaid Expenses asset forever with no path to expense it.
+        if (newTermMonths <= monthsRecognized && refundMinor + writeOffMinor < remainingMinor) {
+          throw new ConvexError(
+            "The corrected term leaves no future month to recognize the remaining balance — either keep at least one month beyond what's already recognized, or write off/refund the full remainder."
+          );
+        }
+
+        const now = Date.now();
+        const correctionId = await ctx.db.insert("prepaidScheduleCorrections", {
+          orgId: args.orgId,
+          scheduleId: args.scheduleId,
+          refundMinor,
+          refundPaymentMethod: refundMinor > 0 ? args.refundPaymentMethod : undefined,
+          writeOffMinor,
+          previousTermMonths: schedule.termMonths,
+          newTermMonths,
+          reason,
+          actorId: user._id,
+          createdAt: now,
+        });
+
+        const newTotalMinor = schedule.totalMinor - refundMinor - writeOffMinor;
+        await ctx.db.patch(args.scheduleId, {
+          totalMinor: newTotalMinor,
+          termMonths: newTermMonths,
+          status: newTotalMinor <= schedule.recognizedMinor ? "CANCELLED" : "ACTIVE",
+        });
+
+        if (refundMinor > 0) {
+          await hookPrepaidExpenseRefunded(ctx, {
+            orgId: args.orgId,
+            scheduleId: args.scheduleId,
+            correctionId,
+            amountMinor: refundMinor,
+            currency: schedule.currency,
+            paymentMethod: args.refundPaymentMethod,
+            actorId: user._id,
+            occurredAt: now,
+          });
+        }
+        if (writeOffMinor > 0) {
+          await hookPrepaidExpenseWrittenOff(ctx, {
+            orgId: args.orgId,
+            scheduleId: args.scheduleId,
+            correctionId,
+            amountMinor: writeOffMinor,
+            currency: schedule.currency,
+            expenseSystemKey: schedule.expenseSystemKey,
+            actorId: user._id,
+            occurredAt: now,
+          });
+        }
+
+        await auditLog(ctx, {
+          orgId: args.orgId,
+          actorId: user._id,
+          actionType: "CORRECT_PREPAID_SCHEDULE",
+          resourceType: "prepaidExpenseSchedules",
+          resourceId: args.scheduleId.toString(),
+          description: `Corrected prepaid schedule: refund ${refundMinor}, write-off ${writeOffMinor}, term ${schedule.termMonths} -> ${newTermMonths}. Reason: ${reason}`,
+        });
+
+        return correctionId;
+      }
+    );
   },
 });
 

@@ -18,6 +18,7 @@ import { normalizePaymentMethod, paymentMethodValidator } from "./utils/paymentM
 import { CAPITALIZABLE_EXPENSE_CATEGORIES } from "./utils/vehicleCost";
 import { expenseAccountKeyForCategory } from "./accounting/postingRules";
 import { createPrepaidScheduleForExpense, cancelPrepaidScheduleForExpense } from "./prepaidExpenses";
+import { yearMonthIndex } from "./utils/expenseAmortization";
 
 // ─── Validators ──────────────────────────────────────────────────────────────
 
@@ -43,13 +44,20 @@ const expenseCategory = v.union(
  * otherwise two independent signals for the same accounting concept that
  * could silently disagree (e.g. category PREPAID with isPrepaid left false) —
  * for new writes, category always implies the flag rather than the two being
- * allowed to drift apart. Returns the cleaned values to persist.
+ * allowed to drift apart. `expenseDate` is the effective date of the expense
+ * itself (the caller passes args.date on create, args.date ?? expense.date on
+ * update) — amortizationStartDate can never predate it: recognition can't
+ * begin before the prepaid asset was booked. Comparison is month-level (not
+ * day-level) because recognition is month-bucketed — a start date a few days
+ * earlier in the same calendar month changes nothing. Returns the cleaned
+ * values to persist.
  */
 function normalizePrepaidFields(
   category: string,
   isPrepaidArg: boolean | undefined,
   amortizationMonths: number | undefined,
-  amortizationStartDate: number | undefined
+  amortizationStartDate: number | undefined,
+  expenseDate: number
 ): {
   isPrepaid: boolean | undefined;
   amortizationMonths: number | undefined;
@@ -66,6 +74,11 @@ function normalizePrepaidFields(
     amortizationMonths > 600
   ) {
     throw new ConvexError("A prepaid expense must specify a whole number of amortization months between 1 and 600.");
+  }
+  if (amortizationStartDate !== undefined && yearMonthIndex(amortizationStartDate) < yearMonthIndex(expenseDate)) {
+    throw new ConvexError(
+      "The amortization start date cannot be earlier than the month the expense was paid — recognition can't begin before the prepaid asset was booked."
+    );
   }
   return { isPrepaid: true, amortizationMonths, amortizationStartDate };
 }
@@ -306,7 +319,8 @@ export const create = mutation({
       args.category,
       args.isPrepaid,
       args.amortizationMonths,
-      args.amortizationStartDate
+      args.amortizationStartDate,
+      args.date
     );
 
     return await runWithIdempotency(
@@ -464,7 +478,10 @@ export const update = mutation({
 
     // Re-validate the prepaid trio against the post-update effective values so a
     // partial edit (e.g. flipping isPrepaid on without months) can't persist an
-    // inconsistent schedule basis.
+    // inconsistent schedule basis. `date` also re-triggers this even though
+    // it isn't one of the trio's own fields: moving the expense's date can by
+    // itself make an unchanged, already-stored amortizationStartDate invalid
+    // (now earlier than the new effective date).
     let normalizedPrepaid: {
       isPrepaid: boolean | undefined;
       amortizationMonths: number | undefined;
@@ -474,13 +491,15 @@ export const update = mutation({
       args.isPrepaid !== undefined ||
       args.amortizationMonths !== undefined ||
       args.amortizationStartDate !== undefined ||
-      args.category !== undefined
+      args.category !== undefined ||
+      args.date !== undefined
     ) {
       normalizedPrepaid = normalizePrepaidFields(
         args.category ?? expense.category,
         args.isPrepaid ?? expense.isPrepaid,
         args.amortizationMonths ?? expense.amortizationMonths,
-        args.amortizationStartDate ?? expense.amortizationStartDate
+        args.amortizationStartDate ?? expense.amortizationStartDate,
+        args.date ?? expense.date
       );
     }
 

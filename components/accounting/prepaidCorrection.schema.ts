@@ -6,7 +6,7 @@ export const prepaidCorrectionSchema = z
     refundPaymentMethod: z.enum(["CASH", "BANK_TRANSFER", "CHEQUE", "CARD"]).optional(),
     writeOffAmount: z.coerce.number().min(0, "Write-off cannot be negative").default(0),
     changeTerm: z.boolean().default(false),
-    newTermMonths: z.coerce.number().int().min(1).optional(),
+    newTermMonths: z.coerce.number().int().min(1).max(600).optional(),
     reason: z.string().min(1, "A reason is required"),
   })
   .refine((v) => v.refundAmount === 0 || !!v.refundPaymentMethod, {

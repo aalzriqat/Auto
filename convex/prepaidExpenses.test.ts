@@ -674,6 +674,80 @@ describe("correctSchedule — a partial correction stays consistent with future 
   });
 });
 
+describe("Phase 2 — correctSchedule term cap and idempotency", () => {
+  test("rejects a corrected term above the 600-month cap (matches expense creation's own cap)", async () => {
+    const { t, orgId, asOwner } = await seedDealer("correct-term-cap");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await expect(
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId, scheduleId: schedule!._id, newTermMonths: 601, reason: "Extend indefinitely",
+      })
+    ).rejects.toThrow(/between 1 and 600/i);
+  });
+
+  test("the same idempotency key replayed twice applies the correction exactly once", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("correct-idempotent");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    const first = await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, writeOffMinor: 100_000, reason: "Partial write-off", idempotencyKey: "correct-key-1",
+    });
+    // A retry (double-click, dropped response) replaying the same key must not
+    // double-book — one correction row, one GL event, the cached result returned.
+    const second = await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, writeOffMinor: 100_000, reason: "Partial write-off", idempotencyKey: "correct-key-1",
+    });
+    expect(second).toBe(first);
+
+    const corrections = await t.run((ctx) =>
+      ctx.db.query("prepaidScheduleCorrections").withIndex("by_schedule", (q) => q.eq("scheduleId", schedule!._id)).collect()
+    );
+    expect(corrections).toHaveLength(1);
+
+    const writeOffEvents = await t.run((ctx) =>
+      ctx.db
+        .query("accountingEvents")
+        .withIndex("by_org_eventType", (q) => q.eq("orgId", orgId).eq("eventType", "PREPAID_EXPENSE_WRITTEN_OFF"))
+        .collect()
+    );
+    expect(writeOffEvents).toHaveLength(1);
+
+    const finalSchedule = await scheduleForExpense(t, expenseId);
+    expect(finalSchedule!.totalMinor).toBe(1_100_000); // 1_200_000 - 100_000, once
+  });
+
+  test("a different idempotency key applies a second, independent correction", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("correct-idempotent-diff");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, writeOffMinor: 100_000, reason: "First write-off", idempotencyKey: "correct-key-a",
+    });
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, writeOffMinor: 100_000, reason: "Second write-off", idempotencyKey: "correct-key-b",
+    });
+
+    const corrections = await t.run((ctx) =>
+      ctx.db.query("prepaidScheduleCorrections").withIndex("by_schedule", (q) => q.eq("scheduleId", schedule!._id)).collect()
+    );
+    expect(corrections).toHaveLength(2);
+  });
+});
+
 describe("retryAmortizationFailure — doesn't report success when still blocked", () => {
   test("a retry that can't clear the underlying blocker throws and leaves the failure unresolved", async () => {
     const { t, orgId, asOwner } = await seedDealer("retry-blocked");

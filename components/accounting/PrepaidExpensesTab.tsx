@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQuery } from "convex/react";
@@ -280,6 +280,11 @@ function CorrectScheduleDialog({
   const { t } = useLanguage();
   const correct = useMutation(api.prepaidExpenses.correctSchedule);
   const { submitting, submitWithFeedback } = useAccountingSubmit();
+  // This dialog is only ever mounted while a schedule is selected for
+  // correction (conditionally rendered by the parent), so a fresh key is
+  // minted per open — a retry within one open (e.g. a network blip) replays
+  // idempotently, and a deliberate second open gets its own key.
+  const idempotencyKey = useMemo(() => crypto.randomUUID(), []);
 
   const form = useForm<PrepaidCorrectionFormValues>({
     resolver: zodResolver(prepaidCorrectionSchema),
@@ -305,6 +310,7 @@ function CorrectScheduleDialog({
         writeOffMinor: Math.round(values.writeOffAmount * factor),
         newTermMonths: values.changeTerm ? values.newTermMonths : undefined,
         reason: values.reason.trim(),
+        idempotencyKey,
       });
       toast.success(t("PrepaidScheduleCorrected" as any));
       onOpenChange(false);
