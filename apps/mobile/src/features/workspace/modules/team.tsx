@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Alert, Text, View } from "react-native";
 import { api, type MobileMembership } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { PAGE_SIZE, parseRequiredNumber, useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, EmptyList, LoadMoreFooter, ModuleScroll } from "./moduleShared";
+import { PAGE_SIZE, parseRequiredNumber, useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
 import { styles } from "./moduleStyles";
 
 export function TeamModule({ orgId }: { orgId: string }) {
@@ -104,19 +104,27 @@ export function TeamModule({ orgId }: { orgId: string }) {
   }
 
   return (
-    <ModuleScroll>
-      <View style={styles.actionRow}>
-        <PrimaryButton label={locale === "ar" ? "إضافة عضو" : "Add member"} onPress={openInvite} />
-      </View>
-      {results.length ? results.map((member: MobileMembership) => (
-        <RecordCard key={member._id}>
-          <Text style={styles.recordTitle}>{member.userName}</Text>
-          <Text style={styles.recordMeta}>{member.userEmail}</Text>
-          <Text style={styles.recordMeta}>{member.roleName} · {member.commissionRate}%</Text>
-          <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => openMember(member)} />
-        </RecordCard>
-      )) : <EmptyList label={locale === "ar" ? "لا يوجد أعضاء." : "No team members found."} />}
-      <LoadMoreFooter loadMore={loadMore} status={status} />
+    <>
+      <ModuleList
+        data={results}
+        emptyLabel={locale === "ar" ? "لا يوجد أعضاء." : "No team members found."}
+        keyExtractor={(member) => member._id}
+        loadMore={loadMore}
+        status={status}
+        header={
+          <View style={styles.actionRow}>
+            <PrimaryButton label={locale === "ar" ? "إضافة عضو" : "Add member"} onPress={openInvite} />
+          </View>
+        }
+        renderItem={(member: MobileMembership) => (
+          <RecordCard>
+            <Text style={styles.recordTitle}>{member.userName}</Text>
+            <Text style={styles.recordMeta}>{member.userEmail}</Text>
+            <Text style={styles.recordMeta}>{member.roleName} · {member.commissionRate}%</Text>
+            <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => openMember(member)} />
+          </RecordCard>
+        )}
+      />
       <FormModal
         title={locale === "ar" ? "إضافة عضو" : "Add member"}
         visible={inviteOpen}
@@ -150,7 +158,7 @@ export function TeamModule({ orgId }: { orgId: string }) {
         <FormField keyboardType="numeric" label={locale === "ar" ? "نسبة العمولة" : "Commission rate"} value={memberForm.commissionRate} onChangeText={(commissionRate) => setMemberForm((prev) => ({ ...prev, commissionRate }))} />
         <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ" : "Save")} onPress={saveMember} />
       </FormModal>
-    </ModuleScroll>
+    </>
   );
 }
 

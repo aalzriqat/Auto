@@ -4,7 +4,7 @@ import { Alert, Text, View } from "react-native";
 import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileBranch } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { SELECTOR_PAGE_SIZE, maybeText, splitLinesOrCommas, joinList, useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, EmptyList, ModuleScroll } from "./moduleShared";
+import { SELECTOR_PAGE_SIZE, maybeText, splitLinesOrCommas, joinList, useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
 import { styles } from "./moduleStyles";
 
 export function BranchesModule({ orgId }: { orgId: string }) {
@@ -69,21 +69,28 @@ export function BranchesModule({ orgId }: { orgId: string }) {
   if (branches === undefined) return <RouteLoadingState label={locale === "ar" ? "جاري التحميل" : "Loading"} />;
 
   return (
-    <ModuleScroll>
-      <View style={styles.actionRow}>
-        <PrimaryButton label={locale === "ar" ? "إضافة فرع" : "Add branch"} onPress={() => openForm(null)} />
-      </View>
-      {branches.length ? branches.map((branch) => (
-        <RecordCard key={branch._id}>
-          <View style={styles.recordHeader}>
-            <Text style={styles.recordTitle}>{branch.name}</Text>
-            <Text style={styles.statusPill}>{branch.isActive ? "ACTIVE" : "INACTIVE"}</Text>
+    <>
+      <ModuleList
+        data={branches}
+        emptyLabel={locale === "ar" ? "لا توجد فروع." : "No branches found."}
+        keyExtractor={(branch) => branch._id}
+        header={
+          <View style={styles.actionRow}>
+            <PrimaryButton label={locale === "ar" ? "إضافة فرع" : "Add branch"} onPress={() => openForm(null)} />
           </View>
-          <Text style={styles.recordMeta}>{branch.address || "-"}</Text>
-          <Text style={styles.recordMeta}>{branch.phone || "-"} · {branch.managerName}</Text>
-          <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => openForm(branch)} />
-        </RecordCard>
-      )) : <EmptyList label={locale === "ar" ? "لا توجد فروع." : "No branches found."} />}
+        }
+        renderItem={(branch) => (
+          <RecordCard>
+            <View style={styles.recordHeader}>
+              <Text style={styles.recordTitle}>{branch.name}</Text>
+              <Text style={styles.statusPill}>{branch.isActive ? "ACTIVE" : "INACTIVE"}</Text>
+            </View>
+            <Text style={styles.recordMeta}>{branch.address || "-"}</Text>
+            <Text style={styles.recordMeta}>{branch.phone || "-"} · {branch.managerName}</Text>
+            <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => openForm(branch)} />
+          </RecordCard>
+        )}
+      />
       <FormModal title={editing ? (locale === "ar" ? "تعديل فرع" : "Edit branch") : (locale === "ar" ? "فرع جديد" : "New branch")} visible={open} onClose={() => setOpen(false)}>
         <FormField label={locale === "ar" ? "الاسم" : "Name"} value={form.name} onChangeText={(name) => setForm((prev) => ({ ...prev, name }))} />
         <FormField multiline label={locale === "ar" ? "العنوان" : "Address"} value={form.address} onChangeText={(address) => setForm((prev) => ({ ...prev, address }))} />
@@ -93,7 +100,7 @@ export function BranchesModule({ orgId }: { orgId: string }) {
         <SelectField label={locale === "ar" ? "فعال" : "Active"} value={form.isActive} options={[{ label: locale === "ar" ? "نعم" : "Yes", value: "true" }, { label: locale === "ar" ? "لا" : "No", value: "false" }]} onChange={(isActive) => setForm((prev) => ({ ...prev, isActive }))} />
         <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ" : "Save")} onPress={save} />
       </FormModal>
-    </ModuleScroll>
+    </>
   );
 }
 

@@ -2,7 +2,7 @@ import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { Text, View } from "react-native";
 import { api, type MobileNotification } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { PAGE_SIZE, compactNumber, useGenericError, PrimaryButton, RecordCard, EmptyList, LoadMoreFooter, ModuleScroll } from "./moduleShared";
+import { PAGE_SIZE, compactNumber, useGenericError, PrimaryButton, RecordCard, ModuleList } from "./moduleShared";
 import { styles } from "./moduleStyles";
 
 export function NotificationsModule({ orgId }: { orgId: string }) {
@@ -27,19 +27,26 @@ export function NotificationsModule({ orgId }: { orgId: string }) {
   }
 
   return (
-    <ModuleScroll>
-      <View style={styles.actionRow}>
-        <Text style={styles.sectionTitle}>
-          {locale === "ar" ? "غير المقروء" : "Unread"}: {compactNumber(unreadCount ?? 0, locale)}
-        </Text>
-        <PrimaryButton
-          label={locale === "ar" ? "تحديد الكل كمقروء" : "Mark all read"}
-          tone="muted"
-          onPress={() => act("Mobile notifications mark all failed", () => markAllRead({ orgId }))}
-        />
-      </View>
-      {results.length ? results.map((notification: MobileNotification) => (
-        <RecordCard key={notification._id}>
+    <ModuleList
+      data={results}
+      emptyLabel={locale === "ar" ? "لا توجد إشعارات." : "No notifications found."}
+      keyExtractor={(notification) => notification._id}
+      loadMore={loadMore}
+      status={status}
+      header={
+        <View style={styles.actionRow}>
+          <Text style={styles.sectionTitle}>
+            {locale === "ar" ? "غير المقروء" : "Unread"}: {compactNumber(unreadCount ?? 0, locale)}
+          </Text>
+          <PrimaryButton
+            label={locale === "ar" ? "تحديد الكل كمقروء" : "Mark all read"}
+            tone="muted"
+            onPress={() => act("Mobile notifications mark all failed", () => markAllRead({ orgId }))}
+          />
+        </View>
+      }
+      renderItem={(notification: MobileNotification) => (
+        <RecordCard>
           <View style={styles.recordHeader}>
             <Text style={styles.recordTitle}>
               {notification.title || notification.type || (locale === "ar" ? "إشعار" : "Notification")}
@@ -63,9 +70,7 @@ export function NotificationsModule({ orgId }: { orgId: string }) {
             />
           </View>
         </RecordCard>
-      )) : <EmptyList label={locale === "ar" ? "لا توجد إشعارات." : "No notifications found."} />}
-      <LoadMoreFooter loadMore={loadMore} status={status} />
-    </ModuleScroll>
+      )}
+    />
   );
 }
-

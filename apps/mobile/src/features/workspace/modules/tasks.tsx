@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Alert, Text, View } from "react-native";
 import { api, type MobileTask, type MobileTaskPriority } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { PAGE_SIZE, SELECTOR_PAGE_SIZE, type Option, dateLabel, maybeText, parseRequiredNumber, useGenericError, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, EmptyList, LoadMoreFooter, ModuleScroll } from "./moduleShared";
+import { PAGE_SIZE, SELECTOR_PAGE_SIZE, type Option, dateLabel, maybeText, parseRequiredNumber, useGenericError, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
 import { styles } from "./moduleStyles";
 
 export function TasksModule({ orgId }: { orgId: string }) {
@@ -73,27 +73,35 @@ export function TasksModule({ orgId }: { orgId: string }) {
   }
 
   return (
-    <ModuleScroll>
-      <View style={styles.actionRow}>
-        <SegmentedControl options={statusOptions} value={filter} onChange={setFilter} />
-        <PrimaryButton label={locale === "ar" ? "إضافة" : "Add"} onPress={() => setOpen(true)} />
-      </View>
-      {results.length ? results.map((task) => (
-        <RecordCard key={task._id}>
-          <View style={styles.recordHeader}>
-            <Text style={styles.recordTitle}>{task.title}</Text>
-            <Text style={styles.statusPill}>{task.status}</Text>
+    <>
+      <ModuleList
+        data={results}
+        emptyLabel={locale === "ar" ? "لا توجد مهام." : "No tasks found."}
+        keyExtractor={(task) => task._id}
+        loadMore={loadMore}
+        status={status}
+        header={
+          <View style={styles.actionRow}>
+            <SegmentedControl options={statusOptions} value={filter} onChange={setFilter} />
+            <PrimaryButton label={locale === "ar" ? "إضافة" : "Add"} onPress={() => setOpen(true)} />
           </View>
-          <Text style={styles.recordMeta}>{locale === "ar" ? "المسؤول" : "Assignee"}: {task.assigneeName}</Text>
-          <Text style={styles.recordMeta}>{locale === "ar" ? "الاستحقاق" : "Due"}: {dateLabel(task.dueDate, locale)}</Text>
-          {task.customerName ? <Text style={styles.recordMeta}>{task.customerName}</Text> : null}
-          <View style={styles.cardActions}>
-            {task.status !== "COMPLETED" ? <PrimaryButton label={locale === "ar" ? "إنهاء" : "Complete"} tone="muted" onPress={() => setTaskStatus(task, "COMPLETED")} /> : null}
-            {task.status !== "CANCELLED" ? <PrimaryButton label={locale === "ar" ? "إلغاء" : "Cancel"} tone="danger" onPress={() => setTaskStatus(task, "CANCELLED")} /> : null}
-          </View>
-        </RecordCard>
-      )) : <EmptyList label={locale === "ar" ? "لا توجد مهام." : "No tasks found."} />}
-      <LoadMoreFooter loadMore={loadMore} status={status} />
+        }
+        renderItem={(task) => (
+          <RecordCard>
+            <View style={styles.recordHeader}>
+              <Text style={styles.recordTitle}>{task.title}</Text>
+              <Text style={styles.statusPill}>{task.status}</Text>
+            </View>
+            <Text style={styles.recordMeta}>{locale === "ar" ? "المسؤول" : "Assignee"}: {task.assigneeName}</Text>
+            <Text style={styles.recordMeta}>{locale === "ar" ? "الاستحقاق" : "Due"}: {dateLabel(task.dueDate, locale)}</Text>
+            {task.customerName ? <Text style={styles.recordMeta}>{task.customerName}</Text> : null}
+            <View style={styles.cardActions}>
+              {task.status !== "COMPLETED" ? <PrimaryButton label={locale === "ar" ? "إنهاء" : "Complete"} tone="muted" onPress={() => setTaskStatus(task, "COMPLETED")} /> : null}
+              {task.status !== "CANCELLED" ? <PrimaryButton label={locale === "ar" ? "إلغاء" : "Cancel"} tone="danger" onPress={() => setTaskStatus(task, "CANCELLED")} /> : null}
+            </View>
+          </RecordCard>
+        )}
+      />
       <FormModal title={locale === "ar" ? "مهمة جديدة" : "New task"} visible={open} onClose={() => setOpen(false)}>
         <SelectField label={locale === "ar" ? "المسؤول" : "Assigned to"} value={form.assignedTo} options={memberOptions} onChange={(assignedTo) => setForm((prev) => ({ ...prev, assignedTo }))} />
         <FormField label={locale === "ar" ? "العنوان" : "Title"} value={form.title} onChangeText={(title) => setForm((prev) => ({ ...prev, title }))} />
@@ -106,7 +114,7 @@ export function TasksModule({ orgId }: { orgId: string }) {
         ]} onChange={(priority) => setForm((prev) => ({ ...prev, priority: priority as MobileTaskPriority }))} />
         <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ" : "Save")} onPress={save} />
       </FormModal>
-    </ModuleScroll>
+    </>
   );
 }
 

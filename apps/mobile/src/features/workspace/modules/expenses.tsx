@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Alert, Text, View } from "react-native";
 import { api, type MobileExpense, type MobileExpenseCategory } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { PAGE_SIZE, money, dateLabel, maybeText, parseOptionalNumber, parseRequiredNumber, idempotencyKey, useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, EmptyList, LoadMoreFooter, ModuleScroll } from "./moduleShared";
+import { PAGE_SIZE, money, dateLabel, maybeText, parseOptionalNumber, parseRequiredNumber, idempotencyKey, useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
 import { styles } from "./moduleStyles";
 
 export function ExpensesModule({ orgId }: { orgId: string }) {
@@ -68,22 +68,28 @@ export function ExpensesModule({ orgId }: { orgId: string }) {
   }
 
   return (
-    <ModuleScroll>
-      <PrimaryButton label={locale === "ar" ? "إضافة مصروف" : "Add expense"} onPress={() => setOpen(true)} />
-      {results.length ? results.map((expense) => (
-        <RecordCard key={expense._id}>
-          <View style={styles.recordHeader}>
-            <Text style={styles.recordTitle}>{expense.title}</Text>
-            <Text style={styles.statusPill}>{expense.status}</Text>
-          </View>
-          <Text style={styles.recordMeta}>{money(expense.amount, locale)} · {expense.category}</Text>
-          <Text style={styles.recordMeta}>{expense.vehicleSummary || expense.vendor || dateLabel(expense.date, locale)}</Text>
-          <View style={styles.cardActions}>
-            <PrimaryButton label={locale === "ar" ? "حذف" : "Remove"} tone="danger" onPress={() => remove(expense)} />
-          </View>
-        </RecordCard>
-      )) : <EmptyList label={locale === "ar" ? "لا توجد مصاريف." : "No expenses found."} />}
-      <LoadMoreFooter loadMore={loadMore} status={status} />
+    <>
+      <ModuleList
+        data={results}
+        emptyLabel={locale === "ar" ? "لا توجد مصاريف." : "No expenses found."}
+        keyExtractor={(expense) => expense._id}
+        loadMore={loadMore}
+        status={status}
+        header={<PrimaryButton label={locale === "ar" ? "إضافة مصروف" : "Add expense"} onPress={() => setOpen(true)} />}
+        renderItem={(expense) => (
+          <RecordCard>
+            <View style={styles.recordHeader}>
+              <Text style={styles.recordTitle}>{expense.title}</Text>
+              <Text style={styles.statusPill}>{expense.status}</Text>
+            </View>
+            <Text style={styles.recordMeta}>{money(expense.amount, locale)} · {expense.category}</Text>
+            <Text style={styles.recordMeta}>{expense.vehicleSummary || expense.vendor || dateLabel(expense.date, locale)}</Text>
+            <View style={styles.cardActions}>
+              <PrimaryButton label={locale === "ar" ? "حذف" : "Remove"} tone="danger" onPress={() => remove(expense)} />
+            </View>
+          </RecordCard>
+        )}
+      />
       <FormModal title={locale === "ar" ? "مصروف جديد" : "New expense"} visible={open} onClose={() => setOpen(false)}>
         <FormField label={locale === "ar" ? "العنوان" : "Title"} value={form.title} onChangeText={(title) => setForm((prev) => ({ ...prev, title }))} />
         <FormField keyboardType="numeric" label={locale === "ar" ? "المبلغ" : "Amount"} value={form.amount} onChangeText={(amount) => setForm((prev) => ({ ...prev, amount }))} />
@@ -94,7 +100,7 @@ export function ExpensesModule({ orgId }: { orgId: string }) {
         <FormField multiline label={locale === "ar" ? "ملاحظات" : "Notes"} value={form.notes} onChangeText={(notes) => setForm((prev) => ({ ...prev, notes }))} />
         <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ" : "Save")} onPress={save} />
       </FormModal>
-    </ModuleScroll>
+    </>
   );
 }
 

@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Alert, Text, View } from "react-native";
 import { api, type MobileLedgerCategory, type MobileLedgerTransaction, type MobileLedgerType } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { PAGE_SIZE, type Option, money, dateLabel, parseRequiredPositiveNumber, idempotencyKey, useGenericError, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, EmptyList, LoadMoreFooter, ModuleScroll } from "./moduleShared";
+import { PAGE_SIZE, type Option, money, dateLabel, parseRequiredPositiveNumber, idempotencyKey, useGenericError, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
 import { styles } from "./moduleStyles";
 
 export function AccountingModule({ orgId }: { orgId: string }) {
@@ -103,25 +103,33 @@ export function AccountingModule({ orgId }: { orgId: string }) {
   }
 
   return (
-    <ModuleScroll>
-      <View style={styles.actionRow}>
-        <PrimaryButton label={locale === "ar" ? "إضافة قيد" : "Add entry"} onPress={openCreate} />
-      </View>
-      {results.length ? results.map((transaction: MobileLedgerTransaction) => (
-        <RecordCard key={transaction._id}>
-          <View style={styles.recordHeader}>
-            <Text style={styles.recordTitle}>{transaction.description}</Text>
-            <Text style={styles.statusPill}>{transaction.type}</Text>
+    <>
+      <ModuleList
+        data={results}
+        emptyLabel={locale === "ar" ? "لا توجد قيود." : "No ledger entries found."}
+        keyExtractor={(transaction) => transaction._id}
+        loadMore={loadMore}
+        status={status}
+        header={
+          <View style={styles.actionRow}>
+            <PrimaryButton label={locale === "ar" ? "إضافة قيد" : "Add entry"} onPress={openCreate} />
           </View>
-          <Text style={styles.recordMeta}>{transaction.category} · {dateLabel(transaction.date, locale)}</Text>
-          <Text style={styles.recordMeta}>{money(transaction.amount, locale)} · {transaction.vehicleLabel || transaction.customerName || "-"}</Text>
-          <View style={styles.cardActions}>
-            <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => openEdit(transaction)} />
-            <PrimaryButton label={locale === "ar" ? "حذف" : "Delete"} tone="danger" onPress={() => remove(transaction)} />
-          </View>
-        </RecordCard>
-      )) : <EmptyList label={locale === "ar" ? "لا توجد قيود." : "No ledger entries found."} />}
-      <LoadMoreFooter loadMore={loadMore} status={status} />
+        }
+        renderItem={(transaction: MobileLedgerTransaction) => (
+          <RecordCard>
+            <View style={styles.recordHeader}>
+              <Text style={styles.recordTitle}>{transaction.description}</Text>
+              <Text style={styles.statusPill}>{transaction.type}</Text>
+            </View>
+            <Text style={styles.recordMeta}>{transaction.category} · {dateLabel(transaction.date, locale)}</Text>
+            <Text style={styles.recordMeta}>{money(transaction.amount, locale)} · {transaction.vehicleLabel || transaction.customerName || "-"}</Text>
+            <View style={styles.cardActions}>
+              <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => openEdit(transaction)} />
+              <PrimaryButton label={locale === "ar" ? "حذف" : "Delete"} tone="danger" onPress={() => remove(transaction)} />
+            </View>
+          </RecordCard>
+        )}
+      />
       <FormModal
         title={editing ? (locale === "ar" ? "تعديل قيد" : "Edit entry") : (locale === "ar" ? "قيد جديد" : "New entry")}
         visible={open}
@@ -136,7 +144,7 @@ export function AccountingModule({ orgId }: { orgId: string }) {
         <FormField multiline label={locale === "ar" ? "البيان" : "Description"} value={form.description} onChangeText={(description) => setForm((prev) => ({ ...prev, description }))} />
         <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ" : "Save")} onPress={save} />
       </FormModal>
-    </ModuleScroll>
+    </>
   );
 }
 

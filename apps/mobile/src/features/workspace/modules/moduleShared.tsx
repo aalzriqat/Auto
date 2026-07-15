@@ -1,5 +1,5 @@
 import { useRouter } from "expo-router";
-import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { Icon } from "../../../components/Icon";
 import { LocaleToggle } from "../../../components/LocaleToggle";
 import { SearchableSelectField, type SearchableSelectOption } from "../../../components/SearchableSelectField";
@@ -929,6 +929,45 @@ export function WizardActions({
 
 export function ModuleScroll({ children }: { children: React.ReactNode }) {
   return <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>{children}</ScrollView>;
+}
+
+export function ModuleList<T>({
+  data,
+  emptyLabel,
+  header,
+  keyExtractor,
+  loadMore,
+  renderItem,
+  status,
+}: {
+  data: readonly T[];
+  emptyLabel: string;
+  header?: React.ReactNode;
+  keyExtractor: (item: T) => string;
+  loadMore?: (numItems: number) => void;
+  renderItem: (item: T) => React.ReactElement;
+  status?: string;
+}) {
+  const handleEndReached =
+    loadMore && status && canLoadMore(status) ? () => loadMore(PAGE_SIZE) : undefined;
+
+  return (
+    <FlatList
+      data={data as T[]}
+      keyExtractor={keyExtractor}
+      renderItem={({ item }) => renderItem(item)}
+      ListHeaderComponent={header ? <View style={styles.listHeader}>{header}</View> : null}
+      ListEmptyComponent={emptyLabel ? <EmptyList label={emptyLabel} /> : null}
+      ListFooterComponent={
+        loadMore && status ? <LoadMoreFooter loadMore={loadMore} status={status} /> : null
+      }
+      style={styles.scroll}
+      contentContainerStyle={styles.scrollContent}
+      keyboardShouldPersistTaps="handled"
+      onEndReached={handleEndReached}
+      onEndReachedThreshold={0.5}
+    />
+  );
 }
 
 

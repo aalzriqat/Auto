@@ -6,7 +6,7 @@ import { api, type MobileVehicle, type MobileVehicleStatus } from "../../../conv
 import { getFuelTypeOptions, getTransmissionOptions, getVehicleColorOptions, getVehicleMakeOptions } from "../../../data/mobileOptions";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { getMobileVinReadiness, normalizeVinInput } from "../mobileVinDecode";
-import { PAGE_SIZE, type Option, fetchDecodedMobileVin, vinNotReadyMessage, vinChecksumWarningMessage, vinDecodeResultMessage, compactNumber, money, maybeText, parseOptionalNumber, parseRequiredNumber, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, MetricCard, EmptyList, LoadMoreFooter, getOptionLabel, firstVehicleImageUrl, DetailPill, SummaryRow, SummaryPanel, WizardActions, ModuleScroll } from "./moduleShared";
+import { PAGE_SIZE, type Option, fetchDecodedMobileVin, vinNotReadyMessage, vinChecksumWarningMessage, vinDecodeResultMessage, compactNumber, money, maybeText, parseOptionalNumber, parseRequiredNumber, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, MetricCard, ModuleList, getOptionLabel, firstVehicleImageUrl, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
 import { styles } from "./moduleStyles";
 
 export function VehiclesModule({ orgId }: { orgId: string }) {
@@ -274,61 +274,71 @@ export function VehiclesModule({ orgId }: { orgId: string }) {
   }
 
   return (
-    <ModuleScroll>
-      <View style={styles.actionRow}>
-        <SearchInput placeholder={locale === "ar" ? "بحث المخزون" : "Search inventory"} value={search} onChangeText={setSearch} />
-        <PrimaryButton label={locale === "ar" ? "إضافة" : "Add"} onPress={openCreate} />
-      </View>
-      <SegmentedControl options={statusOptions} value={filter} onChange={setFilter} />
-      <View style={styles.metricGrid}>
-        <MetricCard title={locale === "ar" ? "النتائج" : "Results"} value={compactNumber(filtered.length, locale)} caption={locale === "ar" ? "مطابقة للبحث" : "matching search"} />
-        <MetricCard title={locale === "ar" ? "المتاح" : "Available"} value={compactNumber(availableCount, locale)} caption={locale === "ar" ? "جاهز للبيع" : "ready to sell"} />
-        <MetricCard title={locale === "ar" ? "القيمة" : "Value"} value={money(inventoryValue, locale)} caption={locale === "ar" ? "سعر البيع" : "list value"} />
-        <MetricCard title={locale === "ar" ? "الهامش" : "Margin"} value={money(projectedMargin, locale)} caption={locale === "ar" ? "تقديري" : "projected"} />
-      </View>
-      {filtered.length ? filtered.map((vehicle) => {
-        const imageUrl = firstVehicleImageUrl(vehicle);
-        return (
-          <View key={vehicle._id} style={styles.vehicleRecordCard}>
-            <View style={styles.vehicleMediaRow}>
-              <View style={styles.vehicleThumb}>
-                {imageUrl ? (
-                  <Image
-                    source={{ uri: imageUrl }}
-                    style={styles.vehicleThumbImage}
-                    resizeMode="cover"
-                  />
-                ) : (
-                  <Text style={styles.vehicleThumbText}>{vehicle.make.slice(0, 2).toUpperCase()}</Text>
-                )}
-              </View>
-              <View style={styles.vehicleCardText}>
-                <View style={styles.recordHeader}>
-                  <Text style={styles.recordTitle}>{vehicle.year} {vehicle.make} {vehicle.model}</Text>
-                  <Text style={styles.statusPill}>{vehicle.status}</Text>
+    <>
+      <ModuleList
+        data={filtered}
+        emptyLabel={locale === "ar" ? "لا توجد سيارات." : "No vehicles found."}
+        keyExtractor={(vehicle) => vehicle._id}
+        loadMore={loadMore}
+        status={status}
+        header={
+          <>
+            <View style={styles.actionRow}>
+              <SearchInput placeholder={locale === "ar" ? "بحث المخزون" : "Search inventory"} value={search} onChangeText={setSearch} />
+              <PrimaryButton label={locale === "ar" ? "إضافة" : "Add"} onPress={openCreate} />
+            </View>
+            <SegmentedControl options={statusOptions} value={filter} onChange={setFilter} />
+            <View style={styles.metricGrid}>
+              <MetricCard title={locale === "ar" ? "النتائج" : "Results"} value={compactNumber(filtered.length, locale)} caption={locale === "ar" ? "مطابقة للبحث" : "matching search"} />
+              <MetricCard title={locale === "ar" ? "المتاح" : "Available"} value={compactNumber(availableCount, locale)} caption={locale === "ar" ? "جاهز للبيع" : "ready to sell"} />
+              <MetricCard title={locale === "ar" ? "القيمة" : "Value"} value={money(inventoryValue, locale)} caption={locale === "ar" ? "سعر البيع" : "list value"} />
+              <MetricCard title={locale === "ar" ? "الهامش" : "Margin"} value={money(projectedMargin, locale)} caption={locale === "ar" ? "تقديري" : "projected"} />
+            </View>
+          </>
+        }
+        renderItem={(vehicle) => {
+          const imageUrl = firstVehicleImageUrl(vehicle);
+          return (
+            <View style={styles.vehicleRecordCard}>
+              <View style={styles.vehicleMediaRow}>
+                <View style={styles.vehicleThumb}>
+                  {imageUrl ? (
+                    <Image
+                      source={{ uri: imageUrl }}
+                      style={styles.vehicleThumbImage}
+                      resizeMode="cover"
+                    />
+                  ) : (
+                    <Text style={styles.vehicleThumbText}>{vehicle.make.slice(0, 2).toUpperCase()}</Text>
+                  )}
                 </View>
-                <Text style={styles.recordMeta}>{vehicle.trim || vehicle.vin}</Text>
-                <View style={styles.detailPillRow}>
-                  <DetailPill label={money(vehicle.sellingPrice, locale)} tone="success" />
-                  <DetailPill label={`${vehicle.mileage.toLocaleString()} km`} tone="info" />
-                  <DetailPill label={vehicle.transmission || "-"} />
+                <View style={styles.vehicleCardText}>
+                  <View style={styles.recordHeader}>
+                    <Text style={styles.recordTitle}>{vehicle.year} {vehicle.make} {vehicle.model}</Text>
+                    <Text style={styles.statusPill}>{vehicle.status}</Text>
+                  </View>
+                  <Text style={styles.recordMeta}>{vehicle.trim || vehicle.vin}</Text>
+                  <View style={styles.detailPillRow}>
+                    <DetailPill label={money(vehicle.sellingPrice, locale)} tone="success" />
+                    <DetailPill label={`${vehicle.mileage.toLocaleString()} km`} tone="info" />
+                    <DetailPill label={vehicle.transmission || "-"} />
+                  </View>
                 </View>
               </View>
+              <View style={styles.vehicleFactRow}>
+                <Text style={styles.recordMeta}>{vehicle.vin}</Text>
+                <Text style={styles.recordMeta}>{vehicle.color || "-"} · {vehicle.fuelType || "-"}</Text>
+              </View>
+              {vehicle.pendingStatusRequest ? <Text style={styles.warningText}>{vehicle.pendingStatusRequest}</Text> : null}
+              <View style={styles.cardActions}>
+                <PrimaryButton label={locale === "ar" ? "تفاصيل" : "Details"} tone="muted" onPress={() => setDetailVehicle(vehicle)} />
+                <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => openEdit(vehicle)} />
+                <PrimaryButton label={locale === "ar" ? "أرشفة" : "Archive"} tone="danger" onPress={() => archive(vehicle)} />
+              </View>
             </View>
-            <View style={styles.vehicleFactRow}>
-              <Text style={styles.recordMeta}>{vehicle.vin}</Text>
-              <Text style={styles.recordMeta}>{vehicle.color || "-"} · {vehicle.fuelType || "-"}</Text>
-            </View>
-            {vehicle.pendingStatusRequest ? <Text style={styles.warningText}>{vehicle.pendingStatusRequest}</Text> : null}
-            <View style={styles.cardActions}>
-              <PrimaryButton label={locale === "ar" ? "تفاصيل" : "Details"} tone="muted" onPress={() => setDetailVehicle(vehicle)} />
-              <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => openEdit(vehicle)} />
-              <PrimaryButton label={locale === "ar" ? "أرشفة" : "Archive"} tone="danger" onPress={() => archive(vehicle)} />
-            </View>
-          </View>
-        );
-      }) : <EmptyList label={locale === "ar" ? "لا توجد سيارات." : "No vehicles found."} />}
-      <LoadMoreFooter loadMore={loadMore} status={status} />
+          );
+        }}
+      />
       <FormModal title={editing ? (locale === "ar" ? "تعديل سيارة" : "Edit vehicle") : (locale === "ar" ? "سيارة جديدة" : "New vehicle")} visible={open} onClose={closeVehicleForm}>
         <GuidedStepFlow activeIndex={vehicleStep} steps={vehicleSteps}>
           {vehicleStep === 0 ? (
@@ -439,7 +449,7 @@ export function VehiclesModule({ orgId }: { orgId: string }) {
           </>
         ) : null}
       </FormModal>
-    </ModuleScroll>
+    </>
   );
 }
 

@@ -4,7 +4,7 @@ import { Alert, Text, View } from "react-native";
 import { api, type MobileCustomer } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { compactInitials } from "../nativeModules";
-import { PAGE_SIZE, compactNumber, maybeText, useGenericError, SearchInput, PrimaryButton, FormField, FormModal, RecordCard, MetricCard, EmptyList, LoadMoreFooter, DetailPill, SummaryRow, SummaryPanel, ModuleScroll } from "./moduleShared";
+import { PAGE_SIZE, compactNumber, maybeText, useGenericError, SearchInput, PrimaryButton, FormField, FormModal, RecordCard, MetricCard, ModuleList, DetailPill, SummaryRow, SummaryPanel } from "./moduleShared";
 import { styles } from "./moduleStyles";
 
 export function CustomersModule({ orgId }: { orgId: string }) {
@@ -130,47 +130,57 @@ export function CustomersModule({ orgId }: { orgId: string }) {
   }
 
   return (
-    <ModuleScroll>
-      <View style={styles.actionRow}>
-        <SearchInput
-          placeholder={locale === "ar" ? "بحث العملاء" : "Search customers"}
-          value={search}
-          onChangeText={setSearch}
-        />
-        <PrimaryButton label={locale === "ar" ? "إضافة" : "Add"} onPress={openCreate} />
-      </View>
-      <View style={styles.metricGrid}>
-        <MetricCard title={locale === "ar" ? "النتائج" : "Results"} value={compactNumber(filtered.length, locale)} caption={locale === "ar" ? "عملاء ظاهرون" : "visible customers"} />
-        <MetricCard title={locale === "ar" ? "هاتف" : "Phone"} value={compactNumber(customersWithPhone, locale)} caption={locale === "ar" ? "جاهز للتواصل" : "call-ready"} />
-        <MetricCard title={locale === "ar" ? "بريد" : "Email"} value={compactNumber(customersWithEmail, locale)} caption={locale === "ar" ? "للمتابعة" : "for follow-up"} />
-        <MetricCard title={locale === "ar" ? "النقص" : "Gaps"} value={compactNumber(Math.max(0, filtered.length - customersWithPhone), locale)} caption={locale === "ar" ? "بدون هاتف" : "missing phone"} />
-      </View>
-      {filtered.length ? filtered.map((customer) => (
-        <RecordCard key={customer._id}>
-          <View style={styles.entityHeader}>
-            <View style={styles.entityAvatar}>
-              <Text style={styles.entityAvatarText}>
-                {compactInitials(`${customer.firstName} ${customer.lastName}`)}
-              </Text>
+    <>
+      <ModuleList
+        data={filtered}
+        emptyLabel={locale === "ar" ? "لا يوجد عملاء." : "No customers found."}
+        keyExtractor={(customer) => customer._id}
+        loadMore={loadMore}
+        status={status}
+        header={
+          <>
+            <View style={styles.actionRow}>
+              <SearchInput
+                placeholder={locale === "ar" ? "بحث العملاء" : "Search customers"}
+                value={search}
+                onChangeText={setSearch}
+              />
+              <PrimaryButton label={locale === "ar" ? "إضافة" : "Add"} onPress={openCreate} />
             </View>
-            <View style={styles.entityText}>
-              <Text style={styles.recordTitle}>{customer.firstName} {customer.lastName}</Text>
-              <Text style={styles.recordMeta}>{customer.address || customer.source || (locale === "ar" ? "بدون عنوان" : "No address")}</Text>
+            <View style={styles.metricGrid}>
+              <MetricCard title={locale === "ar" ? "النتائج" : "Results"} value={compactNumber(filtered.length, locale)} caption={locale === "ar" ? "عملاء ظاهرون" : "visible customers"} />
+              <MetricCard title={locale === "ar" ? "هاتف" : "Phone"} value={compactNumber(customersWithPhone, locale)} caption={locale === "ar" ? "جاهز للتواصل" : "call-ready"} />
+              <MetricCard title={locale === "ar" ? "بريد" : "Email"} value={compactNumber(customersWithEmail, locale)} caption={locale === "ar" ? "للمتابعة" : "for follow-up"} />
+              <MetricCard title={locale === "ar" ? "النقص" : "Gaps"} value={compactNumber(Math.max(0, filtered.length - customersWithPhone), locale)} caption={locale === "ar" ? "بدون هاتف" : "missing phone"} />
             </View>
-          </View>
-          <View style={styles.detailPillRow}>
-            <DetailPill label={customer.phone || (locale === "ar" ? "بدون هاتف" : "No phone")} tone={customer.phone ? "info" : "warning"} />
-            <DetailPill label={customer.whatsapp || "WhatsApp"} tone={customer.whatsapp ? "success" : "neutral"} />
-            <DetailPill label={customer.email || (locale === "ar" ? "بدون بريد" : "No email")} />
-          </View>
-          <View style={styles.cardActions}>
-            <PrimaryButton label={locale === "ar" ? "تفاصيل" : "Details"} tone="muted" onPress={() => setDetailCustomer(customer)} />
-            <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => openEdit(customer)} />
-            <PrimaryButton label={locale === "ar" ? "أرشفة" : "Archive"} tone="danger" onPress={() => remove(customer)} />
-          </View>
-        </RecordCard>
-      )) : <EmptyList label={locale === "ar" ? "لا يوجد عملاء." : "No customers found."} />}
-      <LoadMoreFooter loadMore={loadMore} status={status} />
+          </>
+        }
+        renderItem={(customer) => (
+          <RecordCard>
+            <View style={styles.entityHeader}>
+              <View style={styles.entityAvatar}>
+                <Text style={styles.entityAvatarText}>
+                  {compactInitials(`${customer.firstName} ${customer.lastName}`)}
+                </Text>
+              </View>
+              <View style={styles.entityText}>
+                <Text style={styles.recordTitle}>{customer.firstName} {customer.lastName}</Text>
+                <Text style={styles.recordMeta}>{customer.address || customer.source || (locale === "ar" ? "بدون عنوان" : "No address")}</Text>
+              </View>
+            </View>
+            <View style={styles.detailPillRow}>
+              <DetailPill label={customer.phone || (locale === "ar" ? "بدون هاتف" : "No phone")} tone={customer.phone ? "info" : "warning"} />
+              <DetailPill label={customer.whatsapp || "WhatsApp"} tone={customer.whatsapp ? "success" : "neutral"} />
+              <DetailPill label={customer.email || (locale === "ar" ? "بدون بريد" : "No email")} />
+            </View>
+            <View style={styles.cardActions}>
+              <PrimaryButton label={locale === "ar" ? "تفاصيل" : "Details"} tone="muted" onPress={() => setDetailCustomer(customer)} />
+              <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => openEdit(customer)} />
+              <PrimaryButton label={locale === "ar" ? "أرشفة" : "Archive"} tone="danger" onPress={() => remove(customer)} />
+            </View>
+          </RecordCard>
+        )}
+      />
       <FormModal
         title={editing ? (locale === "ar" ? "تعديل العميل" : "Edit customer") : (locale === "ar" ? "عميل جديد" : "New customer")}
         visible={open}
@@ -210,7 +220,7 @@ export function CustomersModule({ orgId }: { orgId: string }) {
           </>
         ) : null}
       </FormModal>
-    </ModuleScroll>
+    </>
   );
 }
 

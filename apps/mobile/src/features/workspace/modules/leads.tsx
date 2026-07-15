@@ -4,7 +4,7 @@ import { Alert, Text, View } from "react-native";
 import { GuidedStepFlow, type GuidedStep } from "../../../components/GuidedStepFlow";
 import { api, type MobileLead, type MobileLeadStage } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { PAGE_SIZE, SELECTOR_PAGE_SIZE, type Option, compactNumber, money, maybeText, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, EmptyList, LoadMoreFooter, getOptionLabel, DetailPill, SummaryRow, SummaryPanel, WizardActions, ModuleScroll } from "./moduleShared";
+import { PAGE_SIZE, SELECTOR_PAGE_SIZE, type Option, compactNumber, money, maybeText, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, ModuleList, getOptionLabel, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
 import { styles } from "./moduleStyles";
 
 export function LeadsModule({ orgId }: { orgId: string }) {
@@ -149,38 +149,48 @@ export function LeadsModule({ orgId }: { orgId: string }) {
   }
 
   return (
-    <ModuleScroll>
-      <View style={styles.actionRow}>
-        <SearchInput placeholder={locale === "ar" ? "بحث العملاء المحتملين" : "Search leads"} value={search} onChangeText={setSearch} />
-        <PrimaryButton label={locale === "ar" ? "إضافة" : "Add"} onPress={openLeadForm} />
-      </View>
-      <SegmentedControl options={stageOptions} value={stageFilter} onChange={setStageFilter} />
-      <View style={styles.metricGrid}>
-        <MetricCard title={locale === "ar" ? "النتائج" : "Results"} value={compactNumber(filtered.length, locale)} caption={locale === "ar" ? "فرص ظاهرة" : "visible leads"} />
-        <MetricCard title={locale === "ar" ? "نشطة" : "Active"} value={compactNumber(activeLeadCount, locale)} caption={locale === "ar" ? "قبل الفوز/الخسارة" : "before won/lost"} />
-        <MetricCard title={locale === "ar" ? "مع مسؤول" : "Assigned"} value={compactNumber(assignedLeadCount, locale)} caption={locale === "ar" ? "للمتابعة" : "owned follow-up"} />
-        <MetricCard title={locale === "ar" ? "مع سيارة" : "Vehicle"} value={compactNumber(vehicleLeadCount, locale)} caption={locale === "ar" ? "محدد" : "specified"} />
-      </View>
-      {filtered.length ? filtered.map((lead) => (
-        <RecordCard key={lead._id}>
-          <View style={styles.recordHeader}>
-            <Text style={styles.recordTitle}>{lead.customerName}</Text>
-            <Text style={styles.statusPill}>{lead.stage}</Text>
-          </View>
-          <View style={styles.detailPillRow}>
-            <DetailPill label={lead.source || "Manual"} tone="info" />
-            <DetailPill label={lead.assignedUserName || (locale === "ar" ? "بدون مسؤول" : "Unassigned")} tone={lead.assignedUserName ? "success" : "warning"} />
-            <DetailPill label={lead.vehicleSummary || (locale === "ar" ? "بدون سيارة" : "No vehicle")} />
-          </View>
-          <Text style={styles.recordMeta}>{lead.phone || lead.email || "-"}</Text>
-          <View style={styles.cardActions}>
-            <PrimaryButton label={locale === "ar" ? "تفاصيل" : "Details"} tone="muted" onPress={() => setDetailLead(lead)} />
-            <PrimaryButton label={locale === "ar" ? "التالي" : "Advance"} tone="muted" onPress={() => changeStage(lead, nextLeadStage(lead.stage))} />
-            <PrimaryButton label={locale === "ar" ? "أرشفة" : "Archive"} tone="danger" onPress={() => archive(lead)} />
-          </View>
-        </RecordCard>
-      )) : <EmptyList label={locale === "ar" ? "لا توجد فرص." : "No leads found."} />}
-      <LoadMoreFooter loadMore={loadMore} status={status} />
+    <>
+      <ModuleList
+        data={filtered}
+        emptyLabel={locale === "ar" ? "لا توجد فرص." : "No leads found."}
+        keyExtractor={(lead) => lead._id}
+        loadMore={loadMore}
+        status={status}
+        header={
+          <>
+            <View style={styles.actionRow}>
+              <SearchInput placeholder={locale === "ar" ? "بحث العملاء المحتملين" : "Search leads"} value={search} onChangeText={setSearch} />
+              <PrimaryButton label={locale === "ar" ? "إضافة" : "Add"} onPress={openLeadForm} />
+            </View>
+            <SegmentedControl options={stageOptions} value={stageFilter} onChange={setStageFilter} />
+            <View style={styles.metricGrid}>
+              <MetricCard title={locale === "ar" ? "النتائج" : "Results"} value={compactNumber(filtered.length, locale)} caption={locale === "ar" ? "فرص ظاهرة" : "visible leads"} />
+              <MetricCard title={locale === "ar" ? "نشطة" : "Active"} value={compactNumber(activeLeadCount, locale)} caption={locale === "ar" ? "قبل الفوز/الخسارة" : "before won/lost"} />
+              <MetricCard title={locale === "ar" ? "مع مسؤول" : "Assigned"} value={compactNumber(assignedLeadCount, locale)} caption={locale === "ar" ? "للمتابعة" : "owned follow-up"} />
+              <MetricCard title={locale === "ar" ? "مع سيارة" : "Vehicle"} value={compactNumber(vehicleLeadCount, locale)} caption={locale === "ar" ? "محدد" : "specified"} />
+            </View>
+          </>
+        }
+        renderItem={(lead) => (
+          <RecordCard>
+            <View style={styles.recordHeader}>
+              <Text style={styles.recordTitle}>{lead.customerName}</Text>
+              <Text style={styles.statusPill}>{lead.stage}</Text>
+            </View>
+            <View style={styles.detailPillRow}>
+              <DetailPill label={lead.source || "Manual"} tone="info" />
+              <DetailPill label={lead.assignedUserName || (locale === "ar" ? "بدون مسؤول" : "Unassigned")} tone={lead.assignedUserName ? "success" : "warning"} />
+              <DetailPill label={lead.vehicleSummary || (locale === "ar" ? "بدون سيارة" : "No vehicle")} />
+            </View>
+            <Text style={styles.recordMeta}>{lead.phone || lead.email || "-"}</Text>
+            <View style={styles.cardActions}>
+              <PrimaryButton label={locale === "ar" ? "تفاصيل" : "Details"} tone="muted" onPress={() => setDetailLead(lead)} />
+              <PrimaryButton label={locale === "ar" ? "التالي" : "Advance"} tone="muted" onPress={() => changeStage(lead, nextLeadStage(lead.stage))} />
+              <PrimaryButton label={locale === "ar" ? "أرشفة" : "Archive"} tone="danger" onPress={() => archive(lead)} />
+            </View>
+          </RecordCard>
+        )}
+      />
       <FormModal title={locale === "ar" ? "فرصة جديدة" : "New lead"} visible={open} onClose={closeLeadForm}>
         <GuidedStepFlow activeIndex={leadStep} steps={leadSteps}>
           {leadStep === 0 ? (
@@ -252,7 +262,7 @@ export function LeadsModule({ orgId }: { orgId: string }) {
           </>
         ) : null}
       </FormModal>
-    </ModuleScroll>
+    </>
   );
 }
 

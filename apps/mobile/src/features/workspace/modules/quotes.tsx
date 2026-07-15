@@ -5,7 +5,7 @@ import { RouteLoadingState } from "../../../components/RouteState";
 import { GuidedStepFlow, type GuidedStep } from "../../../components/GuidedStepFlow";
 import { api, type MobileQuote, type MobileQuoteMode, type MobileQuoteStatus } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { SELECTOR_PAGE_SIZE, type Option, money, dateLabel, maybeText, parseOptionalNumber, parseRequiredNumber, parseRequiredPositiveNumber, useGenericError, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, EmptyList, getOptionLabel, DetailPill, SummaryRow, SummaryPanel, WizardActions, ModuleScroll } from "./moduleShared";
+import { SELECTOR_PAGE_SIZE, type Option, money, dateLabel, maybeText, parseOptionalNumber, parseRequiredNumber, parseRequiredPositiveNumber, useGenericError, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, ModuleList, getOptionLabel, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
 import { styles } from "./moduleStyles";
 
 export function QuotesModule({ orgId }: { orgId: string }) {
@@ -139,32 +139,46 @@ export function QuotesModule({ orgId }: { orgId: string }) {
   }
 
   return (
-    <ModuleScroll>
-      <View style={styles.actionRow}>
-        <SelectField label={locale === "ar" ? "العميل" : "Customer"} value={customerId} options={customerOptions} onChange={setCustomerId} />
-        <PrimaryButton label={locale === "ar" ? "عرض جديد" : "New quote"} onPress={openCreate} />
-      </View>
-      {!customerId ? <EmptyList label={locale === "ar" ? "اختر عميل لعرض العروض." : "Choose a customer to view quotes."} /> : null}
-      {quotes === undefined && customerId ? <RouteLoadingState label={locale === "ar" ? "جاري التحميل" : "Loading"} /> : null}
-      {quotes?.length ? quotes.map((quote) => (
-        <RecordCard key={quote._id}>
-          <View style={styles.recordHeader}>
-            <Text style={styles.recordTitle}>{money(quote.vehiclePrice, locale)}</Text>
-            <Text style={styles.statusPill}>{quote.status}</Text>
-          </View>
-          <View style={styles.detailPillRow}>
-            <DetailPill label={quote.mode || "CASH"} tone="info" />
-            <DetailPill label={`${quote.termMonths}m`} />
-            <DetailPill label={money(quote.monthlyInstallment, locale)} tone="success" />
-          </View>
-          <Text style={styles.recordMeta}>{dateLabel(quote.createdAt, locale)}</Text>
-          <View style={styles.cardActions}>
-            {quoteStatusOptions.map((statusOption) => (
-              <PrimaryButton key={statusOption} label={statusOption} tone="muted" onPress={() => setStatus(quote, statusOption)} />
-            ))}
-          </View>
-        </RecordCard>
-      )) : customerId && quotes ? <EmptyList label={locale === "ar" ? "لا توجد عروض لهذا العميل." : "No quotes for this customer."} /> : null}
+    <>
+      <ModuleList
+        data={quotes ?? []}
+        emptyLabel={
+          !customerId
+            ? (locale === "ar" ? "اختر عميل لعرض العروض." : "Choose a customer to view quotes.")
+            : quotes === undefined
+              ? ""
+              : (locale === "ar" ? "لا توجد عروض لهذا العميل." : "No quotes for this customer.")
+        }
+        keyExtractor={(quote) => quote._id}
+        header={
+          <>
+            <View style={styles.actionRow}>
+              <SelectField label={locale === "ar" ? "العميل" : "Customer"} value={customerId} options={customerOptions} onChange={setCustomerId} />
+              <PrimaryButton label={locale === "ar" ? "عرض جديد" : "New quote"} onPress={openCreate} />
+            </View>
+            {quotes === undefined && customerId ? <RouteLoadingState label={locale === "ar" ? "جاري التحميل" : "Loading"} /> : null}
+          </>
+        }
+        renderItem={(quote) => (
+          <RecordCard>
+            <View style={styles.recordHeader}>
+              <Text style={styles.recordTitle}>{money(quote.vehiclePrice, locale)}</Text>
+              <Text style={styles.statusPill}>{quote.status}</Text>
+            </View>
+            <View style={styles.detailPillRow}>
+              <DetailPill label={quote.mode || "CASH"} tone="info" />
+              <DetailPill label={`${quote.termMonths}m`} />
+              <DetailPill label={money(quote.monthlyInstallment, locale)} tone="success" />
+            </View>
+            <Text style={styles.recordMeta}>{dateLabel(quote.createdAt, locale)}</Text>
+            <View style={styles.cardActions}>
+              {quoteStatusOptions.map((statusOption) => (
+                <PrimaryButton key={statusOption} label={statusOption} tone="muted" onPress={() => setStatus(quote, statusOption)} />
+              ))}
+            </View>
+          </RecordCard>
+        )}
+      />
       <FormModal title={locale === "ar" ? "عرض جديد" : "New quote"} visible={open} onClose={closeQuoteForm}>
         <GuidedStepFlow activeIndex={quoteStep} steps={quoteSteps}>
           {quoteStep === 0 ? (
@@ -220,7 +234,7 @@ export function QuotesModule({ orgId }: { orgId: string }) {
           />
         </GuidedStepFlow>
       </FormModal>
-    </ModuleScroll>
+    </>
   );
 }
 

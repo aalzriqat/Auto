@@ -11,6 +11,9 @@ export const styles = StyleSheet.create({
     padding: theme.spacing.lg,
     paddingBottom: theme.spacing.xxl,
   },
+  listHeader: {
+    gap: theme.spacing.md,
+  },
   header: {
     flexDirection: "row",
     alignItems: "center",

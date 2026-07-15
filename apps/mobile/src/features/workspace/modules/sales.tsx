@@ -4,7 +4,7 @@ import { Alert, Text, View } from "react-native";
 import { GuidedStepFlow, type GuidedStep } from "../../../components/GuidedStepFlow";
 import { api, type MobileFinancingType, type MobileMyMembership, type MobileSale } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { PAGE_SIZE, SELECTOR_PAGE_SIZE, type Option, type MobileSaleStatusFilter, compactNumber, money, dateLabel, parseOptionalNumber, parseRequiredNumber, idempotencyKey, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, EmptyList, LoadMoreFooter, getOptionLabel, saleMatchesView, averageSalePrice, saleRemainingBalance, vehicleListPriceLabel, DetailPill, SummaryRow, SummaryPanel, WizardActions, ModuleScroll } from "./moduleShared";
+import { PAGE_SIZE, SELECTOR_PAGE_SIZE, type Option, type MobileSaleStatusFilter, compactNumber, money, dateLabel, parseOptionalNumber, parseRequiredNumber, idempotencyKey, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, ModuleList, getOptionLabel, saleMatchesView, averageSalePrice, saleRemainingBalance, vehicleListPriceLabel, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
 import { styles } from "./moduleStyles";
 
 export function SalesModule({ myMembership, orgId }: { myMembership: MobileMyMembership; orgId: string }) {
@@ -161,45 +161,55 @@ export function SalesModule({ myMembership, orgId }: { myMembership: MobileMyMem
   }
 
   return (
-    <ModuleScroll>
-      <View style={styles.actionRow}>
-        <SearchInput
-          placeholder={locale === "ar" ? "بحث المبيعات" : "Search sales"}
-          value={search}
-          onChangeText={setSearch}
-        />
-        <PrimaryButton label={locale === "ar" ? "مسودة" : "Draft"} onPress={openDraft} />
-      </View>
-      <SegmentedControl options={statusOptions} value={statusFilter} onChange={setStatusFilter} />
-      <View style={styles.metricGrid}>
-        <MetricCard title={locale === "ar" ? "ظاهرة" : "Visible"} value={compactNumber(filteredSales.length, locale)} caption={locale === "ar" ? "حسب الفلتر" : "after filters"} />
-        <MetricCard title={locale === "ar" ? "معلقة" : "Pending"} value={compactNumber(pendingSalesCount, locale)} caption={locale === "ar" ? "تحتاج إجراء" : "need action"} />
-        <MetricCard title={locale === "ar" ? "مكتملة" : "Closed"} value={compactNumber(completedSalesCount, locale)} caption={locale === "ar" ? "صفقات منتهية" : "completed deals"} />
-        <MetricCard title={locale === "ar" ? "متوسط" : "Avg deal"} value={money(averageVisibleDeal, locale)} caption={locale === "ar" ? "للقائمة الحالية" : "visible list"} />
-      </View>
-      {filteredSales.length ? filteredSales.map((sale) => (
-        <RecordCard key={sale._id}>
-          <View style={styles.recordHeader}>
-            <Text style={styles.recordTitle}>{sale.vehicleSummary}</Text>
-            <Text style={styles.statusPill}>{sale.status}</Text>
-          </View>
-          <Text style={styles.recordMeta}>{sale.customerName} · {sale.salespersonName}</Text>
-          <View style={styles.detailPillRow}>
-            <DetailPill label={money(sale.salePrice, locale)} tone="success" />
-            <DetailPill label={sale.financingType ?? "CASH"} tone="info" />
-            <DetailPill label={dateLabel(sale.saleDate, locale)} />
-          </View>
-          {sale.downPayment != null ? (
-            <Text style={styles.recordMeta}>{locale === "ar" ? "الدفعة" : "Down payment"}: {money(sale.downPayment, locale)}</Text>
-          ) : null}
-          <View style={styles.cardActions}>
-            <PrimaryButton label={locale === "ar" ? "تفاصيل" : "Details"} tone="muted" onPress={() => setDetailSale(sale)} />
-            {sale.status === "PENDING" ? <PrimaryButton label={locale === "ar" ? "إتمام" : "Complete"} tone="muted" onPress={() => complete(sale)} /> : null}
-            {sale.status !== "CANCELLED" ? <PrimaryButton label={locale === "ar" ? "إلغاء" : "Cancel"} tone="danger" onPress={() => cancel(sale)} /> : null}
-          </View>
-        </RecordCard>
-      )) : <EmptyList label={locale === "ar" ? "لا توجد مبيعات لهذا الفلتر." : "No sales match this view."} />}
-      <LoadMoreFooter loadMore={loadMore} status={status} />
+    <>
+      <ModuleList
+        data={filteredSales}
+        emptyLabel={locale === "ar" ? "لا توجد مبيعات لهذا الفلتر." : "No sales match this view."}
+        keyExtractor={(sale) => sale._id}
+        loadMore={loadMore}
+        status={status}
+        header={
+          <>
+            <View style={styles.actionRow}>
+              <SearchInput
+                placeholder={locale === "ar" ? "بحث المبيعات" : "Search sales"}
+                value={search}
+                onChangeText={setSearch}
+              />
+              <PrimaryButton label={locale === "ar" ? "مسودة" : "Draft"} onPress={openDraft} />
+            </View>
+            <SegmentedControl options={statusOptions} value={statusFilter} onChange={setStatusFilter} />
+            <View style={styles.metricGrid}>
+              <MetricCard title={locale === "ar" ? "ظاهرة" : "Visible"} value={compactNumber(filteredSales.length, locale)} caption={locale === "ar" ? "حسب الفلتر" : "after filters"} />
+              <MetricCard title={locale === "ar" ? "معلقة" : "Pending"} value={compactNumber(pendingSalesCount, locale)} caption={locale === "ar" ? "تحتاج إجراء" : "need action"} />
+              <MetricCard title={locale === "ar" ? "مكتملة" : "Closed"} value={compactNumber(completedSalesCount, locale)} caption={locale === "ar" ? "صفقات منتهية" : "completed deals"} />
+              <MetricCard title={locale === "ar" ? "متوسط" : "Avg deal"} value={money(averageVisibleDeal, locale)} caption={locale === "ar" ? "للقائمة الحالية" : "visible list"} />
+            </View>
+          </>
+        }
+        renderItem={(sale) => (
+          <RecordCard>
+            <View style={styles.recordHeader}>
+              <Text style={styles.recordTitle}>{sale.vehicleSummary}</Text>
+              <Text style={styles.statusPill}>{sale.status}</Text>
+            </View>
+            <Text style={styles.recordMeta}>{sale.customerName} · {sale.salespersonName}</Text>
+            <View style={styles.detailPillRow}>
+              <DetailPill label={money(sale.salePrice, locale)} tone="success" />
+              <DetailPill label={sale.financingType ?? "CASH"} tone="info" />
+              <DetailPill label={dateLabel(sale.saleDate, locale)} />
+            </View>
+            {sale.downPayment != null ? (
+              <Text style={styles.recordMeta}>{locale === "ar" ? "الدفعة" : "Down payment"}: {money(sale.downPayment, locale)}</Text>
+            ) : null}
+            <View style={styles.cardActions}>
+              <PrimaryButton label={locale === "ar" ? "تفاصيل" : "Details"} tone="muted" onPress={() => setDetailSale(sale)} />
+              {sale.status === "PENDING" ? <PrimaryButton label={locale === "ar" ? "إتمام" : "Complete"} tone="muted" onPress={() => complete(sale)} /> : null}
+              {sale.status !== "CANCELLED" ? <PrimaryButton label={locale === "ar" ? "إلغاء" : "Cancel"} tone="danger" onPress={() => cancel(sale)} /> : null}
+            </View>
+          </RecordCard>
+        )}
+      />
       <FormModal title={locale === "ar" ? "مسودة بيع" : "Sale draft"} visible={open} onClose={closeDraft}>
         <GuidedStepFlow activeIndex={draftStep} steps={salesSteps}>
           {draftStep === 0 ? (
@@ -338,7 +348,7 @@ export function SalesModule({ myMembership, orgId }: { myMembership: MobileMyMem
           </>
         ) : null}
       </FormModal>
-    </ModuleScroll>
+    </>
   );
 }
 
