@@ -1515,3 +1515,193 @@ describe("Fix #3 — inactive accounts cannot be posted to", () => {
     ).rejects.toThrow(/inactive/i);
   });
 });
+
+// A refund or write-off is a pure CREDIT to the Prepaid Expenses asset (a
+// refund also credits input VAT). If the EXPENSE_POSTED that should have
+// debited that asset is still queued — which happens whenever the expense is
+// dated in a month that never got an open period, since postability is judged
+// per event date — the correction posts a credit against a balance that was
+// never booked, leaving Prepaid Expenses (and input VAT) negative with no
+// offsetting debit. amortizeScheduleForMonth has always refused to recognize in
+// this state ("source_expense_not_posted"); corrections never had the same
+// guard. The queued original does block the period close, but an unclosable
+// period plus a nonsensical balance sheet is not a correct entry.
+describe("prepaid corrections — refuse to post against an unbooked asset", () => {
+  /** A paid prepaid expense whose EXPENSE_POSTED never posted, plus its ACTIVE schedule. */
+  async function seedQueuedPrepaid(t: T, orgId: Id<"organizations">) {
+    const expenseId = await t.run((ctx) =>
+      ctx.db.insert("expenses", {
+        orgId, title: "Insurance", amount: 1200, taxAmount: 200, date: Date.UTC(2026, 0, 1),
+        category: "FEES", status: "PAID", isPrepaid: true, amortizationMonths: 12,
+      })
+    );
+    const scheduleId = await t.run((ctx) =>
+      ctx.db.insert("prepaidExpenseSchedules", {
+        orgId, expenseId, currency: "JOD", totalMinor: 1_000_000, termMonths: 12,
+        expenseSystemKey: "PROFESSIONAL_FEES_EXPENSE", startYearMonth: "2026-01",
+        recognizedMinor: 0, monthsRecognized: 0, status: "ACTIVE", createdAt: Date.now(),
+      })
+    );
+    return { expenseId, scheduleId };
+  }
+
+  const NOT_POSTED = /hasn't posted to the ledger yet/i;
+
+  test("rejects a write-off while the source expense is still queued", async () => {
+    const { t, orgId, asOwner } = await seedDealer("guard-wo");
+    const { scheduleId } = await seedQueuedPrepaid(t, orgId);
+
+    await expect(
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId, scheduleId, writeOffMinor: 300_000, reason: "Early cancellation",
+      })
+    ).rejects.toThrow(NOT_POSTED);
+
+    expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(0);
+    expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(0);
+  });
+
+  test("rejects a refund while the source expense is still queued", async () => {
+    const { t, orgId, asOwner } = await seedDealer("guard-rf");
+    const { scheduleId } = await seedQueuedPrepaid(t, orgId);
+
+    await expect(
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId, scheduleId, refundMinor: 300_000, refundPaymentMethod: "BANK_TRANSFER",
+        reason: "Policy cancelled, vendor refunded",
+      })
+    ).rejects.toThrow(NOT_POSTED);
+
+    expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(0);
+  });
+
+  test("rejects a VAT-bearing refund while the source expense is still queued", async () => {
+    // The refund's VAT leg credits input VAT that the queued EXPENSE_POSTED
+    // never debited, so it must be refused for the same reason as the net leg.
+    const { t, orgId, asOwner } = await seedDealer("guard-vat");
+    const { scheduleId } = await seedQueuedPrepaid(t, orgId);
+
+    await expect(
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId, scheduleId, refundMinor: 300_000, refundTaxMinor: 60_000,
+        refundPaymentMethod: "BANK_TRANSFER", reason: "Partial refund with VAT",
+      })
+    ).rejects.toThrow(NOT_POSTED);
+
+    expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(0);
+  });
+
+  test("writes no correction row and leaves the schedule untouched when refused", async () => {
+    const { t, orgId, asOwner } = await seedDealer("guard-atomic");
+    const { scheduleId } = await seedQueuedPrepaid(t, orgId);
+    const before = await t.run((ctx) => ctx.db.get(scheduleId));
+
+    await expect(
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId, scheduleId, writeOffMinor: 300_000, newTermMonths: 6, reason: "Early cancellation",
+      })
+    ).rejects.toThrow(NOT_POSTED);
+
+    const corrections = await t.run((ctx) =>
+      ctx.db.query("prepaidScheduleCorrections").withIndex("by_schedule", (q) => q.eq("scheduleId", scheduleId)).collect()
+    );
+    expect(corrections).toHaveLength(0);
+    const after = await t.run((ctx) => ctx.db.get(scheduleId));
+    expect(after!.totalMinor).toBe(before!.totalMinor);
+    expect(after!.termMonths).toBe(before!.termMonths);
+    expect(after!.status).toBe("ACTIVE");
+  });
+
+  test("refuses at submission, so a request is never even queued for approval", async () => {
+    const { t, orgId } = await seedDealer("guard-submit");
+    const { scheduleId } = await seedQueuedPrepaid(t, orgId);
+    const { asUser: asAccountant } = await addFinanceUser(t, orgId, "guard-submit-accountant");
+
+    await expect(
+      asAccountant.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId, scheduleId, writeOffMinor: 300_000, reason: "Early cancellation",
+      })
+    ).rejects.toThrow(NOT_POSTED);
+
+    const requests = await t.run((ctx) =>
+      ctx.db.query("prepaidCorrectionRequests").withIndex("by_schedule", (q) => q.eq("scheduleId", scheduleId)).collect()
+    );
+    expect(requests).toHaveLength(0);
+  });
+
+  test("re-checks at approval: a request approved after the source un-posts is refused", async () => {
+    // The submission-time check can't be the only one — an approval can land
+    // long after the request, and the ledger may have moved underneath it.
+    const { t, orgId, userId, asOwner } = await seedDealer("guard-approve");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    const { asUser: asAccountant } = await addFinanceUser(t, orgId, "guard-approve-accountant");
+    const submitted = await asAccountant.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Early cancellation",
+    });
+    expect(submitted.status).toBe("PENDING");
+
+    // The source EXPENSE_POSTED stops being POSTED between request and approval
+    // (e.g. the expense itself was reversed in the meantime).
+    const posted = await t.run((ctx) =>
+      ctx.db.query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", "expenses").eq("sourceId", expenseId.toString())
+        )
+        .filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED"))
+        .first()
+    );
+    await t.run((ctx) => ctx.db.patch(posted!._id, { status: "REVERSED" }));
+
+    await expect(
+      asOwner.mutation(api.prepaidExpenses.approveCorrectionRequest, {
+        orgId, requestId: submitted.requestId!,
+      })
+    ).rejects.toThrow(NOT_POSTED);
+
+    const corrections = await t.run((ctx) =>
+      ctx.db.query("prepaidScheduleCorrections").withIndex("by_schedule", (q) => q.eq("scheduleId", schedule!._id)).collect()
+    );
+    expect(corrections).toHaveLength(0);
+  });
+
+  test("allows a term-only correction while the source expense is queued", async () => {
+    // Reshaping future recognition posts nothing, so there's no unbooked asset
+    // to credit and no reason to block the accountant.
+    const { t, orgId, asOwner } = await seedDealer("guard-term");
+    const { scheduleId } = await seedQueuedPrepaid(t, orgId);
+
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId, newTermMonths: 6, reason: "Corrected coverage period",
+    });
+
+    const after = await t.run((ctx) => ctx.db.get(scheduleId));
+    expect(after!.termMonths).toBe(6);
+    expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(0);
+  });
+
+  test("allows the correction once the source expense has actually posted", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("guard-ok");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Early cancellation",
+    });
+
+    const corrections = await t.run((ctx) =>
+      ctx.db.query("prepaidScheduleCorrections").withIndex("by_schedule", (q) => q.eq("scheduleId", schedule!._id)).collect()
+    );
+    expect(corrections).toHaveLength(1);
+    expect(corrections[0].writeOffMinor).toBe(300_000);
+  });
+});

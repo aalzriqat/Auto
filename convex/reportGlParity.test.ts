@@ -17,6 +17,7 @@ import { describe, expect, test, vi } from "vitest";
 import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
+import { hookPrepaidExpenseWrittenOff } from "./accounting/workflowHooks";
 
 vi.mock("./rateLimit", () => ({
   rateLimiter: {
@@ -219,14 +220,15 @@ describe("operational Expenses Report vs ledger income statement — parity acro
   // "EXPENSE_POSTED never posted" does NOT imply "this expense left no mark on
   // the P&L", so reversedAt can't be decided on EXPENSE_POSTED alone.
   //
-  // Amortization refuses to run while the source expense is queued
-  // ("source_expense_not_posted" — it won't release an asset that was never
-  // booked), but correctSchedule carries no such guard: an accelerated
-  // write-off debits the expense account outright. Postability is judged per
-  // event date, so an expense dated inside a month that never got an open
-  // period stays queued forever while a write-off dated in an open month posts
-  // for real. Every date here is pinned rather than taken from the wall clock,
-  // so the months stay distinct whenever the suite runs.
+  // correctSchedule now refuses to post a refund or write-off while the source
+  // expense is still queued, because that credit would have no matching debit
+  // (see requireSourceExpensePostedForGlCorrection). It carried no such guard
+  // before, so schedules already in the wild can hold a POSTED write-off
+  // against an expense whose EXPENSE_POSTED never landed — postability is
+  // judged per event date, and an expense dated in a month that never opens
+  // stays queued indefinitely. Reversal still has to account for that history,
+  // so this reconstructs it through the same posting hook correctSchedule uses
+  // rather than through the now-guarded public mutation.
   test("a queued prepaid whose write-off posted keeps the write-off's month", async () => {
     const ctx = await seedDealer("queued-writeoff", { openPeriod: false });
     const expenseId = await ctx.asOwner.mutation(api.expenses.create, {
@@ -236,7 +238,7 @@ describe("operational Expenses Report vs ledger income statement — parity acro
 
     // Opens February–December only. January never gets a period, so the
     // EXPENSE_POSTED dated Jan 1 can never drain — not even via the drain that
-    // opening a period schedules.
+    // opening a period schedules, which is what makes this deterministic.
     await ctx.asOwner.mutation(api.accountingPeriods.create, {
       orgId: ctx.orgId, startDate: Date.UTC(YEAR, 1, 1), endDate: YEAR_END, fiscalYear: YEAR, periodNumber: 1,
     });
@@ -247,29 +249,38 @@ describe("operational Expenses Report vs ledger income statement — parity acro
       c.db.query("prepaidExpenseSchedules").withIndex("by_expense", (q) => q.eq("expenseId", expenseId)).first()
     );
 
-    // Corrections and reversals are both dated by wall-clock `now`, so pin each
-    // into its own open month: write-off in March, reversal in June. Restored in
+    // Legacy state: a write-off posted in March against a still-queued expense.
+    await ctx.t.run(async (c) => {
+      const correctionId = await c.db.insert("prepaidScheduleCorrections", {
+        orgId: ctx.orgId, scheduleId: schedule!._id, refundMinor: 0,
+        writeOffMinor: 300 * JOD_SCALE, previousTermMonths: 12, newTermMonths: 12,
+        reason: "Unused balance written off (pre-guard)", actorId: ctx.userId,
+        createdAt: Date.UTC(YEAR, 2, 20),
+      });
+      await hookPrepaidExpenseWrittenOff(c, {
+        orgId: ctx.orgId, scheduleId: schedule!._id, correctionId,
+        amountMinor: 300 * JOD_SCALE, currency: "JOD",
+        expenseSystemKey: schedule!.expenseSystemKey, actorId: ctx.userId,
+        occurredAt: Date.UTC(YEAR, 2, 20),
+      });
+    });
+
+    const queuedPost = await ctx.t.run((c) =>
+      c.db.query("pendingAccountingEvents").withIndex("by_org_idempotency", (q) =>
+        q.eq("orgId", ctx.orgId).eq("idempotencyKey", `expense_posted_${expenseId}`)
+      ).first()
+    );
+    expect(queuedPost, "EXPENSE_POSTED must still be queued for this to be the case under test").not.toBeNull();
+
+    // Real ledger history in March, despite EXPENSE_POSTED never posting.
+    await assertParity(ctx, MAR_START, MAR_END, 300, "March before reversal");
+
+    // The reversal is dated by wall-clock `now`, so pin it to June. Restored in
     // `finally` — nothing here resets mocks automatically, so letting a failed
     // assertion escape with Date.now still stubbed would strand every later test
-    // in this file in March and bury the real failure under the fallout.
-    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(YEAR, 2, 20));
+    // in this file in June and bury the real failure under the fallout.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(YEAR, 5, 15));
     try {
-      await ctx.asOwner.mutation(api.prepaidExpenses.correctSchedule, {
-        orgId: ctx.orgId, scheduleId: schedule!._id,
-        writeOffMinor: 300 * JOD_SCALE, reason: "Unused balance written off",
-      });
-
-      const queuedPost = await ctx.t.run((c) =>
-        c.db.query("pendingAccountingEvents").withIndex("by_org_idempotency", (q) =>
-          q.eq("orgId", ctx.orgId).eq("idempotencyKey", `expense_posted_${expenseId}`)
-        ).first()
-      );
-      expect(queuedPost, "EXPENSE_POSTED must still be queued for this to be the case under test").not.toBeNull();
-
-      // Real ledger history in March, despite EXPENSE_POSTED never posting.
-      await assertParity(ctx, MAR_START, MAR_END, 300, "March before reversal");
-
-      clock.mockReturnValue(Date.UTC(YEAR, 5, 15));
       await ctx.asOwner.mutation(api.expenses.reverseExpense, {
         orgId: ctx.orgId, expenseId, reason: "Policy cancelled",
       });

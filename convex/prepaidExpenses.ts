@@ -139,6 +139,62 @@ export const listActivePrepaidSchedulesForRecognition = internalQuery({
 });
 
 /**
+ * The schedule's source expense as it actually stands in the ledger: the
+ * EXPENSE_POSTED event that debits Prepaid Expenses, only once it has really
+ * POSTED. A schedule is created ACTIVE the moment its expense is marked paid,
+ * but that debit may still be sitting in the outbox (no open period covering
+ * the expense's own date — postability is judged per event date, so an expense
+ * dated in a month that never opens stays queued indefinitely). Null therefore
+ * means "the prepaid asset does not exist in the GL yet", and nothing may
+ * credit it.
+ */
+async function postedSourceExpenseEvent(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  expenseId: Id<"expenses">
+) {
+  return await ctx.db
+    .query("accountingEvents")
+    .withIndex("by_org_source", (q) =>
+      q.eq("orgId", orgId).eq("sourceType", "expenses").eq("sourceId", expenseId.toString())
+    )
+    .filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED"))
+    .filter((q) => q.eq(q.field("status"), "POSTED"))
+    .first();
+}
+
+/**
+ * Blocks any correction that would post a GL entry against a prepaid asset the
+ * ledger has never seen. A write-off debits the expense account and credits
+ * Prepaid Expenses; a refund credits Prepaid Expenses (and input VAT) against
+ * cash. Both are pure credits to an asset — if the EXPENSE_POSTED that should
+ * have debited it is still queued, they leave a negative Prepaid Expenses
+ * balance (and negative input VAT) with no offsetting debit anywhere. The
+ * queued original does block the period close, but an unclosable period and a
+ * nonsensical balance sheet is not the same thing as a correct entry, and it
+ * lands an accountant in a state they can only unpick by understanding the
+ * outbox internals.
+ *
+ * amortizeScheduleForMonth has refused to run in exactly this situation since
+ * it was written ("source_expense_not_posted"); corrections were simply never
+ * given the same guard. A term-only correction is still allowed — it posts
+ * nothing, it only reshapes future recognition.
+ */
+async function requireSourceExpensePostedForGlCorrection(
+  ctx: MutationCtx,
+  schedule: Doc<"prepaidExpenseSchedules">,
+  amounts: { refundMinor: number; writeOffMinor: number }
+): Promise<void> {
+  if (amounts.refundMinor <= 0 && amounts.writeOffMinor <= 0) return;
+  const posted = await postedSourceExpenseEvent(ctx, schedule.orgId, schedule.expenseId);
+  if (!posted) {
+    throw new ConvexError(
+      "This prepaid expense hasn't posted to the ledger yet, so it can't be refunded or written off — that would credit a Prepaid Expenses balance that was never debited. Resolve the pending accounting event first (Accounting → Setup), then try again. Changing the amortization term is still allowed."
+    );
+  }
+}
+
+/**
  * Recognizes one calendar month for one schedule, if due. Idempotent: a
  * re-call for a month at or before the last recognized one is a no-op. Shared
  * handler behind both the internalMutation (cron/tests) and catchUpPrepaidSchedule.
@@ -163,14 +219,7 @@ export async function amortizeScheduleForMonth(
   // posting time). Recognizing first would credit an asset that isn't there
   // yet. Wait until the source expense has actually posted; the next run
   // catches it up once it does.
-  const sourcePosted = await ctx.db
-    .query("accountingEvents")
-    .withIndex("by_org_source", (q) =>
-      q.eq("orgId", args.orgId).eq("sourceType", "expenses").eq("sourceId", schedule.expenseId.toString())
-    )
-    .filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED"))
-    .filter((q) => q.eq(q.field("status"), "POSTED"))
-    .first();
+  const sourcePosted = await postedSourceExpenseEvent(ctx, args.orgId, schedule.expenseId);
   if (!sourcePosted) return { posted: false, reason: "source_expense_not_posted" };
 
   // Strict month ordering (lexicographic "YYYY-MM"): never recognize a month
@@ -696,6 +745,15 @@ async function applyScheduleCorrection(
     throw new ConvexError(`Cannot correct a schedule with status "${schedule.status}".`);
   }
 
+  // Re-checked here rather than only at submission: this is the single choke
+  // point both the direct path and approveCorrectionRequest go through, and an
+  // approval can land long after the request, by which time the source expense
+  // may still be unposted.
+  await requireSourceExpensePostedForGlCorrection(ctx, schedule, {
+    refundMinor: args.refundMinor,
+    writeOffMinor: args.writeOffMinor,
+  });
+
   const newTermMonths = args.newTermMonths ?? schedule.termMonths;
   const remainingRefundableTaxMinor =
     args.refundTaxMinor > 0 ? await remainingRefundableTaxMinorForSchedule(ctx, schedule) : 0;
@@ -867,6 +925,8 @@ export const correctSchedule = mutation({
         if (schedule.status !== "ACTIVE") {
           throw new ConvexError(`Cannot correct a schedule with status "${schedule.status}".`);
         }
+        await requireSourceExpensePostedForGlCorrection(ctx, schedule, { refundMinor, writeOffMinor });
+
         const newTermMonths = args.newTermMonths ?? schedule.termMonths;
         const remainingRefundableTaxMinor =
           refundTaxMinor > 0 ? await remainingRefundableTaxMinorForSchedule(ctx, schedule) : 0;
