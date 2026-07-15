@@ -1,8 +1,9 @@
 import type { KeyboardTypeOptions, StyleProp, ViewStyle } from "react-native";
 import { StyleSheet, Text, TextInput, View } from "react-native";
 
+import { useAppFontState } from "../providers/AppFontContext";
 import { useLocale } from "../providers/LocaleProvider";
-import { theme } from "../theme";
+import { getTypographyStyle, theme } from "../theme";
 
 type FormFieldProps = Readonly<{
   containerStyle?: StyleProp<ViewStyle>;
@@ -21,11 +22,14 @@ export function FormField({
   onChangeText,
   value,
 }: FormFieldProps) {
-  const { isRtl } = useLocale();
+  const { isRtl, locale } = useLocale();
+  const { fontsLoaded } = useAppFontState();
 
   return (
     <View style={[styles.field, containerStyle]}>
-      <Text style={styles.fieldLabel}>{label}</Text>
+      <Text style={[styles.fieldLabel, getTypographyStyle("label", locale, fontsLoaded)]}>
+        {label}
+      </Text>
       <TextInput
         keyboardType={keyboardType}
         multiline={multiline}
@@ -34,6 +38,7 @@ export function FormField({
         style={[
           styles.input,
           multiline && styles.multilineInput,
+          getTypographyStyle("body", locale, fontsLoaded),
           { textAlign: isRtl ? "right" : "left" },
         ]}
         value={value}
@@ -48,12 +53,10 @@ const styles = StyleSheet.create({
   },
   fieldLabel: {
     color: theme.colors.mutedText,
-    fontSize: 12,
-    fontWeight: "700",
   },
   input: {
-    minHeight: 46,
-    borderRadius: theme.radius.sm,
+    minHeight: 48,
+    borderRadius: theme.radius.md,
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,

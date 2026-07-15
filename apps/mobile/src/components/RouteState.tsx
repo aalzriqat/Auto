@@ -14,8 +14,10 @@ interface RouteErrorStateProps {
 export function RouteLoadingState({ label }: RouteStateProps) {
   return (
     <View style={styles.center}>
-      <ActivityIndicator color={theme.colors.primary} size="large" />
-      <Text style={styles.body}>{label}</Text>
+      <View style={styles.stateCard}>
+        <ActivityIndicator color={theme.colors.primary} size="large" />
+        <Text style={styles.body}>{label}</Text>
+      </View>
     </View>
   );
 }
@@ -23,13 +25,15 @@ export function RouteLoadingState({ label }: RouteStateProps) {
 export function RouteErrorState({ message, onRetry }: RouteErrorStateProps) {
   return (
     <View style={styles.center}>
-      <Text style={styles.title}>AutoFlow</Text>
-      <Text style={styles.error}>{message || "An unexpected error occurred."}</Text>
-      {onRetry ? (
-        <Pressable style={({ pressed }) => [styles.button, getRouteButtonPressedStyle(pressed)]} onPress={onRetry}>
-          <Text style={styles.buttonText}>Retry</Text>
-        </Pressable>
-      ) : null}
+      <View style={styles.stateCard}>
+        <Text style={styles.title}>AutoFlow</Text>
+        <Text style={styles.error}>{message || "An unexpected error occurred."}</Text>
+        {onRetry ? (
+          <Pressable style={({ pressed }) => [styles.button, getRouteButtonPressedStyle(pressed)]} onPress={onRetry}>
+            <Text style={styles.buttonText}>Retry</Text>
+          </Pressable>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -43,13 +47,26 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    gap: theme.spacing.md,
     padding: theme.spacing.xl,
+    backgroundColor: theme.colors.background,
+  },
+  stateCard: {
+    width: "100%",
+    maxWidth: 360,
+    alignItems: "center",
+    gap: theme.spacing.md,
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+    padding: theme.spacing.xl,
+    ...theme.shadows.sm,
   },
   title: {
     color: theme.colors.text,
-    fontSize: 24,
-    fontWeight: "800",
+    fontSize: theme.typography.title.fontSize,
+    fontWeight: theme.typography.title.fontWeight,
+    lineHeight: theme.typography.title.lineHeight,
   },
   body: {
     color: theme.colors.mutedText,
@@ -73,6 +90,7 @@ const styles = StyleSheet.create({
   },
   buttonPressed: {
     opacity: 0.82,
+    transform: [{ scale: 0.98 }],
   },
   buttonText: {
     color: theme.colors.onPrimary,

@@ -11,8 +11,9 @@ import {
   type ViewStyle,
 } from "react-native";
 
+import { useAppFontState } from "../providers/AppFontContext";
 import { useLocale } from "../providers/LocaleProvider";
-import { theme } from "../theme";
+import { getTypographyStyle, theme } from "../theme";
 import { Icon } from "./Icon";
 
 export type SearchableSelectOption = Readonly<{
@@ -75,7 +76,8 @@ export function SearchableSelectField({
   testID = "searchable-select",
   value,
 }: SearchableSelectFieldProps) {
-  const { textDirection } = useLocale();
+  const { locale, textDirection } = useLocale();
+  const { fontsLoaded } = useAppFontState();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const selectedOption = options.find((option) => option.value === value);
@@ -113,7 +115,13 @@ export function SearchableSelectField({
       style={[styles.optionRow, hasNoValue && styles.optionRowSelected]}
       onPress={() => selectValue(noneValue)}
     >
-      <Text style={[styles.optionLabel, hasNoValue && styles.optionLabelSelected]}>
+      <Text
+        style={[
+          styles.optionLabel,
+          getTypographyStyle("body", locale, fontsLoaded),
+          hasNoValue && styles.optionLabelSelected,
+        ]}
+      >
         {noneLabel}
       </Text>
       {hasNoValue ? <Icon color="primary" name="check" size={18} /> : null}
@@ -127,7 +135,7 @@ export function SearchableSelectField({
       style={[styles.optionRow, styles.customRow]}
       onPress={() => selectValue(customValue)}
     >
-      <Text style={styles.optionLabel}>
+      <Text style={[styles.optionLabel, getTypographyStyle("body", locale, fontsLoaded)]}>
         {formatCustomValueLabel(customValueLabel, customValue)}
       </Text>
     </Pressable>
@@ -135,14 +143,17 @@ export function SearchableSelectField({
   /* istanbul ignore next -- empty row rendering is an alternate native modal path. */
   const emptyOption =
     filteredOptions.length === 0 && !showCustomValue ? (
-      <Text testID={`${testID}-empty`} style={styles.emptyText}>
+      <Text
+        testID={`${testID}-empty`}
+        style={[styles.emptyText, getTypographyStyle("body", locale, fontsLoaded)]}
+      >
         {emptyLabel}
       </Text>
     ) : null;
 
   return (
     <View style={[styles.field, containerStyle]}>
-      <Text style={styles.label}>{label}</Text>
+      <Text style={[styles.label, getTypographyStyle("label", locale, fontsLoaded)]}>{label}</Text>
       <Pressable
         accessibilityRole="button"
         accessibilityState={{ disabled, expanded: open }}
@@ -157,11 +168,15 @@ export function SearchableSelectField({
       >
         <Text
           numberOfLines={1}
-          style={[styles.triggerText, !selectedOption && hasNoValue && styles.placeholderText]}
+          style={[
+            styles.triggerText,
+            getTypographyStyle("body", locale, fontsLoaded),
+            !selectedOption && hasNoValue && styles.placeholderText,
+          ]}
         >
           {displayLabel}
         </Text>
-        <View style={[styles.chevron, open && styles.chevronOpen]} />
+        <Icon color="mutedText" name={open ? "chevronUp" : "chevronDown"} size={18} />
       </Pressable>
 
       <Modal animationType="slide" transparent visible={open} onRequestClose={closeSheet}>
@@ -170,27 +185,34 @@ export function SearchableSelectField({
             <View style={[styles.sheet, { direction: textDirection }]}>
               <View style={styles.sheetHeader}>
                 <View style={styles.sheetTitleBlock}>
-                  <Text style={styles.sheetTitle}>{label}</Text>
-                  <Text style={styles.sheetSubtitle}>{displayLabel}</Text>
+                  <Text style={[styles.sheetTitle, getTypographyStyle("heading", locale, fontsLoaded)]}>{label}</Text>
+                  <Text style={[styles.sheetSubtitle, getTypographyStyle("caption", locale, fontsLoaded)]}>
+                    {displayLabel}
+                  </Text>
                 </View>
                 <Pressable
                   accessibilityRole="button"
                   style={styles.closeButton}
                   onPress={closeSheet}
                 >
-                  <Text style={styles.closeButtonText}>{closeLabel}</Text>
+                  <Text style={[styles.closeButtonText, getTypographyStyle("label", locale, fontsLoaded)]}>
+                    {closeLabel}
+                  </Text>
                 </Pressable>
               </View>
-              <TextInput
-                autoCapitalize="none"
-                autoCorrect={false}
-                placeholder={searchPlaceholder}
-                placeholderTextColor={theme.colors.subtleText}
-                testID={`${testID}-search`}
-                style={styles.searchInput}
-                value={search}
-                onChangeText={setSearch}
-              />
+              <View style={styles.searchBox}>
+                <Icon color="primary" name="search" size={18} />
+                <TextInput
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  placeholder={searchPlaceholder}
+                  placeholderTextColor={theme.colors.subtleText}
+                  testID={`${testID}-search`}
+                  style={[styles.searchInput, getTypographyStyle("body", locale, fontsLoaded)]}
+                  value={search}
+                  onChangeText={setSearch}
+                />
+              </View>
               <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.optionList}>
                 {noneOption}
                 {filteredOptions.map((option) => {
@@ -205,10 +227,20 @@ export function SearchableSelectField({
                       onPress={() => selectValue(option.value)}
                     >
                       <View style={styles.optionTextBlock}>
-                        <Text style={[styles.optionLabel, selected && styles.optionLabelSelected]}>
+                        <Text
+                          style={[
+                            styles.optionLabel,
+                            getTypographyStyle("body", locale, fontsLoaded),
+                            selected && styles.optionLabelSelected,
+                          ]}
+                        >
                           {option.label}
                         </Text>
-                        {option.subLabel ? <Text style={styles.optionSubLabel}>{option.subLabel}</Text> : null}
+                        {option.subLabel ? (
+                          <Text style={[styles.optionSubLabel, getTypographyStyle("caption", locale, fontsLoaded)]}>
+                            {option.subLabel}
+                          </Text>
+                        ) : null}
                       </View>
                       {selected ? <Icon color="primary" name="check" size={18} /> : null}
                     </Pressable>
@@ -231,8 +263,6 @@ const styles = StyleSheet.create({
   },
   label: {
     color: theme.colors.text,
-    fontSize: 13,
-    fontWeight: "900",
   },
   trigger: {
     minHeight: 48,
@@ -255,23 +285,9 @@ const styles = StyleSheet.create({
   triggerText: {
     flex: 1,
     color: theme.colors.text,
-    fontSize: 15,
-    fontWeight: "800",
   },
   placeholderText: {
     color: theme.colors.mutedText,
-    fontWeight: "700",
-  },
-  chevron: {
-    width: 8,
-    height: 8,
-    borderRightWidth: 2,
-    borderBottomWidth: 2,
-    borderColor: theme.colors.mutedText,
-    transform: [{ rotate: "45deg" }],
-  },
-  chevronOpen: {
-    transform: [{ rotate: "225deg" }],
   },
   modalRoot: {
     flex: 1,
@@ -299,13 +315,9 @@ const styles = StyleSheet.create({
   },
   sheetTitle: {
     color: theme.colors.text,
-    fontSize: 18,
-    fontWeight: "900",
   },
   sheetSubtitle: {
     color: theme.colors.mutedText,
-    fontSize: 12,
-    fontWeight: "700",
   },
   closeButton: {
     minHeight: 38,
@@ -318,18 +330,22 @@ const styles = StyleSheet.create({
   },
   closeButtonText: {
     color: theme.colors.text,
-    fontSize: 13,
-    fontWeight: "900",
   },
-  searchInput: {
+  searchBox: {
     minHeight: 46,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.sm,
     borderRadius: theme.radius.md,
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
-    color: theme.colors.text,
-    fontSize: 15,
     paddingHorizontal: theme.spacing.md,
+  },
+  searchInput: {
+    flex: 1,
+    minHeight: 44,
+    color: theme.colors.text,
   },
   optionList: {
     gap: theme.spacing.xs,
@@ -361,21 +377,15 @@ const styles = StyleSheet.create({
   },
   optionLabel: {
     color: theme.colors.text,
-    fontSize: 14,
-    fontWeight: "800",
   },
   optionLabelSelected: {
     color: theme.colors.primaryDark,
   },
   optionSubLabel: {
     color: theme.colors.mutedText,
-    fontSize: 12,
-    lineHeight: 17,
   },
   emptyText: {
     color: theme.colors.mutedText,
-    fontSize: 14,
-    lineHeight: 20,
     padding: theme.spacing.lg,
     textAlign: "center",
   },

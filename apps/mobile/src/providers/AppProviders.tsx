@@ -15,13 +15,20 @@ import { ConvexReactClient } from "convex/react";
 import { ConvexProviderWithClerk } from "convex/react-clerk";
 import { useFonts } from "expo-font";
 import * as SplashScreen from "expo-splash-screen";
-import { createContext, useContext, useEffect, useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, type ReactNode } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { validateMobileEnv } from "../config/env";
 import { getTypographyStyle, theme } from "../theme";
+import {
+  AppFontStateProvider,
+  useAppFontState,
+  type AppFontState,
+} from "./AppFontContext";
 import { LocaleProvider, useLocale } from "./LocaleProvider";
+
+export { useAppFontState } from "./AppFontContext";
 
 void SplashScreen.preventAutoHideAsync().catch((error: unknown) => {
   console.error("Failed to keep the splash screen visible while loading fonts", error);
@@ -37,12 +44,6 @@ const MOBILE_FONT_ASSETS = {
   Cairo_700Bold,
 } as const;
 
-type AppFontState = Readonly<{
-  fontsLoaded: boolean;
-}>;
-
-const AppFontContext = createContext<AppFontState>({ fontsLoaded: false });
-
 const envResult = validateMobileEnv();
 const convex = envResult.success
   ? new ConvexReactClient(envResult.data.convexUrl, {
@@ -52,10 +53,6 @@ const convex = envResult.success
 const configurationErrorMessage = envResult.success
   ? "Convex client could not be initialized."
   : envResult.message;
-
-export function useAppFontState(): AppFontState {
-  return useContext(AppFontContext);
-}
 
 function AppFontGate({ children }: { children: ReactNode }) {
   const [loaded, error] = useFonts(MOBILE_FONT_ASSETS);
@@ -80,7 +77,7 @@ function AppFontGate({ children }: { children: ReactNode }) {
     return null;
   }
 
-  return <AppFontContext.Provider value={value}>{children}</AppFontContext.Provider>;
+  return <AppFontStateProvider value={value}>{children}</AppFontStateProvider>;
 }
 
 function ConfigurationError({ message }: { message: string }) {

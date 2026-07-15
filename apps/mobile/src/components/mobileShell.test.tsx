@@ -49,9 +49,14 @@ import * as SecureStore from "expo-secure-store";
 import { StyleSheet, Text, View } from "react-native";
 
 import { LocaleProvider } from "../providers/LocaleProvider";
+import { Badge, Pill } from "./Badge";
+import { Button, getButtonPressedStyle } from "./Button";
+import { Card, getCardPressedStyle } from "./Card";
+import { EmptyState } from "./EmptyState";
 import { FormField } from "./FormField";
 import { GuidedStepFlow, getSafeStepIndex } from "./GuidedStepFlow";
 import { Icon, resolveIconGlyph, semanticIconGlyphs } from "./Icon";
+import { ListRow, getListRowPressedStyle } from "./ListRow";
 import { getLocaleTogglePressedStyle, LocaleToggle } from "./LocaleToggle";
 import { getRouteButtonPressedStyle, RouteErrorState, RouteLoadingState } from "./RouteState";
 import { Screen } from "./Screen";
@@ -61,6 +66,9 @@ import {
   SearchableSelectField,
   type SearchableSelectOption,
 } from "./SearchableSelectField";
+import { SectionHeader, getSectionActionPressedStyle } from "./SectionHeader";
+import { SkeletonRow } from "./SkeletonRow";
+import { StatTile } from "./StatTile";
 
 const getItemAsync = SecureStore.getItemAsync as jest.MockedFunction<typeof SecureStore.getItemAsync>;
 
@@ -78,6 +86,13 @@ describe("mobile shell components", () => {
     );
 
     expect(getByText("Inside shell")).toBeTruthy();
+
+    const scrollScreen = await render(
+      <Screen scroll padding="lg">
+        <Text>Scrollable shell</Text>
+      </Screen>,
+    );
+    expect(scrollScreen.getByText("Scrollable shell")).toBeTruthy();
   });
 
   test("renders semantic icons with token colors and RTL directional flipping", async () => {
@@ -107,6 +122,86 @@ describe("mobile shell components", () => {
     await waitFor(() => {
       expect(rtlIcon.getByTestId("back-icon").props.children).toBe("chevron-forward:#0f172a:20");
     });
+  });
+
+  test("renders modern card and button primitives with press feedback", async () => {
+    const onCardPress = jest.fn();
+    const onButtonPress = jest.fn();
+    const { getByLabelText, getByText } = await render(
+      <LocaleProvider>
+        <View>
+          <Card testID="static-card">
+            <Text>Static card</Text>
+          </Card>
+          <Card accessibilityLabel="Open card" onPress={onCardPress}>
+            <Text>Pressable card</Text>
+          </Card>
+          <Button label="Save" leadingIcon="save" onPress={onButtonPress} />
+          <Button disabled label="Disabled" onPress={onButtonPress} variant="secondary" />
+          <Button label="Delete" onPress={onButtonPress} variant="danger" />
+          <Button label="Preview" onPress={onButtonPress} variant="ghost" />
+        </View>
+      </LocaleProvider>,
+    );
+
+    expect(getCardPressedStyle(false)).toBeNull();
+    expect(getCardPressedStyle(true)).not.toBeNull();
+    expect(getButtonPressedStyle(false)).toBeNull();
+    expect(getButtonPressedStyle(true)).not.toBeNull();
+    expect(getButtonPressedStyle(true, true)).toBeNull();
+
+    await fireEvent.press(getByLabelText("Open card"));
+    await fireEvent.press(getByText("Save"));
+    await fireEvent.press(getByText("Disabled"));
+
+    expect(onCardPress).toHaveBeenCalledTimes(1);
+    expect(onButtonPress).toHaveBeenCalledTimes(1);
+    expect(getByText("Delete")).toBeTruthy();
+    expect(getByText("Preview")).toBeTruthy();
+  });
+
+  test("renders modern display primitives for stats, empty states, rows, badges, and skeletons", async () => {
+    const onAction = jest.fn();
+    const onRowPress = jest.fn();
+    const rendered = await render(
+      <LocaleProvider>
+        <View>
+          <StatTile caption="vs last month" icon="sales" label="Revenue" tone="success" value="42K" />
+          <StatTile icon="tasks" label="Open tasks" tone="warning" value="8" />
+          <StatTile icon="reports" label="Reports" value="4" />
+          <EmptyState actionLabel="Reset" hint="Try another filter." icon="search" onAction={onAction} title="No results" />
+          <EmptyState title="No data" />
+          <ListRow leadingIcon="vehicles" meta="12 available" onPress={onRowPress} title="Inventory" />
+          <ListRow avatarLabel="AF" title="AutoFlow" />
+          <ListRow title="Plain row" />
+          <SectionHeader actionLabel="View all" onAction={onAction} subtitle="Latest activity" title="Pipeline" />
+          <SectionHeader title="Finance" />
+          <Badge label="Pending" tone="warning" />
+          <Badge label="Neutral" />
+          <Pill label="Synced" tone="success" />
+          <Pill label="Default pill" />
+          <SkeletonRow count={2} />
+          <SkeletonRow />
+        </View>
+      </LocaleProvider>,
+    );
+
+    expect(getListRowPressedStyle(false)).toBeNull();
+    expect(getListRowPressedStyle(true)).not.toBeNull();
+    expect(getSectionActionPressedStyle(false)).toBeNull();
+    expect(getSectionActionPressedStyle(true)).not.toBeNull();
+
+    await fireEvent.press(rendered.getByLabelText("Inventory"));
+    await fireEvent.press(rendered.getByText("Reset"));
+    await fireEvent.press(rendered.getByText("View all"));
+
+    expect(onRowPress).toHaveBeenCalledTimes(1);
+    expect(onAction).toHaveBeenCalledTimes(2);
+    expect(rendered.getByText("42K")).toBeTruthy();
+    expect(rendered.getByText("No data")).toBeTruthy();
+    expect(rendered.getByText("Pending")).toBeTruthy();
+    expect(rendered.getByText("Neutral")).toBeTruthy();
+    expect(rendered.getAllByTestId("skeleton-row")).toHaveLength(3);
   });
 
   test("reports shared form field text changes", async () => {

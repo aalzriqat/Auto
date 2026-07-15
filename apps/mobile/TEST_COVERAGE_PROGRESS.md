@@ -1,6 +1,6 @@
 # Mobile Test Coverage Progress
 
-Last updated: 2026-07-15 17:50:58 +03:00
+Last updated: 2026-07-15 18:00:22 +03:00
 
 ## Context
 
@@ -40,6 +40,7 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
 - Started the mobile UI modernization pass by extending `src/theme.ts` with larger radius tokens, subtle slate shadows, Inter/Cairo font-family tokens, and locale-aware typography helpers.
 - Added the Inter/Cairo runtime font dependencies and splash-screen-protected loading in `AppProviders`, with a system-font fallback path if font loading fails.
 - Added the Ionicons dependency, centralized `Icon` wrapper, semantic module/category/workflow icon metadata, and replaced visible text-glyph icon affordances found in the mobile app.
+- Added the Phase 4 component kit primitives (`Card`, `Button`, `StatTile`, `EmptyState`, `SkeletonRow`, `ListRow`, `SectionHeader`, `Badge`/`Pill`) and refreshed the existing shared shell components with radius, shadow, icon, and typography tokens.
 
 ## Validation Log
 
@@ -977,9 +978,17 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `pnpm --filter @autoflow/mobile typecheck`: passed.
   - `pnpm --filter @autoflow/mobile test`: passed with 13 suites, 98 tests, and 100% statements/branches/functions/lines.
   - `JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'; .\gradlew.bat help` from `apps/mobile/android`: passed; existing Gradle verification metadata did not need regeneration.
+- 2026-07-15 18:00 +03: mobile UI modernization Phase 4 validated locally
+  - Added token-driven `Card`, `Button`, `StatTile`, `EmptyState`, `SkeletonRow`, `ListRow`, `SectionHeader`, and `Badge`/`Pill` components under `src/components`.
+  - Updated `Screen`, `FormField`, `SearchableSelectField`, `GuidedStepFlow`, `LocaleToggle`, and `RouteState` with larger radii, soft depth where appropriate, Ionicons affordances, and typography token usage.
+  - Split the app font-state context into `src/providers/AppFontContext.tsx` so shared components can read `fontsLoaded` without importing splash/font-loading side effects.
+  - Expanded `src/components/mobileShell.test.tsx` to cover the new kit and preserve 100% coverage for every file in the component coverage glob.
+  - `pnpm install`: passed; lockfile already up to date.
+  - `pnpm --filter @autoflow/mobile typecheck`: passed.
+  - `pnpm --filter @autoflow/mobile test`: passed with 13 suites, 100 tests, and 100% statements/branches/functions/lines.
 
 ## Next Steps
 
-1. Commit Phase 3 iconography on top of `agent/mobile-ui-port`.
-2. Continue Phase 4 by building/restyling the reusable component kit.
+1. Commit Phase 4 component kit on top of `agent/mobile-ui-port`.
+2. Continue Phase 5 by introducing the org workspace bottom tab layout while preserving legacy deep links.
 3. Continue the later UI phases with typecheck and 100% mobile Jest coverage before each commit.
