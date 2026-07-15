@@ -1,6 +1,6 @@
 # Mobile Test Coverage Progress
 
-Last updated: 2026-07-15 11:36:00 +03:00
+Last updated: 2026-07-15 11:46:00 +03:00
 
 ## Context
 
@@ -811,13 +811,36 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `pnpm mobile:test`: passed with 11 suites, 92 tests, and 100% statements/branches/functions/lines.
   - `git diff --check`: passed with line-ending normalization warnings only.
   - `adb devices -l` still returns no connected devices.
+- 2026-07-15 11:38 +03: sales cockpit pushed and production build started
+  - Committed and pushed `b1871d51` (`Upgrade mobile sales cockpit`) to non-draft PR #70.
+  - PR #70 is confirmed non-draft and the GitHub head is `b1871d51534cb079bae548bf56436db46ccc61da`.
+  - Fresh PR checks started for the new head; Cypress, Playwright, TestSprite, CodeQL, security, lint, type-check, and unit/integration jobs are running.
+  - Checked out short Android worktree `C:\h-ui` to exact commit `b1871d51534cb079bae548bf56436db46ccc61da`.
+  - Started production Android build `pnpm mobile:android:production --skip-checks`; PID `22532`.
+  - Build log: `C:\h-ui\mobile-production-build-20260715-113311.log`.
+  - `adb devices -l` still returns no connected devices, so install remains blocked until USB debugging reappears.
+- 2026-07-15 11:41 +03: PR/build watch heartbeat
+  - SonarCloud passed on head `b1871d51`; type-check, lint, unit-and-integration, Convex backend, TestSprite E2E, Vercel, CodeQL action/python/javascript checks, Semgrep, Checkov, OSV, ZAP, GitGuardian, dealer-worker, dependency-audit, and secret-scan are green.
+  - Still running: Cypress, Playwright, and Nuclei.
+  - CodeRabbit quota window opened enough to post a manual `@coderabbitai review` command: https://github.com/aalzriqat/Auto/pull/70#issuecomment-4978586824.
+  - Production Android build is still running in release JS/assets and native packaging tasks; no release build failure is present.
+  - `adb devices -l` still returns no connected devices.
+- 2026-07-15 11:44 +03: Cypress cross-realm fix applied locally
+  - Fresh Cypress run failed in `dealer-site.cy.ts` because the first local patch used `instanceof HTMLButtonElement`; Cypress runs the app in a separate browser context, so the submit button did not match the spec-window constructor even though it was the right visible button.
+  - Patched `submitDealerLeadForm` to keep the visible/enabled actionability checks, then cast the queried element to `HTMLElement` and invoke the native click without cross-realm `instanceof` checking.
+  - `pnpm typecheck:cypress`: passed.
+  - `pnpm exec eslint cypress/e2e/dealer-site.cy.ts --quiet`: passed.
+  - `pnpm mobile:test`: passed with 11 suites, 92 tests, and 100% statements/branches/functions/lines.
+  - `git diff --check`: passed with line-ending normalization warnings only.
+  - CodeRabbit is now processing the manually triggered review.
+  - Production Android build is still running; no release build failure is present.
+  - `adb devices -l` still returns no connected devices.
 
 ## Next Steps
 
-1. Run Cypress/mobile validation for the local dealer-site patch and sales cockpit pass.
-2. Commit and push the local sales cockpit plus Cypress stabilization changes to non-draft PR #70.
-3. Watch PR checks for the new head and inspect any failures or review threads.
-4. Rebuild a fresh production APK/AAB from the pushed head, then install when ADB lists device `A99JBB5826170023`.
-5. Continue module-level parity passes for dialogs, searchable choices, and guided workflows.
-6. Re-run CodeRabbit after the quota window resets or enable usage-based reviews.
-7. Configure the mobile Turnstile public key if marketplace verification is part of the phone test.
+1. Watch PR checks for the new head and inspect any failures or review threads.
+2. Watch production build `C:\h-ui\mobile-production-build-20260715-113311.log` to completion.
+3. Install the fresh release APK when ADB lists device `A99JBB5826170023`.
+4. Continue module-level parity passes for dialogs, searchable choices, and guided workflows.
+5. Re-run CodeRabbit after the quota window resets or enable usage-based reviews.
+6. Configure the mobile Turnstile public key if marketplace verification is part of the phone test.

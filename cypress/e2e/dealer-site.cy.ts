@@ -11,10 +11,7 @@ function submitDealerLeadForm(buttonName: string) {
     .should("be.visible")
     .and("not.be.disabled");
   cy.findByRole("button", { name: buttonName }).then(($button) => {
-    const button = $button.get(0);
-    if (!(button instanceof HTMLButtonElement)) {
-      throw new Error(`Expected "${buttonName}" to resolve to a submit button.`);
-    }
+    const button = $button.get(0) as HTMLElement;
 
     // The public Next route can replace the hydrated submit button between
     // Cypress' query and click, so click natively after actionability checks.
