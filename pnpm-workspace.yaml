@@ -1,0 +1,10 @@
+overrides:
+  undici: ^7.28.0
+allowBuilds:
+  '@sentry/cli': true
+  core-js: true
+  cypress: true
+  esbuild: true
+  playwright: true
+  sharp: true
+  unrs-resolver: true
