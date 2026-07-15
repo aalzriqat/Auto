@@ -2,13 +2,8 @@
 
 import type { MobileOrgSummary } from "../../convexApi";
 import {
-  canOpenHomeWorkflowAction,
   filterWorkspaces,
-  getHomeWorkflowActions,
-  getPrimaryWorkspace,
   getSafeWorkspaces,
-  getVisibleHomeWorkflowActions,
-  type HomeWorkflowAction,
   workspaceInitials,
   workspaceSearchText,
 } from "./homeCommandModel";
@@ -48,50 +43,5 @@ describe("home command model", () => {
     expect(filterWorkspaces(workspaces, " sales ")).toEqual([wadi]);
     expect(filterWorkspaces(workspaces, "dealer-1")).toEqual([bloom]);
     expect(filterWorkspaces(undefined, "anything")).toEqual([]);
-  });
-
-  test("chooses a primary workspace from filtered results or falls back to all", () => {
-    const first = org({ _id: "first", name: "First Cars" });
-    const second = org({ _id: "second", name: "Second Cars" });
-
-    expect(getPrimaryWorkspace([second], [first, second])).toBe(second);
-    expect(getPrimaryWorkspace([], [first, second])).toBe(first);
-    expect(getPrimaryWorkspace([], [])).toBeNull();
-  });
-
-  test("returns bilingual mobile workflow actions", () => {
-    const englishActions = getHomeWorkflowActions("en");
-    const arabicActions = getHomeWorkflowActions("ar");
-
-    expect(englishActions).toHaveLength(6);
-    expect(englishActions[0]).toMatchObject({
-      icon: "dashboard",
-      target: "dashboard",
-      title: "Open dashboard",
-      tone: "dark",
-    });
-    expect(englishActions.find((action) => action.target === "vehicles")?.icon).toBe("vehicles");
-    expect(englishActions.find((action) => action.target === "sales")?.moduleId).toBe("sales");
-    expect(arabicActions.find((action) => action.target === "marketplace")?.title).toBe("تصفح السوق");
-    expect(arabicActions.every((action) => action.title.length > 0 && action.subtitle.length > 0)).toBe(true);
-  });
-
-  test("filters workflow actions by selected workspace permissions", () => {
-    const actions = getHomeWorkflowActions("en");
-    const sales = org({
-      roleName: "SALES",
-      permissions: ["view:vehicles", "view:sales"],
-    });
-    const visibleTargets = getVisibleHomeWorkflowActions(actions, sales).map((action) => action.target);
-
-    expect(visibleTargets).toEqual(["dashboard", "vehicles", "sales", "messages", "marketplace"]);
-    expect(canOpenHomeWorkflowAction(actions.find((action) => action.target === "leads")!, sales)).toBe(false);
-    expect(canOpenHomeWorkflowAction(actions.find((action) => action.target === "marketplace")!, null)).toBe(true);
-    expect(getVisibleHomeWorkflowActions(actions, null)).toHaveLength(actions.length);
-
-    const missingModule = { ...actions[1], moduleId: undefined };
-    const unknownModule = { ...actions[1], moduleId: "unknown" } as unknown as HomeWorkflowAction;
-    expect(canOpenHomeWorkflowAction(missingModule, sales)).toBe(false);
-    expect(canOpenHomeWorkflowAction(unknownModule, sales)).toBe(false);
   });
 });

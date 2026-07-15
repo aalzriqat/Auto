@@ -3,8 +3,8 @@ import { UserButton } from "@clerk/expo/native";
 import { useAuth } from "@clerk/expo";
 import { useRouter } from "expo-router";
 import { useConvexAuth, useQuery } from "convex/react";
-import { useMemo, useState } from "react";
-import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { useEffect, useMemo, useState } from "react";
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { api, type MobileOrgSummary } from "../../convexApi";
 import { Badge } from "../../components/Badge";
@@ -19,16 +19,12 @@ import { useAppFontState } from "../../providers/AppFontContext";
 import { useLocale } from "../../providers/LocaleProvider";
 import { getTypographyStyle, theme } from "../../theme";
 import {
-  canOpenHomeWorkflowAction,
   filterWorkspaces,
-  getHomeWorkflowActions,
-  getPrimaryWorkspace,
   getSafeWorkspaces,
-  getVisibleHomeWorkflowActions,
   workspaceInitials,
-  type HomeWorkflowAction,
-  type HomeWorkflowTarget,
 } from "./homeCommandModel";
+
+const SEARCH_THRESHOLD = 5;
 
 function useHomeTypography() {
   const { locale } = useLocale();
@@ -101,12 +97,10 @@ function SignedOutState() {
 
 function WorkspaceCard({
   org,
-  onOpenCommand,
-  onOpenDashboard,
+  onOpen,
 }: {
   org: MobileOrgSummary;
-  onOpenCommand: () => void;
-  onOpenDashboard: () => void;
+  onOpen: () => void;
 }) {
   const { t, textDirection } = useLocale();
   const type = useHomeTypography();
@@ -114,182 +108,25 @@ function WorkspaceCard({
   const roleName = org.roleName || t("unknownRole");
 
   return (
-    <Card style={[styles.workspaceCard, { direction: textDirection }]}>
-      <View style={styles.workspaceCardTop}>
-        <View style={styles.workspaceAvatar}>
-          <Text style={[styles.workspaceAvatarText, type.label]}>{workspaceInitials(org.name)}</Text>
-        </View>
-        <View style={styles.workspaceText}>
-          <Text numberOfLines={1} style={[styles.workspaceName, type.heading]}>
-            {workspaceName}
-          </Text>
-          <Text style={[styles.workspaceMeta, type.caption]}>
-            {t("roleLabel")}: {roleName}
-          </Text>
-        </View>
-        <Badge label={roleName} tone="primary" />
-      </View>
-      <View style={styles.workspaceFooter}>
-        <Button
-          accessibilityLabel={`${t("openWorkspace")}: ${workspaceName}`}
-          label={t("openWorkspace")}
-          leadingIcon="dashboard"
-          onPress={onOpenDashboard}
-          style={styles.workspaceFooterButton}
-          variant="secondary"
-        />
-        <Button
-          accessibilityLabel={`${t("homeCommands")}: ${workspaceName}`}
-          label={t("homeCommands")}
-          leadingIcon="operations"
-          onPress={onOpenCommand}
-          style={styles.workspaceFooterButton}
-          variant="ghost"
-        />
-      </View>
-    </Card>
-  );
-}
-
-function WorkflowActionCard({
-  action,
-  disabled,
-  onPress,
-}: {
-  action: HomeWorkflowAction;
-  disabled?: boolean;
-  onPress: () => void;
-}) {
-  const isDark = action.tone === "dark";
-  const type = useHomeTypography();
-
-  return (
-    <Pressable
-      accessibilityLabel={action.title}
-      accessibilityRole="button"
-      accessibilityState={{ disabled: Boolean(disabled) }}
-      android_ripple={{ color: theme.colors.border }}
-      disabled={disabled}
-      style={({ pressed }) => [
-        styles.workflowCard,
-        action.tone === "dark" && styles.workflowCardDark,
-        action.tone === "mint" && styles.workflowCardMint,
-        action.tone === "amber" && styles.workflowCardAmber,
-        action.tone === "blue" && styles.workflowCardBlue,
-        disabled && styles.disabled,
-        pressed && !disabled && styles.cardPressed,
-      ]}
-      onPress={onPress}
-    >
-      <View style={styles.workflowTopRow}>
-        <View style={[styles.workflowIconShell, isDark && styles.workflowIconShellDark]}>
-          <Icon color="primary" name={action.icon} size={20} />
-        </View>
-        <Text style={[styles.workflowKicker, type.label, isDark && styles.workflowTextOnDark]}>
-          {action.kicker}
-        </Text>
-      </View>
-      <View style={styles.workflowCardBody}>
-        <Text numberOfLines={2} style={[styles.workflowTitle, type.heading, isDark && styles.workflowTextOnDark]}>
-          {action.title}
-        </Text>
-        <Text numberOfLines={2} style={[styles.workflowSubtitle, type.caption, isDark && styles.workflowSubtextOnDark]}>
-          {action.subtitle}
-        </Text>
-      </View>
-    </Pressable>
-  );
-}
-
-function WorkspaceCommandSheet({
-  onClose,
-  onOpenWorkflow,
-  onSelectOrg,
-  orgs,
-  selectedOrgId,
-  visible,
-}: {
-  onClose: () => void;
-  onOpenWorkflow: (target: HomeWorkflowTarget, org: MobileOrgSummary | null) => void;
-  onSelectOrg: (orgId: string) => void;
-  orgs: MobileOrgSummary[];
-  selectedOrgId: string | null;
-  visible: boolean;
-}) {
-  const { locale, t, textDirection } = useLocale();
-  const type = useHomeTypography();
-  const actions = useMemo(() => getHomeWorkflowActions(locale), [locale]);
-  const selectedOrg = orgs.find((org) => org._id === selectedOrgId) ?? orgs[0] ?? null;
-  const visibleActions = useMemo(
-    () => getVisibleHomeWorkflowActions(actions, selectedOrg),
-    [actions, selectedOrg],
-  );
-
-  return (
-    <Modal animationType="slide" transparent visible={visible} onRequestClose={onClose}>
-      <View style={styles.sheetBackdrop}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={t("homeCommandSheetLabel")}
-          style={styles.sheetDismissArea}
-          onPress={onClose}
-        />
-        <View style={[styles.commandSheet, { direction: textDirection }]}>
-          <View style={styles.sheetGrabber} />
-          <View style={styles.sheetHeader}>
-            <View style={styles.sheetHeaderText}>
-              <Text style={[styles.sheetTitle, type.title]}>{t("homeCommandSheetTitle")}</Text>
-              <Text style={[styles.sheetBody, type.caption]}>{t("homeCommandSheetBody")}</Text>
-            </View>
-            <Button label={t("close")} onPress={onClose} style={styles.sheetCloseButton} variant="ghost" />
+    <Pressable accessibilityRole="button" onPress={onOpen}>
+      <Card style={[styles.workspaceCard, { direction: textDirection }]}>
+        <View style={styles.workspaceCardTop}>
+          <View style={styles.workspaceAvatar}>
+            <Text style={[styles.workspaceAvatarText, type.label]}>{workspaceInitials(org.name)}</Text>
           </View>
-
-          <ScrollView
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-            style={styles.sheetBodyScroll}
-            contentContainerStyle={styles.sheetBodyContent}
-          >
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.sheetOrgRail}>
-              {orgs.map((org) => {
-                const selected = org._id === selectedOrg?._id;
-                return (
-                  <Pressable
-                    key={org._id}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected }}
-                    style={({ pressed }) => [
-                      styles.sheetOrgChip,
-                      selected && styles.sheetOrgChipSelected,
-                      pressed && styles.cardPressed,
-                    ]}
-                    onPress={() => onSelectOrg(org._id)}
-                  >
-                    <Text style={[styles.sheetOrgText, type.caption, selected && styles.sheetOrgTextSelected]}>
-                      {org.name || t("untitledWorkspace")}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-
-            <View style={styles.sheetActionGrid}>
-              {visibleActions.map((action) => (
-                <WorkflowActionCard
-                  key={action.target}
-                  action={action}
-                  disabled={!selectedOrg && action.target !== "marketplace"}
-                  onPress={() => {
-                    onOpenWorkflow(action.target, selectedOrg);
-                    onClose();
-                  }}
-                />
-              ))}
-            </View>
-          </ScrollView>
+          <View style={styles.workspaceText}>
+            <Text numberOfLines={1} style={[styles.workspaceName, type.heading]}>
+              {workspaceName}
+            </Text>
+            <Text style={[styles.workspaceMeta, type.caption]}>
+              {t("roleLabel")}: {roleName}
+            </Text>
+          </View>
+          <Badge label={roleName} tone="primary" />
+          <Icon color="mutedText" name="chevronForward" size={20} />
         </View>
-      </View>
-    </Modal>
+      </Card>
+    </Pressable>
   );
 }
 
@@ -308,248 +145,112 @@ function EmptyWorkspaceState() {
 }
 
 function AuthenticatedHome() {
-  const { locale, t, textDirection } = useLocale();
+  const { t, textDirection } = useLocale();
   const router = useRouter();
   const type = useHomeTypography();
   const [workspaceQuery, setWorkspaceQuery] = useState("");
-  const [commandSheetOpen, setCommandSheetOpen] = useState(false);
-  const [commandSheetOrgId, setCommandSheetOrgId] = useState<string | null>(null);
   const orgs = useQuery(api.organizations.listMine, {});
   const isSuperAdmin = useQuery(api.adminAuth.isSuperAdmin, {});
   const safeOrgs = useMemo(() => getSafeWorkspaces(orgs), [orgs]);
   const filteredOrgs = useMemo(() => filterWorkspaces(orgs, workspaceQuery), [orgs, workspaceQuery]);
-  const workflowActions = useMemo(() => getHomeWorkflowActions(locale), [locale]);
 
-  if (orgs === undefined || isSuperAdmin === undefined) {
+  const shouldAutoEnter = isSuperAdmin === false && safeOrgs.length === 1;
+  const soleOrgId = shouldAutoEnter ? safeOrgs[0]!._id : null;
+
+  useEffect(() => {
+    if (!soleOrgId) return;
+    router.replace({
+      pathname: nativeRoutes.orgHome,
+      params: { orgId: soleOrgId },
+    });
+  }, [router, soleOrgId]);
+
+  function openWorkspace(org: MobileOrgSummary) {
+    router.push({
+      pathname: nativeRoutes.orgHome,
+      params: { orgId: org._id },
+    });
+  }
+
+  if (orgs === undefined || isSuperAdmin === undefined || shouldAutoEnter) {
     return <RouteLoadingState label={t("loadingWorkspace")} />;
   }
 
-  const primaryOrg = getPrimaryWorkspace(filteredOrgs, safeOrgs);
-  const canOpenWorkspace = Boolean(primaryOrg);
-  const visibleWorkflowActions = getVisibleHomeWorkflowActions(workflowActions, primaryOrg);
-  const openCommandSheet = (org: MobileOrgSummary | null = primaryOrg) => {
-    setCommandSheetOrgId(org?._id ?? null);
-    setCommandSheetOpen(true);
-  };
-  const openWorkflow = (target: HomeWorkflowTarget, org: MobileOrgSummary | null = primaryOrg) => {
-    if (target === "marketplace") {
-      router.push(nativeRoutes.marketplace);
-      return;
-    }
-
-    if (!org) return;
-    const action = workflowActions.find((item) => item.target === target);
-    if (action && !canOpenHomeWorkflowAction(action, org)) return;
-
-    if (target === "dashboard") {
-      router.push({
-        pathname: nativeRoutes.orgHome,
-        params: { orgId: org._id },
-      });
-      return;
-    }
-
-    router.push({
-      pathname: nativeRoutes.orgModule,
-      params: { orgId: org._id, moduleId: target },
-    });
-  };
-
   return (
-    <>
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
-        <View style={[styles.header, { direction: textDirection }]}>
-          <View style={styles.headerText}>
-            <Text style={[styles.brand, type.label]}>{t("appName")}</Text>
-            <Text style={[styles.title, type.display]}>{t("homeWorkCenter")}</Text>
-          </View>
-          <View style={styles.headerActions}>
-            <LocaleToggle />
-            <UserButton />
-          </View>
+    <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+      <View style={[styles.header, { direction: textDirection }]}>
+        <View style={styles.headerText}>
+          <Text style={[styles.brand, type.label]}>{t("appName")}</Text>
+          <Text style={[styles.title, type.display]}>{t("homeWorkCenter")}</Text>
         </View>
+        <View style={styles.headerActions}>
+          <LocaleToggle />
+          <UserButton />
+        </View>
+      </View>
 
-        <Card style={[styles.cockpitPanel, { direction: textDirection }]}>
-          <View style={styles.cockpitTopRow}>
-            <View style={styles.cockpitText}>
-              <Text style={[styles.cockpitEyebrow, type.label]}>{t("homeActiveWorkspace")}</Text>
-              <Text numberOfLines={2} style={[styles.cockpitTitle, type.display]}>
-                {primaryOrg?.name || t("homeChooseWorkspace")}
-              </Text>
-              <Text style={[styles.cockpitMeta, type.caption]}>
-                {primaryOrg
-                  ? `${t("roleLabel")}: ${primaryOrg.roleName || t("unknownRole")}`
-                  : t("homeWorkspaceFallbackHint")}
-              </Text>
-            </View>
-            <View style={styles.cockpitBadge}>
-              <Icon color="primaryDark" name="branches" size={18} />
-              <Text style={[styles.cockpitBadgeValue, type.title]}>{safeOrgs.length}</Text>
-              <Text style={[styles.cockpitBadgeLabel, type.label]}>{t("homeSpacesCount")}</Text>
-            </View>
-          </View>
+      {isSuperAdmin ? (
+        <Card style={[styles.adminPanel, { direction: textDirection }]}>
+          <Text style={[styles.adminLabel, type.heading]}>{t("superAdminLabel")}</Text>
+          <Text style={[styles.adminBody, type.body]}>{t("superAdminBody")}</Text>
+        </Card>
+      ) : null}
 
-          <View style={styles.cockpitMetricRow}>
-            <View style={styles.cockpitMetric}>
-              <Text style={[styles.cockpitMetricValue, type.heading]}>{filteredOrgs.length}</Text>
-              <Text style={[styles.cockpitMetricLabel, type.label]}>{t("homeMatchedCount")}</Text>
-            </View>
-            <View style={styles.cockpitMetric}>
-              <Text style={[styles.cockpitMetricValue, type.heading]}>{visibleWorkflowActions.length}</Text>
-              <Text style={[styles.cockpitMetricLabel, type.label]}>{t("homeWorkflowsCount")}</Text>
-            </View>
-            <View style={styles.cockpitMetric}>
-              <Text style={[styles.cockpitMetricValue, type.heading]}>
-                {isSuperAdmin ? "SA" : primaryOrg?.roleName?.slice(0, 2) || "--"}
-              </Text>
-              <Text style={[styles.cockpitMetricLabel, type.label]}>{t("homeAccessLabel")}</Text>
-            </View>
-          </View>
-
-          <View style={styles.cockpitActions}>
+      {safeOrgs.length > SEARCH_THRESHOLD ? (
+        <View style={styles.searchShell}>
+          <Icon color="primary" name="search" size={18} />
+          <TextInput
+            accessibilityLabel={t("homeSearchWorkspaces")}
+            autoCorrect={false}
+            onChangeText={setWorkspaceQuery}
+            placeholder={t("homeSearchPlaceholder")}
+            placeholderTextColor={theme.colors.subtleText}
+            style={[styles.searchInput, type.body, { textAlign: textDirection === "rtl" ? "right" : "left" }]}
+            value={workspaceQuery}
+          />
+          {workspaceQuery ? (
             <Pressable
               accessibilityRole="button"
-              accessibilityState={{ disabled: !canOpenWorkspace }}
-              disabled={!canOpenWorkspace}
-              style={({ pressed }) => [
-                styles.cockpitPrimaryButton,
-                !canOpenWorkspace && styles.disabled,
-                pressed && canOpenWorkspace && styles.cardPressed,
-              ]}
-              onPress={() => openWorkflow("dashboard")}
+              accessibilityLabel={t("workspaceClearSearch")}
+              style={({ pressed }) => [styles.clearSearch, pressed && styles.cardPressed]}
+              onPress={() => setWorkspaceQuery("")}
             >
-              <Icon color="onPrimary" name="dashboard" size={18} />
-              <Text style={[styles.cockpitPrimaryText, type.heading]}>
-                {t("homeOpenDashboard")}
-              </Text>
+              <Icon color="text" name="close" size={18} />
             </Pressable>
-            <Pressable
-              accessibilityRole="button"
-              style={({ pressed }) => [styles.cockpitSecondaryButton, pressed && styles.cardPressed]}
-              onPress={() => openCommandSheet(primaryOrg)}
-            >
-              <Icon color="text" name="operations" size={18} />
-              <Text style={[styles.cockpitSecondaryText, type.heading]}>
-                {t("homeAllCommands")}
-              </Text>
-            </Pressable>
-          </View>
-        </Card>
+          ) : null}
+        </View>
+      ) : null}
 
-        <Card style={[styles.commandPanel, { direction: textDirection }]}>
-          <View style={styles.commandHeader}>
-            <View style={styles.commandHeaderText}>
-              <Text style={[styles.commandTitle, type.title]}>{t("homeCommandSurfaceTitle")}</Text>
-              <Text style={[styles.commandBody, type.caption]}>{t("homeCommandSurfaceBody")}</Text>
-            </View>
-            <View style={styles.commandStatus}>
-              <Text style={[styles.commandStatusValue, type.title]}>{filteredOrgs.length}</Text>
-              <Text style={[styles.commandStatusLabel, type.label]}>{t("homeResultsCount")}</Text>
-            </View>
-          </View>
-
-          <View style={styles.searchShell}>
-            <Icon color="primary" name="search" size={18} />
-            <TextInput
-              accessibilityLabel={t("homeSearchWorkspaces")}
-              autoCorrect={false}
-              onChangeText={setWorkspaceQuery}
-              placeholder={t("homeSearchPlaceholder")}
-              placeholderTextColor={theme.colors.subtleText}
-              style={[styles.searchInput, type.body, { textAlign: locale === "ar" ? "right" : "left" }]}
-              value={workspaceQuery}
-            />
-            {workspaceQuery ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={t("workspaceClearSearch")}
-                style={({ pressed }) => [styles.clearSearch, pressed && styles.cardPressed]}
-                onPress={() => setWorkspaceQuery("")}
-              >
-                <Icon color="text" name="close" size={18} />
-              </Pressable>
-            ) : null}
-          </View>
-
-          <View style={styles.workflowGrid}>
-            {visibleWorkflowActions.slice(0, 4).map((action) => (
-              <WorkflowActionCard
-                key={action.target}
-                action={action}
-                disabled={!primaryOrg && action.target !== "marketplace"}
-                onPress={() => openWorkflow(action.target)}
-              />
-            ))}
-          </View>
-        </Card>
-
-        {isSuperAdmin ? (
-          <Card style={[styles.adminPanel, { direction: textDirection }]}>
-            <Text style={[styles.adminLabel, type.heading]}>{t("superAdminLabel")}</Text>
-            <Text style={[styles.adminBody, type.body]}>{t("superAdminBody")}</Text>
-          </Card>
-        ) : null}
-
-        <Card
-          accessibilityLabel={t("browseMarketplace")}
-          onPress={() => router.push(nativeRoutes.marketplace)}
-          style={[styles.marketplaceLink, { direction: textDirection }]}
-        >
-          <View style={styles.marketplaceLinkText}>
-            <Text style={[styles.marketplaceLinkTitle, type.heading]}>{t("browseMarketplace")}</Text>
-            <Text style={[styles.workspaceMeta, type.caption]}>{t("marketplaceSubtitle")}</Text>
-          </View>
-          <Icon color="primary" name="chevronForward" size={22} />
-        </Card>
-
-        <View style={[styles.sectionHeader, { direction: textDirection }]}>
-          <View>
-            <Text style={[styles.sectionKicker, type.label]}>{t("homeWorkspacesKicker")}</Text>
-            <Text style={[styles.sectionTitle, type.title]}>{t("workspacesTitle")}</Text>
-          </View>
-          <Button
-            label={t("homeChoose")}
-            leadingIcon="operations"
-            onPress={() => openCommandSheet(primaryOrg)}
-            style={styles.sectionButton}
-            variant="secondary"
+      {filteredOrgs.length > 0 ? (
+        <View style={styles.workspaceList}>
+          {filteredOrgs.map((org) => (
+            <WorkspaceCard key={org._id} org={org} onOpen={() => openWorkspace(org)} />
+          ))}
+        </View>
+      ) : safeOrgs.length > 0 ? (
+        <View style={{ direction: textDirection }}>
+          <EmptyState
+            hint={t("homeNoMatchingWorkspacesBody")}
+            icon="search"
+            title={t("homeNoMatchingWorkspacesTitle")}
           />
         </View>
+      ) : (
+        <EmptyWorkspaceState />
+      )}
 
-        {filteredOrgs.length > 0 ? (
-          <View style={styles.workspaceList}>
-            {filteredOrgs.map((org) => (
-              <WorkspaceCard
-                key={org._id}
-                org={org}
-                onOpenCommand={() => {
-                  openCommandSheet(org);
-                }}
-                onOpenDashboard={() => openWorkflow("dashboard", org)}
-              />
-            ))}
-          </View>
-        ) : safeOrgs.length > 0 ? (
-          <View style={{ direction: textDirection }}>
-            <EmptyState
-              hint={t("homeNoMatchingWorkspacesBody")}
-              icon="search"
-              title={t("homeNoMatchingWorkspacesTitle")}
-            />
-          </View>
-        ) : (
-          <EmptyWorkspaceState />
-        )}
-      </ScrollView>
-      <WorkspaceCommandSheet
-        orgs={safeOrgs}
-        selectedOrgId={commandSheetOrgId}
-        visible={commandSheetOpen}
-        onClose={() => setCommandSheetOpen(false)}
-        onOpenWorkflow={openWorkflow}
-        onSelectOrg={setCommandSheetOrgId}
-      />
-    </>
+      <Card
+        accessibilityLabel={t("browseMarketplace")}
+        onPress={() => router.push(nativeRoutes.marketplace)}
+        style={[styles.marketplaceLink, { direction: textDirection }]}
+      >
+        <View style={styles.marketplaceLinkText}>
+          <Text style={[styles.marketplaceLinkTitle, type.heading]}>{t("browseMarketplace")}</Text>
+          <Text style={[styles.workspaceMeta, type.caption]}>{t("marketplaceSubtitle")}</Text>
+        </View>
+        <Icon color="primary" name="chevronForward" size={22} />
+      </Card>
+    </ScrollView>
   );
 }
 
@@ -662,11 +363,6 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     lineHeight: 36,
   },
-  body: {
-    color: theme.colors.mutedText,
-    fontSize: 16,
-    lineHeight: 23,
-  },
   heroStats: {
     flexDirection: "row",
     gap: theme.spacing.sm,
@@ -726,126 +422,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 21,
   },
-  cockpitPanel: {
-    gap: theme.spacing.md,
-    borderRadius: theme.radius.xl,
-    backgroundColor: theme.colors.surface,
-    padding: theme.spacing.lg,
-    ...theme.shadows.md,
-  },
-  cockpitTopRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: theme.spacing.md,
-  },
-  cockpitText: {
-    flex: 1,
-    minWidth: 0,
-    gap: theme.spacing.xs,
-  },
-  cockpitEyebrow: {
-    color: theme.colors.primary,
-    fontSize: 11,
-    fontWeight: "600",
-    letterSpacing: 0.5,
-    textTransform: "uppercase",
-  },
-  cockpitTitle: {
-    color: theme.colors.text,
-    fontSize: 28,
-    fontWeight: "700",
-    letterSpacing: -0.5,
-    lineHeight: 34,
-  },
-  cockpitMeta: {
-    color: theme.colors.mutedText,
-    fontSize: 13,
-    fontWeight: "500",
-    lineHeight: 19,
-  },
-  cockpitBadge: {
-    minWidth: 68,
-    alignItems: "center",
-    gap: theme.spacing.xs,
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.primarySoft,
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: theme.spacing.sm,
-  },
-  cockpitBadgeValue: {
-    color: theme.colors.primaryDark,
-    fontSize: 24,
-    fontWeight: "700",
-    lineHeight: 28,
-  },
-  cockpitBadgeLabel: {
-    color: theme.colors.primaryDark,
-    fontSize: 10,
-    fontWeight: "600",
-    letterSpacing: 0.4,
-    textTransform: "uppercase",
-  },
-  cockpitMetricRow: {
-    flexDirection: "row",
-    gap: theme.spacing.sm,
-  },
-  cockpitMetric: {
-    flex: 1,
-    minHeight: 62,
-    justifyContent: "space-between",
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.surfaceAlt,
-    padding: theme.spacing.sm,
-  },
-  cockpitMetricValue: {
-    color: theme.colors.text,
-    fontSize: 20,
-    fontWeight: "700",
-    letterSpacing: -0.3,
-  },
-  cockpitMetricLabel: {
-    color: theme.colors.mutedText,
-    fontSize: 10,
-    fontWeight: "600",
-    letterSpacing: 0.4,
-    textTransform: "uppercase",
-  },
-  cockpitActions: {
-    flexDirection: "row",
-    gap: theme.spacing.sm,
-  },
-  cockpitPrimaryButton: {
-    flex: 1.2,
-    minHeight: 48,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: theme.spacing.sm,
-    borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.primary,
-    paddingHorizontal: theme.spacing.md,
-  },
-  cockpitPrimaryText: {
-    color: theme.colors.onPrimary,
-    fontSize: 15,
-    fontWeight: "600",
-  },
-  cockpitSecondaryButton: {
-    flex: 1,
-    minHeight: 48,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: theme.spacing.sm,
-    borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.surfaceAlt,
-    paddingHorizontal: theme.spacing.md,
-  },
-  cockpitSecondaryText: {
-    color: theme.colors.text,
-    fontSize: 15,
-    fontWeight: "600",
-  },
   workspaceList: {
     gap: theme.spacing.md,
   },
@@ -867,123 +443,6 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
     fontSize: 17,
     fontWeight: "700",
-  },
-  commandPanel: {
-    gap: theme.spacing.md,
-    borderColor: theme.colors.borderStrong,
-    borderRadius: theme.radius.lg,
-  },
-  commandHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing.md,
-  },
-  commandHeaderText: {
-    flex: 1,
-    minWidth: 0,
-    gap: theme.spacing.xs,
-  },
-  commandTitle: {
-    color: theme.colors.text,
-    fontSize: 18,
-    fontWeight: "700",
-  },
-  commandBody: {
-    color: theme.colors.mutedText,
-    fontSize: 13,
-    fontWeight: "700",
-    lineHeight: 19,
-  },
-  commandStatus: {
-    minWidth: 62,
-    alignItems: "center",
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.primarySoft,
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: theme.spacing.sm,
-  },
-  commandStatusValue: {
-    color: theme.colors.primary,
-    fontSize: 21,
-    fontWeight: "700",
-    lineHeight: 24,
-  },
-  commandStatusLabel: {
-    color: theme.colors.mutedText,
-    fontSize: 10,
-    fontWeight: "700",
-    textTransform: "uppercase",
-  },
-  workflowGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: theme.spacing.sm,
-  },
-  workflowCard: {
-    width: "48.6%",
-    minHeight: 126,
-    justifyContent: "space-between",
-    gap: theme.spacing.md,
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.surface,
-    padding: theme.spacing.lg,
-    ...theme.shadows.sm,
-  },
-  workflowCardDark: {
-    backgroundColor: theme.colors.surface,
-  },
-  workflowCardMint: {
-    backgroundColor: theme.colors.surface,
-  },
-  workflowCardAmber: {
-    backgroundColor: theme.colors.surface,
-  },
-  workflowCardBlue: {
-    backgroundColor: theme.colors.surface,
-  },
-  workflowTopRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: theme.spacing.sm,
-  },
-  workflowIconShell: {
-    width: 38,
-    height: 38,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.primarySoft,
-  },
-  workflowIconShellDark: {
-    backgroundColor: theme.colors.primarySoft,
-  },
-  workflowKicker: {
-    color: theme.colors.mutedText,
-    fontSize: 11,
-    fontWeight: "700",
-    textTransform: "uppercase",
-  },
-  workflowCardBody: {
-    gap: theme.spacing.xs,
-  },
-  workflowTitle: {
-    color: theme.colors.text,
-    fontSize: 16,
-    fontWeight: "700",
-    lineHeight: 20,
-  },
-  workflowSubtitle: {
-    color: theme.colors.mutedText,
-    fontSize: 12,
-    fontWeight: "700",
-    lineHeight: 17,
-  },
-  workflowTextOnDark: {
-    color: theme.colors.text,
-  },
-  workflowSubtextOnDark: {
-    color: theme.colors.mutedText,
   },
   searchShell: {
     minHeight: 44,
@@ -1045,122 +504,7 @@ const styles = StyleSheet.create({
     color: theme.colors.mutedText,
     fontSize: 14,
   },
-  workspaceFooter: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing.md,
-  },
-  workspaceFooterButton: {
-    flex: 1,
-  },
-  sectionHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: theme.spacing.md,
-  },
-  sectionKicker: {
-    color: theme.colors.mutedText,
-    fontSize: 11,
-    fontWeight: "700",
-    textTransform: "uppercase",
-  },
-  sectionTitle: {
-    color: theme.colors.text,
-    fontSize: 20,
-    fontWeight: "700",
-  },
-  sectionButton: {
-    minHeight: 40,
-  },
-  sheetBackdrop: {
-    flex: 1,
-    justifyContent: "flex-end",
-    backgroundColor: "rgba(15,23,42,0.4)",
-  },
-  sheetDismissArea: {
-    flex: 1,
-  },
-  commandSheet: {
-    maxHeight: "86%",
-    gap: theme.spacing.md,
-    borderTopLeftRadius: theme.radius.xl,
-    borderTopRightRadius: theme.radius.xl,
-    backgroundColor: theme.colors.background,
-    padding: theme.spacing.lg,
-    ...theme.shadows.lg,
-  },
-  sheetGrabber: {
-    alignSelf: "center",
-    width: 42,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: theme.colors.borderStrong,
-  },
-  sheetHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing.md,
-  },
-  sheetHeaderText: {
-    flex: 1,
-    minWidth: 0,
-    gap: theme.spacing.xs,
-  },
-  sheetTitle: {
-    color: theme.colors.text,
-    fontSize: 20,
-    fontWeight: "700",
-  },
-  sheetBody: {
-    color: theme.colors.mutedText,
-    fontSize: 13,
-    fontWeight: "700",
-    lineHeight: 19,
-  },
-  sheetCloseButton: {
-    minHeight: 38,
-  },
-  sheetOrgRail: {
-    gap: theme.spacing.sm,
-  },
-  sheetBodyScroll: {
-    flexShrink: 1,
-  },
-  sheetBodyContent: {
-    gap: theme.spacing.md,
-    paddingBottom: theme.spacing.sm,
-  },
-  sheetOrgChip: {
-    minHeight: 40,
-    justifyContent: "center",
-    borderRadius: theme.radius.full,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surface,
-    paddingHorizontal: theme.spacing.md,
-  },
-  sheetOrgChipSelected: {
-    borderColor: theme.colors.primary,
-    backgroundColor: theme.colors.primarySoft,
-  },
-  sheetOrgText: {
-    color: theme.colors.mutedText,
-    fontSize: 13,
-    fontWeight: "700",
-  },
-  sheetOrgTextSelected: {
-    color: theme.colors.primaryDark,
-  },
-  sheetActionGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: theme.spacing.sm,
-  },
   cardPressed: {
     opacity: 0.82,
-  },
-  disabled: {
-    opacity: 0.5,
   },
 });
