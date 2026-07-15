@@ -1,8 +1,9 @@
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { Icon, type SemanticIconName } from "../../components/Icon";
+import { firstParam } from "../../navigation/routeParams";
 import { Screen } from "../../components/Screen";
 import { useLocale } from "../../providers/LocaleProvider";
 import { theme } from "../../theme";
@@ -182,11 +183,21 @@ export function SalesTabScreen() {
 
 type InboxSegment = "messages" | "social" | "alerts";
 
+const inboxSegmentValues: ReadonlySet<InboxSegment> = new Set(["messages", "social", "alerts"]);
+
+function normalizeInboxSegment(value: string | string[] | undefined): InboxSegment {
+  const candidate = firstParam(value);
+  return candidate && inboxSegmentValues.has(candidate as InboxSegment)
+    ? (candidate as InboxSegment)
+    : "messages";
+}
+
 export function InboxTabScreen() {
   const { locale } = useLocale();
   const { myMembership, org, orgId } = useWorkspaceTabsData();
+  const params = useLocalSearchParams<{ segment?: string | string[] }>();
   const canSeeSocial = moduleAccessible("socialInbox", myMembership.permissions, myMembership.roleName);
-  const [segment, setSegment] = useState<InboxSegment>("messages");
+  const [segment, setSegment] = useState<InboxSegment>(() => normalizeInboxSegment(params.segment));
 
   const segments: Array<{ label: string; value: InboxSegment }> = [
     { label: locale === "ar" ? "الرسائل" : "Messages", value: "messages" },

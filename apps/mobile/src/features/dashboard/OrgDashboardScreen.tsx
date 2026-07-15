@@ -27,6 +27,7 @@ import { useAppFontState } from "../../providers/AppFontContext";
 import { useLocale } from "../../providers/LocaleProvider";
 import { getTypographyStyle, theme } from "../../theme";
 import { WorkspaceModuleLauncher } from "../workspace/WorkspaceModuleLauncher";
+import { TodayAgenda } from "./TodayAgenda";
 
 const TIME_RANGES: ReadonlyArray<{
   value: MobileDashboardTimeRange;
@@ -419,6 +420,7 @@ function DashboardContent({
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
       <Header org={org} />
+      <TodayAgenda orgId={org._id} myMembership={myMembership} />
       <QuickActionRail orgId={org._id} roleName={myMembership.roleName} />
       <Card
         accessibilityLabel={t("dealerMarketplace")}
@@ -439,6 +441,7 @@ function DashboardContent({
         </View>
         <Icon color="primary" name="chevronForward" size={22} />
       </Card>
+      <Text style={[styles.performanceEyebrow, type.label]}>{t("performanceUpper")}</Text>
       <SalesHero stats={stats} timeRange={timeRange} onChangeTimeRange={onChangeTimeRange} />
 
       <View style={styles.metricGrid}>
@@ -716,6 +719,14 @@ const styles = StyleSheet.create({
     color: theme.colors.mutedText,
     fontSize: 13,
     lineHeight: 18,
+  },
+  performanceEyebrow: {
+    color: theme.colors.mutedText,
+    fontSize: 13,
+    fontWeight: "700",
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+    marginTop: theme.spacing.xs,
   },
   salesHero: {
     gap: theme.spacing.lg,
