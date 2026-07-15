@@ -274,7 +274,7 @@ export default function DashboardEntryPage() {
       const landingPage =
         role === "SALES" || role === "SALESPERSON" ? "sales" :
         role === "RECEPTION" ? "leads" :
-        role === "ACCOUNTANT" ? "accounting" :
+        role === "ACCOUNTANT" || role === "SENIOR_ACCOUNTANT" ? "accounting" :
         "dashboard";
       router.replace(`/${firstOrg._id}/${landingPage}`);
     } else if (orgs && orgs.length === 0 && isSupportAgent === true) {

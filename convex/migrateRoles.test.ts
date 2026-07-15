@@ -150,3 +150,75 @@ describe("backfillReopenPeriodsPermission", () => {
     expect(role?.permissions).toEqual(["view:org", "reopen:accounting_periods"]);
   });
 });
+
+describe("backfillSeniorAccountantRole", () => {
+  test("creates a SENIOR_ACCOUNTANT role for an org with an ACCOUNTANT-capable role", async () => {
+    const t = convexTest(schema, MODULES);
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Senior Backfill Dealer", createdAt: Date.now() })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "ACCOUNTANT", permissions: ["view:finance", "manage:finance"] })
+    );
+
+    const result = await t.mutation(internal.migrateRoles.backfillSeniorAccountantRole, {});
+    expect(result.createdCount).toBe(1);
+
+    const seniorRole = await t.run((ctx) =>
+      ctx.db.query("roles").withIndex("by_org", (q) => q.eq("orgId", orgId)).filter((q) => q.eq(q.field("name"), "SENIOR_ACCOUNTANT")).first()
+    );
+    expect(seniorRole).not.toBeNull();
+    expect(seniorRole?.permissions).toContain("delete:expenses");
+    expect(seniorRole?.permissions).toContain("view:cost_price");
+    expect(seniorRole?.permissions).toContain("view:commissions");
+    expect(seniorRole?.permissions).toContain("manage:commissions");
+  });
+
+  test("skips an org with no ACCOUNTANT-capable role", async () => {
+    const t = convexTest(schema, MODULES);
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "No Accountant Dealer", createdAt: Date.now() })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "SALES", permissions: ["view:sales", "create:sales:request"] })
+    );
+
+    const result = await t.mutation(internal.migrateRoles.backfillSeniorAccountantRole, {});
+    expect(result.createdCount).toBe(0);
+  });
+
+  test("is idempotent — a second run creates nothing further", async () => {
+    const t = convexTest(schema, MODULES);
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Senior Backfill Dealer 2", createdAt: Date.now() })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "ACCOUNTANT", permissions: ["view:finance", "manage:finance"] })
+    );
+
+    await t.mutation(internal.migrateRoles.backfillSeniorAccountantRole, {});
+    const second = await t.mutation(internal.migrateRoles.backfillSeniorAccountantRole, {});
+    expect(second.createdCount).toBe(0);
+
+    const seniorRoles = await t.run((ctx) =>
+      ctx.db.query("roles").withIndex("by_org", (q) => q.eq("orgId", orgId)).filter((q) => q.eq(q.field("name"), "SENIOR_ACCOUNTANT")).collect()
+    );
+    expect(seniorRoles.length).toBe(1);
+  });
+
+  test("does not duplicate a SENIOR_ACCOUNTANT role an org already created/customized itself", async () => {
+    const t = convexTest(schema, MODULES);
+    const orgId = await t.run((ctx) =>
+      ctx.db.insert("organizations", { name: "Custom Senior Dealer", createdAt: Date.now() })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "ACCOUNTANT", permissions: ["view:finance", "manage:finance"] })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("roles", { orgId, name: "SENIOR_ACCOUNTANT", permissions: ["view:finance", "manage:finance", "view:cost_price"] })
+    );
+
+    const result = await t.mutation(internal.migrateRoles.backfillSeniorAccountantRole, {});
+    expect(result.createdCount).toBe(0);
+  });
+});

@@ -237,3 +237,54 @@ export const backfillAccountantExpensePermissions = internalMutation({
     return { updatedCount, updates };
   },
 });
+
+/**
+ * One-time backfill for the new SENIOR_ACCOUNTANT role template (founder-
+ * independence readiness review). Unlike the backfills above, this doesn't
+ * patch an existing role's permissions — it INSERTS the new role for every
+ * org that already runs finance day-to-day (has an ACCOUNTANT-capable role,
+ * i.e. one holding manage:finance) but has no SENIOR_ACCOUNTANT row yet, so
+ * the role is selectable in Team settings without waiting for the org to
+ * create it manually. Idempotent: an org that already has a role named
+ * SENIOR_ACCOUNTANT (however its permissions were customized) is skipped
+ * rather than getting a duplicate. Assigning any member to the new role is
+ * left to the org — this only makes the role available.
+ */
+export const backfillSeniorAccountantRole = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const allRoles = await ctx.db.query("roles").collect();
+    const rolesByOrg = new Map<string, Doc<"roles">[]>();
+    for (const role of allRoles) {
+      if (role.isDeleted) continue;
+      const key = role.orgId.toString();
+      const list = rolesByOrg.get(key);
+      if (list) list.push(role);
+      else rolesByOrg.set(key, [role]);
+    }
+
+    const template = DEFAULT_ROLE_TEMPLATES.find((t) => t.name === "SENIOR_ACCOUNTANT");
+    if (!template) throw new Error("SENIOR_ACCOUNTANT template not found in DEFAULT_ROLE_TEMPLATES.");
+
+    let createdCount = 0;
+    const created: string[] = [];
+
+    for (const [orgId, orgRoles] of rolesByOrg) {
+      const hasAccountantCapability = orgRoles.some((r) => r.permissions.includes(PERMISSIONS.MANAGE_FINANCE));
+      const hasSeniorAccountantAlready = orgRoles.some(
+        (r) => normalizeRoleName(r.name) === normalizeRoleName("SENIOR_ACCOUNTANT")
+      );
+      if (!hasAccountantCapability || hasSeniorAccountantAlready) continue;
+
+      await ctx.db.insert("roles", {
+        orgId: orgRoles[0].orgId,
+        name: template.name,
+        permissions: [...template.permissions],
+      });
+      createdCount++;
+      created.push(orgId);
+    }
+
+    return { createdCount, created };
+  },
+});

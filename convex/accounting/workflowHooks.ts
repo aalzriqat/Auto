@@ -9,7 +9,7 @@
  * operationally final without a captured, retryable GL record. The queue is
  * re-driven idempotently when a chart is initialized or a period is opened.
  */
-import { Id } from "../_generated/dataModel";
+import { Doc, Id } from "../_generated/dataModel";
 import { MutationCtx, QueryCtx } from "../_generated/server";
 import { postAccountingEvent, PostCommand } from "./postingEngine";
 import { EventType, ReceivableCreditKey, AcquisitionCorrectionType, classifyExpensePosting } from "./postingRules";
@@ -1259,13 +1259,19 @@ export async function hookFiCommissionRecognitionsReversed(
 }
 
 /**
- * Reverses every month of prepaid amortization already posted for a schedule
- * whose expense is being reversed — same per-month clawback shape as
+ * Reverses every prepaid GL event already posted for a schedule whose expense
+ * is being reversed — every monthly amortization release AND every correction
+ * (partial refund, accelerated write-off), same per-event clawback shape as
  * hookFiCommissionRecognitionsReversed. Together with reversing the original
  * EXPENSE_POSTED entry (which reverseExpense already does), this unwinds the
- * whole prepaid lifecycle to zero: the asset debit, the cash credit, and every
- * asset→expense release. Idempotent (reverseAccountingEvent no-ops on an
- * already-reversed event) and also drops any not-yet-posted queued month.
+ * whole prepaid lifecycle to zero: the asset debit, the cash credit, every
+ * asset→expense release, and any correction's cash refund or accelerated
+ * write-off. Without covering the correction event types too, a schedule that
+ * had a refund or write-off posted before its expense was reversed would keep
+ * that correction's postings live in the GL — orphaned cash/prepaid/VAT
+ * balances with no corresponding expense. Idempotent (reverseAccountingEvent
+ * no-ops on an already-reversed event) and also drops any not-yet-posted
+ * queued event (amortization or correction alike).
  */
 export async function hookPrepaidExpenseAmortizationsReversed(
   ctx: MutationCtx,
@@ -1278,20 +1284,27 @@ export async function hookPrepaidExpenseAmortizationsReversed(
   }
 ): Promise<void> {
   const scheduleIdStr = args.scheduleId.toString();
-  // Amortization events use a per-month sourceId, so they're gathered by their
-  // (stable) payload.scheduleId rather than an exact sourceId match.
-  const postedEvents = (
-    await ctx.db
+  const REVERSIBLE_EVENT_TYPES = [
+    "PREPAID_EXPENSE_AMORTIZED",
+    "PREPAID_EXPENSE_REFUNDED",
+    "PREPAID_EXPENSE_WRITTEN_OFF",
+  ] as const;
+  // Each event type uses a per-event (per-month, or per-correction) sourceId,
+  // so they're gathered by their (stable) payload.scheduleId rather than an
+  // exact sourceId match.
+  const postedEvents: Doc<"accountingEvents">[] = [];
+  for (const eventType of REVERSIBLE_EVENT_TYPES) {
+    const events = await ctx.db
       .query("accountingEvents")
-      .withIndex("by_org", (q) => q.eq("orgId", args.orgId))
-      .filter((q) => q.eq(q.field("eventType"), "PREPAID_EXPENSE_AMORTIZED"))
+      .withIndex("by_org_eventType", (q) => q.eq("orgId", args.orgId).eq("eventType", eventType))
       .filter((q) => q.eq(q.field("status"), "POSTED"))
-      .collect()
-  ).filter((e) => (e.payload as { scheduleId?: string })?.scheduleId === scheduleIdStr);
+      .collect();
+    postedEvents.push(...events.filter((e) => (e.payload as { scheduleId?: string })?.scheduleId === scheduleIdStr));
+  }
 
   const period = await getOpenPeriodForDate(ctx, args.orgId, args.reversalDate);
   for (const event of postedEvents) {
-    const reversalIdempotencyKey = `prepaid_amort_reversed_${event._id}`;
+    const reversalIdempotencyKey = `prepaid_reversed_${event._id}`;
     if (period) {
       await reverseAccountingEvent(ctx, {
         orgId: args.orgId,
