@@ -41,8 +41,7 @@ import {
   occurredAtForMonthIndex,
 } from "./utils/expenseAmortization";
 import { requireTenantAuth } from "./utils/tenancy";
-import { PERMISSIONS } from "./utils/permissions";
-import { isSystemOwnerRole } from "./utils/permissions";
+import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { requireFeature } from "./subscriptions";
 import { auditLog } from "./financialAudit";
 import { notifyFinanceManagers, notifyUser, getActorName } from "./utils/notifications";
@@ -761,13 +760,15 @@ async function applyScheduleCorrection(
     });
   }
 
+  const vatSuffix = args.refundTaxMinor > 0 ? ` (+${args.refundTaxMinor} VAT)` : "";
+  const referenceSuffix = args.reference ? `, ref ${args.reference}` : "";
   await auditLog(ctx, {
     orgId: args.orgId,
     actorId: args.actorId,
     actionType: "CORRECT_PREPAID_SCHEDULE",
     resourceType: "prepaidExpenseSchedules",
     resourceId: args.scheduleId.toString(),
-    description: `Corrected prepaid schedule: refund ${args.refundMinor}${args.refundTaxMinor > 0 ? ` (+${args.refundTaxMinor} VAT)` : ""}, write-off ${args.writeOffMinor}, term ${schedule.termMonths} -> ${newTermMonths}${args.reference ? `, ref ${args.reference}` : ""}. Reason: ${args.reason}`,
+    description: `Corrected prepaid schedule: refund ${args.refundMinor}${vatSuffix}, write-off ${args.writeOffMinor}, term ${schedule.termMonths} -> ${newTermMonths}${referenceSuffix}. Reason: ${args.reason}`,
   });
 
   return correctionId;
@@ -832,6 +833,7 @@ export const correctSchedule = mutation({
           scheduleId: args.scheduleId,
           refundMinor,
           refundTaxMinor,
+          refundPaymentMethod: refundMinor > 0 ? (args.refundPaymentMethod ?? null) : null,
           writeOffMinor,
           newTermMonths: args.newTermMonths ?? null,
           reason,

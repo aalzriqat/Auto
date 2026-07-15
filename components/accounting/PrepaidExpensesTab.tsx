@@ -374,8 +374,26 @@ function PendingCorrectionRequestsPanel({ orgId }: Readonly<{ orgId: Id<"organiz
               <span className="font-medium">{request.expenseTitle}</span>
               <span className="text-slate-500">{format(new Date(request.createdAt), "MMM d, yyyy")}</span>
             </div>
+            {request.refundMinor > 0 && (
+              <p>
+                {t("RefundAmountLabel" as any)}: {formatCurrency(request.refundMinor / factor, request.currency, scale)}
+                {!!request.refundTaxMinor && request.refundTaxMinor > 0 && (
+                  <> ({t("RefundVatLabel" as any)}: {formatCurrency(request.refundTaxMinor / factor, request.currency, scale)})</>
+                )}
+              </p>
+            )}
+            {request.reference && (
+              <p className="text-slate-500">
+                {t("RefundReferenceLabel" as any)}: {request.reference}
+              </p>
+            )}
+            {request.writeOffMinor > 0 && (
+              <p>
+                {t("WriteOffAmountLabel" as any)}: {formatCurrency(request.writeOffMinor / factor, request.currency, scale)}
+              </p>
+            )}
             <p>
-              {t("WriteOffAmountLabel" as any)}: {formatCurrency(request.writeOffMinor / factor, request.currency, scale)}
+              {t("PrepaidTermLabel" as any)}: {request.newTermMonths} {t("Months" as any)}
             </p>
             <p className="text-slate-500">
               {t("RequestedByLabel" as any)}: {request.requestedByName}

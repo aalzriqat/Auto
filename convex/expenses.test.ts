@@ -325,6 +325,34 @@ describe("Phase 2 — amortization start date can't predate the expense's month"
       })
     ).rejects.toThrow(/cannot be earlier/i);
   });
+
+  test("update accepts null to explicitly clear a previously-set start date (distinct from omitting the field)", async () => {
+    const { t, orgId, asUser } = await setup();
+    const expenseId = await asUser.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 2, 1),
+      category: "FEES", status: "PENDING", isPrepaid: true, amortizationMonths: 12,
+      amortizationStartDate: Date.UTC(2026, 4, 1), // May — later than the expense's own March date
+    });
+
+    await asUser.mutation(api.expenses.update, { orgId, expenseId, amortizationStartDate: null });
+
+    const expense = await t.run((ctx) => ctx.db.get(expenseId));
+    expect(expense?.amortizationStartDate).toBeUndefined();
+  });
+
+  test("update omitting amortizationStartDate leaves an existing value untouched (undefined means 'no change', not 'clear')", async () => {
+    const { t, orgId, asUser } = await setup();
+    const expenseId = await asUser.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 2, 1),
+      category: "FEES", status: "PENDING", isPrepaid: true, amortizationMonths: 12,
+      amortizationStartDate: Date.UTC(2026, 4, 1),
+    });
+
+    await asUser.mutation(api.expenses.update, { orgId, expenseId, title: "Insurance (renamed)" });
+
+    const expense = await t.run((ctx) => ctx.db.get(expenseId));
+    expect(expense?.amortizationStartDate).toBe(Date.UTC(2026, 4, 1));
+  });
 });
 
 describe("expenses.remove", () => {

@@ -421,7 +421,10 @@ export const update = mutation({
     notes: v.optional(v.string()),
     isPrepaid: v.optional(v.boolean()),
     amortizationMonths: v.optional(v.number()),
-    amortizationStartDate: v.optional(v.number()),
+    // null (distinct from omitted/undefined) explicitly clears a previously-set
+    // start date back to "recognition begins the month the expense was paid" —
+    // same null-means-clear convention as vehicleId/payerId below.
+    amortizationStartDate: v.optional(v.union(v.number(), v.null())),
   },
   handler: async (ctx, args) => {
     const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.EDIT_EXPENSES]);
@@ -433,13 +436,14 @@ export const update = mutation({
 
     // Note: Zod schema might not expect `null` for vehicleId or payerId directly if not configured,
     // but the schema is typed using .optional(). We may need to filter out nulls or the schema might pass.
-    // The UpdateExpenseSchema defines them as optional string, not nullable. 
+    // The UpdateExpenseSchema defines them as optional string, not nullable.
     // We can pre-process args before validation if necessary, or just validate.
     // The UpdateExpenseSchema is `.partial()`, so `undefined` is allowed. `null` from Convex might fail Zod string check.
     // Let's strip nulls before validation just for Zod.
     const argsToValidate = { ...args };
     if (argsToValidate.vehicleId === null) delete argsToValidate.vehicleId;
     if (argsToValidate.payerId === null) delete argsToValidate.payerId;
+    if (argsToValidate.amortizationStartDate === null) delete argsToValidate.amortizationStartDate;
 
     validateInput(UpdateExpenseSchema, argsToValidate);
 
@@ -469,7 +473,7 @@ export const update = mutation({
       (args.paymentMethod !== undefined && args.paymentMethod !== expense.paymentMethod) ||
       (args.isPrepaid !== undefined && (args.isPrepaid || false) !== (expense.isPrepaid || false)) ||
       (args.amortizationMonths !== undefined && args.amortizationMonths !== expense.amortizationMonths) ||
-      (args.amortizationStartDate !== undefined && args.amortizationStartDate !== expense.amortizationStartDate);
+      (args.amortizationStartDate !== undefined && args.amortizationStartDate !== (expense.amortizationStartDate ?? null));
     if (hasAccountingExposure && hasMaterialAccountingChange) {
       throw new ConvexError(
         "Posted expenses are locked. Use a correction or reversal workflow before changing accounting fields."
@@ -498,7 +502,7 @@ export const update = mutation({
         args.category ?? expense.category,
         args.isPrepaid ?? expense.isPrepaid,
         args.amortizationMonths ?? expense.amortizationMonths,
-        args.amortizationStartDate ?? expense.amortizationStartDate,
+        args.amortizationStartDate === null ? undefined : (args.amortizationStartDate ?? expense.amortizationStartDate),
         args.date ?? expense.date
       );
     }

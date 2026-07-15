@@ -129,8 +129,14 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
       const parsedDate = new Date(values.date).getTime();
       const parsedVehicleId = values.vehicleId === "none" ? undefined : (values.vehicleId as Id<"vehicles">);
       const parsedPayerId = values.payerId === "none" ? undefined : (values.payerId as Id<"users">);
-      const parsedAmortizationStartDate =
-        values.isPrepaid && values.amortizationStartDate ? new Date(values.amortizationStartDate).getTime() : undefined;
+      // null (distinct from undefined) means "explicitly cleared" — only
+      // meaningful on update, where it tells the server to unset a
+      // previously-stored value rather than leave it untouched.
+      const parsedAmortizationStartDate: number | null | undefined = values.isPrepaid
+        ? values.amortizationStartDate
+          ? new Date(values.amortizationStartDate).getTime()
+          : null
+        : undefined;
 
       if (expense) {
         // The server is the authority on whether this is actually allowed:
@@ -173,7 +179,9 @@ export function ExpenseDialog({ open, onOpenChange, expense }: ExpenseDialogProp
           notes: values.notes,
           isPrepaid: values.isPrepaid ?? false,
           amortizationMonths: values.isPrepaid ? values.amortizationMonths : undefined,
-          amortizationStartDate: parsedAmortizationStartDate,
+          // create's schema has no concept of "clearing" a field that doesn't
+          // exist yet — null only means something on update.
+          amortizationStartDate: parsedAmortizationStartDate ?? undefined,
         });
         toast.success(t("ExpenseRecordedSuccess" as any));
       }

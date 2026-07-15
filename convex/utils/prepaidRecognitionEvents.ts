@@ -15,7 +15,7 @@
  * diverge from the authoritative schedule exactly when a period closes late.
  */
 import { QueryCtx } from "../_generated/server";
-import { Id } from "../_generated/dataModel";
+import { Doc, Id } from "../_generated/dataModel";
 import { yearMonthIndex, yearMonthFromIndex, yearMonthStringIndex } from "./expenseAmortization";
 import { fromMinorUnits } from "./money";
 
@@ -59,6 +59,57 @@ function addTo(map: OrgPrepaidRecognitionByMonth, scheduleId: string, yearMonth:
   bySchedule.set(yearMonth, (bySchedule.get(yearMonth) ?? 0) + amountMinor);
 }
 
+/** Records one event/pending-post row into the org-wide map, a no-op when the payload carries no scheduleId. */
+function recordRecognitionRow(
+  byScheduleMonth: OrgPrepaidRecognitionByMonth,
+  payload: RecognitionPayload | undefined,
+  sourceId: string,
+  accountingDate: number
+): void {
+  if (!payload?.scheduleId) return;
+  addTo(byScheduleMonth, payload.scheduleId, monthForRecognitionRow(payload, sourceId, accountingDate), payload.amountMinor ?? 0);
+}
+
+async function loadPostedRecognitionEvents(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  byScheduleMonth: OrgPrepaidRecognitionByMonth
+): Promise<void> {
+  for (const eventType of RECOGNITION_EVENT_TYPES) {
+    const posted = await ctx.db
+      .query("accountingEvents")
+      .withIndex("by_org_eventType", (q) => q.eq("orgId", orgId).eq("eventType", eventType))
+      .filter((q) => q.eq(q.field("status"), "POSTED"))
+      .collect();
+    for (const event of posted) {
+      recordRecognitionRow(byScheduleMonth, event.payload as RecognitionPayload | undefined, event.sourceId, event.accountingDate);
+    }
+  }
+}
+
+/** Refund/write-off corrections share sourceType with amortization but are their own eventTypes — this scopes the pending/failed outbox scan to just the two recognition event types. */
+function isQueuedRecognitionEntry(entry: Doc<"pendingAccountingEvents">): boolean {
+  if (entry.sourceType !== "prepaidExpenseSchedules" || entry.kind !== "POST") return false;
+  return !!entry.eventType && (RECOGNITION_EVENT_TYPES as readonly string[]).includes(entry.eventType);
+}
+
+async function loadQueuedRecognitionEvents(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">,
+  byScheduleMonth: OrgPrepaidRecognitionByMonth
+): Promise<void> {
+  for (const status of ["PENDING", "FAILED"] as const) {
+    const queued = await ctx.db
+      .query("pendingAccountingEvents")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
+      .collect();
+    for (const entry of queued) {
+      if (!isQueuedRecognitionEntry(entry)) continue;
+      recordRecognitionRow(byScheduleMonth, entry.payload as RecognitionPayload | undefined, entry.sourceId, entry.accountingDate);
+    }
+  }
+}
+
 /**
  * One org-wide pass over posted + parked prepaid recognition events — same
  * cost shape (indexed event queries + outbox status queries) as
@@ -69,44 +120,8 @@ export async function loadOrgPrepaidRecognitionByMonth(
   orgId: Id<"organizations">
 ): Promise<OrgPrepaidRecognitionByMonth> {
   const byScheduleMonth: OrgPrepaidRecognitionByMonth = new Map();
-
-  for (const eventType of RECOGNITION_EVENT_TYPES) {
-    const posted = await ctx.db
-      .query("accountingEvents")
-      .withIndex("by_org_eventType", (q) => q.eq("orgId", orgId).eq("eventType", eventType))
-      .filter((q) => q.eq(q.field("status"), "POSTED"))
-      .collect();
-    for (const event of posted) {
-      const payload = event.payload as RecognitionPayload | undefined;
-      if (!payload?.scheduleId) continue;
-      addTo(
-        byScheduleMonth,
-        payload.scheduleId,
-        monthForRecognitionRow(payload, event.sourceId, event.accountingDate),
-        payload.amountMinor ?? 0
-      );
-    }
-  }
-
-  for (const status of ["PENDING", "FAILED"] as const) {
-    const queued = await ctx.db
-      .query("pendingAccountingEvents")
-      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
-      .collect();
-    for (const entry of queued) {
-      if (entry.sourceType !== "prepaidExpenseSchedules" || entry.kind !== "POST") continue;
-      if (!entry.eventType || !(RECOGNITION_EVENT_TYPES as readonly string[]).includes(entry.eventType)) continue;
-      const payload = entry.payload as RecognitionPayload | undefined;
-      if (!payload?.scheduleId) continue;
-      addTo(
-        byScheduleMonth,
-        payload.scheduleId,
-        monthForRecognitionRow(payload, entry.sourceId, entry.accountingDate),
-        payload.amountMinor ?? 0
-      );
-    }
-  }
-
+  await loadPostedRecognitionEvents(ctx, orgId, byScheduleMonth);
+  await loadQueuedRecognitionEvents(ctx, orgId, byScheduleMonth);
   return byScheduleMonth;
 }
 

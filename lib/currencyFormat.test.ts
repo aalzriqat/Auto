@@ -21,9 +21,9 @@ describe("formatInCurrency", () => {
     expect(result).not.toContain("JOD");
   });
 
-  test("falls back to a plain 'amount CODE' string for an invalid currency code instead of throwing", () => {
+  test("falls back to a plain 'amount CODE' string (still honoring fractionDigits) for an invalid currency code instead of throwing", () => {
     const result = formatInCurrency("en-US", "NOT_A_CURRENCY", 100, 2);
-    expect(result).toBe("100 NOT_A_CURRENCY");
+    expect(result).toBe("100.00 NOT_A_CURRENCY");
   });
 
   test("zero and negative amounts format without throwing", () => {

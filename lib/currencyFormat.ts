@@ -12,6 +12,6 @@ export function formatInCurrency(locale: string, currency: string, amount: numbe
       minimumFractionDigits: fractionDigits,
     }).format(amount);
   } catch {
-    return `${amount.toLocaleString()} ${currency}`;
+    return `${amount.toLocaleString(locale, { minimumFractionDigits: fractionDigits })} ${currency}`;
   }
 }

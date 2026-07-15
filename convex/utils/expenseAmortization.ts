@@ -165,8 +165,14 @@ export function amortizationInfoFromScheduleProgress(schedule: ScheduleProgressL
   const monthsRecognized = clampMonths(schedule.monthsRecognized ?? 0, schedule.termMonths);
   const remainingMonths = schedule.termMonths - monthsRecognized;
   const remainingMinor = Math.max(schedule.totalMinor - schedule.recognizedMinor, 0);
-  const monthlyMinor =
-    remainingMonths <= 0 ? 0 : remainingMonths <= 1 ? remainingMinor : Math.floor(remainingMinor / remainingMonths);
+  let monthlyMinor: number;
+  if (remainingMonths <= 0) {
+    monthlyMinor = 0;
+  } else if (remainingMonths <= 1) {
+    monthlyMinor = remainingMinor;
+  } else {
+    monthlyMinor = Math.floor(remainingMinor / remainingMonths);
+  }
   return {
     monthlyAmount: fromMinorUnits(monthlyMinor, schedule.currency),
     recognizedToDateAmount: fromMinorUnits(schedule.recognizedMinor, schedule.currency),
