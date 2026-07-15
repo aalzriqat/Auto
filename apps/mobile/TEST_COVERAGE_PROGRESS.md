@@ -627,11 +627,27 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `pnpm mobile:typecheck`: passed.
   - `pnpm mobile:test`: passed with 9 suites, 83 tests, and 100% statements/branches/functions/lines.
   - `git diff --check`: passed with line-ending normalization warnings only.
+- 2026-07-15 10:10 +03: production Android build running
+  - Pushed commit `5211d27d` (`Upgrade mobile sales and inventory flows`) to non-draft PR #70.
+  - Checked out `C:\h-ui` to the exact pushed commit for the short-path production build.
+  - Started `pnpm mobile:android:production --skip-checks` in the background; the JS bundle step completed and Gradle is still compiling native release modules.
+  - Build log: `C:\h-ui\mobile-production-build-20260715-100802.log`.
+- 2026-07-15 10:14 +03: production build still progressing
+  - Gradle completed release JS bundling, resource processing, Kotlin/Java compile, dex packaging, and ARM native build targets.
+  - Current build tail is in app CMake native targets for x86/x86_64; no failure has appeared in the log.
+- 2026-07-15 10:16 +03: production build installed on phone
+  - Production build completed successfully from source commit `5211d27d` in 6m 44s.
+  - Play-ready bundle: `C:\h-ui\apps\mobile\android\app\build\outputs\bundle\release\app-release.aab` (12-char SHA-256 fingerprint `1131C59440BE`).
+  - Direct phone-test APK: `C:\h-ui\apps\mobile\android\app\build\outputs\apk\release\app-release.apk` (12-char SHA-256 fingerprint `BCDD3FD22893`).
+  - Installed the fresh signed release APK on device `A99JBB5826170023`; install result was `Success`.
+  - Verified package `com.autoflowdealer.mobile` reports `versionName=0.1.0`, `versionCode=1`, `lastUpdateTime=2026-07-15 10:15:43`.
+  - Relaunched the app, confirmed `mCurrentFocus` is `com.autoflowdealer.mobile/com.autoflowdealer.mobile.MainActivity`, and captured visible screenshot `C:\h-ui\phone-sales-inventory-parity-release.png`.
+  - Production build log still reports the Turnstile public site key as missing; marketplace verification flows may remain limited until configured.
 
 ## Next Steps
 
-1. Continue watching pending PR checks/comments/inline comments/failures.
+1. Push the install/progress heartbeat and watch the fresh PR checks/comments/inline comments/failures.
 2. Continue on-device UI testing against the installed production build and record any screens that still feel behind the PWA.
-3. Continue the next parity pass on marketplace cards, vehicle details, and sales wizard-style flows.
+3. Continue the next parity pass on marketplace cards, lead/customer detail flows, and deeper mobile dialogs.
 4. Configure the mobile Turnstile public key if marketplace verification is part of the phone test.
 5. Re-run CodeRabbit after the quota window resets or enable usage-based reviews.
