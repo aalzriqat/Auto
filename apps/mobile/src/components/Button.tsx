@@ -32,8 +32,8 @@ const variantStyles = {
   },
   secondary: {
     container: {
-      backgroundColor: theme.colors.surface,
-      borderColor: theme.colors.borderStrong,
+      backgroundColor: theme.colors.surfaceAlt,
+      borderColor: "transparent",
     },
     icon: "text",
     text: {
@@ -52,12 +52,12 @@ const variantStyles = {
   },
   danger: {
     container: {
-      backgroundColor: theme.colors.danger,
-      borderColor: theme.colors.danger,
+      backgroundColor: theme.colors.dangerSoft,
+      borderColor: "transparent",
     },
-    icon: "onPrimary",
+    icon: "danger",
     text: {
-      color: theme.colors.onPrimary,
+      color: theme.colors.danger,
     },
   },
 } as const;
@@ -119,8 +119,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: theme.spacing.sm,
-    borderRadius: theme.radius.md,
-    borderWidth: 1,
+    borderRadius: theme.radius.full,
     paddingHorizontal: theme.spacing.lg,
     paddingVertical: theme.spacing.sm,
   },

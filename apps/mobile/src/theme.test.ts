@@ -4,11 +4,11 @@ describe("mobile theme tokens", () => {
   test("keeps the brand color palette stable while expanding shape and depth tokens", () => {
     expect(theme.colors.primary).toBe("#0f766e");
     expect(theme.colors.accent).toBe("#ea580c");
-    expect(theme.radius).toEqual({ sm: 8, md: 12, lg: 16, xl: 20, full: 999 });
+    expect(theme.radius).toEqual({ sm: 10, md: 14, lg: 18, xl: 24, full: 999 });
     expect(theme.shadows.sm).toEqual(
       expect.objectContaining({
         shadowColor: "#0f172a",
-        shadowOpacity: 0.06,
+        shadowOpacity: 0.05,
         elevation: 2,
       }),
     );
@@ -24,9 +24,9 @@ describe("mobile theme tokens", () => {
     expect(getTypographyStyle("display", "en")).toEqual(
       expect.objectContaining({
         fontFamily: "Inter_700Bold",
-        fontSize: 28,
+        fontSize: 34,
         fontWeight: "700",
-        lineHeight: 34,
+        lineHeight: 41,
       }),
     );
     expect(getTypographyStyle("heading", "ar")).toEqual(
@@ -39,7 +39,7 @@ describe("mobile theme tokens", () => {
     expect(getTypographyStyle("label", "en", false)).toEqual(
       expect.objectContaining({
         fontFamily: undefined,
-        letterSpacing: 0,
+        letterSpacing: 0.5,
         textTransform: "uppercase",
       }),
     );

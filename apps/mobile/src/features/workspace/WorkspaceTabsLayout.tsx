@@ -185,7 +185,7 @@ export function WorkspaceTabsLayout({ orgId }: Readonly<{ orgId: string | null }
 const styles = StyleSheet.create({
   tabBar: {
     borderTopColor: theme.colors.border,
-    borderTopWidth: 1,
+    borderTopWidth: StyleSheet.hairlineWidth,
     backgroundColor: theme.colors.surface,
     paddingTop: theme.spacing.sm,
     ...theme.shadows.sm,

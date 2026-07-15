@@ -68,12 +68,12 @@ function SignedOutState() {
         <Text style={[styles.heroBody, type.body]}>{t("signedOutSubtitle")}</Text>
         <View style={styles.heroStats}>
           <View style={styles.heroStat}>
-            <Icon color="onPrimary" name="notifications" size={20} />
+            <Icon color="primary" name="notifications" size={20} />
             <Text style={[styles.heroStatValue, type.title]}>24/7</Text>
             <Text style={[styles.heroStatLabel, type.caption]}>{t("homeLiveOps")}</Text>
           </View>
           <View style={styles.heroStat}>
-            <Icon color="onPrimary" name="sales" size={20} />
+            <Icon color="primary" name="sales" size={20} />
             <Text style={[styles.heroStatValue, type.title]}>CRM</Text>
             <Text style={[styles.heroStatLabel, type.caption]}>{t("homeSales")}</Text>
           </View>
@@ -183,7 +183,7 @@ function WorkflowActionCard({
     >
       <View style={styles.workflowTopRow}>
         <View style={[styles.workflowIconShell, isDark && styles.workflowIconShellDark]}>
-          <Icon color={isDark ? "onPrimary" : "primary"} name={action.icon} size={20} />
+          <Icon color="primary" name={action.icon} size={20} />
         </View>
         <Text style={[styles.workflowKicker, type.label, isDark && styles.workflowTextOnDark]}>
           {action.kicker}
@@ -383,7 +383,7 @@ function AuthenticatedHome() {
               </Text>
             </View>
             <View style={styles.cockpitBadge}>
-              <Icon color="onPrimary" name="branches" size={18} />
+              <Icon color="primaryDark" name="branches" size={18} />
               <Text style={[styles.cockpitBadgeValue, type.title]}>{safeOrgs.length}</Text>
               <Text style={[styles.cockpitBadgeLabel, type.label]}>{t("homeSpacesCount")}</Text>
             </View>
@@ -428,7 +428,7 @@ function AuthenticatedHome() {
               style={({ pressed }) => [styles.cockpitSecondaryButton, pressed && styles.cardPressed]}
               onPress={() => openCommandSheet(primaryOrg)}
             >
-              <Icon color="onPrimary" name="operations" size={18} />
+              <Icon color="text" name="operations" size={18} />
               <Text style={[styles.cockpitSecondaryText, type.heading]}>
                 {t("homeAllCommands")}
               </Text>
@@ -621,44 +621,45 @@ const styles = StyleSheet.create({
   brand: {
     color: theme.colors.primary,
     fontSize: 14,
-    fontWeight: "800",
+    fontWeight: "600",
     letterSpacing: 0,
     textTransform: "uppercase",
   },
   shellCaption: {
     color: theme.colors.mutedText,
     fontSize: 12,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   heroPanel: {
     gap: theme.spacing.md,
     borderRadius: theme.radius.xl,
-    backgroundColor: theme.colors.hero,
-    padding: theme.spacing.lg,
-    ...theme.shadows.lg,
+    backgroundColor: theme.colors.surface,
+    padding: theme.spacing.xl,
+    ...theme.shadows.md,
   },
   heroEyebrow: {
-    color: theme.colors.primarySoft,
+    color: theme.colors.primary,
     fontSize: 12,
-    fontWeight: "900",
-    letterSpacing: 0,
+    fontWeight: "600",
+    letterSpacing: 0.5,
     textTransform: "uppercase",
   },
   heroTitle: {
-    color: theme.colors.onPrimary,
-    fontSize: 30,
-    fontWeight: "900",
-    lineHeight: 36,
+    color: theme.colors.text,
+    fontSize: 32,
+    fontWeight: "700",
+    letterSpacing: -0.6,
+    lineHeight: 38,
   },
   heroBody: {
-    color: theme.colors.surfaceAlt,
-    fontSize: 15,
-    lineHeight: 22,
+    color: theme.colors.mutedText,
+    fontSize: 16,
+    lineHeight: 23,
   },
   title: {
     color: theme.colors.text,
     fontSize: 30,
-    fontWeight: "800",
+    fontWeight: "600",
     lineHeight: 36,
   },
   body: {
@@ -675,20 +676,18 @@ const styles = StyleSheet.create({
     minHeight: 72,
     justifyContent: "space-between",
     borderRadius: theme.radius.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.primaryDark,
-    backgroundColor: theme.colors.primaryDark,
+    backgroundColor: theme.colors.surfaceAlt,
     padding: theme.spacing.md,
   },
   heroStatValue: {
-    color: theme.colors.onPrimary,
+    color: theme.colors.text,
     fontSize: 21,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   heroStatLabel: {
-    color: theme.colors.surfaceAlt,
+    color: theme.colors.mutedText,
     fontSize: 12,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   authActions: {
     gap: theme.spacing.md,
@@ -720,7 +719,7 @@ const styles = StyleSheet.create({
   adminLabel: {
     color: theme.colors.accent,
     fontSize: 14,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   adminBody: {
     color: theme.colors.text,
@@ -729,11 +728,10 @@ const styles = StyleSheet.create({
   },
   cockpitPanel: {
     gap: theme.spacing.md,
-    borderColor: theme.colors.hero,
     borderRadius: theme.radius.xl,
-    backgroundColor: theme.colors.hero,
+    backgroundColor: theme.colors.surface,
     padding: theme.spacing.lg,
-    ...theme.shadows.lg,
+    ...theme.shadows.md,
   },
   cockpitTopRow: {
     flexDirection: "row",
@@ -746,21 +744,23 @@ const styles = StyleSheet.create({
     gap: theme.spacing.xs,
   },
   cockpitEyebrow: {
-    color: theme.colors.primarySoft,
+    color: theme.colors.primary,
     fontSize: 11,
-    fontWeight: "900",
+    fontWeight: "600",
+    letterSpacing: 0.5,
     textTransform: "uppercase",
   },
   cockpitTitle: {
-    color: theme.colors.onPrimary,
-    fontSize: 27,
-    fontWeight: "900",
-    lineHeight: 33,
+    color: theme.colors.text,
+    fontSize: 28,
+    fontWeight: "700",
+    letterSpacing: -0.5,
+    lineHeight: 34,
   },
   cockpitMeta: {
-    color: theme.colors.surfaceAlt,
+    color: theme.colors.mutedText,
     fontSize: 13,
-    fontWeight: "700",
+    fontWeight: "500",
     lineHeight: 19,
   },
   cockpitBadge: {
@@ -768,22 +768,21 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: theme.spacing.xs,
     borderRadius: theme.radius.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.primaryDark,
-    backgroundColor: theme.colors.primaryDark,
+    backgroundColor: theme.colors.primarySoft,
     paddingHorizontal: theme.spacing.sm,
     paddingVertical: theme.spacing.sm,
   },
   cockpitBadgeValue: {
-    color: theme.colors.onPrimary,
+    color: theme.colors.primaryDark,
     fontSize: 24,
-    fontWeight: "900",
+    fontWeight: "700",
     lineHeight: 28,
   },
   cockpitBadgeLabel: {
-    color: theme.colors.surfaceAlt,
+    color: theme.colors.primaryDark,
     fontSize: 10,
-    fontWeight: "900",
+    fontWeight: "600",
+    letterSpacing: 0.4,
     textTransform: "uppercase",
   },
   cockpitMetricRow: {
@@ -795,20 +794,20 @@ const styles = StyleSheet.create({
     minHeight: 62,
     justifyContent: "space-between",
     borderRadius: theme.radius.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.primaryDark,
-    backgroundColor: theme.colors.primaryDark,
+    backgroundColor: theme.colors.surfaceAlt,
     padding: theme.spacing.sm,
   },
   cockpitMetricValue: {
-    color: theme.colors.onPrimary,
+    color: theme.colors.text,
     fontSize: 20,
-    fontWeight: "900",
+    fontWeight: "700",
+    letterSpacing: -0.3,
   },
   cockpitMetricLabel: {
-    color: theme.colors.surfaceAlt,
+    color: theme.colors.mutedText,
     fontSize: 10,
-    fontWeight: "900",
+    fontWeight: "600",
+    letterSpacing: 0.4,
     textTransform: "uppercase",
   },
   cockpitActions: {
@@ -817,37 +816,35 @@ const styles = StyleSheet.create({
   },
   cockpitPrimaryButton: {
     flex: 1.2,
-    minHeight: 46,
+    minHeight: 48,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: theme.spacing.sm,
-    borderRadius: theme.radius.lg,
+    borderRadius: theme.radius.full,
     backgroundColor: theme.colors.primary,
     paddingHorizontal: theme.spacing.md,
   },
   cockpitPrimaryText: {
     color: theme.colors.onPrimary,
-    fontSize: 14,
-    fontWeight: "900",
+    fontSize: 15,
+    fontWeight: "600",
   },
   cockpitSecondaryButton: {
     flex: 1,
-    minHeight: 46,
+    minHeight: 48,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: theme.spacing.sm,
-    borderRadius: theme.radius.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.primaryDark,
-    backgroundColor: theme.colors.primaryDark,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.surfaceAlt,
     paddingHorizontal: theme.spacing.md,
   },
   cockpitSecondaryText: {
-    color: theme.colors.onPrimary,
-    fontSize: 14,
-    fontWeight: "900",
+    color: theme.colors.text,
+    fontSize: 15,
+    fontWeight: "600",
   },
   workspaceList: {
     gap: theme.spacing.md,
@@ -869,7 +866,7 @@ const styles = StyleSheet.create({
   marketplaceLinkTitle: {
     color: theme.colors.text,
     fontSize: 17,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   commandPanel: {
     gap: theme.spacing.md,
@@ -889,7 +886,7 @@ const styles = StyleSheet.create({
   commandTitle: {
     color: theme.colors.text,
     fontSize: 18,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   commandBody: {
     color: theme.colors.mutedText,
@@ -908,13 +905,13 @@ const styles = StyleSheet.create({
   commandStatusValue: {
     color: theme.colors.primary,
     fontSize: 21,
-    fontWeight: "900",
+    fontWeight: "700",
     lineHeight: 24,
   },
   commandStatusLabel: {
     color: theme.colors.mutedText,
     fontSize: 10,
-    fontWeight: "900",
+    fontWeight: "700",
     textTransform: "uppercase",
   },
   workflowGrid: {
@@ -928,26 +925,21 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: theme.spacing.md,
     borderRadius: theme.radius.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    padding: theme.spacing.md,
+    backgroundColor: theme.colors.surface,
+    padding: theme.spacing.lg,
     ...theme.shadows.sm,
   },
   workflowCardDark: {
-    borderColor: theme.colors.hero,
-    backgroundColor: theme.colors.hero,
+    backgroundColor: theme.colors.surface,
   },
   workflowCardMint: {
-    borderColor: theme.colors.primary,
-    backgroundColor: theme.colors.primarySoft,
+    backgroundColor: theme.colors.surface,
   },
   workflowCardAmber: {
-    borderColor: theme.colors.accent,
-    backgroundColor: theme.colors.accentSoft,
+    backgroundColor: theme.colors.surface,
   },
   workflowCardBlue: {
-    borderColor: theme.colors.info,
-    backgroundColor: theme.colors.infoSoft,
+    backgroundColor: theme.colors.surface,
   },
   workflowTopRow: {
     flexDirection: "row",
@@ -956,20 +948,20 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
   },
   workflowIconShell: {
-    width: 36,
-    height: 36,
+    width: 38,
+    height: 38,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.surface,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.primarySoft,
   },
   workflowIconShellDark: {
-    backgroundColor: theme.colors.primaryDark,
+    backgroundColor: theme.colors.primarySoft,
   },
   workflowKicker: {
     color: theme.colors.mutedText,
     fontSize: 11,
-    fontWeight: "900",
+    fontWeight: "700",
     textTransform: "uppercase",
   },
   workflowCardBody: {
@@ -978,7 +970,7 @@ const styles = StyleSheet.create({
   workflowTitle: {
     color: theme.colors.text,
     fontSize: 16,
-    fontWeight: "900",
+    fontWeight: "700",
     lineHeight: 20,
   },
   workflowSubtitle: {
@@ -988,28 +980,26 @@ const styles = StyleSheet.create({
     lineHeight: 17,
   },
   workflowTextOnDark: {
-    color: theme.colors.onPrimary,
+    color: theme.colors.text,
   },
   workflowSubtextOnDark: {
-    color: theme.colors.surfaceAlt,
+    color: theme.colors.mutedText,
   },
   searchShell: {
-    minHeight: 48,
+    minHeight: 44,
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing.sm,
     borderRadius: theme.radius.md,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.background,
+    backgroundColor: theme.colors.surfaceAlt,
     paddingHorizontal: theme.spacing.md,
   },
   searchInput: {
     flex: 1,
-    minHeight: 46,
+    minHeight: 44,
     color: theme.colors.text,
-    fontSize: 15,
-    fontWeight: "700",
+    fontSize: 16,
+    fontWeight: "400",
   },
   clearSearch: {
     width: 28,
@@ -1039,7 +1029,7 @@ const styles = StyleSheet.create({
   workspaceAvatarText: {
     color: theme.colors.primary,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   workspaceText: {
     flex: 1,
@@ -1049,7 +1039,7 @@ const styles = StyleSheet.create({
   workspaceName: {
     color: theme.colors.text,
     fontSize: 18,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   workspaceMeta: {
     color: theme.colors.mutedText,
@@ -1072,13 +1062,13 @@ const styles = StyleSheet.create({
   sectionKicker: {
     color: theme.colors.mutedText,
     fontSize: 11,
-    fontWeight: "900",
+    fontWeight: "700",
     textTransform: "uppercase",
   },
   sectionTitle: {
     color: theme.colors.text,
     fontSize: 20,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   sectionButton: {
     minHeight: 40,
@@ -1086,7 +1076,7 @@ const styles = StyleSheet.create({
   sheetBackdrop: {
     flex: 1,
     justifyContent: "flex-end",
-    backgroundColor: theme.colors.hero,
+    backgroundColor: "rgba(15,23,42,0.4)",
   },
   sheetDismissArea: {
     flex: 1,
@@ -1120,7 +1110,7 @@ const styles = StyleSheet.create({
   sheetTitle: {
     color: theme.colors.text,
     fontSize: 20,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   sheetBody: {
     color: theme.colors.mutedText,
@@ -1145,7 +1135,7 @@ const styles = StyleSheet.create({
     minHeight: 40,
     justifyContent: "center",
     borderRadius: theme.radius.full,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     paddingHorizontal: theme.spacing.md,
@@ -1157,7 +1147,7 @@ const styles = StyleSheet.create({
   sheetOrgText: {
     color: theme.colors.mutedText,
     fontSize: 13,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   sheetOrgTextSelected: {
     color: theme.colors.primaryDark,

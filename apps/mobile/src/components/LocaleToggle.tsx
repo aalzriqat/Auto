@@ -40,7 +40,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: theme.spacing.xs,
     borderRadius: theme.radius.md,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     paddingHorizontal: theme.spacing.sm,

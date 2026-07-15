@@ -771,14 +771,14 @@ const styles = StyleSheet.create({
   brand: {
     color: theme.colors.primary,
     fontSize: 12,
-    fontWeight: "900",
+    fontWeight: "700",
     letterSpacing: 0,
     textTransform: "uppercase",
   },
   title: {
     color: theme.colors.text,
     fontSize: 30,
-    fontWeight: "900",
+    fontWeight: "700",
     lineHeight: 36,
   },
   subtitle: {
@@ -794,7 +794,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: theme.spacing.xs,
     borderRadius: theme.radius.lg,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     paddingHorizontal: theme.spacing.sm,
@@ -803,7 +803,7 @@ const styles = StyleSheet.create({
   secondaryIconText: {
     color: theme.colors.primary,
     fontSize: 12,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   tabsScroll: {
     flexGrow: 0,
@@ -829,7 +829,7 @@ const styles = StyleSheet.create({
   tabText: {
     color: theme.colors.mutedText,
     fontSize: 12,
-    fontWeight: "800",
+    fontWeight: "600",
     textAlign: "center",
   },
   tabTextSelected: {
@@ -841,7 +841,7 @@ const styles = StyleSheet.create({
   searchPanel: {
     gap: theme.spacing.md,
     borderRadius: theme.radius.md,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.md,
@@ -876,7 +876,7 @@ const styles = StyleSheet.create({
   primaryButtonText: {
     color: theme.colors.onPrimary,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
     textAlign: "center",
   },
   secondaryButton: {
@@ -885,7 +885,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderRadius: theme.radius.md,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     paddingHorizontal: theme.spacing.md,
@@ -893,7 +893,7 @@ const styles = StyleSheet.create({
   secondaryButtonText: {
     color: theme.colors.text,
     fontSize: 14,
-    fontWeight: "800",
+    fontWeight: "600",
     textAlign: "center",
   },
   disabledButton: {
@@ -905,7 +905,7 @@ const styles = StyleSheet.create({
   vehicleCard: {
     overflow: "hidden",
     borderRadius: theme.radius.lg,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     ...theme.shadows.sm,
@@ -923,7 +923,7 @@ const styles = StyleSheet.create({
   noImageText: {
     color: theme.colors.mutedText,
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   priceBadge: {
     position: "absolute",
@@ -937,7 +937,7 @@ const styles = StyleSheet.create({
   priceBadgeText: {
     color: theme.colors.onPrimary,
     fontSize: 15,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   cardBody: {
     gap: theme.spacing.sm,
@@ -946,7 +946,7 @@ const styles = StyleSheet.create({
   cardTitle: {
     color: theme.colors.text,
     fontSize: 18,
-    fontWeight: "900",
+    fontWeight: "700",
     lineHeight: 24,
   },
   cardMeta: {
@@ -957,7 +957,7 @@ const styles = StyleSheet.create({
   priceText: {
     color: theme.colors.text,
     fontSize: 20,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   badgeRow: {
     flexDirection: "row",
@@ -979,7 +979,7 @@ const styles = StyleSheet.create({
   badgeText: {
     color: theme.colors.text,
     fontSize: 11,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   factList: {
     gap: theme.spacing.xs,
@@ -1001,12 +1001,12 @@ const styles = StyleSheet.create({
   inlineButtonText: {
     color: theme.colors.onPrimary,
     fontSize: 13,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   dealerCard: {
     gap: theme.spacing.md,
     borderRadius: theme.radius.lg,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.md,
@@ -1033,7 +1033,7 @@ const styles = StyleSheet.create({
   dealerLogoText: {
     color: theme.colors.primary,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   dealerText: {
     flex: 1,
@@ -1042,7 +1042,7 @@ const styles = StyleSheet.create({
   lookupPanel: {
     gap: theme.spacing.md,
     borderRadius: theme.radius.md,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.md,
@@ -1056,13 +1056,13 @@ const styles = StyleSheet.create({
   statusTitle: {
     color: theme.colors.text,
     fontSize: 15,
-    fontWeight: "900",
+    fontWeight: "700",
     lineHeight: 21,
   },
   successText: {
     color: theme.colors.success,
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "600",
     lineHeight: 19,
   },
   emptyText: {

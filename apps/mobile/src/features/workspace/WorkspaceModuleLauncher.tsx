@@ -237,7 +237,7 @@ const styles = StyleSheet.create({
   panel: {
     gap: theme.spacing.md,
     borderRadius: theme.radius.md,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.md,
@@ -258,7 +258,7 @@ const styles = StyleSheet.create({
   panelTitle: {
     color: theme.colors.text,
     fontSize: 18,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   panelBody: {
     color: theme.colors.mutedText,
@@ -276,13 +276,13 @@ const styles = StyleSheet.create({
   countBadgeValue: {
     color: theme.colors.primary,
     fontSize: 20,
-    fontWeight: "900",
+    fontWeight: "700",
     lineHeight: 23,
   },
   countBadgeLabel: {
     color: theme.colors.mutedText,
     fontSize: 10,
-    fontWeight: "900",
+    fontWeight: "700",
     textTransform: "uppercase",
   },
   searchShell: {
@@ -291,7 +291,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: theme.spacing.sm,
     borderRadius: theme.radius.md,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.borderStrong,
     backgroundColor: theme.colors.background,
     paddingHorizontal: theme.spacing.md,
@@ -328,7 +328,7 @@ const styles = StyleSheet.create({
   },
   tabSelected: {
     backgroundColor: theme.colors.surface,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
   },
   tabContent: {
@@ -342,7 +342,7 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     color: theme.colors.mutedText,
     fontSize: 12,
-    fontWeight: "800",
+    fontWeight: "600",
     textAlign: "center",
   },
   tabTextSelected: {
@@ -359,7 +359,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: theme.spacing.sm,
     borderRadius: theme.radius.md,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.background,
     padding: theme.spacing.md,
@@ -391,7 +391,7 @@ const styles = StyleSheet.create({
   moduleCategory: {
     color: theme.colors.mutedText,
     fontSize: 11,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   moduleText: {
     gap: theme.spacing.xs,
@@ -399,7 +399,7 @@ const styles = StyleSheet.create({
   moduleTitle: {
     color: theme.colors.text,
     fontSize: 15,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   moduleSubtitle: {
     color: theme.colors.mutedText,
@@ -409,7 +409,7 @@ const styles = StyleSheet.create({
   moduleAction: {
     color: theme.colors.primary,
     fontSize: 12,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   pressed: {
     opacity: 0.82,

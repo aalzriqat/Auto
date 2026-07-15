@@ -74,8 +74,6 @@ const styles = StyleSheet.create({
     minHeight: 124,
     gap: theme.spacing.md,
     borderRadius: theme.radius.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.md,
     ...theme.shadows.sm,

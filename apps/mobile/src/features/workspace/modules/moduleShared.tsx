@@ -483,7 +483,15 @@ export function PrimaryButton({
       ]}
       onPress={onPress}
     >
-      <Text style={tone === "muted" ? styles.mutedButtonText : styles.primaryButtonText}>
+      <Text
+        style={
+          tone === "muted"
+            ? styles.mutedButtonText
+            : tone === "danger"
+              ? styles.dangerButtonText
+              : styles.primaryButtonText
+        }
+      >
         {label}
       </Text>
     </Pressable>

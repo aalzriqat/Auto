@@ -190,7 +190,7 @@ function SalesHero({
           <Text style={[styles.heroSubtitle, type.caption]}>{t("revenue")}</Text>
         </View>
         <View style={styles.soldPill}>
-          <Icon color="onPrimary" name="sales" size={18} />
+          <Icon color="primaryDark" name="sales" size={18} />
           <Text style={[styles.soldValue, type.title]}>{plainNumber(stats.salesThisMonth, locale)}</Text>
           <Text style={[styles.soldLabel, type.caption]}>{t("vehiclesSold")}</Text>
         </View>
@@ -627,7 +627,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderRadius: theme.radius.lg,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     ...theme.shadows.sm,
@@ -644,14 +644,14 @@ const styles = StyleSheet.create({
   brand: {
     color: theme.colors.primary,
     fontSize: 12,
-    fontWeight: "800",
+    fontWeight: "600",
     letterSpacing: 0,
     textTransform: "uppercase",
   },
   orgName: {
     color: theme.colors.text,
     fontSize: 24,
-    fontWeight: "800",
+    fontWeight: "600",
     lineHeight: 30,
   },
   roleText: {
@@ -669,7 +669,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: theme.spacing.xs,
     borderRadius: theme.radius.lg,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     paddingHorizontal: theme.spacing.sm,
@@ -678,7 +678,7 @@ const styles = StyleSheet.create({
   quickRailText: {
     color: theme.colors.text,
     fontSize: 12,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   marketplaceLink: {
     flexDirection: "row",
@@ -703,7 +703,7 @@ const styles = StyleSheet.create({
   marketplaceLinkTitle: {
     color: theme.colors.text,
     fontSize: 17,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   marketplaceLinkBody: {
     color: theme.colors.mutedText,
@@ -712,11 +712,10 @@ const styles = StyleSheet.create({
   },
   salesHero: {
     gap: theme.spacing.lg,
-    borderColor: theme.colors.hero,
     borderRadius: theme.radius.xl,
-    backgroundColor: theme.colors.hero,
+    backgroundColor: theme.colors.surface,
     padding: theme.spacing.lg,
-    ...theme.shadows.lg,
+    ...theme.shadows.md,
   },
   heroTopRow: {
     flexDirection: "row",
@@ -730,50 +729,49 @@ const styles = StyleSheet.create({
     gap: theme.spacing.xs,
   },
   heroEyebrow: {
-    color: theme.colors.primarySoft,
+    color: theme.colors.primary,
     fontSize: 12,
-    fontWeight: "800",
-    letterSpacing: 0,
+    fontWeight: "600",
+    letterSpacing: 0.5,
     textTransform: "uppercase",
   },
   heroTitle: {
-    color: theme.colors.onPrimary,
+    color: theme.colors.text,
     fontSize: 34,
-    fontWeight: "900",
+    fontWeight: "700",
+    letterSpacing: -0.6,
     lineHeight: 40,
   },
   heroSubtitle: {
-    color: theme.colors.surfaceAlt,
+    color: theme.colors.mutedText,
     fontSize: 13,
-    fontWeight: "700",
+    fontWeight: "500",
   },
   soldPill: {
     minWidth: 88,
     alignItems: "center",
     gap: theme.spacing.xs,
     borderRadius: theme.radius.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.primaryDark,
-    backgroundColor: theme.colors.primaryDark,
+    backgroundColor: theme.colors.primarySoft,
     padding: theme.spacing.sm,
   },
   soldValue: {
-    color: theme.colors.onPrimary,
+    color: theme.colors.primaryDark,
     fontSize: 22,
-    fontWeight: "900",
+    fontWeight: "700",
     textAlign: "center",
   },
   soldLabel: {
-    color: theme.colors.surfaceAlt,
+    color: theme.colors.primaryDark,
     fontSize: 11,
-    fontWeight: "700",
+    fontWeight: "600",
     textAlign: "center",
   },
   segmentedControl: {
     flexDirection: "row",
     gap: theme.spacing.xs,
-    borderRadius: theme.radius.lg,
-    backgroundColor: theme.colors.primaryDark,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.surfaceAlt,
     padding: theme.spacing.xs,
   },
   segment: {
@@ -784,12 +782,13 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.sm,
   },
   segmentSelected: {
-    backgroundColor: theme.colors.onPrimary,
+    backgroundColor: theme.colors.surface,
+    ...theme.shadows.sm,
   },
   segmentText: {
-    color: theme.colors.surfaceAlt,
+    color: theme.colors.mutedText,
     fontSize: 12,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   segmentTextSelected: {
     color: theme.colors.text,
@@ -809,9 +808,9 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.primary,
   },
   trendCaption: {
-    color: theme.colors.surfaceAlt,
+    color: theme.colors.mutedText,
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "500",
   },
   metricGrid: {
     flexDirection: "row",
@@ -834,7 +833,7 @@ const styles = StyleSheet.create({
   panelTitle: {
     color: theme.colors.text,
     fontSize: 13,
-    fontWeight: "900",
+    fontWeight: "700",
     textTransform: "uppercase",
   },
   panelBody: {
@@ -858,7 +857,7 @@ const styles = StyleSheet.create({
   metricPillValue: {
     color: theme.colors.text,
     fontSize: 18,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   metricPillLabel: {
     flex: 1,
@@ -882,7 +881,7 @@ const styles = StyleSheet.create({
   avatarText: {
     color: theme.colors.primary,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   performerText: {
     flex: 1,
@@ -891,7 +890,7 @@ const styles = StyleSheet.create({
   performerName: {
     color: theme.colors.text,
     fontSize: 16,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   performerMeta: {
     color: theme.colors.mutedText,
@@ -910,7 +909,7 @@ const styles = StyleSheet.create({
     flex: 1,
     color: theme.colors.text,
     fontSize: 14,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   teamMeta: {
     color: theme.colors.mutedText,

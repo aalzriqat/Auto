@@ -83,7 +83,7 @@ const styles = StyleSheet.create({
   root: {
     gap: theme.spacing.md,
     borderRadius: theme.radius.lg,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.md,
@@ -91,7 +91,7 @@ const styles = StyleSheet.create({
   },
   header: {
     gap: theme.spacing.md,
-    borderBottomWidth: 1,
+    borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.colors.border,
     paddingBottom: theme.spacing.md,
   },

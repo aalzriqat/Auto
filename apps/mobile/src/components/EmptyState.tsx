@@ -53,10 +53,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: theme.spacing.md,
     borderRadius: theme.radius.lg,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.xl,
+    ...theme.shadows.sm,
   },
   iconShell: {
     width: 58,

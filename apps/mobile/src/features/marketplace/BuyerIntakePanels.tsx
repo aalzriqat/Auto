@@ -907,7 +907,7 @@ const styles = StyleSheet.create({
   panel: {
     gap: theme.spacing.md,
     borderRadius: theme.radius.lg,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.md,
@@ -919,7 +919,7 @@ const styles = StyleSheet.create({
   panelTitle: {
     color: theme.colors.text,
     fontSize: 20,
-    fontWeight: "900",
+    fontWeight: "700",
     lineHeight: 26,
   },
   panelSubtitle: {
@@ -936,7 +936,7 @@ const styles = StyleSheet.create({
   fieldLabel: {
     color: theme.colors.mutedText,
     fontSize: 12,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   choiceWrap: {
     flexDirection: "row",
@@ -949,7 +949,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderRadius: theme.radius.md,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     paddingHorizontal: theme.spacing.md,
@@ -961,7 +961,7 @@ const styles = StyleSheet.create({
   choiceText: {
     color: theme.colors.mutedText,
     fontSize: 12,
-    fontWeight: "800",
+    fontWeight: "600",
     textAlign: "center",
   },
   choiceTextSelected: {
@@ -987,7 +987,7 @@ const styles = StyleSheet.create({
   noticeTitle: {
     color: theme.colors.success,
     fontSize: 15,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   noticeBody: {
     color: theme.colors.text,
@@ -1003,7 +1003,7 @@ const styles = StyleSheet.create({
   idText: {
     color: theme.colors.text,
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   primaryButton: {
     minHeight: 46,
@@ -1016,7 +1016,7 @@ const styles = StyleSheet.create({
   primaryButtonText: {
     color: theme.colors.onPrimary,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
     textAlign: "center",
   },
   secondaryButton: {
@@ -1024,7 +1024,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderRadius: theme.radius.lg,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     paddingHorizontal: theme.spacing.md,
@@ -1032,7 +1032,7 @@ const styles = StyleSheet.create({
   secondaryButtonText: {
     color: theme.colors.text,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
     textAlign: "center",
   },
   stepActions: {
@@ -1054,7 +1054,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     color: theme.colors.text,
     fontSize: 15,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   selectorList: {
     gap: theme.spacing.sm,
@@ -1064,7 +1064,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: theme.spacing.md,
     borderRadius: theme.radius.lg,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.md,
@@ -1075,7 +1075,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: theme.spacing.md,
     borderRadius: theme.radius.lg,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.md,
@@ -1089,7 +1089,7 @@ const styles = StyleSheet.create({
   selectorTitle: {
     color: theme.colors.text,
     fontSize: 15,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   selectorMeta: {
     color: theme.colors.mutedText,
@@ -1108,7 +1108,7 @@ const styles = StyleSheet.create({
   smallButtonText: {
     color: theme.colors.onPrimary,
     fontSize: 12,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   emptyText: {
     color: theme.colors.mutedText,

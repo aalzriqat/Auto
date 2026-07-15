@@ -544,7 +544,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderRadius: theme.radius.md,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
   },
@@ -555,14 +555,14 @@ const styles = StyleSheet.create({
   brand: {
     color: theme.colors.primary,
     fontSize: 12,
-    fontWeight: "900",
+    fontWeight: "700",
     letterSpacing: 0,
     textTransform: "uppercase",
   },
   title: {
     color: theme.colors.text,
     fontSize: 24,
-    fontWeight: "900",
+    fontWeight: "700",
     lineHeight: 30,
   },
   subtitle: {
@@ -589,7 +589,7 @@ const styles = StyleSheet.create({
   tabText: {
     color: theme.colors.mutedText,
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   tabTextSelected: {
     color: theme.colors.text,
@@ -600,7 +600,7 @@ const styles = StyleSheet.create({
   card: {
     gap: theme.spacing.md,
     borderRadius: theme.radius.lg,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.md,
@@ -620,7 +620,7 @@ const styles = StyleSheet.create({
   cardTitle: {
     color: theme.colors.text,
     fontSize: 18,
-    fontWeight: "900",
+    fontWeight: "700",
     lineHeight: 24,
   },
   cardMeta: {
@@ -631,7 +631,7 @@ const styles = StyleSheet.create({
   priceText: {
     color: theme.colors.text,
     fontSize: 18,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   pill: {
     maxWidth: 132,
@@ -652,7 +652,7 @@ const styles = StyleSheet.create({
   pillText: {
     color: theme.colors.text,
     fontSize: 11,
-    fontWeight: "900",
+    fontWeight: "700",
     textAlign: "center",
   },
   secondaryButton: {
@@ -660,7 +660,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderRadius: theme.radius.lg,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     paddingHorizontal: theme.spacing.md,
@@ -668,7 +668,7 @@ const styles = StyleSheet.create({
   secondaryButtonText: {
     color: theme.colors.text,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
     textAlign: "center",
   },
   primaryButton: {
@@ -682,7 +682,7 @@ const styles = StyleSheet.create({
   primaryButtonText: {
     color: theme.colors.onPrimary,
     fontSize: 14,
-    fontWeight: "900",
+    fontWeight: "700",
     textAlign: "center",
   },
   disabledButton: {
@@ -690,14 +690,14 @@ const styles = StyleSheet.create({
   },
   inlineForm: {
     gap: theme.spacing.sm,
-    borderTopWidth: 1,
+    borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: theme.colors.border,
     paddingTop: theme.spacing.md,
   },
   formLabel: {
     color: theme.colors.mutedText,
     fontSize: 12,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   optionGrid: {
     flexDirection: "row",
@@ -711,7 +711,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     borderRadius: theme.radius.md,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     paddingHorizontal: theme.spacing.sm,
@@ -723,7 +723,7 @@ const styles = StyleSheet.create({
   optionButtonText: {
     color: theme.colors.mutedText,
     fontSize: 12,
-    fontWeight: "800",
+    fontWeight: "600",
     textAlign: "center",
   },
   optionButtonTextSelected: {
@@ -732,7 +732,7 @@ const styles = StyleSheet.create({
   vehicleOption: {
     gap: theme.spacing.xs,
     borderRadius: theme.radius.md,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.sm,
@@ -744,7 +744,7 @@ const styles = StyleSheet.create({
   vehicleOptionText: {
     color: theme.colors.text,
     fontSize: 13,
-    fontWeight: "800",
+    fontWeight: "600",
   },
   vehicleOptionTextSelected: {
     color: theme.colors.primary,
@@ -756,7 +756,7 @@ const styles = StyleSheet.create({
   input: {
     minHeight: 44,
     borderRadius: theme.radius.sm,
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     color: theme.colors.text,
@@ -784,7 +784,7 @@ const styles = StyleSheet.create({
   emptyTitle: {
     color: theme.colors.text,
     fontSize: 24,
-    fontWeight: "900",
+    fontWeight: "700",
   },
   pressed: {
     opacity: 0.82,
