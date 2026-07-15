@@ -770,5 +770,57 @@ export const styles = StyleSheet.create({
   pressed: {
     opacity: 0.82,
   },
+  inboxCounterRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: theme.spacing.sm,
+  },
+  inboxRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: theme.spacing.md,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.surface,
+    padding: theme.spacing.md,
+    ...theme.shadows.sm,
+  },
+  inboxRowBody: {
+    flex: 1,
+    minWidth: 0,
+    gap: theme.spacing.xs,
+  },
+  threadEventGroup: {
+    gap: theme.spacing.sm,
+  },
+  leadContextCard: {
+    gap: theme.spacing.sm,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.surface,
+    padding: theme.spacing.lg,
+    ...theme.shadows.sm,
+  },
+  leadContextHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.sm,
+  },
+  leadContextTitle: {
+    color: theme.colors.mutedText,
+    fontSize: 12,
+    fontWeight: "600",
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+  },
+  leadContextValue: {
+    color: theme.colors.text,
+    fontSize: 17,
+    fontWeight: "600",
+  },
+  vehiclePrice: {
+    color: theme.colors.primary,
+    fontSize: 18,
+    fontWeight: "700",
+    letterSpacing: -0.3,
+  },
 });
 

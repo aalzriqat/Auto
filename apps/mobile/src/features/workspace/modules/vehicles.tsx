@@ -318,8 +318,8 @@ export function VehiclesModule({ orgId }: { orgId: string }) {
                     <Text style={styles.statusPill}>{vehicle.status}</Text>
                   </View>
                   <Text style={styles.recordMeta}>{vehicle.trim || vehicle.vin}</Text>
+                  <Text style={styles.vehiclePrice}>{money(vehicle.sellingPrice, locale)}</Text>
                   <View style={styles.detailPillRow}>
-                    <DetailPill label={money(vehicle.sellingPrice, locale)} tone="success" />
                     <DetailPill label={`${vehicle.mileage.toLocaleString()} km`} tone="info" />
                     <DetailPill label={vehicle.transmission || "-"} />
                   </View>

@@ -1,11 +1,138 @@
 import { useAction, useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { useState } from "react";
-import { Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
+import { Icon } from "../../../components/Icon";
 import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileSocialConversation, type MobileSocialConversationEvent, type MobileSocialPlatform } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { PAGE_SIZE, type Option, compactNumber, dateLabel, useGenericError, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, ModuleList } from "./moduleShared";
+import { compactInitials } from "../nativeModules";
+import { PAGE_SIZE, compactNumber, relativeTimeLabel, useGenericError, PrimaryButton, FormField, SelectField, FormModal, ModuleList } from "./moduleShared";
 import { styles } from "./moduleStyles";
+
+function FilterChip({
+  label,
+  onPress,
+  selected,
+}: Readonly<{ label: string; onPress: () => void; selected: boolean }>) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      style={({ pressed }) => [styles.chip, selected && styles.chipSelected, pressed && styles.pressed]}
+      onPress={onPress}
+    >
+      <Text style={[styles.chipText, selected && styles.chipTextSelected]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function ConversationRow({
+  conversation,
+  onPress,
+}: Readonly<{
+  conversation: MobileSocialConversation;
+  onPress: () => void;
+}>) {
+  const { locale, textDirection } = useLocale();
+  const platformLabel = conversation.platform === "instagram" ? "Instagram" : "Facebook";
+
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={conversation.senderDisplayName}
+      style={({ pressed }) => [styles.inboxRow, { direction: textDirection }, pressed && styles.pressed]}
+      onPress={onPress}
+    >
+      <View style={styles.conversationAvatar}>
+        <Text style={styles.conversationAvatarText}>
+          {compactInitials(conversation.senderDisplayName)}
+        </Text>
+        {conversation.needsReply ? <View style={styles.unreadDot} /> : null}
+      </View>
+      <View style={styles.inboxRowBody}>
+        <View style={styles.recordHeader}>
+          <Text numberOfLines={1} style={styles.conversationTitle}>
+            {conversation.senderDisplayName}
+          </Text>
+          <Text style={styles.conversationTime}>
+            {relativeTimeLabel(conversation.latestCreationTime, locale)}
+          </Text>
+        </View>
+        <Text numberOfLines={1} style={styles.conversationPreview}>
+          {conversation.latestText || (locale === "ar" ? "بدون نص" : "No message text")}
+        </Text>
+        <View style={styles.detailPillRow}>
+          {conversation.needsReply ? (
+            <View style={[styles.detailPill, styles.detailPillWarning]}>
+              <Text style={styles.detailPillText}>{locale === "ar" ? "بحاجة رد" : "Needs reply"}</Text>
+            </View>
+          ) : null}
+          {conversation.leadStage ? (
+            <View style={[styles.detailPill, styles.detailPillSuccess]}>
+              <Text style={styles.detailPillText}>{conversation.leadStage}</Text>
+            </View>
+          ) : null}
+          <View style={styles.detailPill}>
+            <Text style={styles.detailPillText}>{platformLabel}</Text>
+          </View>
+          {conversation.vehicleSummary ? (
+            <View style={[styles.detailPill, styles.detailPillInfo]}>
+              <Text numberOfLines={1} style={styles.detailPillText}>{conversation.vehicleSummary}</Text>
+            </View>
+          ) : null}
+        </View>
+      </View>
+    </Pressable>
+  );
+}
+
+function EventThread({
+  events,
+  locale,
+}: Readonly<{
+  events: readonly MobileSocialConversationEvent[];
+  locale: string;
+}>) {
+  return (
+    <View style={styles.threadContent}>
+      {events.map((event) => (
+        <View key={event._id} style={styles.threadEventGroup}>
+          {event.text ? (
+            <View style={styles.messageRow}>
+              <View style={[styles.messageBubble, styles.messageBubbleOther]}>
+                <Text style={styles.messageSender}>{event.senderDisplayName}</Text>
+                <Text style={styles.messageBody}>{event.text}</Text>
+                <Text style={styles.messageMeta}>
+                  {relativeTimeLabel(event._creationTime, locale as "en" | "ar")}
+                </Text>
+              </View>
+            </View>
+          ) : null}
+          {event.autoReplyText ? (
+            <View style={[styles.messageRow, styles.messageRowMine]}>
+              <View style={[styles.messageBubble, styles.messageBubbleMine]}>
+                <Text style={[styles.messageBody, styles.messageBodyMine]}>{event.autoReplyText}</Text>
+                <Text style={[styles.messageMeta, styles.messageMetaMine]}>
+                  {locale === "ar" ? "رد تلقائي" : "Auto-reply"}
+                </Text>
+              </View>
+            </View>
+          ) : null}
+          {event.manualReplyText ? (
+            <View style={[styles.messageRow, styles.messageRowMine]}>
+              <View style={[styles.messageBubble, styles.messageBubbleMine]}>
+                <Text style={[styles.messageBody, styles.messageBodyMine]}>{event.manualReplyText}</Text>
+                <Text style={[styles.messageMeta, styles.messageMetaMine]}>
+                  {event.manualRepliedByName || (locale === "ar" ? "رد يدوي" : "Manual reply")}
+                </Text>
+              </View>
+            </View>
+          ) : null}
+        </View>
+      ))}
+    </View>
+  );
+}
 
 export function SocialInboxModule({ orgId }: { orgId: string }) {
   const { locale } = useLocale();
@@ -18,13 +145,13 @@ export function SocialInboxModule({ orgId }: { orgId: string }) {
   const stats = useQuery(api.socialInbox.platformStats, { orgId });
   const vehicles = useQuery(api.vehicles.listAll, { orgId, includeReserved: true });
   const [platformFilter, setPlatformFilter] = useState<MobileSocialPlatform | "ALL">("ALL");
-  const [needsReplyOnly, setNeedsReplyOnly] = useState<"ALL" | "NEEDS">("ALL");
+  const [needsReplyOnly, setNeedsReplyOnly] = useState(false);
   const { loadMore, results, status } = usePaginatedQuery(
     api.socialInbox.listConversations,
     {
       orgId,
       platform: platformFilter === "ALL" ? undefined : platformFilter,
-      needsReply: needsReplyOnly === "NEEDS" ? true : undefined,
+      needsReply: needsReplyOnly ? true : undefined,
     },
     { initialNumItems: PAGE_SIZE },
   );
@@ -48,11 +175,8 @@ export function SocialInboxModule({ orgId }: { orgId: string }) {
     { label: locale === "ar" ? "اختر سيارة" : "Select vehicle", value: "" },
     ...(vehicles ?? []).map((vehicle) => ({ label: `${vehicle.year} ${vehicle.make} ${vehicle.model}`, value: vehicle._id })),
   ];
-  const platformOptions: Array<Option<MobileSocialPlatform | "ALL">> = [
-    { label: locale === "ar" ? "الكل" : "All", value: "ALL" },
-    { label: "Instagram", value: "instagram" },
-    { label: "Facebook", value: "facebook" },
-  ];
+  const totalConversations = (stats?.instagram.total ?? 0) + (stats?.facebook.total ?? 0);
+  const needsReplyLoaded = results.filter((conversation) => conversation.needsReply).length;
 
   function openConversation(conversation: MobileSocialConversation) {
     setSelected(conversation);
@@ -118,31 +242,46 @@ export function SocialInboxModule({ orgId }: { orgId: string }) {
         status={status}
         header={
           <>
-            <View style={styles.metricGrid}>
-              <MetricCard title="Instagram" value={compactNumber(stats?.instagram.total ?? 0, locale)} caption={`${stats?.instagram.comments ?? 0} comments · ${stats?.instagram.dms ?? 0} DM`} />
-              <MetricCard title="Facebook" value={compactNumber(stats?.facebook.total ?? 0, locale)} caption={`${stats?.facebook.comments ?? 0} comments · ${stats?.facebook.dms ?? 0} DM`} />
+            <View style={styles.inboxCounterRow}>
+              <View style={[styles.detailPill, styles.detailPillSuccess]}>
+                <Text style={styles.detailPillText}>
+                  {compactNumber(totalConversations, locale)} {locale === "ar" ? "محادثة نشطة" : "active chats"}
+                </Text>
+              </View>
+              {needsReplyLoaded > 0 ? (
+                <View style={[styles.detailPill, styles.detailPillWarning]}>
+                  <Text style={styles.detailPillText}>
+                    {compactNumber(needsReplyLoaded, locale)} {locale === "ar" ? "بحاجة رد" : "need reply"}
+                  </Text>
+                </View>
+              ) : null}
             </View>
-            <SegmentedControl options={platformOptions} value={platformFilter} onChange={setPlatformFilter} />
-            <SegmentedControl
-              options={[
-                { label: locale === "ar" ? "الكل" : "All", value: "ALL" },
-                { label: locale === "ar" ? "بحاجة رد" : "Needs reply", value: "NEEDS" },
-              ]}
-              value={needsReplyOnly}
-              onChange={setNeedsReplyOnly}
-            />
+            <View style={styles.chipRow}>
+              <FilterChip
+                label={locale === "ar" ? "الكل" : "All"}
+                selected={platformFilter === "ALL"}
+                onPress={() => setPlatformFilter("ALL")}
+              />
+              <FilterChip
+                label="Instagram"
+                selected={platformFilter === "instagram"}
+                onPress={() => setPlatformFilter("instagram")}
+              />
+              <FilterChip
+                label="Facebook"
+                selected={platformFilter === "facebook"}
+                onPress={() => setPlatformFilter("facebook")}
+              />
+              <FilterChip
+                label={locale === "ar" ? "بحاجة رد" : "Needs reply"}
+                selected={needsReplyOnly}
+                onPress={() => setNeedsReplyOnly((value) => !value)}
+              />
+            </View>
           </>
         }
         renderItem={(conversation: MobileSocialConversation) => (
-          <RecordCard>
-            <View style={styles.recordHeader}>
-              <Text style={styles.recordTitle}>{conversation.senderDisplayName}</Text>
-              <Text style={styles.statusPill}>{conversation.needsReply ? (locale === "ar" ? "رد" : "Reply") : conversation.platform}</Text>
-            </View>
-            <Text style={styles.recordMeta}>{conversation.latestText || "-"}</Text>
-            <Text style={styles.recordMeta}>{conversation.vehicleSummary || (locale === "ar" ? "بدون سيارة" : "No vehicle")} · {conversation.eventCount}</Text>
-            <PrimaryButton label={locale === "ar" ? "فتح" : "Open"} tone="muted" onPress={() => openConversation(conversation)} />
-          </RecordCard>
+          <ConversationRow conversation={conversation} onPress={() => openConversation(conversation)} />
         )}
       />
       <FormModal
@@ -150,22 +289,41 @@ export function SocialInboxModule({ orgId }: { orgId: string }) {
         visible={Boolean(selected)}
         onClose={() => setSelected(null)}
       >
-        {events === undefined ? <RouteLoadingState label={locale === "ar" ? "جاري التحميل" : "Loading"} /> : null}
-        {(events ?? []).map((event) => (
-          <RecordCard key={event._id}>
-            <Text style={styles.recordTitle}>{event.senderDisplayName}</Text>
-            <Text style={styles.recordMeta}>{event.text || "-"}</Text>
-            {event.autoReplyText ? <Text style={styles.warningText}>{locale === "ar" ? "رد تلقائي: " : "Auto: "}{event.autoReplyText}</Text> : null}
-            {event.manualReplyText ? <Text style={styles.warningText}>{locale === "ar" ? "رد يدوي: " : "Manual: "}{event.manualReplyText}</Text> : null}
-            <Text style={styles.recordMeta}>{dateLabel(event._creationTime, locale)} · {event.vehicleSummary || "-"}</Text>
-          </RecordCard>
-        ))}
-        <SelectField label={locale === "ar" ? "ربط سيارة" : "Link vehicle"} value={vehicleId} options={vehicleOptions} onChange={setVehicleId} />
-        <PrimaryButton disabled={saving || !vehicleId} label={locale === "ar" ? "ربط" : "Link"} tone="muted" onPress={saveVehicleLink} />
+        {events === undefined ? (
+          <RouteLoadingState label={locale === "ar" ? "جاري التحميل" : "Loading"} />
+        ) : (
+          <EventThread events={events} locale={locale} />
+        )}
+        <View style={styles.leadContextCard}>
+          <View style={styles.leadContextHeader}>
+            <Icon color="primary" name="vehicles" size={18} />
+            <Text style={styles.leadContextTitle}>
+              {locale === "ar" ? "السيارة المطلوبة" : "Interested vehicle"}
+            </Text>
+          </View>
+          <Text style={styles.leadContextValue}>
+            {selected?.vehicleSummary || (locale === "ar" ? "لم يتم الربط بعد" : "Not linked yet")}
+          </Text>
+          <SelectField
+            label={locale === "ar" ? "ربط سيارة" : "Link vehicle"}
+            value={vehicleId}
+            options={vehicleOptions}
+            onChange={setVehicleId}
+          />
+          <PrimaryButton
+            disabled={saving || !vehicleId}
+            label={locale === "ar" ? "ربط" : "Link"}
+            tone="muted"
+            onPress={saveVehicleLink}
+          />
+        </View>
         <FormField multiline label={locale === "ar" ? "رد" : "Reply"} value={replyText} onChangeText={setReplyText} />
-        <PrimaryButton disabled={saving || !replyText.trim()} label={saving ? (locale === "ar" ? "جاري الإرسال..." : "Sending...") : (locale === "ar" ? "إرسال" : "Send")} onPress={sendReply} />
+        <PrimaryButton
+          disabled={saving || !replyText.trim()}
+          label={saving ? (locale === "ar" ? "جاري الإرسال..." : "Sending...") : (locale === "ar" ? "إرسال" : "Send")}
+          onPress={sendReply}
+        />
       </FormModal>
     </>
   );
 }
-
