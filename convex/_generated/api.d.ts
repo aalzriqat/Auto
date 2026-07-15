@@ -139,6 +139,7 @@ import type * as utils_notifications from "../utils/notifications.js";
 import type * as utils_paymentMethods from "../utils/paymentMethods.js";
 import type * as utils_paymentWebhook from "../utils/paymentWebhook.js";
 import type * as utils_permissions from "../utils/permissions.js";
+import type * as utils_prepaidRecognitionEvents from "../utils/prepaidRecognitionEvents.js";
 import type * as utils_saleCancellation from "../utils/saleCancellation.js";
 import type * as utils_saleCompletion from "../utils/saleCompletion.js";
 import type * as utils_saleHelpers from "../utils/saleHelpers.js";
@@ -309,6 +310,7 @@ declare const fullApi: ApiFromModules<{
   "utils/paymentMethods": typeof utils_paymentMethods;
   "utils/paymentWebhook": typeof utils_paymentWebhook;
   "utils/permissions": typeof utils_permissions;
+  "utils/prepaidRecognitionEvents": typeof utils_prepaidRecognitionEvents;
   "utils/saleCancellation": typeof utils_saleCancellation;
   "utils/saleCompletion": typeof utils_saleCompletion;
   "utils/saleHelpers": typeof utils_saleHelpers;
