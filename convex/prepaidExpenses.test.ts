@@ -281,6 +281,80 @@ describe("prepaid expense — reversal unwinds the whole lifecycle", () => {
     const cancelled = await scheduleForExpense(t, expenseId);
     expect(cancelled!.status).toBe("CANCELLED");
   });
+
+  test("reversing after a partial refund correction also unwinds the refund — no orphaned cash or negative prepaid balance", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("rev-refund");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    // Vendor refunds part of the unused balance before the expense is reversed.
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, refundMinor: 300_000, refundPaymentMethod: "CASH",
+      reason: "Partial refund ahead of cancellation",
+    });
+
+    await asOwner.mutation(api.expenses.reverseExpense, { orgId, expenseId, reason: "Policy cancelled" });
+
+    // Without reversing the posted PREPAID_EXPENSE_REFUNDED event too, the
+    // refund's cash-in and prepaid-credit would survive the original
+    // expense's reversal: Prepaid Expenses would sit at a negative (credit)
+    // balance and Cash would carry an unexplained surplus.
+    expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(0);
+    expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(0);
+    expect(await accountNetMinor(t, orgId, "CASH_ON_HAND")).toBe(0);
+  });
+
+  test("reversing after an accelerated write-off correction also unwinds the write-off — no orphaned expense or negative prepaid balance", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("rev-writeoff");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    // Non-refundable portion of the unused balance is accelerated to expense
+    // before the expense itself is reversed.
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Non-refundable portion",
+    });
+
+    await asOwner.mutation(api.expenses.reverseExpense, { orgId, expenseId, reason: "Policy cancelled" });
+
+    expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(0);
+    expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(0);
+    expect(await accountNetMinor(t, orgId, "CASH_ON_HAND")).toBe(0);
+  });
+
+  test("reversing after a combined VAT refund + write-off unwinds both corrections", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("rev-combined");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Prepaid rent w/ VAT", amount: 1200, taxAmount: 200, date: Date.UTC(2026, 0, 1),
+      category: "RENT", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 10,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, refundMinor: 200_000, refundTaxMinor: 40_000,
+      refundPaymentMethod: "CASH", reason: "Partial refund",
+    });
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, writeOffMinor: 100_000, reason: "Non-refundable remainder",
+    });
+
+    await asOwner.mutation(api.expenses.reverseExpense, { orgId, expenseId, reason: "Lease terminated" });
+
+    expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(0);
+    expect(await accountNetMinor(t, orgId, "RENT_EXPENSE")).toBe(0);
+    expect(await accountNetMinor(t, orgId, "CASH_ON_HAND")).toBe(0);
+    expect(await accountNetMinor(t, orgId, "VAT_RECEIVABLE")).toBe(0);
+  });
+
 });
 
 // ─── Reports and GL derive from the same schedule ─────────────────────────────
