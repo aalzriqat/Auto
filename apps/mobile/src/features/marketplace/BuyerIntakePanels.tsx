@@ -320,7 +320,36 @@ export function BuyerRequestPanel() {
     },
   ];
   function setField<TKey extends keyof RequestFields>(key: TKey, value: RequestFields[TKey]) {
+    setError(null);
     setFields((current) => ({ ...current, [key]: value }));
+  }
+
+  function getBuyerRequestStepError(step: number): string | null {
+    if (
+      step === 0 &&
+      (!trimOrUndefined(fields.buyerFirstName) ||
+        !trimOrUndefined(fields.buyerPhone) ||
+        !trimOrUndefined(fields.buyerCity))
+    ) {
+      return t("marketplaceRequiredFields");
+    }
+
+    return null;
+  }
+
+  function moveBuyerRequestStep(nextStep: number) {
+    setError(null);
+    setActiveStep(Math.min(Math.max(nextStep, 0), requestSteps.length - 1));
+  }
+
+  function advanceBuyerRequestStep() {
+    const stepError = getBuyerRequestStepError(activeStep);
+    if (stepError) {
+      setError(stepError);
+      return;
+    }
+
+    moveBuyerRequestStep(activeStep + 1);
   }
 
   async function submitBuyerRequest() {
@@ -528,9 +557,9 @@ export function BuyerRequestPanel() {
               resetKey={verificationResetKey}
               onTokenChange={setTurnstileToken}
             />
-            {error ? <Text style={styles.errorText}>{error}</Text> : null}
           </>
         ) : null}
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
         <StepActions
           activeStep={activeStep}
           nextLabel={locale === "ar" ? "التالي" : "Next"}
@@ -538,8 +567,8 @@ export function BuyerRequestPanel() {
           submitLabel={t("marketplaceSubmitRequest")}
           submitting={submitting}
           totalSteps={requestSteps.length}
-          onBack={() => setActiveStep((step) => Math.max(step - 1, 0))}
-          onNext={() => setActiveStep((step) => Math.min(step + 1, requestSteps.length - 1))}
+          onBack={() => moveBuyerRequestStep(activeStep - 1)}
+          onNext={advanceBuyerRequestStep}
           onSubmit={submitBuyerRequest}
         />
       </GuidedStepFlow>
@@ -636,7 +665,41 @@ export function TradeInRequestPanel({
   ];
 
   function setField<TKey extends keyof TradeInFields>(key: TKey, value: TradeInFields[TKey]) {
+    setError(null);
     setFields((current) => ({ ...current, [key]: value }));
+  }
+
+  function getTradeInStepError(step: number): string | null {
+    if (step === 0 && (!trimOrUndefined(fields.buyerFirstName) || !trimOrUndefined(fields.buyerPhone))) {
+      return t("marketplaceRequiredFields");
+    }
+
+    if (
+      step === 1 &&
+      (!trimOrUndefined(fields.currentMake) ||
+        !trimOrUndefined(fields.currentModel) ||
+        !parseOptionalWholeNumber(fields.currentYear) ||
+        parseOptionalWholeNumber(fields.currentMileage) === undefined)
+    ) {
+      return t("marketplaceRequiredFields");
+    }
+
+    return null;
+  }
+
+  function moveTradeInStep(nextStep: number) {
+    setError(null);
+    setActiveStep(Math.min(Math.max(nextStep, 0), tradeInSteps.length - 1));
+  }
+
+  function advanceTradeInStep() {
+    const stepError = getTradeInStepError(activeStep);
+    if (stepError) {
+      setError(stepError);
+      return;
+    }
+
+    moveTradeInStep(activeStep + 1);
   }
 
   async function submitTradeInOfferRequest() {
@@ -819,9 +882,9 @@ export function TradeInRequestPanel({
                   resetKey={verificationResetKey}
                   onTokenChange={setTurnstileToken}
                 />
-                {error ? <Text style={styles.errorText}>{error}</Text> : null}
               </>
             ) : null}
+            {error ? <Text style={styles.errorText}>{error}</Text> : null}
             <StepActions
               activeStep={activeStep}
               nextLabel={locale === "ar" ? "التالي" : "Next"}
@@ -829,8 +892,8 @@ export function TradeInRequestPanel({
               submitLabel={t("marketplaceSubmitTradeIn")}
               submitting={submitting}
               totalSteps={tradeInSteps.length}
-              onBack={() => setActiveStep((step) => Math.max(step - 1, 0))}
-              onNext={() => setActiveStep((step) => Math.min(step + 1, tradeInSteps.length - 1))}
+              onBack={() => moveTradeInStep(activeStep - 1)}
+              onNext={advanceTradeInStep}
               onSubmit={submitTradeInOfferRequest}
             />
           </GuidedStepFlow>

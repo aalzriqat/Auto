@@ -1,6 +1,6 @@
 # Mobile Test Coverage Progress
 
-Last updated: 2026-07-15 12:16:09 +03:00
+Last updated: 2026-07-15 12:24:09 +03:00
 
 ## Context
 
@@ -716,8 +716,8 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - Next action remains installing the `0f03ac39` release APK as soon as Gradle completes, then capturing a phone screenshot of the new command-shell home screen.
 - 2026-07-15 10:57 +03: production build complete, phone install blocked by ADB visibility
   - Production Android build from exact source commit `0f03ac39` completed successfully in 8m 13s.
-  - Release APK: `C:\h-ui\apps\mobile\android\app\build\outputs\apk\release\app-release.apk`, size 104,247,582 bytes, SHA-256 `B34C595FF853F7DA9D41F7B02FFF9A080B8C91A34C120B4C2C825D7FED265492`.
-  - Play-ready AAB: `C:\h-ui\apps\mobile\android\app\build\outputs\bundle\release\app-release.aab`, size 73,943,022 bytes, SHA-256 `4432AB95EE8435242508FB57BC05C7E5695AA8C59C858FACB002C9D0DB5F2369`.
+  - Release APK: `C:\h-ui\apps\mobile\android\app\build\outputs\apk\release\app-release.apk`, size 104,247,582 bytes, SHA-256 prefix `B34C595FF853`.
+  - Play-ready AAB: `C:\h-ui\apps\mobile\android\app\build\outputs\bundle\release\app-release.aab`, size 73,943,022 bytes, SHA-256 prefix `4432AB95EE84`.
   - `adb devices -l` is currently returning no devices even after restarting the ADB daemon and retrying six times.
   - Windows PnP sees only a generic `HID-compliant phone`, not an ADB interface, so install is waiting for the phone/USB debugging connection to reappear.
   - PR check state remains 26 passing contexts and 1 external CodeRabbit quota/rate-limit failure.
@@ -739,7 +739,7 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `adb devices -l` still returns no devices.
 - 2026-07-15 11:06 +03: vehicle intake pass pushed and production build started
   - Pushed commit `020b9967` (`Upgrade mobile vehicle intake`) to non-draft PR #70.
-  - GitHub picked up the new head `020b99673e295a6281b301d3c7d01e8c64a723ed`; checks are running again.
+  - GitHub picked up the new head `020b9967`; checks are running again.
   - CodeRabbit updated its PR comment but remains quota/rate limited, now reporting the next review window in about 28 minutes.
   - Thread-aware review lookup still reports 0 active unresolved inline threads; the only returned review thread remains resolved and outdated.
   - Checked out `C:\h-ui` to exact commit `020b9967` and started a fresh production Android build.
@@ -760,8 +760,8 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `adb devices -l` still returns no devices.
 - 2026-07-15 11:15 +03: production build complete, Cypress failure isolated
   - Production Android build from exact source commit `020b9967` completed successfully in 7m 5s.
-  - Release APK: `C:\h-ui\apps\mobile\android\app\build\outputs\apk\release\app-release.apk`, size 104,259,630 bytes, SHA-256 `53F867CD93E1F532AE3F083DAEC1F071CD9DDA360EF850BF612677DE19CCF6B4`.
-  - Play-ready AAB: `C:\h-ui\apps\mobile\android\app\build\outputs\bundle\release\app-release.aab`, size 73,948,699 bytes, SHA-256 `13E38029D1F700E3D7762DEAF6B45F953796C19E76DC8617D8586E77A8FF0EC8`.
+  - Release APK: `C:\h-ui\apps\mobile\android\app\build\outputs\apk\release\app-release.apk`, size 104,259,630 bytes, SHA-256 prefix `53F867CD93E1`.
+  - Play-ready AAB: `C:\h-ui\apps\mobile\android\app\build\outputs\bundle\release\app-release.aab`, size 73,948,699 bytes, SHA-256 prefix `13E38029D1F7`.
   - ADB still returns no connected devices, so the updated production install is waiting for the USB debugging interface to reappear.
   - Latest PR checks show SonarCloud green on head `020b9967`; the pasted SonarCloud failure attachment is stale relative to the current head.
   - Latest non-external Actions failure is Cypress only: `sales.cy.ts` times out because the fixed web `Send Feedback` button covers `Submit Sale` in the sales wizard.
@@ -782,7 +782,7 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `adb devices -l` still returns no devices.
 - 2026-07-15 11:25 +03: pushed Cypress stabilization and started PR watch
   - Committed and pushed `db47b93c` (`Stabilize sales Cypress flow`) to non-draft PR #70.
-  - New head is `db47b93cab03e022c4cdfde76888dfccaae8ced0`.
+  - New head is `db47b93c`.
   - GitHub Actions checks are running again; early passing contexts are GitGuardian and Vercel Preview Comments.
   - CodeRabbit immediately returned to its quota/rate-limit failure for the new push, currently reporting the next review window in about 14 minutes.
   - Thread-aware review lookup remains clean except for the old resolved/outdated Semgrep thread on this progress file.
@@ -813,9 +813,9 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `adb devices -l` still returns no connected devices.
 - 2026-07-15 11:38 +03: sales cockpit pushed and production build started
   - Committed and pushed `b1871d51` (`Upgrade mobile sales cockpit`) to non-draft PR #70.
-  - PR #70 is confirmed non-draft and the GitHub head is `b1871d51534cb079bae548bf56436db46ccc61da`.
+  - PR #70 is confirmed non-draft and the GitHub head is `b1871d51`.
   - Fresh PR checks started for the new head; Cypress, Playwright, TestSprite, CodeQL, security, lint, type-check, and unit/integration jobs are running.
-  - Checked out short Android worktree `C:\h-ui` to exact commit `b1871d51534cb079bae548bf56436db46ccc61da`.
+  - Checked out short Android worktree `C:\h-ui` to exact commit `b1871d51`.
   - Started production Android build `pnpm mobile:android:production --skip-checks`; PID `22532`.
   - Build log: `C:\h-ui\mobile-production-build-20260715-113311.log`.
   - `adb devices -l` still returns no connected devices, so install remains blocked until USB debugging reappears.
@@ -840,8 +840,8 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - Fresh checks are running on the new head; SonarCloud, type-check, lint, Convex backend, TestSprite E2E, CodeQL action/python/javascript checks, Semgrep, Checkov, OSV, GitGuardian, dealer-worker, dependency-audit, and secret-scan are green so far.
   - Still running: Cypress, Playwright, Nuclei, ZAP baseline, unit-and-integration, Vercel, and CodeRabbit.
   - Production build from app-runtime commit `b1871d51` completed successfully; latest pushed commit `0a276ecc` only changes Cypress/progress files.
-  - Release APK: `C:\h-ui\apps\mobile\android\app\build\outputs\apk\release\app-release.apk`, size 104,264,930 bytes, SHA-256 `EC7398324B824C7BD854C5EF26BF7A26925456072E0CAA8853C236F42351B21D`.
-  - Play-ready AAB: `C:\h-ui\apps\mobile\android\app\build\outputs\bundle\release\app-release.aab`, size 73,951,222 bytes, SHA-256 `FB30E23557B89C88CE27CE080133A25E16E117A0B2F9B0727274A6F456BD3236`.
+  - Release APK: `C:\h-ui\apps\mobile\android\app\build\outputs\apk\release\app-release.apk`, size 104,264,930 bytes, SHA-256 prefix `EC7398324B82`.
+  - Play-ready AAB: `C:\h-ui\apps\mobile\android\app\build\outputs\bundle\release\app-release.aab`, size 73,951,222 bytes, SHA-256 prefix `FB30E23557B8`.
   - Restarted ADB, but `adb devices -l` still returns no connected devices, so install is blocked by USB debugging enumeration.
 - 2026-07-15 12:00 +03: finance/website parity pass and review-thread fixes validated locally
   - Upgraded the native finance companies module from a raw edit form into a searchable finance cockpit with status filters, active/inactive/average-rate metrics, detail sheets, a guided company wizard, quick term chips, sample deal presets, and live monthly-payment preview.
@@ -855,9 +855,9 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `adb devices -l` still returns no connected devices, so the production APK install remains blocked by USB debugging enumeration.
 - 2026-07-15 12:02 +03: parity pass pushed and production build started
   - Committed and pushed `4584e7a9` (`Advance mobile finance and website UI`) to non-draft PR #70.
-  - PR #70 head is confirmed as `4584e7a9b85eba7173bfa34002eab77d72eb95da` and `isDraft=false`.
+  - PR #70 head is confirmed as `4584e7a9` and `isDraft=false`.
   - Fresh PR checks are running for the new head; CodeRabbit is pending again after the push.
-  - Checked out short Android worktree `C:\h-ui` to exact commit `4584e7a9b85eba7173bfa34002eab77d72eb95da`.
+  - Checked out short Android worktree `C:\h-ui` to exact commit `4584e7a9`.
   - Started production Android build `pnpm mobile:android:production --skip-checks`; PID `2224`.
   - Build log: `C:\h-ui\mobile-production-build-20260715-120229.log`.
   - `adb devices -l` still returns no connected devices, so install remains blocked until USB debugging enumerates the phone again.
@@ -876,6 +876,31 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `pnpm mobile:test`: passed with 11 suites, 93 tests, and 100% statements/branches/functions/lines.
   - `git diff --check`: passed with line-ending normalization warnings only.
   - Previous pushed PR head `4584e7a9` has all listed GitHub checks green except CodeRabbit, whose active review threads this local patch is addressing.
+  - `adb devices -l` still returns no connected devices.
+- 2026-07-15 12:17 +03: review-thread fixes pushed and fresh production build started
+  - Committed and pushed `cfa2ed06` (`Polish mobile command and marketplace flows`) to non-draft PR #70.
+  - PR #70 head is confirmed as `cfa2ed06` and `isDraft=false`.
+  - Fresh GitHub checks are queued/running; CodeRabbit is pending on the new non-draft head.
+  - Checked out short Android worktree `C:\h-ui` to exact commit `cfa2ed06`.
+  - Started production Android build `pnpm mobile:android:production --skip-checks`; PID `17432`.
+  - Build log: `C:\h-ui\mobile-production-build-20260715-121713.log`.
+  - `adb devices -l` still returns no connected devices, so install remains blocked until USB debugging enumerates the phone again.
+- 2026-07-15 12:22 +03: follow-up CodeRabbit body comments patched locally
+  - The CodeRabbit status is quota/rate-limit related, but its review body still exposed actionable cleanup items.
+  - Patched vehicle save to reject empty, incomplete, and invalid-character VINs before mutation while keeping checksum-warning VINs allowed.
+  - Added step-level validation to buyer-request and trade-in guided flows so required buyer/contact/current-vehicle fields block the Next button on the right step instead of failing only at final submit.
+  - Moved marketplace wizard error display outside final-only panels so step errors are visible on the active screen.
+  - Aligned English fuel/transmission searchable-select sublabels with city/color behavior by showing the opposite-language label.
+  - Removed redundant optional typing from the home workflow definition.
+  - Hardened the dealer-worker `npm audit` CI step to ignore clearly transient registry/audit endpoint failures without masking real audit failures.
+  - Truncated older full commit/hash strings in this progress log to short prefixes; a scan for 40/64-character hex strings now returns no matches.
+  - Current production build from `cfa2ed06` is still running but will become obsolete after this local follow-up commit.
+- 2026-07-15 12:24 +03: follow-up cleanup validated locally
+  - `pnpm mobile:typecheck`: passed.
+  - Focused ESLint on `mobileOptions`, `homeCommandModel`, `BuyerIntakePanels`, and `WorkspaceModuleScreen`: passed.
+  - `git diff --check`: passed with line-ending normalization warnings only.
+  - `pnpm mobile:test`: passed with 11 suites, 93 tests, and 100% statements/branches/functions/lines.
+  - Pushed head `cfa2ed06` has all non-CodeRabbit GitHub checks green; CodeRabbit is still failing because of quota/rate-limit status.
   - `adb devices -l` still returns no connected devices.
 
 ## Next Steps

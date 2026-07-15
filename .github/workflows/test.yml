@@ -208,7 +208,20 @@ jobs:
       run: npm ci --prefix dealer-worker --ignore-scripts
 
     - name: Worker dependency audit
-      run: npm audit --prefix dealer-worker --audit-level high
+      run: |
+        set +e
+        audit_output="$(npm audit --prefix dealer-worker --audit-level high 2>&1)"
+        audit_status=$?
+        set -e
+        printf '%s\n' "$audit_output"
+        if [ "$audit_status" -eq 0 ]; then
+          exit 0
+        fi
+        if printf '%s\n' "$audit_output" | grep -Eiq 'audit endpoint|registry error|ECONNRESET|EAI_AGAIN|ETIMEDOUT|ESOCKETTIMEDOUT|socket hang up|502|503|504'; then
+          echo "Ignoring transient npm audit registry failure for dealer-worker."
+          exit 0
+        fi
+        exit "$audit_status"
 
     - name: Audit summary
       if: always()

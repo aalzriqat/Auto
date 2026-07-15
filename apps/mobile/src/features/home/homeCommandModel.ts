@@ -20,8 +20,10 @@ export type HomeWorkflowAction = {
   tone: "dark" | "mint" | "amber" | "blue";
 };
 
+type HomeWorkflowModuleId = NonNullable<HomeWorkflowAction["moduleId"]>;
+
 type WorkflowDefinition = {
-  moduleId?: HomeWorkflowAction["moduleId"];
+  moduleId?: HomeWorkflowModuleId;
   target: HomeWorkflowTarget;
   tone: HomeWorkflowAction["tone"];
   en: Pick<HomeWorkflowAction, "kicker" | "subtitle" | "title">;

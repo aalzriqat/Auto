@@ -1454,6 +1454,7 @@ function VehiclesModule({ orgId }: { orgId: string }) {
   }
 
   async function save() {
+    const vin = normalizeVinInput(form.vin);
     const year = parseRequiredNumber(form.year);
     const mileage = parseRequiredNumber(form.mileage);
     const sellingPrice = parseRequiredNumber(form.sellingPrice);
@@ -1461,15 +1462,20 @@ function VehiclesModule({ orgId }: { orgId: string }) {
       Alert.alert(locale === "ar" ? "حقول مطلوبة" : "Required fields");
       return;
     }
-    if (!editing && !form.vin.trim()) {
+    if (!vin) {
       Alert.alert(locale === "ar" ? "رقم الشاصي مطلوب" : "VIN is required");
+      return;
+    }
+    const readinessMessage = vinNotReadyMessage(getMobileVinReadiness(vin), locale);
+    if (readinessMessage) {
+      Alert.alert(locale === "ar" ? "رقم الشاصي غير جاهز" : "VIN is not ready", readinessMessage);
       return;
     }
     setSaving(true);
     try {
       const payload = {
         orgId,
-        vin: maybeText(form.vin),
+        vin,
         make: form.make,
         model: form.model,
         trim: maybeText(form.trim),

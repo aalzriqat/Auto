@@ -88,7 +88,7 @@ export function getVehicleColorOptions(locale: Locale): SearchableSelectOption[]
 export function getFuelTypeOptions(locale: Locale): SearchableSelectOption[] {
   return FUEL_TYPES.map((fuelType) => ({
     label: locale === "ar" ? fuelType.ar : fuelType.en,
-    subLabel: locale === "ar" ? fuelType.en : undefined,
+    subLabel: locale === "ar" ? fuelType.en : fuelType.ar,
     value: fuelType.en,
   }));
 }
@@ -96,7 +96,7 @@ export function getFuelTypeOptions(locale: Locale): SearchableSelectOption[] {
 export function getTransmissionOptions(locale: Locale): SearchableSelectOption[] {
   return TRANSMISSIONS.map((transmission) => ({
     label: locale === "ar" ? transmission.ar : transmission.en,
-    subLabel: locale === "ar" ? transmission.en : undefined,
+    subLabel: locale === "ar" ? transmission.en : transmission.ar,
     value: transmission.en,
   }));
 }
