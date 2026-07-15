@@ -91,7 +91,7 @@ export function InventoryTabScreen() {
         title={locale === "ar" ? "المخزون" : "Inventory"}
       />
       {canSeeVehicles ? (
-        <VehiclesModule orgId={orgId} />
+        <VehiclesModule orgId={orgId} permissions={myMembership.permissions} />
       ) : (
         <Screen scroll padding="lg">
           <WorkspaceModuleLauncher

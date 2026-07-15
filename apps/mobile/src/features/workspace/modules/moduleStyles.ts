@@ -822,5 +822,48 @@ export const styles = StyleSheet.create({
     fontWeight: "700",
     letterSpacing: -0.3,
   },
+  galleryStrip: {
+    gap: theme.spacing.sm,
+    paddingVertical: theme.spacing.xs,
+  },
+  galleryImage: {
+    width: 240,
+    height: 160,
+    borderRadius: theme.radius.lg,
+    backgroundColor: theme.colors.surfaceAlt,
+  },
+  detailTabStrip: {
+    gap: theme.spacing.xs,
+    paddingVertical: theme.spacing.xs,
+  },
+  detailSection: {
+    gap: theme.spacing.md,
+  },
+  detailRecordRow: {
+    gap: theme.spacing.sm,
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.surfaceAlt,
+    padding: theme.spacing.md,
+  },
+  detailRowSplit: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: theme.spacing.md,
+  },
+  detailAmountText: {
+    color: theme.colors.text,
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  detailTotalRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: theme.spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.border,
+    paddingTop: theme.spacing.md,
+  },
 });
 

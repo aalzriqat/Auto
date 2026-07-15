@@ -8,8 +8,9 @@ import { useLocale } from "../../../providers/LocaleProvider";
 import { getMobileVinReadiness, normalizeVinInput } from "../mobileVinDecode";
 import { PAGE_SIZE, type Option, fetchDecodedMobileVin, vinNotReadyMessage, vinChecksumWarningMessage, vinDecodeResultMessage, compactNumber, money, maybeText, parseOptionalNumber, parseRequiredNumber, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, MetricCard, ModuleList, getOptionLabel, firstVehicleImageUrl, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
 import { styles } from "./moduleStyles";
+import { VehicleDetailSheet } from "./vehicleDetail";
 
-export function VehiclesModule({ orgId }: { orgId: string }) {
+export function VehiclesModule({ orgId, permissions }: { orgId: string; permissions: readonly string[] }) {
   const { locale } = useLocale();
   const reportError = useGenericError();
   const createVehicle = useMutation(api.vehicles.create);
@@ -252,7 +253,7 @@ export function VehiclesModule({ orgId }: { orgId: string }) {
     }
   }
 
-  async function archive(vehicle: MobileVehicle) {
+  async function archive(vehicle: MobileVehicle, onSuccess?: () => void) {
     Alert.alert(
       locale === "ar" ? "أرشفة السيارة؟" : "Archive vehicle?",
       `${vehicle.year} ${vehicle.make} ${vehicle.model}`,
@@ -264,6 +265,7 @@ export function VehiclesModule({ orgId }: { orgId: string }) {
           onPress: async () => {
             try {
               await archiveVehicle({ orgId, vehicleId: vehicle._id });
+              onSuccess?.();
             } catch (error) {
               reportError("Mobile vehicle archive failed", error);
             }
@@ -423,32 +425,14 @@ export function VehiclesModule({ orgId }: { orgId: string }) {
           />
         </GuidedStepFlow>
       </FormModal>
-      <FormModal
-        title={detailVehicle ? `${detailVehicle.year} ${detailVehicle.make} ${detailVehicle.model}` : ""}
-        visible={Boolean(detailVehicle)}
+      <VehicleDetailSheet
+        orgId={orgId}
+        permissions={permissions}
+        vehicle={detailVehicle}
+        onArchive={(target) => archive(target, () => setDetailVehicle(null))}
         onClose={() => setDetailVehicle(null)}
-      >
-        {detailVehicle ? (
-          <>
-            <SummaryPanel
-              title={locale === "ar" ? "بطاقة السيارة" : "Vehicle card"}
-              subtitle={locale === "ar" ? "ملخص سريع قبل التعديل أو التواصل مع العميل." : "A fast read before editing or talking to a buyer."}
-            >
-              <SummaryRow label="VIN" value={detailVehicle.vin || "-"} />
-              <SummaryRow label={locale === "ar" ? "الحالة" : "Status"} value={detailVehicle.status} />
-              <SummaryRow label={locale === "ar" ? "سعر البيع" : "Selling price"} value={money(detailVehicle.sellingPrice, locale)} />
-              <SummaryRow label={locale === "ar" ? "سعر الشراء" : "Purchase price"} value={money(detailVehicle.purchasePrice, locale)} />
-              <SummaryRow label={locale === "ar" ? "الممشى" : "Mileage"} value={`${detailVehicle.mileage.toLocaleString()} km`} />
-              <SummaryRow label={locale === "ar" ? "المواصفات" : "Specs"} value={`${detailVehicle.color || "-"} · ${detailVehicle.fuelType || "-"} · ${detailVehicle.transmission || "-"}`} />
-              {detailVehicle.notes ? <SummaryRow label={locale === "ar" ? "ملاحظات" : "Notes"} value={detailVehicle.notes} /> : null}
-            </SummaryPanel>
-            <View style={styles.cardActions}>
-              <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} onPress={() => openEdit(detailVehicle)} />
-              <PrimaryButton label={locale === "ar" ? "أرشفة" : "Archive"} tone="danger" onPress={() => archive(detailVehicle)} />
-            </View>
-          </>
-        ) : null}
-      </FormModal>
+        onEdit={(target) => openEdit(target)}
+      />
     </>
   );
 }

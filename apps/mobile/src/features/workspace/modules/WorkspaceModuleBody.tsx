@@ -57,7 +57,7 @@ function ModuleBody({
     case "marketplace":
       return <DedicatedMarketplaceModule orgId={org._id} />;
     case "vehicles":
-      return <VehiclesModule orgId={org._id} />;
+      return <VehiclesModule orgId={org._id} permissions={myMembership.permissions} />;
     case "customers":
       return <CustomersModule orgId={org._id} />;
     case "leads":

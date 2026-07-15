@@ -604,6 +604,131 @@ export interface MobileVehicleValuation {
   valuationAmount: number;
 }
 
+export type MobileDepositStatus = "HELD" | "APPLIED" | "REFUNDED" | "FORFEITED";
+export type MobileDepositMethod =
+  | "CASH"
+  | "BANK_TRANSFER"
+  | "PAYMENT_LINK"
+  | "CARD"
+  | "CHEQUE"
+  | "OTHER";
+export type MobileLandedCostPaymentMethod = "CASH" | "BANK_TRANSFER" | "CHEQUE" | "CARD";
+export type MobileReservationStatus = "ACTIVE" | "RELEASED" | "CONVERTED" | "EXPIRED";
+
+export interface MobileVehicleDeposit {
+  _id: string;
+  _creationTime: number;
+  amount: number;
+  status: MobileDepositStatus;
+  notes?: string;
+}
+
+export interface MobileVehicleRelationSale {
+  _id: string;
+  customerName: string;
+  salespersonName: string;
+  status: MobileSaleStatus;
+  saleDate: number;
+  salePrice: number;
+}
+
+export interface MobileVehicleRelationLead {
+  _id: string;
+  customerName: string;
+  stage: MobileLeadStage;
+  source: string;
+  assignedUserName: string;
+  notes?: string;
+}
+
+export interface MobileVehicleRelationExpense {
+  _id: string;
+  title: string;
+  status: MobileExpenseStatus;
+  date: number;
+  category: string;
+  vendor?: string;
+  payerName?: string | null;
+  notes?: string;
+  amount: number;
+}
+
+export interface MobileVehicleRelationTask {
+  _id: string;
+  title: string;
+  status: MobileTaskStatus;
+  dueDate: number;
+  assignedUserName: string;
+  description?: string;
+}
+
+export interface MobileVehicleRelationTestDrive {
+  _id: string;
+  customerName: string;
+  salespersonName: string;
+  demoPlateNumber?: string;
+  startTime: number;
+  endTime?: number;
+  notes?: string;
+}
+
+export interface MobileVehicleRelationWorkOrder {
+  _id: string;
+  title: string;
+  status: "OPEN" | "IN_PROGRESS" | "COMPLETED";
+  totalCost: number;
+  tasks: Array<{
+    id: string;
+    description: string;
+    partsCost: number;
+    laborCost: number;
+    mechanicName?: string;
+    completed: boolean;
+  }>;
+  notes?: string;
+}
+
+export interface MobileVehicleRelations {
+  sales: MobileVehicleRelationSale[];
+  leads: MobileVehicleRelationLead[];
+  expenses: MobileVehicleRelationExpense[];
+  tasks: MobileVehicleRelationTask[];
+  testDrives: MobileVehicleRelationTestDrive[];
+  workOrders: MobileVehicleRelationWorkOrder[];
+}
+
+export interface MobileLandedCostItem {
+  label: string;
+  amount: number;
+  paymentMethod?: MobileLandedCostPaymentMethod;
+}
+
+export interface MobileLandedCosts {
+  _id: string;
+  items: MobileLandedCostItem[];
+  total: number;
+  updatedAt: number;
+}
+
+export interface MobileVehiclePriceHistoryEntry {
+  _id: string;
+  oldPrice: number;
+  newPrice: number;
+  changedAt: number;
+}
+
+export interface MobileVehicleReservation {
+  _id: string;
+  status: MobileReservationStatus;
+  customerName: string | null;
+  reservedByName: string | null;
+  releasedByName: string | null;
+  reservedAt: number;
+  releasedAt?: number;
+  expiresAt?: number;
+  depositAmount?: number;
+}
+
 export interface MobileProfitApprovalCheck {
   status: "PENDING" | "APPROVED" | "REJECTED";
   requestedProfit: number;
@@ -1016,6 +1141,25 @@ type PaginationOpts = {
 type VehicleListArgs = OrgScopedArgs & {
   status?: MobileVehicleStatus;
   paginationOpts: PaginationOpts;
+};
+
+type VehicleScopedArgs = OrgScopedArgs & {
+  vehicleId: string;
+};
+
+type DepositReleaseArgs = OrgScopedArgs & {
+  depositId: string;
+  resolution: "REFUNDED" | "FORFEITED";
+  refundMethod?: MobileDepositMethod;
+  notes?: string;
+  idempotencyKey?: string;
+};
+
+type ReservationCreateArgs = VehicleScopedArgs & {
+  customerId: string;
+  depositAmount?: number;
+  depositMethod?: MobileDepositMethod;
+  expiresAt?: number;
 };
 
 type CustomerListArgs = OrgScopedArgs & {
@@ -2016,6 +2160,12 @@ export const api = {
       OrgScopedArgs & { quoteId: string; amount: number; notes?: string; idempotencyKey?: string },
       string
     >("deposits:create"),
+    listByVehicle: makeFunctionReference<
+      "query",
+      VehicleScopedArgs,
+      MobileVehicleDeposit[]
+    >("deposits:listByVehicle"),
+    release: makeFunctionReference<"mutation", DepositReleaseArgs, unknown>("deposits:release"),
   },
   approvals: {
     checkPendingApproval: makeFunctionReference<
@@ -2142,6 +2292,39 @@ export const api = {
       },
       MobileVehiclePickerItem[]
     >("vehicles:listAll"),
+    getRelations: makeFunctionReference<
+      "query",
+      VehicleScopedArgs,
+      MobileVehicleRelations
+    >("vehicles:getRelations"),
+    getLandedCosts: makeFunctionReference<
+      "query",
+      VehicleScopedArgs,
+      MobileLandedCosts | null
+    >("vehicles:getLandedCosts"),
+    upsertLandedCosts: makeFunctionReference<
+      "mutation",
+      VehicleScopedArgs & { items: MobileLandedCostItem[] },
+      unknown
+    >("vehicles:upsertLandedCosts"),
+    getPricingHistory: makeFunctionReference<
+      "query",
+      VehicleScopedArgs,
+      MobileVehiclePriceHistoryEntry[]
+    >("vehicles:getPricingHistory"),
+    getReservationHistory: makeFunctionReference<
+      "query",
+      VehicleScopedArgs,
+      MobileVehicleReservation[]
+    >("vehicles:getReservationHistory"),
+    createReservation: makeFunctionReference<"mutation", ReservationCreateArgs, unknown>(
+      "vehicles:createReservation",
+    ),
+    releaseReservation: makeFunctionReference<
+      "mutation",
+      OrgScopedArgs & { reservationId: string },
+      unknown
+    >("vehicles:releaseReservation"),
   },
 } satisfies {
   adminAuth: {
@@ -2520,6 +2703,8 @@ export const api = {
       OrgScopedArgs & { quoteId: string; amount: number; notes?: string; idempotencyKey?: string },
       string
     >;
+    listByVehicle: FunctionReference<"query", "public", VehicleScopedArgs, MobileVehicleDeposit[]>;
+    release: FunctionReference<"mutation", "public", DepositReleaseArgs, unknown>;
   };
   applications: {
     createFromQuote: FunctionReference<
@@ -2649,6 +2834,33 @@ export const api = {
         sourceType?: MobileVehicleSourceType;
       },
       MobileVehiclePickerItem[]
+    >;
+    getRelations: FunctionReference<"query", "public", VehicleScopedArgs, MobileVehicleRelations>;
+    getLandedCosts: FunctionReference<"query", "public", VehicleScopedArgs, MobileLandedCosts | null>;
+    upsertLandedCosts: FunctionReference<
+      "mutation",
+      "public",
+      VehicleScopedArgs & { items: MobileLandedCostItem[] },
+      unknown
+    >;
+    getPricingHistory: FunctionReference<
+      "query",
+      "public",
+      VehicleScopedArgs,
+      MobileVehiclePriceHistoryEntry[]
+    >;
+    getReservationHistory: FunctionReference<
+      "query",
+      "public",
+      VehicleScopedArgs,
+      MobileVehicleReservation[]
+    >;
+    createReservation: FunctionReference<"mutation", "public", ReservationCreateArgs, unknown>;
+    releaseReservation: FunctionReference<
+      "mutation",
+      "public",
+      OrgScopedArgs & { reservationId: string },
+      unknown
     >;
   };
 };
