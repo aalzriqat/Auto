@@ -995,9 +995,17 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `pnpm --filter @autoflow/mobile typecheck`: passed.
   - `pnpm --filter @autoflow/mobile test`: passed with 13 suites, 107 tests, and 100% statements/branches/functions/lines.
   - `pnpm --filter @autoflow/shared test`: passed with 1 suite and 3 tests.
+- 2026-07-15 18:15 +03: mobile UI modernization Phase 6 HomeScreen validated locally
+  - Restyled the signed-out hero, authenticated cockpit, command surface, marketplace link, workspace cards, and command sheet with the shared component kit, radius/shadow tokens, Ionicons, and locale-aware typography helpers.
+  - Moved touched home-screen copy into `packages/shared/src/i18n.ts`; the only remaining locale branch in `HomeScreen.tsx` is text alignment.
+  - Updated dashboard navigation from the home workflow to the new workspace Home tab route while preserving module and marketplace targets.
+  - `pnpm install --frozen-lockfile`: passed; lockfile already up to date.
+  - `pnpm --filter @autoflow/mobile typecheck`: passed.
+  - `pnpm --filter @autoflow/mobile test`: passed with 13 suites, 107 tests, and 100% statements/branches/functions/lines.
+  - `pnpm --filter @autoflow/shared test`: passed with 1 suite and 3 tests.
 
 ## Next Steps
 
-1. Commit Phase 5 bottom tab navigation on top of `agent/mobile-ui-port`.
-2. Continue Phase 6 screen restyling, starting with `src/features/home/HomeScreen.tsx`.
+1. Commit Phase 6 HomeScreen restyle on top of `agent/mobile-ui-port`.
+2. Continue Phase 6 screen restyling with `src/features/dashboard/OrgDashboardScreen.tsx`.
 3. Continue the later UI/list phases with typecheck and 100% mobile Jest coverage before each commit.

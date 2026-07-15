@@ -7,12 +7,17 @@ import { useMemo, useState } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { api, type MobileOrgSummary } from "../../convexApi";
+import { Badge } from "../../components/Badge";
+import { Button } from "../../components/Button";
+import { Card } from "../../components/Card";
+import { EmptyState } from "../../components/EmptyState";
 import { Icon } from "../../components/Icon";
 import { LocaleToggle } from "../../components/LocaleToggle";
 import { RouteLoadingState } from "../../components/RouteState";
 import { Screen } from "../../components/Screen";
+import { useAppFontState } from "../../providers/AppFontContext";
 import { useLocale } from "../../providers/LocaleProvider";
-import { theme } from "../../theme";
+import { getTypographyStyle, theme } from "../../theme";
 import {
   canOpenHomeWorkflowAction,
   filterWorkspaces,
@@ -25,57 +30,70 @@ import {
   type HomeWorkflowTarget,
 } from "./homeCommandModel";
 
+function useHomeTypography() {
+  const { locale } = useLocale();
+  const { fontsLoaded } = useAppFontState();
+
+  return useMemo(
+    () => ({
+      body: getTypographyStyle("body", locale, fontsLoaded),
+      caption: getTypographyStyle("caption", locale, fontsLoaded),
+      display: getTypographyStyle("display", locale, fontsLoaded),
+      heading: getTypographyStyle("heading", locale, fontsLoaded),
+      label: getTypographyStyle("label", locale, fontsLoaded),
+      title: getTypographyStyle("title", locale, fontsLoaded),
+    }),
+    [fontsLoaded, locale],
+  );
+}
+
 function SignedOutState() {
-  const { locale, t, textDirection } = useLocale();
+  const { t, textDirection } = useLocale();
   const router = useRouter();
+  const type = useHomeTypography();
 
   return (
     <View style={[styles.signedOut, { direction: textDirection }]}>
       <View style={styles.signedOutTop}>
         <View>
-          <Text style={styles.brand}>{t("appName")}</Text>
-          <Text style={styles.shellCaption}>
-            {locale === "ar" ? "إدارة المعرض من الهاتف" : "Dealer OS on mobile"}
-          </Text>
+          <Text style={[styles.brand, type.label]}>{t("appName")}</Text>
+          <Text style={[styles.shellCaption, type.caption]}>{t("homeMobileTagline")}</Text>
         </View>
         <LocaleToggle />
       </View>
 
       <View style={styles.heroPanel}>
-        <Text style={styles.heroEyebrow}>
-          {locale === "ar" ? "جاهز للعمل" : "Production ready"}
-        </Text>
-        <Text style={styles.heroTitle}>{t("signedOutTitle")}</Text>
-        <Text style={styles.heroBody}>{t("signedOutSubtitle")}</Text>
+        <Text style={[styles.heroEyebrow, type.label]}>{t("homeProductionReady")}</Text>
+        <Text style={[styles.heroTitle, type.display]}>{t("signedOutTitle")}</Text>
+        <Text style={[styles.heroBody, type.body]}>{t("signedOutSubtitle")}</Text>
         <View style={styles.heroStats}>
           <View style={styles.heroStat}>
-            <Text style={styles.heroStatValue}>24/7</Text>
-            <Text style={styles.heroStatLabel}>
-              {locale === "ar" ? "متابعة" : "Live ops"}
-            </Text>
+            <Icon color="onPrimary" name="notifications" size={20} />
+            <Text style={[styles.heroStatValue, type.title]}>24/7</Text>
+            <Text style={[styles.heroStatLabel, type.caption]}>{t("homeLiveOps")}</Text>
           </View>
           <View style={styles.heroStat}>
-            <Text style={styles.heroStatValue}>CRM</Text>
-            <Text style={styles.heroStatLabel}>
-              {locale === "ar" ? "مبيعات" : "Sales"}
-            </Text>
+            <Icon color="onPrimary" name="sales" size={20} />
+            <Text style={[styles.heroStatValue, type.title]}>CRM</Text>
+            <Text style={[styles.heroStatLabel, type.caption]}>{t("homeSales")}</Text>
           </View>
         </View>
       </View>
 
       <View style={styles.authActions}>
-        <Pressable
-          style={({ pressed }) => [styles.primaryButton, pressed && styles.buttonPressed]}
+        <Button
+          label={t("signIn")}
+          leadingIcon="settings"
           onPress={() => router.push(nativeRoutes.signIn)}
-        >
-          <Text style={styles.primaryButtonText}>{t("signIn")}</Text>
-        </Pressable>
-        <Pressable
-          style={({ pressed }) => [styles.secondaryButton, pressed && styles.buttonPressed]}
+          style={styles.fullWidthButton}
+        />
+        <Button
+          label={t("browseMarketplace")}
+          leadingIcon="marketplace"
           onPress={() => router.push(nativeRoutes.marketplace)}
-        >
-          <Text style={styles.secondaryButtonText}>{t("browseMarketplace")}</Text>
-        </Pressable>
+          style={styles.fullWidthButton}
+          variant="secondary"
+        />
       </View>
     </View>
   );
@@ -90,48 +108,46 @@ function WorkspaceCard({
   onOpenCommand: () => void;
   onOpenDashboard: () => void;
 }) {
-  const { locale, t, textDirection } = useLocale();
+  const { t, textDirection } = useLocale();
+  const type = useHomeTypography();
+  const workspaceName = org.name || t("untitledWorkspace");
+  const roleName = org.roleName || t("unknownRole");
 
   return (
-    <View style={[styles.workspaceCard, { direction: textDirection }]}>
+    <Card style={[styles.workspaceCard, { direction: textDirection }]}>
       <View style={styles.workspaceCardTop}>
         <View style={styles.workspaceAvatar}>
-          <Text style={styles.workspaceAvatarText}>{workspaceInitials(org.name)}</Text>
+          <Text style={[styles.workspaceAvatarText, type.label]}>{workspaceInitials(org.name)}</Text>
         </View>
         <View style={styles.workspaceText}>
-          <Text numberOfLines={1} style={styles.workspaceName}>
-            {org.name || "Untitled workspace"}
+          <Text numberOfLines={1} style={[styles.workspaceName, type.heading]}>
+            {workspaceName}
           </Text>
-          <Text style={styles.workspaceMeta}>
-            {t("roleLabel")}: {org.roleName || "UNKNOWN"}
+          <Text style={[styles.workspaceMeta, type.caption]}>
+            {t("roleLabel")}: {roleName}
           </Text>
         </View>
-        <Text style={styles.rolePill}>{org.roleName || "UNKNOWN"}</Text>
+        <Badge label={roleName} tone="primary" />
       </View>
       <View style={styles.workspaceFooter}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel={`${t("openWorkspace")}: ${org.name || "Untitled workspace"}`}
-          style={({ pressed }) => [styles.workspaceFooterButton, pressed && styles.cardPressed]}
+        <Button
+          accessibilityLabel={`${t("openWorkspace")}: ${workspaceName}`}
+          label={t("openWorkspace")}
+          leadingIcon="dashboard"
           onPress={onOpenDashboard}
-        >
-          <Text style={styles.workspaceAction}>{t("openWorkspace")}</Text>
-        </Pressable>
-        <Pressable
-          accessibilityRole="button"
-          style={({ pressed }) => [
-            styles.workspaceFooterButton,
-            styles.workspaceFooterButtonAccent,
-            pressed && styles.cardPressed,
-          ]}
+          style={styles.workspaceFooterButton}
+          variant="secondary"
+        />
+        <Button
+          accessibilityLabel={`${t("homeCommands")}: ${workspaceName}`}
+          label={t("homeCommands")}
+          leadingIcon="operations"
           onPress={onOpenCommand}
-        >
-          <Text style={styles.workspaceActionAccent}>
-            {locale === "ar" ? "الأوامر" : "Commands"}
-          </Text>
-        </Pressable>
+          style={styles.workspaceFooterButton}
+          variant="ghost"
+        />
       </View>
-    </View>
+    </Card>
   );
 }
 
@@ -145,11 +161,14 @@ function WorkflowActionCard({
   onPress: () => void;
 }) {
   const isDark = action.tone === "dark";
+  const type = useHomeTypography();
 
   return (
     <Pressable
+      accessibilityLabel={action.title}
       accessibilityRole="button"
       accessibilityState={{ disabled: Boolean(disabled) }}
+      android_ripple={{ color: theme.colors.border }}
       disabled={disabled}
       style={({ pressed }) => [
         styles.workflowCard,
@@ -166,15 +185,15 @@ function WorkflowActionCard({
         <View style={[styles.workflowIconShell, isDark && styles.workflowIconShellDark]}>
           <Icon color={isDark ? "onPrimary" : "primary"} name={action.icon} size={20} />
         </View>
-        <Text style={[styles.workflowKicker, isDark && styles.workflowTextOnDark]}>
+        <Text style={[styles.workflowKicker, type.label, isDark && styles.workflowTextOnDark]}>
           {action.kicker}
         </Text>
       </View>
       <View style={styles.workflowCardBody}>
-        <Text numberOfLines={2} style={[styles.workflowTitle, isDark && styles.workflowTextOnDark]}>
+        <Text numberOfLines={2} style={[styles.workflowTitle, type.heading, isDark && styles.workflowTextOnDark]}>
           {action.title}
         </Text>
-        <Text numberOfLines={2} style={[styles.workflowSubtitle, isDark && styles.workflowSubtextOnDark]}>
+        <Text numberOfLines={2} style={[styles.workflowSubtitle, type.caption, isDark && styles.workflowSubtextOnDark]}>
           {action.subtitle}
         </Text>
       </View>
@@ -197,7 +216,8 @@ function WorkspaceCommandSheet({
   selectedOrgId: string | null;
   visible: boolean;
 }) {
-  const { locale, textDirection } = useLocale();
+  const { locale, t, textDirection } = useLocale();
+  const type = useHomeTypography();
   const actions = useMemo(() => getHomeWorkflowActions(locale), [locale]);
   const selectedOrg = orgs.find((org) => org._id === selectedOrgId) ?? orgs[0] ?? null;
   const visibleActions = useMemo(
@@ -210,7 +230,7 @@ function WorkspaceCommandSheet({
       <View style={styles.sheetBackdrop}>
         <Pressable
           accessibilityRole="button"
-          accessibilityLabel={locale === "ar" ? "إغلاق قائمة الأوامر" : "Close command sheet"}
+          accessibilityLabel={t("homeCommandSheetLabel")}
           style={styles.sheetDismissArea}
           onPress={onClose}
         />
@@ -218,22 +238,10 @@ function WorkspaceCommandSheet({
           <View style={styles.sheetGrabber} />
           <View style={styles.sheetHeader}>
             <View style={styles.sheetHeaderText}>
-              <Text style={styles.sheetTitle}>
-                {locale === "ar" ? "اختيار مساحة العمل" : "Workspace command deck"}
-              </Text>
-              <Text style={styles.sheetBody}>
-                {locale === "ar"
-                  ? "اختر معرضاً ثم افتح الإجراء المطلوب مباشرة."
-                  : "Pick a showroom, then jump straight into the workflow you need."}
-              </Text>
+              <Text style={[styles.sheetTitle, type.title]}>{t("homeCommandSheetTitle")}</Text>
+              <Text style={[styles.sheetBody, type.caption]}>{t("homeCommandSheetBody")}</Text>
             </View>
-            <Pressable
-              accessibilityRole="button"
-              style={({ pressed }) => [styles.sheetCloseButton, pressed && styles.cardPressed]}
-              onPress={onClose}
-            >
-              <Text style={styles.sheetCloseText}>{locale === "ar" ? "إغلاق" : "Close"}</Text>
-            </Pressable>
+            <Button label={t("close")} onPress={onClose} style={styles.sheetCloseButton} variant="ghost" />
           </View>
 
           <ScrollView
@@ -257,8 +265,8 @@ function WorkspaceCommandSheet({
                     ]}
                     onPress={() => onSelectOrg(org._id)}
                   >
-                    <Text style={[styles.sheetOrgText, selected && styles.sheetOrgTextSelected]}>
-                      {org.name || "Untitled workspace"}
+                    <Text style={[styles.sheetOrgText, type.caption, selected && styles.sheetOrgTextSelected]}>
+                      {org.name || t("untitledWorkspace")}
                     </Text>
                   </Pressable>
                 );
@@ -289,9 +297,12 @@ function EmptyWorkspaceState() {
   const { t, textDirection } = useLocale();
 
   return (
-    <View style={[styles.emptyState, { direction: textDirection }]}>
-      <Text style={styles.emptyTitle}>{t("noWorkspacesTitle")}</Text>
-      <Text style={styles.body}>{t("noWorkspacesBody")}</Text>
+    <View style={{ direction: textDirection }}>
+      <EmptyState
+        hint={t("noWorkspacesBody")}
+        icon="branches"
+        title={t("noWorkspacesTitle")}
+      />
     </View>
   );
 }
@@ -299,6 +310,7 @@ function EmptyWorkspaceState() {
 function AuthenticatedHome() {
   const { locale, t, textDirection } = useLocale();
   const router = useRouter();
+  const type = useHomeTypography();
   const [workspaceQuery, setWorkspaceQuery] = useState("");
   const [commandSheetOpen, setCommandSheetOpen] = useState(false);
   const [commandSheetOrgId, setCommandSheetOrgId] = useState<string | null>(null);
@@ -331,14 +343,14 @@ function AuthenticatedHome() {
 
     if (target === "dashboard") {
       router.push({
-        pathname: "/org/[orgId]",
+        pathname: nativeRoutes.orgHome,
         params: { orgId: org._id },
       });
       return;
     }
 
     router.push({
-      pathname: "/org/[orgId]/module/[moduleId]",
+      pathname: nativeRoutes.orgModule,
       params: { orgId: org._id, moduleId: target },
     });
   };
@@ -348,10 +360,8 @@ function AuthenticatedHome() {
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
         <View style={[styles.header, { direction: textDirection }]}>
           <View style={styles.headerText}>
-            <Text style={styles.brand}>{t("appName")}</Text>
-            <Text style={styles.title}>
-              {locale === "ar" ? "مركز العمل" : "Work center"}
-            </Text>
+            <Text style={[styles.brand, type.label]}>{t("appName")}</Text>
+            <Text style={[styles.title, type.display]}>{t("homeWorkCenter")}</Text>
           </View>
           <View style={styles.headerActions}>
             <LocaleToggle />
@@ -359,41 +369,40 @@ function AuthenticatedHome() {
           </View>
         </View>
 
-        <View style={[styles.cockpitPanel, { direction: textDirection }]}>
+        <Card style={[styles.cockpitPanel, { direction: textDirection }]}>
           <View style={styles.cockpitTopRow}>
             <View style={styles.cockpitText}>
-              <Text style={styles.cockpitEyebrow}>
-                {locale === "ar" ? "مساحة نشطة" : "Active workspace"}
+              <Text style={[styles.cockpitEyebrow, type.label]}>{t("homeActiveWorkspace")}</Text>
+              <Text numberOfLines={2} style={[styles.cockpitTitle, type.display]}>
+                {primaryOrg?.name || t("homeChooseWorkspace")}
               </Text>
-              <Text numberOfLines={2} style={styles.cockpitTitle}>
-                {primaryOrg?.name || (locale === "ar" ? "اختر مساحة عمل" : "Choose a workspace")}
-              </Text>
-              <Text style={styles.cockpitMeta}>
+              <Text style={[styles.cockpitMeta, type.caption]}>
                 {primaryOrg
-                  ? `${t("roleLabel")}: ${primaryOrg.roleName || "UNKNOWN"}`
-                  : locale === "ar"
-                    ? "ابدأ من قائمة مساحات العمل المتاحة."
-                    : "Start from the workspaces available to this account."}
+                  ? `${t("roleLabel")}: ${primaryOrg.roleName || t("unknownRole")}`
+                  : t("homeWorkspaceFallbackHint")}
               </Text>
             </View>
             <View style={styles.cockpitBadge}>
-              <Text style={styles.cockpitBadgeValue}>{safeOrgs.length}</Text>
-              <Text style={styles.cockpitBadgeLabel}>{locale === "ar" ? "مساحة" : "spaces"}</Text>
+              <Icon color="onPrimary" name="branches" size={18} />
+              <Text style={[styles.cockpitBadgeValue, type.title]}>{safeOrgs.length}</Text>
+              <Text style={[styles.cockpitBadgeLabel, type.label]}>{t("homeSpacesCount")}</Text>
             </View>
           </View>
 
           <View style={styles.cockpitMetricRow}>
             <View style={styles.cockpitMetric}>
-              <Text style={styles.cockpitMetricValue}>{filteredOrgs.length}</Text>
-              <Text style={styles.cockpitMetricLabel}>{locale === "ar" ? "مطابقة" : "matched"}</Text>
+              <Text style={[styles.cockpitMetricValue, type.heading]}>{filteredOrgs.length}</Text>
+              <Text style={[styles.cockpitMetricLabel, type.label]}>{t("homeMatchedCount")}</Text>
             </View>
             <View style={styles.cockpitMetric}>
-              <Text style={styles.cockpitMetricValue}>{visibleWorkflowActions.length}</Text>
-              <Text style={styles.cockpitMetricLabel}>{locale === "ar" ? "أوامر" : "workflows"}</Text>
+              <Text style={[styles.cockpitMetricValue, type.heading]}>{visibleWorkflowActions.length}</Text>
+              <Text style={[styles.cockpitMetricLabel, type.label]}>{t("homeWorkflowsCount")}</Text>
             </View>
             <View style={styles.cockpitMetric}>
-              <Text style={styles.cockpitMetricValue}>{isSuperAdmin ? "SA" : primaryOrg?.roleName?.slice(0, 2) || "--"}</Text>
-              <Text style={styles.cockpitMetricLabel}>{locale === "ar" ? "صلاحية" : "access"}</Text>
+              <Text style={[styles.cockpitMetricValue, type.heading]}>
+                {isSuperAdmin ? "SA" : primaryOrg?.roleName?.slice(0, 2) || "--"}
+              </Text>
+              <Text style={[styles.cockpitMetricLabel, type.label]}>{t("homeAccessLabel")}</Text>
             </View>
           </View>
 
@@ -409,8 +418,9 @@ function AuthenticatedHome() {
               ]}
               onPress={() => openWorkflow("dashboard")}
             >
-              <Text style={styles.cockpitPrimaryText}>
-                {locale === "ar" ? "فتح لوحة التحكم" : "Open dashboard"}
+              <Icon color="onPrimary" name="dashboard" size={18} />
+              <Text style={[styles.cockpitPrimaryText, type.heading]}>
+                {t("homeOpenDashboard")}
               </Text>
             </Pressable>
             <Pressable
@@ -418,46 +428,41 @@ function AuthenticatedHome() {
               style={({ pressed }) => [styles.cockpitSecondaryButton, pressed && styles.cardPressed]}
               onPress={() => openCommandSheet(primaryOrg)}
             >
-              <Text style={styles.cockpitSecondaryText}>
-                {locale === "ar" ? "كل الأوامر" : "All commands"}
+              <Icon color="onPrimary" name="operations" size={18} />
+              <Text style={[styles.cockpitSecondaryText, type.heading]}>
+                {t("homeAllCommands")}
               </Text>
             </Pressable>
           </View>
-        </View>
+        </Card>
 
-        <View style={[styles.commandPanel, { direction: textDirection }]}>
+        <Card style={[styles.commandPanel, { direction: textDirection }]}>
           <View style={styles.commandHeader}>
             <View style={styles.commandHeaderText}>
-              <Text style={styles.commandTitle}>
-                {locale === "ar" ? "سطح الأوامر" : "Command surface"}
-              </Text>
-              <Text style={styles.commandBody}>
-                {locale === "ar"
-                  ? "ابحث، اختر مساحة، ثم انتقل مباشرة إلى المبيعات أو المخزون أو الرسائل."
-                  : "Search, pick a workspace, then jump straight into sales, stock, leads, or messages."}
-              </Text>
+              <Text style={[styles.commandTitle, type.title]}>{t("homeCommandSurfaceTitle")}</Text>
+              <Text style={[styles.commandBody, type.caption]}>{t("homeCommandSurfaceBody")}</Text>
             </View>
             <View style={styles.commandStatus}>
-              <Text style={styles.commandStatusValue}>{filteredOrgs.length}</Text>
-              <Text style={styles.commandStatusLabel}>{locale === "ar" ? "نتيجة" : "results"}</Text>
+              <Text style={[styles.commandStatusValue, type.title]}>{filteredOrgs.length}</Text>
+              <Text style={[styles.commandStatusLabel, type.label]}>{t("homeResultsCount")}</Text>
             </View>
           </View>
 
           <View style={styles.searchShell}>
             <Icon color="primary" name="search" size={18} />
             <TextInput
-              accessibilityLabel={locale === "ar" ? "البحث في مساحات العمل" : "Search workspaces"}
+              accessibilityLabel={t("homeSearchWorkspaces")}
               autoCorrect={false}
               onChangeText={setWorkspaceQuery}
-              placeholder={locale === "ar" ? "ابحث باسم المعرض أو الدور..." : "Search showroom or role..."}
+              placeholder={t("homeSearchPlaceholder")}
               placeholderTextColor={theme.colors.subtleText}
-              style={[styles.searchInput, { textAlign: locale === "ar" ? "right" : "left" }]}
+              style={[styles.searchInput, type.body, { textAlign: locale === "ar" ? "right" : "left" }]}
               value={workspaceQuery}
             />
             {workspaceQuery ? (
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={locale === "ar" ? "مسح البحث" : "Clear search"}
+                accessibilityLabel={t("workspaceClearSearch")}
                 style={({ pressed }) => [styles.clearSearch, pressed && styles.cardPressed]}
                 onPress={() => setWorkspaceQuery("")}
               >
@@ -476,47 +481,39 @@ function AuthenticatedHome() {
               />
             ))}
           </View>
-        </View>
+        </Card>
 
         {isSuperAdmin ? (
-          <View style={[styles.adminPanel, { direction: textDirection }]}>
-            <Text style={styles.adminLabel}>{t("superAdminLabel")}</Text>
-            <Text style={styles.adminBody}>{t("superAdminBody")}</Text>
-          </View>
+          <Card style={[styles.adminPanel, { direction: textDirection }]}>
+            <Text style={[styles.adminLabel, type.heading]}>{t("superAdminLabel")}</Text>
+            <Text style={[styles.adminBody, type.body]}>{t("superAdminBody")}</Text>
+          </Card>
         ) : null}
 
-        <Pressable
-          accessibilityRole="button"
-          style={({ pressed }) => [
-            styles.marketplaceLink,
-            { direction: textDirection },
-            pressed && styles.cardPressed,
-          ]}
+        <Card
+          accessibilityLabel={t("browseMarketplace")}
           onPress={() => router.push(nativeRoutes.marketplace)}
+          style={[styles.marketplaceLink, { direction: textDirection }]}
         >
           <View style={styles.marketplaceLinkText}>
-            <Text style={styles.marketplaceLinkTitle}>{t("browseMarketplace")}</Text>
-            <Text style={styles.workspaceMeta}>{t("marketplaceSubtitle")}</Text>
+            <Text style={[styles.marketplaceLinkTitle, type.heading]}>{t("browseMarketplace")}</Text>
+            <Text style={[styles.workspaceMeta, type.caption]}>{t("marketplaceSubtitle")}</Text>
           </View>
           <Icon color="primary" name="chevronForward" size={22} />
-        </Pressable>
+        </Card>
 
         <View style={[styles.sectionHeader, { direction: textDirection }]}>
           <View>
-            <Text style={styles.sectionKicker}>
-              {locale === "ar" ? "المساحات" : "Workspaces"}
-            </Text>
-            <Text style={styles.sectionTitle}>{t("workspacesTitle")}</Text>
+            <Text style={[styles.sectionKicker, type.label]}>{t("homeWorkspacesKicker")}</Text>
+            <Text style={[styles.sectionTitle, type.title]}>{t("workspacesTitle")}</Text>
           </View>
-          <Pressable
-            accessibilityRole="button"
-            style={({ pressed }) => [styles.sectionButton, pressed && styles.cardPressed]}
+          <Button
+            label={t("homeChoose")}
+            leadingIcon="operations"
             onPress={() => openCommandSheet(primaryOrg)}
-          >
-            <Text style={styles.sectionButtonText}>
-              {locale === "ar" ? "اختيار" : "Choose"}
-            </Text>
-          </Pressable>
+            style={styles.sectionButton}
+            variant="secondary"
+          />
         </View>
 
         {filteredOrgs.length > 0 ? (
@@ -533,15 +530,12 @@ function AuthenticatedHome() {
             ))}
           </View>
         ) : safeOrgs.length > 0 ? (
-          <View style={[styles.emptyState, { direction: textDirection }]}>
-            <Text style={styles.emptyTitle}>
-              {locale === "ar" ? "لا توجد نتائج" : "No matching workspaces"}
-            </Text>
-            <Text style={styles.body}>
-              {locale === "ar"
-                ? "جرّب اسم معرض أو دور آخر."
-                : "Try another showroom name or role."}
-            </Text>
+          <View style={{ direction: textDirection }}>
+            <EmptyState
+              hint={t("homeNoMatchingWorkspacesBody")}
+              icon="search"
+              title={t("homeNoMatchingWorkspacesTitle")}
+            />
           </View>
         ) : (
           <EmptyWorkspaceState />
@@ -638,12 +632,13 @@ const styles = StyleSheet.create({
   },
   heroPanel: {
     gap: theme.spacing.md,
-    borderRadius: theme.radius.md,
+    borderRadius: theme.radius.xl,
     backgroundColor: theme.colors.hero,
     padding: theme.spacing.lg,
+    ...theme.shadows.lg,
   },
   heroEyebrow: {
-    color: "#c7d2fe",
+    color: theme.colors.primarySoft,
     fontSize: 12,
     fontWeight: "900",
     letterSpacing: 0,
@@ -656,7 +651,7 @@ const styles = StyleSheet.create({
     lineHeight: 36,
   },
   heroBody: {
-    color: "#e0e7ff",
+    color: theme.colors.surfaceAlt,
     fontSize: 15,
     lineHeight: 22,
   },
@@ -679,8 +674,10 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 72,
     justifyContent: "space-between",
-    borderRadius: theme.radius.md,
-    backgroundColor: "rgba(255,255,255,0.12)",
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.primaryDark,
+    backgroundColor: theme.colors.primaryDark,
     padding: theme.spacing.md,
   },
   heroStatValue: {
@@ -689,45 +686,15 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   heroStatLabel: {
-    color: "#cbd5e1",
+    color: theme.colors.surfaceAlt,
     fontSize: 12,
     fontWeight: "800",
   },
   authActions: {
     gap: theme.spacing.md,
   },
-  primaryButton: {
-    minHeight: 52,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.primary,
-    paddingHorizontal: theme.spacing.lg,
+  fullWidthButton: {
     width: "100%",
-  },
-  buttonPressed: {
-    opacity: 0.82,
-  },
-  primaryButtonText: {
-    color: theme.colors.onPrimary,
-    fontSize: 17,
-    fontWeight: "800",
-  },
-  secondaryButton: {
-    minHeight: 52,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: theme.radius.md,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surface,
-    paddingHorizontal: theme.spacing.lg,
-    width: "100%",
-  },
-  secondaryButtonText: {
-    color: theme.colors.text,
-    fontSize: 17,
-    fontWeight: "800",
   },
   header: {
     flexDirection: "row",
@@ -744,42 +711,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: theme.spacing.sm,
   },
-  workspaceSummary: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing.lg,
-    borderRadius: theme.radius.md,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surface,
-    padding: theme.spacing.md,
-  },
-  summaryEyebrow: {
-    color: theme.colors.mutedText,
-    fontSize: 11,
-    fontWeight: "900",
-    textTransform: "uppercase",
-  },
-  summaryValue: {
-    color: theme.colors.text,
-    fontSize: 36,
-    fontWeight: "900",
-    lineHeight: 40,
-  },
-  summaryBody: {
-    flex: 1,
-    color: theme.colors.mutedText,
-    fontSize: 13,
-    fontWeight: "700",
-    lineHeight: 19,
-  },
   adminPanel: {
     gap: theme.spacing.xs,
-    borderWidth: 1,
-    borderColor: "#fde68a",
-    borderRadius: theme.radius.md,
+    borderColor: theme.colors.warning,
+    borderRadius: theme.radius.lg,
     backgroundColor: theme.colors.warningSoft,
-    padding: theme.spacing.md,
   },
   adminLabel: {
     color: theme.colors.accent,
@@ -793,9 +729,11 @@ const styles = StyleSheet.create({
   },
   cockpitPanel: {
     gap: theme.spacing.md,
-    borderRadius: theme.radius.md,
+    borderColor: theme.colors.hero,
+    borderRadius: theme.radius.xl,
     backgroundColor: theme.colors.hero,
     padding: theme.spacing.lg,
+    ...theme.shadows.lg,
   },
   cockpitTopRow: {
     flexDirection: "row",
@@ -808,7 +746,7 @@ const styles = StyleSheet.create({
     gap: theme.spacing.xs,
   },
   cockpitEyebrow: {
-    color: "#99f6e4",
+    color: theme.colors.primarySoft,
     fontSize: 11,
     fontWeight: "900",
     textTransform: "uppercase",
@@ -820,7 +758,7 @@ const styles = StyleSheet.create({
     lineHeight: 33,
   },
   cockpitMeta: {
-    color: "#cbd5e1",
+    color: theme.colors.surfaceAlt,
     fontSize: 13,
     fontWeight: "700",
     lineHeight: 19,
@@ -828,8 +766,11 @@ const styles = StyleSheet.create({
   cockpitBadge: {
     minWidth: 68,
     alignItems: "center",
-    borderRadius: theme.radius.md,
-    backgroundColor: "rgba(255,255,255,0.11)",
+    gap: theme.spacing.xs,
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.primaryDark,
+    backgroundColor: theme.colors.primaryDark,
     paddingHorizontal: theme.spacing.sm,
     paddingVertical: theme.spacing.sm,
   },
@@ -840,7 +781,7 @@ const styles = StyleSheet.create({
     lineHeight: 28,
   },
   cockpitBadgeLabel: {
-    color: "#cbd5e1",
+    color: theme.colors.surfaceAlt,
     fontSize: 10,
     fontWeight: "900",
     textTransform: "uppercase",
@@ -853,8 +794,10 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: 62,
     justifyContent: "space-between",
-    borderRadius: theme.radius.md,
-    backgroundColor: "rgba(255,255,255,0.09)",
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.primaryDark,
+    backgroundColor: theme.colors.primaryDark,
     padding: theme.spacing.sm,
   },
   cockpitMetricValue: {
@@ -863,7 +806,7 @@ const styles = StyleSheet.create({
     fontWeight: "900",
   },
   cockpitMetricLabel: {
-    color: "#cbd5e1",
+    color: theme.colors.surfaceAlt,
     fontSize: 10,
     fontWeight: "900",
     textTransform: "uppercase",
@@ -875,9 +818,11 @@ const styles = StyleSheet.create({
   cockpitPrimaryButton: {
     flex: 1.2,
     minHeight: 46,
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: theme.radius.md,
+    gap: theme.spacing.sm,
+    borderRadius: theme.radius.lg,
     backgroundColor: theme.colors.primary,
     paddingHorizontal: theme.spacing.md,
   },
@@ -889,10 +834,14 @@ const styles = StyleSheet.create({
   cockpitSecondaryButton: {
     flex: 1,
     minHeight: 46,
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: theme.radius.md,
-    backgroundColor: "rgba(255,255,255,0.12)",
+    gap: theme.spacing.sm,
+    borderRadius: theme.radius.lg,
+    borderWidth: 1,
+    borderColor: theme.colors.primaryDark,
+    backgroundColor: theme.colors.primaryDark,
     paddingHorizontal: theme.spacing.md,
   },
   cockpitSecondaryText: {
@@ -908,11 +857,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     gap: theme.spacing.md,
-    borderWidth: 1,
-    borderColor: "#c7d2fe",
-    borderRadius: theme.radius.md,
+    borderColor: theme.colors.primary,
+    borderRadius: theme.radius.lg,
     backgroundColor: theme.colors.primarySoft,
-    padding: theme.spacing.md,
   },
   marketplaceLinkText: {
     flex: 1,
@@ -926,11 +873,8 @@ const styles = StyleSheet.create({
   },
   commandPanel: {
     gap: theme.spacing.md,
-    borderRadius: theme.radius.md,
-    borderWidth: 1,
     borderColor: theme.colors.borderStrong,
-    backgroundColor: theme.colors.surface,
-    padding: theme.spacing.md,
+    borderRadius: theme.radius.lg,
   },
   commandHeader: {
     flexDirection: "row",
@@ -956,7 +900,7 @@ const styles = StyleSheet.create({
   commandStatus: {
     minWidth: 62,
     alignItems: "center",
-    borderRadius: theme.radius.md,
+    borderRadius: theme.radius.lg,
     backgroundColor: theme.colors.primarySoft,
     paddingHorizontal: theme.spacing.sm,
     paddingVertical: theme.spacing.sm,
@@ -983,25 +927,26 @@ const styles = StyleSheet.create({
     minHeight: 126,
     justifyContent: "space-between",
     gap: theme.spacing.md,
-    borderRadius: theme.radius.md,
+    borderRadius: theme.radius.lg,
     borderWidth: 1,
     borderColor: theme.colors.border,
     padding: theme.spacing.md,
+    ...theme.shadows.sm,
   },
   workflowCardDark: {
     borderColor: theme.colors.hero,
     backgroundColor: theme.colors.hero,
   },
   workflowCardMint: {
-    borderColor: "#99f6e4",
+    borderColor: theme.colors.primary,
     backgroundColor: theme.colors.primarySoft,
   },
   workflowCardAmber: {
-    borderColor: "#fed7aa",
+    borderColor: theme.colors.accent,
     backgroundColor: theme.colors.accentSoft,
   },
   workflowCardBlue: {
-    borderColor: "#bae6fd",
+    borderColor: theme.colors.info,
     backgroundColor: theme.colors.infoSoft,
   },
   workflowTopRow: {
@@ -1015,11 +960,11 @@ const styles = StyleSheet.create({
     height: 36,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: theme.radius.md,
+    borderRadius: theme.radius.lg,
     backgroundColor: theme.colors.surface,
   },
   workflowIconShellDark: {
-    backgroundColor: "rgba(255,255,255,0.14)",
+    backgroundColor: theme.colors.primaryDark,
   },
   workflowKicker: {
     color: theme.colors.mutedText,
@@ -1046,7 +991,7 @@ const styles = StyleSheet.create({
     color: theme.colors.onPrimary,
   },
   workflowSubtextOnDark: {
-    color: "#cbd5e1",
+    color: theme.colors.surfaceAlt,
   },
   searchShell: {
     minHeight: 48,
@@ -1074,50 +1019,9 @@ const styles = StyleSheet.create({
     borderRadius: theme.radius.sm,
     backgroundColor: theme.colors.surfaceAlt,
   },
-  commandActions: {
-    flexDirection: "row",
-    gap: theme.spacing.sm,
-  },
-  commandActionPrimary: {
-    flex: 1.2,
-    minHeight: 82,
-    justifyContent: "space-between",
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.hero,
-    padding: theme.spacing.md,
-  },
-  commandActionSecondary: {
-    flex: 1,
-    minHeight: 82,
-    justifyContent: "space-between",
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.accentSoft,
-    padding: theme.spacing.md,
-  },
-  commandActionKicker: {
-    color: theme.colors.mutedText,
-    fontSize: 11,
-    fontWeight: "900",
-    textTransform: "uppercase",
-  },
-  commandActionKickerOnDark: {
-    color: "#a7f3d0",
-  },
-  commandActionTitle: {
-    color: theme.colors.text,
-    fontSize: 15,
-    fontWeight: "900",
-  },
-  commandActionTitleOnDark: {
-    color: theme.colors.onPrimary,
-  },
   workspaceCard: {
     gap: theme.spacing.md,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.surface,
-    padding: theme.spacing.md,
+    borderRadius: theme.radius.lg,
   },
   workspaceCardTop: {
     flexDirection: "row",
@@ -1129,7 +1033,7 @@ const styles = StyleSheet.create({
     height: 46,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: theme.radius.md,
+    borderRadius: theme.radius.lg,
     backgroundColor: theme.colors.primarySoft,
   },
   workspaceAvatarText: {
@@ -1158,38 +1062,6 @@ const styles = StyleSheet.create({
   },
   workspaceFooterButton: {
     flex: 1,
-    minHeight: 42,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: theme.radius.md,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surfaceAlt,
-    paddingHorizontal: theme.spacing.sm,
-  },
-  workspaceFooterButtonAccent: {
-    borderColor: "#99f6e4",
-    backgroundColor: theme.colors.primarySoft,
-  },
-  rolePill: {
-    overflow: "hidden",
-    borderRadius: theme.radius.sm,
-    backgroundColor: theme.colors.surfaceAlt,
-    color: theme.colors.mutedText,
-    fontSize: 11,
-    fontWeight: "900",
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: theme.spacing.xs,
-  },
-  workspaceAction: {
-    color: theme.colors.primary,
-    fontSize: 14,
-    fontWeight: "800",
-  },
-  workspaceActionAccent: {
-    color: theme.colors.primaryDark,
-    fontSize: 14,
-    fontWeight: "900",
   },
   sectionHeader: {
     flexDirection: "row",
@@ -1210,21 +1082,11 @@ const styles = StyleSheet.create({
   },
   sectionButton: {
     minHeight: 40,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.surfaceAlt,
-    paddingHorizontal: theme.spacing.md,
-  },
-  sectionButtonText: {
-    color: theme.colors.text,
-    fontSize: 13,
-    fontWeight: "900",
   },
   sheetBackdrop: {
     flex: 1,
     justifyContent: "flex-end",
-    backgroundColor: "rgba(15,23,42,0.42)",
+    backgroundColor: theme.colors.hero,
   },
   sheetDismissArea: {
     flex: 1,
@@ -1232,10 +1094,11 @@ const styles = StyleSheet.create({
   commandSheet: {
     maxHeight: "86%",
     gap: theme.spacing.md,
-    borderTopLeftRadius: theme.radius.md,
-    borderTopRightRadius: theme.radius.md,
+    borderTopLeftRadius: theme.radius.xl,
+    borderTopRightRadius: theme.radius.xl,
     backgroundColor: theme.colors.background,
     padding: theme.spacing.lg,
+    ...theme.shadows.lg,
   },
   sheetGrabber: {
     alignSelf: "center",
@@ -1267,16 +1130,6 @@ const styles = StyleSheet.create({
   },
   sheetCloseButton: {
     minHeight: 38,
-    alignItems: "center",
-    justifyContent: "center",
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.surfaceAlt,
-    paddingHorizontal: theme.spacing.md,
-  },
-  sheetCloseText: {
-    color: theme.colors.text,
-    fontSize: 13,
-    fontWeight: "900",
   },
   sheetOrgRail: {
     gap: theme.spacing.sm,
@@ -1291,7 +1144,7 @@ const styles = StyleSheet.create({
   sheetOrgChip: {
     minHeight: 40,
     justifyContent: "center",
-    borderRadius: theme.radius.md,
+    borderRadius: theme.radius.full,
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
@@ -1319,18 +1172,5 @@ const styles = StyleSheet.create({
   },
   disabled: {
     opacity: 0.5,
-  },
-  emptyState: {
-    gap: theme.spacing.sm,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.radius.md,
-    backgroundColor: theme.colors.surfaceAlt,
-    padding: theme.spacing.lg,
-  },
-  emptyTitle: {
-    color: theme.colors.text,
-    fontSize: 19,
-    fontWeight: "800",
   },
 });
