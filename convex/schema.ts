@@ -171,7 +171,11 @@ export default defineSchema({
     .index("by_org_eventType", ["orgId", "eventType"])
     .index("by_org_source", ["orgId", "sourceType", "sourceId"])
     .index("by_org_idempotency", ["orgId", "idempotencyKey"])
-    .index("by_org_event_source_version", ["orgId", "eventType", "sourceType", "sourceId", "eventVersion"]),
+    .index("by_org_event_source_version", ["orgId", "eventType", "sourceType", "sourceId", "eventVersion"])
+    // Lets a report load one event type for just its own window instead of the
+    // org's whole history — the reversals the operational P&L needs are only
+    // ever the ones dated inside the window being reported.
+    .index("by_org_eventType_date", ["orgId", "eventType", "accountingDate"]),
 
   // Durable outbox for accounting events that could not post at the time of the
   // domain operation (no chart of accounts or no open period). Instead of
@@ -1131,13 +1135,27 @@ export default defineSchema({
       v.union(v.literal("CAPITALIZED_INVENTORY"), v.literal("PERIOD_EXPENSE"))
     ),
     capitalizedAmount: v.optional(v.number()),
+    // Accounting date of the offsetting reversal entry, set by
+    // expenses.reverseExpense to the same instant it hands reverseAccountingEvent
+    // as reversalDate. reverseExpense also soft-deletes the row, so this is what
+    // lets the operational P&L tell "reversed" (really posted, really expensed in
+    // its own month, credited back in a later one) apart from "deleted before it
+    // ever posted" (no GL footprint, correctly invisible) — without it, filtering
+    // isDeleted silently erased posted history from the report while the ledger
+    // kept it. Absent on rows reversed before this field existed until
+    // backfillExpenseReversedAt runs.
+    reversedAt: v.optional(v.number()),
     isDeleted: v.optional(v.boolean()),
     deletedAt: v.optional(v.number()),
     deletedBy: v.optional(v.string()),
   })
     .index("by_org", ["orgId"])
     .index("by_org_vehicle", ["orgId", "vehicleId"])
-    .index("by_org_date", ["orgId", "date"]),
+    .index("by_org_date", ["orgId", "date"])
+    // Finds expenses whose *reversal* lands in a reporting window even though
+    // the expense itself is dated long before it — a date-range scan over
+    // `by_org_date` would never reach them.
+    .index("by_org_reversedAt", ["orgId", "reversedAt"]),
 
   tasks: defineTable({
     orgId: v.id("organizations"),
