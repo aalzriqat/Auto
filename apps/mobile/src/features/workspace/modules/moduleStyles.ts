@@ -80,7 +80,7 @@ export const styles = StyleSheet.create({
     paddingHorizontal: theme.spacing.md,
   },
   moduleSwitchChipSelected: {
-    borderColor: "#c7d2fe",
+    borderColor: theme.colors.primary,
     backgroundColor: theme.colors.primarySoft,
   },
   moduleSwitchChipContent: {
@@ -712,7 +712,7 @@ export const styles = StyleSheet.create({
     fontWeight: "800",
   },
   messageMetaMine: {
-    color: "#ccfbf1",
+    color: theme.colors.primarySoft,
   },
   typingText: {
     color: theme.colors.mutedText,

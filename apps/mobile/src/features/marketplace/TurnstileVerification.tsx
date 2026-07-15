@@ -195,7 +195,7 @@ const styles = StyleSheet.create({
   },
   notice: {
     borderRadius: theme.radius.sm,
-    backgroundColor: "#fef3c7",
+    backgroundColor: theme.colors.warningSoft,
     padding: theme.spacing.md,
   },
   noticeText: {
