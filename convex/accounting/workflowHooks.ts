@@ -1123,6 +1123,7 @@ export async function hookPrepaidExpenseRefunded(
     scheduleId: Id<"prepaidExpenseSchedules">;
     correctionId: Id<"prepaidScheduleCorrections">;
     amountMinor: number;
+    taxMinor?: number;
     currency: string;
     paymentMethod?: string;
     actorId: Id<"users">;
@@ -1131,6 +1132,9 @@ export async function hookPrepaidExpenseRefunded(
 ) {
   if (await isChartInitialized(ctx, args.orgId)) {
     await ensurePrepaidExpensesAccount(ctx, args.orgId, args.actorId);
+  }
+  if (args.taxMinor && args.taxMinor > 0) {
+    await ensureVatReceivableAccountIfChartReady(ctx, args.orgId, args.actorId);
   }
   await postDomainEvent(ctx, {
     orgId: args.orgId,
@@ -1144,6 +1148,7 @@ export async function hookPrepaidExpenseRefunded(
     payload: {
       scheduleId: args.scheduleId.toString(),
       amountMinor: args.amountMinor,
+      taxMinor: args.taxMinor,
       currency: args.currency,
       paymentMethod: args.paymentMethod,
     },

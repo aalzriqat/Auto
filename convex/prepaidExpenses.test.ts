@@ -748,6 +748,105 @@ describe("Phase 2 — correctSchedule term cap and idempotency", () => {
   });
 });
 
+describe("Phase 4 — VAT-aware refunds", () => {
+  test("a refund with a VAT portion posts a balanced 3-line journal: cash debit gross, Prepaid Expenses credit net, VAT_RECEIVABLE credit tax", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("vat-refund");
+    await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Prepaid rent w/ VAT", amount: 1200, taxAmount: 200, date: Date.UTC(2026, 0, 1),
+      category: "RENT", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 10,
+    });
+    const schedule = await t.run((ctx) => ctx.db.query("prepaidExpenseSchedules").first());
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    const cashBefore = await accountNetMinor(t, orgId, "CASH_ON_HAND");
+    const prepaidBefore = await accountNetMinor(t, orgId, "PREPAID_EXPENSES");
+    const vatBefore = await accountNetMinor(t, orgId, "VAT_RECEIVABLE");
+
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, refundMinor: 300_000, refundTaxMinor: 60_000,
+      refundPaymentMethod: "CASH", reference: "CN-1001", reason: "Early cancellation, partial refund",
+    });
+
+    expect(await accountNetMinor(t, orgId, "CASH_ON_HAND")).toBe(cashBefore + 360_000); // net + tax received
+    expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(prepaidBefore - 300_000); // net released from the asset
+    expect(await accountNetMinor(t, orgId, "VAT_RECEIVABLE")).toBe(vatBefore - 60_000); // VAT reclaimed
+
+    const corrections = await t.run((ctx) =>
+      ctx.db.query("prepaidScheduleCorrections").withIndex("by_schedule", (q) => q.eq("scheduleId", schedule!._id)).collect()
+    );
+    expect(corrections[0].refundTaxMinor).toBe(60_000);
+    expect(corrections[0].reference).toBe("CN-1001");
+  });
+
+  test("the VAT refund cap is enforced against the expense's original taxAmount, net of prior VAT refunds", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("vat-refund-cap");
+    await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Prepaid rent w/ VAT", amount: 1200, taxAmount: 200, date: Date.UTC(2026, 0, 1),
+      category: "RENT", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 10,
+    });
+    const schedule = await t.run((ctx) => ctx.db.query("prepaidExpenseSchedules").first());
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    // First correction uses up 150 of the 200 total input VAT on this expense.
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, refundMinor: 100_000, refundTaxMinor: 150_000,
+      refundPaymentMethod: "CASH", reason: "First partial refund",
+    });
+
+    // A second correction asking for more than the remaining 50 is rejected.
+    await expect(
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId, scheduleId: schedule!._id, refundMinor: 50_000, refundTaxMinor: 60_000,
+        refundPaymentMethod: "CASH", reason: "Second partial refund",
+      })
+    ).rejects.toThrow(/cannot exceed the remaining refundable input VAT/i);
+
+    // Exactly the remaining 50 succeeds.
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, refundMinor: 50_000, refundTaxMinor: 50_000,
+      refundPaymentMethod: "CASH", reason: "Second partial refund, capped",
+    });
+
+    const remainingRefundableTaxMinor = await asOwner.query(api.prepaidExpenses.getRemainingRefundableTaxMinor, {
+      orgId, scheduleId: schedule!._id,
+    });
+    expect(remainingRefundableTaxMinor).toBe(0);
+  });
+
+  test("a VAT refund without an accompanying net refund is rejected", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("vat-refund-orphan");
+    await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Prepaid rent w/ VAT", amount: 1200, taxAmount: 200, date: Date.UTC(2026, 0, 1),
+      category: "RENT", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 10,
+    });
+    const schedule = await t.run((ctx) => ctx.db.query("prepaidExpenseSchedules").first());
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    await expect(
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId, scheduleId: schedule!._id, refundTaxMinor: 50_000, reason: "VAT only, no net",
+      })
+    ).rejects.toThrow(/requires a net refund amount/i);
+  });
+
+  test("a refund with no VAT posts the same two-line journal as before (byte-identical zero-tax path)", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("refund-no-vat");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, refundMinor: 300_000, refundPaymentMethod: "CASH", reason: "Refund, no VAT involved",
+    });
+
+    expect(await accountNetMinor(t, orgId, "VAT_RECEIVABLE")).toBe(0);
+    expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(1_200_000 - 100_000 - 300_000);
+  });
+});
+
 describe("retryAmortizationFailure — doesn't report success when still blocked", () => {
   test("a retry that can't clear the underlying blocker throws and leaves the failure unresolved", async () => {
     const { t, orgId, asOwner } = await seedDealer("retry-blocked");

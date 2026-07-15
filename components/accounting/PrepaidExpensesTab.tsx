@@ -467,12 +467,17 @@ function CorrectScheduleDialog({
   // minted per open — a retry within one open (e.g. a network blip) replays
   // idempotently, and a deliberate second open gets its own key.
   const idempotencyKey = useMemo(() => crypto.randomUUID(), []);
+  const remainingRefundableTaxMinor = useQuery(api.prepaidExpenses.getRemainingRefundableTaxMinor, {
+    orgId, scheduleId: schedule._id,
+  });
 
   const form = useForm<PrepaidCorrectionFormValues>({
     resolver: zodResolver(prepaidCorrectionSchema),
     defaultValues: {
       refundAmount: 0,
+      refundTaxAmount: 0,
       refundPaymentMethod: "BANK_TRANSFER",
+      reference: "",
       writeOffAmount: 0,
       changeTerm: false,
       newTermMonths: schedule.termMonths,
@@ -488,7 +493,9 @@ function CorrectScheduleDialog({
         orgId,
         scheduleId: schedule._id,
         refundMinor: Math.round(values.refundAmount * factor),
+        refundTaxMinor: values.refundAmount > 0 ? Math.round(values.refundTaxAmount * factor) : undefined,
         refundPaymentMethod: values.refundAmount > 0 ? values.refundPaymentMethod : undefined,
+        reference: values.refundAmount > 0 ? values.reference?.trim() || undefined : undefined,
         writeOffMinor: Math.round(values.writeOffAmount * factor),
         newTermMonths: values.changeTerm ? values.newTermMonths : undefined,
         reason: values.reason.trim(),
@@ -567,6 +574,45 @@ function CorrectScheduleDialog({
                   </FormItem>
                 )}
               />
+            )}
+
+            {refundAmount > 0 && (
+              <div className="grid grid-cols-2 gap-3">
+                <FormField
+                  control={form.control}
+                  name="refundTaxAmount"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("RefundVatLabel" as any)}</FormLabel>
+                      <FormControl>
+                        <Input type="number" min={0} step={1 / factor} {...field} />
+                      </FormControl>
+                      {remainingRefundableTaxMinor !== undefined && (
+                        <p className="text-xs text-slate-500">
+                          {t("RefundVatCapHint" as any).replace(
+                            "{amount}",
+                            formatCurrency(remainingRefundableTaxMinor / factor, scale)
+                          )}
+                        </p>
+                      )}
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+                <FormField
+                  control={form.control}
+                  name="reference"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>{t("RefundReferenceLabel" as any)}</FormLabel>
+                      <FormControl>
+                        <Input {...field} />
+                      </FormControl>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
+              </div>
             )}
 
             <FormField
@@ -684,6 +730,14 @@ function ScheduleCorrectionsDialog({
                 {correction.refundMinor > 0 && (
                   <p>
                     {t("RefundAmountLabel" as any)}: {formatCurrency(correction.refundMinor / factor, scale)}
+                    {!!correction.refundTaxMinor && correction.refundTaxMinor > 0 && (
+                      <> ({t("RefundVatLabel" as any)}: {formatCurrency(correction.refundTaxMinor / factor, scale)})</>
+                    )}
+                  </p>
+                )}
+                {correction.reference && (
+                  <p className="text-slate-500">
+                    {t("RefundReferenceLabel" as any)}: {correction.reference}
                   </p>
                 )}
                 {correction.writeOffMinor > 0 && (

@@ -558,7 +558,8 @@ export function rulePrepaidExpenseAmortized(p: PrepaidExpenseAmortizedPayload): 
 
 export interface PrepaidExpenseRefundedPayload {
   scheduleId: string;
-  amountMinor: number;
+  amountMinor: number; // net (ex-VAT) refund, released from the Prepaid Expenses asset
+  taxMinor?: number; // VAT portion of the refund, reclaimed from VAT_RECEIVABLE
   currency: string;
   paymentMethod?: string;
 }
@@ -566,14 +567,23 @@ export interface PrepaidExpenseRefundedPayload {
 /**
  * A vendor refunds the unused (not-yet-recognized) portion of a prepaid
  * expense in cash/bank — the reverse cash-flow of ruleExpensePosted's prepaid
- * line, for exactly the unused remainder rather than the whole asset.
+ * line, for exactly the unused remainder rather than the whole asset. When the
+ * refund includes VAT (the vendor returns the input tax too, not just the net
+ * cost), a third line reclaims it from VAT_RECEIVABLE — same net/tax split
+ * ruleExpensePosted uses on the way in, mirrored on the way out. Byte-identical
+ * two-line output for the tax-free case (taxMinor 0/undefined).
  */
 export function rulePrepaidExpenseRefunded(p: PrepaidExpenseRefundedPayload): RuleResult {
+  const taxMinor = p.taxMinor ?? 0;
+  const lines: LineSpec[] = [
+    line(cashAccountKey(p.paymentMethod), p.amountMinor + taxMinor, 0, "Prepaid expense refund received"),
+    line(SYSTEM_KEYS.PREPAID_EXPENSES, 0, p.amountMinor, "Prepaid expense asset released (refund)"),
+  ];
+  if (taxMinor > 0) {
+    lines.push(line(SYSTEM_KEYS.VAT_RECEIVABLE, 0, taxMinor, "Input VAT reclaimed on refund"));
+  }
   return {
-    lines: [
-      line(cashAccountKey(p.paymentMethod), p.amountMinor, 0, "Prepaid expense refund received"),
-      line(SYSTEM_KEYS.PREPAID_EXPENSES, 0, p.amountMinor, "Prepaid expense asset released (refund)"),
-    ],
+    lines,
     memo: "Prepaid expense partially refunded",
     category: "SYSTEM",
   };

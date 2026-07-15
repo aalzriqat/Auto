@@ -119,6 +119,9 @@ export const expensesEn = {
   RedriveSchedule: "Redrive queued postings",
   PrepaidRedriveSuccess: "Redrive complete: {posted} posted, {failed} still failing.",
   PrepaidRedriveNothingToDo: "Nothing queued for this schedule.",
+  RefundVatLabel: "VAT portion",
+  RefundVatCapHint: "Up to {amount} of input VAT remains refundable on this expense.",
+  RefundReferenceLabel: "Credit note / reference",
 };
 
 export const expensesAr = {
@@ -242,4 +245,7 @@ export const expensesAr = {
   RedriveSchedule: "إعادة محاولة الترحيلات المعلقة",
   PrepaidRedriveSuccess: "اكتملت إعادة المحاولة: تم ترحيل {posted}، وما زال {failed} فاشلاً.",
   PrepaidRedriveNothingToDo: "لا توجد عناصر معلقة لهذا الجدول.",
+  RefundVatLabel: "حصة ضريبة القيمة المضافة",
+  RefundVatCapHint: "يتبقى حتى {amount} من ضريبة القيمة المضافة القابلة للاسترداد على هذا المصروف.",
+  RefundReferenceLabel: "إشعار دائن / مرجع",
 };

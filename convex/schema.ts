@@ -1042,11 +1042,13 @@ export default defineSchema({
     orgId: v.id("organizations"),
     scheduleId: v.id("prepaidExpenseSchedules"),
     refundMinor: v.number(), // cash/bank refund received for the unused portion, 0 if none
+    refundTaxMinor: v.optional(v.number()), // VAT portion of the refund, 0/undefined if none
     refundPaymentMethod: v.optional(paymentMethodValidator),
     writeOffMinor: v.number(), // non-refundable unused portion expensed immediately, 0 if none
     previousTermMonths: v.number(),
     newTermMonths: v.number(),
     reason: v.string(),
+    reference: v.optional(v.string()), // vendor credit-note / reference number, refund corrections only
     actorId: v.id("users"),
     createdAt: v.number(),
   })

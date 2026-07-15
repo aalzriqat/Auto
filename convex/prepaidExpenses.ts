@@ -26,7 +26,7 @@
  * the accountant-facing status.
  */
 import { v, ConvexError } from "convex/values";
-import { internalMutation, internalQuery, query, mutation, action, MutationCtx } from "./_generated/server";
+import { internalMutation, internalQuery, query, mutation, action, MutationCtx, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Id, Doc } from "./_generated/dataModel";
 import {
@@ -48,6 +48,7 @@ import { notifyOwner } from "./utils/notifications";
 import { paymentMethodValidator } from "./utils/paymentMethods";
 import { runWithIdempotency } from "./utils/idempotency";
 import { drainEntries } from "./accountingOutbox";
+import { toMinorUnits } from "./utils/money";
 
 /** UTC "YYYY-MM" for a timestamp — the month recognition of that expense begins. */
 export function toYearMonth(timestamp: number): string {
@@ -559,6 +560,44 @@ export const redriveScheduleEvents = mutation({
 // ─── Corrections: partial refund / non-refundable write-off / term change ────
 
 /**
+ * How much input VAT is still eligible to be refunded against this schedule:
+ * the source expense's own original taxAmount, minus whatever VAT this
+ * schedule's corrections have already refunded. Tax isn't part of the
+ * prepaid asset (schedule totals are net by design), so this is tracked
+ * against the expense's taxAmount rather than the schedule's remaining
+ * balance. Shared by correctSchedule's own validation and the read-only
+ * query the correction dialog uses to show the cap as helper text.
+ */
+async function remainingRefundableTaxMinorForSchedule(
+  ctx: QueryCtx | MutationCtx,
+  schedule: Doc<"prepaidExpenseSchedules">
+): Promise<number> {
+  const expense = await ctx.db.get(schedule.expenseId);
+  const originalTaxMinor = expense?.taxAmount ? toMinorUnits(expense.taxAmount, schedule.currency) : 0;
+  const priorCorrections = await ctx.db
+    .query("prepaidScheduleCorrections")
+    .withIndex("by_schedule", (q) => q.eq("scheduleId", schedule._id))
+    .collect();
+  const alreadyRefundedTaxMinor = priorCorrections.reduce((sum, c) => sum + (c.refundTaxMinor ?? 0), 0);
+  return Math.max(originalTaxMinor - alreadyRefundedTaxMinor, 0);
+}
+
+/** Read-only counterpart of remainingRefundableTaxMinorForSchedule, for the correction dialog's helper text. */
+export const getRemainingRefundableTaxMinor = query({
+  args: { orgId: v.id("organizations"), scheduleId: v.id("prepaidExpenseSchedules") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+
+    const schedule = await ctx.db.get(args.scheduleId);
+    if (!schedule || schedule.orgId !== args.orgId) {
+      throw new ConvexError("Prepaid schedule not found in this organization.");
+    }
+    return remainingRefundableTaxMinorForSchedule(ctx, schedule);
+  },
+});
+
+/**
  * The only way to adjust an ACTIVE schedule short of a full expense reversal.
  * `refundMinor` (cash/bank refund for the unused portion) and `writeOffMinor`
  * (non-refundable unused portion expensed immediately) can be combined — e.g.
@@ -574,10 +613,12 @@ export const correctSchedule = mutation({
     orgId: v.id("organizations"),
     scheduleId: v.id("prepaidExpenseSchedules"),
     refundMinor: v.optional(v.number()),
+    refundTaxMinor: v.optional(v.number()),
     refundPaymentMethod: v.optional(paymentMethodValidator),
     writeOffMinor: v.optional(v.number()),
     newTermMonths: v.optional(v.number()),
     reason: v.string(),
+    reference: v.optional(v.string()), // vendor credit-note / reference number, refund only
     // A double-click, dialog re-submit, or client retry must not create two
     // corrections (two refunds, two write-offs) for what the accountant only
     // intended once — same idempotency discipline expenses.create already
@@ -591,8 +632,10 @@ export const correctSchedule = mutation({
 
     const reason = args.reason.trim();
     if (!reason) throw new ConvexError("A reason is required for a schedule correction.");
+    const reference = args.reference?.trim() || undefined;
 
     const refundMinor = Math.round(args.refundMinor ?? 0);
+    const refundTaxMinor = Math.round(args.refundTaxMinor ?? 0);
     const writeOffMinor = Math.round(args.writeOffMinor ?? 0);
 
     return await runWithIdempotency(
@@ -605,9 +648,11 @@ export const correctSchedule = mutation({
         fingerprint: JSON.stringify({
           scheduleId: args.scheduleId,
           refundMinor,
+          refundTaxMinor,
           writeOffMinor,
           newTermMonths: args.newTermMonths ?? null,
           reason,
+          reference: reference ?? null,
         }),
       },
       async () => {
@@ -619,11 +664,22 @@ export const correctSchedule = mutation({
           throw new ConvexError(`Cannot correct a schedule with status "${schedule.status}".`);
         }
 
-        if (refundMinor < 0 || writeOffMinor < 0) {
-          throw new ConvexError("Refund and write-off amounts cannot be negative.");
+        if (refundMinor < 0 || writeOffMinor < 0 || refundTaxMinor < 0) {
+          throw new ConvexError("Refund, VAT, and write-off amounts cannot be negative.");
         }
         if (refundMinor > 0 && !args.refundPaymentMethod) {
           throw new ConvexError("A payment method is required to record a refund.");
+        }
+        if (refundTaxMinor > 0 && refundMinor <= 0) {
+          throw new ConvexError("A VAT refund requires a net refund amount alongside it.");
+        }
+        if (refundTaxMinor > 0) {
+          const remainingRefundableTaxMinor = await remainingRefundableTaxMinorForSchedule(ctx, schedule);
+          if (refundTaxMinor > remainingRefundableTaxMinor) {
+            throw new ConvexError(
+              `VAT refund (${refundTaxMinor}) cannot exceed the remaining refundable input VAT (${remainingRefundableTaxMinor}).`
+            );
+          }
         }
 
         const newTermMonths = args.newTermMonths ?? schedule.termMonths;
@@ -663,11 +719,13 @@ export const correctSchedule = mutation({
           orgId: args.orgId,
           scheduleId: args.scheduleId,
           refundMinor,
+          refundTaxMinor: refundMinor > 0 ? refundTaxMinor : undefined,
           refundPaymentMethod: refundMinor > 0 ? args.refundPaymentMethod : undefined,
           writeOffMinor,
           previousTermMonths: schedule.termMonths,
           newTermMonths,
           reason,
+          reference: refundMinor > 0 ? reference : undefined,
           actorId: user._id,
           createdAt: now,
         });
@@ -685,6 +743,7 @@ export const correctSchedule = mutation({
             scheduleId: args.scheduleId,
             correctionId,
             amountMinor: refundMinor,
+            taxMinor: refundTaxMinor > 0 ? refundTaxMinor : undefined,
             currency: schedule.currency,
             paymentMethod: args.refundPaymentMethod,
             actorId: user._id,
@@ -710,7 +769,7 @@ export const correctSchedule = mutation({
           actionType: "CORRECT_PREPAID_SCHEDULE",
           resourceType: "prepaidExpenseSchedules",
           resourceId: args.scheduleId.toString(),
-          description: `Corrected prepaid schedule: refund ${refundMinor}, write-off ${writeOffMinor}, term ${schedule.termMonths} -> ${newTermMonths}. Reason: ${reason}`,
+          description: `Corrected prepaid schedule: refund ${refundMinor}${refundTaxMinor > 0 ? ` (+${refundTaxMinor} VAT)` : ""}, write-off ${writeOffMinor}, term ${schedule.termMonths} -> ${newTermMonths}${reference ? `, ref ${reference}` : ""}. Reason: ${reason}`,
         });
 
         return correctionId;
