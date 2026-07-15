@@ -198,6 +198,77 @@ export interface MobileCustomer {
   source?: string;
   createdAt?: number;
   createdByName?: string | null;
+  employment?: {
+    employer: string;
+    title?: string;
+    salary: number;
+    hireDate?: number;
+  };
+  financials?: {
+    totalMonthlyDebt: number;
+    dbr?: number;
+  };
+}
+
+export interface MobileGuarantor {
+  _id: string;
+  firstName: string;
+  lastName: string;
+  nationalId: string;
+  phone: string;
+  relationship?: string;
+  income?: number;
+}
+
+export interface MobileCustomerRelationSale {
+  _id: string;
+  vehicleDesc: string;
+  status: MobileSaleStatus;
+  saleDate: number;
+  salePrice: number;
+  salespersonName: string;
+}
+
+export interface MobileCustomerRelationLead {
+  _id: string;
+  vehicleDesc: string;
+  stage: MobileLeadStage;
+  source: string;
+  assignedUserName: string;
+  notes?: string;
+}
+
+export interface MobileCustomerRelationTask {
+  _id: string;
+  title: string;
+  status: MobileTaskStatus;
+  dueDate: number;
+  assignedUserName: string;
+  description?: string;
+}
+
+export interface MobileCustomerRelationQuote {
+  _id: string;
+  vehicleDesc: string;
+  companyId?: string;
+  companyName: string;
+  status: MobileQuoteStatus;
+  vehiclePrice: number;
+  downPayment?: number;
+  termMonths?: number;
+  profitRateApplied?: number;
+  totalFinancedAmount?: number;
+  totalProfit?: number;
+  monthlyInstallment?: number;
+  createdAt: number;
+  createdByUserName: string;
+}
+
+export interface MobileCustomerRelations {
+  sales: MobileCustomerRelationSale[];
+  leads: MobileCustomerRelationLead[];
+  tasks: MobileCustomerRelationTask[];
+  quotes: MobileCustomerRelationQuote[];
 }
 
 export interface MobileLead {
@@ -1271,7 +1342,40 @@ type CustomerCreateArgs = OrgScopedArgs & {
 type CustomerUpdateArgs = Partial<Omit<CustomerCreateArgs, "orgId">> &
   OrgScopedArgs & {
     customerId: string;
+    employment?: {
+      employer: string;
+      title?: string;
+      salary: number;
+      hireDate?: number;
+    };
+    financials?: {
+      totalMonthlyDebt: number;
+      dbr?: number;
+    };
   };
+
+type CustomerScopedArgs = OrgScopedArgs & {
+  customerId: string;
+};
+
+type GuarantorCreateArgs = CustomerScopedArgs & {
+  firstName: string;
+  lastName: string;
+  nationalId: string;
+  phone: string;
+  relationship?: string;
+  income?: number;
+};
+
+type GuarantorUpdateArgs = OrgScopedArgs & {
+  guarantorId: string;
+  firstName?: string;
+  lastName?: string;
+  nationalId?: string;
+  phone?: string;
+  relationship?: string;
+  income?: number;
+};
 
 type VehicleCreateArgs = OrgScopedArgs & {
   vin?: string;
@@ -1722,10 +1826,26 @@ export const api = {
     list: makeFunctionReference<"query", CustomerListArgs, MobilePageResult<MobileCustomer>>(
       "customers:list",
     ),
+    get: makeFunctionReference<"query", CustomerScopedArgs, MobileCustomer | null>(
+      "customers:get",
+    ),
+    getRelations: makeFunctionReference<"query", CustomerScopedArgs, MobileCustomerRelations>(
+      "customers:getRelations",
+    ),
     create: makeFunctionReference<"mutation", CustomerCreateArgs, string>("customers:create"),
     update: makeFunctionReference<"mutation", CustomerUpdateArgs, null>("customers:update"),
     softDelete: makeFunctionReference<"mutation", OrgScopedArgs & { customerId: string }, null>(
       "customers:softDelete",
+    ),
+  },
+  guarantors: {
+    listByCustomer: makeFunctionReference<"query", CustomerScopedArgs, MobileGuarantor[]>(
+      "guarantors:listByCustomer",
+    ),
+    add: makeFunctionReference<"mutation", GuarantorCreateArgs, string>("guarantors:add"),
+    update: makeFunctionReference<"mutation", GuarantorUpdateArgs, null>("guarantors:update"),
+    remove: makeFunctionReference<"mutation", OrgScopedArgs & { guarantorId: string }, null>(
+      "guarantors:remove",
     ),
   },
   leads: {
@@ -2381,9 +2501,17 @@ export const api = {
   };
   customers: {
     list: FunctionReference<"query", "public", CustomerListArgs, MobilePageResult<MobileCustomer>>;
+    get: FunctionReference<"query", "public", CustomerScopedArgs, MobileCustomer | null>;
+    getRelations: FunctionReference<"query", "public", CustomerScopedArgs, MobileCustomerRelations>;
     create: FunctionReference<"mutation", "public", CustomerCreateArgs, string>;
     update: FunctionReference<"mutation", "public", CustomerUpdateArgs, null>;
     softDelete: FunctionReference<"mutation", "public", OrgScopedArgs & { customerId: string }, null>;
+  };
+  guarantors: {
+    listByCustomer: FunctionReference<"query", "public", CustomerScopedArgs, MobileGuarantor[]>;
+    add: FunctionReference<"mutation", "public", GuarantorCreateArgs, string>;
+    update: FunctionReference<"mutation", "public", GuarantorUpdateArgs, null>;
+    remove: FunctionReference<"mutation", "public", OrgScopedArgs & { guarantorId: string }, null>;
   };
   leads: {
     list: FunctionReference<"query", "public", LeadListArgs, MobilePageResult<MobileLead>>;

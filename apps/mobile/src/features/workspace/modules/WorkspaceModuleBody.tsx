@@ -59,7 +59,7 @@ function ModuleBody({
     case "vehicles":
       return <VehiclesModule orgId={org._id} permissions={myMembership.permissions} />;
     case "customers":
-      return <CustomersModule orgId={org._id} />;
+      return <CustomersModule orgId={org._id} permissions={myMembership.permissions} />;
     case "leads":
       return <LeadsModule orgId={org._id} />;
     case "messages":

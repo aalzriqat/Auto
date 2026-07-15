@@ -4,10 +4,11 @@ import { Alert, Text, View } from "react-native";
 import { api, type MobileCustomer } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { compactInitials } from "../nativeModules";
-import { PAGE_SIZE, compactNumber, maybeText, useGenericError, SearchInput, PrimaryButton, FormField, FormModal, RecordCard, MetricCard, ModuleList, DetailPill, SummaryRow, SummaryPanel } from "./moduleShared";
+import { PAGE_SIZE, compactNumber, maybeText, useGenericError, SearchInput, PrimaryButton, FormField, FormModal, RecordCard, MetricCard, ModuleList, DetailPill } from "./moduleShared";
 import { styles } from "./moduleStyles";
+import { CustomerDetailSheet } from "./customerDetail";
 
-export function CustomersModule({ orgId }: { orgId: string }) {
+export function CustomersModule({ orgId, permissions }: { orgId: string; permissions: readonly string[] }) {
   const { locale } = useLocale();
   const reportError = useGenericError();
   const createCustomer = useMutation(api.customers.create);
@@ -108,7 +109,7 @@ export function CustomersModule({ orgId }: { orgId: string }) {
     }
   }
 
-  async function remove(customer: MobileCustomer) {
+  async function remove(customer: MobileCustomer, onSuccess?: () => void) {
     Alert.alert(
       locale === "ar" ? "أرشفة العميل؟" : "Archive customer?",
       `${customer.firstName} ${customer.lastName}`,
@@ -120,6 +121,7 @@ export function CustomersModule({ orgId }: { orgId: string }) {
           onPress: async () => {
             try {
               await deleteCustomer({ orgId, customerId: customer._id });
+              onSuccess?.();
             } catch (error) {
               reportError("Mobile customer archive failed", error);
             }
@@ -195,31 +197,14 @@ export function CustomersModule({ orgId }: { orgId: string }) {
         <FormField multiline label={locale === "ar" ? "العنوان" : "Address"} value={form.address} onChangeText={(address) => setForm((prev) => ({ ...prev, address }))} />
         <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ" : "Save")} onPress={save} />
       </FormModal>
-      <FormModal
-        title={detailCustomer ? `${detailCustomer.firstName} ${detailCustomer.lastName}` : ""}
-        visible={Boolean(detailCustomer)}
+      <CustomerDetailSheet
+        orgId={orgId}
+        permissions={permissions}
+        customer={detailCustomer}
+        onArchive={(target) => remove(target, () => setDetailCustomer(null))}
         onClose={() => setDetailCustomer(null)}
-      >
-        {detailCustomer ? (
-          <>
-            <SummaryPanel
-              title={locale === "ar" ? "ملف العميل" : "Customer profile"}
-              subtitle={locale === "ar" ? "معلومات تواصل كاملة قبل إنشاء فرصة أو مهمة." : "Contact context before creating a lead or task."}
-            >
-              <SummaryRow label={locale === "ar" ? "الهاتف" : "Phone"} value={detailCustomer.phone || "-"} />
-              <SummaryRow label="WhatsApp" value={detailCustomer.whatsapp || "-"} />
-              <SummaryRow label={locale === "ar" ? "البريد" : "Email"} value={detailCustomer.email || "-"} />
-              <SummaryRow label={locale === "ar" ? "الرقم الوطني" : "National ID"} value={detailCustomer.nationalId || "-"} />
-              <SummaryRow label={locale === "ar" ? "العنوان" : "Address"} value={detailCustomer.address || "-"} />
-              <SummaryRow label={locale === "ar" ? "المصدر" : "Source"} value={detailCustomer.source || "-"} />
-            </SummaryPanel>
-            <View style={styles.cardActions}>
-              <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} onPress={() => openEdit(detailCustomer)} />
-              <PrimaryButton label={locale === "ar" ? "أرشفة" : "Archive"} tone="danger" onPress={() => remove(detailCustomer)} />
-            </View>
-          </>
-        ) : null}
-      </FormModal>
+        onEdit={(target) => openEdit(target)}
+      />
     </>
   );
 }
