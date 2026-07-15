@@ -865,5 +865,45 @@ export const styles = StyleSheet.create({
     borderTopColor: theme.colors.border,
     paddingTop: theme.spacing.md,
   },
+  underlineTabBar: {
+    flexGrow: 0,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+  },
+  underlineTabBarContent: {
+    flexDirection: "row",
+    gap: theme.spacing.lg,
+    paddingHorizontal: theme.spacing.lg,
+  },
+  underlineTab: {
+    paddingVertical: theme.spacing.md,
+    borderBottomWidth: 2,
+    borderBottomColor: "transparent",
+  },
+  underlineTabSelected: {
+    borderBottomColor: theme.colors.primary,
+  },
+  underlineTabText: {
+    color: theme.colors.mutedText,
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  underlineTabTextSelected: {
+    color: theme.colors.primary,
+  },
+  pushedScreenContent: {
+    gap: theme.spacing.lg,
+    padding: theme.spacing.lg,
+  },
+  rowChevron: {
+    marginStart: theme.spacing.xs,
+  },
+  overflowButton: {
+    width: 36,
+    height: 36,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.radius.full,
+  },
 });
 

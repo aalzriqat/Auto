@@ -366,6 +366,52 @@ export function ModuleHeader({
   );
 }
 
+export function PushedScreenHeader({
+  onOverflow,
+  subtitle,
+  title,
+}: {
+  onOverflow?: () => void;
+  subtitle?: string;
+  title: string;
+}) {
+  const router = useRouter();
+  const { locale, t, textDirection } = useLocale();
+
+  return (
+    <View style={[styles.header, { direction: textDirection }]}>
+      <Pressable
+        accessibilityLabel={t("back")}
+        accessibilityRole="button"
+        style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
+        onPress={() => router.back()}
+      >
+        <Icon color="text" name="back" size={22} />
+      </Pressable>
+      <View style={styles.headerText}>
+        <Text numberOfLines={1} style={styles.headerTitle}>
+          {title}
+        </Text>
+        {subtitle ? (
+          <Text numberOfLines={1} style={styles.headerSubtitle}>
+            {subtitle}
+          </Text>
+        ) : null}
+      </View>
+      {onOverflow ? (
+        <Pressable
+          accessibilityLabel={locale === "ar" ? "المزيد" : "More options"}
+          accessibilityRole="button"
+          style={({ pressed }) => [styles.overflowButton, pressed && styles.pressed]}
+          onPress={onOverflow}
+        >
+          <Icon color="text" name="more" size={22} />
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
 export function ModuleSwitcherBar({
   activeModuleId,
   orgId,
@@ -545,6 +591,44 @@ export function SegmentedControl<T extends string>({
         />
       ))}
     </View>
+  );
+}
+
+export function UnderlineTabBar<T extends string>({
+  onChange,
+  tabs,
+  value,
+}: {
+  onChange: (value: T) => void;
+  tabs: ReadonlyArray<{ label: string; value: T }>;
+  value: T;
+}) {
+  const { textDirection } = useLocale();
+
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      style={styles.underlineTabBar}
+      contentContainerStyle={[styles.underlineTabBarContent, { direction: textDirection }]}
+    >
+      {tabs.map((tab) => {
+        const selected = tab.value === value;
+        return (
+          <Pressable
+            key={tab.value}
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
+            style={[styles.underlineTab, selected && styles.underlineTabSelected]}
+            onPress={() => onChange(tab.value)}
+          >
+            <Text style={[styles.underlineTabText, selected && styles.underlineTabTextSelected]}>
+              {tab.label}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </ScrollView>
   );
 }
 

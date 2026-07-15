@@ -12,6 +12,7 @@ import MarketplaceRoute from "../../app/(app)/marketplace";
 import OrgDashboardRoute from "../../app/(app)/org/[orgId]";
 import DealerMarketplaceRoute from "../../app/(app)/org/[orgId]/marketplace";
 import WorkspaceModuleRoute from "../../app/(app)/org/[orgId]/module/[moduleId]";
+import CustomerDetailRoute from "../../app/(app)/org/[orgId]/customers/[customerId]";
 import OrgWorkspaceTabsRoute from "../../app/(app)/org/[orgId]/(tabs)/_layout";
 import OrgWorkspaceAdminRoute from "../../app/(app)/org/[orgId]/(tabs)/admin";
 import OrgWorkspaceFinanceRoute from "../../app/(app)/org/[orgId]/(tabs)/finance";
@@ -138,6 +139,16 @@ jest.mock("../features/workspace/WorkspaceModuleScreen", () => {
   return {
     WorkspaceModuleScreen: ({ moduleId, orgId }: { moduleId: string | null; orgId: string | null }) =>
       React.createElement(Text, { testID: "workspace-module-screen" }, `${orgId ?? "null"}:${moduleId ?? "null"}`),
+  };
+});
+
+jest.mock("../features/workspace/CustomerDetailScreen", () => {
+  const React = jest.requireActual<typeof import("react")>("react");
+  const { Text } = jest.requireActual<typeof import("react-native")>("react-native");
+
+  return {
+    CustomerDetailScreen: ({ customerId, orgId }: { customerId: string | null; orgId: string | null }) =>
+      React.createElement(Text, { testID: "customer-detail-screen" }, `${orgId ?? "null"}:${customerId ?? "null"}`),
   };
 });
 
@@ -292,6 +303,23 @@ describe("mobile Expo routes", () => {
 
     mockParams = {};
     expect((await render(<WorkspaceModuleRoute />)).getByTestId("workspace-module-screen").props.children).toBe(
+      "null:null",
+    );
+  });
+
+  test("normalizes customer detail route params", async () => {
+    mockParams = { customerId: ["customer-1"], orgId: "org-1" };
+    expect((await render(<CustomerDetailRoute />)).getByTestId("customer-detail-screen").props.children).toBe(
+      "org-1:customer-1",
+    );
+
+    mockParams = { customerId: [], orgId: [] };
+    expect((await render(<CustomerDetailRoute />)).getByTestId("customer-detail-screen").props.children).toBe(
+      "null:null",
+    );
+
+    mockParams = {};
+    expect((await render(<CustomerDetailRoute />)).getByTestId("customer-detail-screen").props.children).toBe(
       "null:null",
     );
   });
