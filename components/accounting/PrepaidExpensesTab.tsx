@@ -8,8 +8,7 @@ import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
-import { useCurrency } from "@/hooks/useCurrency";
-import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
+import { useCurrencyFormatterInCurrency } from "@/hooks/useCurrencyFormatter";
 import { usePermissions } from "@/hooks/use-permissions";
 import { PERMISSIONS } from "@/convex/utils/permissions";
 import { toast } from "@/components/ui/sonner";
@@ -41,9 +40,15 @@ import {
   errorMessage,
   scaleForCurrency,
   useAccountingSubmit,
-  type CurrencyFormatter,
 } from "./AccountingTabShared";
 import { prepaidCorrectionSchema, type PrepaidCorrectionFormValues } from "./prepaidCorrection.schema";
+
+// Each prepaid schedule carries its own currency (set at creation, independent
+// of the org's CURRENT currency — see hooks/useCurrencyFormatter.ts), so every
+// formatter in this file takes the amount's currency explicitly rather than
+// defaulting to the org's, and factor/scale are always derived from the
+// SCHEDULE's own currency, never a single tab-wide one.
+type CurrencyFormatterInCurrency = (amount: number, currency: string, fractionDigits?: number) => string;
 
 type ScheduleRow = {
   _id: Id<"prepaidExpenseSchedules">;
@@ -103,18 +108,16 @@ function ScheduleStatusPopover({
   schedule,
   orgId,
   canManage,
-  factor,
-  scale,
   formatCurrency,
 }: Readonly<{
   schedule: ScheduleRow;
   orgId: Id<"organizations">;
   canManage: boolean;
-  factor: number;
-  scale: number;
-  formatCurrency: CurrencyFormatter;
+  formatCurrency: CurrencyFormatterInCurrency;
 }>) {
   const { t } = useLanguage();
+  const scale = scaleForCurrency(schedule.currency);
+  const factor = Math.pow(10, scale);
   const [open, setOpen] = useState(false);
   const failures = useQuery(
     api.prepaidExpenses.listOpenFailures,
@@ -141,7 +144,7 @@ function ScheduleStatusPopover({
     });
   }
 
-  const fmt = (minor: number) => formatCurrency(minor / factor, scale);
+  const fmt = (minor: number) => formatCurrency(minor / factor, schedule.currency, scale);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -267,8 +270,7 @@ export function PrepaidExpensesTab() {
   const [correctSchedule, setCorrectSchedule] = useState<ScheduleRow | null>(null);
   const [historySchedule, setHistorySchedule] = useState<ScheduleRow | null>(null);
   const [runNowResult, setRunNowResult] = useState<RunAmortizationNowResult | null>(null);
-  const { code: currencyCode } = useCurrency();
-  const formatCurrency = useCurrencyFormatter();
+  const formatCurrency = useCurrencyFormatterInCurrency();
 
   async function handleRunNow() {
     if (!activeOrgId) return;
@@ -299,9 +301,6 @@ export function PrepaidExpensesTab() {
       setRetryingId(null);
     }
   }
-
-  const scale = scaleForCurrency(currencyCode);
-  const factor = Math.pow(10, scale);
 
   if (!activeOrgId || schedules === undefined) {
     return <LoadingAccountingState label={t("LoadingPrepaidSchedules" as any)} />;
@@ -339,7 +338,10 @@ export function PrepaidExpensesTab() {
             {schedules.length === 0 ? (
               <AccountingEmptyRow colSpan={7} label={t("NoPrepaidSchedulesFound" as any)} />
             ) : (
-              schedules.map((schedule) => (
+              schedules.map((schedule) => {
+                const scale = scaleForCurrency(schedule.currency);
+                const factor = Math.pow(10, scale);
+                return (
                 <TableRow key={schedule._id}>
                   <TableCell className="font-medium">
                     {schedule.expenseTitle ?? t("GeneralExpense" as any)}
@@ -351,13 +353,13 @@ export function PrepaidExpensesTab() {
                     {schedule.startYearMonth} · {schedule.monthsRecognized}/{schedule.termMonths} {t("Months" as any)}
                   </TableCell>
                   <TableCell className="text-right font-semibold text-slate-900">
-                    {formatCurrency(schedule.totalMinor / factor, scale)}
+                    {formatCurrency(schedule.totalMinor / factor, schedule.currency, scale)}
                   </TableCell>
                   <TableCell className="text-right text-slate-700">
-                    {formatCurrency(schedule.recognizedMinor / factor, scale)}
+                    {formatCurrency(schedule.recognizedMinor / factor, schedule.currency, scale)}
                   </TableCell>
                   <TableCell className="text-right text-slate-500">
-                    {formatCurrency(schedule.remainingMinor / factor, scale)}
+                    {formatCurrency(schedule.remainingMinor / factor, schedule.currency, scale)}
                   </TableCell>
                   <TableCell>
                     {activeOrgId && (
@@ -365,8 +367,6 @@ export function PrepaidExpensesTab() {
                         schedule={schedule}
                         orgId={activeOrgId}
                         canManage={canManage}
-                        factor={factor}
-                        scale={scale}
                         formatCurrency={formatCurrency}
                       />
                     )}
@@ -409,7 +409,8 @@ export function PrepaidExpensesTab() {
                     </div>
                   </TableCell>
                 </TableRow>
-              ))
+                );
+              })
             )}
           </TableBody>
         </Table>
@@ -423,8 +424,6 @@ export function PrepaidExpensesTab() {
         <CorrectScheduleDialog
           schedule={correctSchedule}
           orgId={activeOrgId}
-          factor={factor}
-          scale={scale}
           formatCurrency={formatCurrency}
           onOpenChange={(open) => !open && setCorrectSchedule(null)}
         />
@@ -434,8 +433,6 @@ export function PrepaidExpensesTab() {
         <ScheduleCorrectionsDialog
           schedule={historySchedule}
           orgId={activeOrgId}
-          factor={factor}
-          scale={scale}
           formatCurrency={formatCurrency}
           onOpenChange={(open) => !open && setHistorySchedule(null)}
         />
@@ -447,19 +444,17 @@ export function PrepaidExpensesTab() {
 function CorrectScheduleDialog({
   schedule,
   orgId,
-  factor,
-  scale,
   formatCurrency,
   onOpenChange,
 }: Readonly<{
   schedule: ScheduleRow;
   orgId: Id<"organizations">;
-  factor: number;
-  scale: number;
-  formatCurrency: CurrencyFormatter;
+  formatCurrency: CurrencyFormatterInCurrency;
   onOpenChange: (open: boolean) => void;
 }>) {
   const { t } = useLanguage();
+  const scale = scaleForCurrency(schedule.currency);
+  const factor = Math.pow(10, scale);
   const correct = useMutation(api.prepaidExpenses.correctSchedule);
   const { submitting, submitWithFeedback } = useAccountingSubmit();
   // This dialog is only ever mounted while a schedule is selected for
@@ -520,7 +515,7 @@ function CorrectScheduleDialog({
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
             <AmountSummary
               label={t("PrepaidRemainingLabel" as any)}
-              value={formatCurrency(schedule.remainingMinor / factor, scale)}
+              value={formatCurrency(schedule.remainingMinor / factor, schedule.currency, scale)}
             />
 
             <div className="grid grid-cols-2 gap-3">
@@ -591,7 +586,7 @@ function CorrectScheduleDialog({
                         <p className="text-xs text-slate-500">
                           {t("RefundVatCapHint" as any).replace(
                             "{amount}",
-                            formatCurrency(remainingRefundableTaxMinor / factor, scale)
+                            formatCurrency(remainingRefundableTaxMinor / factor, schedule.currency, scale)
                           )}
                         </p>
                       )}
@@ -683,19 +678,17 @@ function CorrectScheduleDialog({
 function ScheduleCorrectionsDialog({
   schedule,
   orgId,
-  factor,
-  scale,
   formatCurrency,
   onOpenChange,
 }: Readonly<{
   schedule: ScheduleRow;
   orgId: Id<"organizations">;
-  factor: number;
-  scale: number;
-  formatCurrency: CurrencyFormatter;
+  formatCurrency: CurrencyFormatterInCurrency;
   onOpenChange: (open: boolean) => void;
 }>) {
   const { t } = useLanguage();
+  const scale = scaleForCurrency(schedule.currency);
+  const factor = Math.pow(10, scale);
   const corrections = useQuery(api.prepaidExpenses.listCorrections, {
     orgId,
     scheduleId: schedule._id,
@@ -729,9 +722,9 @@ function ScheduleCorrectionsDialog({
                 </div>
                 {correction.refundMinor > 0 && (
                   <p>
-                    {t("RefundAmountLabel" as any)}: {formatCurrency(correction.refundMinor / factor, scale)}
+                    {t("RefundAmountLabel" as any)}: {formatCurrency(correction.refundMinor / factor, schedule.currency, scale)}
                     {!!correction.refundTaxMinor && correction.refundTaxMinor > 0 && (
-                      <> ({t("RefundVatLabel" as any)}: {formatCurrency(correction.refundTaxMinor / factor, scale)})</>
+                      <> ({t("RefundVatLabel" as any)}: {formatCurrency(correction.refundTaxMinor / factor, schedule.currency, scale)})</>
                     )}
                   </p>
                 )}
@@ -742,7 +735,7 @@ function ScheduleCorrectionsDialog({
                 )}
                 {correction.writeOffMinor > 0 && (
                   <p>
-                    {t("WriteOffAmountLabel" as any)}: {formatCurrency(correction.writeOffMinor / factor, scale)}
+                    {t("WriteOffAmountLabel" as any)}: {formatCurrency(correction.writeOffMinor / factor, schedule.currency, scale)}
                   </p>
                 )}
                 <p className="text-slate-700">{correction.reason}</p>
