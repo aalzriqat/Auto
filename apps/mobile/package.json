@@ -9,6 +9,10 @@
         "react-native-worklets",
         "react-native-reanimated",
         "@solana-mobile/mobile-wallet-adapter-protocol"
+      ],
+      "buildFromSource": [
+        "expo-print",
+        "expo-sharing"
       ]
     }
   },
