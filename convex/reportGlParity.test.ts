@@ -248,28 +248,34 @@ describe("operational Expenses Report vs ledger income statement — parity acro
     );
 
     // Corrections and reversals are both dated by wall-clock `now`, so pin each
-    // into its own open month: write-off in March, reversal in June.
+    // into its own open month: write-off in March, reversal in June. Restored in
+    // `finally` — nothing here resets mocks automatically, so letting a failed
+    // assertion escape with Date.now still stubbed would strand every later test
+    // in this file in March and bury the real failure under the fallout.
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(YEAR, 2, 20));
-    await ctx.asOwner.mutation(api.prepaidExpenses.correctSchedule, {
-      orgId: ctx.orgId, scheduleId: schedule!._id,
-      writeOffMinor: 300 * JOD_SCALE, reason: "Unused balance written off",
-    });
+    try {
+      await ctx.asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId: ctx.orgId, scheduleId: schedule!._id,
+        writeOffMinor: 300 * JOD_SCALE, reason: "Unused balance written off",
+      });
 
-    const queuedPost = await ctx.t.run((c) =>
-      c.db.query("pendingAccountingEvents").withIndex("by_org_idempotency", (q) =>
-        q.eq("orgId", ctx.orgId).eq("idempotencyKey", `expense_posted_${expenseId}`)
-      ).first()
-    );
-    expect(queuedPost, "EXPENSE_POSTED must still be queued for this to be the case under test").not.toBeNull();
+      const queuedPost = await ctx.t.run((c) =>
+        c.db.query("pendingAccountingEvents").withIndex("by_org_idempotency", (q) =>
+          q.eq("orgId", ctx.orgId).eq("idempotencyKey", `expense_posted_${expenseId}`)
+        ).first()
+      );
+      expect(queuedPost, "EXPENSE_POSTED must still be queued for this to be the case under test").not.toBeNull();
 
-    // Real ledger history in March, despite EXPENSE_POSTED never posting.
-    await assertParity(ctx, MAR_START, MAR_END, 300, "March before reversal");
+      // Real ledger history in March, despite EXPENSE_POSTED never posting.
+      await assertParity(ctx, MAR_START, MAR_END, 300, "March before reversal");
 
-    clock.mockReturnValue(Date.UTC(YEAR, 5, 15));
-    await ctx.asOwner.mutation(api.expenses.reverseExpense, {
-      orgId: ctx.orgId, expenseId, reason: "Policy cancelled",
-    });
-    clock.mockRestore();
+      clock.mockReturnValue(Date.UTC(YEAR, 5, 15));
+      await ctx.asOwner.mutation(api.expenses.reverseExpense, {
+        orgId: ctx.orgId, expenseId, reason: "Policy cancelled",
+      });
+    } finally {
+      clock.mockRestore();
+    }
 
     // Cancelling the queued EXPENSE_POSTED must not erase the write-off that
     // really did post: March keeps it, the credit lands in the reversal month.
