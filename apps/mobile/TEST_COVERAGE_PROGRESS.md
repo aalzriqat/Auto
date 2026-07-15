@@ -1016,9 +1016,15 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `pnpm install --frozen-lockfile`: passed; lockfile already up to date.
   - `pnpm --filter @autoflow/mobile typecheck`: passed.
   - `pnpm --filter @autoflow/mobile test`: passed with 13 suites, 107 tests, and 100% statements/branches/functions/lines.
+- 2026-07-15 18:37 +03: mobile UI modernization Phase 6 WorkspaceModuleScreen extraction validated locally
+  - Moved the existing 6,575-line module implementation into `src/features/workspace/modules/WorkspaceModuleBody.tsx` and reduced `WorkspaceModuleScreen.tsx` to a thin public wrapper.
+  - Kept the move mechanical and behavior-preserving so deeper module-by-module restyling can proceed from a clean boundary.
+  - `pnpm install --frozen-lockfile`: passed; lockfile already up to date.
+  - `pnpm --filter @autoflow/mobile typecheck`: passed.
+  - `pnpm --filter @autoflow/mobile test`: passed with 13 suites, 107 tests, and 100% statements/branches/functions/lines.
 
 ## Next Steps
 
-1. Commit Phase 6 WorkspaceModuleLauncher restyle on top of `agent/mobile-ui-port`.
-2. Continue Phase 6 with `src/features/workspace/WorkspaceModuleScreen.tsx` extraction/restyle.
+1. Commit Phase 6 WorkspaceModuleScreen extraction on top of `agent/mobile-ui-port`.
+2. Continue Phase 6 by restyling the extracted workspace module implementation and then the marketplace screens.
 3. Continue the later UI/list phases with typecheck and 100% mobile Jest coverage before each commit.
