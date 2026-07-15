@@ -14,6 +14,7 @@ import {
   type MobileOrgSummary,
   type MobileVehiclePickerItem,
 } from "../../convexApi";
+import { Icon } from "../../components/Icon";
 import { RouteLoadingState } from "../../components/RouteState";
 import { Screen } from "../../components/Screen";
 import { useLocale } from "../../providers/LocaleProvider";
@@ -44,7 +45,7 @@ function getSafeOrgs(orgs: Array<MobileOrgSummary | null> | undefined): MobileOr
 
 function Header({ org }: Readonly<{ org: MobileOrgSummary }>) {
   const router = useRouter();
-  const { isRtl, t, textDirection } = useLocale();
+  const { t, textDirection } = useLocale();
 
   return (
     <View style={[styles.header, { direction: textDirection }]}>
@@ -59,7 +60,7 @@ function Header({ org }: Readonly<{ org: MobileOrgSummary }>) {
           })
         }
       >
-        <Text style={styles.backButtonText}>{isRtl ? ">" : "<"}</Text>
+        <Icon color="text" name="back" size={22} />
       </Pressable>
       <View style={styles.headerText}>
         <Text style={styles.brand}>{t("appName")}</Text>
@@ -546,12 +547,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
-  },
-  backButtonText: {
-    color: theme.colors.text,
-    fontSize: 24,
-    fontWeight: "900",
-    lineHeight: 26,
   },
   headerText: {
     flex: 1,

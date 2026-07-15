@@ -1,6 +1,6 @@
 # Mobile Test Coverage Progress
 
-Last updated: 2026-07-15 17:41:48 +03:00
+Last updated: 2026-07-15 17:50:58 +03:00
 
 ## Context
 
@@ -39,6 +39,7 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
 - Extracted tiny pressed-state style helpers in `+not-found.tsx`, `RouteState.tsx`, and `LocaleToggle.tsx` so React Native pressed-state branches can be tested directly without brittle renderer internals.
 - Started the mobile UI modernization pass by extending `src/theme.ts` with larger radius tokens, subtle slate shadows, Inter/Cairo font-family tokens, and locale-aware typography helpers.
 - Added the Inter/Cairo runtime font dependencies and splash-screen-protected loading in `AppProviders`, with a system-font fallback path if font loading fails.
+- Added the Ionicons dependency, centralized `Icon` wrapper, semantic module/category/workflow icon metadata, and replaced visible text-glyph icon affordances found in the mobile app.
 
 ## Validation Log
 
@@ -967,9 +968,18 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `pnpm --filter @autoflow/mobile typecheck`: passed.
   - `pnpm --filter @autoflow/mobile test`: passed with 13 suites, 97 tests, and 100% statements/branches/functions/lines.
   - `JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'; .\gradlew.bat help` from `apps/mobile/android`: passed; existing Gradle verification metadata did not need regeneration.
+- 2026-07-15 17:50 +03: mobile UI modernization Phase 3 validated locally
+  - Added `@expo/vector-icons` to the mobile package and standardized new icons on Ionicons via `src/components/Icon.tsx`.
+  - Added semantic icons for every native module, module category, and home workflow action.
+  - Replaced the literal back glyphs in workspace, dashboard, and dealer marketplace headers, plus search/clear/checkmark affordances in launcher/home/select surfaces.
+  - Scans for `⌕`, `×`, `✓`, arrow glyphs, and literal `isRtl ? ">" : "<"` back buttons returned no matches under `apps/mobile/src` or `apps/mobile/app`.
+  - `pnpm install`: passed; lockfile already up to date.
+  - `pnpm --filter @autoflow/mobile typecheck`: passed.
+  - `pnpm --filter @autoflow/mobile test`: passed with 13 suites, 98 tests, and 100% statements/branches/functions/lines.
+  - `JAVA_HOME='C:\Program Files\Android\Android Studio\jbr'; .\gradlew.bat help` from `apps/mobile/android`: passed; existing Gradle verification metadata did not need regeneration.
 
 ## Next Steps
 
-1. Commit Phase 2 font loading on top of `agent/mobile-ui-port`.
-2. Continue Phase 3 by adding the Ionicons wrapper and replacing text-glyph navigation affordances.
+1. Commit Phase 3 iconography on top of `agent/mobile-ui-port`.
+2. Continue Phase 4 by building/restyling the reusable component kit.
 3. Continue the later UI phases with typecheck and 100% mobile Jest coverage before each commit.

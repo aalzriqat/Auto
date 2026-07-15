@@ -18,6 +18,32 @@ jest.mock("react-native", () => {
   });
 });
 
+jest.mock("@expo/vector-icons", () => {
+  const React = jest.requireActual<typeof import("react")>("react");
+  const { Text } = jest.requireActual<typeof import("react-native")>("react-native");
+
+  return {
+    Ionicons: ({
+      accessibilityLabel,
+      color,
+      name,
+      size,
+      testID,
+    }: {
+      accessibilityLabel?: string;
+      color?: string;
+      name: string;
+      size?: number;
+      testID?: string;
+    }) =>
+      React.createElement(
+        Text,
+        { accessibilityLabel, testID: testID ?? "ionicon" },
+        `${name}:${color}:${size}`,
+      ),
+  };
+});
+
 import { fireEvent, render, waitFor } from "@testing-library/react-native";
 import * as SecureStore from "expo-secure-store";
 import { StyleSheet, Text, View } from "react-native";
@@ -25,6 +51,7 @@ import { StyleSheet, Text, View } from "react-native";
 import { LocaleProvider } from "../providers/LocaleProvider";
 import { FormField } from "./FormField";
 import { GuidedStepFlow, getSafeStepIndex } from "./GuidedStepFlow";
+import { Icon, resolveIconGlyph, semanticIconGlyphs } from "./Icon";
 import { getLocaleTogglePressedStyle, LocaleToggle } from "./LocaleToggle";
 import { getRouteButtonPressedStyle, RouteErrorState, RouteLoadingState } from "./RouteState";
 import { Screen } from "./Screen";
@@ -51,6 +78,35 @@ describe("mobile shell components", () => {
     );
 
     expect(getByText("Inside shell")).toBeTruthy();
+  });
+
+  test("renders semantic icons with token colors and RTL directional flipping", async () => {
+    expect(semanticIconGlyphs.vehicles).toBe("car-sport-outline");
+    expect(resolveIconGlyph("back", false)).toBe("chevron-back");
+    expect(resolveIconGlyph("back", true)).toBe("chevron-forward");
+    expect(resolveIconGlyph("vehicles", true)).toBe("car-sport-outline");
+
+    getItemAsync.mockResolvedValueOnce("en");
+    const ltrIcon = await render(
+      <LocaleProvider>
+        <Icon accessibilityLabel="Search icon" color="primary" name="search" size={24} testID="search-icon" />
+      </LocaleProvider>,
+    );
+
+    await waitFor(() => {
+      expect(ltrIcon.getByTestId("search-icon").props.children).toBe("search:#0f766e:24");
+    });
+    expect(ltrIcon.getByLabelText("Search icon")).toBeTruthy();
+
+    const rtlIcon = await render(
+      <LocaleProvider>
+        <Icon name="back" testID="back-icon" />
+      </LocaleProvider>,
+    );
+
+    await waitFor(() => {
+      expect(rtlIcon.getByTestId("back-icon").props.children).toBe("chevron-forward:#0f172a:20");
+    });
   });
 
   test("reports shared form field text changes", async () => {

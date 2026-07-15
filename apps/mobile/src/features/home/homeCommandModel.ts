@@ -1,4 +1,5 @@
 import type { MobileOrgSummary } from "../../convexApi";
+import type { SemanticIconName } from "../../components/Icon";
 import { canAccessNativeModule, getNativeModule } from "../workspace/nativeModules";
 
 export type HomeLocale = "en" | "ar";
@@ -12,6 +13,7 @@ export type HomeWorkflowTarget =
   | "marketplace";
 
 export type HomeWorkflowAction = {
+  icon: SemanticIconName;
   kicker: string;
   moduleId?: "vehicles" | "leads" | "sales" | "messages";
   subtitle: string;
@@ -23,6 +25,7 @@ export type HomeWorkflowAction = {
 type HomeWorkflowModuleId = NonNullable<HomeWorkflowAction["moduleId"]>;
 
 type WorkflowDefinition = {
+  icon: SemanticIconName;
   moduleId?: HomeWorkflowModuleId;
   target: HomeWorkflowTarget;
   tone: HomeWorkflowAction["tone"];
@@ -33,6 +36,7 @@ type WorkflowDefinition = {
 const WORKFLOW_DEFINITIONS: readonly WorkflowDefinition[] = [
   {
     target: "dashboard",
+    icon: "dashboard",
     tone: "dark",
     en: {
       kicker: "Cockpit",
@@ -47,6 +51,7 @@ const WORKFLOW_DEFINITIONS: readonly WorkflowDefinition[] = [
   },
   {
     target: "vehicles",
+    icon: "vehicles",
     moduleId: "vehicles",
     tone: "mint",
     en: {
@@ -62,6 +67,7 @@ const WORKFLOW_DEFINITIONS: readonly WorkflowDefinition[] = [
   },
   {
     target: "leads",
+    icon: "leads",
     moduleId: "leads",
     tone: "amber",
     en: {
@@ -77,6 +83,7 @@ const WORKFLOW_DEFINITIONS: readonly WorkflowDefinition[] = [
   },
   {
     target: "sales",
+    icon: "sales",
     moduleId: "sales",
     tone: "blue",
     en: {
@@ -92,6 +99,7 @@ const WORKFLOW_DEFINITIONS: readonly WorkflowDefinition[] = [
   },
   {
     target: "messages",
+    icon: "messages",
     moduleId: "messages",
     tone: "mint",
     en: {
@@ -107,6 +115,7 @@ const WORKFLOW_DEFINITIONS: readonly WorkflowDefinition[] = [
   },
   {
     target: "marketplace",
+    icon: "marketplace",
     tone: "amber",
     en: {
       kicker: "Market",
@@ -168,6 +177,7 @@ export function getHomeWorkflowActions(locale: HomeLocale): HomeWorkflowAction[]
 
     return {
       ...labels,
+      icon: definition.icon,
       moduleId: definition.moduleId,
       target: definition.target,
       tone: definition.tone,

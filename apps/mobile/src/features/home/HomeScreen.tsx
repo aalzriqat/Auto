@@ -7,6 +7,7 @@ import { useMemo, useState } from "react";
 import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { api, type MobileOrgSummary } from "../../convexApi";
+import { Icon } from "../../components/Icon";
 import { LocaleToggle } from "../../components/LocaleToggle";
 import { RouteLoadingState } from "../../components/RouteState";
 import { Screen } from "../../components/Screen";
@@ -161,9 +162,14 @@ function WorkflowActionCard({
       ]}
       onPress={onPress}
     >
-      <Text style={[styles.workflowKicker, isDark && styles.workflowTextOnDark]}>
-        {action.kicker}
-      </Text>
+      <View style={styles.workflowTopRow}>
+        <View style={[styles.workflowIconShell, isDark && styles.workflowIconShellDark]}>
+          <Icon color={isDark ? "onPrimary" : "primary"} name={action.icon} size={20} />
+        </View>
+        <Text style={[styles.workflowKicker, isDark && styles.workflowTextOnDark]}>
+          {action.kicker}
+        </Text>
+      </View>
       <View style={styles.workflowCardBody}>
         <Text numberOfLines={2} style={[styles.workflowTitle, isDark && styles.workflowTextOnDark]}>
           {action.title}
@@ -438,7 +444,7 @@ function AuthenticatedHome() {
           </View>
 
           <View style={styles.searchShell}>
-            <Text style={styles.searchIcon}>⌕</Text>
+            <Icon color="primary" name="search" size={18} />
             <TextInput
               accessibilityLabel={locale === "ar" ? "البحث في مساحات العمل" : "Search workspaces"}
               autoCorrect={false}
@@ -455,7 +461,7 @@ function AuthenticatedHome() {
                 style={({ pressed }) => [styles.clearSearch, pressed && styles.cardPressed]}
                 onPress={() => setWorkspaceQuery("")}
               >
-                <Text style={styles.clearSearchText}>×</Text>
+                <Icon color="text" name="close" size={18} />
               </Pressable>
             ) : null}
           </View>
@@ -492,7 +498,7 @@ function AuthenticatedHome() {
             <Text style={styles.marketplaceLinkTitle}>{t("browseMarketplace")}</Text>
             <Text style={styles.workspaceMeta}>{t("marketplaceSubtitle")}</Text>
           </View>
-          <Text style={styles.marketplaceArrow}>{locale === "ar" ? "<" : ">"}</Text>
+          <Icon color="primary" name="chevronForward" size={22} />
         </Pressable>
 
         <View style={[styles.sectionHeader, { direction: textDirection }]}>
@@ -918,11 +924,6 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: "900",
   },
-  marketplaceArrow: {
-    color: theme.colors.primary,
-    fontSize: 24,
-    fontWeight: "900",
-  },
   commandPanel: {
     gap: theme.spacing.md,
     borderRadius: theme.radius.md,
@@ -1003,6 +1004,23 @@ const styles = StyleSheet.create({
     borderColor: "#bae6fd",
     backgroundColor: theme.colors.infoSoft,
   },
+  workflowTopRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: theme.spacing.sm,
+  },
+  workflowIconShell: {
+    width: 36,
+    height: 36,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.surface,
+  },
+  workflowIconShellDark: {
+    backgroundColor: "rgba(255,255,255,0.14)",
+  },
   workflowKicker: {
     color: theme.colors.mutedText,
     fontSize: 11,
@@ -1041,11 +1059,6 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.background,
     paddingHorizontal: theme.spacing.md,
   },
-  searchIcon: {
-    color: theme.colors.primary,
-    fontSize: 18,
-    fontWeight: "900",
-  },
   searchInput: {
     flex: 1,
     minHeight: 46,
@@ -1060,12 +1073,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     borderRadius: theme.radius.sm,
     backgroundColor: theme.colors.surfaceAlt,
-  },
-  clearSearchText: {
-    color: theme.colors.text,
-    fontSize: 18,
-    fontWeight: "900",
-    lineHeight: 20,
   },
   commandActions: {
     flexDirection: "row",

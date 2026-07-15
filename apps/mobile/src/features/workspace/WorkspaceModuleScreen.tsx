@@ -17,6 +17,7 @@ import {
   View,
 } from "react-native";
 
+import { Icon } from "../../components/Icon";
 import { RouteLoadingState } from "../../components/RouteState";
 import { LocaleToggle } from "../../components/LocaleToggle";
 import { GuidedStepFlow, type GuidedStep } from "../../components/GuidedStepFlow";
@@ -434,7 +435,7 @@ function ModuleHeader({
   title: string;
 }) {
   const router = useRouter();
-  const { isRtl, t, textDirection } = useLocale();
+  const { t, textDirection } = useLocale();
 
   return (
     <View style={[styles.header, { direction: textDirection }]}>
@@ -444,7 +445,7 @@ function ModuleHeader({
         style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
         onPress={() => router.back()}
       >
-        <Text style={styles.backButtonText}>{isRtl ? ">" : "<"}</Text>
+        <Icon color="text" name="back" size={22} />
       </Pressable>
       <View style={styles.headerText}>
         <Text style={styles.brand}>{t("appName")}</Text>
@@ -510,12 +511,15 @@ function ModuleSwitcherBar({
                 })
               }
             >
-              <Text
-                numberOfLines={1}
-                style={[styles.moduleSwitchText, selected && styles.moduleSwitchTextSelected]}
-              >
-                {labelFor(module.title, locale)}
-              </Text>
+              <View style={styles.moduleSwitchChipContent}>
+                <Icon color={selected ? "primary" : "mutedText"} name={module.icon} size={16} />
+                <Text
+                  numberOfLines={1}
+                  style={[styles.moduleSwitchText, selected && styles.moduleSwitchTextSelected]}
+                >
+                  {labelFor(module.title, locale)}
+                </Text>
+              </View>
             </Pressable>
           );
         })}
@@ -5812,12 +5816,6 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
   },
-  backButtonText: {
-    color: theme.colors.text,
-    fontSize: 24,
-    fontWeight: "900",
-    lineHeight: 26,
-  },
   headerText: {
     flex: 1,
     minWidth: 0,
@@ -5867,7 +5865,14 @@ const styles = StyleSheet.create({
     borderColor: "#c7d2fe",
     backgroundColor: theme.colors.primarySoft,
   },
+  moduleSwitchChipContent: {
+    maxWidth: 160,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.xs,
+  },
   moduleSwitchText: {
+    flexShrink: 1,
     color: theme.colors.mutedText,
     fontSize: 12,
     fontWeight: "900",

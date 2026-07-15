@@ -13,6 +13,7 @@ import {
 
 import { useLocale } from "../providers/LocaleProvider";
 import { theme } from "../theme";
+import { Icon } from "./Icon";
 
 export type SearchableSelectOption = Readonly<{
   label: string;
@@ -115,7 +116,7 @@ export function SearchableSelectField({
       <Text style={[styles.optionLabel, hasNoValue && styles.optionLabelSelected]}>
         {noneLabel}
       </Text>
-      {hasNoValue ? <Text style={styles.checkMark}>✓</Text> : null}
+      {hasNoValue ? <Icon color="primary" name="check" size={18} /> : null}
     </Pressable>
   ) : null;
   /* istanbul ignore next -- custom row close is covered in native device testing. */
@@ -209,7 +210,7 @@ export function SearchableSelectField({
                         </Text>
                         {option.subLabel ? <Text style={styles.optionSubLabel}>{option.subLabel}</Text> : null}
                       </View>
-                      {selected ? <Text style={styles.checkMark}>✓</Text> : null}
+                      {selected ? <Icon color="primary" name="check" size={18} /> : null}
                     </Pressable>
                   );
                 })}
@@ -370,11 +371,6 @@ const styles = StyleSheet.create({
     color: theme.colors.mutedText,
     fontSize: 12,
     lineHeight: 17,
-  },
-  checkMark: {
-    color: theme.colors.primary,
-    fontSize: 16,
-    fontWeight: "900",
   },
   emptyText: {
     color: theme.colors.mutedText,

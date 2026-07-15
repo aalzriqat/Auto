@@ -65,10 +65,12 @@ describe("home command model", () => {
 
     expect(englishActions).toHaveLength(6);
     expect(englishActions[0]).toMatchObject({
+      icon: "dashboard",
       target: "dashboard",
       title: "Open dashboard",
       tone: "dark",
     });
+    expect(englishActions.find((action) => action.target === "vehicles")?.icon).toBe("vehicles");
     expect(englishActions.find((action) => action.target === "sales")?.moduleId).toBe("sales");
     expect(arabicActions.find((action) => action.target === "marketplace")?.title).toBe("تصفح السوق");
     expect(arabicActions.every((action) => action.title.length > 0 && action.subtitle.length > 0)).toBe(true);

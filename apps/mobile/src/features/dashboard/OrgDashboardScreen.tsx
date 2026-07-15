@@ -14,6 +14,7 @@ import {
   type MobileMyMembership,
   type MobileOrgSummary,
 } from "../../convexApi";
+import { Icon } from "../../components/Icon";
 import { LocaleToggle } from "../../components/LocaleToggle";
 import { RouteLoadingState } from "../../components/RouteState";
 import { Screen } from "../../components/Screen";
@@ -76,7 +77,7 @@ function getTrendBarHeight(revenue: number, maxRevenue: number): number {
 
 function Header({ org }: { org: MobileOrgSummary }) {
   const router = useRouter();
-  const { isRtl, t, textDirection } = useLocale();
+  const { t, textDirection } = useLocale();
 
   return (
     <View style={[styles.header, { direction: textDirection }]}>
@@ -86,7 +87,7 @@ function Header({ org }: { org: MobileOrgSummary }) {
         style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
         onPress={() => router.replace(nativeRoutes.home)}
       >
-        <Text style={styles.backButtonText}>{isRtl ? ">" : "<"}</Text>
+        <Icon color="text" name="back" size={22} />
       </Pressable>
       <View style={styles.headerText}>
         <Text style={styles.brand}>{t("appName")}</Text>
@@ -569,12 +570,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
-  },
-  backButtonText: {
-    color: theme.colors.text,
-    fontSize: 24,
-    fontWeight: "800",
-    lineHeight: 26,
   },
   headerText: {
     flex: 1,

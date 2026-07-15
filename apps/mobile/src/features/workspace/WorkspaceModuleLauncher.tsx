@@ -2,10 +2,10 @@ import { useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
+import { Icon } from "../../components/Icon";
 import { useLocale } from "../../providers/LocaleProvider";
 import { theme } from "../../theme";
 import {
-  compactInitials,
   countVisibleNativeModulesByCategory,
   getVisibleNativeModules,
   getVisibleNativeModulesByCategory,
@@ -86,7 +86,7 @@ export function WorkspaceModuleLauncher({
       </View>
 
       <View style={styles.searchShell}>
-        <Text style={styles.searchIcon}>⌕</Text>
+        <Icon color="primary" name="search" size={18} />
         <TextInput
           accessibilityLabel={locale === "ar" ? "البحث في الأقسام" : "Search workspace tools"}
           autoCorrect={false}
@@ -103,7 +103,7 @@ export function WorkspaceModuleLauncher({
             style={({ pressed }) => [styles.clearSearch, pressed && styles.pressed]}
             onPress={() => setQuery("")}
           >
-            <Text style={styles.clearSearchText}>×</Text>
+            <Icon color="text" name="close" size={18} />
           </Pressable>
         ) : null}
       </View>
@@ -127,14 +127,17 @@ export function WorkspaceModuleLauncher({
                 setCategory(item.id);
               }}
             >
-              <Text
-                adjustsFontSizeToFit
-                minimumFontScale={0.82}
-                numberOfLines={1}
-                style={[styles.tabText, selected && styles.tabTextSelected]}
-              >
-                {labelFor(item.title, locale)} · {visibleCount}
-              </Text>
+              <View style={styles.tabContent}>
+                <Icon color={selected ? "primary" : "mutedText"} name={item.icon} size={16} />
+                <Text
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.82}
+                  numberOfLines={1}
+                  style={[styles.tabText, selected && styles.tabTextSelected]}
+                >
+                  {labelFor(item.title, locale)} · {visibleCount}
+                </Text>
+              </View>
             </Pressable>
           );
         })}
@@ -163,7 +166,7 @@ export function WorkspaceModuleLauncher({
               >
                 <View style={styles.moduleTopRow}>
                   <View style={styles.moduleBadge}>
-                    <Text style={styles.moduleBadgeText}>{compactInitials(title)}</Text>
+                    <Icon color="primary" name={module.icon} size={20} />
                   </View>
                   <View style={styles.moduleMeta}>
                     <Text numberOfLines={1} style={styles.moduleCategory}>
@@ -269,11 +272,6 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.background,
     paddingHorizontal: theme.spacing.md,
   },
-  searchIcon: {
-    color: theme.colors.primary,
-    fontSize: 18,
-    fontWeight: "900",
-  },
   searchInput: {
     flex: 1,
     minHeight: 46,
@@ -288,12 +286,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     borderRadius: theme.radius.sm,
     backgroundColor: theme.colors.surfaceAlt,
-  },
-  clearSearchText: {
-    color: theme.colors.text,
-    fontSize: 18,
-    fontWeight: "900",
-    lineHeight: 20,
   },
   tabs: {
     flexDirection: "row",
@@ -315,7 +307,15 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.colors.border,
   },
+  tabContent: {
+    maxWidth: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: theme.spacing.xs,
+  },
   tabText: {
+    flexShrink: 1,
     color: theme.colors.mutedText,
     fontSize: 12,
     fontWeight: "800",
@@ -357,11 +357,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     borderRadius: theme.radius.md,
     backgroundColor: theme.colors.primarySoft,
-  },
-  moduleBadgeText: {
-    color: theme.colors.primary,
-    fontSize: 11,
-    fontWeight: "900",
   },
   moduleMeta: {
     flex: 1,

@@ -22,12 +22,14 @@ describe("native workspace modules", () => {
 
   test("every category exposes at least one module", () => {
     for (const category of nativeModuleCategories) {
+      expect(category.icon).toBe(category.id);
       expect(getNativeModulesByCategory(category.id).length).toBeGreaterThan(0);
     }
   });
 
   test("resolves known modules and rejects unknown ones", () => {
     expect(getNativeModule("vehicles")?.id).toBe("vehicles");
+    expect(getNativeModule("vehicles")?.icon).toBe("vehicles");
     expect(getNativeModule("webview")).toBeNull();
     expect(getNativeModule(null)).toBeNull();
     expect(getNativeModule(undefined)).toBeNull();
@@ -89,6 +91,7 @@ describe("native workspace modules", () => {
     const visibleForSales = getVisibleNativeModules(["view:vehicles", "view:sales"], "Sales");
 
     expect(getVisibleNativeModules().map((module) => module.id)).toEqual(["messages", "notifications", "quotes"]);
+    expect(nativeModules.every((module) => module.icon.length > 0)).toBe(true);
     expect(visibleForSales.map((module) => module.id)).toEqual(
       expect.arrayContaining(["vehicles", "messages", "notifications", "sales", "quotes"]),
     );

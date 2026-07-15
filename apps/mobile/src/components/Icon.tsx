@@ -1,0 +1,103 @@
+import { Ionicons } from "@expo/vector-icons";
+import type { ComponentProps } from "react";
+import type { StyleProp, TextStyle } from "react-native";
+
+import { useLocale } from "../providers/LocaleProvider";
+import { theme } from "../theme";
+
+export type IoniconGlyphName = ComponentProps<typeof Ionicons>["name"];
+
+export const semanticIconGlyphs = {
+  accounting: "calculator-outline",
+  admin: "settings-outline",
+  applications: "document-text-outline",
+  approvals: "shield-checkmark-outline",
+  back: "chevron-back",
+  billing: "card-outline",
+  branches: "business-outline",
+  calendar: "calendar-outline",
+  check: "checkmark",
+  chevronDown: "chevron-down",
+  chevronForward: "chevron-forward",
+  close: "close",
+  commissionSettings: "options-outline",
+  commissions: "medal-outline",
+  customFields: "create-outline",
+  customers: "people-outline",
+  dashboard: "speedometer-outline",
+  expenses: "receipt-outline",
+  feedback: "chatbubble-ellipses-outline",
+  finance: "wallet-outline",
+  financeCompanies: "business-outline",
+  filter: "filter-outline",
+  integrations: "extension-puzzle-outline",
+  leadSources: "megaphone-outline",
+  leads: "git-branch-outline",
+  marketplace: "storefront-outline",
+  marketplaceSettings: "storefront-outline",
+  messages: "chatbubbles-outline",
+  notifications: "notifications-outline",
+  operations: "grid-outline",
+  pipeline: "git-merge-outline",
+  pipelineSettings: "git-network-outline",
+  quotes: "document-text-outline",
+  reports: "bar-chart-outline",
+  roles: "key-outline",
+  sales: "pricetags-outline",
+  search: "search",
+  settings: "settings-outline",
+  socialInbox: "logo-instagram",
+  sourcing: "cube-outline",
+  tasks: "checkbox-outline",
+  team: "people-circle-outline",
+  valuationCompanies: "scale-outline",
+  vehicles: "car-sport-outline",
+  website: "globe-outline",
+} as const satisfies Record<string, IoniconGlyphName>;
+
+const rtlIconGlyphs: Partial<Record<IoniconGlyphName, IoniconGlyphName>> = {
+  "arrow-back": "arrow-forward",
+  "arrow-forward": "arrow-back",
+  "chevron-back": "chevron-forward",
+  "chevron-forward": "chevron-back",
+} as const;
+
+export type SemanticIconName = keyof typeof semanticIconGlyphs;
+export type IconColorToken = keyof typeof theme.colors;
+
+type IconProps = Readonly<{
+  accessibilityLabel?: string;
+  color?: IconColorToken;
+  name: SemanticIconName;
+  size?: number;
+  style?: StyleProp<TextStyle>;
+  testID?: string;
+}>;
+
+export function resolveIconGlyph(name: SemanticIconName, isRtl: boolean): IoniconGlyphName {
+  const glyph = semanticIconGlyphs[name];
+  return isRtl ? (rtlIconGlyphs[glyph] ?? glyph) : glyph;
+}
+
+export function Icon({
+  accessibilityLabel,
+  color = "text",
+  name,
+  size = 20,
+  style,
+  testID,
+}: IconProps) {
+  const { isRtl } = useLocale();
+
+  return (
+    <Ionicons
+      accessibilityLabel={accessibilityLabel}
+      accessible={Boolean(accessibilityLabel)}
+      color={theme.colors[color]}
+      name={resolveIconGlyph(name, isRtl)}
+      size={size}
+      style={style}
+      testID={testID}
+    />
+  );
+}
