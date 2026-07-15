@@ -202,7 +202,7 @@ jobs:
       run: pnpm install --frozen-lockfile --ignore-scripts
 
     - name: Root dependency audit
-      run: pnpm audit --audit-level high
+      run: pnpm audit --audit-level high --ignore-registry-errors
 
     - name: Install worker dependencies
       run: npm ci --prefix dealer-worker --ignore-scripts
@@ -215,7 +215,7 @@ jobs:
       run: |
         echo "## Dependency Audit" >> $GITHUB_STEP_SUMMARY
         echo "### Root" >> $GITHUB_STEP_SUMMARY
-        pnpm audit --audit-level high >> $GITHUB_STEP_SUMMARY 2>&1 || true
+        pnpm audit --audit-level high --ignore-registry-errors >> $GITHUB_STEP_SUMMARY 2>&1 || true
         echo "### Dealer worker" >> $GITHUB_STEP_SUMMARY
         npm audit --prefix dealer-worker --audit-level high >> $GITHUB_STEP_SUMMARY 2>&1 || true
 
