@@ -698,6 +698,12 @@ export const reverseExpense = mutation({
       .filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED"))
       .first();
 
+    // Whether this reversal unwound anything that had actually reached the
+    // ledger. Only then does the expense keep a place in the operational P&L
+    // (see the reversedAt patch below) — a reversal that cancelled nothing but
+    // queued posts has no GL footprint to mirror.
+    let reversedPostedGl = false;
+
     if (postedEvent) {
       // Actually posted to the ledger — create a real offsetting journal entry.
       await reverseAccountingEvent(ctx, {
@@ -708,6 +714,7 @@ export const reverseExpense = mutation({
         actorId: user._id,
         idempotencyKey: `expense_reversed_${args.expenseId}`,
       });
+      reversedPostedGl = true;
     } else {
       // No chart of accounts / open period existed when this expense was
       // marked paid, so it never actually posted — it's just queued. Nothing
@@ -725,13 +732,19 @@ export const reverseExpense = mutation({
     // Expenses balance, no expense recognized for a reversed prepayment.
     const schedule = await cancelPrepaidScheduleForExpense(ctx, args.orgId, args.expenseId);
     if (schedule) {
-      await hookPrepaidExpenseAmortizationsReversed(ctx, {
+      // A prepaid can have posted GL events even when EXPENSE_POSTED never
+      // posted: an accelerated write-off posts as soon as its own date falls in
+      // an open period, regardless of whether the expense behind it ever landed
+      // (only amortization waits for that). Anything reversed here is ledger
+      // history this expense still has to account for.
+      const reversedAmortizations = await hookPrepaidExpenseAmortizationsReversed(ctx, {
         orgId: args.orgId,
         scheduleId: schedule,
         reason,
         actorId: user._id,
         reversalDate: now,
       });
+      if (reversedAmortizations > 0) reversedPostedGl = true;
     }
 
     const identity = await ctx.auth.getUserIdentity();
@@ -742,7 +755,17 @@ export const reverseExpense = mutation({
     // credits this back in exactly the month the ledger's reversing entry
     // lands in. Deriving it from deletedAt instead would drift whenever the
     // two straddle a month boundary.
-    await ctx.db.patch(args.expenseId, { reversedAt: now });
+    //
+    // Only when something actually posted. reversedAt is what keeps a
+    // soft-deleted expense visible to the operational P&L (reports.ts), so
+    // stamping it after merely cancelling a queued post would invent an
+    // expense in the original month and a reversing credit in this one for a
+    // ledger that holds neither — the report's own precondition is that an
+    // expense which never posted carries no reversedAt. Left unstamped, the
+    // soft delete takes it out of the report entirely, matching the GL's zero.
+    if (reversedPostedGl) {
+      await ctx.db.patch(args.expenseId, { reversedAt: now });
+    }
 
     await softDeleteExpenseRecord(ctx, {
       orgId: args.orgId,

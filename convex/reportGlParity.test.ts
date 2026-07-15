@@ -37,7 +37,12 @@ const OWNER_PERMS = [
 /** JOD is a 3-decimal currency: 100 JOD == 100_000 minor units. */
 const JOD_SCALE = 1000;
 
-async function seedDealer(tag: string) {
+/**
+ * `openPeriod: false` seeds a dealer with a chart but no open accounting
+ * period, which is what makes postOrEnqueue park an expense in the outbox
+ * instead of posting it — the "paid but never reached the ledger" state.
+ */
+async function seedDealer(tag: string, opts: { openPeriod?: boolean } = {}) {
   const t = convexTest(schema, MODULE_GLOB);
   const orgId = await t.run((ctx) =>
     ctx.db.insert("organizations", { name: `Parity ${tag}`, createdAt: Date.now() })
@@ -59,13 +64,15 @@ async function seedDealer(tag: string) {
   const asOwner = t.withIdentity({ subject: `${tag}_owner`, clerkId: `${tag}_owner` });
   await asOwner.mutation(api.chartOfAccounts.initialize, { orgId });
 
-  const fiscalYear = new Date().getUTCFullYear();
-  await asOwner.mutation(api.accountingPeriods.create, {
-    orgId, startDate: Date.UTC(fiscalYear, 0, 1), endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
-    fiscalYear, periodNumber: 1,
-  });
-  const period = (await asOwner.query(api.accountingPeriods.list, { orgId }))[0];
-  await asOwner.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+  if (opts.openPeriod !== false) {
+    const fiscalYear = new Date().getUTCFullYear();
+    await asOwner.mutation(api.accountingPeriods.create, {
+      orgId, startDate: Date.UTC(fiscalYear, 0, 1), endDate: Date.UTC(fiscalYear, 11, 31, 23, 59, 59, 999),
+      fiscalYear, periodNumber: 1,
+    });
+    const period = (await asOwner.query(api.accountingPeriods.list, { orgId }))[0];
+    await asOwner.mutation(api.accountingPeriods.open, { orgId, periodId: period._id });
+  }
 
   return { t, orgId, userId, asOwner };
 }
@@ -101,6 +108,10 @@ const REVERSAL_MONTH_START = Date.UTC(YEAR, NOW_MONTH, 1);
 const REVERSAL_MONTH_END = Date.UTC(YEAR, NOW_MONTH + 1, 0, 23, 59, 59, 999);
 const YEAR_START = Date.UTC(YEAR, 0, 1);
 const YEAR_END = Date.UTC(YEAR, 11, 31, 23, 59, 59, 999);
+const MAR_START = Date.UTC(YEAR, 2, 1);
+const MAR_END = Date.UTC(YEAR, 2, 31, 23, 59, 59, 999);
+const JUN_START = Date.UTC(YEAR, 5, 1);
+const JUN_END = Date.UTC(YEAR, 5, 30, 23, 59, 59, 999);
 
 const runsInJanuary = NOW_MONTH === 0;
 
@@ -171,5 +182,100 @@ describe("operational Expenses Report vs ledger income statement — parity acro
 
     // No reversedAt, no GL footprint — the isDeleted filter still applies.
     await assertParity(ctx, JAN_START, JAN_END, 0, "January");
+  });
+
+  test("reversing a paid expense that only ever queued leaves both at zero", async () => {
+    // Paid with no open period: postOrEnqueue parks EXPENSE_POSTED in the
+    // outbox, so the ledger never sees it.
+    const ctx = await seedDealer("queued", { openPeriod: false });
+    const expenseId = await ctx.asOwner.mutation(api.expenses.create, {
+      orgId: ctx.orgId, title: "Fuel", amount: 500, date: Date.UTC(YEAR, 0, 10),
+      category: "OTHER", status: "PAID", paymentMethod: "CASH",
+    });
+
+    const queued = await ctx.t.run((c) =>
+      c.db.query("pendingAccountingEvents").filter((q) => q.eq(q.field("orgId"), ctx.orgId)).collect()
+    );
+    expect(queued.map((q) => q.idempotencyKey), "expense should be queued, not posted")
+      .toContain(`expense_posted_${expenseId}`);
+
+    await ctx.asOwner.mutation(api.expenses.reverseExpense, {
+      orgId: ctx.orgId, expenseId, reason: "Entered in error",
+    });
+
+    // Reversal cancelled the queued post, so nothing ever hit the ledger. The
+    // operational report must not invent an expense in January and a credit in
+    // the reversal month for a GL that holds neither.
+    await assertParity(ctx, JAN_START, JAN_END, 0, "January after reversing a queued expense");
+    if (!runsInJanuary) {
+      await assertParity(ctx, REVERSAL_MONTH_START, REVERSAL_MONTH_END, 0, "reversal month");
+    }
+    await assertParity(ctx, YEAR_START, YEAR_END, 0, "full year");
+
+    const reversed = await ctx.t.run((c) => c.db.get(expenseId));
+    expect(reversed?.reversedAt, "a cancelled queued post is not a ledger reversal").toBeUndefined();
+  });
+
+  // "EXPENSE_POSTED never posted" does NOT imply "this expense left no mark on
+  // the P&L", so reversedAt can't be decided on EXPENSE_POSTED alone.
+  //
+  // Amortization refuses to run while the source expense is queued
+  // ("source_expense_not_posted" — it won't release an asset that was never
+  // booked), but correctSchedule carries no such guard: an accelerated
+  // write-off debits the expense account outright. Postability is judged per
+  // event date, so an expense dated inside a month that never got an open
+  // period stays queued forever while a write-off dated in an open month posts
+  // for real. Every date here is pinned rather than taken from the wall clock,
+  // so the months stay distinct whenever the suite runs.
+  test("a queued prepaid whose write-off posted keeps the write-off's month", async () => {
+    const ctx = await seedDealer("queued-writeoff", { openPeriod: false });
+    const expenseId = await ctx.asOwner.mutation(api.expenses.create, {
+      orgId: ctx.orgId, title: "Insurance", amount: 1200, date: Date.UTC(YEAR, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+
+    // Opens February–December only. January never gets a period, so the
+    // EXPENSE_POSTED dated Jan 1 can never drain — not even via the drain that
+    // opening a period schedules.
+    await ctx.asOwner.mutation(api.accountingPeriods.create, {
+      orgId: ctx.orgId, startDate: Date.UTC(YEAR, 1, 1), endDate: YEAR_END, fiscalYear: YEAR, periodNumber: 1,
+    });
+    const period = (await ctx.asOwner.query(api.accountingPeriods.list, { orgId: ctx.orgId }))[0];
+    await ctx.asOwner.mutation(api.accountingPeriods.open, { orgId: ctx.orgId, periodId: period._id });
+
+    const schedule = await ctx.t.run((c) =>
+      c.db.query("prepaidExpenseSchedules").withIndex("by_expense", (q) => q.eq("expenseId", expenseId)).first()
+    );
+
+    // Corrections and reversals are both dated by wall-clock `now`, so pin each
+    // into its own open month: write-off in March, reversal in June.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(YEAR, 2, 20));
+    await ctx.asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId: ctx.orgId, scheduleId: schedule!._id,
+      writeOffMinor: 300 * JOD_SCALE, reason: "Unused balance written off",
+    });
+
+    const queuedPost = await ctx.t.run((c) =>
+      c.db.query("pendingAccountingEvents").withIndex("by_org_idempotency", (q) =>
+        q.eq("orgId", ctx.orgId).eq("idempotencyKey", `expense_posted_${expenseId}`)
+      ).first()
+    );
+    expect(queuedPost, "EXPENSE_POSTED must still be queued for this to be the case under test").not.toBeNull();
+
+    // Real ledger history in March, despite EXPENSE_POSTED never posting.
+    await assertParity(ctx, MAR_START, MAR_END, 300, "March before reversal");
+
+    clock.mockReturnValue(Date.UTC(YEAR, 5, 15));
+    await ctx.asOwner.mutation(api.expenses.reverseExpense, {
+      orgId: ctx.orgId, expenseId, reason: "Policy cancelled",
+    });
+    clock.mockRestore();
+
+    // Cancelling the queued EXPENSE_POSTED must not erase the write-off that
+    // really did post: March keeps it, the credit lands in the reversal month.
+    await assertParity(ctx, MAR_START, MAR_END, 300, "March after reversal");
+    await assertParity(ctx, JUN_START, JUN_END, -300, "reversal month");
+    await assertParity(ctx, JAN_START, JAN_END, 0, "January never posted");
+    await assertParity(ctx, YEAR_START, YEAR_END, 0, "full year");
   });
 });
