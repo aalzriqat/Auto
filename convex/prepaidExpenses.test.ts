@@ -96,6 +96,19 @@ async function scheduleForExpense(t: T, expenseId: Id<"expenses">) {
   );
 }
 
+/** A non-owner member with MANAGE_FINANCE (Phase 6 maker-checker tests need a caller who ISN'T the org owner). */
+async function addFinanceUser(t: T, orgId: Id<"organizations">, tag: string) {
+  await t.run((ctx) => ctx.db.insert("users", { clerkId: tag, email: `${tag}@example.com`, name: tag }));
+  const roleId = await t.run((ctx) =>
+    ctx.db.insert("roles", { orgId, name: "Accountant", permissions: OWNER_PERMS })
+  );
+  const userId = await t.run((ctx) =>
+    ctx.db.query("users").filter((q) => q.eq(q.field("clerkId"), tag)).first().then((u) => u!._id)
+  );
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId, roleId }));
+  return { userId, asUser: t.withIdentity({ subject: tag, clerkId: tag }) };
+}
+
 // ─── Authoritative schedule math ──────────────────────────────────────────────
 
 describe("prepaid amortization schedule (exact-term rounding)", () => {
@@ -706,7 +719,7 @@ describe("Phase 2 — correctSchedule term cap and idempotency", () => {
     const second = await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
       orgId, scheduleId: schedule!._id, writeOffMinor: 100_000, reason: "Partial write-off", idempotencyKey: "correct-key-1",
     });
-    expect(second).toBe(first);
+    expect(second).toEqual(first);
 
     const corrections = await t.run((ctx) =>
       ctx.db.query("prepaidScheduleCorrections").withIndex("by_schedule", (q) => q.eq("scheduleId", schedule!._id)).collect()
@@ -844,6 +857,198 @@ describe("Phase 4 — VAT-aware refunds", () => {
 
     expect(await accountNetMinor(t, orgId, "VAT_RECEIVABLE")).toBe(0);
     expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(1_200_000 - 100_000 - 300_000);
+  });
+});
+
+describe("Phase 6 — maker-checker write-off approval", () => {
+  test("a non-owner's write-off creates a PENDING request instead of applying, and the schedule is untouched", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("mc-pending");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    const { asUser: asAccountant } = await addFinanceUser(t, orgId, "mc-pending-accountant");
+    const result = await asAccountant.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Early cancellation, non-refundable",
+    });
+    expect(result.status).toBe("PENDING");
+    expect(result.requestId).not.toBeNull();
+    expect(result.correctionId).toBeNull();
+
+    const requests = await t.run((ctx) =>
+      ctx.db.query("prepaidCorrectionRequests").withIndex("by_schedule", (q) => q.eq("scheduleId", schedule!._id)).collect()
+    );
+    expect(requests).toHaveLength(1);
+    expect(requests[0].status).toBe("PENDING");
+
+    // The schedule itself is untouched — no correction row, no GL posting.
+    const corrections = await t.run((ctx) =>
+      ctx.db.query("prepaidScheduleCorrections").withIndex("by_schedule", (q) => q.eq("scheduleId", schedule!._id)).collect()
+    );
+    expect(corrections).toHaveLength(0);
+    const unchangedSchedule = await scheduleForExpense(t, expenseId);
+    expect(unchangedSchedule!.totalMinor).toBe(1_200_000);
+    expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(100_000); // only January's amortization
+  });
+
+  test("the owner's own write-off still applies directly, without a request", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("mc-owner-direct");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    const result = await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Owner-approved write-off",
+    });
+    expect(result.status).toBe("APPLIED");
+    expect(result.correctionId).not.toBeNull();
+
+    const requests = await t.run((ctx) =>
+      ctx.db.query("prepaidCorrectionRequests").withIndex("by_schedule", (q) => q.eq("scheduleId", schedule!._id)).collect()
+    );
+    expect(requests).toHaveLength(0);
+  });
+
+  test("the maker cannot approve their own request", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("mc-self-approve");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    const { asUser: asAccountant } = await addFinanceUser(t, orgId, "mc-self-approve-accountant");
+    const result = await asAccountant.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Needs approval",
+    });
+    const requestId = result.requestId!;
+
+    await expect(
+      asAccountant.mutation(api.prepaidExpenses.approveCorrectionRequest, { orgId, requestId })
+    ).rejects.toThrow(/cannot approve your own/i);
+
+    const request = await t.run((ctx) => ctx.db.get(requestId));
+    expect(request!.status).toBe("PENDING");
+  });
+
+  test("a different finance manager (or the owner) can approve, applying the correction and posting the GL", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("mc-approve");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    const { asUser: asAccountant } = await addFinanceUser(t, orgId, "mc-approve-accountant");
+    const result = await asAccountant.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Early cancellation",
+    });
+    const requestId = result.requestId!;
+
+    const correctionId = await asOwner.mutation(api.prepaidExpenses.approveCorrectionRequest, {
+      orgId, requestId, decisionNote: "Confirmed with vendor",
+    });
+    expect(correctionId).toBeDefined();
+
+    const request = await t.run((ctx) => ctx.db.get(requestId));
+    expect(request!.status).toBe("APPROVED");
+    expect(request!.decidedBy).toBe(userId);
+
+    const corrections = await t.run((ctx) =>
+      ctx.db.query("prepaidScheduleCorrections").withIndex("by_schedule", (q) => q.eq("scheduleId", schedule!._id)).collect()
+    );
+    expect(corrections).toHaveLength(1);
+    expect(corrections[0].writeOffMinor).toBe(300_000);
+
+    // The GL posted the write-off — 100 (Jan amortization) + 300 (write-off) = 400.
+    expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(400_000);
+  });
+
+  test("a request whose remainder shrank while pending is rejected cleanly at approval time", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("mc-stale");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+    // 1_100_000 unrecognized remainder after January.
+
+    const { asUser: asAccountant } = await addFinanceUser(t, orgId, "mc-stale-accountant");
+    const result = await asAccountant.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, writeOffMinor: 1_000_000, reason: "Large write-off",
+    });
+    const requestId = result.requestId!;
+
+    // While the write-off request is still pending, the OWNER directly
+    // refunds most of the remainder — shrinking what's left below the
+    // pending request's own write-off amount.
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, refundMinor: 900_000, refundPaymentMethod: "CASH", reason: "Owner refunded most of it directly",
+    });
+
+    await expect(
+      asOwner.mutation(api.prepaidExpenses.approveCorrectionRequest, { orgId, requestId })
+    ).rejects.toThrow(/cannot exceed the unrecognized remainder/i);
+
+    // The stale request is still sitting PENDING — rejected cleanly (an
+    // error, not a corrupted partial application), needs a human to
+    // reject/resubmit it.
+    const request = await t.run((ctx) => ctx.db.get(requestId));
+    expect(request!.status).toBe("PENDING");
+  });
+
+  test("rejecting a request applies no schedule change", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("mc-reject");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    const { asUser: asAccountant } = await addFinanceUser(t, orgId, "mc-reject-accountant");
+    const result = await asAccountant.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Needs approval",
+    });
+    const requestId = result.requestId!;
+
+    await asOwner.mutation(api.prepaidExpenses.rejectCorrectionRequest, { orgId, requestId, decisionNote: "Not warranted" });
+
+    const request = await t.run((ctx) => ctx.db.get(requestId));
+    expect(request!.status).toBe("REJECTED");
+
+    const unchangedSchedule = await scheduleForExpense(t, expenseId);
+    expect(unchangedSchedule!.totalMinor).toBe(1_200_000);
+  });
+
+  test("listPendingCorrectionRequests only returns PENDING requests for the org, enriched with schedule/expense details", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("mc-list");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    const { asUser: asAccountant } = await addFinanceUser(t, orgId, "mc-list-accountant");
+    await asAccountant.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Needs approval",
+    });
+
+    const pending = await asOwner.query(api.prepaidExpenses.listPendingCorrectionRequests, { orgId });
+    expect(pending).toHaveLength(1);
+    expect(pending[0].expenseTitle).toBe("Insurance");
+    expect(pending[0].currency).toBe("JOD");
+    expect(pending[0].writeOffMinor).toBe(300_000);
   });
 });
 

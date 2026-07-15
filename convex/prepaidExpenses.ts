@@ -42,10 +42,11 @@ import {
 } from "./utils/expenseAmortization";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
+import { isSystemOwnerRole } from "./utils/permissions";
 import { requireFeature } from "./subscriptions";
 import { auditLog } from "./financialAudit";
-import { notifyOwner } from "./utils/notifications";
-import { paymentMethodValidator } from "./utils/paymentMethods";
+import { notifyOwner, notifyUser, getActorName } from "./utils/notifications";
+import { paymentMethodValidator, type PaymentMethod } from "./utils/paymentMethods";
 import { runWithIdempotency } from "./utils/idempotency";
 import { drainEntries } from "./accountingOutbox";
 import { toMinorUnits } from "./utils/money";
@@ -597,6 +598,181 @@ export const getRemainingRefundableTaxMinor = query({
   },
 });
 
+interface CorrectionInputs {
+  refundMinor: number;
+  refundTaxMinor: number;
+  refundPaymentMethod?: PaymentMethod;
+  writeOffMinor: number;
+  newTermMonths: number;
+}
+
+/**
+ * All the business-rule validation for a schedule correction, independent of
+ * whether it's about to apply directly or is only being checked before
+ * queuing a maker-checker approval request — both paths must reject the same
+ * inputs, so an accountant never gets a "this looks fine" acknowledgment for
+ * a request that would fail validation again at approval time.
+ */
+function validateCorrectionInputs(
+  schedule: Doc<"prepaidExpenseSchedules">,
+  inputs: CorrectionInputs,
+  remainingRefundableTaxMinor: number
+): void {
+  const { refundMinor, refundTaxMinor, writeOffMinor, newTermMonths } = inputs;
+  if (refundMinor < 0 || writeOffMinor < 0 || refundTaxMinor < 0) {
+    throw new ConvexError("Refund, VAT, and write-off amounts cannot be negative.");
+  }
+  if (refundMinor > 0 && !inputs.refundPaymentMethod) {
+    throw new ConvexError("A payment method is required to record a refund.");
+  }
+  if (refundTaxMinor > 0 && refundMinor <= 0) {
+    throw new ConvexError("A VAT refund requires a net refund amount alongside it.");
+  }
+  if (refundTaxMinor > 0 && refundTaxMinor > remainingRefundableTaxMinor) {
+    throw new ConvexError(
+      `VAT refund (${refundTaxMinor}) cannot exceed the remaining refundable input VAT (${remainingRefundableTaxMinor}).`
+    );
+  }
+
+  const termChanged = newTermMonths !== schedule.termMonths;
+  if (refundMinor === 0 && writeOffMinor === 0 && !termChanged) {
+    throw new ConvexError("No change specified — provide a refund, write-off, or new term.");
+  }
+  if (!Number.isInteger(newTermMonths) || newTermMonths < 1 || newTermMonths > 600) {
+    throw new ConvexError("Term must be a whole number of months, between 1 and 600.");
+  }
+  const monthsRecognized = schedule.monthsRecognized ?? 0;
+  if (newTermMonths < monthsRecognized) {
+    throw new ConvexError(
+      `Term cannot be shortened below the ${monthsRecognized} month(s) already recognized. Use a write-off for the remainder instead.`
+    );
+  }
+
+  const remainingMinor = Math.max(schedule.totalMinor - schedule.recognizedMinor, 0);
+  if (refundMinor + writeOffMinor > remainingMinor) {
+    throw new ConvexError(
+      `Refund + write-off (${refundMinor + writeOffMinor}) cannot exceed the unrecognized remainder (${remainingMinor}).`
+    );
+  }
+
+  // A term equal to monthsRecognized leaves zero future months for
+  // amortizeScheduleForMonth to ever recognize — if the refund/write-off
+  // doesn't also cover the entire remainder, the leftover balance would sit
+  // ACTIVE in the Prepaid Expenses asset forever with no path to expense it.
+  if (newTermMonths <= monthsRecognized && refundMinor + writeOffMinor < remainingMinor) {
+    throw new ConvexError(
+      "The corrected term leaves no future month to recognize the remaining balance — either keep at least one month beyond what's already recognized, or write off/refund the full remainder."
+    );
+  }
+}
+
+/**
+ * The core of a schedule correction — validates against the schedule's
+ * CURRENT state (never trusts a caller's earlier read, since a maker-checker
+ * approval can apply long after the request was validated at submission
+ * time) and applies it: correction row, schedule patch, GL hooks, audit log.
+ * Shared by correctSchedule's direct-apply path and approveCorrectionRequest,
+ * so both follow byte-identical business rules and GL posting.
+ */
+async function applyScheduleCorrection(
+  ctx: MutationCtx,
+  args: {
+    orgId: Id<"organizations">;
+    scheduleId: Id<"prepaidExpenseSchedules">;
+    refundMinor: number;
+    refundTaxMinor: number;
+    refundPaymentMethod?: PaymentMethod;
+    writeOffMinor: number;
+    newTermMonths: number | undefined;
+    reason: string;
+    reference: string | undefined;
+    actorId: Id<"users">;
+  }
+): Promise<Id<"prepaidScheduleCorrections">> {
+  const schedule = await ctx.db.get(args.scheduleId);
+  if (!schedule || schedule.orgId !== args.orgId) {
+    throw new ConvexError("Prepaid schedule not found in this organization.");
+  }
+  if (schedule.status !== "ACTIVE") {
+    throw new ConvexError(`Cannot correct a schedule with status "${schedule.status}".`);
+  }
+
+  const newTermMonths = args.newTermMonths ?? schedule.termMonths;
+  const remainingRefundableTaxMinor =
+    args.refundTaxMinor > 0 ? await remainingRefundableTaxMinorForSchedule(ctx, schedule) : 0;
+  validateCorrectionInputs(
+    schedule,
+    {
+      refundMinor: args.refundMinor,
+      refundTaxMinor: args.refundTaxMinor,
+      refundPaymentMethod: args.refundPaymentMethod,
+      writeOffMinor: args.writeOffMinor,
+      newTermMonths,
+    },
+    remainingRefundableTaxMinor
+  );
+
+  const now = Date.now();
+  const correctionId = await ctx.db.insert("prepaidScheduleCorrections", {
+    orgId: args.orgId,
+    scheduleId: args.scheduleId,
+    refundMinor: args.refundMinor,
+    refundTaxMinor: args.refundMinor > 0 ? args.refundTaxMinor : undefined,
+    refundPaymentMethod: args.refundMinor > 0 ? args.refundPaymentMethod : undefined,
+    writeOffMinor: args.writeOffMinor,
+    previousTermMonths: schedule.termMonths,
+    newTermMonths,
+    reason: args.reason,
+    reference: args.refundMinor > 0 ? args.reference : undefined,
+    actorId: args.actorId,
+    createdAt: now,
+  });
+
+  const newTotalMinor = schedule.totalMinor - args.refundMinor - args.writeOffMinor;
+  await ctx.db.patch(args.scheduleId, {
+    totalMinor: newTotalMinor,
+    termMonths: newTermMonths,
+    status: newTotalMinor <= schedule.recognizedMinor ? "CANCELLED" : "ACTIVE",
+  });
+
+  if (args.refundMinor > 0) {
+    await hookPrepaidExpenseRefunded(ctx, {
+      orgId: args.orgId,
+      scheduleId: args.scheduleId,
+      correctionId,
+      amountMinor: args.refundMinor,
+      taxMinor: args.refundTaxMinor > 0 ? args.refundTaxMinor : undefined,
+      currency: schedule.currency,
+      paymentMethod: args.refundPaymentMethod,
+      actorId: args.actorId,
+      occurredAt: now,
+    });
+  }
+  if (args.writeOffMinor > 0) {
+    await hookPrepaidExpenseWrittenOff(ctx, {
+      orgId: args.orgId,
+      scheduleId: args.scheduleId,
+      correctionId,
+      amountMinor: args.writeOffMinor,
+      currency: schedule.currency,
+      expenseSystemKey: schedule.expenseSystemKey,
+      actorId: args.actorId,
+      occurredAt: now,
+    });
+  }
+
+  await auditLog(ctx, {
+    orgId: args.orgId,
+    actorId: args.actorId,
+    actionType: "CORRECT_PREPAID_SCHEDULE",
+    resourceType: "prepaidExpenseSchedules",
+    resourceId: args.scheduleId.toString(),
+    description: `Corrected prepaid schedule: refund ${args.refundMinor}${args.refundTaxMinor > 0 ? ` (+${args.refundTaxMinor} VAT)` : ""}, write-off ${args.writeOffMinor}, term ${schedule.termMonths} -> ${newTermMonths}${args.reference ? `, ref ${args.reference}` : ""}. Reason: ${args.reason}`,
+  });
+
+  return correctionId;
+}
+
 /**
  * The only way to adjust an ACTIVE schedule short of a full expense reversal.
  * `refundMinor` (cash/bank refund for the unused portion) and `writeOffMinor`
@@ -607,6 +783,12 @@ export const getRemainingRefundableTaxMinor = query({
  * asset. `newTermMonths`, if given, can shorten the remaining term no further
  * than what's already been recognized (can't retroactively invalidate posted
  * months) or extend it freely.
+ *
+ * Maker-checker: a non-owner's write-off (asset -> P&L, the highest-risk
+ * correction shape) doesn't apply immediately — it creates a
+ * prepaidCorrectionRequests row for another MANAGE_FINANCE holder or the
+ * owner to approve/reject (see approveCorrectionRequest). Owner submissions
+ * and refund-only/term-only corrections (no write-off) always apply directly.
  */
 export const correctSchedule = mutation({
   args: {
@@ -627,7 +809,7 @@ export const correctSchedule = mutation({
     idempotencyKey: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    const { user, role } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
     await requireFeature(ctx, args.orgId, "accounting");
 
     const reason = args.reason.trim();
@@ -637,12 +819,13 @@ export const correctSchedule = mutation({
     const refundMinor = Math.round(args.refundMinor ?? 0);
     const refundTaxMinor = Math.round(args.refundTaxMinor ?? 0);
     const writeOffMinor = Math.round(args.writeOffMinor ?? 0);
+    const requiresApproval = writeOffMinor > 0 && !isSystemOwnerRole(role);
 
     return await runWithIdempotency(
       ctx,
       {
         orgId: args.orgId,
-        operation: "correctPrepaidSchedule",
+        operation: requiresApproval ? "submitPrepaidCorrectionRequest" : "correctPrepaidSchedule",
         idempotencyKey: args.idempotencyKey,
         actorId: user._id,
         fingerprint: JSON.stringify({
@@ -656,6 +839,25 @@ export const correctSchedule = mutation({
         }),
       },
       async () => {
+        if (!requiresApproval) {
+          const correctionId = await applyScheduleCorrection(ctx, {
+            orgId: args.orgId,
+            scheduleId: args.scheduleId,
+            refundMinor,
+            refundTaxMinor,
+            refundPaymentMethod: args.refundPaymentMethod,
+            writeOffMinor,
+            newTermMonths: args.newTermMonths,
+            reason,
+            reference,
+            actorId: user._id,
+          });
+          return { status: "APPLIED" as const, correctionId, requestId: null };
+        }
+
+        // Same validation the direct path runs, checked up front so the
+        // accountant gets immediate feedback instead of a surprise rejection
+        // once someone finally reviews the request.
         const schedule = await ctx.db.get(args.scheduleId);
         if (!schedule || schedule.orgId !== args.orgId) {
           throw new ConvexError("Prepaid schedule not found in this organization.");
@@ -663,118 +865,191 @@ export const correctSchedule = mutation({
         if (schedule.status !== "ACTIVE") {
           throw new ConvexError(`Cannot correct a schedule with status "${schedule.status}".`);
         }
-
-        if (refundMinor < 0 || writeOffMinor < 0 || refundTaxMinor < 0) {
-          throw new ConvexError("Refund, VAT, and write-off amounts cannot be negative.");
-        }
-        if (refundMinor > 0 && !args.refundPaymentMethod) {
-          throw new ConvexError("A payment method is required to record a refund.");
-        }
-        if (refundTaxMinor > 0 && refundMinor <= 0) {
-          throw new ConvexError("A VAT refund requires a net refund amount alongside it.");
-        }
-        if (refundTaxMinor > 0) {
-          const remainingRefundableTaxMinor = await remainingRefundableTaxMinorForSchedule(ctx, schedule);
-          if (refundTaxMinor > remainingRefundableTaxMinor) {
-            throw new ConvexError(
-              `VAT refund (${refundTaxMinor}) cannot exceed the remaining refundable input VAT (${remainingRefundableTaxMinor}).`
-            );
-          }
-        }
-
         const newTermMonths = args.newTermMonths ?? schedule.termMonths;
-        const termChanged = newTermMonths !== schedule.termMonths;
-        if (refundMinor === 0 && writeOffMinor === 0 && !termChanged) {
-          throw new ConvexError("No change specified — provide a refund, write-off, or new term.");
-        }
-        if (!Number.isInteger(newTermMonths) || newTermMonths < 1 || newTermMonths > 600) {
-          throw new ConvexError("Term must be a whole number of months, between 1 and 600.");
-        }
-        const monthsRecognized = schedule.monthsRecognized ?? 0;
-        if (newTermMonths < monthsRecognized) {
-          throw new ConvexError(
-            `Term cannot be shortened below the ${monthsRecognized} month(s) already recognized. Use a write-off for the remainder instead.`
-          );
-        }
-
-        const remainingMinor = Math.max(schedule.totalMinor - schedule.recognizedMinor, 0);
-        if (refundMinor + writeOffMinor > remainingMinor) {
-          throw new ConvexError(
-            `Refund + write-off (${refundMinor + writeOffMinor}) cannot exceed the unrecognized remainder (${remainingMinor}).`
-          );
-        }
-
-        // A term equal to monthsRecognized leaves zero future months for
-        // amortizeScheduleForMonth to ever recognize — if the refund/write-off
-        // doesn't also cover the entire remainder, the leftover balance would sit
-        // ACTIVE in the Prepaid Expenses asset forever with no path to expense it.
-        if (newTermMonths <= monthsRecognized && refundMinor + writeOffMinor < remainingMinor) {
-          throw new ConvexError(
-            "The corrected term leaves no future month to recognize the remaining balance — either keep at least one month beyond what's already recognized, or write off/refund the full remainder."
-          );
-        }
+        const remainingRefundableTaxMinor =
+          refundTaxMinor > 0 ? await remainingRefundableTaxMinorForSchedule(ctx, schedule) : 0;
+        validateCorrectionInputs(
+          schedule,
+          { refundMinor, refundTaxMinor, refundPaymentMethod: args.refundPaymentMethod, writeOffMinor, newTermMonths },
+          remainingRefundableTaxMinor
+        );
 
         const now = Date.now();
-        const correctionId = await ctx.db.insert("prepaidScheduleCorrections", {
+        const requestId = await ctx.db.insert("prepaidCorrectionRequests", {
           orgId: args.orgId,
           scheduleId: args.scheduleId,
           refundMinor,
           refundTaxMinor: refundMinor > 0 ? refundTaxMinor : undefined,
           refundPaymentMethod: refundMinor > 0 ? args.refundPaymentMethod : undefined,
           writeOffMinor,
-          previousTermMonths: schedule.termMonths,
           newTermMonths,
           reason,
           reference: refundMinor > 0 ? reference : undefined,
-          actorId: user._id,
+          status: "PENDING",
+          requestedBy: user._id,
           createdAt: now,
         });
-
-        const newTotalMinor = schedule.totalMinor - refundMinor - writeOffMinor;
-        await ctx.db.patch(args.scheduleId, {
-          totalMinor: newTotalMinor,
-          termMonths: newTermMonths,
-          status: newTotalMinor <= schedule.recognizedMinor ? "CANCELLED" : "ACTIVE",
-        });
-
-        if (refundMinor > 0) {
-          await hookPrepaidExpenseRefunded(ctx, {
-            orgId: args.orgId,
-            scheduleId: args.scheduleId,
-            correctionId,
-            amountMinor: refundMinor,
-            taxMinor: refundTaxMinor > 0 ? refundTaxMinor : undefined,
-            currency: schedule.currency,
-            paymentMethod: args.refundPaymentMethod,
-            actorId: user._id,
-            occurredAt: now,
-          });
-        }
-        if (writeOffMinor > 0) {
-          await hookPrepaidExpenseWrittenOff(ctx, {
-            orgId: args.orgId,
-            scheduleId: args.scheduleId,
-            correctionId,
-            amountMinor: writeOffMinor,
-            currency: schedule.currency,
-            expenseSystemKey: schedule.expenseSystemKey,
-            actorId: user._id,
-            occurredAt: now,
-          });
-        }
 
         await auditLog(ctx, {
           orgId: args.orgId,
           actorId: user._id,
-          actionType: "CORRECT_PREPAID_SCHEDULE",
-          resourceType: "prepaidExpenseSchedules",
-          resourceId: args.scheduleId.toString(),
-          description: `Corrected prepaid schedule: refund ${refundMinor}${refundTaxMinor > 0 ? ` (+${refundTaxMinor} VAT)` : ""}, write-off ${writeOffMinor}, term ${schedule.termMonths} -> ${newTermMonths}${reference ? `, ref ${reference}` : ""}. Reason: ${reason}`,
+          actionType: "REQUEST_PREPAID_CORRECTION",
+          resourceType: "prepaidCorrectionRequests",
+          resourceId: requestId.toString(),
+          description: `Requested approval for a prepaid write-off: refund ${refundMinor}, write-off ${writeOffMinor}. Reason: ${reason}`,
         });
 
-        return correctionId;
+        const expense = await ctx.db.get(schedule.expenseId);
+        const actorName = await getActorName(ctx);
+        await notifyOwner(ctx, args.orgId, "accounting.prepaidCorrectionRequested", {
+          actorName,
+          expenseTitle: expense?.title ?? "Prepaid expense",
+          amount: String(writeOffMinor),
+        });
+
+        return { status: "PENDING" as const, correctionId: null, requestId };
       }
     );
+  },
+});
+
+/** Every PENDING correction request for the org, newest first, enriched for the approval panel. */
+export const listPendingCorrectionRequests = query({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.VIEW_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+
+    const requests = await ctx.db
+      .query("prepaidCorrectionRequests")
+      .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", "PENDING"))
+      .collect();
+
+    const enriched = await Promise.all(
+      requests.map(async (r) => {
+        const schedule = await ctx.db.get(r.scheduleId);
+        const expense = schedule ? await ctx.db.get(schedule.expenseId) : null;
+        const requester = await ctx.db.get(r.requestedBy);
+        return {
+          ...r,
+          expenseTitle: expense?.title ?? "Prepaid expense",
+          currency: schedule?.currency ?? "USD",
+          requestedByName: requester?.name ?? requester?.email ?? "Unknown",
+        };
+      })
+    );
+    return enriched.sort((a, b) => b.createdAt - a.createdAt);
+  },
+});
+
+/**
+ * Approves a PENDING correction request and applies it — re-validated
+ * against the schedule's CURRENT state (balances may have moved while the
+ * request sat pending), attributed on the GL/audit trail to the original
+ * requester (the approver's decision is its own record on the request row).
+ * The maker can never approve their own request.
+ */
+export const approveCorrectionRequest = mutation({
+  args: { orgId: v.id("organizations"), requestId: v.id("prepaidCorrectionRequests"), decisionNote: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+
+    const request = await ctx.db.get(args.requestId);
+    if (!request || request.orgId !== args.orgId) {
+      throw new ConvexError("Correction request not found in this organization.");
+    }
+    if (request.status !== "PENDING") {
+      throw new ConvexError(`This request has already been ${request.status.toLowerCase()}.`);
+    }
+    if (request.requestedBy === user._id) {
+      throw new ConvexError("You cannot approve your own correction request — ask another finance manager or the owner.");
+    }
+
+    const correctionId = await applyScheduleCorrection(ctx, {
+      orgId: args.orgId,
+      scheduleId: request.scheduleId,
+      refundMinor: request.refundMinor,
+      refundTaxMinor: request.refundTaxMinor ?? 0,
+      refundPaymentMethod: request.refundPaymentMethod,
+      writeOffMinor: request.writeOffMinor,
+      newTermMonths: request.newTermMonths,
+      reason: request.reason,
+      reference: request.reference,
+      actorId: request.requestedBy,
+    });
+
+    await ctx.db.patch(args.requestId, {
+      status: "APPROVED",
+      decidedBy: user._id,
+      decidedAt: Date.now(),
+      decisionNote: args.decisionNote,
+    });
+
+    await auditLog(ctx, {
+      orgId: args.orgId,
+      actorId: user._id,
+      actionType: "APPROVE_PREPAID_CORRECTION",
+      resourceType: "prepaidCorrectionRequests",
+      resourceId: args.requestId.toString(),
+      description: `Approved prepaid correction request (write-off ${request.writeOffMinor}). Reason: ${request.reason}`,
+    });
+
+    const schedule = await ctx.db.get(request.scheduleId);
+    const expense = schedule ? await ctx.db.get(schedule.expenseId) : null;
+    await notifyUser(ctx, args.orgId, request.requestedBy, "accounting.prepaidCorrectionDecided", {
+      expenseTitle: expense?.title ?? "Prepaid expense",
+      status: "approved",
+    });
+
+    return correctionId;
+  },
+});
+
+/**
+ * Rejects a PENDING correction request — no schedule change, no GL posting.
+ * Unlike approval, a requester CAN reject/withdraw their own request (same
+ * self-service-cancel precedent as approvals.cancelMyApproval); segregation
+ * of duties only requires that the maker can't be the one who approves.
+ */
+export const rejectCorrectionRequest = mutation({
+  args: { orgId: v.id("organizations"), requestId: v.id("prepaidCorrectionRequests"), decisionNote: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const { user } = await requireTenantAuth(ctx, args.orgId, [PERMISSIONS.MANAGE_FINANCE]);
+    await requireFeature(ctx, args.orgId, "accounting");
+
+    const request = await ctx.db.get(args.requestId);
+    if (!request || request.orgId !== args.orgId) {
+      throw new ConvexError("Correction request not found in this organization.");
+    }
+    if (request.status !== "PENDING") {
+      throw new ConvexError(`This request has already been ${request.status.toLowerCase()}.`);
+    }
+
+    await ctx.db.patch(args.requestId, {
+      status: "REJECTED",
+      decidedBy: user._id,
+      decidedAt: Date.now(),
+      decisionNote: args.decisionNote,
+    });
+
+    await auditLog(ctx, {
+      orgId: args.orgId,
+      actorId: user._id,
+      actionType: "REJECT_PREPAID_CORRECTION",
+      resourceType: "prepaidCorrectionRequests",
+      resourceId: args.requestId.toString(),
+      description: `Rejected prepaid correction request (write-off ${request.writeOffMinor}). Reason: ${request.reason}`,
+    });
+
+    if (request.requestedBy !== user._id) {
+      const schedule = await ctx.db.get(request.scheduleId);
+      const expense = schedule ? await ctx.db.get(schedule.expenseId) : null;
+      await notifyUser(ctx, args.orgId, request.requestedBy, "accounting.prepaidCorrectionDecided", {
+        expenseTitle: expense?.title ?? "Prepaid expense",
+        status: "rejected",
+      });
+    }
   },
 });
 

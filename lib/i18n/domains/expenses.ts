@@ -122,6 +122,14 @@ export const expensesEn = {
   RefundVatLabel: "VAT portion",
   RefundVatCapHint: "Up to {amount} of input VAT remains refundable on this expense.",
   RefundReferenceLabel: "Credit note / reference",
+  PrepaidCorrectionRequiresApprovalNotice: "A write-off requires approval from another finance manager or the owner before it applies.",
+  SubmitForApproval: "Submit for approval",
+  PrepaidCorrectionSubmittedForApproval: "Submitted for approval.",
+  PendingCorrectionRequestsTitle: "Pending correction approvals",
+  RequestedByLabel: "Requested by",
+  PrepaidCorrectionOwnRequestNotice: "This is your own request — another finance manager or the owner must approve it.",
+  PrepaidCorrectionApproved: "Correction approved and applied.",
+  PrepaidCorrectionRejected: "Correction request rejected.",
 };
 
 export const expensesAr = {
@@ -248,4 +256,12 @@ export const expensesAr = {
   RefundVatLabel: "حصة ضريبة القيمة المضافة",
   RefundVatCapHint: "يتبقى حتى {amount} من ضريبة القيمة المضافة القابلة للاسترداد على هذا المصروف.",
   RefundReferenceLabel: "إشعار دائن / مرجع",
+  PrepaidCorrectionRequiresApprovalNotice: "الشطب يتطلب موافقة مدير مالي آخر أو المالك قبل التطبيق.",
+  SubmitForApproval: "إرسال للموافقة",
+  PrepaidCorrectionSubmittedForApproval: "تم الإرسال للموافقة.",
+  PendingCorrectionRequestsTitle: "موافقات التصحيح المعلقة",
+  RequestedByLabel: "طلب بواسطة",
+  PrepaidCorrectionOwnRequestNotice: "هذا طلبك الخاص — يجب أن يوافق عليه مدير مالي آخر أو المالك.",
+  PrepaidCorrectionApproved: "تمت الموافقة على التصحيح وتطبيقه.",
+  PrepaidCorrectionRejected: "تم رفض طلب التصحيح.",
 };

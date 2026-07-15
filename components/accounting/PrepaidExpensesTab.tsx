@@ -249,6 +249,94 @@ function RunNowResultsDialog({
   );
 }
 
+type PendingCorrectionRequest = {
+  _id: Id<"prepaidCorrectionRequests">;
+  scheduleId: Id<"prepaidExpenseSchedules">;
+  refundMinor: number;
+  refundTaxMinor?: number;
+  writeOffMinor: number;
+  newTermMonths: number;
+  reason: string;
+  reference?: string;
+  requestedBy: Id<"users">;
+  requestedByName: string;
+  expenseTitle: string;
+  currency: string;
+  createdAt: number;
+};
+
+/** Maker-checker queue for non-owner write-offs — approve/reject for anyone with MANAGE_FINANCE other than the requester (server-enforced; the approve button is also disabled client-side for the requester's own requests). */
+function PendingCorrectionRequestsPanel({ orgId }: Readonly<{ orgId: Id<"organizations"> }>) {
+  const { t } = useLanguage();
+  const { membership } = usePermissions();
+  const requests = useQuery(api.prepaidExpenses.listPendingCorrectionRequests, { orgId }) as
+    | PendingCorrectionRequest[]
+    | undefined;
+  const approve = useMutation(api.prepaidExpenses.approveCorrectionRequest);
+  const reject = useMutation(api.prepaidExpenses.rejectCorrectionRequest);
+  const [actingId, setActingId] = useState<Id<"prepaidCorrectionRequests"> | null>(null);
+  const formatCurrency = useCurrencyFormatterInCurrency();
+
+  if (!requests || requests.length === 0) return null;
+
+  async function handleDecision(request: PendingCorrectionRequest, decision: "approve" | "reject") {
+    setActingId(request._id);
+    try {
+      if (decision === "approve") {
+        await approve({ orgId, requestId: request._id });
+        toast.success(t("PrepaidCorrectionApproved" as any));
+      } else {
+        await reject({ orgId, requestId: request._id });
+        toast.success(t("PrepaidCorrectionRejected" as any));
+      }
+    } catch (error) {
+      toast.error(errorMessage(error));
+    } finally {
+      setActingId(null);
+    }
+  }
+
+  return (
+    <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-4 space-y-3">
+      <h3 className="text-sm font-semibold text-amber-700">{t("PendingCorrectionRequestsTitle" as any)}</h3>
+      {requests.map((request) => {
+        const scale = scaleForCurrency(request.currency);
+        const factor = Math.pow(10, scale);
+        const isOwnRequest = membership?.userId === request.requestedBy;
+        return (
+          <div key={request._id} className="rounded-md border border-slate-200 bg-white p-3 text-sm space-y-1">
+            <div className="flex justify-between">
+              <span className="font-medium">{request.expenseTitle}</span>
+              <span className="text-slate-500">{format(new Date(request.createdAt), "MMM d, yyyy")}</span>
+            </div>
+            <p>
+              {t("WriteOffAmountLabel" as any)}: {formatCurrency(request.writeOffMinor / factor, request.currency, scale)}
+            </p>
+            <p className="text-slate-500">
+              {t("RequestedByLabel" as any)}: {request.requestedByName}
+            </p>
+            <p className="text-slate-700">{request.reason}</p>
+            {isOwnRequest && <p className="text-xs text-amber-600">{t("PrepaidCorrectionOwnRequestNotice" as any)}</p>}
+            <div className="flex justify-end gap-2 pt-1">
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={actingId === request._id}
+                onClick={() => handleDecision(request, "reject")}
+              >
+                {t("Reject" as any)}
+              </Button>
+              <Button size="sm" disabled={actingId === request._id || isOwnRequest} onClick={() => handleDecision(request, "approve")}>
+                {t("Approve" as any)}
+              </Button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function PrepaidExpensesTab() {
   const { activeOrgId } = useOrg();
   const { t } = useLanguage();
@@ -320,6 +408,8 @@ export function PrepaidExpensesTab() {
           </Button>
         )}
       </div>
+
+      {activeOrgId && canManage && <PendingCorrectionRequestsPanel orgId={activeOrgId} />}
 
       <AccountingTableFrame>
         <Table>
@@ -453,6 +543,7 @@ function CorrectScheduleDialog({
   onOpenChange: (open: boolean) => void;
 }>) {
   const { t } = useLanguage();
+  const { isOwner } = usePermissions();
   const scale = scaleForCurrency(schedule.currency);
   const factor = Math.pow(10, scale);
   const correct = useMutation(api.prepaidExpenses.correctSchedule);
@@ -481,10 +572,12 @@ function CorrectScheduleDialog({
   });
   const changeTerm = form.watch("changeTerm");
   const refundAmount = form.watch("refundAmount") || 0;
+  const writeOffAmount = form.watch("writeOffAmount") || 0;
+  const needsApproval = writeOffAmount > 0 && !isOwner;
 
   async function onSubmit(values: PrepaidCorrectionFormValues) {
     await submitWithFeedback(async () => {
-      await correct({
+      const result = await correct({
         orgId,
         scheduleId: schedule._id,
         refundMinor: Math.round(values.refundAmount * factor),
@@ -496,7 +589,7 @@ function CorrectScheduleDialog({
         reason: values.reason.trim(),
         idempotencyKey,
       });
-      toast.success(t("PrepaidScheduleCorrected" as any));
+      toast.success(t(result.status === "PENDING" ? "PrepaidCorrectionSubmittedForApproval" as any : "PrepaidScheduleCorrected" as any));
       onOpenChange(false);
     });
   }
@@ -546,6 +639,12 @@ function CorrectScheduleDialog({
                 )}
               />
             </div>
+
+            {needsApproval && (
+              <p className="text-xs text-amber-600 bg-amber-500/10 border border-amber-500/20 rounded-md px-3 py-2">
+                {t("PrepaidCorrectionRequiresApprovalNotice" as any)}
+              </p>
+            )}
 
             {refundAmount > 0 && (
               <FormField
@@ -662,7 +761,7 @@ function CorrectScheduleDialog({
             <DialogFooter>
               <DialogFooterActions
                 cancelLabel={t("Cancel" as any)}
-                confirmLabel={t("ConfirmCorrection" as any)}
+                confirmLabel={t(needsApproval ? "SubmitForApproval" as any : "ConfirmCorrection" as any)}
                 onCancel={() => onOpenChange(false)}
                 onConfirm={form.handleSubmit(onSubmit)}
                 submitting={submitting}

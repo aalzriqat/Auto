@@ -423,6 +423,9 @@ export default defineSchema({
       v.literal("REVERSE_ALLOCATION"),
       v.literal("IGNORE_BANK_STATEMENT_LINE"),
       v.literal("CORRECT_PREPAID_SCHEDULE"),
+      v.literal("REQUEST_PREPAID_CORRECTION"),
+      v.literal("APPROVE_PREPAID_CORRECTION"),
+      v.literal("REJECT_PREPAID_CORRECTION"),
       v.literal("RESOLVE_SYSTEM_ACCOUNT_ADOPTION"),
       v.literal("ACKNOWLEDGE_CLOSE_WARNINGS"),
     ),
@@ -1053,6 +1056,32 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_org", ["orgId"])
+    .index("by_schedule", ["scheduleId"]),
+
+  // Maker-checker gate for a non-owner's write-off correction (an asset ->
+  // P&L accelerated expense — the highest-risk correction shape). Refund-only
+  // and term-only corrections, and any correction submitted by the owner,
+  // apply immediately via prepaidExpenseSchedules.correctSchedule and never
+  // create a row here. Same pending -> approved/rejected idiom as
+  // profitApprovalRequests / vehicleStatusRequests.
+  prepaidCorrectionRequests: defineTable({
+    orgId: v.id("organizations"),
+    scheduleId: v.id("prepaidExpenseSchedules"),
+    refundMinor: v.number(),
+    refundTaxMinor: v.optional(v.number()),
+    refundPaymentMethod: v.optional(paymentMethodValidator),
+    writeOffMinor: v.number(),
+    newTermMonths: v.number(),
+    reason: v.string(),
+    reference: v.optional(v.string()),
+    status: v.union(v.literal("PENDING"), v.literal("APPROVED"), v.literal("REJECTED")),
+    requestedBy: v.id("users"),
+    decidedBy: v.optional(v.id("users")),
+    decidedAt: v.optional(v.number()),
+    decisionNote: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_org_status", ["orgId", "status"])
     .index("by_schedule", ["scheduleId"]),
 
   expenses: defineTable({
