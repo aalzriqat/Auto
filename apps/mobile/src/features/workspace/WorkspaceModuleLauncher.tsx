@@ -2,9 +2,12 @@ import { useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
+import { Card } from "../../components/Card";
+import { EmptyState } from "../../components/EmptyState";
 import { Icon } from "../../components/Icon";
+import { useAppFontState } from "../../providers/AppFontContext";
 import { useLocale } from "../../providers/LocaleProvider";
-import { theme } from "../../theme";
+import { getTypographyStyle, theme } from "../../theme";
 import {
   countVisibleNativeModulesByCategory,
   getVisibleNativeModules,
@@ -16,6 +19,22 @@ import {
   type NativeModuleDefinition,
   type NativeModuleCategory,
 } from "./nativeModules";
+
+function useLauncherTypography() {
+  const { locale } = useLocale();
+  const { fontsLoaded } = useAppFontState();
+
+  return useMemo(
+    () => ({
+      body: getTypographyStyle("body", locale, fontsLoaded),
+      caption: getTypographyStyle("caption", locale, fontsLoaded),
+      heading: getTypographyStyle("heading", locale, fontsLoaded),
+      label: getTypographyStyle("label", locale, fontsLoaded),
+      title: getTypographyStyle("title", locale, fontsLoaded),
+    }),
+    [fontsLoaded, locale],
+  );
+}
 
 export function WorkspaceModuleLauncher({
   initialCategory = "operations",
@@ -32,6 +51,7 @@ export function WorkspaceModuleLauncher({
 }) {
   const router = useRouter();
   const { locale, t, textDirection } = useLocale();
+  const type = useLauncherTypography();
   const [category, setCategory] = useState<NativeModuleCategory>(initialCategory);
   const [query, setQuery] = useState("");
   const activeCategory = lockedCategory ?? category;
@@ -75,22 +95,22 @@ export function WorkspaceModuleLauncher({
   }, [category, lockedCategory, modules.length, visibleCategories]);
 
   return (
-    <View style={[styles.panel, { direction: textDirection }]}>
+    <Card style={[styles.panel, { direction: textDirection }]}>
       <View style={styles.heading}>
         <View style={styles.headingRow}>
           <View style={styles.headingText}>
-            <Text style={styles.panelTitle}>
+            <Text style={[styles.panelTitle, type.title]}>
               {lockedCategory && activeCategoryDefinition
                 ? labelFor(activeCategoryDefinition.title, locale)
                 : t("workspaceCommandCenterTitle")}
             </Text>
-            <Text style={styles.panelBody}>
+            <Text style={[styles.panelBody, type.body]}>
               {lockedCategory ? t("workspaceCategoryCenterBody") : t("workspaceCommandCenterBody")}
             </Text>
           </View>
           <View style={styles.countBadge}>
-            <Text style={styles.countBadgeValue}>{moduleCount}</Text>
-            <Text style={styles.countBadgeLabel}>{t("workspaceToolsCount")}</Text>
+            <Text style={[styles.countBadgeValue, type.title]}>{moduleCount}</Text>
+            <Text style={[styles.countBadgeLabel, type.label]}>{t("workspaceToolsCount")}</Text>
           </View>
         </View>
       </View>
@@ -103,7 +123,7 @@ export function WorkspaceModuleLauncher({
           onChangeText={setQuery}
           placeholder={t("workspaceSearchPlaceholder")}
           placeholderTextColor={theme.colors.subtleText}
-          style={[styles.searchInput, { textAlign: locale === "ar" ? "right" : "left" }]}
+          style={[styles.searchInput, type.body, { textAlign: locale === "ar" ? "right" : "left" }]}
           value={query}
         />
         {query ? (
@@ -121,36 +141,36 @@ export function WorkspaceModuleLauncher({
       {lockedCategory ? null : (
         <View style={styles.tabs}>
           {visibleCategories.map((item) => {
-          const selected = item.id === category;
-          const visibleCount = countVisibleNativeModulesByCategory(item.id, permissions, roleName);
-          return (
-            <Pressable
-              key={item.id}
-              accessibilityRole="tab"
-              accessibilityState={{ selected }}
-              style={({ pressed }) => [
-                styles.tab,
-                selected && styles.tabSelected,
-                pressed && styles.pressed,
-              ]}
-              onPress={() => {
-                setQuery("");
-                setCategory(item.id);
-              }}
-            >
-              <View style={styles.tabContent}>
-                <Icon color={selected ? "primary" : "mutedText"} name={item.icon} size={16} />
-                <Text
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.82}
-                  numberOfLines={1}
-                  style={[styles.tabText, selected && styles.tabTextSelected]}
-                >
-                  {labelFor(item.title, locale)} · {visibleCount}
-                </Text>
-              </View>
-            </Pressable>
-          );
+            const selected = item.id === category;
+            const visibleCount = countVisibleNativeModulesByCategory(item.id, permissions, roleName);
+            return (
+              <Pressable
+                key={item.id}
+                accessibilityRole="tab"
+                accessibilityState={{ selected }}
+                style={({ pressed }) => [
+                  styles.tab,
+                  selected && styles.tabSelected,
+                  pressed && styles.pressed,
+                ]}
+                onPress={() => {
+                  setQuery("");
+                  setCategory(item.id);
+                }}
+              >
+                <View style={styles.tabContent}>
+                  <Icon color={selected ? "primary" : "mutedText"} name={item.icon} size={16} />
+                  <Text
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.82}
+                    numberOfLines={1}
+                    style={[styles.tabText, type.label, selected && styles.tabTextSelected]}
+                  >
+                    {labelFor(item.title, locale)} · {visibleCount}
+                  </Text>
+                </View>
+              </Pressable>
+            );
           })}
         </View>
       )}
@@ -161,54 +181,50 @@ export function WorkspaceModuleLauncher({
             const title = labelFor(module.title, locale);
             const categoryTitle = getCategoryLabel(module, locale);
             return (
-              <Pressable
+              <Card
                 key={module.id}
-                accessibilityRole="button"
-                style={({ pressed }) => [
-                  styles.moduleCard,
-                  isSearching && styles.moduleCardWide,
-                  pressed && styles.pressed,
-                ]}
+                accessibilityLabel={`${t("workspaceOpenModule")}: ${title}`}
                 onPress={() =>
                   router.push({
                     pathname: nativeModulePath(module.id),
                     params: { orgId, moduleId: module.id },
                   })
                 }
+                style={[
+                  styles.moduleCard,
+                  isSearching && styles.moduleCardWide,
+                ]}
               >
                 <View style={styles.moduleTopRow}>
                   <View style={styles.moduleBadge}>
                     <Icon color="primary" name={module.icon} size={20} />
                   </View>
                   <View style={styles.moduleMeta}>
-                    <Text numberOfLines={1} style={styles.moduleCategory}>
+                    <Text numberOfLines={1} style={[styles.moduleCategory, type.label]}>
                       {categoryTitle}
                     </Text>
-                    <Text style={styles.moduleAction}>{t("workspaceOpenModule")}</Text>
+                    <Text style={[styles.moduleAction, type.label]}>{t("workspaceOpenModule")}</Text>
                   </View>
                 </View>
                 <View style={styles.moduleText}>
-                  <Text numberOfLines={1} style={styles.moduleTitle}>
+                  <Text numberOfLines={1} style={[styles.moduleTitle, type.heading]}>
                     {title}
                   </Text>
-                  <Text numberOfLines={isSearching ? 3 : 2} style={styles.moduleSubtitle}>
+                  <Text numberOfLines={isSearching ? 3 : 2} style={[styles.moduleSubtitle, type.caption]}>
                     {labelFor(module.subtitle, locale)}
                   </Text>
                 </View>
-              </Pressable>
+              </Card>
             );
           })}
         </View>
       ) : (
-        <View style={styles.emptyState}>
-          <Text style={styles.emptyText}>
-            {isSearching
-              ? t("workspaceNoSearchResults")
-              : t("workspaceNoRoleTools")}
-          </Text>
-        </View>
+        <EmptyState
+          icon={isSearching ? "search" : "operations"}
+          title={isSearching ? t("workspaceNoSearchResults") : t("workspaceNoRoleTools")}
+        />
       )}
-    </View>
+    </Card>
   );
 }
 
@@ -397,18 +413,5 @@ const styles = StyleSheet.create({
   },
   pressed: {
     opacity: 0.82,
-  },
-  emptyState: {
-    borderRadius: theme.radius.md,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surfaceAlt,
-    padding: theme.spacing.lg,
-  },
-  emptyText: {
-    color: theme.colors.mutedText,
-    fontSize: 14,
-    fontWeight: "700",
-    textAlign: "center",
   },
 });
