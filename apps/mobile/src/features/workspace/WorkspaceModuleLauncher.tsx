@@ -122,7 +122,10 @@ export function WorkspaceModuleLauncher({
                 selected && styles.tabSelected,
                 pressed && styles.pressed,
               ]}
-              onPress={() => setCategory(item.id)}
+              onPress={() => {
+                setQuery("");
+                setCategory(item.id);
+              }}
             >
               <Text
                 adjustsFontSizeToFit

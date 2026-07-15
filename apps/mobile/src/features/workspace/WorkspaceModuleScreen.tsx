@@ -117,6 +117,33 @@ type Option<T extends string> = {
 type SelectableOption = SearchableSelectOption;
 type AppLocale = "en" | "ar";
 type MobileSaleStatusFilter = MobileSaleStatus | "ALL";
+type MobileFinanceCompanyFilter = "ALL" | "ACTIVE" | "INACTIVE";
+
+type FinancePreviewInput = {
+  adminFees: number;
+  commission: number;
+  downPayment: number;
+  gracePeriodMonths: number;
+  includesCommissionInDebt: boolean;
+  insuranceRate: number;
+  profitRate: number;
+  termMonths: number;
+  vehiclePrice: number;
+};
+
+type WebsiteTemplateOption = {
+  id: string;
+  labelEn: string;
+  labelAr: string;
+  tier: "standard" | "signature";
+};
+
+type WebsiteColorPreset = {
+  labelEn: string;
+  labelAr: string;
+  primaryColor: string;
+  secondaryColor: string;
+};
 
 type FormFieldProps = {
   keyboardType?: "default" | "email-address" | "numeric" | "phone-pad";
@@ -125,6 +152,83 @@ type FormFieldProps = {
   onChangeText: (value: string) => void;
   placeholder?: string;
   value: string;
+};
+
+const TERM_MONTH_PRESETS = ["36", "48", "60", "72"] as const;
+
+const FINANCE_SCENARIO_PRESETS = [
+  { labelEn: "Compact", labelAr: "سيارة اقتصادية", price: "12000", downPayment: "2400" },
+  { labelEn: "Family SUV", labelAr: "سيارة عائلية", price: "24000", downPayment: "4800" },
+  { labelEn: "Premium", labelAr: "سيارة مميزة", price: "42000", downPayment: "8400" },
+] as const;
+
+const WEBSITE_TEMPLATE_OPTIONS: WebsiteTemplateOption[] = [
+  { id: "modern-showroom", labelEn: "Modern Showroom", labelAr: "معرض عصري", tier: "standard" },
+  { id: "classic-inventory", labelEn: "Classic Inventory", labelAr: "مخزون كلاسيكي", tier: "standard" },
+  { id: "premium-minimal", labelEn: "Premium Minimal", labelAr: "فاخر بسيط", tier: "standard" },
+  { id: "prestige", labelEn: "Prestige", labelAr: "برستيج", tier: "signature" },
+  { id: "velocity", labelEn: "Velocity", labelAr: "فيلوسيتي", tier: "signature" },
+  { id: "avant", labelEn: "Avant", labelAr: "أفانت", tier: "signature" },
+  { id: "obsidian-atelier", labelEn: "Obsidian Atelier", labelAr: "أوبسيديان أتولييه", tier: "signature" },
+  { id: "desert-grand-tourer", labelEn: "Desert Grand Tourer", labelAr: "رحلة الصحراء", tier: "signature" },
+  { id: "velocity-command", labelEn: "Velocity Command", labelAr: "مركز السرعة", tier: "signature" },
+  { id: "lucent-studio", labelEn: "Lucent Studio", labelAr: "استوديو لوسنت", tier: "signature" },
+  { id: "concierge-editorial", labelEn: "Concierge Editorial", labelAr: "كونسيرج تحريري", tier: "signature" },
+  { id: "neon-grid", labelEn: "Neon Grid", labelAr: "شبكة نيون", tier: "signature" },
+  { id: "cinema-noir", labelEn: "Cinema Noir", labelAr: "سينما نوار", tier: "signature" },
+  { id: "atlas-rally", labelEn: "Atlas Rally", labelAr: "أطلس رالي", tier: "signature" },
+  { id: "glass-horizon", labelEn: "Glass Horizon", labelAr: "أفق زجاجي", tier: "signature" },
+  { id: "torque-lab", labelEn: "Torque Lab", labelAr: "مختبر العزم", tier: "signature" },
+  { id: "pearl-majlis", labelEn: "Pearl Majlis", labelAr: "مجلس اللؤلؤ", tier: "signature" },
+  { id: "prism-motion", labelEn: "Prism Motion", labelAr: "حركة بريزم", tier: "signature" },
+  { id: "carbon-track", labelEn: "Carbon Track", labelAr: "مسار الكربون", tier: "signature" },
+  { id: "solaris-bay", labelEn: "Solaris Bay", labelAr: "خليج سولاريس", tier: "signature" },
+  { id: "pixel-showroom", labelEn: "Pixel Showroom", labelAr: "معرض بكسل", tier: "signature" },
+  { id: "kinetic-luxury", labelEn: "Kinetic Luxury", labelAr: "فخامة حركية", tier: "signature" },
+  { id: "kinetic-ev", labelEn: "Kinetic EV", labelAr: "كهرباء حركية", tier: "signature" },
+  { id: "kinetic-sales", labelEn: "Kinetic Sales", labelAr: "مبيعات حركية", tier: "signature" },
+];
+
+const WEBSITE_COLOR_PRESETS: WebsiteColorPreset[] = [
+  { labelEn: "Executive Teal", labelAr: "تركواز تنفيذي", primaryColor: "#0f766e", secondaryColor: "#f97316" },
+  { labelEn: "Graphite Gold", labelAr: "جرافيت ذهبي", primaryColor: "#111827", secondaryColor: "#d97706" },
+  { labelEn: "Electric Lime", labelAr: "لايم كهربائي", primaryColor: "#155e75", secondaryColor: "#84cc16" },
+  { labelEn: "Crimson Steel", labelAr: "فولاذ قرمزي", primaryColor: "#991b1b", secondaryColor: "#475569" },
+  { labelEn: "Royal Emerald", labelAr: "زمرد ملكي", primaryColor: "#065f46", secondaryColor: "#7c3aed" },
+];
+
+const HERO_TITLE_PRESETS: Record<AppLocale, readonly string[]> = {
+  en: [
+    "Premium Cars at Your Fingertips",
+    "Your Trusted Auto Dealer",
+    "Find Your Perfect Vehicle",
+    "Quality Cars, Unbeatable Prices",
+    "Certified Pre-Owned Vehicles",
+  ],
+  ar: [
+    "سيارات مميزة بين يديك",
+    "وكيلك الموثوق للسيارات",
+    "اعثر على سيارتك المثالية",
+    "جودة عالية وأسعار لا تقاوم",
+    "مركبات معتمدة مضمونة",
+  ],
+};
+
+const HERO_SUBTITLE_PRESETS: Record<AppLocale, readonly string[]> = {
+  en: [
+    "Browse our public inventory and contact our team.",
+    "We make car buying simple, fast, and transparent.",
+    "Premium selection. Fair pricing. Outstanding service.",
+    "Finance available. Drive away today.",
+    "Contact us to schedule a test drive.",
+  ],
+  ar: [
+    "تصفح مخزوننا وتواصل مع فريقنا.",
+    "نجعل شراء السيارات بسيطا وسريعا وشفافا.",
+    "اختيار متميز. أسعار عادلة. خدمة استثنائية.",
+    "تمويل متاح. اقود سيارتك اليوم.",
+    "تواصل معنا لحجز تجربة قيادة.",
+  ],
 };
 
 function vinNotReadyMessage(readiness: MobileVinReadiness, locale: AppLocale): string | null {
@@ -156,20 +260,38 @@ function vinDecodeResultMessage(decoded: MobileVinDecodedFields, locale: AppLoca
 }
 
 async function fetchDecodedMobileVin(vin: string): Promise<MobileVinDecodedFields> {
-  const vinResponse = await fetch(
-    `https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/${encodeURIComponent(vin)}?format=json`,
-  );
-  const wmiResponse = await fetch(
-    `https://vpic.nhtsa.dot.gov/api/vehicles/DecodeWMI/${encodeURIComponent(vin.slice(0, 3))}?format=json`,
-  );
-  const vinPayload: unknown = await vinResponse.json();
-  const wmiPayload: unknown = await wmiResponse.json();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10_000);
 
-  return mapNhtsaVinPayload({
-    vin,
-    vinValues: getFirstNhtsaResult(vinPayload),
-    wmiName: getFirstNhtsaWmiName(wmiPayload),
-  });
+  try {
+    const [vinResponse, wmiResponse] = await Promise.all([
+      fetch(
+        `https://vpic.nhtsa.dot.gov/api/vehicles/DecodeVinValues/${encodeURIComponent(vin)}?format=json`,
+        { signal: controller.signal },
+      ),
+      fetch(
+        `https://vpic.nhtsa.dot.gov/api/vehicles/DecodeWMI/${encodeURIComponent(vin.slice(0, 3))}?format=json`,
+        { signal: controller.signal },
+      ),
+    ]);
+
+    if (!vinResponse.ok || !wmiResponse.ok) {
+      throw new Error("NHTSA VIN decode request failed");
+    }
+
+    const [vinPayload, wmiPayload]: [unknown, unknown] = await Promise.all([
+      vinResponse.json(),
+      wmiResponse.json(),
+    ]);
+
+    return mapNhtsaVinPayload({
+      vin,
+      vinValues: getFirstNhtsaResult(vinPayload),
+      wmiName: getFirstNhtsaWmiName(wmiPayload),
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function firstAvailableOrg(orgs: Array<MobileOrgSummary | null> | undefined): MobileOrgSummary[] {
@@ -708,6 +830,95 @@ function vehicleListPriceLabel(
     : locale === "ar" ? "بدون سعر" : "No list price";
 }
 
+function calculateFinancePreview(input: FinancePreviewInput) {
+  if (input.vehiclePrice <= 0 || input.termMonths <= 0) {
+    return {
+      financedAmount: 0,
+      monthlyInstallment: 0,
+      totalContractValue: 0,
+      totalProfit: 0,
+    };
+  }
+
+  const years = input.termMonths / 12;
+  const baseAmount = input.includesCommissionInDebt
+    ? input.vehiclePrice - input.downPayment + input.adminFees
+    : input.vehiclePrice - input.downPayment + input.adminFees + input.commission;
+  const financedAmount = Math.max(0, baseAmount);
+  const totalProfit = financedAmount * (input.profitRate / 100) * years;
+  const debtBeforeInsurance = financedAmount + totalProfit;
+  const insuranceAmount = debtBeforeInsurance * (input.insuranceRate / 100) * years;
+  const totalContractValue = Math.max(
+    0,
+    debtBeforeInsurance + insuranceAmount + (input.includesCommissionInDebt ? input.commission : 0),
+  );
+  const paymentMonths = Math.max(0, input.termMonths - input.gracePeriodMonths);
+
+  return {
+    financedAmount,
+    monthlyInstallment: paymentMonths > 0 ? totalContractValue / paymentMonths : 0,
+    totalContractValue,
+    totalProfit,
+  };
+}
+
+function financeCompanyMatchesView(
+  company: MobileFinanceCompany,
+  statusFilter: MobileFinanceCompanyFilter,
+  search: string,
+): boolean {
+  const matchesStatus =
+    statusFilter === "ALL"
+    || (statusFilter === "ACTIVE" && company.isActive)
+    || (statusFilter === "INACTIVE" && !company.isActive);
+  const query = search.trim().toLowerCase();
+  if (!query) return matchesStatus;
+
+  const searchIndex = [
+    company.name,
+    `${company.profitRate}`,
+    `${company.maxTermMonths}`,
+    `${company.maxFinancingLTV ?? ""}`,
+  ].join(" ");
+
+  return matchesStatus && searchIndex.toLowerCase().includes(query);
+}
+
+function averageFinanceRate(companies: readonly MobileFinanceCompany[]): number {
+  if (companies.length === 0) return 0;
+  return companies.reduce((total, company) => total + company.profitRate, 0) / companies.length;
+}
+
+function websiteTemplateLabel(templateId: string, locale: AppLocale): string {
+  const template = WEBSITE_TEMPLATE_OPTIONS.find((option) => option.id === templateId);
+  if (!template) return locale === "ar" ? "معرض عصري" : "Modern Showroom";
+  return locale === "ar" ? template.labelAr : template.labelEn;
+}
+
+function websiteTemplateOptions(locale: AppLocale): SelectableOption[] {
+  return WEBSITE_TEMPLATE_OPTIONS.map((template) => ({
+    label: locale === "ar" ? template.labelAr : template.labelEn,
+    subLabel: template.tier === "signature"
+      ? locale === "ar" ? "قالب مميز" : "Signature template"
+      : locale === "ar" ? "قالب قياسي" : "Standard template",
+    value: template.id,
+  }));
+}
+
+function heroPresetOptions(presets: readonly string[]): SelectableOption[] {
+  return presets.map((preset) => ({ label: preset, value: preset }));
+}
+
+function websiteAddressPreview(subdomainSlug: string, fallback?: string): string {
+  const slug = subdomainSlug.trim().toLowerCase();
+  if (slug) return `${slug}.autoflowdealer.com`;
+  return fallback ?? "-";
+}
+
+function websiteEnabledCount(sections: readonly { enabled: boolean }[]): number {
+  return sections.filter((section) => section.enabled).length;
+}
+
 function firstVehicleImageUrl(vehicle: MobileVehicle): string | undefined {
   return vehicle.imageUrls?.find((url): url is string => Boolean(url));
 }
@@ -1068,6 +1279,8 @@ function VehiclesModule({ orgId }: { orgId: string }) {
   const [vehicleStep, setVehicleStep] = useState(0);
   const [saving, setSaving] = useState(false);
   const [decodingVin, setDecodingVin] = useState(false);
+  const vinDecodeRequestRef = useRef(0);
+  const formVinRef = useRef("");
   const [vinDecodeMessage, setVinDecodeMessage] = useState<string | null>(null);
   const [form, setForm] = useState({
     vin: "",
@@ -1131,7 +1344,12 @@ function VehiclesModule({ orgId }: { orgId: string }) {
     form.status,
   );
 
+  useEffect(() => {
+    formVinRef.current = form.vin;
+  }, [form.vin]);
+
   function openCreate() {
+    vinDecodeRequestRef.current += 1;
     setEditing(null);
     setVehicleStep(0);
     setVinDecodeMessage(null);
@@ -1154,6 +1372,7 @@ function VehiclesModule({ orgId }: { orgId: string }) {
   }
 
   function openEdit(vehicle: MobileVehicle) {
+    vinDecodeRequestRef.current += 1;
     setEditing(vehicle);
     setDetailVehicle(null);
     setVehicleStep(0);
@@ -1177,6 +1396,7 @@ function VehiclesModule({ orgId }: { orgId: string }) {
   }
 
   function closeVehicleForm() {
+    vinDecodeRequestRef.current += 1;
     setOpen(false);
     setEditing(null);
     setVehicleStep(0);
@@ -1185,6 +1405,9 @@ function VehiclesModule({ orgId }: { orgId: string }) {
 
   async function decodeVehicleVin() {
     const vin = normalizeVinInput(form.vin);
+    const requestId = vinDecodeRequestRef.current + 1;
+    vinDecodeRequestRef.current = requestId;
+    formVinRef.current = vin;
     const readiness = getMobileVinReadiness(vin);
     const readinessMessage = vinNotReadyMessage(readiness, locale);
     setForm((prev) => ({ ...prev, vin }));
@@ -1204,6 +1427,9 @@ function VehiclesModule({ orgId }: { orgId: string }) {
 
     try {
       const decoded = await fetchDecodedMobileVin(vin);
+      if (vinDecodeRequestRef.current !== requestId || normalizeVinInput(formVinRef.current) !== vin) {
+        return;
+      }
       setForm((prev) => ({
         ...prev,
         vin: decoded.vin,
@@ -1215,10 +1441,15 @@ function VehiclesModule({ orgId }: { orgId: string }) {
       }));
       setVinDecodeMessage(vinDecodeResultMessage(decoded, locale));
     } catch (error) {
+      if (vinDecodeRequestRef.current !== requestId) {
+        return;
+      }
       reportError("Mobile VIN decode failed", error);
       setVinDecodeMessage(locale === "ar" ? "تعذر فك رقم الشاصي الآن." : "Could not decode VIN right now.");
     } finally {
-      setDecodingVin(false);
+      if (vinDecodeRequestRef.current === requestId) {
+        setDecodingVin(false);
+      }
     }
   }
 
@@ -1353,8 +1584,10 @@ function VehiclesModule({ orgId }: { orgId: string }) {
                     label="VIN"
                     value={form.vin}
                     onChangeText={(vin) => {
+                      const normalizedVin = normalizeVinInput(vin);
+                      formVinRef.current = normalizedVin;
                       setVinDecodeMessage(null);
-                      setForm((prev) => ({ ...prev, vin: normalizeVinInput(vin) }));
+                      setForm((prev) => ({ ...prev, vin: normalizedVin }));
                     }}
                   />
                 </View>
@@ -3219,8 +3452,14 @@ function FinanceCompaniesModule({ orgId }: { orgId: string }) {
   const updateCompany = useMutation(api.finance.updateCompany);
   const deleteCompany = useMutation(api.finance.deleteCompany);
   const [editing, setEditing] = useState<MobileFinanceCompany | null>(null);
+  const [detailCompany, setDetailCompany] = useState<MobileFinanceCompany | null>(null);
+  const [financeStep, setFinanceStep] = useState(0);
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<MobileFinanceCompanyFilter>("ALL");
+  const [samplePrice, setSamplePrice] = useState("24000");
+  const [sampleDownPayment, setSampleDownPayment] = useState("4800");
   const [form, setForm] = useState({
     name: "",
     profitRate: "",
@@ -3233,9 +3472,46 @@ function FinanceCompaniesModule({ orgId }: { orgId: string }) {
     isActive: "true",
     includesCommissionInDebt: "false",
   });
+  const visibleCompanies = (companies ?? []).filter((company) =>
+    financeCompanyMatchesView(company, statusFilter, search),
+  );
+  const activeCompanies = (companies ?? []).filter((company) => company.isActive);
+  const inactiveCompanies = (companies ?? []).filter((company) => !company.isActive);
+  const financeStatusOptions: Array<Option<MobileFinanceCompanyFilter>> = [
+    { label: locale === "ar" ? "الكل" : "All", value: "ALL" },
+    { label: locale === "ar" ? "نشطة" : "Active", value: "ACTIVE" },
+    { label: locale === "ar" ? "متوقفة" : "Inactive", value: "INACTIVE" },
+  ];
+  const previewInput: FinancePreviewInput = {
+    adminFees: parseOptionalNumber(form.adminFees) ?? 0,
+    commission: parseOptionalNumber(form.commission) ?? 0,
+    downPayment: parseOptionalNumber(sampleDownPayment) ?? 0,
+    gracePeriodMonths: parseOptionalNumber(form.gracePeriodMonths) ?? 0,
+    includesCommissionInDebt: form.includesCommissionInDebt === "true",
+    insuranceRate: parseOptionalNumber(form.insuranceRate) ?? 0,
+    profitRate: parseOptionalNumber(form.profitRate) ?? 0,
+    termMonths: parseOptionalNumber(form.maxTermMonths) ?? 0,
+    vehiclePrice: parseOptionalNumber(samplePrice) ?? 0,
+  };
+  const preview = calculateFinancePreview(previewInput);
+  const financeSteps: GuidedStep[] = [
+    {
+      title: locale === "ar" ? "هوية الشركة" : "Company profile",
+      subtitle: locale === "ar" ? "الاسم والحالة وطريقة احتساب العمولة." : "Name, availability, and commission behavior.",
+    },
+    {
+      title: locale === "ar" ? "الشروط الأساسية" : "Core terms",
+      subtitle: locale === "ar" ? "نسبة الربح والمدة وفترة السماح." : "Profit rate, repayment term, and grace period.",
+    },
+    {
+      title: locale === "ar" ? "محاكاة الصفقة" : "Deal simulation",
+      subtitle: locale === "ar" ? "رسوم وحدود مع معاينة قسط فورية." : "Fees and limits with an instant payment preview.",
+    },
+  ];
 
   function fill(company: MobileFinanceCompany | null) {
     setEditing(company);
+    setFinanceStep(0);
     setForm({
       name: company?.name ?? "",
       profitRate: company ? String(company.profitRate) : "",
@@ -3249,6 +3525,15 @@ function FinanceCompaniesModule({ orgId }: { orgId: string }) {
       includesCommissionInDebt: company?.includesCommissionInDebt ? "true" : "false",
     });
     setOpen(true);
+  }
+
+  function applyScenario(price: string, downPayment: string) {
+    setSamplePrice(price);
+    setSampleDownPayment(downPayment);
+  }
+
+  function selectTerm(maxTermMonths: string) {
+    setForm((prev) => ({ ...prev, maxTermMonths }));
   }
 
   async function save() {
@@ -3300,34 +3585,162 @@ function FinanceCompaniesModule({ orgId }: { orgId: string }) {
 
   return (
     <ModuleScroll>
-      <View style={styles.actionRow}>
-        <PrimaryButton label={locale === "ar" ? "إضافة شركة" : "Add company"} onPress={() => fill(null)} />
+      <View style={styles.metricGrid}>
+        <MetricCard title={locale === "ar" ? "الشركات" : "Companies"} value={compactNumber(companies.length, locale)} caption={locale === "ar" ? "إجمالي" : "total"} />
+        <MetricCard title={locale === "ar" ? "نشطة" : "Active"} value={compactNumber(activeCompanies.length, locale)} caption={locale === "ar" ? "جاهزة للعروض" : "ready for quotes"} />
+        <MetricCard title={locale === "ar" ? "متوسط الربح" : "Avg rate"} value={`${averageFinanceRate(activeCompanies).toFixed(1)}%`} caption={locale === "ar" ? "للشركات النشطة" : "active companies"} />
+        <MetricCard title={locale === "ar" ? "متوقفة" : "Inactive"} value={compactNumber(inactiveCompanies.length, locale)} caption={locale === "ar" ? "غير مستخدمة" : "not in use"} />
       </View>
-      {companies.length ? companies.map((company) => (
+      <View style={styles.actionRow}>
+        <SearchInput
+          placeholder={locale === "ar" ? "ابحث باسم الشركة أو النسبة" : "Search company or rate"}
+          value={search}
+          onChangeText={setSearch}
+        />
+        <PrimaryButton label={locale === "ar" ? "إضافة شركة" : "Add"} onPress={() => fill(null)} />
+      </View>
+      <SegmentedControl options={financeStatusOptions} value={statusFilter} onChange={setStatusFilter} />
+      {visibleCompanies.length ? visibleCompanies.map((company) => (
         <RecordCard key={company._id}>
           <View style={styles.recordHeader}>
             <Text style={styles.recordTitle}>{company.name}</Text>
             <Text style={styles.statusPill}>{company.isActive ? "ACTIVE" : "INACTIVE"}</Text>
           </View>
-          <Text style={styles.recordMeta}>{company.profitRate}% · {company.maxTermMonths}m · LTV {company.maxFinancingLTV ?? "-"}</Text>
-          <Text style={styles.recordMeta}>{locale === "ar" ? "رسوم" : "Fees"} {money(company.adminFees, locale)} · {locale === "ar" ? "عمولة" : "Commission"} {money(company.commission, locale)}</Text>
+          <View style={styles.detailPillRow}>
+            <DetailPill label={`${company.profitRate}%`} tone="info" />
+            <DetailPill label={`${company.maxTermMonths}m`} />
+            <DetailPill label={`LTV ${company.maxFinancingLTV ?? "-"}`} tone="warning" />
+            {company.includesCommissionInDebt ? <DetailPill label={locale === "ar" ? "عمولة خارج الأصل" : "flat commission"} tone="success" /> : null}
+          </View>
+          <Text style={styles.recordMeta}>
+            {locale === "ar" ? "رسوم" : "Fees"} {money(company.adminFees, locale)} · {locale === "ar" ? "عمولة" : "Commission"} {money(company.commission, locale)}
+          </Text>
           <View style={styles.cardActions}>
+            <PrimaryButton label={locale === "ar" ? "تفاصيل" : "Details"} tone="muted" onPress={() => setDetailCompany(company)} />
             <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => fill(company)} />
             {company.isActive ? <PrimaryButton label={locale === "ar" ? "تعطيل" : "Deactivate"} tone="danger" onPress={() => deactivate(company)} /> : null}
           </View>
         </RecordCard>
-      )) : <EmptyList label={locale === "ar" ? "لا توجد شركات تمويل." : "No finance companies found."} />}
-      <FormModal title={editing ? (locale === "ar" ? "تعديل شركة" : "Edit company") : (locale === "ar" ? "شركة جديدة" : "New company")} visible={open} onClose={() => setOpen(false)}>
-        <FormField label={locale === "ar" ? "الاسم" : "Name"} value={form.name} onChangeText={(name) => setForm((prev) => ({ ...prev, name }))} />
-        <FormField keyboardType="numeric" label={locale === "ar" ? "نسبة الربح" : "Profit rate"} value={form.profitRate} onChangeText={(profitRate) => setForm((prev) => ({ ...prev, profitRate }))} />
-        <FormField keyboardType="numeric" label={locale === "ar" ? "أقصى مدة" : "Max term months"} value={form.maxTermMonths} onChangeText={(maxTermMonths) => setForm((prev) => ({ ...prev, maxTermMonths }))} />
-        <FormField keyboardType="numeric" label={locale === "ar" ? "فترة السماح" : "Grace months"} value={form.gracePeriodMonths} onChangeText={(gracePeriodMonths) => setForm((prev) => ({ ...prev, gracePeriodMonths }))} />
-        <FormField keyboardType="numeric" label={locale === "ar" ? "تأمين %" : "Insurance rate"} value={form.insuranceRate} onChangeText={(insuranceRate) => setForm((prev) => ({ ...prev, insuranceRate }))} />
-        <FormField keyboardType="numeric" label={locale === "ar" ? "رسوم إدارية" : "Admin fees"} value={form.adminFees} onChangeText={(adminFees) => setForm((prev) => ({ ...prev, adminFees }))} />
-        <FormField keyboardType="numeric" label={locale === "ar" ? "عمولة" : "Commission"} value={form.commission} onChangeText={(commission) => setForm((prev) => ({ ...prev, commission }))} />
-        <FormField keyboardType="numeric" label="LTV" value={form.maxFinancingLTV} onChangeText={(maxFinancingLTV) => setForm((prev) => ({ ...prev, maxFinancingLTV }))} />
-        <SelectField label={locale === "ar" ? "فعال" : "Active"} value={form.isActive} options={[{ label: locale === "ar" ? "نعم" : "Yes", value: "true" }, { label: locale === "ar" ? "لا" : "No", value: "false" }]} onChange={(isActive) => setForm((prev) => ({ ...prev, isActive }))} />
-        <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ" : "Save")} onPress={save} />
+      )) : <EmptyList label={locale === "ar" ? "لا توجد شركات مطابقة." : "No matching finance companies."} />}
+      <FormModal
+        title={editing ? (locale === "ar" ? "تعديل شركة" : "Edit company") : (locale === "ar" ? "شركة جديدة" : "New company")}
+        visible={open}
+        onClose={() => setOpen(false)}
+      >
+        <GuidedStepFlow activeIndex={financeStep} steps={financeSteps}>
+          {financeStep === 0 ? (
+            <>
+              <FormField label={locale === "ar" ? "اسم الشركة" : "Company name"} value={form.name} onChangeText={(name) => setForm((prev) => ({ ...prev, name }))} />
+              <SelectField label={locale === "ar" ? "فعالة" : "Active"} value={form.isActive} options={[{ label: locale === "ar" ? "نعم" : "Yes", value: "true" }, { label: locale === "ar" ? "لا" : "No", value: "false" }]} onChange={(isActive) => setForm((prev) => ({ ...prev, isActive }))} />
+              <SelectField
+                label={locale === "ar" ? "احتساب العمولة" : "Commission treatment"}
+                value={form.includesCommissionInDebt}
+                options={[
+                  { label: locale === "ar" ? "ضمن أصل الدين" : "Finance commission in debt", value: "false" },
+                  { label: locale === "ar" ? "عمولة ثابتة خارج الدين" : "Add commission as flat fee", value: "true" },
+                ]}
+                onChange={(includesCommissionInDebt) => setForm((prev) => ({ ...prev, includesCommissionInDebt }))}
+              />
+              <SummaryPanel title={locale === "ar" ? "تأثير الاختيار" : "Setup impact"}>
+                <SummaryRow label={locale === "ar" ? "الحالة" : "Status"} value={form.isActive === "true" ? (locale === "ar" ? "نشطة" : "Active") : (locale === "ar" ? "متوقفة" : "Inactive")} />
+                <SummaryRow label={locale === "ar" ? "العمولة" : "Commission"} value={form.includesCommissionInDebt === "true" ? (locale === "ar" ? "تضاف كرسوم ثابتة" : "added as a flat fee") : (locale === "ar" ? "تدخل في التمويل" : "financed into the debt")} />
+              </SummaryPanel>
+            </>
+          ) : null}
+          {financeStep === 1 ? (
+            <>
+              <FormField keyboardType="numeric" label={locale === "ar" ? "نسبة الربح" : "Profit rate"} value={form.profitRate} onChangeText={(profitRate) => setForm((prev) => ({ ...prev, profitRate }))} />
+              <FormField keyboardType="numeric" label={locale === "ar" ? "أقصى مدة" : "Max term months"} value={form.maxTermMonths} onChangeText={(maxTermMonths) => setForm((prev) => ({ ...prev, maxTermMonths }))} />
+              <View style={styles.chipRow}>
+                {TERM_MONTH_PRESETS.map((term) => (
+                  <Chip
+                    key={term}
+                    label={`${term}m`}
+                    selected={form.maxTermMonths === term}
+                    value={term}
+                    onPress={() => selectTerm(term)}
+                  />
+                ))}
+              </View>
+              <FormField keyboardType="numeric" label={locale === "ar" ? "فترة السماح" : "Grace months"} value={form.gracePeriodMonths} onChangeText={(gracePeriodMonths) => setForm((prev) => ({ ...prev, gracePeriodMonths }))} />
+              <View style={styles.metricGrid}>
+                <MetricCard title={locale === "ar" ? "نسبة" : "Rate"} value={`${previewInput.profitRate.toFixed(2)}%`} caption={locale === "ar" ? "سنوية" : "annual"} />
+                <MetricCard title={locale === "ar" ? "مدة" : "Term"} value={`${previewInput.termMonths}m`} caption={locale === "ar" ? "أقصى مدة" : "max months"} />
+              </View>
+            </>
+          ) : null}
+          {financeStep === 2 ? (
+            <>
+              <View style={styles.chipRow}>
+                {FINANCE_SCENARIO_PRESETS.map((scenario) => (
+                  <Chip
+                    key={scenario.labelEn}
+                    label={locale === "ar" ? scenario.labelAr : scenario.labelEn}
+                    selected={samplePrice === scenario.price && sampleDownPayment === scenario.downPayment}
+                    value={scenario.labelEn}
+                    onPress={() => applyScenario(scenario.price, scenario.downPayment)}
+                  />
+                ))}
+              </View>
+              <FormField keyboardType="numeric" label={locale === "ar" ? "سعر تجربة" : "Sample vehicle price"} value={samplePrice} onChangeText={setSamplePrice} />
+              <FormField keyboardType="numeric" label={locale === "ar" ? "دفعة تجربة" : "Sample down payment"} value={sampleDownPayment} onChangeText={setSampleDownPayment} />
+              <FormField keyboardType="numeric" label={locale === "ar" ? "تأمين %" : "Insurance rate"} value={form.insuranceRate} onChangeText={(insuranceRate) => setForm((prev) => ({ ...prev, insuranceRate }))} />
+              <FormField keyboardType="numeric" label={locale === "ar" ? "رسوم إدارية" : "Admin fees"} value={form.adminFees} onChangeText={(adminFees) => setForm((prev) => ({ ...prev, adminFees }))} />
+              <FormField keyboardType="numeric" label={locale === "ar" ? "عمولة" : "Commission"} value={form.commission} onChangeText={(commission) => setForm((prev) => ({ ...prev, commission }))} />
+              <FormField keyboardType="numeric" label="LTV" value={form.maxFinancingLTV} onChangeText={(maxFinancingLTV) => setForm((prev) => ({ ...prev, maxFinancingLTV }))} />
+              <SummaryPanel
+                title={locale === "ar" ? "معاينة القسط" : "Payment preview"}
+                subtitle={locale === "ar" ? "تقدير للعرض فقط؛ الحفظ لا ينشئ صفقة." : "Preview only; saving does not create a deal."}
+              >
+                <SummaryRow label={locale === "ar" ? "المبلغ الممول" : "Financed amount"} value={money(preview.financedAmount, locale)} />
+                <SummaryRow label={locale === "ar" ? "إجمالي الربح" : "Total profit"} value={money(preview.totalProfit, locale)} />
+                <SummaryRow label={locale === "ar" ? "إجمالي العقد" : "Contract value"} value={money(preview.totalContractValue, locale)} />
+                <SummaryRow label={locale === "ar" ? "القسط الشهري" : "Monthly installment"} value={money(preview.monthlyInstallment, locale)} />
+              </SummaryPanel>
+            </>
+          ) : null}
+          <WizardActions
+            activeStep={financeStep}
+            backLabel={locale === "ar" ? "السابق" : "Back"}
+            nextLabel={locale === "ar" ? "التالي" : "Next"}
+            saveLabel={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ الشركة" : "Save company")}
+            saving={saving}
+            totalSteps={financeSteps.length}
+            onBack={() => setFinanceStep((step) => Math.max(0, step - 1))}
+            onNext={() => setFinanceStep((step) => Math.min(financeSteps.length - 1, step + 1))}
+            onSave={save}
+          />
+        </GuidedStepFlow>
+      </FormModal>
+      <FormModal
+        title={detailCompany?.name ?? (locale === "ar" ? "تفاصيل الشركة" : "Company details")}
+        visible={Boolean(detailCompany)}
+        onClose={() => setDetailCompany(null)}
+      >
+        {detailCompany ? (
+          <>
+            <View style={styles.metricGrid}>
+              <MetricCard title={locale === "ar" ? "النسبة" : "Rate"} value={`${detailCompany.profitRate}%`} caption={locale === "ar" ? "ربح سنوي" : "annual profit"} />
+              <MetricCard title={locale === "ar" ? "المدة" : "Term"} value={`${detailCompany.maxTermMonths}m`} caption={locale === "ar" ? "أقصى مدة" : "maximum"} />
+            </View>
+            <SummaryPanel title={locale === "ar" ? "إعدادات التمويل" : "Finance settings"}>
+              <SummaryRow label={locale === "ar" ? "الحالة" : "Status"} value={detailCompany.isActive ? "ACTIVE" : "INACTIVE"} />
+              <SummaryRow label={locale === "ar" ? "فترة السماح" : "Grace period"} value={`${detailCompany.gracePeriodMonths}m`} />
+              <SummaryRow label={locale === "ar" ? "رسوم إدارية" : "Admin fees"} value={money(detailCompany.adminFees, locale)} />
+              <SummaryRow label={locale === "ar" ? "تأمين" : "Insurance"} value={`${detailCompany.insuranceRate ?? 0}%`} />
+              <SummaryRow label={locale === "ar" ? "عمولة" : "Commission"} value={money(detailCompany.commission, locale)} />
+              <SummaryRow label="LTV" value={`${detailCompany.maxFinancingLTV ?? "-"}%`} />
+            </SummaryPanel>
+            <View style={styles.cardActions}>
+              <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} onPress={() => {
+                const selectedCompany = detailCompany;
+                setDetailCompany(null);
+                fill(selectedCompany);
+              }} />
+              {detailCompany.isActive ? <PrimaryButton label={locale === "ar" ? "تعطيل" : "Deactivate"} tone="danger" onPress={() => deactivate(detailCompany)} /> : null}
+            </View>
+          </>
+        ) : null}
       </FormModal>
     </ModuleScroll>
   );
@@ -3584,7 +3997,7 @@ function QuotesModule({ orgId }: { orgId: string }) {
     setForm((prev) => ({
       ...prev,
       vehicleId,
-      vehiclePrice: prev.vehiclePrice || (selectedVehicle ? String(selectedVehicle.sellingPrice) : prev.vehiclePrice),
+      vehiclePrice: selectedVehicle?.sellingPrice != null ? String(selectedVehicle.sellingPrice) : "",
     }));
   }
 
@@ -4550,11 +4963,13 @@ function WebsiteModule({ orgId }: { orgId: string }) {
   const subscription = useQuery(api.subscriptions.getMySubscription, { orgId });
   const canUseWebsite = subscription?.planDetails.gates.websiteBuilder === true;
   const status = useQuery(api.websites.getStatus, canUseWebsite ? { orgId } : "skip");
+  const companies = useQuery(api.finance.listCompanies, canUseWebsite ? { orgId } : "skip");
   const startSetup = useMutation(api.websites.startSetup);
   const saveDraft = useMutation(api.websites.saveDraft);
   const publishWebsite = useMutation(api.websites.publish);
   const unpublishWebsite = useMutation(api.websites.unpublish);
   const [saving, setSaving] = useState(false);
+  const [websiteStep, setWebsiteStep] = useState(0);
   const [form, setForm] = useState({
     subdomainSlug: "",
     templateId: "modern-showroom",
@@ -4566,9 +4981,44 @@ function WebsiteModule({ orgId }: { orgId: string }) {
     heroSubtitle: "",
     heroBadgeText: "",
     slogan: "",
+    activeFinanceCompanyId: "none",
   });
   const [sections, setSections] = useState<Array<{ sectionKey: string; enabled: boolean }>>([]);
   const [routing, setRouting] = useState<Array<{ formType: string; createTask: boolean; notifyByEmail: boolean; notifyByWhatsApp: boolean }>>([]);
+  const templateOptions = websiteTemplateOptions(locale);
+  const financeCompanyOptions: SelectableOption[] = [
+    { label: locale === "ar" ? "بدون شركة تمويل" : "No finance company", value: "none" },
+    ...(companies ?? [])
+      .filter((company) => company.isActive)
+      .map((company) => ({
+        label: company.name,
+        subLabel: `${company.profitRate}% · ${company.maxTermMonths}m`,
+        value: company._id,
+      })),
+  ];
+  const enabledSectionCount = websiteEnabledCount(sections);
+  const websiteSteps: GuidedStep[] = [
+    {
+      title: locale === "ar" ? "العنوان واللغة" : "Address and language",
+      subtitle: locale === "ar" ? "حدد رابط الموقع واللغة العامة." : "Choose the public address and language behavior.",
+    },
+    {
+      title: locale === "ar" ? "القالب والهوية" : "Template and brand",
+      subtitle: locale === "ar" ? "اختر قالبا، لوحة ألوان، ونص البطل." : "Pick a template, palette, and hero copy.",
+    },
+    {
+      title: locale === "ar" ? "البيانات العامة" : "Public data",
+      subtitle: locale === "ar" ? "اختر ما يظهر من بيانات المعرض والمخزون." : "Control what dealership and inventory data appears.",
+    },
+    {
+      title: locale === "ar" ? "توجيه العملاء" : "Lead routing",
+      subtitle: locale === "ar" ? "حول نماذج الموقع إلى مهام وتنبيهات." : "Route public forms into tasks and notifications.",
+    },
+    {
+      title: locale === "ar" ? "مراجعة ونشر" : "Review and publish",
+      subtitle: locale === "ar" ? "راجع الإعدادات قبل النشر." : "Check the setup before publishing.",
+    },
+  ];
 
   useEffect(() => {
     if (!status) return;
@@ -4585,6 +5035,7 @@ function WebsiteModule({ orgId }: { orgId: string }) {
         heroSubtitle: settings.heroSubtitle ?? "",
         heroBadgeText: settings.heroBadgeText ?? "",
         slogan: settings.slogan ?? "",
+        activeFinanceCompanyId: settings.activeFinanceCompanyId ?? "none",
       });
     }
     setSections(status.sections.map((section) => ({ sectionKey: section.sectionKey, enabled: section.enabled })));
@@ -4596,10 +5047,19 @@ function WebsiteModule({ orgId }: { orgId: string }) {
     })));
   }, [status]);
 
+  function applyWebsitePalette(palette: WebsiteColorPreset) {
+    setForm((prev) => ({
+      ...prev,
+      primaryColor: palette.primaryColor,
+      secondaryColor: palette.secondaryColor,
+    }));
+  }
+
   async function ensureSetup() {
     setSaving(true);
     try {
       await startSetup({ orgId });
+      setWebsiteStep(0);
     } catch (error) {
       reportError("Mobile website setup failed", error);
     } finally {
@@ -4622,6 +5082,7 @@ function WebsiteModule({ orgId }: { orgId: string }) {
         heroSubtitle: maybeText(form.heroSubtitle),
         heroBadgeText: maybeText(form.heroBadgeText),
         slogan: maybeText(form.slogan),
+        activeFinanceCompanyId: form.activeFinanceCompanyId === "none" ? null : form.activeFinanceCompanyId,
         sections,
         routing,
       });
@@ -4648,7 +5109,7 @@ function WebsiteModule({ orgId }: { orgId: string }) {
     }
   }
 
-  if (subscription === undefined || (canUseWebsite && status === undefined)) {
+  if (subscription === undefined || (canUseWebsite && (status === undefined || companies === undefined))) {
     return <RouteLoadingState label={locale === "ar" ? "جاري التحميل" : "Loading"} />;
   }
 
@@ -4666,11 +5127,23 @@ function WebsiteModule({ orgId }: { orgId: string }) {
   if (!websiteSettings) {
     return (
       <ModuleScroll>
-        <EmptyList label={locale === "ar" ? "لم يتم إعداد الموقع بعد." : "Website setup has not started yet."} />
+        <SummaryPanel
+          title={locale === "ar" ? "موقع المعرض جاهز للبناء" : "Your dealer website is ready to build"}
+          subtitle={locale === "ar" ? "ابدأ إعدادا موجها بدل تعبئة كل شيء يدويا." : "Start a guided setup instead of manually entering every field."}
+        >
+          <SummaryRow label={locale === "ar" ? "القوالب" : "Templates"} value={`${WEBSITE_TEMPLATE_OPTIONS.length}`} />
+          <SummaryRow label={locale === "ar" ? "النماذج" : "Forms"} value="6" />
+          <SummaryRow label={locale === "ar" ? "اللغات" : "Languages"} value="EN / AR" />
+        </SummaryPanel>
         <PrimaryButton disabled={saving} label={locale === "ar" ? "بدء الإعداد" : "Start setup"} onPress={ensureSetup} />
       </ModuleScroll>
     );
   }
+
+  const selectedAddress = websiteAddressPreview(form.subdomainSlug, websiteStatus.primaryDomain?.domain ?? websiteSettings.defaultSubdomain);
+  const activeFinanceLabel = getOptionLabel(financeCompanyOptions, form.activeFinanceCompanyId, locale === "ar" ? "بدون شركة تمويل" : "No finance company");
+  const selectedTemplateLabel = websiteTemplateLabel(form.templateId, locale);
+  const canPublish = selectedAddress !== "-";
 
   return (
     <ModuleScroll>
@@ -4681,42 +5154,142 @@ function WebsiteModule({ orgId }: { orgId: string }) {
         </View>
         <Text style={styles.recordMeta}>{locale === "ar" ? "النطاقات" : "Domains"}: {websiteStatus.domains.length}</Text>
       </RecordCard>
-      <FormField label={locale === "ar" ? "النطاق الفرعي" : "Subdomain slug"} value={form.subdomainSlug} onChangeText={(subdomainSlug) => setForm((prev) => ({ ...prev, subdomainSlug }))} />
-      <FormField label={locale === "ar" ? "القالب" : "Template"} value={form.templateId} onChangeText={(templateId) => setForm((prev) => ({ ...prev, templateId }))} />
-      <SelectField label={locale === "ar" ? "اللغة الأساسية" : "Default language"} value={form.defaultLanguage} options={[{ label: "English", value: "en" }, { label: "العربية", value: "ar" }]} onChange={(defaultLanguage) => setForm((prev) => ({ ...prev, defaultLanguage: defaultLanguage as MobileWebsiteLanguage }))} />
-      <SelectField label={locale === "ar" ? "دعم العربية" : "Support Arabic"} value={form.supportArabic} options={[{ label: locale === "ar" ? "نعم" : "Yes", value: "true" }, { label: locale === "ar" ? "لا" : "No", value: "false" }]} onChange={(supportArabic) => setForm((prev) => ({ ...prev, supportArabic }))} />
-      <FormField label={locale === "ar" ? "اللون الأساسي" : "Primary color"} value={form.primaryColor} onChangeText={(primaryColor) => setForm((prev) => ({ ...prev, primaryColor }))} />
-      <FormField label={locale === "ar" ? "اللون الثانوي" : "Secondary color"} value={form.secondaryColor} onChangeText={(secondaryColor) => setForm((prev) => ({ ...prev, secondaryColor }))} />
-      <FormField label={locale === "ar" ? "عنوان البطل" : "Hero title"} value={form.heroTitle} onChangeText={(heroTitle) => setForm((prev) => ({ ...prev, heroTitle }))} />
-      <FormField multiline label={locale === "ar" ? "وصف البطل" : "Hero subtitle"} value={form.heroSubtitle} onChangeText={(heroSubtitle) => setForm((prev) => ({ ...prev, heroSubtitle }))} />
-      <FormField label={locale === "ar" ? "شارة البطل" : "Hero badge"} value={form.heroBadgeText} onChangeText={(heroBadgeText) => setForm((prev) => ({ ...prev, heroBadgeText }))} />
-      <FormField label={locale === "ar" ? "الشعار النصي" : "Slogan"} value={form.slogan} onChangeText={(slogan) => setForm((prev) => ({ ...prev, slogan }))} />
-      <Text style={styles.sectionTitle}>{locale === "ar" ? "الأقسام" : "Sections"}</Text>
-      {sections.map((section) => (
-        <RecordCard key={section.sectionKey}>
-          <View style={styles.recordHeader}>
-            <Text style={styles.recordTitle}>{section.sectionKey}</Text>
-            <PrimaryButton
-              label={section.enabled ? (locale === "ar" ? "تعطيل" : "Disable") : (locale === "ar" ? "تفعيل" : "Enable")}
-              tone="muted"
-              onPress={() => setSections((prev) => prev.map((item) => item.sectionKey === section.sectionKey ? { ...item, enabled: !item.enabled } : item))}
-            />
-          </View>
-        </RecordCard>
-      ))}
-      <Text style={styles.sectionTitle}>{locale === "ar" ? "توجيه النماذج" : "Form routing"}</Text>
-      {routing.map((route) => (
-        <RecordCard key={route.formType}>
-          <Text style={styles.recordTitle}>{route.formType}</Text>
-          <View style={styles.cardActions}>
-            <PrimaryButton label={route.createTask ? (locale === "ar" ? "مهمة: نعم" : "Task: yes") : (locale === "ar" ? "مهمة: لا" : "Task: no")} tone="muted" onPress={() => setRouting((prev) => prev.map((item) => item.formType === route.formType ? { ...item, createTask: !item.createTask } : item))} />
-            <PrimaryButton label={route.notifyByEmail ? "Email: yes" : "Email: no"} tone="muted" onPress={() => setRouting((prev) => prev.map((item) => item.formType === route.formType ? { ...item, notifyByEmail: !item.notifyByEmail } : item))} />
-            <PrimaryButton label={route.notifyByWhatsApp ? "WhatsApp: yes" : "WhatsApp: no"} tone="muted" onPress={() => setRouting((prev) => prev.map((item) => item.formType === route.formType ? { ...item, notifyByWhatsApp: !item.notifyByWhatsApp } : item))} />
-          </View>
-        </RecordCard>
-      ))}
-      <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ المسودة" : "Save draft")} onPress={save} />
-      <PrimaryButton disabled={saving} label={websiteSettings.status === "active" ? (locale === "ar" ? "إلغاء النشر" : "Unpublish") : (locale === "ar" ? "نشر" : "Publish")} tone="muted" onPress={() => publish(websiteSettings.status !== "active")} />
+      <View style={styles.metricGrid}>
+        <MetricCard title={locale === "ar" ? "الأقسام" : "Sections"} value={`${enabledSectionCount}/${sections.length}`} caption={locale === "ar" ? "ظاهرة" : "visible"} />
+        <MetricCard title={locale === "ar" ? "النماذج" : "Forms"} value={compactNumber(routing.length, locale)} caption={locale === "ar" ? "موجهة" : "routed"} />
+        <MetricCard title={locale === "ar" ? "القالب" : "Template"} value={selectedTemplateLabel} caption={locale === "ar" ? "مختار" : "selected"} />
+        <MetricCard title={locale === "ar" ? "اللغة" : "Language"} value={form.supportArabic === "true" ? "EN/AR" : form.defaultLanguage.toUpperCase()} caption={locale === "ar" ? "عام" : "public"} />
+      </View>
+      <GuidedStepFlow activeIndex={websiteStep} steps={websiteSteps}>
+        {websiteStep === 0 ? (
+          <>
+            <FormField label={locale === "ar" ? "النطاق الفرعي" : "Subdomain slug"} value={form.subdomainSlug} placeholder="premiumcars" onChangeText={(subdomainSlug) => setForm((prev) => ({ ...prev, subdomainSlug }))} />
+            <SelectField label={locale === "ar" ? "اللغة الأساسية" : "Default language"} value={form.defaultLanguage} options={[{ label: "English", value: "en" }, { label: "العربية", value: "ar" }]} onChange={(defaultLanguage) => setForm((prev) => ({ ...prev, defaultLanguage: defaultLanguage as MobileWebsiteLanguage }))} />
+            <SelectField label={locale === "ar" ? "دعم العربية" : "Support Arabic"} value={form.supportArabic} options={[{ label: locale === "ar" ? "نعم" : "Yes", value: "true" }, { label: locale === "ar" ? "لا" : "No", value: "false" }]} onChange={(supportArabic) => setForm((prev) => ({ ...prev, supportArabic }))} />
+            <SummaryPanel title={locale === "ar" ? "معاينة الرابط" : "Address preview"}>
+              <SummaryRow label={locale === "ar" ? "الموقع" : "Website"} value={selectedAddress} />
+              <SummaryRow label={locale === "ar" ? "اللغات" : "Languages"} value={form.supportArabic === "true" ? "English + العربية" : form.defaultLanguage.toUpperCase()} />
+            </SummaryPanel>
+          </>
+        ) : null}
+        {websiteStep === 1 ? (
+          <>
+            <SelectField label={locale === "ar" ? "القالب" : "Template"} value={form.templateId} options={templateOptions} onChange={(templateId) => setForm((prev) => ({ ...prev, templateId }))} />
+            <View style={styles.swatchRow}>
+              {WEBSITE_COLOR_PRESETS.map((palette) => {
+                const selected = form.primaryColor === palette.primaryColor && form.secondaryColor === palette.secondaryColor;
+                return (
+                  <Pressable
+                    key={palette.labelEn}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                    style={[styles.swatchButton, selected && styles.swatchSelected]}
+                    onPress={() => applyWebsitePalette(palette)}
+                  >
+                    <View style={styles.swatchStack}>
+                      <View style={[styles.swatchFill, { backgroundColor: palette.primaryColor }]} />
+                      <View style={[styles.swatchFill, { backgroundColor: palette.secondaryColor }]} />
+                    </View>
+                    <Text style={styles.swatchLabel}>{locale === "ar" ? palette.labelAr : palette.labelEn}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <View style={styles.inlineActionGroup}>
+              <View style={styles.inlineActionField}>
+                <FormField label={locale === "ar" ? "اللون الأساسي" : "Primary color"} value={form.primaryColor} onChangeText={(primaryColor) => setForm((prev) => ({ ...prev, primaryColor }))} />
+              </View>
+              <View style={styles.inlineActionField}>
+                <FormField label={locale === "ar" ? "اللون الثانوي" : "Secondary color"} value={form.secondaryColor} onChangeText={(secondaryColor) => setForm((prev) => ({ ...prev, secondaryColor }))} />
+              </View>
+            </View>
+            <SelectField label={locale === "ar" ? "عنوان جاهز" : "Hero title preset"} value={form.heroTitle} options={heroPresetOptions(HERO_TITLE_PRESETS[form.defaultLanguage])} onChange={(heroTitle) => setForm((prev) => ({ ...prev, heroTitle }))} />
+            <FormField label={locale === "ar" ? "عنوان البطل" : "Hero title"} value={form.heroTitle} onChangeText={(heroTitle) => setForm((prev) => ({ ...prev, heroTitle }))} />
+            <SelectField label={locale === "ar" ? "وصف جاهز" : "Hero subtitle preset"} value={form.heroSubtitle} options={heroPresetOptions(HERO_SUBTITLE_PRESETS[form.defaultLanguage])} onChange={(heroSubtitle) => setForm((prev) => ({ ...prev, heroSubtitle }))} />
+            <FormField multiline label={locale === "ar" ? "وصف البطل" : "Hero subtitle"} value={form.heroSubtitle} onChangeText={(heroSubtitle) => setForm((prev) => ({ ...prev, heroSubtitle }))} />
+            <FormField label={locale === "ar" ? "شارة البطل" : "Hero badge"} value={form.heroBadgeText} onChangeText={(heroBadgeText) => setForm((prev) => ({ ...prev, heroBadgeText }))} />
+            <FormField label={locale === "ar" ? "الشعار النصي" : "Slogan"} value={form.slogan} onChangeText={(slogan) => setForm((prev) => ({ ...prev, slogan }))} />
+            <SelectField label={locale === "ar" ? "شركة التمويل العامة" : "Public finance company"} value={form.activeFinanceCompanyId} options={financeCompanyOptions} onChange={(activeFinanceCompanyId) => setForm((prev) => ({ ...prev, activeFinanceCompanyId }))} />
+            <View style={[styles.websitePreview, { backgroundColor: form.primaryColor }]}>
+              <Text style={styles.websitePreviewBadge}>{form.heroBadgeText || (locale === "ar" ? "متوفر الآن" : "Now available")}</Text>
+              <Text style={styles.websitePreviewTitle}>{form.heroTitle || selectedTemplateLabel}</Text>
+              <Text style={styles.websitePreviewSubtitle}>{form.heroSubtitle || selectedAddress}</Text>
+              <View style={[styles.websitePreviewAccent, { backgroundColor: form.secondaryColor }]} />
+            </View>
+          </>
+        ) : null}
+        {websiteStep === 2 ? (
+          <>
+            <View style={styles.metricGrid}>
+              <MetricCard title={locale === "ar" ? "مفعل" : "Enabled"} value={compactNumber(enabledSectionCount, locale)} caption={locale === "ar" ? "عام" : "public"} />
+              <MetricCard title={locale === "ar" ? "مخفي" : "Hidden"} value={compactNumber(sections.length - enabledSectionCount, locale)} caption={locale === "ar" ? "خاص" : "private"} />
+            </View>
+            {sections.map((section) => (
+              <RecordCard key={section.sectionKey}>
+                <View style={styles.recordHeader}>
+                  <Text style={styles.recordTitle}>{section.sectionKey}</Text>
+                  <Text style={styles.statusPill}>{section.enabled ? "ON" : "OFF"}</Text>
+                </View>
+                <PrimaryButton
+                  label={section.enabled ? (locale === "ar" ? "إخفاء" : "Hide") : (locale === "ar" ? "إظهار" : "Show")}
+                  tone="muted"
+                  onPress={() => setSections((prev) => prev.map((item) => item.sectionKey === section.sectionKey ? { ...item, enabled: !item.enabled } : item))}
+                />
+              </RecordCard>
+            ))}
+          </>
+        ) : null}
+        {websiteStep === 3 ? (
+          <>
+            {routing.map((route) => (
+              <RecordCard key={route.formType}>
+                <View style={styles.recordHeader}>
+                  <Text style={styles.recordTitle}>{route.formType}</Text>
+                  <Text style={styles.statusPill}>{route.createTask ? "TASK" : "LEAD"}</Text>
+                </View>
+                <View style={styles.detailPillRow}>
+                  <DetailPill label={route.notifyByEmail ? "Email on" : "Email off"} tone={route.notifyByEmail ? "success" : "neutral"} />
+                  <DetailPill label={route.notifyByWhatsApp ? "WhatsApp on" : "WhatsApp off"} tone={route.notifyByWhatsApp ? "success" : "neutral"} />
+                </View>
+                <View style={styles.cardActions}>
+                  <PrimaryButton label={route.createTask ? (locale === "ar" ? "مهمة: نعم" : "Task: yes") : (locale === "ar" ? "مهمة: لا" : "Task: no")} tone="muted" onPress={() => setRouting((prev) => prev.map((item) => item.formType === route.formType ? { ...item, createTask: !item.createTask } : item))} />
+                  <PrimaryButton label={route.notifyByEmail ? "Email: yes" : "Email: no"} tone="muted" onPress={() => setRouting((prev) => prev.map((item) => item.formType === route.formType ? { ...item, notifyByEmail: !item.notifyByEmail } : item))} />
+                  <PrimaryButton label={route.notifyByWhatsApp ? "WhatsApp: yes" : "WhatsApp: no"} tone="muted" onPress={() => setRouting((prev) => prev.map((item) => item.formType === route.formType ? { ...item, notifyByWhatsApp: !item.notifyByWhatsApp } : item))} />
+                </View>
+              </RecordCard>
+            ))}
+          </>
+        ) : null}
+        {websiteStep === 4 ? (
+          <>
+            <SummaryPanel
+              title={locale === "ar" ? "مراجعة الموقع" : "Website review"}
+              subtitle={locale === "ar" ? "هذه هي الإعدادات التي سيتم حفظها أو نشرها." : "These settings will be saved or published."}
+            >
+              <SummaryRow label={locale === "ar" ? "الرابط" : "Address"} value={selectedAddress} />
+              <SummaryRow label={locale === "ar" ? "القالب" : "Template"} value={selectedTemplateLabel} />
+              <SummaryRow label={locale === "ar" ? "الألوان" : "Colors"} value={`${form.primaryColor} / ${form.secondaryColor}`} />
+              <SummaryRow label={locale === "ar" ? "الأقسام" : "Sections"} value={`${enabledSectionCount}/${sections.length}`} />
+              <SummaryRow label={locale === "ar" ? "شركة التمويل" : "Finance company"} value={activeFinanceLabel} />
+            </SummaryPanel>
+            <View style={styles.cardActions}>
+              <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ المسودة" : "Save draft")} onPress={save} />
+              <PrimaryButton disabled={saving || !canPublish} label={websiteSettings.status === "active" ? (locale === "ar" ? "إلغاء النشر" : "Unpublish") : (locale === "ar" ? "نشر" : "Publish")} tone="muted" onPress={() => publish(websiteSettings.status !== "active")} />
+            </View>
+          </>
+        ) : null}
+        <WizardActions
+          activeStep={websiteStep}
+          backLabel={locale === "ar" ? "السابق" : "Back"}
+          nextLabel={locale === "ar" ? "التالي" : "Next"}
+          saveLabel={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ المسودة" : "Save draft")}
+          saving={saving}
+          totalSteps={websiteSteps.length}
+          onBack={() => setWebsiteStep((step) => Math.max(0, step - 1))}
+          onNext={() => setWebsiteStep((step) => Math.min(websiteSteps.length - 1, step + 1))}
+          onSave={save}
+        />
+      </GuidedStepFlow>
     </ModuleScroll>
   );
 }
@@ -5689,6 +6262,75 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
     fontSize: 12,
     fontWeight: "700",
+  },
+  swatchRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: theme.spacing.sm,
+  },
+  swatchButton: {
+    width: "48%",
+    gap: theme.spacing.sm,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+    padding: theme.spacing.sm,
+  },
+  swatchSelected: {
+    borderColor: theme.colors.primary,
+    backgroundColor: theme.colors.primarySoft,
+  },
+  swatchStack: {
+    height: 38,
+    overflow: "hidden",
+    flexDirection: "row",
+    borderRadius: theme.radius.sm,
+  },
+  swatchFill: {
+    flex: 1,
+  },
+  swatchLabel: {
+    color: theme.colors.text,
+    fontSize: 12,
+    fontWeight: "900",
+  },
+  websitePreview: {
+    minHeight: 190,
+    overflow: "hidden",
+    justifyContent: "flex-end",
+    gap: theme.spacing.sm,
+    borderRadius: theme.radius.md,
+    padding: theme.spacing.lg,
+  },
+  websitePreviewBadge: {
+    alignSelf: "flex-start",
+    overflow: "hidden",
+    borderRadius: theme.radius.sm,
+    backgroundColor: "rgba(255,255,255,0.18)",
+    color: theme.colors.onPrimary,
+    fontSize: 11,
+    fontWeight: "900",
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: theme.spacing.xs,
+  },
+  websitePreviewTitle: {
+    color: theme.colors.onPrimary,
+    fontSize: 26,
+    fontWeight: "900",
+    lineHeight: 32,
+  },
+  websitePreviewSubtitle: {
+    color: theme.colors.onPrimary,
+    fontSize: 13,
+    fontWeight: "700",
+    lineHeight: 19,
+    opacity: 0.88,
+  },
+  websitePreviewAccent: {
+    height: 5,
+    width: 96,
+    borderRadius: theme.radius.sm,
   },
   messagesRoot: {
     flex: 1,

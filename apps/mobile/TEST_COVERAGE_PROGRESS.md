@@ -1,6 +1,6 @@
 # Mobile Test Coverage Progress
 
-Last updated: 2026-07-15 11:46:00 +03:00
+Last updated: 2026-07-15 12:00:00 +03:00
 
 ## Context
 
@@ -835,12 +835,30 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - CodeRabbit is now processing the manually triggered review.
   - Production Android build is still running; no release build failure is present.
   - `adb devices -l` still returns no connected devices.
+- 2026-07-15 11:48 +03: Cypress repair pushed and release artifacts ready
+  - Committed and pushed `0a276ecc` (`Stabilize dealer site Cypress submit`) to non-draft PR #70.
+  - Fresh checks are running on the new head; SonarCloud, type-check, lint, Convex backend, TestSprite E2E, CodeQL action/python/javascript checks, Semgrep, Checkov, OSV, GitGuardian, dealer-worker, dependency-audit, and secret-scan are green so far.
+  - Still running: Cypress, Playwright, Nuclei, ZAP baseline, unit-and-integration, Vercel, and CodeRabbit.
+  - Production build from app-runtime commit `b1871d51` completed successfully; latest pushed commit `0a276ecc` only changes Cypress/progress files.
+  - Release APK: `C:\h-ui\apps\mobile\android\app\build\outputs\apk\release\app-release.apk`, size 104,264,930 bytes, SHA-256 `EC7398324B824C7BD854C5EF26BF7A26925456072E0CAA8853C236F42351B21D`.
+  - Play-ready AAB: `C:\h-ui\apps\mobile\android\app\build\outputs\bundle\release\app-release.aab`, size 73,951,222 bytes, SHA-256 `FB30E23557B89C88CE27CE080133A25E16E117A0B2F9B0727274A6F456BD3236`.
+  - Restarted ADB, but `adb devices -l` still returns no connected devices, so install is blocked by USB debugging enumeration.
+- 2026-07-15 12:00 +03: finance/website parity pass and review-thread fixes validated locally
+  - Upgraded the native finance companies module from a raw edit form into a searchable finance cockpit with status filters, active/inactive/average-rate metrics, detail sheets, a guided company wizard, quick term chips, sample deal presets, and live monthly-payment preview.
+  - Added the missing mobile control for commission treatment so the native app can preserve the same finance-company behavior exposed by the web dialog.
+  - Upgraded the native website builder from manual fields into a guided setup flow: address/language, searchable template picker, palette swatches, hero title/subtitle presets, public finance-company selection, live hero preview, section visibility review, form-routing controls, and final save/publish review.
+  - Addressed fresh CodeRabbit review threads locally: full VIN alphabet validation, deterministic VIN year fallback, hybrid fuel mapping, bounded/concurrent NHTSA requests, stale VIN decode response discard, quote vehicle price refresh, and command-center category/search consistency.
+  - `pnpm mobile:typecheck`: passed.
+  - `pnpm exec eslint apps/mobile/src/features/workspace/WorkspaceModuleScreen.tsx apps/mobile/src/features/workspace/WorkspaceModuleLauncher.tsx apps/mobile/src/features/workspace/mobileVinDecode.ts apps/mobile/src/features/workspace/mobileVinDecode.test.ts --quiet`: passed.
+  - `pnpm mobile:test`: passed with 11 suites, 92 tests, and 100% statements/branches/functions/lines.
+  - Previous pushed head `0a276ecc` has all GitHub Actions/Vercel/SonarCloud checks green; CodeRabbit is currently rate-limited and the local fixes are ready for commit/push.
+  - `adb devices -l` still returns no connected devices, so the production APK install remains blocked by USB debugging enumeration.
 
 ## Next Steps
 
-1. Watch PR checks for the new head and inspect any failures or review threads.
-2. Watch production build `C:\h-ui\mobile-production-build-20260715-113311.log` to completion.
-3. Install the fresh release APK when ADB lists device `A99JBB5826170023`.
-4. Continue module-level parity passes for dialogs, searchable choices, and guided workflows.
-5. Re-run CodeRabbit after the quota window resets or enable usage-based reviews.
+1. Commit and push the finance/website parity pass plus review-thread fixes to non-draft PR #70.
+2. Watch the fresh PR checks and CodeRabbit result after the push; resolve any remaining active review threads.
+3. Rebuild a production Android APK/AAB from the pushed runtime commit.
+4. Install the fresh release APK when ADB lists device `A99JBB5826170023`.
+5. Continue module-level parity passes for dialogs, searchable choices, and guided workflows.
 6. Configure the mobile Turnstile public key if marketplace verification is part of the phone test.

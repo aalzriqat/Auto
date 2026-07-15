@@ -25,11 +25,12 @@ describe("mobile VIN decode helpers", () => {
   });
 
   test("decodes VIN years and validates advisory checksums", () => {
-    expect(decodeMobileVinYear("A")).toBe(2010);
-    expect(decodeMobileVinYear("Y")).toBe(2000);
+    expect(decodeMobileVinYear("A")).toBeUndefined();
+    expect(decodeMobileVinYear("Y")).toBeUndefined();
     expect(decodeMobileVinYear("9")).toBe(2009);
     expect(decodeMobileVinYear("I")).toBeUndefined();
     expect(hasInvalidMobileVinCharacters("IOQ")).toBe(true);
+    expect(hasInvalidMobileVinCharacters("AAAAAAAAAAAAAAAA*")).toBe(true);
     expect(validateMobileVinChecksum("1HGCM82633A004352")).toBe(true);
     expect(validateMobileVinChecksum("1HGCM82633A004353")).toBe(false);
     expect(validateMobileVinChecksum("SHORT")).toBe(false);
@@ -48,7 +49,7 @@ describe("mobile VIN decode helpers", () => {
     expect(mapFuelType("Gasoline / Petrol")).toBe("Gasoline");
     expect(mapFuelType("Diesel fuel")).toBe("Diesel");
     expect(mapFuelType("Battery Electric Vehicle")).toBe("Electric");
-    expect(mapFuelType("Hybrid Electric")).toBe("Electric");
+    expect(mapFuelType("Hybrid Electric")).toBe("Hybrid");
     expect(mapFuelType("Hybrid")).toBe("Hybrid");
     expect(mapFuelType(undefined)).toBeUndefined();
     expect(mapFuelType("Unknown")).toBeUndefined();
@@ -102,7 +103,7 @@ describe("mobile VIN decode helpers", () => {
       make: "BMW",
       model: "3-series",
       fuelType: "Gasoline",
-      year: 2013,
+      year: undefined,
     });
 
     expect(
@@ -121,7 +122,7 @@ describe("mobile VIN decode helpers", () => {
       make: undefined,
       model: undefined,
       trim: undefined,
-      year: 2010,
+      year: undefined,
       fuelType: undefined,
     });
 

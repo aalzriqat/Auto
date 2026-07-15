@@ -21,7 +21,7 @@ export function normalizeVinInput(value: string): string {
 }
 
 export function hasInvalidMobileVinCharacters(vin: string): boolean {
-  return /[IOQ]/i.test(vin);
+  return /[^A-HJ-NPR-Z0-9]/i.test(vin);
 }
 
 export function decodeMobileVinYear(char: string): number | undefined {
@@ -59,8 +59,7 @@ export function decodeMobileVinYear(char: string): number | undefined {
   };
   const year = base[char?.toUpperCase()];
   if (!year) return undefined;
-  const now = new Date().getFullYear();
-  return year + 30 <= now + 2 ? year + 30 : year;
+  return /\d/.test(char) ? year : undefined;
 }
 
 export function toMobileCarBrand(name: string): string {
@@ -118,8 +117,7 @@ export function validateMobileVinChecksum(vin: string): boolean {
   let sum = 0;
   for (let index = 0; index < upper.length; index += 1) {
     const char = upper[index];
-    const value = /\d/.test(char) ? Number(char) : VIN_TRANSLITERATION[char];
-    if (value === undefined) return false;
+    const value = /\d/.test(char) ? Number(char) : VIN_TRANSLITERATION[char]!;
     sum += value * VIN_CHECK_DIGIT_WEIGHTS[index];
   }
 
@@ -161,8 +159,8 @@ export function mapFuelType(rawFuelType: string | undefined): string | undefined
   const value = rawFuelType?.toLowerCase() ?? "";
   if (value.includes("gasoline") || value.includes("petrol")) return "Gasoline";
   if (value.includes("diesel")) return "Diesel";
-  if (value.includes("electric")) return "Electric";
   if (value.includes("hybrid")) return "Hybrid";
+  if (value.includes("electric")) return "Electric";
   return undefined;
 }
 
