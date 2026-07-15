@@ -1,14 +1,39 @@
 /// <reference types="jest" />
 
+import type { ReactNode } from "react";
+
+jest.mock("react-native", () => {
+  const actual = jest.requireActual<typeof import("react-native")>("react-native");
+  const React = jest.requireActual<typeof import("react")>("react");
+
+  function MockModal({ children, visible }: { children?: ReactNode; visible?: boolean }) {
+    return visible ? React.createElement(actual.View, null, children) : null;
+  }
+
+  return new Proxy(actual, {
+    get(target, property, receiver) {
+      if (property === "Modal") return MockModal;
+      return Reflect.get(target, property, receiver);
+    },
+  });
+});
+
 import { fireEvent, render, waitFor } from "@testing-library/react-native";
 import * as SecureStore from "expo-secure-store";
-import { StyleSheet, Text } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 
 import { LocaleProvider } from "../providers/LocaleProvider";
 import { FormField } from "./FormField";
+import { GuidedStepFlow, getSafeStepIndex } from "./GuidedStepFlow";
 import { getLocaleTogglePressedStyle, LocaleToggle } from "./LocaleToggle";
 import { getRouteButtonPressedStyle, RouteErrorState, RouteLoadingState } from "./RouteState";
 import { Screen } from "./Screen";
+import {
+  filterSearchableOptions,
+  formatCustomValueLabel,
+  SearchableSelectField,
+  type SearchableSelectOption,
+} from "./SearchableSelectField";
 
 const getItemAsync = SecureStore.getItemAsync as jest.MockedFunction<typeof SecureStore.getItemAsync>;
 
@@ -84,6 +109,67 @@ describe("mobile shell components", () => {
     });
   });
 
+  test("filters searchable select options by label, value, and sub label", () => {
+    const options: SearchableSelectOption[] = [
+      { label: "Camry", subLabel: "Toyota sedan", value: "camry-id" },
+      { label: "Accord", subLabel: "Honda sedan", value: "accord-id" },
+      { label: "Sportage", value: "sportage-id" },
+    ];
+
+    expect(filterSearchableOptions(options, "")).toHaveLength(3);
+    expect(filterSearchableOptions(options, "cam")).toEqual([options[0]]);
+    expect(filterSearchableOptions(options, "honda")).toEqual([options[1]]);
+    expect(filterSearchableOptions(options, "sportage-id")).toEqual([options[2]]);
+    expect(filterSearchableOptions(options, "missing")).toEqual([]);
+    expect(formatCustomValueLabel(undefined, "Genesis")).toBe("Genesis");
+    expect(formatCustomValueLabel('Use "{value}"', "Lucid")).toBe('Use "Lucid"');
+  });
+
+  test("renders guided step flow state and clamps active step indexes", async () => {
+    expect(getSafeStepIndex(0, 4)).toBe(0);
+    expect(getSafeStepIndex(3, -1)).toBe(0);
+    expect(getSafeStepIndex(3, 8)).toBe(2);
+    expect(getSafeStepIndex(3, 1)).toBe(1);
+
+    const steps = [
+      { title: "Contact", subtitle: "Buyer info" },
+      { title: "Vehicle" },
+      { title: "Review", subtitle: "Final check" },
+    ];
+    const flow = await render(
+      <LocaleProvider>
+        <GuidedStepFlow activeIndex={1} steps={steps}>
+          <Text>Step body</Text>
+        </GuidedStepFlow>
+      </LocaleProvider>,
+    );
+
+    await waitFor(() => expect(flow.getByText("2/3")).toBeTruthy());
+    expect(flow.getByText("2/3")).toBeTruthy();
+    expect(flow.getByText("Vehicle")).toBeTruthy();
+    expect(flow.queryByText("Buyer info")).toBeNull();
+    expect(flow.getByText("Step body")).toBeTruthy();
+
+    await flow.rerender(
+      <LocaleProvider>
+        <GuidedStepFlow activeIndex={0} steps={steps}>
+          <Text>Step body</Text>
+        </GuidedStepFlow>
+      </LocaleProvider>,
+    );
+    expect(flow.getByText("Buyer info")).toBeTruthy();
+
+    const emptyFlow = await render(
+      <LocaleProvider>
+        <GuidedStepFlow activeIndex={3} steps={[]}>
+          <Text>No steps body</Text>
+        </GuidedStepFlow>
+      </LocaleProvider>,
+    );
+    expect(emptyFlow.getByText("No steps body")).toBeTruthy();
+    expect(emptyFlow.queryByText("0/0")).toBeNull();
+  });
+
   test("renders loading and error states with retry behavior", async () => {
     const retry = jest.fn();
     const loading = await render(<RouteLoadingState label="Loading workspace" />);
@@ -133,5 +219,71 @@ describe("mobile shell components", () => {
     await fireEvent.press(getByLabelText("Switch to Arabic"));
 
     expect(getByText("EN")).toBeTruthy();
+  });
+
+  test("drives searchable select sheet interactions", async () => {
+    const onChange = jest.fn();
+    const options: SearchableSelectOption[] = [
+      { label: "Camry", subLabel: "Toyota", value: "camry" },
+      { label: "Accord", value: "accord" },
+    ];
+    const picker = await render(
+      <LocaleProvider>
+        <View>
+          <SearchableSelectField
+            allowCustomValue
+            closeLabel="Done"
+            customValueLabel={'Use "{value}"'}
+            label="Vehicle"
+            noneLabel="Any vehicle"
+            options={options}
+            searchPlaceholder="Find vehicle"
+            testID="vehicle"
+            value="camry"
+            onChange={onChange}
+          />
+          <SearchableSelectField
+            emptyLabel="Nothing here"
+            label="Empty"
+            noneLabel="Any empty"
+            options={[]}
+            searchPlaceholder="Find empty"
+            testID="empty"
+            value=""
+            onChange={onChange}
+          />
+          <SearchableSelectField
+            allowCustomValue
+            label="Raw custom"
+            options={[]}
+            searchPlaceholder="Find raw"
+            testID="raw-custom"
+            value=""
+            onChange={onChange}
+          />
+          <SearchableSelectField label="Default id" options={[]} value="" onChange={onChange} />
+          <SearchableSelectField disabled label="Disabled" options={[]} testID="disabled" onChange={onChange} />
+        </View>
+      </LocaleProvider>,
+    );
+
+    fireEvent.press(picker.getByTestId("disabled-trigger"));
+    expect(picker.queryByTestId("disabled-search")).toBeNull();
+    expect(picker.getByText("Any empty")).toBeTruthy();
+
+    fireEvent(picker.getByTestId("vehicle-trigger"), "pressIn");
+    fireEvent(picker.getByTestId("vehicle-trigger"), "pressOut");
+    fireEvent.press(picker.getByTestId("vehicle-trigger"));
+    await waitFor(() => expect(picker.getByTestId("vehicle-search")).toBeTruthy());
+    expect(picker.getByText("Toyota")).toBeTruthy();
+    await fireEvent.changeText(picker.getByTestId("vehicle-search"), "Genesis");
+    await waitFor(() => expect(picker.getByText('Use "Genesis"')).toBeTruthy());
+    fireEvent(picker.getByTestId("vehicle-custom"), "pressIn");
+    fireEvent(picker.getByTestId("vehicle-custom"), "pressOut");
+    await fireEvent.changeText(picker.getByTestId("vehicle-search"), "accord");
+    await waitFor(() => expect(picker.getByText("Accord")).toBeTruthy());
+    fireEvent.press(picker.getByTestId("vehicle-option-accord"));
+    expect(onChange).toHaveBeenCalledWith("accord");
+    await waitFor(() => expect(picker.queryByTestId("vehicle-search")).toBeNull());
   });
 });

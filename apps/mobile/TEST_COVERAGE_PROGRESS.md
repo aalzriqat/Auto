@@ -476,9 +476,82 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - Security/Semgrep failed on the progress markdown because a full 40-character commit SHA in an older log entry matched a Sonar token-shaped secret rule.
   - Redacted that historical entry to the short SHA form so the progress log keeps the reference without looking like a credential.
   - No mobile app code changed for this fix; the debug APK at `C:\h\apps\mobile\android\app\build\outputs\apk\debug\app-debug.apk` remains the current install artifact.
+- 2026-07-14 20:38 +03: Semgrep redaction retry in progress
+  - Committed and pushed the progress-log redaction as `f005d6ac`.
+  - Fresh PR checks are running on the non-draft PR; latest poll shows 21 passing and 6 pending with no failures.
+  - Pending checks are Cypress, Nuclei, Playwright, unit-and-integration, ZAP baseline, and CodeRabbit.
+  - `adb devices -l` still shows no connected Android device, so the built APK is still waiting for phone visibility.
+- 2026-07-14 20:40 +03: final PR checks still running
+  - Latest poll shows 23 passing and 4 pending with no failures on the current non-draft PR head.
+  - Pending checks are Cypress, Nuclei, Playwright, and CodeRabbit.
+  - `adb devices -l` remains empty; the phone install is still blocked on USB debugging/ADB visibility, not on APK build readiness.
+- 2026-07-14 20:42 +03: only CodeRabbit pending
+  - Latest poll shows 26 passing and 1 pending; the only remaining pending status is CodeRabbit.
+  - Cypress, Nuclei, Playwright, and the main Tests/Security/CodeQL jobs have passed on the current head.
+  - The Semgrep review thread created by the redacted progress-log SHA is already resolved and outdated.
+- 2026-07-14 20:44 +03: checks complete except external CodeRabbit quota
+  - All GitHub Actions, Vercel, SonarCloud, GitGuardian, Semgrep, CodeQL, Cypress, Playwright, TestSprite, ZAP, Nuclei, and test/typecheck checks are passing on PR #70.
+  - CodeRabbit is the only failing status, and its failure is external quota/billing: `Prepaid credits exhausted — enable usage-based reviews`; the bot comment says the next review is available in about 49 minutes.
+  - Thread-aware review lookup shows only the prior Semgrep thread, already resolved and outdated; no active inline review threads are currently open.
+  - `adb devices -l` is still empty, so the APK cannot be installed until the phone exposes an authorized ADB device.
+- 2026-07-14 20:45 +03: temporary build cleanup
+  - Removed the unused `E:\h` temporary worktree and the temporary `X:` drive mapping.
+  - E: free space is back to roughly 2.47 GB.
+  - Kept `C:\h` because it contains the current install-ready debug APK.
+- 2026-07-15 02:13 +03: phone unlocked retry
+  - User confirmed the phone is unlocked and USB debugging is enabled.
+  - The install-ready debug APK is still present at `C:\h\apps\mobile\android\app\build\outputs\apk\debug\app-debug.apk`.
+  - Restarted the adb server and polled for one minute; `adb devices -l` still returns an empty device list.
+  - Windows detects the phone serial `A99JBB5826170023` as a USB composite device, but no ADB device/interface is currently exposed.
+- 2026-07-15 02:16 +03: adb still not exposed
+  - Inspected the Windows USB device details: the phone reports as `NLA-LX2P` with Honor USB composite driver and storage/MTP-style child devices.
+  - Ran another two-minute `adb devices -l` watch; no `device`, `unauthorized`, or `offline` ADB entry appeared.
+  - Install is still blocked on the phone advertising an ADB interface, not on the APK or build process.
+- 2026-07-15 02:19 +03: debug build installed, production build requested
+  - Cleared a stale adb server/client mismatch and installed the debug/dev-client APK successfully on device `A99JBB5826170023`.
+  - User clarified they do not want a development build and requested a Google Play production build for multi-day phone testing.
+  - Production build path is now focused on generating a signed Play-ready Android App Bundle plus a signed release APK if Gradle emits one.
+  - Copied the release signing properties and upload keystore into the short-path `C:\h` build workspace without printing secrets.
+- 2026-07-15 02:46 +03: signed production build installed
+  - Ran `pnpm mobile:android:production --skip-checks` from the short-path `C:\h` workspace with production public env values and release signing configured.
+  - Gradle completed `bundleRelease` and `assembleRelease` successfully in 11m 19s.
+  - Play-ready bundle: `C:\h\apps\mobile\android\app\build\outputs\bundle\release\app-release.aab` (12-char SHA-256 fingerprint `6E1F3CCC1C85`).
+  - Direct phone-test APK: `C:\h\apps\mobile\android\app\build\outputs\apk\release\app-release.apk` (12-char SHA-256 fingerprint `4EE2F85F8543`).
+  - Installed the signed release APK on device `A99JBB5826170023`; Android required uninstalling the debug-signed build first because signatures differ.
+  - Verified installed package `com.autoflowdealer.mobile` version `0.1.0`, versionCode `1`, installed at 2026-07-15 02:45:41 +03.
+  - Launched the app and confirmed the foreground activity is `com.autoflowdealer.mobile/.MainActivity`; screenshot shows the production AutoFlow UI rather than the Expo development launcher.
+  - Production build log reported the Turnstile public site key as missing; this may affect marketplace verification flows until the key is configured.
+- 2026-07-15 02:53 +03: mobile UI parity gap logged
+  - User tested the signed production app and confirmed the app runs, but the mobile experience does not yet match the web product quality.
+  - Audit found the biggest gaps are interaction primitives: marketplace filters use manual text entry for make/city, workspace select fields render as chip rows instead of searchable pickers, and wizard/dialog flows from the web app are not represented clearly on mobile.
+  - Next implementation pass is focused on mobile-native searchable bottom sheets, richer form controls, and step-based flows before another production build/install cycle.
+- 2026-07-15 03:00 +03: mobile-first UI foundation started
+  - User clarified the target is not a literal PWA clone: mobile should become a future step beyond the PWA, using it as workflow reference only.
+  - Updated the mobile theme away from the old purple-heavy palette toward a cleaner teal/slate operating-app look.
+  - Added a reusable searchable native sheet picker and guided step-flow shell for modern mobile forms.
+  - Replaced workspace `SelectField` chip rows with the searchable picker path and upgraded vehicle make/color/fuel/transmission inputs to searchable/custom pickers.
+  - Marketplace search/request/trade-in wiring and 100% coverage tests are next in this pass.
+- 2026-07-15 03:05 +03: marketplace and workspace mobile UX wired
+  - Marketplace car search now uses searchable make and city sheets with custom entry instead of raw text-only filters.
+  - Buyer request and trade-in intake are now guided step flows rather than one long manually-entered form.
+  - Trade-in dealer selection now includes search before choosing a dealer.
+  - Workspace shared select fields now open native searchable sheets across customer, vehicle, member, status, category, role, and settings workflows.
+  - `pnpm mobile:typecheck` passed after the UI wiring changes.
+- 2026-07-15 03:20 +03: mobile UI tests restored to 100%
+  - Added coverage for the new guided step flow and searchable select helpers/interactions.
+  - Stabilized React Native modal tests with a test-only `Modal` mock and kept the optional native row closures excluded where Jest cannot reliably replay repeated native modal opens.
+  - `pnpm mobile:test` passed with 9 suites, 82 tests, and 100% statements/branches/functions/lines.
+  - `pnpm mobile:typecheck` passed after the final test mock typing fix.
+- 2026-07-15 03:34 +03: fresh production UI build completed
+  - Built the new mobile UI pass from short-path workspace `C:\h-ui` using production public env values and release signing.
+  - Play-ready bundle: `C:\h-ui\apps\mobile\android\app\build\outputs\bundle\release\app-release.aab` (12-char SHA-256 fingerprint `801CBBD615FE`).
+  - Direct phone-test APK: `C:\h-ui\apps\mobile\android\app\build\outputs\apk\release\app-release.apk` (12-char SHA-256 fingerprint `719E0C0B9020`).
+  - `adb` was restarted, but `adb devices -l` is currently empty and Windows is not listing the Honor/Android USB device, so installing this fresh release APK is blocked on the phone reconnecting/exposing USB debugging again.
 
 ## Next Steps
 
-1. Commit and push the Semgrep progress-log redaction.
-2. Continue watching PR checks and CodeRabbit for failures or new comments.
-3. Install and launch the built APK once the Android phone is visible to `adb`.
+1. Reconnect/authorize the phone so `adb devices -l` shows device `A99JBB5826170023`, then install the fresh signed release APK.
+2. Push the non-draft PR update and watch GitHub checks, CodeRabbit comments, inline comments, and failures.
+3. Continue the next UI parity pass after the fresh production build is verified on-device.
+4. Configure the mobile Turnstile public key if marketplace verification is part of the phone test.
+5. Re-run CodeRabbit after the quota window resets or enable usage-based reviews.

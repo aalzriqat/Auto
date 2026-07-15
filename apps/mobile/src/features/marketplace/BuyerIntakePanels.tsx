@@ -18,8 +18,11 @@ import {
   type MobileTradeInCondition,
 } from "../../convexApi";
 import { FormField } from "../../components/FormField";
+import { GuidedStepFlow, type GuidedStep } from "../../components/GuidedStepFlow";
 import { RouteLoadingState } from "../../components/RouteState";
+import { SearchableSelectField } from "../../components/SearchableSelectField";
 import { getMobileEnv } from "../../config/env";
+import { getJordanCityOptions, getVehicleMakeOptions } from "../../data/mobileOptions";
 import { useLocale } from "../../providers/LocaleProvider";
 import { theme } from "../../theme";
 import { getMarketplaceClientFingerprint } from "./marketplaceFingerprint";
@@ -235,6 +238,57 @@ function SubmitButton({
   );
 }
 
+function StepActions({
+  activeStep,
+  nextLabel,
+  onBack,
+  onNext,
+  onSubmit,
+  previousLabel,
+  submitLabel,
+  submitting,
+  totalSteps,
+}: {
+  activeStep: number;
+  nextLabel: string;
+  onBack: () => void;
+  onNext: () => void;
+  onSubmit: () => void;
+  previousLabel: string;
+  submitLabel: string;
+  submitting: boolean;
+  totalSteps: number;
+}) {
+  const isLast = activeStep >= totalSteps - 1;
+
+  return (
+    <View style={styles.stepActions}>
+      {activeStep > 0 ? (
+        <Pressable
+          accessibilityRole="button"
+          style={({ pressed }) => [styles.secondaryButton, pressed && styles.pressed]}
+          onPress={onBack}
+        >
+          <Text style={styles.secondaryButtonText}>{previousLabel}</Text>
+        </Pressable>
+      ) : null}
+      <View style={styles.stepPrimaryAction}>
+        {isLast ? (
+          <SubmitButton label={submitLabel} submitting={submitting} onPress={onSubmit} />
+        ) : (
+          <Pressable
+            accessibilityRole="button"
+            style={({ pressed }) => [styles.primaryButton, pressed && styles.pressed]}
+            onPress={onNext}
+          >
+            <Text style={styles.primaryButtonText}>{nextLabel}</Text>
+          </Pressable>
+        )}
+      </View>
+    </View>
+  );
+}
+
 export function BuyerRequestPanel() {
   const { locale, t, textDirection } = useLocale();
   const submitRequest = useAction(api.marketplaceRequests.submitRequest);
@@ -244,7 +298,31 @@ export function BuyerRequestPanel() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submittedRequest, setSubmittedRequest] = useState<{ requestId: string; matchedCount: number } | null>(null);
+  const [activeStep, setActiveStep] = useState(0);
   const turnstileSiteKey = getTurnstileSiteKey();
+  const closeLabel = locale === "ar" ? "إغلاق" : "Close";
+  const customValueLabel = locale === "ar" ? 'استخدام "{value}"' : 'Use "{value}"';
+  const emptyLabel = locale === "ar" ? "لا توجد نتائج." : "No results found.";
+  const requestSteps: GuidedStep[] = [
+    {
+      title: locale === "ar" ? "بيانات المشتري" : "Buyer details",
+      subtitle: locale === "ar" ? "ابدأ بوسيلة التواصل والمدينة." : "Start with contact and city.",
+    },
+    {
+      title: locale === "ar" ? "السيارة المطلوبة" : "Desired vehicle",
+      subtitle: locale === "ar" ? "اختر الماركة وأدخل المواصفات المهمة." : "Pick the make and key preferences.",
+    },
+    {
+      title: locale === "ar" ? "الميزانية والتوقيت" : "Budget and timing",
+      subtitle: locale === "ar" ? "حدد طريقة الدفع ومدى الجدية." : "Set payment, budget, and urgency.",
+    },
+    {
+      title: locale === "ar" ? "المراجعة والإرسال" : "Review and submit",
+      subtitle: locale === "ar" ? "أكد الموافقة ثم أرسل الطلب." : "Confirm consent, verify, and send.",
+    },
+  ];
+  const cityOptions = getJordanCityOptions(locale);
+  const makeOptions = getVehicleMakeOptions();
 
   function setField<TKey extends keyof RequestFields>(key: TKey, value: RequestFields[TKey]) {
     setFields((current) => ({ ...current, [key]: value }));
@@ -298,6 +376,7 @@ export function BuyerRequestPanel() {
 
       setSubmittedRequest(submitResponse);
       setFields(DEFAULT_REQUEST_FIELDS);
+      setActiveStep(0);
       setTurnstileToken(null);
       setVerificationResetKey((value) => value + 1);
     } catch (error) {
@@ -337,97 +416,138 @@ export function BuyerRequestPanel() {
         </View>
       ) : null}
 
-      <View style={styles.formGrid}>
-        <FormField
-          label={t("marketplaceBuyerFirstName")}
-          value={fields.buyerFirstName}
-          onChangeText={(value) => setField("buyerFirstName", value)}
+      <GuidedStepFlow activeIndex={activeStep} steps={requestSteps}>
+        {activeStep === 0 ? (
+          <View style={styles.formGrid}>
+            <FormField
+              label={t("marketplaceBuyerFirstName")}
+              value={fields.buyerFirstName}
+              onChangeText={(value) => setField("buyerFirstName", value)}
+            />
+            <FormField
+              label={t("marketplaceBuyerPhone")}
+              value={fields.buyerPhone}
+              keyboardType="phone-pad"
+              onChangeText={(value) => setField("buyerPhone", value)}
+            />
+            <FormField
+              label={t("marketplaceBuyerWhatsapp")}
+              value={fields.buyerWhatsApp}
+              keyboardType="phone-pad"
+              onChangeText={(value) => setField("buyerWhatsApp", value)}
+            />
+            <SearchableSelectField
+              allowCustomValue
+              closeLabel={closeLabel}
+              customValueLabel={customValueLabel}
+              emptyLabel={emptyLabel}
+              label={t("marketplaceCity")}
+              options={cityOptions}
+              placeholder={locale === "ar" ? "اختر المدينة" : "Choose city"}
+              searchPlaceholder={locale === "ar" ? "بحث المدن" : "Search cities"}
+              value={fields.buyerCity}
+              onChange={(value) => setField("buyerCity", value)}
+            />
+          </View>
+        ) : null}
+        {activeStep === 1 ? (
+          <View style={styles.formGrid}>
+            <SearchableSelectField
+              allowCustomValue
+              closeLabel={closeLabel}
+              customValueLabel={customValueLabel}
+              emptyLabel={emptyLabel}
+              label={t("marketplaceMake")}
+              options={makeOptions}
+              placeholder={locale === "ar" ? "اختر الماركة" : "Choose make"}
+              searchPlaceholder={locale === "ar" ? "بحث الماركات" : "Search makes"}
+              value={fields.make}
+              onChange={(value) => setField("make", value)}
+            />
+            <FormField
+              label={t("marketplaceBuyerModel")}
+              value={fields.model}
+              onChangeText={(value) => setField("model", value)}
+            />
+            <FormField
+              label={t("marketplaceBuyerYearMin")}
+              value={fields.yearMin}
+              keyboardType="number-pad"
+              onChangeText={(value) => setField("yearMin", value)}
+            />
+            <FormField
+              label={t("marketplaceBuyerYearMax")}
+              value={fields.yearMax}
+              keyboardType="number-pad"
+              onChangeText={(value) => setField("yearMax", value)}
+            />
+          </View>
+        ) : null}
+        {activeStep === 2 ? (
+          <>
+            <View style={styles.formGrid}>
+              <FormField
+                label={t("marketplacePriceMin")}
+                value={fields.priceMin}
+                keyboardType="number-pad"
+                onChangeText={(value) => setField("priceMin", value)}
+              />
+              <FormField
+                label={t("marketplacePriceMax")}
+                value={fields.priceMax}
+                keyboardType="number-pad"
+                onChangeText={(value) => setField("priceMax", value)}
+              />
+            </View>
+            <ChoiceGroup
+              label={t("marketplaceBuyerPayment")}
+              value={fields.paymentType}
+              options={PAYMENT_OPTIONS}
+              onChange={(value) => setField("paymentType", value)}
+            />
+            {fields.paymentType !== "CASH" ? (
+              <FormField
+                label={t("marketplaceBuyerMonthlyBudget")}
+                value={fields.monthlyBudget}
+                keyboardType="number-pad"
+                onChangeText={(value) => setField("monthlyBudget", value)}
+              />
+            ) : null}
+            <ChoiceGroup
+              label={t("marketplaceBuyerTimeframe")}
+              value={fields.buyerTimeframe}
+              options={TIMEFRAME_OPTIONS}
+              onChange={(value) => setField("buyerTimeframe", value)}
+            />
+          </>
+        ) : null}
+        {activeStep === 3 ? (
+          <>
+            <ConsentRow
+              label={t("marketplaceBuyerConsent")}
+              value={fields.consentAccepted}
+              onChange={(value) => setField("consentAccepted", value)}
+            />
+            <TurnstileVerification
+              siteKey={turnstileSiteKey}
+              resetKey={verificationResetKey}
+              onTokenChange={setTurnstileToken}
+            />
+            {error ? <Text style={styles.errorText}>{error}</Text> : null}
+          </>
+        ) : null}
+        <StepActions
+          activeStep={activeStep}
+          nextLabel={locale === "ar" ? "التالي" : "Next"}
+          previousLabel={locale === "ar" ? "السابق" : "Back"}
+          submitLabel={t("marketplaceSubmitRequest")}
+          submitting={submitting}
+          totalSteps={requestSteps.length}
+          onBack={() => setActiveStep((step) => Math.max(step - 1, 0))}
+          onNext={() => setActiveStep((step) => Math.min(step + 1, requestSteps.length - 1))}
+          onSubmit={submitBuyerRequest}
         />
-        <FormField
-          label={t("marketplaceBuyerPhone")}
-          value={fields.buyerPhone}
-          keyboardType="phone-pad"
-          onChangeText={(value) => setField("buyerPhone", value)}
-        />
-        <FormField
-          label={t("marketplaceBuyerWhatsapp")}
-          value={fields.buyerWhatsApp}
-          keyboardType="phone-pad"
-          onChangeText={(value) => setField("buyerWhatsApp", value)}
-        />
-        <FormField
-          label={t("marketplaceCity")}
-          value={fields.buyerCity}
-          onChangeText={(value) => setField("buyerCity", value)}
-        />
-        <FormField
-          label={t("marketplaceMake")}
-          value={fields.make}
-          onChangeText={(value) => setField("make", value)}
-        />
-        <FormField
-          label={t("marketplaceBuyerModel")}
-          value={fields.model}
-          onChangeText={(value) => setField("model", value)}
-        />
-        <FormField
-          label={t("marketplaceBuyerYearMin")}
-          value={fields.yearMin}
-          keyboardType="number-pad"
-          onChangeText={(value) => setField("yearMin", value)}
-        />
-        <FormField
-          label={t("marketplaceBuyerYearMax")}
-          value={fields.yearMax}
-          keyboardType="number-pad"
-          onChangeText={(value) => setField("yearMax", value)}
-        />
-        <FormField
-          label={t("marketplacePriceMin")}
-          value={fields.priceMin}
-          keyboardType="number-pad"
-          onChangeText={(value) => setField("priceMin", value)}
-        />
-        <FormField
-          label={t("marketplacePriceMax")}
-          value={fields.priceMax}
-          keyboardType="number-pad"
-          onChangeText={(value) => setField("priceMax", value)}
-        />
-      </View>
-
-      <ChoiceGroup
-        label={t("marketplaceBuyerPayment")}
-        value={fields.paymentType}
-        options={PAYMENT_OPTIONS}
-        onChange={(value) => setField("paymentType", value)}
-      />
-      {fields.paymentType !== "CASH" ? (
-        <FormField
-          label={t("marketplaceBuyerMonthlyBudget")}
-          value={fields.monthlyBudget}
-          keyboardType="number-pad"
-          onChangeText={(value) => setField("monthlyBudget", value)}
-        />
-      ) : null}
-      <ChoiceGroup
-        label={t("marketplaceBuyerTimeframe")}
-        value={fields.buyerTimeframe}
-        options={TIMEFRAME_OPTIONS}
-        onChange={(value) => setField("buyerTimeframe", value)}
-      />
-      <ConsentRow
-        label={t("marketplaceBuyerConsent")}
-        value={fields.consentAccepted}
-        onChange={(value) => setField("consentAccepted", value)}
-      />
-      <TurnstileVerification
-        siteKey={turnstileSiteKey}
-        resetKey={verificationResetKey}
-        onTokenChange={setTurnstileToken}
-      />
-      {error ? <Text style={styles.errorText}>{error}</Text> : null}
-      <SubmitButton label={t("marketplaceSubmitRequest")} submitting={submitting} onPress={submitBuyerRequest} />
+      </GuidedStepFlow>
     </View>
   );
 }
@@ -437,7 +557,8 @@ function DealerSelector({
 }: {
   onSelectDealer: (dealer: TradeInDealerTarget) => void;
 }) {
-  const { t, textDirection } = useLocale();
+  const { locale, t, textDirection } = useLocale();
+  const [search, setSearch] = useState("");
   const dealers = useQuery(api.marketplaceDealers.listPublicDirectory, {});
 
   if (dealers === undefined) {
@@ -448,9 +569,24 @@ function DealerSelector({
     return <Text style={styles.emptyText}>{t("marketplaceNoTradeInDealers")}</Text>;
   }
 
+  const query = search.trim().toLowerCase();
+  const visibleDealers = query
+    ? dealers.filter((dealer) =>
+        `${dealer.dealershipName} ${dealer.address ?? ""}`.toLowerCase().includes(query),
+      )
+    : dealers;
+
   return (
     <View style={[styles.selectorList, { direction: textDirection }]}>
-      {dealers.map((dealer) => (
+      <FormField
+        label={locale === "ar" ? "بحث المعارض" : "Search dealers"}
+        value={search}
+        onChangeText={setSearch}
+      />
+      {visibleDealers.length === 0 ? (
+        <Text style={styles.emptyText}>{locale === "ar" ? "لا توجد نتائج." : "No dealers match your search."}</Text>
+      ) : null}
+      {visibleDealers.map((dealer) => (
         <View key={dealer.orgId} style={styles.selectorCard}>
           <View style={styles.selectorText}>
             <Text style={styles.selectorTitle}>{dealer.dealershipName}</Text>
@@ -486,7 +622,26 @@ export function TradeInRequestPanel({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submittedTradeIn, setSubmittedTradeIn] = useState<{ tradeInRequestId: string } | null>(null);
+  const [activeStep, setActiveStep] = useState(0);
   const turnstileSiteKey = getTurnstileSiteKey();
+  const closeLabel = locale === "ar" ? "إغلاق" : "Close";
+  const customValueLabel = locale === "ar" ? 'استخدام "{value}"' : 'Use "{value}"';
+  const emptyLabel = locale === "ar" ? "لا توجد نتائج." : "No results found.";
+  const makeOptions = getVehicleMakeOptions();
+  const tradeInSteps: GuidedStep[] = [
+    {
+      title: locale === "ar" ? "بيانات المالك" : "Owner details",
+      subtitle: locale === "ar" ? "ابدأ بالاسم ورقم التواصل." : "Start with name and phone.",
+    },
+    {
+      title: locale === "ar" ? "السيارة الحالية" : "Current vehicle",
+      subtitle: locale === "ar" ? "اختر الماركة وأدخل معلومات السيارة." : "Pick the make and vehicle details.",
+    },
+    {
+      title: locale === "ar" ? "الحالة والإرسال" : "Condition and submit",
+      subtitle: locale === "ar" ? "حدد الحالة وأكد الموافقة." : "Set condition, consent, and verify.",
+    },
+  ];
 
   function setField<TKey extends keyof TradeInFields>(key: TKey, value: TradeInFields[TKey]) {
     setFields((current) => ({ ...current, [key]: value }));
@@ -540,6 +695,7 @@ export function TradeInRequestPanel({
 
       setSubmittedTradeIn(submitResponse);
       setFields(DEFAULT_TRADE_IN_FIELDS);
+      setActiveStep(0);
       setTurnstileToken(null);
       setVerificationResetKey((value) => value + 1);
     } catch (error) {
@@ -569,7 +725,10 @@ export function TradeInRequestPanel({
           <Pressable
             accessibilityRole="button"
             style={({ pressed }) => [styles.smallButton, pressed && styles.pressed]}
-            onPress={onClearDealer}
+            onPress={() => {
+              setActiveStep(0);
+              onClearDealer();
+            }}
           >
             <Text style={styles.smallButtonText}>{t("marketplaceChangeDealer")}</Text>
           </Pressable>
@@ -595,70 +754,94 @@ export function TradeInRequestPanel({
             </View>
           ) : null}
 
-          <View style={styles.formGrid}>
-            <FormField
-              label={t("marketplaceBuyerFirstName")}
-              value={fields.buyerFirstName}
-              onChangeText={(value) => setField("buyerFirstName", value)}
+          <GuidedStepFlow activeIndex={activeStep} steps={tradeInSteps}>
+            {activeStep === 0 ? (
+              <View style={styles.formGrid}>
+                <FormField
+                  label={t("marketplaceBuyerFirstName")}
+                  value={fields.buyerFirstName}
+                  onChangeText={(value) => setField("buyerFirstName", value)}
+                />
+                <FormField
+                  label={t("marketplaceBuyerPhone")}
+                  value={fields.buyerPhone}
+                  keyboardType="phone-pad"
+                  onChangeText={(value) => setField("buyerPhone", value)}
+                />
+              </View>
+            ) : null}
+            {activeStep === 1 ? (
+              <View style={styles.formGrid}>
+                <SearchableSelectField
+                  allowCustomValue
+                  closeLabel={closeLabel}
+                  customValueLabel={customValueLabel}
+                  emptyLabel={emptyLabel}
+                  label={t("marketplaceCurrentMake")}
+                  options={makeOptions}
+                  placeholder={locale === "ar" ? "اختر الماركة" : "Choose make"}
+                  searchPlaceholder={locale === "ar" ? "بحث الماركات" : "Search makes"}
+                  value={fields.currentMake}
+                  onChange={(value) => setField("currentMake", value)}
+                />
+                <FormField
+                  label={t("marketplaceCurrentModel")}
+                  value={fields.currentModel}
+                  onChangeText={(value) => setField("currentModel", value)}
+                />
+                <FormField
+                  label={t("marketplaceCurrentYear")}
+                  value={fields.currentYear}
+                  keyboardType="number-pad"
+                  onChangeText={(value) => setField("currentYear", value)}
+                />
+                <FormField
+                  label={t("marketplaceCurrentMileage")}
+                  value={fields.currentMileage}
+                  keyboardType="number-pad"
+                  onChangeText={(value) => setField("currentMileage", value)}
+                />
+              </View>
+            ) : null}
+            {activeStep === 2 ? (
+              <>
+                <ChoiceGroup
+                  label={t("marketplaceCondition")}
+                  value={fields.condition}
+                  options={CONDITION_OPTIONS}
+                  onChange={(value) => setField("condition", value)}
+                />
+                <FormField
+                  label={t("marketplaceTradeInNotes")}
+                  value={fields.notes}
+                  multiline
+                  onChangeText={(value) => setField("notes", value)}
+                />
+                <ConsentRow
+                  label={t("marketplaceTradeInConsent")}
+                  value={fields.consentAccepted}
+                  onChange={(value) => setField("consentAccepted", value)}
+                />
+                <TurnstileVerification
+                  siteKey={turnstileSiteKey}
+                  resetKey={verificationResetKey}
+                  onTokenChange={setTurnstileToken}
+                />
+                {error ? <Text style={styles.errorText}>{error}</Text> : null}
+              </>
+            ) : null}
+            <StepActions
+              activeStep={activeStep}
+              nextLabel={locale === "ar" ? "التالي" : "Next"}
+              previousLabel={locale === "ar" ? "السابق" : "Back"}
+              submitLabel={t("marketplaceSubmitTradeIn")}
+              submitting={submitting}
+              totalSteps={tradeInSteps.length}
+              onBack={() => setActiveStep((step) => Math.max(step - 1, 0))}
+              onNext={() => setActiveStep((step) => Math.min(step + 1, tradeInSteps.length - 1))}
+              onSubmit={submitTradeInOfferRequest}
             />
-            <FormField
-              label={t("marketplaceBuyerPhone")}
-              value={fields.buyerPhone}
-              keyboardType="phone-pad"
-              onChangeText={(value) => setField("buyerPhone", value)}
-            />
-            <FormField
-              label={t("marketplaceCurrentMake")}
-              value={fields.currentMake}
-              onChangeText={(value) => setField("currentMake", value)}
-            />
-            <FormField
-              label={t("marketplaceCurrentModel")}
-              value={fields.currentModel}
-              onChangeText={(value) => setField("currentModel", value)}
-            />
-            <FormField
-              label={t("marketplaceCurrentYear")}
-              value={fields.currentYear}
-              keyboardType="number-pad"
-              onChangeText={(value) => setField("currentYear", value)}
-            />
-            <FormField
-              label={t("marketplaceCurrentMileage")}
-              value={fields.currentMileage}
-              keyboardType="number-pad"
-              onChangeText={(value) => setField("currentMileage", value)}
-            />
-          </View>
-
-          <ChoiceGroup
-            label={t("marketplaceCondition")}
-            value={fields.condition}
-            options={CONDITION_OPTIONS}
-            onChange={(value) => setField("condition", value)}
-          />
-          <FormField
-            label={t("marketplaceTradeInNotes")}
-            value={fields.notes}
-            multiline
-            onChangeText={(value) => setField("notes", value)}
-          />
-          <ConsentRow
-            label={t("marketplaceTradeInConsent")}
-            value={fields.consentAccepted}
-            onChange={(value) => setField("consentAccepted", value)}
-          />
-          <TurnstileVerification
-            siteKey={turnstileSiteKey}
-            resetKey={verificationResetKey}
-            onTokenChange={setTurnstileToken}
-          />
-          {error ? <Text style={styles.errorText}>{error}</Text> : null}
-          <SubmitButton
-            label={t("marketplaceSubmitTradeIn")}
-            submitting={submitting}
-            onPress={submitTradeInOfferRequest}
-          />
+          </GuidedStepFlow>
         </>
       ) : null}
     </View>
@@ -779,6 +962,30 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "900",
     textAlign: "center",
+  },
+  secondaryButton: {
+    minHeight: 46,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+    paddingHorizontal: theme.spacing.md,
+  },
+  secondaryButtonText: {
+    color: theme.colors.text,
+    fontSize: 14,
+    fontWeight: "900",
+    textAlign: "center",
+  },
+  stepActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.sm,
+  },
+  stepPrimaryAction: {
+    flex: 1,
   },
   disabledButton: {
     opacity: 0.48,

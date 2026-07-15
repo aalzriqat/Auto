@@ -24,7 +24,9 @@ import {
 } from "../../convexApi";
 import { FormField } from "../../components/FormField";
 import { RouteLoadingState } from "../../components/RouteState";
+import { SearchableSelectField } from "../../components/SearchableSelectField";
 import { Screen } from "../../components/Screen";
+import { getJordanCityOptions, getVehicleMakeOptions } from "../../data/mobileOptions";
 import { useLocale } from "../../providers/LocaleProvider";
 import { theme } from "../../theme";
 import {
@@ -182,20 +184,39 @@ function SearchPanel({
   onSearch: () => void;
   onReset: () => void;
 }>) {
-  const { t, textDirection } = useLocale();
+  const { locale, t, textDirection } = useLocale();
+  const closeLabel = locale === "ar" ? "إغلاق" : "Close";
+  const customValueLabel = locale === "ar" ? 'استخدام "{value}"' : 'Use "{value}"';
+  const emptyLabel = locale === "ar" ? "لا توجد نتائج." : "No results found.";
+  const makeOptions = getVehicleMakeOptions();
+  const cityOptions = getJordanCityOptions(locale);
 
   return (
     <View style={[styles.searchPanel, { direction: textDirection }]}>
       <View style={styles.formGrid}>
-        <FormField
+        <SearchableSelectField
+          allowCustomValue
+          closeLabel={closeLabel}
+          customValueLabel={customValueLabel}
+          emptyLabel={emptyLabel}
           label={t("marketplaceMake")}
+          options={makeOptions}
+          placeholder={locale === "ar" ? "كل الماركات" : "Any make"}
+          searchPlaceholder={locale === "ar" ? "بحث الماركات" : "Search makes"}
           value={fields.make}
-          onChangeText={(make) => setFields({ ...fields, make })}
+          onChange={(make) => setFields({ ...fields, make })}
         />
-        <FormField
+        <SearchableSelectField
+          allowCustomValue
+          closeLabel={closeLabel}
+          customValueLabel={customValueLabel}
+          emptyLabel={emptyLabel}
           label={t("marketplaceCity")}
+          options={cityOptions}
+          placeholder={locale === "ar" ? "كل المدن" : "Any city"}
+          searchPlaceholder={locale === "ar" ? "بحث المدن" : "Search cities"}
           value={fields.city}
-          onChangeText={(city) => setFields({ ...fields, city })}
+          onChange={(city) => setFields({ ...fields, city })}
         />
         <FormField
           label={t("marketplacePriceMin")}

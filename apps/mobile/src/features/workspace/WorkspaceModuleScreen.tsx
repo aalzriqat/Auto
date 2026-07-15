@@ -20,6 +20,10 @@ import { RouteLoadingState } from "../../components/RouteState";
 import { LocaleToggle } from "../../components/LocaleToggle";
 import { Screen } from "../../components/Screen";
 import {
+  SearchableSelectField,
+  type SearchableSelectOption,
+} from "../../components/SearchableSelectField";
+import {
   api,
   type MobileApprovalRequest,
   type MobileBranch,
@@ -72,6 +76,12 @@ import {
   type MobileVehicleStatus,
   type MobileWebsiteLanguage,
 } from "../../convexApi";
+import {
+  getFuelTypeOptions,
+  getTransmissionOptions,
+  getVehicleColorOptions,
+  getVehicleMakeOptions,
+} from "../../data/mobileOptions";
 import { useLocale } from "../../providers/LocaleProvider";
 import { theme } from "../../theme";
 import {
@@ -92,10 +102,7 @@ type Option<T extends string> = {
   value: T;
 };
 
-type SelectableOption = {
-  label: string;
-  value: string;
-};
+type SelectableOption = SearchableSelectOption;
 
 type FormFieldProps = {
   keyboardType?: "default" | "email-address" | "numeric" | "phone-pad";
@@ -471,39 +478,35 @@ function FormField({
 }
 
 function SelectField({
+  allowCustomValue,
+  customValueLabel,
   label,
   onChange,
   options,
   value,
 }: {
+  allowCustomValue?: boolean;
+  customValueLabel?: string;
   label: string;
   onChange: (value: string) => void;
   options: SelectableOption[];
   value: string;
 }) {
+  const { locale } = useLocale();
+
   return (
-    <View style={styles.formField}>
-      <Text style={styles.formLabel}>{label}</Text>
-      <View style={styles.chipRow}>
-        {options.map((option) => (
-          <Pressable
-            key={option.value}
-            accessibilityRole="button"
-            accessibilityState={{ selected: option.value === value }}
-            style={({ pressed }) => [
-              styles.chip,
-              option.value === value && styles.chipSelected,
-              pressed && styles.pressed,
-            ]}
-            onPress={() => onChange(option.value)}
-          >
-            <Text style={[styles.chipText, option.value === value && styles.chipTextSelected]}>
-              {option.label}
-            </Text>
-          </Pressable>
-        ))}
-      </View>
-    </View>
+    <SearchableSelectField
+      allowCustomValue={allowCustomValue}
+      closeLabel={locale === "ar" ? "إغلاق" : "Close"}
+      customValueLabel={customValueLabel}
+      emptyLabel={locale === "ar" ? "لا توجد نتائج." : "No results found."}
+      label={label}
+      options={options}
+      placeholder={locale === "ar" ? "اختر" : "Select"}
+      searchPlaceholder={locale === "ar" ? "بحث" : "Search"}
+      value={value}
+      onChange={onChange}
+    />
   );
 }
 
@@ -830,6 +833,11 @@ function VehiclesModule({ orgId }: { orgId: string }) {
     { value: "IN_REPAIR", label: locale === "ar" ? "صيانة" : "Repair" },
     { value: "ARCHIVED", label: locale === "ar" ? "مؤرشف" : "Archived" },
   ];
+  const vehicleMakeOptions = getVehicleMakeOptions();
+  const vehicleColorOptions = getVehicleColorOptions(locale);
+  const fuelTypeOptions = getFuelTypeOptions(locale);
+  const transmissionOptions = getTransmissionOptions(locale);
+  const customValueLabel = locale === "ar" ? 'استخدام "{value}"' : 'Use "{value}"';
 
   function openCreate() {
     setEditing(null);
@@ -958,13 +966,13 @@ function VehiclesModule({ orgId }: { orgId: string }) {
       <LoadMoreFooter loadMore={loadMore} status={status} />
       <FormModal title={editing ? (locale === "ar" ? "تعديل سيارة" : "Edit vehicle") : (locale === "ar" ? "سيارة جديدة" : "New vehicle")} visible={open} onClose={() => setOpen(false)}>
         <FormField label="VIN" value={form.vin} onChangeText={(vin) => setForm((prev) => ({ ...prev, vin }))} />
-        <FormField label={locale === "ar" ? "الماركة" : "Make"} value={form.make} onChangeText={(make) => setForm((prev) => ({ ...prev, make }))} />
+        <SelectField allowCustomValue customValueLabel={customValueLabel} label={locale === "ar" ? "الماركة" : "Make"} value={form.make} options={vehicleMakeOptions} onChange={(make) => setForm((prev) => ({ ...prev, make }))} />
         <FormField label={locale === "ar" ? "الموديل" : "Model"} value={form.model} onChangeText={(model) => setForm((prev) => ({ ...prev, model }))} />
         <FormField keyboardType="numeric" label={locale === "ar" ? "السنة" : "Year"} value={form.year} onChangeText={(year) => setForm((prev) => ({ ...prev, year }))} />
         <FormField keyboardType="numeric" label={locale === "ar" ? "الممشى" : "Mileage"} value={form.mileage} onChangeText={(mileage) => setForm((prev) => ({ ...prev, mileage }))} />
-        <FormField label={locale === "ar" ? "اللون" : "Color"} value={form.color} onChangeText={(color) => setForm((prev) => ({ ...prev, color }))} />
-        <FormField label={locale === "ar" ? "الوقود" : "Fuel"} value={form.fuelType} onChangeText={(fuelType) => setForm((prev) => ({ ...prev, fuelType }))} />
-        <FormField label={locale === "ar" ? "القير" : "Transmission"} value={form.transmission} onChangeText={(transmission) => setForm((prev) => ({ ...prev, transmission }))} />
+        <SelectField allowCustomValue customValueLabel={customValueLabel} label={locale === "ar" ? "اللون" : "Color"} value={form.color} options={vehicleColorOptions} onChange={(color) => setForm((prev) => ({ ...prev, color }))} />
+        <SelectField allowCustomValue customValueLabel={customValueLabel} label={locale === "ar" ? "الوقود" : "Fuel"} value={form.fuelType} options={fuelTypeOptions} onChange={(fuelType) => setForm((prev) => ({ ...prev, fuelType }))} />
+        <SelectField allowCustomValue customValueLabel={customValueLabel} label={locale === "ar" ? "القير" : "Transmission"} value={form.transmission} options={transmissionOptions} onChange={(transmission) => setForm((prev) => ({ ...prev, transmission }))} />
         <FormField keyboardType="numeric" label={locale === "ar" ? "سعر الشراء" : "Purchase price"} value={form.purchasePrice} onChangeText={(purchasePrice) => setForm((prev) => ({ ...prev, purchasePrice }))} />
         <FormField keyboardType="numeric" label={locale === "ar" ? "سعر البيع" : "Selling price"} value={form.sellingPrice} onChangeText={(sellingPrice) => setForm((prev) => ({ ...prev, sellingPrice }))} />
         <SelectField
