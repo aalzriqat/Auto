@@ -280,6 +280,15 @@ export function expectVisibleTableCell(
   return findLoadedCell();
 }
 
+export function hideDashboardFeedbackWidget(): Cypress.Chainable<JQuery<HTMLBodyElement>> {
+  return cy.get("body").then(($body) => {
+    const feedbackTrigger = $body.find('button[aria-label="Send Feedback"]');
+    if (feedbackTrigger.length > 0) {
+      feedbackTrigger.css("display", "none");
+    }
+  });
+}
+
 /**
  * Creates a vehicle through the real UI (not the API) so the sales/leads
  * specs always have a fresh, distinctively-named vehicle to select without

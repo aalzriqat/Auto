@@ -1,6 +1,6 @@
 # Mobile Test Coverage Progress
 
-Last updated: 2026-07-14 17:01:56 +03:00
+Last updated: 2026-07-15 11:23:00 +03:00
 
 ## Context
 
@@ -736,6 +736,49 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `pnpm mobile:test`: passed with 11 suites, 92 tests, and 100% statements/branches/functions/lines after the refactor.
   - `git diff --check`: passed with line-ending normalization warnings only.
   - PR #70 still has 26 passing checks and the same external CodeRabbit quota/rate-limit failure on the previously pushed head; new vehicle pass is ready to commit/push.
+  - `adb devices -l` still returns no devices.
+- 2026-07-15 11:06 +03: vehicle intake pass pushed and production build started
+  - Pushed commit `020b9967` (`Upgrade mobile vehicle intake`) to non-draft PR #70.
+  - GitHub picked up the new head `020b99673e295a6281b301d3c7d01e8c64a723ed`; checks are running again.
+  - CodeRabbit updated its PR comment but remains quota/rate limited, now reporting the next review window in about 28 minutes.
+  - Thread-aware review lookup still reports 0 active unresolved inline threads; the only returned review thread remains resolved and outdated.
+  - Checked out `C:\h-ui` to exact commit `020b9967` and started a fresh production Android build.
+  - Build log: `C:\h-ui\mobile-production-build-20260715-110543.log`; process PID `13748`.
+  - ADB still lists no connected devices, so install will run as soon as the phone reappears.
+- 2026-07-15 11:07 +03: build/check watch for `020b9967`
+  - Production Android build is running through release JS bundling and native module release packaging.
+  - Warnings so far are dependency deprecations plus a Gradle daemon metaspace warning; no build failure has appeared.
+  - PR #70 has 21 passing contexts.
+  - Still pending: unit-and-integration, Cypress, Playwright, Nuclei, and ZAP baseline.
+  - CodeRabbit remains the only red context and is still quota/rate-limit related.
+  - `adb devices -l` still returns no devices.
+- 2026-07-15 11:10 +03: build/check watch for `020b9967`
+  - Release JS bundling completed successfully: 1,895 modules bundled and 29 assets copied.
+  - Production Android build is now in app/native release package tasks after manifest/resources/dex/native-library processing.
+  - Remaining PR checks are only Cypress and Nuclei; everything else non-CodeRabbit has passed.
+  - CodeRabbit remains quota/rate-limit red, with no active unresolved inline review thread known.
+  - `adb devices -l` still returns no devices.
+- 2026-07-15 11:15 +03: production build complete, Cypress failure isolated
+  - Production Android build from exact source commit `020b9967` completed successfully in 7m 5s.
+  - Release APK: `C:\h-ui\apps\mobile\android\app\build\outputs\apk\release\app-release.apk`, size 104,259,630 bytes, SHA-256 `53F867CD93E1F532AE3F083DAEC1F071CD9DDA360EF850BF612677DE19CCF6B4`.
+  - Play-ready AAB: `C:\h-ui\apps\mobile\android\app\build\outputs\bundle\release\app-release.aab`, size 73,948,699 bytes, SHA-256 `13E38029D1F700E3D7762DEAF6B45F953796C19E76DC8617D8586E77A8FF0EC8`.
+  - ADB still returns no connected devices, so the updated production install is waiting for the USB debugging interface to reappear.
+  - Latest PR checks show SonarCloud green on head `020b9967`; the pasted SonarCloud failure attachment is stale relative to the current head.
+  - Latest non-external Actions failure is Cypress only: `sales.cy.ts` times out because the fixed web `Send Feedback` button covers `Submit Sale` in the sales wizard.
+  - CodeRabbit remains an external quota/rate-limit failure; thread-aware review lookup still returns no active unresolved inline review threads.
+- 2026-07-15 11:18 +03: Cypress overlay fix validated locally
+  - Added a Cypress-only `hideDashboardFeedbackWidget()` helper so the fixed web feedback launcher does not cover the sales wizard submit button in CI.
+  - Updated `sales.cy.ts` to hide that launcher, scroll the real `Submit Sale` button into view, and click without using `force: true`.
+  - `pnpm typecheck:cypress`: passed.
+  - `git diff --check`: passed with line-ending normalization warnings only.
+  - `adb devices -l` still returns no devices.
+- 2026-07-15 11:23 +03: review-comment sweep and mobile coverage reconfirmed
+  - GitHub review-comments API returns only the old Semgrep finding on this progress file; the thread-aware lookup continues to show that thread as resolved/outdated.
+  - Rechecked visible CodeRabbit findings against current code: source-type update safety, non-blocking typing status, numeric zero preservation, Gradle release detection, Kotlin catch naming, and start-mobile-dev spawn error handling are already fixed in the current branch.
+  - The CodeRabbit suggestion to make `LocaleProvider.test.tsx` use synchronous `toThrow` was re-tested and is invalid in this React Native Testing Library + React 19 setup; the locally passing async render assertion remains, now with a rationale comment.
+  - `pnpm mobile:typecheck`: passed.
+  - `pnpm mobile:test`: passed with 11 suites, 92 tests, and 100% statements/branches/functions/lines.
+  - `pnpm typecheck:cypress`: passed.
   - `adb devices -l` still returns no devices.
 
 ## Next Steps

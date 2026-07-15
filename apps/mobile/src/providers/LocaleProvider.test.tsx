@@ -121,6 +121,7 @@ describe("mobile locale provider", () => {
       return null;
     }
 
+    // React Native Testing Library with React 19 surfaces this render failure through act asynchronously.
     await expect((async () => render(<ConsumerWithoutProvider />))()).rejects.toThrow(
       "useLocale must be used within LocaleProvider",
     );
