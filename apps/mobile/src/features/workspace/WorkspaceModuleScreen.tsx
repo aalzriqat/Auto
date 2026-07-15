@@ -5,6 +5,7 @@ import { useRouter } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
+  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -18,6 +19,7 @@ import {
 
 import { RouteLoadingState } from "../../components/RouteState";
 import { LocaleToggle } from "../../components/LocaleToggle";
+import { GuidedStepFlow, type GuidedStep } from "../../components/GuidedStepFlow";
 import { Screen } from "../../components/Screen";
 import {
   SearchableSelectField,
@@ -603,6 +605,115 @@ function LoadMoreFooter({
   return null;
 }
 
+function getOptionLabel(
+  options: readonly SelectableOption[],
+  value: string,
+  fallback: string,
+): string {
+  return options.find((option) => option.value === value)?.label ?? fallback;
+}
+
+function firstVehicleImageUrl(vehicle: MobileVehicle): string | undefined {
+  return vehicle.imageUrls?.find((url): url is string => Boolean(url));
+}
+
+function DetailPill({
+  label,
+  tone = "neutral",
+}: {
+  label: string;
+  tone?: "neutral" | "success" | "warning" | "info";
+}) {
+  return (
+    <View
+      style={[
+        styles.detailPill,
+        tone === "success" && styles.detailPillSuccess,
+        tone === "warning" && styles.detailPillWarning,
+        tone === "info" && styles.detailPillInfo,
+      ]}
+    >
+      <Text style={styles.detailPillText}>{label}</Text>
+    </View>
+  );
+}
+
+function SummaryRow({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <View style={styles.summaryRow}>
+      <Text style={styles.summaryLabel}>{label}</Text>
+      <Text numberOfLines={2} style={styles.summaryValue}>
+        {value}
+      </Text>
+    </View>
+  );
+}
+
+function SummaryPanel({
+  children,
+  subtitle,
+  title,
+}: {
+  children: React.ReactNode;
+  subtitle?: string;
+  title: string;
+}) {
+  return (
+    <View style={styles.summaryPanel}>
+      <View style={styles.summaryHeader}>
+        <Text style={styles.summaryTitle}>{title}</Text>
+        {subtitle ? <Text style={styles.summarySubtitle}>{subtitle}</Text> : null}
+      </View>
+      <View style={styles.summaryRows}>{children}</View>
+    </View>
+  );
+}
+
+function WizardActions({
+  activeStep,
+  backLabel,
+  nextLabel,
+  onBack,
+  onNext,
+  onSave,
+  saveLabel,
+  saving,
+  totalSteps,
+}: {
+  activeStep: number;
+  backLabel: string;
+  nextLabel: string;
+  onBack: () => void;
+  onNext: () => void;
+  onSave: () => void;
+  saveLabel: string;
+  saving: boolean;
+  totalSteps: number;
+}) {
+  const isLastStep = activeStep >= totalSteps - 1;
+
+  return (
+    <View style={styles.wizardActions}>
+      {activeStep > 0 ? (
+        <PrimaryButton label={backLabel} tone="muted" onPress={onBack} />
+      ) : null}
+      <View style={styles.wizardPrimaryAction}>
+        {isLastStep ? (
+          <PrimaryButton disabled={saving} label={saveLabel} onPress={onSave} />
+        ) : (
+          <PrimaryButton label={nextLabel} onPress={onNext} />
+        )}
+      </View>
+    </View>
+  );
+}
+
 function ModuleScroll({ children }: { children: React.ReactNode }) {
   return <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>{children}</ScrollView>;
 }
@@ -805,6 +916,7 @@ function VehiclesModule({ orgId }: { orgId: string }) {
   );
   const [search, setSearch] = useState("");
   const [editing, setEditing] = useState<MobileVehicle | null>(null);
+  const [detailVehicle, setDetailVehicle] = useState<MobileVehicle | null>(null);
   const [open, setOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
@@ -825,6 +937,12 @@ function VehiclesModule({ orgId }: { orgId: string }) {
     const haystack = `${vehicle.vin} ${vehicle.make} ${vehicle.model} ${vehicle.year}`.toLowerCase();
     return haystack.includes(search.trim().toLowerCase());
   });
+  const availableCount = filtered.filter((vehicle) => vehicle.status === "AVAILABLE").length;
+  const inventoryValue = filtered.reduce((sum, vehicle) => sum + vehicle.sellingPrice, 0);
+  const projectedMargin = filtered.reduce(
+    (sum, vehicle) => sum + Math.max(0, vehicle.sellingPrice - (vehicle.purchasePrice ?? vehicle.sellingPrice)),
+    0,
+  );
   const statusOptions: Array<Option<MobileVehicleStatus | "ALL">> = [
     { value: "ALL", label: locale === "ar" ? "الكل" : "All" },
     { value: "AVAILABLE", label: locale === "ar" ? "متاح" : "Available" },
@@ -860,6 +978,7 @@ function VehiclesModule({ orgId }: { orgId: string }) {
 
   function openEdit(vehicle: MobileVehicle) {
     setEditing(vehicle);
+    setDetailVehicle(null);
     setForm({
       vin: vehicle.vin,
       make: vehicle.make,
@@ -875,6 +994,11 @@ function VehiclesModule({ orgId }: { orgId: string }) {
       notes: vehicle.notes ?? "",
     });
     setOpen(true);
+  }
+
+  function closeVehicleForm() {
+    setOpen(false);
+    setEditing(null);
   }
 
   async function save() {
@@ -948,23 +1072,56 @@ function VehiclesModule({ orgId }: { orgId: string }) {
         <PrimaryButton label={locale === "ar" ? "إضافة" : "Add"} onPress={openCreate} />
       </View>
       <SegmentedControl options={statusOptions} value={filter} onChange={setFilter} />
-      {filtered.length ? filtered.map((vehicle) => (
-        <RecordCard key={vehicle._id}>
-          <View style={styles.recordHeader}>
-            <Text style={styles.recordTitle}>{vehicle.year} {vehicle.make} {vehicle.model}</Text>
-            <Text style={styles.statusPill}>{vehicle.status}</Text>
+      <View style={styles.metricGrid}>
+        <MetricCard title={locale === "ar" ? "النتائج" : "Results"} value={compactNumber(filtered.length, locale)} caption={locale === "ar" ? "مطابقة للبحث" : "matching search"} />
+        <MetricCard title={locale === "ar" ? "المتاح" : "Available"} value={compactNumber(availableCount, locale)} caption={locale === "ar" ? "جاهز للبيع" : "ready to sell"} />
+        <MetricCard title={locale === "ar" ? "القيمة" : "Value"} value={money(inventoryValue, locale)} caption={locale === "ar" ? "سعر البيع" : "list value"} />
+        <MetricCard title={locale === "ar" ? "الهامش" : "Margin"} value={money(projectedMargin, locale)} caption={locale === "ar" ? "تقديري" : "projected"} />
+      </View>
+      {filtered.length ? filtered.map((vehicle) => {
+        const imageUrl = firstVehicleImageUrl(vehicle);
+        return (
+          <View key={vehicle._id} style={styles.vehicleRecordCard}>
+            <View style={styles.vehicleMediaRow}>
+              <View style={styles.vehicleThumb}>
+                {imageUrl ? (
+                  <Image
+                    source={{ uri: imageUrl }}
+                    style={styles.vehicleThumbImage}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <Text style={styles.vehicleThumbText}>{vehicle.make.slice(0, 2).toUpperCase()}</Text>
+                )}
+              </View>
+              <View style={styles.vehicleCardText}>
+                <View style={styles.recordHeader}>
+                  <Text style={styles.recordTitle}>{vehicle.year} {vehicle.make} {vehicle.model}</Text>
+                  <Text style={styles.statusPill}>{vehicle.status}</Text>
+                </View>
+                <Text style={styles.recordMeta}>{vehicle.trim || vehicle.vin}</Text>
+                <View style={styles.detailPillRow}>
+                  <DetailPill label={money(vehicle.sellingPrice, locale)} tone="success" />
+                  <DetailPill label={`${vehicle.mileage.toLocaleString()} km`} tone="info" />
+                  <DetailPill label={vehicle.transmission || "-"} />
+                </View>
+              </View>
+            </View>
+            <View style={styles.vehicleFactRow}>
+              <Text style={styles.recordMeta}>{vehicle.vin}</Text>
+              <Text style={styles.recordMeta}>{vehicle.color || "-"} · {vehicle.fuelType || "-"}</Text>
+            </View>
+            {vehicle.pendingStatusRequest ? <Text style={styles.warningText}>{vehicle.pendingStatusRequest}</Text> : null}
+            <View style={styles.cardActions}>
+              <PrimaryButton label={locale === "ar" ? "تفاصيل" : "Details"} tone="muted" onPress={() => setDetailVehicle(vehicle)} />
+              <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => openEdit(vehicle)} />
+              <PrimaryButton label={locale === "ar" ? "أرشفة" : "Archive"} tone="danger" onPress={() => archive(vehicle)} />
+            </View>
           </View>
-          <Text style={styles.recordMeta}>{vehicle.vin}</Text>
-          <Text style={styles.recordMeta}>{money(vehicle.sellingPrice, locale)} · {vehicle.mileage.toLocaleString()} km</Text>
-          {vehicle.pendingStatusRequest ? <Text style={styles.warningText}>{vehicle.pendingStatusRequest}</Text> : null}
-          <View style={styles.cardActions}>
-            <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => openEdit(vehicle)} />
-            <PrimaryButton label={locale === "ar" ? "أرشفة" : "Archive"} tone="danger" onPress={() => archive(vehicle)} />
-          </View>
-        </RecordCard>
-      )) : <EmptyList label={locale === "ar" ? "لا توجد سيارات." : "No vehicles found."} />}
+        );
+      }) : <EmptyList label={locale === "ar" ? "لا توجد سيارات." : "No vehicles found."} />}
       <LoadMoreFooter loadMore={loadMore} status={status} />
-      <FormModal title={editing ? (locale === "ar" ? "تعديل سيارة" : "Edit vehicle") : (locale === "ar" ? "سيارة جديدة" : "New vehicle")} visible={open} onClose={() => setOpen(false)}>
+      <FormModal title={editing ? (locale === "ar" ? "تعديل سيارة" : "Edit vehicle") : (locale === "ar" ? "سيارة جديدة" : "New vehicle")} visible={open} onClose={closeVehicleForm}>
         <FormField label="VIN" value={form.vin} onChangeText={(vin) => setForm((prev) => ({ ...prev, vin }))} />
         <SelectField allowCustomValue customValueLabel={customValueLabel} label={locale === "ar" ? "الماركة" : "Make"} value={form.make} options={vehicleMakeOptions} onChange={(make) => setForm((prev) => ({ ...prev, make }))} />
         <FormField label={locale === "ar" ? "الموديل" : "Model"} value={form.model} onChangeText={(model) => setForm((prev) => ({ ...prev, model }))} />
@@ -983,6 +1140,32 @@ function VehiclesModule({ orgId }: { orgId: string }) {
         />
         <FormField multiline label={locale === "ar" ? "ملاحظات" : "Notes"} value={form.notes} onChangeText={(notes) => setForm((prev) => ({ ...prev, notes }))} />
         <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ" : "Save")} onPress={save} />
+      </FormModal>
+      <FormModal
+        title={detailVehicle ? `${detailVehicle.year} ${detailVehicle.make} ${detailVehicle.model}` : ""}
+        visible={Boolean(detailVehicle)}
+        onClose={() => setDetailVehicle(null)}
+      >
+        {detailVehicle ? (
+          <>
+            <SummaryPanel
+              title={locale === "ar" ? "بطاقة السيارة" : "Vehicle card"}
+              subtitle={locale === "ar" ? "ملخص سريع قبل التعديل أو التواصل مع العميل." : "A fast read before editing or talking to a buyer."}
+            >
+              <SummaryRow label="VIN" value={detailVehicle.vin || "-"} />
+              <SummaryRow label={locale === "ar" ? "الحالة" : "Status"} value={detailVehicle.status} />
+              <SummaryRow label={locale === "ar" ? "سعر البيع" : "Selling price"} value={money(detailVehicle.sellingPrice, locale)} />
+              <SummaryRow label={locale === "ar" ? "سعر الشراء" : "Purchase price"} value={money(detailVehicle.purchasePrice, locale)} />
+              <SummaryRow label={locale === "ar" ? "الممشى" : "Mileage"} value={`${detailVehicle.mileage.toLocaleString()} km`} />
+              <SummaryRow label={locale === "ar" ? "المواصفات" : "Specs"} value={`${detailVehicle.color || "-"} · ${detailVehicle.fuelType || "-"} · ${detailVehicle.transmission || "-"}`} />
+              {detailVehicle.notes ? <SummaryRow label={locale === "ar" ? "ملاحظات" : "Notes"} value={detailVehicle.notes} /> : null}
+            </SummaryPanel>
+            <View style={styles.cardActions}>
+              <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} onPress={() => openEdit(detailVehicle)} />
+              <PrimaryButton label={locale === "ar" ? "أرشفة" : "Archive"} tone="danger" onPress={() => archive(detailVehicle)} />
+            </View>
+          </>
+        ) : null}
       </FormModal>
     </ModuleScroll>
   );
@@ -1249,6 +1432,7 @@ function SalesModule({ myMembership, orgId }: { myMembership: MobileMyMembership
   const vehicles = useQuery(api.vehicles.listAll, { orgId, status: "AVAILABLE", includeReserved: true });
   const members = useQuery(api.memberships.list, { orgId, paginationOpts: { cursor: null, numItems: SELECTOR_PAGE_SIZE } });
   const [open, setOpen] = useState(false);
+  const [draftStep, setDraftStep] = useState(0);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     customerId: "",
@@ -1261,6 +1445,44 @@ function SalesModule({ myMembership, orgId }: { myMembership: MobileMyMembership
   const customerOptions = (customers?.page ?? []).map((customer) => ({ label: `${customer.firstName} ${customer.lastName}`, value: customer._id }));
   const vehicleOptions = (vehicles ?? []).map((vehicle) => ({ label: `${vehicle.year} ${vehicle.make} ${vehicle.model}`, value: vehicle._id }));
   const memberOptions = (members?.page ?? []).map((member) => ({ label: member.userName, value: member.userId }));
+  const selectedCustomerLabel = getOptionLabel(customerOptions, form.customerId, locale === "ar" ? "لم يتم الاختيار" : "Not selected");
+  const selectedVehicleLabel = getOptionLabel(vehicleOptions, form.vehicleId, locale === "ar" ? "لم يتم الاختيار" : "Not selected");
+  const selectedSalespersonLabel = getOptionLabel(memberOptions, form.salespersonId, locale === "ar" ? "لم يتم الاختيار" : "Not selected");
+  const salePricePreview = parseOptionalNumber(form.salePrice) ?? 0;
+  const downPaymentPreview = parseOptionalNumber(form.downPayment) ?? 0;
+  const remainingBalancePreview = Math.max(0, salePricePreview - downPaymentPreview);
+  const salesSteps: GuidedStep[] = [
+    {
+      title: locale === "ar" ? "العميل والسيارة" : "Customer and vehicle",
+      subtitle: locale === "ar" ? "اختر من القوائم القابلة للبحث." : "Search and pick the exact deal participants.",
+    },
+    {
+      title: locale === "ar" ? "السعر والتمويل" : "Price and financing",
+      subtitle: locale === "ar" ? "حدد السعر، الدفعة، وطريقة التمويل." : "Set price, deposit, and finance mode.",
+    },
+    {
+      title: locale === "ar" ? "المراجعة" : "Review",
+      subtitle: locale === "ar" ? "راجع الملخص قبل إنشاء المسودة." : "Confirm the draft before it enters the pipeline.",
+    },
+  ];
+
+  function openDraft() {
+    setDraftStep(0);
+    setForm({
+      customerId: "",
+      vehicleId: "",
+      salespersonId: myMembership.userId,
+      salePrice: "",
+      downPayment: "",
+      financingType: "CASH",
+    });
+    setOpen(true);
+  }
+
+  function closeDraft() {
+    setDraftStep(0);
+    setOpen(false);
+  }
 
   async function saveDraft() {
     const salePrice = parseRequiredNumber(form.salePrice);
@@ -1282,7 +1504,7 @@ function SalesModule({ myMembership, orgId }: { myMembership: MobileMyMembership
         downPayment: parseOptionalNumber(form.downPayment),
         idempotencyKey: idempotencyKey("sales.createDraft"),
       });
-      setOpen(false);
+      closeDraft();
       setForm({ customerId: "", vehicleId: "", salespersonId: myMembership.userId, salePrice: "", downPayment: "", financingType: "CASH" });
     } catch (error) {
       reportError("Mobile sale draft save failed", error);
@@ -1309,7 +1531,7 @@ function SalesModule({ myMembership, orgId }: { myMembership: MobileMyMembership
 
   return (
     <ModuleScroll>
-      <PrimaryButton label={locale === "ar" ? "مسودة بيع جديدة" : "New sale draft"} onPress={() => setOpen(true)} />
+      <PrimaryButton label={locale === "ar" ? "مسودة بيع جديدة" : "New sale draft"} onPress={openDraft} />
       {results.length ? results.map((sale) => (
         <RecordCard key={sale._id}>
           <View style={styles.recordHeader}>
@@ -1317,7 +1539,14 @@ function SalesModule({ myMembership, orgId }: { myMembership: MobileMyMembership
             <Text style={styles.statusPill}>{sale.status}</Text>
           </View>
           <Text style={styles.recordMeta}>{sale.customerName} · {sale.salespersonName}</Text>
-          <Text style={styles.recordMeta}>{money(sale.salePrice, locale)} · {dateLabel(sale.saleDate, locale)}</Text>
+          <View style={styles.detailPillRow}>
+            <DetailPill label={money(sale.salePrice, locale)} tone="success" />
+            <DetailPill label={sale.financingType ?? "CASH"} tone="info" />
+            <DetailPill label={dateLabel(sale.saleDate, locale)} />
+          </View>
+          {sale.downPayment != null ? (
+            <Text style={styles.recordMeta}>{locale === "ar" ? "الدفعة" : "Down payment"}: {money(sale.downPayment, locale)}</Text>
+          ) : null}
           <View style={styles.cardActions}>
             {sale.status === "PENDING" ? <PrimaryButton label={locale === "ar" ? "إتمام" : "Complete"} tone="muted" onPress={() => complete(sale)} /> : null}
             {sale.status !== "CANCELLED" ? <PrimaryButton label={locale === "ar" ? "إلغاء" : "Cancel"} tone="danger" onPress={() => cancel(sale)} /> : null}
@@ -1325,18 +1554,60 @@ function SalesModule({ myMembership, orgId }: { myMembership: MobileMyMembership
         </RecordCard>
       )) : <EmptyList label={locale === "ar" ? "لا توجد مبيعات." : "No sales found."} />}
       <LoadMoreFooter loadMore={loadMore} status={status} />
-      <FormModal title={locale === "ar" ? "مسودة بيع" : "Sale draft"} visible={open} onClose={() => setOpen(false)}>
-        <SelectField label={locale === "ar" ? "العميل" : "Customer"} value={form.customerId} options={customerOptions} onChange={(customerId) => setForm((prev) => ({ ...prev, customerId }))} />
-        <SelectField label={locale === "ar" ? "السيارة" : "Vehicle"} value={form.vehicleId} options={vehicleOptions} onChange={(vehicleId) => setForm((prev) => ({ ...prev, vehicleId }))} />
-        <SelectField label={locale === "ar" ? "البائع" : "Salesperson"} value={form.salespersonId} options={memberOptions} onChange={(salespersonId) => setForm((prev) => ({ ...prev, salespersonId }))} />
-        <FormField keyboardType="numeric" label={locale === "ar" ? "سعر البيع" : "Sale price"} value={form.salePrice} onChangeText={(salePrice) => setForm((prev) => ({ ...prev, salePrice }))} />
-        <FormField keyboardType="numeric" label={locale === "ar" ? "الدفعة" : "Down payment"} value={form.downPayment} onChangeText={(downPayment) => setForm((prev) => ({ ...prev, downPayment }))} />
-        <SelectField label={locale === "ar" ? "طريقة التمويل" : "Financing"} value={form.financingType} options={[
-          { label: locale === "ar" ? "نقدا" : "Cash", value: "CASH" },
-          { label: locale === "ar" ? "تمويل" : "Financed", value: "FINANCED" },
-          { label: locale === "ar" ? "تأجير" : "Lease", value: "LEASE" },
-        ]} onChange={(financingType) => setForm((prev) => ({ ...prev, financingType: financingType as MobileFinancingType }))} />
-        <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ المسودة" : "Save draft")} onPress={saveDraft} />
+      <FormModal title={locale === "ar" ? "مسودة بيع" : "Sale draft"} visible={open} onClose={closeDraft}>
+        <GuidedStepFlow activeIndex={draftStep} steps={salesSteps}>
+          {draftStep === 0 ? (
+            <>
+              <SelectField label={locale === "ar" ? "العميل" : "Customer"} value={form.customerId} options={customerOptions} onChange={(customerId) => setForm((prev) => ({ ...prev, customerId }))} />
+              <SelectField label={locale === "ar" ? "السيارة" : "Vehicle"} value={form.vehicleId} options={vehicleOptions} onChange={(vehicleId) => setForm((prev) => ({ ...prev, vehicleId }))} />
+              <SummaryPanel title={locale === "ar" ? "اختيار الصفقة" : "Deal selection"}>
+                <SummaryRow label={locale === "ar" ? "العميل" : "Customer"} value={selectedCustomerLabel} />
+                <SummaryRow label={locale === "ar" ? "السيارة" : "Vehicle"} value={selectedVehicleLabel} />
+              </SummaryPanel>
+            </>
+          ) : null}
+          {draftStep === 1 ? (
+            <>
+              <FormField keyboardType="numeric" label={locale === "ar" ? "سعر البيع" : "Sale price"} value={form.salePrice} onChangeText={(salePrice) => setForm((prev) => ({ ...prev, salePrice }))} />
+              <FormField keyboardType="numeric" label={locale === "ar" ? "الدفعة" : "Down payment"} value={form.downPayment} onChangeText={(downPayment) => setForm((prev) => ({ ...prev, downPayment }))} />
+              <SelectField label={locale === "ar" ? "طريقة التمويل" : "Financing"} value={form.financingType} options={[
+                { label: locale === "ar" ? "نقدا" : "Cash", value: "CASH" },
+                { label: locale === "ar" ? "تمويل" : "Financed", value: "FINANCED" },
+                { label: locale === "ar" ? "تأجير" : "Lease", value: "LEASE" },
+              ]} onChange={(financingType) => setForm((prev) => ({ ...prev, financingType: financingType as MobileFinancingType }))} />
+              <View style={styles.metricGrid}>
+                <MetricCard title={locale === "ar" ? "السعر" : "Price"} value={money(salePricePreview, locale)} caption={locale === "ar" ? "سعر البيع" : "sale price"} />
+                <MetricCard title={locale === "ar" ? "المتبقي" : "Balance"} value={money(remainingBalancePreview, locale)} caption={locale === "ar" ? "بعد الدفعة" : "after deposit"} />
+              </View>
+            </>
+          ) : null}
+          {draftStep === 2 ? (
+            <>
+              <SelectField label={locale === "ar" ? "البائع" : "Salesperson"} value={form.salespersonId} options={memberOptions} onChange={(salespersonId) => setForm((prev) => ({ ...prev, salespersonId }))} />
+              <SummaryPanel
+                title={locale === "ar" ? "مراجعة المسودة" : "Draft review"}
+                subtitle={locale === "ar" ? "ستظهر كصفقة معلقة بعد الحفظ." : "This will enter sales as a pending deal."}
+              >
+                <SummaryRow label={locale === "ar" ? "العميل" : "Customer"} value={selectedCustomerLabel} />
+                <SummaryRow label={locale === "ar" ? "السيارة" : "Vehicle"} value={selectedVehicleLabel} />
+                <SummaryRow label={locale === "ar" ? "البائع" : "Salesperson"} value={selectedSalespersonLabel} />
+                <SummaryRow label={locale === "ar" ? "السعر" : "Price"} value={money(salePricePreview, locale)} />
+                <SummaryRow label={locale === "ar" ? "طريقة التمويل" : "Financing"} value={form.financingType} />
+              </SummaryPanel>
+            </>
+          ) : null}
+          <WizardActions
+            activeStep={draftStep}
+            backLabel={locale === "ar" ? "السابق" : "Back"}
+            nextLabel={locale === "ar" ? "التالي" : "Next"}
+            saveLabel={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ المسودة" : "Save draft")}
+            saving={saving}
+            totalSteps={salesSteps.length}
+            onBack={() => setDraftStep((step) => Math.max(0, step - 1))}
+            onNext={() => setDraftStep((step) => Math.min(salesSteps.length - 1, step + 1))}
+            onSave={saveDraft}
+          />
+        </GuidedStepFlow>
       </FormModal>
     </ModuleScroll>
   );
@@ -2707,6 +2978,7 @@ function QuotesModule({ orgId }: { orgId: string }) {
   const [customerId, setCustomerId] = useState("");
   const quotes = useQuery(api.quotes.listQuotesByCustomer, customerId ? { orgId, customerId } : "skip");
   const [open, setOpen] = useState(false);
+  const [quoteStep, setQuoteStep] = useState(0);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
     customerId: "",
@@ -2727,8 +2999,31 @@ function QuotesModule({ orgId }: { orgId: string }) {
     { label: "INSTALLMENT", value: "INTERNAL_INSTALLMENT" },
     { label: "LEASE", value: "LEASE" },
   ];
+  const selectedQuoteCustomerLabel = getOptionLabel(customerOptions, form.customerId, locale === "ar" ? "لم يتم الاختيار" : "Not selected");
+  const selectedQuoteVehicleLabel = getOptionLabel(vehicleOptions, form.vehicleId, locale === "ar" ? "لم يتم الاختيار" : "Not selected");
+  const selectedCompanyLabel = getOptionLabel(companyOptions, form.companyId, locale === "ar" ? "بدون شركة" : "No company");
+  const vehiclePricePreview = parseOptionalNumber(form.vehiclePrice) ?? 0;
+  const quoteDownPaymentPreview = parseOptionalNumber(form.downPayment) ?? 0;
+  const termMonthsPreview = parseOptionalNumber(form.termMonths) ?? 0;
+  const monthlyPreview = parseOptionalNumber(form.monthlyInstallment)
+    ?? (termMonthsPreview > 0 ? Math.max(0, vehiclePricePreview - quoteDownPaymentPreview) / termMonthsPreview : 0);
+  const quoteSteps: GuidedStep[] = [
+    {
+      title: locale === "ar" ? "العميل والسيارة" : "Customer and vehicle",
+      subtitle: locale === "ar" ? "ابدأ باختيار العميل والسيارة." : "Start with the buyer and inventory item.",
+    },
+    {
+      title: locale === "ar" ? "خطة العرض" : "Quote plan",
+      subtitle: locale === "ar" ? "حدد النقد أو التمويل والأرقام الأساسية." : "Choose cash or finance and the core numbers.",
+    },
+    {
+      title: locale === "ar" ? "المراجعة والإرسال" : "Review and save",
+      subtitle: locale === "ar" ? "راجع العرض قبل حفظه." : "Check the quote before saving it.",
+    },
+  ];
 
   function openCreate() {
+    setQuoteStep(0);
     setForm({
       customerId: customerId || customerOptions[0]?.value || "",
       vehicleId: vehicleOptions[0]?.value || "",
@@ -2741,6 +3036,20 @@ function QuotesModule({ orgId }: { orgId: string }) {
       recipientName: "",
     });
     setOpen(true);
+  }
+
+  function closeQuoteForm() {
+    setQuoteStep(0);
+    setOpen(false);
+  }
+
+  function chooseQuoteVehicle(vehicleId: string) {
+    const selectedVehicle = (vehicles ?? []).find((vehicle) => vehicle._id === vehicleId);
+    setForm((prev) => ({
+      ...prev,
+      vehicleId,
+      vehiclePrice: prev.vehiclePrice || (selectedVehicle ? String(selectedVehicle.sellingPrice) : prev.vehiclePrice),
+    }));
   }
 
   async function save() {
@@ -2766,7 +3075,7 @@ function QuotesModule({ orgId }: { orgId: string }) {
         recipientName: maybeText(form.recipientName),
       });
       setCustomerId(form.customerId);
-      setOpen(false);
+      closeQuoteForm();
     } catch (error) {
       reportError("Mobile quote save failed", error);
     } finally {
@@ -2796,7 +3105,11 @@ function QuotesModule({ orgId }: { orgId: string }) {
             <Text style={styles.recordTitle}>{money(quote.vehiclePrice, locale)}</Text>
             <Text style={styles.statusPill}>{quote.status}</Text>
           </View>
-          <Text style={styles.recordMeta}>{quote.mode || "CASH"} · {quote.termMonths}m · {money(quote.monthlyInstallment, locale)}</Text>
+          <View style={styles.detailPillRow}>
+            <DetailPill label={quote.mode || "CASH"} tone="info" />
+            <DetailPill label={`${quote.termMonths}m`} />
+            <DetailPill label={money(quote.monthlyInstallment, locale)} tone="success" />
+          </View>
           <Text style={styles.recordMeta}>{dateLabel(quote.createdAt, locale)}</Text>
           <View style={styles.cardActions}>
             {quoteStatusOptions.map((statusOption) => (
@@ -2805,17 +3118,60 @@ function QuotesModule({ orgId }: { orgId: string }) {
           </View>
         </RecordCard>
       )) : customerId && quotes ? <EmptyList label={locale === "ar" ? "لا توجد عروض لهذا العميل." : "No quotes for this customer."} /> : null}
-      <FormModal title={locale === "ar" ? "عرض جديد" : "New quote"} visible={open} onClose={() => setOpen(false)}>
-        <SelectField label={locale === "ar" ? "العميل" : "Customer"} value={form.customerId} options={customerOptions} onChange={(customerIdValue) => setForm((prev) => ({ ...prev, customerId: customerIdValue }))} />
-        <SelectField label={locale === "ar" ? "السيارة" : "Vehicle"} value={form.vehicleId} options={vehicleOptions} onChange={(vehicleId) => setForm((prev) => ({ ...prev, vehicleId }))} />
-        <SegmentedControl options={quoteModeOptions} value={form.mode} onChange={(mode) => setForm((prev) => ({ ...prev, mode }))} />
-        {form.mode === "CONFIGURED_FINANCE_COMPANY" ? <SelectField label={locale === "ar" ? "شركة التمويل" : "Finance company"} value={form.companyId} options={companyOptions} onChange={(companyId) => setForm((prev) => ({ ...prev, companyId }))} /> : null}
-        <FormField keyboardType="numeric" label={locale === "ar" ? "سعر السيارة" : "Vehicle price"} value={form.vehiclePrice} onChangeText={(vehiclePrice) => setForm((prev) => ({ ...prev, vehiclePrice }))} />
-        <FormField keyboardType="numeric" label={locale === "ar" ? "دفعة أولى" : "Down payment"} value={form.downPayment} onChangeText={(downPayment) => setForm((prev) => ({ ...prev, downPayment }))} />
-        <FormField keyboardType="numeric" label={locale === "ar" ? "الأشهر" : "Term months"} value={form.termMonths} onChangeText={(termMonths) => setForm((prev) => ({ ...prev, termMonths }))} />
-        <FormField keyboardType="numeric" label={locale === "ar" ? "القسط الشهري" : "Monthly installment"} value={form.monthlyInstallment} onChangeText={(monthlyInstallment) => setForm((prev) => ({ ...prev, monthlyInstallment }))} />
-        <FormField label={locale === "ar" ? "اسم المستلم" : "Recipient"} value={form.recipientName} onChangeText={(recipientName) => setForm((prev) => ({ ...prev, recipientName }))} />
-        <PrimaryButton disabled={saving} label={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ" : "Save")} onPress={save} />
+      <FormModal title={locale === "ar" ? "عرض جديد" : "New quote"} visible={open} onClose={closeQuoteForm}>
+        <GuidedStepFlow activeIndex={quoteStep} steps={quoteSteps}>
+          {quoteStep === 0 ? (
+            <>
+              <SelectField label={locale === "ar" ? "العميل" : "Customer"} value={form.customerId} options={customerOptions} onChange={(customerIdValue) => setForm((prev) => ({ ...prev, customerId: customerIdValue }))} />
+              <SelectField label={locale === "ar" ? "السيارة" : "Vehicle"} value={form.vehicleId} options={vehicleOptions} onChange={chooseQuoteVehicle} />
+              <SummaryPanel title={locale === "ar" ? "نطاق العرض" : "Quote scope"}>
+                <SummaryRow label={locale === "ar" ? "العميل" : "Customer"} value={selectedQuoteCustomerLabel} />
+                <SummaryRow label={locale === "ar" ? "السيارة" : "Vehicle"} value={selectedQuoteVehicleLabel} />
+              </SummaryPanel>
+            </>
+          ) : null}
+          {quoteStep === 1 ? (
+            <>
+              <SegmentedControl options={quoteModeOptions} value={form.mode} onChange={(mode) => setForm((prev) => ({ ...prev, mode }))} />
+              {form.mode === "CONFIGURED_FINANCE_COMPANY" ? <SelectField label={locale === "ar" ? "شركة التمويل" : "Finance company"} value={form.companyId} options={companyOptions} onChange={(companyId) => setForm((prev) => ({ ...prev, companyId }))} /> : null}
+              <FormField keyboardType="numeric" label={locale === "ar" ? "سعر السيارة" : "Vehicle price"} value={form.vehiclePrice} onChangeText={(vehiclePrice) => setForm((prev) => ({ ...prev, vehiclePrice }))} />
+              <FormField keyboardType="numeric" label={locale === "ar" ? "دفعة أولى" : "Down payment"} value={form.downPayment} onChangeText={(downPayment) => setForm((prev) => ({ ...prev, downPayment }))} />
+              <FormField keyboardType="numeric" label={locale === "ar" ? "الأشهر" : "Term months"} value={form.termMonths} onChangeText={(termMonths) => setForm((prev) => ({ ...prev, termMonths }))} />
+              <FormField keyboardType="numeric" label={locale === "ar" ? "القسط الشهري" : "Monthly installment"} value={form.monthlyInstallment} onChangeText={(monthlyInstallment) => setForm((prev) => ({ ...prev, monthlyInstallment }))} />
+              <View style={styles.metricGrid}>
+                <MetricCard title={locale === "ar" ? "القيمة" : "Price"} value={money(vehiclePricePreview, locale)} caption={locale === "ar" ? "سعر السيارة" : "vehicle price"} />
+                <MetricCard title={locale === "ar" ? "القسط" : "Monthly"} value={money(monthlyPreview, locale)} caption={locale === "ar" ? "تقديري" : "estimated"} />
+              </View>
+            </>
+          ) : null}
+          {quoteStep === 2 ? (
+            <>
+              <FormField label={locale === "ar" ? "اسم المستلم" : "Recipient"} value={form.recipientName} onChangeText={(recipientName) => setForm((prev) => ({ ...prev, recipientName }))} />
+              <SummaryPanel
+                title={locale === "ar" ? "مراجعة العرض" : "Quote review"}
+                subtitle={locale === "ar" ? "ملخص قابل للمشاركة مع العميل." : "A customer-ready summary before saving."}
+              >
+                <SummaryRow label={locale === "ar" ? "العميل" : "Customer"} value={selectedQuoteCustomerLabel} />
+                <SummaryRow label={locale === "ar" ? "السيارة" : "Vehicle"} value={selectedQuoteVehicleLabel} />
+                <SummaryRow label={locale === "ar" ? "النمط" : "Mode"} value={form.mode} />
+                <SummaryRow label={locale === "ar" ? "شركة التمويل" : "Finance company"} value={selectedCompanyLabel} />
+                <SummaryRow label={locale === "ar" ? "القيمة" : "Price"} value={money(vehiclePricePreview, locale)} />
+                <SummaryRow label={locale === "ar" ? "القسط" : "Monthly"} value={money(monthlyPreview, locale)} />
+              </SummaryPanel>
+            </>
+          ) : null}
+          <WizardActions
+            activeStep={quoteStep}
+            backLabel={locale === "ar" ? "السابق" : "Back"}
+            nextLabel={locale === "ar" ? "التالي" : "Next"}
+            saveLabel={saving ? (locale === "ar" ? "جاري الحفظ..." : "Saving...") : (locale === "ar" ? "حفظ العرض" : "Save quote")}
+            saving={saving}
+            totalSteps={quoteSteps.length}
+            onBack={() => setQuoteStep((step) => Math.max(0, step - 1))}
+            onNext={() => setQuoteStep((step) => Math.min(quoteSteps.length - 1, step + 1))}
+            onSave={save}
+          />
+        </GuidedStepFlow>
       </FormModal>
     </ModuleScroll>
   );
@@ -4491,6 +4847,47 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.md,
   },
+  vehicleRecordCard: {
+    gap: theme.spacing.md,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+    padding: theme.spacing.md,
+  },
+  vehicleMediaRow: {
+    flexDirection: "row",
+    gap: theme.spacing.md,
+  },
+  vehicleThumb: {
+    width: 82,
+    height: 82,
+    overflow: "hidden",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: theme.radius.md,
+    backgroundColor: theme.colors.hero,
+  },
+  vehicleThumbImage: {
+    width: "100%",
+    height: "100%",
+  },
+  vehicleThumbText: {
+    color: theme.colors.onPrimary,
+    fontSize: 22,
+    fontWeight: "900",
+  },
+  vehicleCardText: {
+    flex: 1,
+    minWidth: 0,
+    gap: theme.spacing.sm,
+  },
+  vehicleFactRow: {
+    gap: theme.spacing.xs,
+    borderRadius: theme.radius.sm,
+    backgroundColor: theme.colors.surfaceAlt,
+    padding: theme.spacing.sm,
+  },
   recordHeader: {
     flexDirection: "row",
     alignItems: "center",
@@ -4517,6 +4914,33 @@ const styles = StyleSheet.create({
     fontWeight: "900",
     paddingHorizontal: theme.spacing.sm,
     paddingVertical: theme.spacing.xs,
+  },
+  detailPillRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: theme.spacing.xs,
+  },
+  detailPill: {
+    minHeight: 28,
+    justifyContent: "center",
+    borderRadius: theme.radius.sm,
+    backgroundColor: theme.colors.surfaceAlt,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: theme.spacing.xs,
+  },
+  detailPillSuccess: {
+    backgroundColor: theme.colors.successSoft,
+  },
+  detailPillWarning: {
+    backgroundColor: theme.colors.warningSoft,
+  },
+  detailPillInfo: {
+    backgroundColor: theme.colors.infoSoft,
+  },
+  detailPillText: {
+    color: theme.colors.text,
+    fontSize: 11,
+    fontWeight: "900",
   },
   cardActions: {
     flexDirection: "row",
@@ -4592,6 +5016,60 @@ const styles = StyleSheet.create({
     color: theme.colors.mutedText,
     fontSize: 14,
     textAlign: "center",
+  },
+  summaryPanel: {
+    gap: theme.spacing.md,
+    borderRadius: theme.radius.md,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surfaceMuted,
+    padding: theme.spacing.md,
+  },
+  summaryHeader: {
+    gap: theme.spacing.xs,
+  },
+  summaryTitle: {
+    color: theme.colors.text,
+    fontSize: 16,
+    fontWeight: "900",
+  },
+  summarySubtitle: {
+    color: theme.colors.mutedText,
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  summaryRows: {
+    gap: theme.spacing.sm,
+  },
+  summaryRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: theme.spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.border,
+    paddingTop: theme.spacing.sm,
+  },
+  summaryLabel: {
+    flex: 0.44,
+    color: theme.colors.mutedText,
+    fontSize: 12,
+    fontWeight: "800",
+  },
+  summaryValue: {
+    flex: 0.56,
+    color: theme.colors.text,
+    fontSize: 13,
+    fontWeight: "900",
+    textAlign: "right",
+  },
+  wizardActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.sm,
+  },
+  wizardPrimaryAction: {
+    flex: 1,
   },
   mutedText: {
     color: theme.colors.mutedText,

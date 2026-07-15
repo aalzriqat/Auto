@@ -601,10 +601,36 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - Verified package `com.autoflowdealer.mobile` reports `versionName=0.1.0`, `versionCode=1`, `lastUpdateTime=2026-07-15 09:44:14`.
   - Relaunched the app, confirmed `mCurrentFocus` is `com.autoflowdealer.mobile/com.autoflowdealer.mobile.MainActivity`, and captured visible screenshot `C:\h-ui\phone-command-center-release-visible.png`.
   - Production build log still reports the Turnstile public site key as missing; marketplace verification flows may remain limited until configured.
+- 2026-07-15 09:48 +03: PR watch after command-center push
+  - Pushed command-center UI pass to non-draft PR #70 at head `d56cbfd5`; PR remains open and mergeable.
+  - Early checks passing: lint, type-check, dependency-audit, SonarCloud, Semgrep, Checkov, dealer-worker, secret-scan, GitGuardian, and CodeQL actions/python analysis.
+  - Still pending: Cypress, Playwright, TestSprite E2E, unit-and-integration, Convex backend, OSV, Nuclei, ZAP baseline, JavaScript/TypeScript CodeQL analysis, and Vercel.
+  - CodeRabbit is the only red status so far; thread-aware review lookup still reports 0 active inline threads and no fresh CodeRabbit PR comment.
+- 2026-07-15 09:51 +03: PR checks nearly settled
+  - Additional checks now passing: unit-and-integration, Convex backend, TestSprite E2E, ZAP baseline, JavaScript/TypeScript CodeQL analysis, Playwright, Vercel, and OSV.
+  - Remaining pending checks: Cypress, Nuclei, and one OSV context.
+  - CodeRabbit remains the only red status and has not posted a fresh active inline thread.
+- 2026-07-15 09:53 +03: Cypress rerun triggered
+  - Cypress failed because the Cypress Cloud run was canceled; the log shows later specs skipped and no app assertion failure from the command-center UI pass.
+  - Triggered `gh run rerun 29395222397 --failed`; Cypress is now in progress again.
+  - All other non-CodeRabbit checks are passing except one queued OSV context.
+  - CodeRabbit remains an external red status with no fresh active inline review thread.
+- 2026-07-15 10:02 +03: next PWA parity pass in progress
+  - User reiterated that the PWA is still far ahead, so the next native pass is targeting workflow depth, not just styling.
+  - PR check watch: Cypress passed after rerun; all non-CodeRabbit checks are green except one duplicate OSV scanner context still queued.
+  - CodeRabbit is still failing because the latest review hit its quota/rate limit; thread-aware review lookup found no active inline threads.
+  - Local UI patch started for inventory detail sheets/cards, guided sale draft flow, and guided quote builder flow.
+- 2026-07-15 10:07 +03: inventory/sales/quotes parity pass validated locally
+  - Upgraded inventory cards with media thumbnails, status/value chips, four fast metrics, and a vehicle detail bottom sheet.
+  - Reworked the sales draft form into a guided three-step flow: customer/vehicle, price/financing, review/save.
+  - Reworked quotes into a guided three-step builder with searchable customer/vehicle selection, finance-plan inputs, estimated monthly preview, and review/save.
+  - `pnpm mobile:typecheck`: passed.
+  - `pnpm mobile:test`: passed with 9 suites, 83 tests, and 100% statements/branches/functions/lines.
+  - `git diff --check`: passed with line-ending normalization warnings only.
 
 ## Next Steps
 
-1. Push the command-center UI pass to PR #70 and watch checks/comments/inline comments/failures.
+1. Continue watching pending PR checks/comments/inline comments/failures.
 2. Continue on-device UI testing against the installed production build and record any screens that still feel behind the PWA.
 3. Continue the next parity pass on marketplace cards, vehicle details, and sales wizard-style flows.
 4. Configure the mobile Turnstile public key if marketplace verification is part of the phone test.
