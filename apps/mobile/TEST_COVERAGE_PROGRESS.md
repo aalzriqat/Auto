@@ -1036,9 +1036,15 @@ This scope avoids fake coverage over large native UI screens that depend on Conv
   - `pnpm install --frozen-lockfile`: passed; lockfile already up to date.
   - `pnpm --filter @autoflow/mobile typecheck`: passed.
   - `pnpm --filter @autoflow/mobile test`: passed with 13 suites, 107 tests, and 100% statements/branches/functions/lines.
+- 2026-07-15 18:55 +03: mobile UI modernization Phase 7 select-list conversion validated locally
+  - Converted `SearchableSelectField` modal options from `ScrollView` + `.map()` to `FlatList` with `keyExtractor`, `ItemSeparatorComponent`, and preserved header/footer option rows.
+  - Kept custom-value, none, and empty-state behavior intact under the existing component test coverage.
+  - `pnpm install --frozen-lockfile`: passed; lockfile already up to date.
+  - `pnpm --filter @autoflow/mobile typecheck`: passed.
+  - `pnpm --filter @autoflow/mobile test`: passed with 13 suites, 107 tests, and 100% statements/branches/functions/lines.
 
 ## Next Steps
 
-1. Commit Phase 6 auth/not-found route restyle on top of `agent/mobile-ui-port`.
-2. Continue Phase 7 list-performance conversion.
-3. Run final verification and push `origin/agent/mobile-ui-port`.
+1. Commit Phase 7 select-list conversion on top of `agent/mobile-ui-port`.
+2. Run final verification and push `origin/agent/mobile-ui-port`.
+3. Continue broader FlatList conversions in follow-up slices if more time is available.

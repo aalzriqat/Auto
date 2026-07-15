@@ -1,8 +1,8 @@
 import { useMemo, useState } from "react";
 import {
+  FlatList,
   Modal,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -57,6 +57,10 @@ export function filterSearchableOptions(
 
 export function formatCustomValueLabel(template: string | undefined, value: string): string {
   return template ? template.replace("{value}", value) : value;
+}
+
+function OptionSeparator() {
+  return <View style={styles.optionSeparator} />;
 }
 
 export function SearchableSelectField({
@@ -213,13 +217,23 @@ export function SearchableSelectField({
                   onChangeText={setSearch}
                 />
               </View>
-              <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.optionList}>
-                {noneOption}
-                {filteredOptions.map((option) => {
+              <FlatList
+                data={filteredOptions}
+                ItemSeparatorComponent={OptionSeparator}
+                keyboardShouldPersistTaps="handled"
+                keyExtractor={(option) => option.value}
+                ListFooterComponent={(
+                  <>
+                    {customOption}
+                    {emptyOption}
+                  </>
+                )}
+                ListHeaderComponent={noneOption}
+                contentContainerStyle={styles.optionList}
+                renderItem={({ item: option }) => {
                   const selected = option.value === value;
                   return (
                     <Pressable
-                      key={option.value}
                       accessibilityRole="button"
                       accessibilityState={{ selected }}
                       testID={`${testID}-option-${option.value}`}
@@ -245,10 +259,8 @@ export function SearchableSelectField({
                       {selected ? <Icon color="primary" name="check" size={18} /> : null}
                     </Pressable>
                   );
-                })}
-                {customOption}
-                {emptyOption}
-              </ScrollView>
+                }}
+              />
             </View>
           </View>
         ) : null}
@@ -348,8 +360,10 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
   },
   optionList: {
-    gap: theme.spacing.xs,
     paddingTop: theme.spacing.md,
+  },
+  optionSeparator: {
+    height: theme.spacing.xs,
   },
   optionRow: {
     minHeight: 48,
