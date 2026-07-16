@@ -285,7 +285,7 @@ export async function drainPendingForOrg(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
   limit = 50
-): Promise<{ posted: number; failed: number }> {
+): Promise<{ posted: number; failed: number; held: number }> {
   const pending = await ctx.db
     .query("pendingAccountingEvents")
     .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))
