@@ -273,6 +273,25 @@ export async function amortizeScheduleForMonth(
     status: newRecognizedMinor >= schedule.totalMinor ? "FULLY_AMORTIZED" : "ACTIVE",
   });
 
+  // Never credit the asset before its own debit. The two dates come off
+  // different clocks: EXPENSE_POSTED takes the expense's `date`, while the
+  // in-progress month is dated min(end-of-month, now) — so an expense dated
+  // later in its own start month than the day this runs (paid on the 25th, cron
+  // on the 5th) would release an asset that the ledger doesn't show as booked
+  // until twenty days later, leaving Prepaid Expenses negative in between.
+  //
+  // Dated at the debit rather than refused: this is a valid schedule whose asset
+  // really is booked, and refusing it would stall recognition — and the period
+  // close that checks recognition is caught up — over a few days' skew. The
+  // clamp cannot push recognition out of the month it recognizes, because
+  // expenses.ts forbids an amortizationStartDate earlier than the expense's own
+  // month: the debit therefore always falls at or before the end of the start
+  // month. (Recognition never runs ahead of the debit's month anyway — a month
+  // index past the current one is outside catchUpPrepaidSchedule's loop.) The
+  // report buckets by payload.yearMonth, not this date, so the month a figure
+  // reports in is unaffected either way — see prepaidRecognitionEvents.ts.
+  const occurredAt = Math.max(args.occurredAt, sourcePosted.accountingDate);
+
   await hookPrepaidExpenseAmortized(ctx, {
     orgId: args.orgId,
     scheduleId: args.scheduleId,
@@ -281,7 +300,7 @@ export async function amortizeScheduleForMonth(
     currency: schedule.currency,
     expenseSystemKey: schedule.expenseSystemKey,
     actorId: args.systemActorId,
-    occurredAt: args.occurredAt,
+    occurredAt,
   });
 
   return { posted: true, amountMinor };

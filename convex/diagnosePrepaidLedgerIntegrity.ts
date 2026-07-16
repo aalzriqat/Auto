@@ -1,5 +1,6 @@
 import { v } from "convex/values";
-import { internalQuery } from "./_generated/server";
+import { internalAction, internalQuery } from "./_generated/server";
+import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 
 /**
@@ -20,9 +21,12 @@ import { Doc, Id } from "./_generated/dataModel";
  * the mutation path. It cannot see rows written before it existed. This is how
  * you find those rows before handing the books to an accountant.
  *
- * Paginated over organizations and self-rescheduling in the same shape as
- * migrateExpenseReversals, so it can be run against production without a single
- * transaction trying to scan every event.
+ * Paginated over organizations so no single transaction tries to scan every
+ * event on a mature deployment. surveyPrepaidLedgerIntegrity is ONE page;
+ * runPrepaidLedgerIntegritySurvey is the whole survey and is what you actually
+ * run — a page's empty findings mean nothing on their own, and an operator who
+ * runs the query once against more than ORG_BATCH_SIZE orgs gets a clean bill of
+ * health for the first few and silence about the rest.
  */
 
 const ORG_BATCH_SIZE = 5;
@@ -40,6 +44,8 @@ type DefectKind =
   | "correction_dated_before_source"
   /** Recognition posted without a posted source expense (amortization's own guard bypassed). */
   | "amortization_without_posted_source"
+  /** Recognition is dated before the debit it releases — same negative asset, but reached by the cron's clock rather than a correction. */
+  | "amortization_dated_before_source"
   /** The source expense was reversed while a correction against it is still POSTED. */
   | "source_reversed_with_live_correction";
 
@@ -125,7 +131,12 @@ export const surveyPrepaidLedgerIntegrity = internalQuery({
           } else if (source.status === "REVERSED" && isCorrection) {
             defect = "source_reversed_with_live_correction";
           } else if (sourcePosted && source.accountingDate > event.accountingDate) {
-            defect = "correction_dated_before_source";
+            // Same negative asset either way, but a correction gets there
+            // because someone booked it too early and recognition because the
+            // cron's clock ran ahead of the expense's own date — different
+            // causes, different fixes. Reporting recognition as a "correction"
+            // sends the reader hunting for a refund that was never made.
+            defect = isCorrection ? "correction_dated_before_source" : "amortization_dated_before_source";
           }
           if (!defect) continue;
 
@@ -159,5 +170,55 @@ export const surveyPrepaidLedgerIntegrity = internalQuery({
       continueCursor: page.continueCursor,
       orgsScanned: page.page.length,
     };
+  },
+});
+
+/** Pages beyond which the run reports itself incomplete rather than looping forever. */
+const MAX_SURVEY_PAGES = 500;
+
+/**
+ * The whole survey, every organization, in one call — page one to isDone.
+ *
+ * This exists because the honest answer to "are the books clean?" is the only
+ * output anyone wants from a diagnostic, and a single page cannot give it: it
+ * sees ORG_BATCH_SIZE organizations and says nothing about the rest, which reads
+ * as an all-clear to whoever ran it. `complete` is the load-bearing field —
+ * findings are only exhaustive when it is true, and a run that exhausts its page
+ * budget says so and hands back a cursor instead of quietly reporting clean.
+ *
+ * An action, not a self-rescheduling mutation: the survey never writes, so
+ * nothing needs to survive a transaction, and paging from an action returns one
+ * assembled report to whoever ran it rather than scattering pages across
+ * scheduled runs with no assembly point.
+ */
+export const runPrepaidLedgerIntegritySurvey = internalAction({
+  args: {
+    cursor: v.optional(v.string()),
+    maxPages: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const maxPages = args.maxPages ?? MAX_SURVEY_PAGES;
+    const findings: Finding[] = [];
+    let cursor: string | undefined = args.cursor;
+    let orgsScanned = 0;
+    let pagesScanned = 0;
+
+    while (pagesScanned < maxPages) {
+      const page: {
+        findings: Finding[];
+        isDone: boolean;
+        continueCursor: string;
+        orgsScanned: number;
+      } = await ctx.runQuery(internal.diagnosePrepaidLedgerIntegrity.surveyPrepaidLedgerIntegrity, { cursor });
+      findings.push(...page.findings);
+      orgsScanned += page.orgsScanned;
+      pagesScanned++;
+      cursor = page.continueCursor;
+      if (page.isDone) {
+        return { complete: true, findings, orgsScanned, pagesScanned, resumeCursor: null };
+      }
+    }
+
+    return { complete: false, findings, orgsScanned, pagesScanned, resumeCursor: cursor ?? null };
   },
 });

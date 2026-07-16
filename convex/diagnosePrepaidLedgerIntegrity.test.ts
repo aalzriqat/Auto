@@ -181,6 +181,30 @@ describe("prepaid ledger integrity survey", () => {
     expect(findings[0].defect).toBe("source_reversed_with_live_correction");
   });
 
+  test("calls recognition dated before its source what it is, not a correction", async () => {
+    // Recognition and corrections reach a too-early date by different routes and
+    // are fixed by different things, so the label has to tell them apart. Filing
+    // an amortization under "correction dated before source" sends whoever reads
+    // the report hunting for a refund or write-off that was never made.
+    const ctx = await seed("amort-dated-before");
+    const { scheduleId, expenseId } = await seedSchedule(ctx, { expenseDate: DEC });
+    await insertEvent(ctx, {
+      eventType: "EXPENSE_POSTED", sourceType: "expenses", sourceId: expenseId.toString(),
+      accountingDate: DEC, status: "POSTED", payload: { expenseId: expenseId.toString() },
+    });
+    await insertEvent(ctx, {
+      eventType: "PREPAID_EXPENSE_AMORTIZED", sourceType: "prepaidExpenseSchedules",
+      sourceId: `${scheduleId}_2026-03`, accountingDate: MAR, status: "POSTED",
+      payload: { scheduleId: scheduleId.toString(), amountMinor: 100_000, yearMonth: "2026-03" },
+    });
+
+    const { findings } = await survey(ctx);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].defect).toBe("amortization_dated_before_source");
+    expect(findings[0].eventType).toBe("PREPAID_EXPENSE_AMORTIZED");
+    expect(findings[0].sourceAccountingDate).toBe(DEC);
+  });
+
   test("stays silent on a healthy schedule", async () => {
     // The whole point of a diagnostic is that a clean result means clean.
     const ctx = await seed("healthy");
@@ -244,5 +268,75 @@ describe("prepaid ledger integrity survey", () => {
     expect(findings).toHaveLength(1);
     // Diagnostic only: the offending row is reported, never touched.
     expect(after).toEqual(before);
+  });
+});
+
+describe("running the survey to completion", () => {
+  /** An org whose books are broken in the one way the survey exists to find. */
+  async function seedBrokenOrg(t: ReturnType<typeof convexTest>, name: string) {
+    const orgId = await t.run((c) => c.db.insert("organizations", { name, createdAt: Date.now() }));
+    const userId = await t.run((c) => c.db.insert("users", { clerkId: `${name}_u`, email: `${name}@example.com` }));
+    const ctx = { t, orgId, userId } as Ctx;
+    const { scheduleId, expenseId } = await seedSchedule(ctx, { expenseDate: JAN });
+    await insertEvent(ctx, {
+      eventType: "EXPENSE_POSTED", sourceType: "expenses", sourceId: expenseId.toString(),
+      accountingDate: JAN, status: "PENDING", payload: { expenseId: expenseId.toString() },
+    });
+    await insertEvent(ctx, {
+      eventType: "PREPAID_EXPENSE_WRITTEN_OFF", sourceType: "prepaidExpenseSchedules",
+      sourceId: `${scheduleId}_c1`, accountingDate: MAR, status: "POSTED",
+      payload: { scheduleId: scheduleId.toString(), amountMinor: 300_000 },
+    });
+    return orgId;
+  }
+
+  test("one page does not see past its own batch — so a single query can't clear the books", async () => {
+    // Pins the reason the runner below has to exist: this is exactly the false
+    // all-clear an operator gets from running the query once.
+    const t = convexTest(schema, MODULE_GLOB);
+    for (let i = 0; i < 6; i++) {
+      await t.run((c) => c.db.insert("organizations", { name: `Clean ${i}`, createdAt: Date.now() }));
+    }
+    await seedBrokenOrg(t, "Broken");
+
+    const firstPage = await t.query(internal.diagnosePrepaidLedgerIntegrity.surveyPrepaidLedgerIntegrity, {});
+
+    expect(firstPage.findings).toHaveLength(0);
+    expect(firstPage.isDone).toBe(false);
+  });
+
+  test("the runner pages to the end and finds what page one missed", async () => {
+    const t = convexTest(schema, MODULE_GLOB);
+    for (let i = 0; i < 6; i++) {
+      await t.run((c) => c.db.insert("organizations", { name: `Clean ${i}`, createdAt: Date.now() }));
+    }
+    const brokenOrgId = await seedBrokenOrg(t, "Broken");
+
+    const result = await t.action(internal.diagnosePrepaidLedgerIntegrity.runPrepaidLedgerIntegritySurvey, {});
+
+    // Complete is what makes an empty findings list mean anything at all.
+    expect(result.complete).toBe(true);
+    expect(result.orgsScanned).toBe(7);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].orgId).toBe(brokenOrgId);
+    expect(result.findings[0].defect).toBe("correction_without_posted_source");
+  });
+
+  test("hitting the page budget reports incomplete rather than a clean bill of health", async () => {
+    // The failure mode this guards is a survey that stops early and still reads
+    // as "no findings" — the one answer nobody may take on trust.
+    const t = convexTest(schema, MODULE_GLOB);
+    for (let i = 0; i < 6; i++) {
+      await t.run((c) => c.db.insert("organizations", { name: `Clean ${i}`, createdAt: Date.now() }));
+    }
+    await seedBrokenOrg(t, "Broken");
+
+    const result = await t.action(internal.diagnosePrepaidLedgerIntegrity.runPrepaidLedgerIntegritySurvey, {
+      maxPages: 1,
+    });
+
+    expect(result.complete).toBe(false);
+    expect(result.findings).toHaveLength(0);
+    expect(result.resumeCursor).toBeTruthy();
   });
 });

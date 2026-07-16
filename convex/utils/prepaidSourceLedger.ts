@@ -56,11 +56,20 @@ const PREPAID_SOURCE_DEPENDENT_EVENT_TYPES = new Set([
  * to prevent, with no operator action. This is that guard re-asked at the
  * moment of posting, which is the only place that can answer it truthfully.
  *
- * Ordering is checked for corrections only. Recognition is month-bucketed and
- * dated at min(end-of-month, now) (expenseAmortization.ts), so a legitimate
- * month can fall a few days before an expense dated later within that same
- * start month; refusing it would stall real amortization for no benefit, and
- * amortizeScheduleForMonth has always had its own posted-source check anyway.
+ * Ordering is checked for recognition as well as corrections. Recognition dated
+ * ahead of its own debit is impossible at the source now that
+ * amortizeScheduleForMonth clamps each month to the debit's date, but an entry
+ * queued before that clamp existed can still be sitting in the outbox carrying
+ * the old date, and posting it leaves the asset negative exactly as a misdated
+ * correction would.
+ *
+ * FAILS CLOSED. Everything this guard knows it learns by following the entry's
+ * payload.scheduleId to the schedule and from there to the asset's debit. The
+ * posting rules need no such reference — they carry the amount and the accounts
+ * themselves (postingRules.ts) — so an entry whose schedule reference is absent
+ * or dangling posts perfectly happily, while being exactly the entry nobody can
+ * audit afterwards. Waving those through because the guard can't see them is the
+ * wrong way round: no schedule, no posting.
  */
 export async function prepaidPostingBlockedReason(
   ctx: MutationCtx,
@@ -77,17 +86,20 @@ export async function prepaidPostingBlockedReason(
   if (!PREPAID_SOURCE_DEPENDENT_EVENT_TYPES.has(entry.eventType)) return null;
 
   const rawScheduleId = (entry.payload as { scheduleId?: string })?.scheduleId;
-  if (!rawScheduleId) return null;
+  if (!rawScheduleId) {
+    return "it carries no prepaid schedule reference, so the Prepaid Expenses balance it credits cannot be traced back to an expense that debited it";
+  }
   const scheduleId = ctx.db.normalizeId("prepaidExpenseSchedules", rawScheduleId);
-  if (!scheduleId) return null;
-  const schedule = await ctx.db.get(scheduleId);
-  if (!schedule || schedule.orgId !== entry.orgId) return null;
+  const schedule = scheduleId ? await ctx.db.get(scheduleId) : null;
+  if (!schedule || schedule.orgId !== entry.orgId) {
+    return "its prepaid schedule is missing or belongs to another organization, so the Prepaid Expenses balance it credits cannot be traced back to an expense that debited it";
+  }
 
   const posted = await postedSourceExpenseEvent(ctx, entry.orgId, schedule.expenseId);
   if (!posted) {
     return "the prepaid expense behind it has not posted to the ledger yet, so this would credit a Prepaid Expenses balance that was never debited";
   }
-  if (PREPAID_CORRECTION_EVENT_TYPES.has(entry.eventType) && posted.accountingDate > entry.accountingDate) {
+  if (posted.accountingDate > entry.accountingDate) {
     return "the prepaid expense behind it is recognized on a later date, so this would credit a Prepaid Expenses balance that does not exist yet on this entry's date";
   }
   return null;
