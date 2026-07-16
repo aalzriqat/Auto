@@ -283,6 +283,33 @@ async function requireWebsiteSettings(ctx: QueryCtx | MutationCtx, orgId: Id<"or
   return settings;
 }
 
+/** The parsed contents of a published site snapshot: the dealer's live public inventory + finance terms + profile, exactly as the buyer-facing browse renders them. */
+export type PublishedSnapshotData = {
+  vehicles?: unknown[];
+  profile?: { dealershipName?: string };
+  financeCompany?: unknown | null;
+};
+
+/**
+ * Resolves a dealer's currently-published site snapshot JSON, or null when
+ * they have no active published site. Shared by the public browse query and
+ * the marketplace matcher so both score against the exact same inventory
+ * source — the alternative (each re-deriving the snapshot resolution) is how
+ * "what the buyer browses" and "what the buyer gets matched to" silently drift.
+ */
+export async function getPublishedSnapshotData(
+  ctx: QueryCtx | MutationCtx,
+  orgId: Id<"organizations">
+): Promise<PublishedSnapshotData | null> {
+  const settings = await getSettingsByOrg(ctx, orgId);
+  if (!settings || settings.status !== "active" || !settings.enabled || !settings.publishedSnapshotId) return null;
+
+  const snapshot = await ctx.db.get(settings.publishedSnapshotId);
+  if (!snapshot || snapshot.orgId !== orgId || snapshot.websiteSettingsId !== settings._id) return null;
+
+  return (snapshot.snapshotJson ?? null) as PublishedSnapshotData | null;
+}
+
 export async function activePrimaryDomain(ctx: QueryCtx | MutationCtx, orgId: Id<"organizations">) {
   return await ctx.db
     .query("websiteDomains")

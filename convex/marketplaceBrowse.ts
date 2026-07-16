@@ -3,7 +3,7 @@ import { query } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
 import { hasPlanFeature } from "./subscriptions";
 import { listOptedInDealerProfiles } from "./marketplaceDealers";
-import { getSettingsByOrg, activePrimaryDomain } from "./websites";
+import { getPublishedSnapshotData, activePrimaryDomain } from "./websites";
 import { calculateUnifiedMurabaha } from "../lib/financing";
 
 const MAX_CANDIDATE_ORGS = 100;
@@ -130,17 +130,9 @@ export const search = query({
       if (!org || org.suspended) continue;
       if (!(await hasPlanFeature(ctx, orgId, "websiteBuilder"))) continue;
 
-      const settings = await getSettingsByOrg(ctx, orgId);
-      if (!settings || settings.status !== "active" || !settings.enabled || !settings.publishedSnapshotId) continue;
-
-      const snapshot = await ctx.db.get(settings.publishedSnapshotId);
-      if (!snapshot || snapshot.orgId !== orgId || snapshot.websiteSettingsId !== settings._id) continue;
-
-      const snapshotData = snapshot.snapshotJson as
-        | { vehicles?: unknown[]; profile?: { dealershipName?: string }; financeCompany?: FinanceCompanyTerms | null }
-        | null
-        | undefined;
-      const financeCompany = snapshotData?.financeCompany ?? null;
+      const snapshotData = await getPublishedSnapshotData(ctx, orgId);
+      if (!snapshotData) continue;
+      const financeCompany = (snapshotData.financeCompany as FinanceCompanyTerms | null | undefined) ?? null;
       const financeAvailable = Boolean(financeCompany);
       if (args.paymentType === "FINANCE" && !financeAvailable) continue;
       if (args.maxMonthlyPayment != null && !financeAvailable) continue;

@@ -85,6 +85,112 @@ async function seedDealer(
   return { orgId, userId };
 }
 
+const WEBSITE_PERMS = ["website.view", "website.manage", "website.publish", "view:settings"];
+
+/** Seeds a dealer with a real published site snapshot (enterprise plan → websiteBuilder), one AVAILABLE vehicle, and an opted-in profile — so createRequest's Tier A inventory scan has something to score. */
+async function seedPublishedDealer(
+  t: ReturnType<typeof convexTest>,
+  opts: {
+    name: string;
+    subdomainSlug: string;
+    city: string;
+    model?: string;
+    sellingPrice?: number;
+    tier?: "FREE_FOUNDING" | "LEAD_PACKAGE" | "FEATURED";
+    quotaExhausted?: boolean;
+  }
+) {
+  const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: opts.name, createdAt: Date.now() }));
+  await t.run((ctx) =>
+    ctx.db.insert("subscriptions", { orgId, plan: "enterprise", status: "active", createdAt: Date.now(), updatedAt: Date.now() })
+  );
+  const ownerId = await t.run((ctx) => ctx.db.insert("users", { clerkId: `owner_${orgId}`, email: `owner_${orgId}@test.com`, name: "Owner" }));
+  const roleId = await t.run((ctx) => ctx.db.insert("roles", { orgId, name: "MANAGER", permissions: WEBSITE_PERMS }));
+  await t.run((ctx) => ctx.db.insert("memberships", { orgId, userId: ownerId, roleId }));
+  await t.run((ctx) =>
+    ctx.db.insert("orgSettings", { orgId, currency: "JOD", currencySymbol: "د.أ", enabledPaymentTypes: ["CASH"], dealershipName: opts.name })
+  );
+  await t.run((ctx) =>
+    ctx.db.insert("vehicles", {
+      orgId, make: "Toyota", model: opts.model ?? "Corolla", year: 2021, mileage: 30000,
+      color: "White", fuelType: "Petrol", transmission: "Automatic",
+      sellingPrice: opts.sellingPrice ?? 18000, status: "AVAILABLE", isDeleted: false,
+    })
+  );
+  const financeCompanyId = await t.run((ctx) =>
+    ctx.db.insert("financeCompanies", { orgId, name: "Test Finance", profitRate: 5, maxTermMonths: 60, gracePeriodMonths: 0, insuranceRate: 3, adminFees: 150, commission: 300, isActive: true })
+  );
+  const asOwner = t.withIdentity({ subject: `owner_${orgId}` });
+  await asOwner.mutation(api.websites.startSetup, { orgId });
+  await asOwner.mutation(api.websites.saveDraft, {
+    orgId,
+    subdomainSlug: opts.subdomainSlug,
+    activeFinanceCompanyId: financeCompanyId,
+    sections: [
+      { sectionKey: "vehicle.price", enabled: true },
+      { sectionKey: "vehicle.photos", enabled: true },
+    ],
+  });
+  await asOwner.mutation(api.websites.publish, { orgId });
+  await t.run((ctx) =>
+    ctx.db.insert("marketplaceDealerProfiles", {
+      orgId, isOptedIn: true, areas: [opts.city], brandsCarried: ["Toyota"], badges: [],
+      totalResponses: 0, totalAccepted: 0, tier: opts.tier ?? "FREE_FOUNDING",
+      leadQuota: opts.tier === "LEAD_PACKAGE" ? 1 : undefined,
+      leadsUsedThisPeriod: opts.quotaExhausted ? 1 : 0,
+      leadPeriodStartedAt: opts.quotaExhausted ? Date.now() : undefined,
+      createdAt: Date.now(), updatedAt: Date.now(),
+    })
+  );
+  return { orgId };
+}
+
+describe("two-tier inventory matching", () => {
+  test("scores a dealer's published inventory into an INVENTORY-tier match with reasons + monthly estimate", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId } = await seedPublishedDealer(t, { name: "Amman Motors", subdomainSlug: "amanm1", city: "Amman", model: "Corolla", sellingPrice: 18000 });
+
+    const result = await t.action(api.marketplaceRequests.submitRequest, {
+      ...baseRequestArgs, make: "Toyota", model: "Corolla", priceMin: 15000, priceMax: 22000, monthlyBudget: 600,
+    });
+
+    const match = await t.run((ctx) =>
+      ctx.db.query("marketplaceRequestMatches").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique()
+    );
+    expect(match?.matchTier).toBe("INVENTORY");
+    expect(match?.matchScore).toBeGreaterThan(0);
+    expect(match?.matchReasons).toContain("model_exact");
+    expect(match?.estimatedMonthlyPayment).toBeGreaterThan(0);
+    expect(match?.calculationSnapshot?.vehiclePrice).toBe(18000);
+  });
+
+  test("an inventory match outranks an eligible-only dealer", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId: inventoryOrg } = await seedPublishedDealer(t, { name: "Stocked", subdomainSlug: "stocked1", city: "Amman", model: "Corolla" });
+    // Eligible-only dealer: city/brand match but no published inventory.
+    const { orgId: eligibleOrg } = await seedDealer(t, { name: "Sourcer", areas: ["Amman"], brandsCarried: ["Toyota"] });
+
+    await t.action(api.marketplaceRequests.submitRequest, { ...baseRequestArgs, make: "Toyota", model: "Corolla" });
+
+    const inv = await t.run((ctx) => ctx.db.query("marketplaceRequestMatches").withIndex("by_org", (q) => q.eq("orgId", inventoryOrg)).unique());
+    const elig = await t.run((ctx) => ctx.db.query("marketplaceRequestMatches").withIndex("by_org", (q) => q.eq("orgId", eligibleOrg)).unique());
+    expect(inv?.matchTier).toBe("INVENTORY");
+    expect(elig?.matchTier).toBe("ELIGIBLE");
+    expect(inv!.matchScore!).toBeGreaterThan(elig!.matchScore!);
+  });
+
+  test("a quota-exhausted dealer is excluded before consuming a match slot", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId } = await seedPublishedDealer(t, { name: "Maxed Out", subdomainSlug: "maxed1", city: "Amman", model: "Corolla", tier: "LEAD_PACKAGE", quotaExhausted: true });
+
+    const result = await t.action(api.marketplaceRequests.submitRequest, { ...baseRequestArgs, make: "Toyota", model: "Corolla" });
+
+    expect(result.matchedCount).toBe(0);
+    const match = await t.run((ctx) => ctx.db.query("marketplaceRequestMatches").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique());
+    expect(match).toBeNull();
+  });
+});
+
 describe("computeBuyerIntent", () => {
   test("HOT when urgent timeframe and budget are both given", () => {
     expect(computeBuyerIntent({ buyerTimeframe: "ASAP", monthlyBudget: 300 })).toBe("HOT");

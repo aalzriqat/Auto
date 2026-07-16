@@ -138,6 +138,7 @@ import type * as utils_idempotency from "../utils/idempotency.js";
 import type * as utils_instagramApi from "../utils/instagramApi.js";
 import type * as utils_leadAssignment from "../utils/leadAssignment.js";
 import type * as utils_leadStageHelpers from "../utils/leadStageHelpers.js";
+import type * as utils_marketplaceMatching from "../utils/marketplaceMatching.js";
 import type * as utils_mergeHelpers from "../utils/mergeHelpers.js";
 import type * as utils_money from "../utils/money.js";
 import type * as utils_notifications from "../utils/notifications.js";
@@ -315,6 +316,7 @@ declare const fullApi: ApiFromModules<{
   "utils/instagramApi": typeof utils_instagramApi;
   "utils/leadAssignment": typeof utils_leadAssignment;
   "utils/leadStageHelpers": typeof utils_leadStageHelpers;
+  "utils/marketplaceMatching": typeof utils_marketplaceMatching;
   "utils/mergeHelpers": typeof utils_mergeHelpers;
   "utils/money": typeof utils_money;
   "utils/notifications": typeof utils_notifications;
