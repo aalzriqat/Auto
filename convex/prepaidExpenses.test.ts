@@ -1921,6 +1921,188 @@ describe("prepaid corrections — refuse to post ahead of the original entry", (
 // postable. So without a guard at the posting boundary, opening a period is
 // enough to recreate the exact negative-asset state the mutation guard exists
 // to prevent, with no operator action and nothing to click.
+// A credit note that arrives 30 June and gets entered 3 July belongs in June.
+// Booking every correction at Date.now() forced the accountant into a manual
+// adjusting entry (and an approver's signature) to say what they already knew.
+describe("prepaid corrections — the accountant can date the correction", () => {
+  async function seedPostedPrepaid(tag: string, expenseDate = Date.UTC(2026, 0, 1)) {
+    const ctx = await seedDealer(tag);
+    const expenseId = await ctx.asOwner.mutation(api.expenses.create, {
+      orgId: ctx.orgId, title: "Insurance", amount: 1200, date: expenseDate,
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(ctx.t, expenseId);
+    return { ...ctx, expenseId, scheduleId: schedule!._id };
+  }
+
+  test("a backdated write-off books on the chosen date, not the day it was entered", async () => {
+    const { t, orgId, asOwner, scheduleId } = await seedPostedPrepaid("correction-dated");
+    const chosen = Date.UTC(2026, 5, 30); // 30 June — the credit note's own date
+
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId, writeOffMinor: 300_000, accountingDate: chosen,
+      reason: "Vendor credit note dated 30 June", idempotencyKey: "k1",
+    });
+
+    const event = await t.run((c) =>
+      c.db.query("accountingEvents").filter((q) => q.eq(q.field("eventType"), "PREPAID_EXPENSE_WRITTEN_OFF")).first()
+    );
+    expect(event!.accountingDate).toBe(chosen);
+    // The row records both: when the books say it happened, and when it was typed.
+    const correction = await t.run((c) => c.db.query("prepaidScheduleCorrections").first());
+    expect(correction!.accountingDate).toBe(chosen);
+    expect(correction!.createdAt).toBeGreaterThan(chosen);
+  });
+
+  test("the chosen date reaches the ledger, so the expense lands in its own month", async () => {
+    // The point of the feature: June's income statement shows it, July's doesn't.
+    const { orgId, asOwner, scheduleId } = await seedPostedPrepaid("correction-dated-gl");
+    const chosen = Date.UTC(2026, 5, 30);
+
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId, writeOffMinor: 300_000, accountingDate: chosen,
+      reason: "Vendor credit note dated 30 June", idempotencyKey: "k1",
+    });
+
+    const june = await asOwner.query(api.accountingReports.incomeStatement, {
+      orgId, fromDate: Date.UTC(2026, 5, 1), toDate: Date.UTC(2026, 5, 30, 23, 59, 59, 999),
+    });
+    const july = await asOwner.query(api.accountingReports.incomeStatement, {
+      orgId, fromDate: Date.UTC(2026, 6, 1), toDate: Date.UTC(2026, 6, 31, 23, 59, 59, 999),
+    });
+    expect(june.totalExpenses).toBe(300_000);
+    expect(july.totalExpenses).toBe(0);
+  });
+
+  test("a future-dated correction is refused", async () => {
+    const { orgId, asOwner, scheduleId } = await seedPostedPrepaid("correction-future");
+    await expect(
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId, scheduleId, writeOffMinor: 300_000,
+        accountingDate: Date.now() + 30 * 24 * 60 * 60 * 1000,
+        reason: "Not yet happened", idempotencyKey: "k1",
+      })
+    ).rejects.toThrow(/can't be dated in the future/i);
+  });
+
+  test("a date that is tomorrow in UTC but today for a user ahead of UTC is accepted", async () => {
+    // Guards the timezone fix: the future bound has a day of grace, so a user
+    // at +offset picking their own local today — already 'tomorrow' in UTC in
+    // the first hours of their day — isn't rejected at the month boundary.
+    const { t, orgId, asOwner, scheduleId } = await seedPostedPrepaid("correction-tz-grace");
+    const d = new Date(Date.now() + 6 * 60 * 60 * 1000);
+    const tomorrowUtcMidnight = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
+
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId, writeOffMinor: 300_000, accountingDate: tomorrowUtcMidnight,
+      reason: "Recorded in the first hours of the day, +3 timezone", idempotencyKey: "k1",
+    });
+
+    const correction = await t.run((c) => c.db.query("prepaidScheduleCorrections").first());
+    expect(correction!.accountingDate).toBe(tomorrowUtcMidnight);
+  });
+
+  test("two or more days ahead is future in every timezone and still refused", async () => {
+    const { orgId, asOwner, scheduleId } = await seedPostedPrepaid("correction-two-days");
+    await expect(
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId, scheduleId, writeOffMinor: 300_000,
+        accountingDate: Date.now() + 2 * 24 * 60 * 60 * 1000,
+        reason: "Genuinely future", idempotencyKey: "k1",
+      })
+    ).rejects.toThrow(/can't be dated in the future/i);
+  });
+
+  test("a correction dated into a closed period is refused, not silently queued", async () => {
+    // Silently queueing against a filed month is the failure this exists to
+    // prevent: it looks like success and lands nowhere.
+    const { t, orgId, asOwner, scheduleId, period } = await seedPostedPrepaid("correction-closed");
+    await t.run((c) => c.db.patch(period._id, { status: "CLOSED" }));
+
+    await expect(
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId, scheduleId, writeOffMinor: 300_000, accountingDate: Date.UTC(2026, 5, 30),
+        reason: "Vendor credit note", idempotencyKey: "k1",
+      })
+    ).rejects.toThrow(/no open accounting period covering that date/i);
+    expect(await t.run((c) => c.db.query("prepaidScheduleCorrections").first())).toBeNull();
+  });
+
+  test("a correction dated before the expense it credits is still refused", async () => {
+    // The ordering guard has to vet the CHOSEN date, not the clock — otherwise
+    // picking a date is simply a way around it. The date here sits inside the
+    // open period and in the past, so ONLY the ordering rule can reject it.
+    const { orgId, asOwner, scheduleId } = await seedPostedPrepaid("correction-before-source", Date.UTC(2026, 5, 1));
+    await expect(
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId, scheduleId, writeOffMinor: 300_000, accountingDate: Date.UTC(2026, 1, 1),
+        reason: "Dated before the prepayment itself", idempotencyKey: "k1",
+      })
+    ).rejects.toThrow(/recognized in the ledger on a later date/i);
+  });
+
+  test("the chosen date survives maker-checker and is re-vetted at approval", async () => {
+    const { t, orgId, scheduleId } = await seedPostedPrepaid("correction-approval-date");
+    const maker = await addFinanceUser(t, orgId, "maker-date");
+    const checker = await addFinanceUser(t, orgId, "checker-date");
+    const chosen = Date.UTC(2026, 5, 30);
+
+    const submitted = await maker.asUser.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId, writeOffMinor: 300_000, accountingDate: chosen,
+      reason: "Vendor credit note dated 30 June", idempotencyKey: "k1",
+    });
+    expect(submitted.status).toBe("PENDING");
+    const request = await t.run((c) => c.db.query("prepaidCorrectionRequests").first());
+    expect(request!.accountingDate).toBe(chosen);
+
+    await checker.asUser.mutation(api.prepaidExpenses.approveCorrectionRequest, {
+      orgId, requestId: request!._id,
+    });
+
+    // The approver's click doesn't become the date — the maker's does.
+    const event = await t.run((c) =>
+      c.db.query("accountingEvents").filter((q) => q.eq(q.field("eventType"), "PREPAID_EXPENSE_WRITTEN_OFF")).first()
+    );
+    expect(event!.accountingDate).toBe(chosen);
+  });
+
+  test("an approval is refused if the chosen date's period closed while the request waited", async () => {
+    const { t, orgId, scheduleId, period } = await seedPostedPrepaid("correction-approval-closed");
+    const maker = await addFinanceUser(t, orgId, "maker-closed");
+    const checker = await addFinanceUser(t, orgId, "checker-closed");
+
+    await maker.asUser.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId, writeOffMinor: 300_000, accountingDate: Date.UTC(2026, 5, 30),
+      reason: "Vendor credit note", idempotencyKey: "k1",
+    });
+    const request = await t.run((c) => c.db.query("prepaidCorrectionRequests").first());
+    // The month is filed between request and approval.
+    await t.run((c) => c.db.patch(period._id, { status: "CLOSED" }));
+
+    await expect(
+      checker.asUser.mutation(api.prepaidExpenses.approveCorrectionRequest, { orgId, requestId: request!._id })
+    ).rejects.toThrow(/no open accounting period covering that date/i);
+  });
+
+  test("omitting the date keeps the old behaviour: books at now, no period demanded", async () => {
+    // The default path must not inherit the explicit path's stricter rules —
+    // "now" queueing is what every other hook does for an org without periods.
+    const { t, orgId, asOwner, scheduleId } = await seedPostedPrepaid("correction-default-date");
+    const before = Date.now();
+
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId, writeOffMinor: 300_000, reason: "No date given", idempotencyKey: "k1",
+    });
+
+    const correction = await t.run((c) => c.db.query("prepaidScheduleCorrections").first());
+    expect(correction!.accountingDate).toBeUndefined();
+    const event = await t.run((c) =>
+      c.db.query("accountingEvents").filter((q) => q.eq(q.field("eventType"), "PREPAID_EXPENSE_WRITTEN_OFF")).first()
+    );
+    expect(event!.accountingDate).toBeGreaterThanOrEqual(before);
+  });
+});
+
 describe("prepaid corrections — the outbox refuses to post them against an unbooked asset", () => {
   /**
    * The pre-guard shape: an expense dated in a month that never opens (so its

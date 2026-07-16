@@ -1056,6 +1056,12 @@ export default defineSchema({
     newTermMonths: v.number(),
     reason: v.string(),
     reference: v.optional(v.string()), // vendor credit-note / reference number, refund corrections only
+    // The date the correction's GL entries book at, when the accountant chose
+    // one rather than taking "now" — a credit note received 30 June and entered
+    // 3 July belongs in June. Absent on term-only corrections (they post
+    // nothing) and on every row written before this was offered, which booked
+    // at their own createdAt.
+    accountingDate: v.optional(v.number()),
     actorId: v.id("users"),
     createdAt: v.number(),
   })
@@ -1078,6 +1084,10 @@ export default defineSchema({
     newTermMonths: v.number(),
     reason: v.string(),
     reference: v.optional(v.string()),
+    // Carried from request to approval so the approver books the date the maker
+    // meant, not the date they happened to click. Re-validated on approval —
+    // its period can close in between.
+    accountingDate: v.optional(v.number()),
     status: v.union(v.literal("PENDING"), v.literal("APPROVED"), v.literal("REJECTED")),
     requestedBy: v.id("users"),
     decidedBy: v.optional(v.id("users")),

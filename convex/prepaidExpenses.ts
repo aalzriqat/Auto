@@ -40,6 +40,7 @@ import {
   yearMonthFromIndex,
   occurredAtForMonthIndex,
 } from "./utils/expenseAmortization";
+import { getOpenPeriodForDate } from "./accountingPeriods";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS, isSystemOwnerRole } from "./utils/permissions";
 import { requireFeature } from "./subscriptions";
@@ -183,6 +184,60 @@ async function requireSourceExpensePostedForGlCorrection(
   if (posted.accountingDate > correctionDate) {
     throw new ConvexError(
       "This prepaid expense is recognized in the ledger on a later date than this correction, so refunding or writing it off now would credit a Prepaid Expenses balance that doesn't exist yet — leaving the asset negative until the original entry's date is reached. Changing the amortization term is still allowed."
+    );
+  }
+}
+
+/** Last millisecond of the UTC day containing `now`. */
+function endOfDayMs(now: number): number {
+  const d = new Date(now);
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate(), 23, 59, 59, 999);
+}
+
+/**
+ * Vets an accountant-chosen correction date, which is the only date here that
+ * isn't the system's own clock and so the only one that can be wrong.
+ *
+ * Two rules beyond the source-ordering guard (which
+ * requireSourceExpensePostedForGlCorrection applies to this same date):
+ *
+ * - **Not in the future.** A refund or write-off records something that has
+ *   already happened; there is no vendor credit note you have not received yet.
+ *   Bounded at the end of the UTC day AFTER now — a full day of grace — because
+ *   the accountant's "today" is their local date, and a user ahead of UTC (the
+ *   +3 target market, in the first hours of their day) picks a calendar date
+ *   that is already "tomorrow" in UTC. Bounding at end-of-today-UTC would reject
+ *   their genuine today at exactly the month boundary this feature exists to get
+ *   right. Max real offset is +14h, well inside the day of grace; a date two or
+ *   more days ahead is future in every timezone and still refused, and the
+ *   open-period and ordering guards below are the real safety anyway.
+ * - **Inside an OPEN period.** Not merely "not closed": a closed period has been
+ *   filed and must not be restated, and a date with no period at all would post
+ *   nowhere — it would queue against a month that may never open, which is
+ *   silent failure dressed as success. Both deserve an answer now, while the
+ *   accountant is looking at the dialog and can pick a date that works.
+ *
+ * The default (no date given) deliberately keeps its old behaviour and queues,
+ * because "now" queueing is what every other hook does for an org whose periods
+ * aren't set up; only an explicit claim about when something happened earns an
+ * explicit answer about whether the books can take it.
+ */
+async function requireUsableCorrectionAccountingDate(
+  ctx: MutationCtx,
+  orgId: Id<"organizations">,
+  accountingDate: number,
+  now: number
+): Promise<void> {
+  const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+  if (accountingDate > endOfDayMs(now + ONE_DAY_MS)) {
+    throw new ConvexError(
+      "A correction can't be dated in the future — record it on the date the refund or credit note actually happened."
+    );
+  }
+  const period = await getOpenPeriodForDate(ctx, orgId, accountingDate);
+  if (!period) {
+    throw new ConvexError(
+      "There's no open accounting period covering that date, so this correction can't post there. Reopen the period (or pick a date inside an open one) and try again."
     );
   }
 }
@@ -763,6 +818,8 @@ async function applyScheduleCorrection(
     newTermMonths: number | undefined;
     reason: string;
     reference: string | undefined;
+    /** Accountant-chosen date for the correction's GL entries; omitted = book at now. */
+    accountingDate?: number;
     actorId: Id<"users">;
   }
 ): Promise<Id<"prepaidScheduleCorrections">> {
@@ -778,7 +835,16 @@ async function applyScheduleCorrection(
   // verbatim for the correction row and its GL entries, so the date the guard
   // vets is the date that actually posts. Reading the clock again lower down
   // would let the two drift apart and reopen the ordering hole the guard closes.
+  // `now` stays the wall clock — when the row was written — while accountingDate
+  // is when the books say it happened; a late-entered credit note separates them.
   const now = Date.now();
+  const postsToGl = args.refundMinor > 0 || args.writeOffMinor > 0;
+  const accountingDate = args.accountingDate ?? now;
+  if (postsToGl && args.accountingDate !== undefined) {
+    // Re-validated here, not just at submission: an approval can land after the
+    // period the maker chose has closed.
+    await requireUsableCorrectionAccountingDate(ctx, args.orgId, args.accountingDate, now);
+  }
 
   // Re-checked here rather than only at submission: this is the single choke
   // point both the direct path and approveCorrectionRequest go through, and an
@@ -788,7 +854,7 @@ async function applyScheduleCorrection(
     ctx,
     schedule,
     { refundMinor: args.refundMinor, writeOffMinor: args.writeOffMinor },
-    now
+    accountingDate
   );
 
   const newTermMonths = args.newTermMonths ?? schedule.termMonths;
@@ -817,6 +883,7 @@ async function applyScheduleCorrection(
     newTermMonths,
     reason: args.reason,
     reference: args.refundMinor > 0 ? args.reference : undefined,
+    accountingDate: postsToGl && args.accountingDate !== undefined ? args.accountingDate : undefined,
     actorId: args.actorId,
     createdAt: now,
   });
@@ -838,7 +905,7 @@ async function applyScheduleCorrection(
       currency: schedule.currency,
       paymentMethod: args.refundPaymentMethod,
       actorId: args.actorId,
-      occurredAt: now,
+      occurredAt: accountingDate,
     });
   }
   if (args.writeOffMinor > 0) {
@@ -850,19 +917,26 @@ async function applyScheduleCorrection(
       currency: schedule.currency,
       expenseSystemKey: schedule.expenseSystemKey,
       actorId: args.actorId,
-      occurredAt: now,
+      occurredAt: accountingDate,
     });
   }
 
   const vatSuffix = args.refundTaxMinor > 0 ? ` (+${args.refundTaxMinor} VAT)` : "";
   const referenceSuffix = args.reference ? `, ref ${args.reference}` : "";
+  // A backdated correction is exactly the kind an auditor asks about, so the
+  // chosen date goes in the trail next to who chose it — a row whose GL sits in
+  // a month its createdAt doesn't mention is otherwise unexplainable later.
+  const datedSuffix =
+    postsToGl && args.accountingDate !== undefined
+      ? `, booked ${new Date(args.accountingDate).toISOString().slice(0, 10)}`
+      : "";
   await auditLog(ctx, {
     orgId: args.orgId,
     actorId: args.actorId,
     actionType: "CORRECT_PREPAID_SCHEDULE",
     resourceType: "prepaidExpenseSchedules",
     resourceId: args.scheduleId.toString(),
-    description: `Corrected prepaid schedule: refund ${args.refundMinor}${vatSuffix}, write-off ${args.writeOffMinor}, term ${schedule.termMonths} -> ${newTermMonths}${referenceSuffix}. Reason: ${args.reason}`,
+    description: `Corrected prepaid schedule: refund ${args.refundMinor}${vatSuffix}, write-off ${args.writeOffMinor}, term ${schedule.termMonths} -> ${newTermMonths}${referenceSuffix}${datedSuffix}. Reason: ${args.reason}`,
   });
 
   return correctionId;
@@ -896,6 +970,9 @@ export const correctSchedule = mutation({
     newTermMonths: v.optional(v.number()),
     reason: v.string(),
     reference: v.optional(v.string()), // vendor credit-note / reference number, refund only
+    // When the correction actually happened, if that isn't today — a credit note
+    // received 30 June and entered 3 July belongs in June. Omitted = book now.
+    accountingDate: v.optional(v.number()),
     // A double-click, dialog re-submit, or client retry must not create two
     // corrections (two refunds, two write-offs) for what the accountant only
     // intended once — same idempotency discipline expenses.create already
@@ -932,6 +1009,7 @@ export const correctSchedule = mutation({
           newTermMonths: args.newTermMonths ?? null,
           reason,
           reference: reference ?? null,
+          accountingDate: args.accountingDate ?? null,
         }),
       },
       async () => {
@@ -946,6 +1024,7 @@ export const correctSchedule = mutation({
             newTermMonths: args.newTermMonths,
             reason,
             reference,
+            accountingDate: args.accountingDate,
             actorId: user._id,
           });
           return { status: "APPLIED" as const, correctionId, requestId: null };
@@ -961,14 +1040,19 @@ export const correctSchedule = mutation({
         if (schedule.status !== "ACTIVE") {
           throw new ConvexError(`Cannot correct a schedule with status "${schedule.status}".`);
         }
-        // Vetted against submission time, which is the earliest the correction
-        // could post. applyScheduleCorrection re-runs it against the real
-        // posting date at approval — this is only to fail the accountant fast.
+        // Vetted against the date this will actually book at — the chosen one if
+        // given, else submission time as the earliest it could post.
+        // applyScheduleCorrection re-runs both at approval, which can land much
+        // later; this is only to fail the accountant fast.
+        const submissionNow = Date.now();
+        if ((refundMinor > 0 || writeOffMinor > 0) && args.accountingDate !== undefined) {
+          await requireUsableCorrectionAccountingDate(ctx, args.orgId, args.accountingDate, submissionNow);
+        }
         await requireSourceExpensePostedForGlCorrection(
           ctx,
           schedule,
           { refundMinor, writeOffMinor },
-          Date.now()
+          args.accountingDate ?? submissionNow
         );
 
         const newTermMonths = args.newTermMonths ?? schedule.termMonths;
@@ -991,6 +1075,7 @@ export const correctSchedule = mutation({
           newTermMonths,
           reason,
           reference: refundMinor > 0 ? reference : undefined,
+          accountingDate: args.accountingDate,
           status: "PENDING",
           requestedBy: user._id,
           createdAt: now,
@@ -1086,6 +1171,9 @@ export const approveCorrectionRequest = mutation({
       newTermMonths: request.newTermMonths,
       reason: request.reason,
       reference: request.reference,
+      // The maker's chosen date, not the approver's click — and re-validated
+      // inside, since its period can close while the request sits waiting.
+      accountingDate: request.accountingDate,
       actorId: request.requestedBy,
     });
 
