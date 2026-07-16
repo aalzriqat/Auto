@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
 
 import { Icon, type SemanticIconName } from "../../components/Icon";
+import { FadeSlideIn } from "../../components/Motion";
 import { firstParam } from "../../navigation/routeParams";
 import { Screen } from "../../components/Screen";
 import { useLocale } from "../../providers/LocaleProvider";
@@ -40,10 +41,12 @@ function TabLargeTitle({ caption, title }: Readonly<{ caption?: string; title: s
   const { textDirection } = useLocale();
 
   return (
-    <View style={[styles.largeTitleBlock, { direction: textDirection }]}>
-      <Text style={styles.largeTitle}>{title}</Text>
-      {caption ? <Text style={styles.largeTitleCaption}>{caption}</Text> : null}
-    </View>
+    <FadeSlideIn>
+      <View style={[styles.largeTitleBlock, { direction: textDirection }]}>
+        <Text style={styles.largeTitle}>{title}</Text>
+        {caption ? <Text style={styles.largeTitleCaption}>{caption}</Text> : null}
+      </View>
+    </FadeSlideIn>
   );
 }
 
@@ -246,11 +249,27 @@ const moreSections: ReadonlyArray<{
   { category: "admin", title: { en: "Workspace", ar: "مساحة العمل" } },
 ];
 
+const categoryToneSoft: Record<NativeModuleCategory, "successSoft" | "warningSoft" | "infoSoft" | "indigoSoft"> = {
+  operations: "successSoft",
+  pipeline: "warningSoft",
+  finance: "infoSoft",
+  admin: "indigoSoft",
+};
+
+const categoryToneFg: Record<NativeModuleCategory, "success" | "warning" | "info" | "indigo"> = {
+  operations: "success",
+  pipeline: "warning",
+  finance: "info",
+  admin: "indigo",
+};
+
 function MoreRow({
+  category,
   isLast,
   module,
   onPress,
 }: Readonly<{
+  category: NativeModuleCategory;
   isLast: boolean;
   module: NativeModuleDefinition;
   onPress: () => void;
@@ -264,8 +283,8 @@ function MoreRow({
       style={({ pressed }) => [styles.moreRow, pressed && styles.moreRowPressed]}
       onPress={onPress}
     >
-      <View style={styles.moreIconShell}>
-        <Icon color="primary" name={module.icon as SemanticIconName} size={18} />
+      <View style={[styles.moreIconShell, { backgroundColor: theme.colors[categoryToneSoft[category]] }]}>
+        <Icon color={categoryToneFg[category]} name={module.icon as SemanticIconName} size={18} />
       </View>
       <View style={[styles.moreRowText, !isLast && styles.moreRowSeparator]}>
         <Text numberOfLines={1} style={styles.moreRowTitle}>
@@ -299,7 +318,7 @@ export function MoreTabScreen() {
         caption={org.name || undefined}
         title={locale === "ar" ? "المزيد" : "More"}
       />
-      <View style={[styles.moreSections, { direction: textDirection }]}>
+      <FadeSlideIn delay={70} style={[styles.moreSections, { direction: textDirection }]}>
         {sections.map((section) => (
           <View key={section.category} style={styles.moreSection}>
             <Text style={styles.moreSectionTitle}>{labelFor(section.title, locale)}</Text>
@@ -307,6 +326,7 @@ export function MoreTabScreen() {
               {section.modules.map((module, index) => (
                 <MoreRow
                   key={module.id}
+                  category={section.category}
                   isLast={index === section.modules.length - 1}
                   module={module}
                   onPress={() =>
@@ -320,7 +340,7 @@ export function MoreTabScreen() {
             </View>
           </View>
         ))}
-      </View>
+      </FadeSlideIn>
     </Screen>
   );
 }
