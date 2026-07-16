@@ -55,17 +55,41 @@ function monthForRecognitionRow(
   return yearMonthFromIndex(yearMonthIndex(accountingDate));
 }
 
-/** scheduleId -> "YYYY-MM" -> minor units recognized (posted + still-queued) that month. */
-export type OrgPrepaidRecognitionByMonth = Map<string, Map<string, number>>;
+/**
+ * Where a month's recognition actually stands with the ledger. The operational
+ * total is all three added together — that is what the schedule says happened —
+ * but the three are kept apart so a report can show which of it the GL has
+ * really taken, rather than presenting queued and posted work as one figure and
+ * silently disagreeing with the income statement.
+ */
+export type RecognitionState = "posted" | "pending" | "failed";
 
-function addTo(map: OrgPrepaidRecognitionByMonth, scheduleId: string, yearMonth: string, amountMinor: number): void {
+export type RecognitionBuckets = { posted: number; pending: number; failed: number };
+
+/** scheduleId -> "YYYY-MM" -> minor units recognized that month, split by posting state. */
+export type OrgPrepaidRecognitionByMonth = Map<string, Map<string, RecognitionBuckets>>;
+
+/** The posting state of one outbox row. FAILED is dead-lettered or erroring; anything still queued is pending. */
+function stateForQueuedEntry(status: string): RecognitionState {
+  return status === "FAILED" ? "failed" : "pending";
+}
+
+function addTo(
+  map: OrgPrepaidRecognitionByMonth,
+  scheduleId: string,
+  yearMonth: string,
+  amountMinor: number,
+  state: RecognitionState
+): void {
   if (!scheduleId || amountMinor === 0) return;
   let bySchedule = map.get(scheduleId);
   if (!bySchedule) {
     bySchedule = new Map();
     map.set(scheduleId, bySchedule);
   }
-  bySchedule.set(yearMonth, (bySchedule.get(yearMonth) ?? 0) + amountMinor);
+  const buckets = bySchedule.get(yearMonth) ?? { posted: 0, pending: 0, failed: 0 };
+  buckets[state] += amountMinor;
+  bySchedule.set(yearMonth, buckets);
 }
 
 /** Records one event/pending-post row into the org-wide map, a no-op when the payload carries no scheduleId. */
@@ -73,10 +97,11 @@ function recordRecognitionRow(
   byScheduleMonth: OrgPrepaidRecognitionByMonth,
   payload: RecognitionPayload | undefined,
   sourceId: string,
-  accountingDate: number
+  accountingDate: number,
+  state: RecognitionState
 ): void {
   if (!payload?.scheduleId) return;
-  addTo(byScheduleMonth, payload.scheduleId, monthForRecognitionRow(payload, sourceId, accountingDate), payload.amountMinor ?? 0);
+  addTo(byScheduleMonth, payload.scheduleId, monthForRecognitionRow(payload, sourceId, accountingDate), payload.amountMinor ?? 0, state);
 }
 
 /**
@@ -97,7 +122,7 @@ async function loadPostedRecognitionEvents(
       .filter((q) => q.or(q.eq(q.field("status"), "POSTED"), q.eq(q.field("status"), "REVERSED")))
       .collect();
     for (const event of posted) {
-      recordRecognitionRow(byScheduleMonth, event.payload as RecognitionPayload | undefined, event.sourceId, event.accountingDate);
+      recordRecognitionRow(byScheduleMonth, event.payload as RecognitionPayload | undefined, event.sourceId, event.accountingDate, "posted");
     }
   }
 }
@@ -130,7 +155,8 @@ async function loadRecognitionReversals(
 ): Promise<void> {
   const recordReversal = async (
     originalEventId: Id<"accountingEvents"> | undefined,
-    reversalDate: number
+    reversalDate: number,
+    state: RecognitionState
   ): Promise<void> => {
     if (!originalEventId) return;
     const original = await ctx.db.get(originalEventId);
@@ -139,7 +165,7 @@ async function loadRecognitionReversals(
     if (!original || !(RECOGNITION_EVENT_TYPES as readonly string[]).includes(original.eventType)) return;
     const payload = original.payload as RecognitionPayload | undefined;
     if (!payload?.scheduleId) return;
-    addTo(byScheduleMonth, payload.scheduleId, yearMonthFromIndex(yearMonthIndex(reversalDate)), -(payload.amountMinor ?? 0));
+    addTo(byScheduleMonth, payload.scheduleId, yearMonthFromIndex(yearMonthIndex(reversalDate)), -(payload.amountMinor ?? 0), state);
   };
 
   const postedReversals = await ctx.db
@@ -150,7 +176,7 @@ async function loadRecognitionReversals(
     .filter((q) => q.eq(q.field("status"), "POSTED"))
     .collect();
   for (const reversal of postedReversals) {
-    await recordReversal(reversal.reversalOfEventId, reversal.accountingDate);
+    await recordReversal(reversal.reversalOfEventId, reversal.accountingDate, "posted");
   }
 
   for (const status of ["PENDING", "FAILED"] as const) {
@@ -161,7 +187,12 @@ async function loadRecognitionReversals(
     for (const entry of queued) {
       if (entry.kind !== "REVERSE") continue;
       if (entry.accountingDate < windowStart || entry.accountingDate > windowEnd) continue;
-      await recordReversal(entry.originalEventId, entry.accountingDate);
+      // A queued reversal's credit is itself unposted, so it lands in the same
+      // bucket as any other queued work: the GL still shows the original in
+      // full, and the operational view nets it away. Filing the credit under
+      // `posted` would make the posted column claim a reversal the ledger
+      // hasn't taken.
+      await recordReversal(entry.originalEventId, entry.accountingDate, stateForQueuedEntry(status));
     }
   }
 }
@@ -184,7 +215,13 @@ async function loadQueuedRecognitionEvents(
       .collect();
     for (const entry of queued) {
       if (!isQueuedRecognitionEntry(entry)) continue;
-      recordRecognitionRow(byScheduleMonth, entry.payload as RecognitionPayload | undefined, entry.sourceId, entry.accountingDate);
+      recordRecognitionRow(
+        byScheduleMonth,
+        entry.payload as RecognitionPayload | undefined,
+        entry.sourceId,
+        entry.accountingDate,
+        stateForQueuedEntry(status)
+      );
     }
   }
 }
@@ -228,16 +265,19 @@ export function recognizedAmountInRangeFromEvents(
   scheduleId: Id<"prepaidExpenseSchedules">,
   startDate: number,
   endDate: number,
-  currency: string
+  currency: string,
+  /** Restrict to one posting state. Omitted = the operational figure: all three. */
+  state?: RecognitionState
 ): number {
   const byMonth = events.get(scheduleId.toString());
   if (!byMonth) return 0;
   const startIdx = yearMonthIndex(startDate);
   const endIdx = yearMonthIndex(endDate);
   let totalMinor = 0;
-  for (const [ym, minor] of byMonth) {
+  for (const [ym, buckets] of byMonth) {
     const idx = yearMonthStringIndex(ym);
-    if (idx >= startIdx && idx <= endIdx) totalMinor += minor;
+    if (idx < startIdx || idx > endIdx) continue;
+    totalMinor += state ? buckets[state] : buckets.posted + buckets.pending + buckets.failed;
   }
   // Deliberately not clamped at zero: a window containing a reversal but not
   // the month it reversed nets negative, exactly as the ledger shows it.

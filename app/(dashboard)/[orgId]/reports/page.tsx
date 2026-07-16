@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
@@ -15,6 +17,9 @@ import {
   Users,
   Target,
   BadgeDollarSign,
+  BookCheck,
+  Clock,
+  TriangleAlert,
 } from "lucide-react";
 import {
   Card,
@@ -88,6 +93,70 @@ function ReportsDateFilter({
           ]}
         />
       </div>
+    </div>
+  );
+}
+
+type GlState = "POSTED" | "PENDING" | "FAILED" | "MIXED";
+
+const GL_STATE_STYLES: Record<GlState, string> = {
+  POSTED: "bg-emerald-500/10 text-emerald-700 border-emerald-500/20",
+  PENDING: "bg-amber-500/10 text-amber-700 border-amber-500/20",
+  FAILED: "bg-red-500/10 text-red-700 border-red-500/20",
+  MIXED: "bg-amber-500/10 text-amber-700 border-amber-500/20",
+};
+
+/** Whether this row's amount actually reached the ledger. */
+function GlStateBadge({ state, t }: Readonly<{ state?: GlState; t: (k: string) => string }>) {
+  // Older cached query results won't carry glState; a missing badge is better
+  // than asserting a state the server never sent.
+  if (!state) return <span className="text-muted-foreground">—</span>;
+  return (
+    <span className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium ${GL_STATE_STYLES[state]}`}>
+      {t(`GlState${state}`)}
+    </span>
+  );
+}
+
+/**
+ * Says out loud what this report is, so nobody reads it as the P&L.
+ *
+ * It counts what operationally happened — including postings still queued or
+ * dead-lettered — while the Income Statement counts only what the ledger took.
+ * When something is outstanding the two legitimately differ, by exactly the
+ * unposted figure named here; when nothing is, they agree and the notice says
+ * that instead of nagging. The Setup tab (the accounting page's default) is
+ * where queued and failed entries get redriven.
+ */
+function OperationalReportNotice({
+  orgId,
+  unpostedAmount,
+  loaded,
+  format,
+  t,
+}: Readonly<{
+  orgId: Id<"organizations"> | null;
+  unpostedAmount: number;
+  loaded: boolean;
+  format: (n: number) => string;
+  t: (k: string) => string;
+}>) {
+  if (!loaded) return null;
+  if (unpostedAmount === 0) {
+    return (
+      <p className="mb-4 text-xs text-emerald-700 bg-emerald-500/10 border border-emerald-500/20 rounded-md px-3 py-2">
+        {t("OperationalReportAllPosted")}
+      </p>
+    );
+  }
+  return (
+    <div className="mb-4 text-xs text-amber-700 bg-amber-500/10 border border-amber-500/20 rounded-md px-3 py-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+      <span>{t("OperationalReportNotice").replace("{unposted}", format(unpostedAmount))}</span>
+      {orgId && (
+        <Link href={`/${orgId}/accounting`} className="font-medium underline underline-offset-2 no-print">
+          {t("ResolveUnpostedEntries")}
+        </Link>
+      )}
     </div>
   );
 }
@@ -325,7 +394,7 @@ export default function ReportsPage() {
             <ReportsDateFilter {...dateFilterProps} />
             <div className="flex flex-wrap items-center justify-between gap-2 no-print">
               <div>
-                <h3 className="text-lg font-medium">{t("ExpensesOverview") || "Expenses Overview"}</h3>
+                <h3 className="text-lg font-medium">{t("OperationalExpensesReport")}</h3>
                 <p className="text-sm text-muted-foreground">
                   {new Date(startDate).toLocaleDateString()} — {new Date(endDate).toLocaleDateString()}
                 </p>
@@ -340,14 +409,53 @@ export default function ReportsPage() {
               </div>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-3 mb-4">
+            <OperationalReportNotice
+              orgId={activeOrgId}
+              unpostedAmount={(expensesReport?.totalPending ?? 0) + (expensesReport?.totalFailed ?? 0)}
+              loaded={!!expensesReport}
+              format={format}
+              t={t}
+            />
+
+            <div className="grid gap-4 md:grid-cols-4 mb-4">
               <Card className="print-shadow-none border print:border-gray-200">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">{t("TotalExpenses") || "Total Expenses"}</CardTitle>
+                  <CardTitle className="text-sm font-medium">{t("OperationalTotal")}</CardTitle>
                   <Receipt className="h-4 w-4 text-muted-foreground no-print" />
                 </CardHeader>
                 <CardContent>
                   <div className="text-2xl font-bold text-red-600">{format(expensesReport?.totalExpenses ?? 0)}</div>
+                </CardContent>
+              </Card>
+              <Card className="print-shadow-none border print:border-gray-200">
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">{t("PostedToLedger")}</CardTitle>
+                  <BookCheck className="h-4 w-4 text-muted-foreground no-print" />
+                </CardHeader>
+                <CardContent>
+                  <div className="text-2xl font-bold">{format(expensesReport?.totalPosted ?? 0)}</div>
+                </CardContent>
+              </Card>
+              <Card className="print-shadow-none border print:border-gray-200">
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">{t("PendingPosting")}</CardTitle>
+                  <Clock className="h-4 w-4 text-muted-foreground no-print" />
+                </CardHeader>
+                <CardContent>
+                  <div className={`text-2xl font-bold ${(expensesReport?.totalPending ?? 0) !== 0 ? "text-amber-600" : ""}`}>
+                    {format(expensesReport?.totalPending ?? 0)}
+                  </div>
+                </CardContent>
+              </Card>
+              <Card className="print-shadow-none border print:border-gray-200">
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">{t("FailedPosting")}</CardTitle>
+                  <TriangleAlert className="h-4 w-4 text-muted-foreground no-print" />
+                </CardHeader>
+                <CardContent>
+                  <div className={`text-2xl font-bold ${(expensesReport?.totalFailed ?? 0) !== 0 ? "text-red-600" : ""}`}>
+                    {format(expensesReport?.totalFailed ?? 0)}
+                  </div>
                 </CardContent>
               </Card>
             </div>
@@ -360,6 +468,7 @@ export default function ReportsPage() {
                     <TableHead>{t("Category")}</TableHead>
                     <TableHead>{t("Description")}</TableHead>
                     <TableHead>{t("RelatedVehicle")}</TableHead>
+                    <TableHead>{t("GlStatus")}</TableHead>
                     <TableHead className="text-right">{t("Amount")}</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -380,12 +489,15 @@ export default function ReportsPage() {
                         )}
                       </TableCell>
                       <TableCell>{exp.vehicleDesc}</TableCell>
+                      <TableCell>
+                        <GlStateBadge state={exp.glState} t={t} />
+                      </TableCell>
                       <TableCell className="text-right font-medium">{format(exp.recognizedAmount ?? exp.amount)}</TableCell>
                     </TableRow>
                   ))}
                   {!expensesReport?.expenses?.length && (
                     <TableRow>
-                      <TableCell colSpan={5} className="text-center py-6 text-muted-foreground">
+                      <TableCell colSpan={6} className="text-center py-6 text-muted-foreground">
                         {t("NoExpensesFoundPeriod")}
                       </TableCell>
                     </TableRow>

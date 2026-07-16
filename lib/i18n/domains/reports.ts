@@ -40,6 +40,24 @@ export const reportsEn = {
   Amount: "Amount",
   PrepaidAmortizedNote: "Prepaid — {monthsElapsed}/{amortizationMonths} months recognized of {totalAmount} total",
 
+  // Operational vs ledger — this report counts what happened operationally,
+  // including postings still queued or failed. The income statement counts only
+  // what reached the ledger. The two agree exactly when nothing is outstanding.
+  OperationalExpensesReport: "Operational Expenses Report",
+  OperationalTotal: "Operational Total",
+  PostedToLedger: "Posted to Ledger",
+  PendingPosting: "Pending Posting",
+  FailedPosting: "Failed Posting",
+  GlStatus: "Ledger Status",
+  GlStatePOSTED: "Posted",
+  GlStatePENDING: "Pending",
+  GlStateFAILED: "Failed",
+  GlStateMIXED: "Partly posted",
+  OperationalReportNotice:
+    "This is an operational report: it counts what happened, including {unposted} not yet in the ledger. The official profit & loss is the ledger-backed Income Statement.",
+  OperationalReportAllPosted: "Every expense in this period has posted to the ledger, so this report and the Income Statement agree.",
+  ResolveUnpostedEntries: "Resolve unposted entries",
+
   // Empty states
   NoSalesFoundPeriod: "No sales found in this period.",
   NoExpensesFoundPeriod: "No expenses found in this period.",
@@ -88,6 +106,22 @@ export const reportsAr = {
   RelatedVehicle: "المركبة ذات الصلة",
   Amount: "المبلغ",
   PrepaidAmortizedNote: "مصروف مدفوع مقدماً — تم احتساب {monthsElapsed}/{amortizationMonths} أشهر من إجمالي {totalAmount}",
+
+  // Operational vs ledger
+  OperationalExpensesReport: "تقرير المصروفات التشغيلي",
+  OperationalTotal: "الإجمالي التشغيلي",
+  PostedToLedger: "مُرحّل إلى دفتر الأستاذ",
+  PendingPosting: "بانتظار الترحيل",
+  FailedPosting: "فشل الترحيل",
+  GlStatus: "حالة الترحيل",
+  GlStatePOSTED: "مُرحّل",
+  GlStatePENDING: "بانتظار الترحيل",
+  GlStateFAILED: "فشل الترحيل",
+  GlStateMIXED: "مُرحّل جزئياً",
+  OperationalReportNotice:
+    "هذا تقرير تشغيلي: يحتسب ما حدث فعلاً، بما في ذلك {unposted} لم تصل إلى دفتر الأستاذ بعد. أما قائمة الدخل المبنية على دفتر الأستاذ فهي التقرير الرسمي للأرباح والخسائر.",
+  OperationalReportAllPosted: "جميع مصروفات هذه الفترة مُرحّلة إلى دفتر الأستاذ، لذلك يتطابق هذا التقرير مع قائمة الدخل.",
+  ResolveUnpostedEntries: "معالجة القيود غير المُرحّلة",
 
   // Empty states
   NoSalesFoundPeriod: "لم يتم العثور على مبيعات في هذه الفترة.",

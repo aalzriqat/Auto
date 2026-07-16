@@ -116,6 +116,141 @@ const JUN_END = Date.UTC(YEAR, 5, 30, 23, 59, 59, 999);
 
 const runsInJanuary = NOW_MONTH === 0;
 
+// Parity is the invariant; this is the escape hatch for when it legitimately
+// can't hold. An expense whose debit is still queued IS operationally real and
+// must report — but the ledger doesn't have it, so the two numbers differ by
+// exactly that much, and the report has to say so rather than present one total
+// and let the accountant discover the gap by reconciling by hand.
+describe("operational Expenses Report — posted vs pending vs failed", () => {
+  test("a paid expense whose debit never posted is reported as pending, not as posted", async () => {
+    const ctx = await seedDealer("split-pending", { openPeriod: false });
+    await ctx.asOwner.mutation(api.expenses.create, {
+      orgId: ctx.orgId, title: "Office supplies", amount: 500, date: Date.UTC(YEAR, 0, 10),
+      category: "OTHER", status: "PAID", paymentMethod: "CASH",
+    });
+
+    const report = await ctx.asOwner.query(api.reports.getExpensesReport, {
+      orgId: ctx.orgId, startDate: JAN_START, endDate: JAN_END,
+    });
+    const ledger = await ctx.asOwner.query(api.accountingReports.incomeStatement, {
+      orgId: ctx.orgId, fromDate: JAN_START, toDate: JAN_END,
+    });
+
+    // The operational total is unchanged — this report has always meant "what
+    // happened", and that's still 500.
+    expect(report.totalExpenses).toBeCloseTo(500, 6);
+    // …but none of it is in the ledger, and the split says which.
+    expect(report.totalPosted).toBeCloseTo(0, 6);
+    expect(report.totalPending).toBeCloseTo(500, 6);
+    expect(report.totalFailed).toBeCloseTo(0, 6);
+    expect(ledger.totalExpenses / JOD_SCALE).toBeCloseTo(0, 6);
+    // The gap between the two reports is exactly the unposted column.
+    expect(report.totalExpenses - report.totalPosted).toBeCloseTo(report.totalPending + report.totalFailed, 6);
+
+    expect(report.expenses[0].glState).toBe("PENDING");
+    expect(report.expenses[0].pendingAmount).toBeCloseTo(500, 6);
+    expect(report.expenses[0].postedAmount).toBeCloseTo(0, 6);
+  });
+
+  test("a dead-lettered debit is reported as failed, not merely pending", async () => {
+    // Pending resolves itself when a period opens; failed needs a human. A
+    // report that merges them hides the one that needs attention.
+    const ctx = await seedDealer("split-failed", { openPeriod: false });
+    await ctx.asOwner.mutation(api.expenses.create, {
+      orgId: ctx.orgId, title: "Office supplies", amount: 500, date: Date.UTC(YEAR, 0, 10),
+      category: "OTHER", status: "PAID", paymentMethod: "CASH",
+    });
+    await ctx.t.run(async (c) => {
+      const entry = await c.db.query("pendingAccountingEvents").filter((q) => q.eq(q.field("orgId"), ctx.orgId)).first();
+      await c.db.patch(entry!._id, { status: "FAILED", lastError: "dead-lettered" });
+    });
+
+    const report = await ctx.asOwner.query(api.reports.getExpensesReport, {
+      orgId: ctx.orgId, startDate: JAN_START, endDate: JAN_END,
+    });
+
+    expect(report.totalPending).toBeCloseTo(0, 6);
+    expect(report.totalFailed).toBeCloseTo(500, 6);
+    expect(report.expenses[0].glState).toBe("FAILED");
+  });
+
+  test("an expense that really did post is reported as posted, and agrees with the ledger", async () => {
+    // The split must not turn into a blanket "nothing is posted" caveat.
+    const ctx = await seedDealer("split-posted");
+    await ctx.asOwner.mutation(api.expenses.create, {
+      orgId: ctx.orgId, title: "Office supplies", amount: 500, date: Date.UTC(YEAR, 0, 10),
+      category: "OTHER", status: "PAID", paymentMethod: "CASH",
+    });
+
+    const report = await ctx.asOwner.query(api.reports.getExpensesReport, {
+      orgId: ctx.orgId, startDate: JAN_START, endDate: JAN_END,
+    });
+
+    expect(report.totalPosted).toBeCloseTo(500, 6);
+    expect(report.totalPending).toBeCloseTo(0, 6);
+    expect(report.totalFailed).toBeCloseTo(0, 6);
+    expect(report.expenses[0].glState).toBe("POSTED");
+    await assertParity(ctx, JAN_START, JAN_END, 500, "posted expense");
+  });
+
+  test("a prepaid schedule with one month posted and the next queued reports as MIXED, split across both columns", async () => {
+    // The case only a per-event split can represent: the schedule's own months
+    // are what posted or didn't, independent of the debit that opened it.
+    const ctx = await seedDealer("split-mixed");
+    const expenseId = await ctx.asOwner.mutation(api.expenses.create, {
+      orgId: ctx.orgId, title: "Insurance", amount: 1200, date: Date.UTC(YEAR, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await ctx.t.run((c) =>
+      c.db.query("prepaidExpenseSchedules").withIndex("by_expense", (q) => q.eq("expenseId", expenseId)).first()
+    );
+    // January recognizes and posts (the year's period is open).
+    await ctx.t.mutation(internal.prepaidExpenses.amortizePrepaidExpenseForMonth, {
+      orgId: ctx.orgId, scheduleId: schedule!._id, yearMonth: `${YEAR}-01`,
+      occurredAt: Date.UTC(YEAR, 0, 31), systemActorId: ctx.userId,
+    });
+    // February recognizes but its posting is parked, as if the period had closed.
+    await ctx.t.mutation(internal.prepaidExpenses.amortizePrepaidExpenseForMonth, {
+      orgId: ctx.orgId, scheduleId: schedule!._id, yearMonth: `${YEAR}-02`,
+      occurredAt: Date.UTC(YEAR, 1, 28), systemActorId: ctx.userId,
+    });
+    await ctx.t.run(async (c) => {
+      const feb = await c.db
+        .query("accountingEvents")
+        .filter((q) => q.eq(q.field("eventType"), "PREPAID_EXPENSE_AMORTIZED"))
+        .collect()
+        .then((rows) => rows.find((r) => (r.payload as { yearMonth?: string })?.yearMonth === `${YEAR}-02`));
+      // Re-park February as a queued outbox row: the shape a month recognized
+      // behind a closed period actually has.
+      await c.db.delete(feb!._id);
+      await c.db.insert("pendingAccountingEvents", {
+        orgId: ctx.orgId, kind: "POST", status: "PENDING", attempts: 0,
+        idempotencyKey: `prepaid_amort_${schedule!._id}_${YEAR}-02`,
+        eventType: "PREPAID_EXPENSE_AMORTIZED", sourceType: "prepaidExpenseSchedules",
+        sourceId: `prepaid_amort_${schedule!._id}_${YEAR}-02`, eventVersion: 1,
+        accountingDate: Date.UTC(YEAR, 1, 28), occurredAt: Date.UTC(YEAR, 1, 28),
+        currency: "JOD", actorId: ctx.userId, createdAt: Date.now(), reason: "period closed",
+        payload: {
+          scheduleId: schedule!._id.toString(), amountMinor: 100_000, currency: "JOD",
+          yearMonth: `${YEAR}-02`, expenseSystemKey: "PROFESSIONAL_FEES_EXPENSE",
+        },
+      });
+    });
+
+    const report = await ctx.asOwner.query(api.reports.getExpensesReport, {
+      orgId: ctx.orgId, startDate: JAN_START, endDate: Date.UTC(YEAR, 1, 28, 23, 59, 59, 999),
+    });
+
+    expect(report.totalExpenses).toBeCloseTo(200, 6);
+    expect(report.totalPosted).toBeCloseTo(100, 6);
+    expect(report.totalPending).toBeCloseTo(100, 6);
+    const row = report.expenses.find((e) => e._id === expenseId)!;
+    expect(row.glState).toBe("MIXED");
+    expect(row.postedAmount).toBeCloseTo(100, 6);
+    expect(row.pendingAmount).toBeCloseTo(100, 6);
+  });
+});
+
 describe("operational Expenses Report vs ledger income statement — parity across reversals", () => {
   test("an ordinary expense reversed in a later month keeps reporting in the month it posted", async () => {
     const ctx = await seedDealer("ord");

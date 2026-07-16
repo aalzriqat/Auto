@@ -1,5 +1,5 @@
 import { v, ConvexError } from "convex/values";
-import { query } from "./_generated/server";
+import { query, QueryCtx } from "./_generated/server";
 import { Id, Doc } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -11,7 +11,11 @@ import {
   recognizedAmountInRangeWithReversal,
   PREPAID_LOOKBACK_MS,
 } from "./utils/expenseAmortization";
-import { loadOrgPrepaidRecognitionByMonth, recognizedAmountInRangeFromEvents } from "./utils/prepaidRecognitionEvents";
+import {
+  loadOrgPrepaidRecognitionByMonth,
+  recognizedAmountInRangeFromEvents,
+  type RecognitionState,
+} from "./utils/prepaidRecognitionEvents";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 
@@ -190,6 +194,56 @@ export const getInventoryReport = query({
   },
 });
 
+/**
+ * Every expense whose own debit has NOT reached the ledger, and why — keyed by
+ * expenseId.
+ *
+ * The outbox is the whole authority here, and can be, because a PAID expense
+ * never has "no GL event at all": hookExpensePosted either posts immediately or
+ * durably enqueues (workflowHooks.ts — an org with no chart of accounts enqueues
+ * with "No chart of accounts or open period at operation time"), and a drained
+ * row is patched to POSTED rather than deleted. So a PENDING/FAILED row here is
+ * exactly the set whose debit the income statement does not yet carry, and an
+ * expense absent from this map has posted.
+ *
+ * One indexed scan of the outbox — which is a queue, not a history — rather than
+ * a per-expense event lookup, or an org-wide scan of EXPENSE_POSTED, which is
+ * the highest-volume event type there is.
+ */
+async function loadUnpostedExpenseDebitStates(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">
+): Promise<Map<string, RecognitionState>> {
+  const byExpenseId = new Map<string, RecognitionState>();
+  for (const status of ["PENDING", "FAILED"] as const) {
+    const queued = await ctx.db
+      .query("pendingAccountingEvents")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
+      .collect();
+    for (const entry of queued) {
+      if (entry.kind !== "POST" || entry.eventType !== "EXPENSE_POSTED") continue;
+      // FAILED wins over PENDING: an expense with a dead-lettered debit needs
+      // attention even if some other row for it is still waiting its turn.
+      if (status === "FAILED" || !byExpenseId.has(entry.sourceId)) {
+        byExpenseId.set(entry.sourceId, status === "FAILED" ? "failed" : "pending");
+      }
+    }
+  }
+  return byExpenseId;
+}
+
+/** The row's headline posting state. MIXED = partly posted, partly not. */
+function glStateFor(amounts: {
+  postedAmount: number;
+  pendingAmount: number;
+  failedAmount: number;
+}): "POSTED" | "PENDING" | "FAILED" | "MIXED" {
+  const unposted = (amounts.pendingAmount !== 0 ? 1 : 0) + (amounts.failedAmount !== 0 ? 1 : 0);
+  if (unposted === 0) return "POSTED";
+  if (amounts.postedAmount !== 0 || unposted > 1) return "MIXED";
+  return amounts.failedAmount !== 0 ? "FAILED" : "PENDING";
+}
+
 export const getExpensesReport = query({
   args: {
     orgId: v.id("organizations"),
@@ -247,6 +301,7 @@ export const getExpensesReport = query({
       .collect();
     const scheduleByExpenseId = new Map(schedules.map((s) => [s.expenseId, s]));
     const recognitionEvents = await loadOrgPrepaidRecognitionByMonth(ctx, args.orgId, args.startDate, args.endDate);
+    const unpostedExpenseDebits = await loadUnpostedExpenseDebitStates(ctx, args.orgId);
 
     // Any status, INCLUDING CANCELLED: cancellation only stops future
     // recognition, it never un-happens history. A cancelled schedule's
@@ -336,6 +391,10 @@ export const getExpensesReport = query({
       vehicles.filter((v): v is NonNullable<typeof v> => v !== null).map(v => [v._id, v])
     );
 
+    let totalPosted = 0;
+    let totalPending = 0;
+    let totalFailed = 0;
+
     const enrichedExpenses = allExpenses.map((exp) => {
       // Prefer the authoritative schedule's own GL events; fall back to the
       // net-of-VAT expense doc only for a prepaid expense that has no
@@ -344,6 +403,30 @@ export const getExpensesReport = query({
       const recognizedAmount = schedule
         ? recognizedAmountInRangeFromEvents(recognitionEvents, schedule._id, args.startDate, args.endDate, schedule.currency)
         : recognizedAmountInRangeWithReversal(exp, args.startDate, args.endDate, currency);
+
+      // How much of this row the ledger has actually taken. A scheduled prepaid
+      // is split per recognition event, so a schedule with some months posted
+      // and this month still queued reports both — its own months are what's
+      // posted or not, independent of the debit that opened it. Everything else
+      // recognizes through its single EXPENSE_POSTED debit, so that debit's
+      // state carries the whole row.
+      let postedAmount: number;
+      let pendingAmount: number;
+      let failedAmount: number;
+      if (schedule) {
+        postedAmount = recognizedAmountInRangeFromEvents(recognitionEvents, schedule._id, args.startDate, args.endDate, schedule.currency, "posted");
+        pendingAmount = recognizedAmountInRangeFromEvents(recognitionEvents, schedule._id, args.startDate, args.endDate, schedule.currency, "pending");
+        failedAmount = recognizedAmountInRangeFromEvents(recognitionEvents, schedule._id, args.startDate, args.endDate, schedule.currency, "failed");
+      } else {
+        const debitState = unpostedExpenseDebits.get(exp._id.toString());
+        postedAmount = debitState ? 0 : recognizedAmount;
+        pendingAmount = debitState === "pending" ? recognizedAmount : 0;
+        failedAmount = debitState === "failed" ? recognizedAmount : 0;
+      }
+      totalPosted += postedAmount;
+      totalPending += pendingAmount;
+      totalFailed += failedAmount;
+
       totalExpenses += recognizedAmount;
       let vehicleDesc = "General";
 
@@ -358,6 +441,12 @@ export const getExpensesReport = query({
         ...exp,
         vehicleDesc,
         recognizedAmount,
+        postedAmount,
+        pendingAmount,
+        failedAmount,
+        // For the row badge. MIXED is real and only a schedule can be it: some
+        // months posted, this one still queued behind a closed period.
+        glState: glStateFor({ postedAmount, pendingAmount, failedAmount }),
         amortization: schedule
           ? amortizationInfoFromScheduleProgress(schedule)
           : computeAmortizationInfo(exp, args.endDate, currency),
@@ -367,7 +456,14 @@ export const getExpensesReport = query({
     enrichedExpenses.sort((a, b) => b.date - a.date);
 
     return {
+      // The operational figure — what the schedules and expense rows say
+      // happened this window, posted or not. Kept as-is so it stays the single
+      // number this report has always meant, with the split beside it rather
+      // than silently redefining it.
       totalExpenses,
+      totalPosted,
+      totalPending,
+      totalFailed,
       expenses: enrichedExpenses,
     };
   },
