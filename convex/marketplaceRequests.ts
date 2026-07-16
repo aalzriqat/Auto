@@ -266,6 +266,105 @@ export const getStatusForBuyer = query({
   },
 });
 
+/**
+ * Public Request Room feed: everything the buyer sees for their request, keyed
+ * only by the unguessable publicId (possession of the link = read access; the
+ * phone is only needed for sensitive actions, handled elsewhere). Offers are
+ * sanitized — dealer identity is a display name + badges, never internal ids
+ * beyond what a buyer action needs. NOT_AVAILABLE replies are omitted; they
+ * aren't offers.
+ */
+export const getBuyerOffers = query({
+  args: { publicId: v.string() },
+  handler: async (ctx, args) => {
+    const request = await ctx.db
+      .query("marketplaceRequests")
+      .withIndex("by_publicId", (q) => q.eq("publicId", args.publicId.trim()))
+      .unique();
+    if (!request) return null;
+
+    const now = Date.now();
+    const responses = await ctx.db
+      .query("marketplaceResponses")
+      .withIndex("by_request", (q) => q.eq("requestId", request._id))
+      .collect();
+
+    const offers = await Promise.all(
+      responses
+        .filter((response) => response.kind !== "NOT_AVAILABLE")
+        .map(async (response) => {
+          const [org, profile] = await Promise.all([
+            ctx.db.get(response.orgId),
+            ctx.db
+              .query("marketplaceDealerProfiles")
+              .withIndex("by_org", (q) => q.eq("orgId", response.orgId))
+              .unique(),
+          ]);
+
+          let vehicle: {
+            year?: number;
+            make: string;
+            model: string;
+            trim?: string;
+            mileage?: number;
+            photoUrl: string | null;
+            inspectionStatus?: string;
+            dealerGuarantee?: boolean;
+          } | null = null;
+          if (response.vehicleId) {
+            const v = await ctx.db.get(response.vehicleId);
+            if (v && !v.isDeleted) {
+              const firstImageId = v.imageIds?.[0];
+              vehicle = {
+                year: v.year,
+                make: v.make,
+                model: v.model,
+                trim: v.trim,
+                mileage: v.mileage,
+                photoUrl: firstImageId ? await ctx.storage.getUrl(firstImageId) : null,
+                inspectionStatus: v.inspectionStatus,
+                dealerGuarantee: v.dealerGuarantee,
+              };
+            }
+          }
+
+          const expiresAt = response.financeOffer?.expiresAt;
+          return {
+            responseId: response._id,
+            dealerName: org?.name ?? "Dealer",
+            dealerBadges: profile?.badges ?? [],
+            dealerAvgResponseMinutes: profile?.avgResponseMinutes ?? null,
+            kind: response.kind,
+            cashPriceJod: response.offerPriceJod ?? null,
+            financeOffer: response.financeOffer ?? null,
+            sourcingRange: response.sourcingRange ?? null,
+            vehicle,
+            note: response.note ?? null,
+            expiresAt: expiresAt ?? null,
+            isExpired: expiresAt !== undefined && expiresAt < now,
+            buyerAction: response.buyerAction ?? null,
+            contactUnlocked: response.contactUnlockedAt !== undefined,
+            createdAt: response.createdAt,
+          };
+        })
+    );
+
+    // Newest offers first, matching how the Request Room timeline reads.
+    offers.sort((a, b) => b.createdAt - a.createdAt);
+
+    return {
+      publicId: request.publicId,
+      status: request.status,
+      createdAt: request.createdAt,
+      make: request.make,
+      model: request.model,
+      buyerCity: request.buyerCity,
+      paymentType: request.paymentType,
+      offers,
+    };
+  },
+});
+
 export const expireStaleRequests = internalMutation({
   args: {},
   handler: async (ctx) => {
