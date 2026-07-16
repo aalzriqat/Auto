@@ -2404,6 +2404,11 @@ export const api = {
       VehicleListArgs,
       MobilePageResult<MobileVehicle>
     >("vehicles:list"),
+    // Throws (not null) when the vehicle doesn't exist/belong to this org — matches
+    // the backend's actual behavior, unlike customers.get which returns null.
+    get: makeFunctionReference<"query", VehicleScopedArgs, MobileVehicle>(
+      "vehicles:get",
+    ),
     create: makeFunctionReference<"mutation", VehicleCreateArgs, string>("vehicles:create"),
     update: makeFunctionReference<"mutation", VehicleUpdateArgs, null>("vehicles:update"),
     softDelete: makeFunctionReference<"mutation", OrgScopedArgs & { vehicleId: string }, null>(
@@ -2956,6 +2961,7 @@ export const api = {
       VehicleListArgs,
       MobilePageResult<MobileVehicle>
     >;
+    get: FunctionReference<"query", "public", VehicleScopedArgs, MobileVehicle>;
     create: FunctionReference<"mutation", "public", VehicleCreateArgs, string>;
     update: FunctionReference<"mutation", "public", VehicleUpdateArgs, null>;
     softDelete: FunctionReference<"mutation", "public", OrgScopedArgs & { vehicleId: string }, null>;
