@@ -254,13 +254,25 @@ export const stats = query({
     let completedTasks = 0;
     let overdueTasks = 0;
 
-    const memberTaskStats: Record<string, { pending: number, overdue: number, completed: number, name: string }> = {};
+    const memberTaskStats: Record<string, { pending: number, overdue: number, completed: number, name: string, userId: Id<"users">, imageUrl?: string, lastSeenAt?: number }> = {};
 
     // Batch fetch assignees to prevent N+1 queries
     const assigneeIds = canViewUsers ? Array.from(new Set(tasks.map(t => t.assignedTo))) : [];
     const assignees = await Promise.all(assigneeIds.map(id => ctx.db.get(id)));
     const assigneeMap = Object.fromEntries(
-      assignees.filter(Boolean).map(user => [user!._id, user!.name || user!.email || "Unknown"])
+      assignees.filter(Boolean).map(user => [user!._id, { name: user!.name || user!.email || "Unknown", imageUrl: user!.imageUrl }])
+    );
+    // "Last seen" lives on the per-org membership row, not the user doc.
+    const assigneeMemberships = await Promise.all(
+      assigneeIds.map((id) =>
+        ctx.db
+          .query("memberships")
+          .withIndex("by_org_user", (q) => q.eq("orgId", args.orgId).eq("userId", id))
+          .unique()
+      )
+    );
+    const lastSeenMap = Object.fromEntries(
+      assigneeIds.map((id, index) => [id, assigneeMemberships[index]?.lastSeenAt])
     );
 
     for (const task of tasks) {
@@ -275,7 +287,16 @@ export const stats = query({
       if (canViewUsers) {
         const assigneeId = task.assignedTo;
         if (!memberTaskStats[assigneeId]) {
-          memberTaskStats[assigneeId] = { pending: 0, overdue: 0, completed: 0, name: assigneeMap[assigneeId] || "Unknown" };
+          const assignee = assigneeMap[assigneeId];
+          memberTaskStats[assigneeId] = {
+            pending: 0,
+            overdue: 0,
+            completed: 0,
+            name: assignee?.name || "Unknown",
+            userId: assigneeId,
+            imageUrl: assignee?.imageUrl,
+            lastSeenAt: lastSeenMap[assigneeId],
+          };
         }
         if (task.status === "COMPLETED") memberTaskStats[assigneeId].completed++;
         else if (isOverdue) memberTaskStats[assigneeId].overdue++;
@@ -288,7 +309,7 @@ export const stats = query({
     // 7. Top performer — ranked by visible sale revenue in this period
     // (not the task backlog leaderboard above, which tracks a different thing).
     const revenueBySalesperson: Record<string, { revenue: number; deals: number }> = {};
-    let topPerformer: { name: string; revenue: number; deals: number } | null = null;
+    let topPerformer: { name: string; revenue: number; deals: number; userId: Id<"users">; imageUrl?: string; lastSeenAt?: number } | null = null;
     if (canViewSalesMetrics && canViewUsers) {
       for (const sale of activeSales) {
         const entry = revenueBySalesperson[sale.salespersonId] ?? { revenue: 0, deals: 0 };
@@ -301,7 +322,18 @@ export const stats = query({
       if (topEntry) {
         const [salespersonId, { revenue, deals }] = topEntry;
         const salesperson = await ctx.db.get(salespersonId as Id<"users">);
-        topPerformer = { name: salesperson?.name || salesperson?.email || "Unknown", revenue, deals };
+        const salespersonMembership = await ctx.db
+          .query("memberships")
+          .withIndex("by_org_user", (q) => q.eq("orgId", args.orgId).eq("userId", salespersonId as Id<"users">))
+          .unique();
+        topPerformer = {
+          name: salesperson?.name || salesperson?.email || "Unknown",
+          revenue,
+          deals,
+          userId: salespersonId as Id<"users">,
+          imageUrl: salesperson?.imageUrl,
+          lastSeenAt: salespersonMembership?.lastSeenAt,
+        };
       }
     }
 

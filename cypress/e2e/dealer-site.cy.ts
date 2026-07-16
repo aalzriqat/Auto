@@ -5,6 +5,21 @@ import {
   gotoOrgRoute,
 } from "../support/utils";
 
+function submitDealerLeadForm(buttonName: string) {
+  ensureTurnstileToken();
+  cy.findByRole("button", { name: buttonName })
+    .should("be.visible")
+    .and("not.be.disabled");
+  cy.findByRole("button", { name: buttonName }).then(($button) => {
+    const button = $button.get(0) as HTMLElement;
+
+    // The public Next route can replace the hydrated submit button between
+    // Cypress' query and click, so click natively after actionability checks.
+    button.click();
+  });
+  cy.findByRole("heading", { name: "Thank you!" }).should("be.visible");
+}
+
 describe("public dealer website", () => {
   beforeEach(() => {
     cy.login();
@@ -49,10 +64,7 @@ describe("public dealer website", () => {
           `${item.emailPrefix}-${item.lastName.toLowerCase()}@example.com`,
         );
         cy.findByPlaceholderText("Message").type(item.message);
-        ensureTurnstileToken();
-
-        cy.findByRole("button", { name: item.buttonName }).click();
-        cy.findByRole("heading", { name: "Thank you!" }).should("be.visible");
+        submitDealerLeadForm(item.buttonName);
       }
 
       gotoOrgRoute("leads").then(() => {

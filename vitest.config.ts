@@ -25,7 +25,7 @@ export default defineConfig({
       NEXT_PUBLIC_APP_URL: "http://localhost:3000",
     },
     include: ["**/*.test.ts", "**/*.test.tsx"],
-    exclude: ["node_modules", "**/node_modules/**", ".next", "out", "build"],
+    exclude: ["node_modules", "**/node_modules/**", ".next", "out", "build", "apps/**", "packages/**"],
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov", "html", "json-summary"],

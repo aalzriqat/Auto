@@ -1,0 +1,99 @@
+{
+  "name": "@autoflow/mobile",
+  "version": "0.1.0",
+  "private": true,
+  "main": "expo-router/entry",
+  "expo": {
+    "autolinking": {
+      "exclude": [
+        "react-native-worklets",
+        "react-native-reanimated",
+        "@solana-mobile/mobile-wallet-adapter-protocol"
+      ],
+      "buildFromSource": [
+        "expo-print",
+        "expo-sharing"
+      ]
+    }
+  },
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web",
+    "typecheck": "tsc --noEmit",
+    "test": "jest --coverage --watchAll=false",
+    "test:coverage": "jest --coverage --watchAll=false"
+  },
+  "dependencies": {
+    "@autoflow/shared": "workspace:*",
+    "@clerk/expo": "^3.7.4",
+    "@expo-google-fonts/cairo": "^0.4.2",
+    "@expo-google-fonts/inter": "^0.4.2",
+    "@expo/metro-runtime": "~57.0.3",
+    "@expo/vector-icons": "^15.1.1",
+    "convex": "^1.42.1",
+    "expo": "~57.0.4",
+    "expo-dev-client": "~57.0.5",
+    "expo-font": "^57.0.1",
+    "expo-linking": "~57.0.2",
+    "expo-print": "~15.0.2",
+    "expo-router": "~57.0.4",
+    "expo-secure-store": "~57.0.0",
+    "expo-sharing": "~14.0.1",
+    "expo-splash-screen": "~57.0.2",
+    "expo-status-bar": "~57.0.0",
+    "expo-system-ui": "~57.0.0",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.0",
+    "react-native-gesture-handler": "~2.32.0",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-screens": "4.25.2",
+    "react-native-svg": "15.15.4",
+    "react-native-web": "^0.21.2",
+    "react-native-webview": "13.16.1"
+  },
+  "devDependencies": {
+    "@react-native/jest-preset": "^0.86.0",
+    "@testing-library/react-native": "^14.0.1",
+    "@types/jest": "^29.5.14",
+    "babel-preset-expo": "~57.0.2",
+    "jest": "^29.7.0",
+    "jest-expo": "~57.0.1",
+    "react-test-renderer": "19.2.3",
+    "typescript": "^6.0.3"
+  },
+  "jest": {
+    "collectCoverageFrom": [
+      "app/**/*.tsx",
+      "!app/**/*.test.tsx",
+      "src/components/*.tsx",
+      "src/config/env.ts",
+      "src/features/home/homeCommandModel.ts",
+      "src/features/marketplace/marketplaceFingerprint.ts",
+      "src/features/marketplace/TurnstileVerification.tsx",
+      "src/features/marketplace/marketplaceUtils.ts",
+      "src/features/workspace/mobileVinDecode.ts",
+      "src/providers/LocaleProvider.tsx",
+      "src/navigation/*.ts",
+      "src/theme.ts",
+      "src/features/workspace/nativeModules.ts"
+    ],
+    "coverageThreshold": {
+      "global": {
+        "branches": 100,
+        "functions": 100,
+        "lines": 100,
+        "statements": 100
+      }
+    },
+    "preset": "jest-expo",
+    "setupFilesAfterEnv": [
+      "<rootDir>/jest.setup.ts"
+    ],
+    "testPathIgnorePatterns": [
+      "/node_modules/"
+    ]
+  }
+}

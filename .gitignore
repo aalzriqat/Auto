@@ -2,6 +2,8 @@
 
 # dependencies
 /node_modules
+node_modules/
+/.p/
 /.pnp
 .pnp.*
 .yarn/*
@@ -12,6 +14,7 @@
 
 # testing
 /coverage
+coverage/
 
 # Playwright — .auth/ holds a real signed-in storageState (session cookies)
 playwright-report/
@@ -29,6 +32,7 @@ cypress/downloads/
 
 # production
 /build
+build/
 
 # misc
 .DS_Store
@@ -50,6 +54,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Expo / React Native generated output
+.expo/
+android/**/build/
+ios/**/build/
 
 # clerk configuration (can include secrets)
 /.clerk/

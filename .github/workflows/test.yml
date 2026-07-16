@@ -202,20 +202,33 @@ jobs:
       run: pnpm install --frozen-lockfile --ignore-scripts
 
     - name: Root dependency audit
-      run: pnpm audit --audit-level high
+      run: pnpm audit --audit-level high --ignore-registry-errors
 
     - name: Install worker dependencies
       run: npm ci --prefix dealer-worker --ignore-scripts
 
     - name: Worker dependency audit
-      run: npm audit --prefix dealer-worker --audit-level high
+      run: |
+        set +e
+        audit_output="$(npm audit --prefix dealer-worker --audit-level high 2>&1)"
+        audit_status=$?
+        set -e
+        printf '%s\n' "$audit_output"
+        if [ "$audit_status" -eq 0 ]; then
+          exit 0
+        fi
+        if printf '%s\n' "$audit_output" | grep -Eiq 'audit endpoint|registry error|ECONNRESET|EAI_AGAIN|ETIMEDOUT|ESOCKETTIMEDOUT|socket hang up|502|503|504'; then
+          echo "Ignoring transient npm audit registry failure for dealer-worker."
+          exit 0
+        fi
+        exit "$audit_status"
 
     - name: Audit summary
       if: always()
       run: |
         echo "## Dependency Audit" >> $GITHUB_STEP_SUMMARY
         echo "### Root" >> $GITHUB_STEP_SUMMARY
-        pnpm audit --audit-level high >> $GITHUB_STEP_SUMMARY 2>&1 || true
+        pnpm audit --audit-level high --ignore-registry-errors >> $GITHUB_STEP_SUMMARY 2>&1 || true
         echo "### Dealer worker" >> $GITHUB_STEP_SUMMARY
         npm audit --prefix dealer-worker --audit-level high >> $GITHUB_STEP_SUMMARY 2>&1 || true
 

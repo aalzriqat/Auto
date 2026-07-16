@@ -335,12 +335,20 @@ export const get = query({
     const imageUrls = await Promise.all(
       (vehicle.imageIds ?? []).map((id) => ctx.storage.getUrl(id))
     );
+    const addedByUser = vehicle.addedBy ? await ctx.db.get(vehicle.addedBy) : null;
+    const pendingRequest = await ctx.db
+      .query("vehicleStatusRequests")
+      .withIndex("by_vehicle", (q) => q.eq("vehicleId", args.vehicleId))
+      .filter((q) => q.eq(q.field("status"), "PENDING"))
+      .first();
 
     const { purchasePrice, ...rest } = vehicle;
     return {
       ...rest,
       ...(canViewCostPrice ? { purchasePrice } : {}),
-      imageUrls
+      imageUrls,
+      addedByName: addedByUser?.name ?? addedByUser?.email ?? null,
+      pendingStatusRequest: pendingRequest?.requestedStatus ?? null,
     };
   },
 });

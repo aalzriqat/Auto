@@ -259,6 +259,7 @@ export const listMine = query({
               createdAt: org.createdAt,
               roleName: role?.name ?? "UNKNOWN",
               membershipId: m._id,
+              permissions: role?.permissions ?? [],
             }
           : null;
       })
