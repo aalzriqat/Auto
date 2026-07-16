@@ -1,21 +1,10 @@
-import { nativeRoutes, type MobileFoundationStringKey } from "@autoflow/shared";
+import { nativeRoutes } from "@autoflow/shared";
 import { useAuth } from "@clerk/expo";
 import { UserButton } from "@clerk/expo/native";
 import { useConvexAuth, useQuery } from "convex/react";
 import { useRouter } from "expo-router";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import {
-  Animated,
-  Easing,
-  Image,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-  type StyleProp,
-  type ViewStyle,
-} from "react-native";
+import { useEffect, useMemo, useState } from "react";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import {
   api,
@@ -30,6 +19,9 @@ import { EmptyState } from "../../components/EmptyState";
 import { Icon } from "../../components/Icon";
 import type { SemanticIconName } from "../../components/Icon";
 import { LocaleToggle } from "../../components/LocaleToggle";
+import { FadeSlideIn, useCountUp } from "../../components/Motion";
+import { MemberAvatar } from "../../components/Avatar";
+import { PresenceDot, PresencePill } from "../../components/Presence";
 import { RouteLoadingState } from "../../components/RouteState";
 import { Screen } from "../../components/Screen";
 import { SkeletonRow } from "../../components/SkeletonRow";
@@ -129,69 +121,6 @@ function getGreeting(locale: string, hour: number): string {
     return locale === "ar" ? "طاب يومك" : "Good afternoon";
   }
   return locale === "ar" ? "مساء الخير" : "Good evening";
-}
-
-function FadeSlideIn({
-  children,
-  delay = 0,
-  style,
-}: {
-  children: ReactNode;
-  delay?: number;
-  style?: StyleProp<ViewStyle>;
-}) {
-  const progress = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    const animation = Animated.timing(progress, {
-      toValue: 1,
-      duration: 420,
-      delay,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: true,
-    });
-    animation.start();
-    return () => animation.stop();
-  }, [delay, progress]);
-
-  return (
-    <Animated.View
-      style={[
-        style,
-        {
-          opacity: progress,
-          transform: [{ translateY: progress.interpolate({ inputRange: [0, 1], outputRange: [16, 0] }) }],
-        },
-      ]}
-    >
-      {children}
-    </Animated.View>
-  );
-}
-
-function useCountUp(target: number, duration = 700): number {
-  const [display, setDisplay] = useState(0);
-  const progress = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    progress.setValue(0);
-    const listenerId = progress.addListener(({ value }) => {
-      setDisplay(Math.round(value * target));
-    });
-    const animation = Animated.timing(progress, {
-      toValue: 1,
-      duration,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: false,
-    });
-    animation.start();
-    return () => {
-      animation.stop();
-      progress.removeListener(listenerId);
-    };
-  }, [target, duration, progress]);
-
-  return display;
 }
 
 function getFirstName(fullName: string | undefined): string | null {
@@ -390,72 +319,6 @@ function MetricPill({ label, value }: { label: string; value: string }) {
     <View style={styles.metricPill}>
       <Text style={[styles.metricPillValue, type.heading]}>{value}</Text>
       <Text style={[styles.metricPillLabel, type.caption]}>{label}</Text>
-    </View>
-  );
-}
-
-// Mirrors the web team page's getLastSeenInfo tiers exactly (app/(dashboard)/[orgId]/team/page.tsx) —
-// lastSeenAt is throttled server-side to a write at most every few minutes, so "active now"
-// lines up with that window rather than claiming second-by-second accuracy.
-function getPresenceInfo(
-  t: (key: MobileFoundationStringKey) => string,
-  lastSeenAt: number | undefined,
-): { label: string; dotColor: string } {
-  if (!lastSeenAt) {
-    return { label: t("presenceOffline"), dotColor: theme.colors.subtleText };
-  }
-  const minutes = Math.floor((Date.now() - lastSeenAt) / 60_000);
-  if (minutes < 5) {
-    return { label: t("presenceActiveNow"), dotColor: theme.colors.success };
-  }
-  if (minutes < 60) {
-    return { label: t("presenceActiveMinutesAgo").replace("{0}", String(minutes)), dotColor: theme.colors.warning };
-  }
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) {
-    return { label: t("presenceActiveHoursAgo").replace("{0}", String(hours)), dotColor: theme.colors.subtleText };
-  }
-  const days = Math.floor(hours / 24);
-  return { label: t("presenceActiveDaysAgo").replace("{0}", String(days)), dotColor: theme.colors.subtleText };
-}
-
-function MemberAvatar({ imageUrl, name, size = 44 }: { imageUrl?: string; name: string; size?: number }) {
-  const dimensionStyle = { width: size, height: size, borderRadius: size / 2 };
-
-  if (imageUrl) {
-    return <Image source={{ uri: imageUrl }} style={[styles.avatarImage, dimensionStyle]} />;
-  }
-
-  return (
-    <View style={[styles.avatar, dimensionStyle]}>
-      <Text style={styles.avatarText}>{name.slice(0, 2).toUpperCase() || "?"}</Text>
-    </View>
-  );
-}
-
-function PresenceDot({ lastSeenAt }: { lastSeenAt: number | undefined }) {
-  const { t } = useLocale();
-  const presence = getPresenceInfo(t, lastSeenAt);
-
-  return (
-    <View
-      accessibilityLabel={presence.label}
-      style={[styles.presenceDot, { backgroundColor: presence.dotColor }]}
-    />
-  );
-}
-
-function PresencePill({ lastSeenAt }: { lastSeenAt: number | undefined }) {
-  const { t } = useLocale();
-  const type = useDashboardTypography();
-  const presence = getPresenceInfo(t, lastSeenAt);
-
-  return (
-    <View style={styles.presencePill}>
-      <View style={[styles.presenceDot, { backgroundColor: presence.dotColor }]} />
-      <Text numberOfLines={1} style={[styles.presencePillText, type.caption]}>
-        {presence.label}
-      </Text>
     </View>
   );
 }
@@ -1067,37 +930,6 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: theme.spacing.md,
-  },
-  avatar: {
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: theme.colors.surfaceAlt,
-  },
-  avatarImage: {
-    backgroundColor: theme.colors.surfaceAlt,
-  },
-  avatarText: {
-    color: theme.colors.primary,
-    fontSize: 14,
-    fontWeight: "700",
-  },
-  presenceDot: {
-    width: 8,
-    height: 8,
-    borderRadius: theme.radius.full,
-  },
-  presencePill: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing.xs,
-    borderRadius: theme.radius.full,
-    backgroundColor: theme.colors.surfaceAlt,
-    paddingHorizontal: theme.spacing.sm,
-    paddingVertical: theme.spacing.xs,
-  },
-  presencePillText: {
-    color: theme.colors.mutedText,
-    fontWeight: "600",
   },
   performerText: {
     flex: 1,

@@ -48,6 +48,8 @@ import { fireEvent, render, waitFor } from "@testing-library/react-native";
 import * as SecureStore from "expo-secure-store";
 import { StyleSheet, Text, View } from "react-native";
 
+import { getMobileFoundationString } from "@autoflow/shared";
+
 import { LocaleProvider } from "../providers/LocaleProvider";
 import { Badge, Pill } from "./Badge";
 import { Button, getButtonPressedStyle } from "./Button";
@@ -58,6 +60,9 @@ import { GuidedStepFlow, getSafeStepIndex } from "./GuidedStepFlow";
 import { Icon, resolveIconGlyph, semanticIconGlyphs } from "./Icon";
 import { ListRow, getListRowPressedStyle } from "./ListRow";
 import { getLocaleTogglePressedStyle, LocaleToggle } from "./LocaleToggle";
+import { MemberAvatar } from "./Avatar";
+import { FadeSlideIn, useCountUp } from "./Motion";
+import { getPresenceInfo, PresenceDot, PresencePill } from "./Presence";
 import { getRouteButtonPressedStyle, RouteErrorState, RouteLoadingState } from "./RouteState";
 import { Screen } from "./Screen";
 import {
@@ -436,5 +441,81 @@ describe("mobile shell components", () => {
     fireEvent.press(picker.getByTestId("vehicle-option-accord"));
     expect(onChange).toHaveBeenCalledWith("accord");
     await waitFor(() => expect(picker.queryByTestId("vehicle-search")).toBeNull());
+  });
+
+  test("renders member avatars with a photo, initials, or a placeholder fallback", async () => {
+    const rendered = await render(
+      <View>
+        <MemberAvatar imageUrl="https://example.com/photo.jpg" name="Alaa Albal3awy" size={40} testID="photo-avatar" />
+        <MemberAvatar name="Baker Alsawaf" testID="initials-avatar" />
+        <MemberAvatar name="" testID="empty-avatar" />
+      </View>,
+    );
+
+    expect(rendered.getByTestId("photo-avatar").props.source).toEqual({ uri: "https://example.com/photo.jpg" });
+    expect(rendered.getByText("BA")).toBeTruthy();
+    expect(rendered.getByText("?")).toBeTruthy();
+  });
+
+  test("derives presence tiers from lastSeenAt matching the web team page's thresholds", () => {
+    const t = (key: Parameters<typeof getMobileFoundationString>[1]) => getMobileFoundationString("en", key);
+    const now = Date.now();
+
+    expect(getPresenceInfo(t, undefined)).toEqual({ label: "Offline", dotColor: "#94a3b8" });
+    expect(getPresenceInfo(t, now - 60_000).label).toBe("Active now");
+    expect(getPresenceInfo(t, now - 10 * 60_000).label).toBe("Active 10m ago");
+    expect(getPresenceInfo(t, now - 3 * 3_600_000).label).toBe("Active 3h ago");
+    expect(getPresenceInfo(t, now - 3 * 86_400_000).label).toBe("Active 3d ago");
+  });
+
+  test("renders presence dot and pill using the derived label", async () => {
+    const now = Date.now();
+    const rendered = await render(
+      <LocaleProvider>
+        <View>
+          <PresenceDot lastSeenAt={now} />
+          <PresencePill lastSeenAt={undefined} />
+        </View>
+      </LocaleProvider>,
+    );
+
+    await waitFor(() => expect(rendered.getByLabelText("نشط الآن")).toBeTruthy());
+    expect(rendered.getByText("غير متصل")).toBeTruthy();
+  });
+
+  test("fades slide-in content into view with a custom or default delay", async () => {
+    const faded = await render(
+      <FadeSlideIn delay={5}>
+        <Text>Fade content</Text>
+      </FadeSlideIn>,
+    );
+    expect(faded.getByText("Fade content")).toBeTruthy();
+
+    const defaultFaded = await render(
+      <FadeSlideIn>
+        <Text>Default delay</Text>
+      </FadeSlideIn>,
+    );
+    expect(defaultFaded.getByText("Default delay")).toBeTruthy();
+  });
+
+  test("counts a number up to its target with a custom or default duration", async () => {
+    function CountUpProbe({ target, duration }: { target: number; duration?: number }) {
+      const value = useCountUp(target, duration);
+      return <Text testID="count-value">{value}</Text>;
+    }
+
+    const counter = await render(<CountUpProbe duration={80} target={42} />);
+    await waitFor(() => expect(counter.getByTestId("count-value").props.children).toBe(42), { timeout: 2000 });
+  });
+
+  test("accepts the default duration for useCountUp", async () => {
+    function CountUpProbe({ target }: { target: number }) {
+      const value = useCountUp(target);
+      return <Text testID="default-count-value">{value}</Text>;
+    }
+
+    const defaultCounter = await render(<CountUpProbe target={5} />);
+    expect(typeof defaultCounter.getByTestId("default-count-value").props.children).toBe("number");
   });
 });
