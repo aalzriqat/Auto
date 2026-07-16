@@ -17,7 +17,7 @@ jest.mock("expo-router", () => ({
 
 import { api, type MobileNotification } from "../convexApi";
 import { LocaleProvider } from "../providers/LocaleProvider";
-import { getBellPressedStyle, getRowPressedStyle, NotificationBell } from "./NotificationBell";
+import { getBellPressedStyle, getRowPressedStyle, NotificationBell, parseNotificationLink } from "./NotificationBell";
 
 const mockUseQuery = useQuery as jest.MockedFunction<typeof useQuery>;
 const mockUseMutation = useMutation as jest.MockedFunction<typeof useMutation>;
@@ -58,6 +58,41 @@ describe("NotificationBell", () => {
     expect(getBellPressedStyle(true)).not.toBeNull();
     expect(getRowPressedStyle(false)).toBeNull();
     expect(getRowPressedStyle(true)).not.toBeNull();
+  });
+
+  describe("parseNotificationLink", () => {
+    test("returns null for an undefined link", () => {
+      expect(parseNotificationLink(undefined, "org1")).toBeNull();
+    });
+
+    test("returns null for a link that does not belong to this org", () => {
+      expect(parseNotificationLink("/org2/leads", "org1")).toBeNull();
+    });
+
+    test("returns null for a segment that isn't a known module", () => {
+      expect(parseNotificationLink("/org1/whats-new", "org1")).toBeNull();
+    });
+
+    test("parses a plain module link with no query string", () => {
+      expect(parseNotificationLink("/org1/accounting", "org1")).toEqual({
+        moduleId: "accounting",
+        highlightId: undefined,
+      });
+    });
+
+    test("parses a module link with an unrelated query param", () => {
+      expect(parseNotificationLink("/org1/vehicles?approvals=true", "org1")).toEqual({
+        moduleId: "vehicles",
+        highlightId: undefined,
+      });
+    });
+
+    test("extracts highlightId from the query string", () => {
+      expect(parseNotificationLink("/org1/leads?highlightId=lead-9", "org1")).toEqual({
+        moduleId: "leads",
+        highlightId: "lead-9",
+      });
+    });
   });
 
   const markAsRead = jest.fn().mockResolvedValue(null);
@@ -211,6 +246,61 @@ describe("NotificationBell", () => {
     markAsRead.mockClear();
     fireEvent.press(rendered.getByText("عنوان مخصص"));
     expect(markAsRead).not.toHaveBeenCalled();
+  });
+
+  test("tapping an unread notification with a routable link marks it read, navigates, and closes the panel", async () => {
+    const routable = makeNotification({
+      _id: "n-routable",
+      isRead: false,
+      title: "عميل محتمل جديد",
+      link: "/org1/leads?highlightId=lead-9",
+    });
+    mockQueries({ unreadCount: 1, notifications: [routable] });
+
+    const rendered = await render(
+      <LocaleProvider>
+        <NotificationBell orgId="org1" />
+      </LocaleProvider>,
+    );
+
+    fireEvent.press(rendered.getByLabelText("الإشعارات"));
+    await waitFor(() => expect(rendered.getByText("عميل محتمل جديد")).toBeTruthy());
+
+    fireEvent.press(rendered.getByText("عميل محتمل جديد"));
+    await waitFor(() => expect(markAsRead).toHaveBeenCalledWith({ orgId: "org1", notificationId: "n-routable" }));
+    expect(mockPush).toHaveBeenCalledWith({
+      pathname: "/org/[orgId]/module/[moduleId]",
+      params: { orgId: "org1", moduleId: "leads", highlightId: "lead-9" },
+    });
+    await waitFor(() => expect(rendered.queryByText("عميل محتمل جديد")).toBeNull());
+  });
+
+  test("tapping an already-read notification with a routable link still navigates without marking it read again", async () => {
+    const routable = makeNotification({
+      _id: "n-routable-read",
+      isRead: true,
+      title: "محاسبة",
+      link: "/org1/accounting",
+    });
+    mockQueries({ unreadCount: 0, notifications: [routable] });
+
+    const rendered = await render(
+      <LocaleProvider>
+        <NotificationBell orgId="org1" />
+      </LocaleProvider>,
+    );
+
+    fireEvent.press(rendered.getByLabelText("الإشعارات"));
+    await waitFor(() => expect(rendered.getByText("محاسبة")).toBeTruthy());
+
+    fireEvent.press(rendered.getByText("محاسبة"));
+    expect(markAsRead).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(mockPush).toHaveBeenCalledWith({
+        pathname: "/org/[orgId]/module/[moduleId]",
+        params: { orgId: "org1", moduleId: "accounting" },
+      }),
+    );
   });
 
   test("marks all as read from the panel header", async () => {

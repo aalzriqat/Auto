@@ -7,7 +7,15 @@ import { useLocale } from "../../../providers/LocaleProvider";
 import { PAGE_SIZE, SELECTOR_PAGE_SIZE, type Option, type MobileSaleStatusFilter, compactNumber, money, dateLabel, parseOptionalNumber, parseRequiredNumber, idempotencyKey, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, ModuleList, getOptionLabel, saleMatchesView, averageSalePrice, saleRemainingBalance, vehicleListPriceLabel, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
 import { styles } from "./moduleStyles";
 
-export function SalesModule({ myMembership, orgId }: { myMembership: MobileMyMembership; orgId: string }) {
+export function SalesModule({
+  highlightId,
+  myMembership,
+  orgId,
+}: {
+  highlightId?: string;
+  myMembership: MobileMyMembership;
+  orgId: string;
+}) {
   const { locale } = useLocale();
   const reportError = useGenericError();
   const createDraft = useMutation(api.sales.createDraft);
@@ -165,6 +173,7 @@ export function SalesModule({ myMembership, orgId }: { myMembership: MobileMyMem
       <ModuleList
         data={filteredSales}
         emptyLabel={locale === "ar" ? "لا توجد مبيعات لهذا الفلتر." : "No sales match this view."}
+        highlightId={highlightId}
         keyExtractor={(sale) => sale._id}
         loadMore={loadMore}
         status={status}

@@ -7,7 +7,7 @@ import { useLocale } from "../../../providers/LocaleProvider";
 import { PAGE_SIZE, SELECTOR_PAGE_SIZE, type Option, compactNumber, money, maybeText, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, RecordCard, MetricCard, ModuleList, getOptionLabel, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
 import { styles } from "./moduleStyles";
 
-export function LeadsModule({ orgId }: { orgId: string }) {
+export function LeadsModule({ highlightId, orgId }: { highlightId?: string; orgId: string }) {
   const { locale } = useLocale();
   const reportError = useGenericError();
   const createLead = useMutation(api.leads.create);
@@ -153,6 +153,7 @@ export function LeadsModule({ orgId }: { orgId: string }) {
       <ModuleList
         data={filtered}
         emptyLabel={locale === "ar" ? "لا توجد فرص." : "No leads found."}
+        highlightId={highlightId}
         keyExtractor={(lead) => lead._id}
         loadMore={loadMore}
         status={status}

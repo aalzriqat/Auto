@@ -177,6 +177,12 @@ export const styles = StyleSheet.create({
     padding: theme.spacing.lg,
     ...theme.shadows.sm,
   },
+  highlightedRow: {
+    borderRadius: theme.radius.lg + 2,
+    borderWidth: 2,
+    borderColor: theme.colors.primary,
+    backgroundColor: theme.colors.primarySoft,
+  },
   entityHeader: {
     flexDirection: "row",
     alignItems: "center",

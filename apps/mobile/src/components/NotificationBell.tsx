@@ -7,11 +7,36 @@ import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from "react-nati
 import { renderNotification } from "../../../../lib/notifications/render";
 import { api, type MobileNotification } from "../convexApi";
 import { relativeTimeLabel, useGenericError } from "../features/workspace/modules/moduleShared";
+import { getNativeModule, nativeModulePath, type NativeModuleId } from "../features/workspace/nativeModules";
 import { useLocale } from "../providers/LocaleProvider";
 import { theme } from "../theme";
 import { Icon } from "./Icon";
 
 const PREVIEW_COUNT = 8;
+
+/**
+ * Web notification links are always `/{orgId}/{moduleSegment}` with an
+ * optional `?highlightId=` query param (see convex/**\/*.ts's `notifyUser`
+ * call sites). Mirrors that shape into a native module route so tapping a
+ * notification lands on the same screen + row the web bell would.
+ */
+export function parseNotificationLink(
+  link: string | undefined,
+  orgId: string,
+): { moduleId: NativeModuleId; highlightId?: string } | null {
+  if (!link) return null;
+
+  const prefix = `/${orgId}/`;
+  if (!link.startsWith(prefix)) return null;
+
+  const [segment, queryString] = link.slice(prefix.length).split("?");
+  if (!getNativeModule(segment)) return null;
+
+  const highlightPair = queryString?.split("&").find((pair) => pair.startsWith("highlightId="));
+  const highlightId = highlightPair ? decodeURIComponent(highlightPair.slice("highlightId=".length)) : undefined;
+
+  return { moduleId: segment as NativeModuleId, highlightId };
+}
 
 export function getBellPressedStyle(pressed: boolean) {
   return pressed ? styles.pressed : null;
@@ -61,12 +86,24 @@ export function NotificationBell({ orgId }: Readonly<{ orgId: string }>) {
   }
 
   async function handleRowPress(notification: MobileNotification) {
-    if (notification.isRead) return;
-    try {
-      await markAsRead({ orgId, notificationId: notification._id });
-    } catch (error) {
-      reportError("Mobile notification bell mark read failed", error);
+    if (!notification.isRead) {
+      try {
+        await markAsRead({ orgId, notificationId: notification._id });
+      } catch (error) {
+        reportError("Mobile notification bell mark read failed", error);
+      }
     }
+
+    const target = parseNotificationLink(notification.link, orgId);
+    if (!target) return;
+
+    close();
+    router.push({
+      pathname: nativeModulePath(target.moduleId),
+      params: target.highlightId
+        ? { orgId, moduleId: target.moduleId, highlightId: target.highlightId }
+        : { orgId, moduleId: target.moduleId },
+    });
   }
 
   return (

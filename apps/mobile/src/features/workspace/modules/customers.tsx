@@ -9,7 +9,15 @@ import { compactInitials } from "../nativeModules";
 import { PAGE_SIZE, compactNumber, maybeText, useGenericError, SearchInput, PrimaryButton, FormField, FormModal, RecordCard, MetricCard, ModuleList, DetailPill } from "./moduleShared";
 import { styles } from "./moduleStyles";
 
-export function CustomersModule({ orgId, permissions }: { orgId: string; permissions: readonly string[] }) {
+export function CustomersModule({
+  highlightId,
+  orgId,
+  permissions,
+}: {
+  highlightId?: string;
+  orgId: string;
+  permissions: readonly string[];
+}) {
   const router = useRouter();
   const { locale } = useLocale();
   const reportError = useGenericError();
@@ -120,6 +128,7 @@ export function CustomersModule({ orgId, permissions }: { orgId: string; permiss
       <ModuleList
         data={filtered}
         emptyLabel={locale === "ar" ? "لا يوجد عملاء." : "No customers found."}
+        highlightId={highlightId}
         keyExtractor={(customer) => customer._id}
         loadMore={loadMore}
         status={status}

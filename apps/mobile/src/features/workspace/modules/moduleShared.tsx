@@ -1032,6 +1032,7 @@ export function ModuleList<T>({
   data,
   emptyLabel,
   header,
+  highlightId,
   keyExtractor,
   loadMore,
   renderItem,
@@ -1040,6 +1041,7 @@ export function ModuleList<T>({
   data: readonly T[];
   emptyLabel: string;
   header?: React.ReactNode;
+  highlightId?: string;
   keyExtractor: (item: T) => string;
   loadMore?: (numItems: number) => void;
   renderItem: (item: T) => React.ReactElement;
@@ -1053,7 +1055,13 @@ export function ModuleList<T>({
       <FlatList
         data={data as T[]}
         keyExtractor={keyExtractor}
-        renderItem={({ item }) => renderItem(item)}
+        renderItem={({ item }) =>
+          highlightId && keyExtractor(item) === highlightId ? (
+            <View style={styles.highlightedRow}>{renderItem(item)}</View>
+          ) : (
+            renderItem(item)
+          )
+        }
         ListHeaderComponent={header ? <View style={styles.listHeader}>{header}</View> : null}
         ListEmptyComponent={emptyLabel ? <EmptyList label={emptyLabel} /> : null}
         ListFooterComponent={

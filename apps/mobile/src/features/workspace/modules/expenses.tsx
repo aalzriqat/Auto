@@ -6,7 +6,7 @@ import { useLocale } from "../../../providers/LocaleProvider";
 import { PAGE_SIZE, money, dateLabel, maybeText, parseOptionalNumber, parseRequiredNumber, idempotencyKey, useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
 import { styles } from "./moduleStyles";
 
-export function ExpensesModule({ orgId }: { orgId: string }) {
+export function ExpensesModule({ highlightId, orgId }: { highlightId?: string; orgId: string }) {
   const { locale } = useLocale();
   const reportError = useGenericError();
   const createExpense = useMutation(api.expenses.create);
@@ -72,6 +72,7 @@ export function ExpensesModule({ orgId }: { orgId: string }) {
       <ModuleList
         data={results}
         emptyLabel={locale === "ar" ? "لا توجد مصاريف." : "No expenses found."}
+        highlightId={highlightId}
         keyExtractor={(expense) => expense._id}
         loadMore={loadMore}
         status={status}

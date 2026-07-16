@@ -45,10 +45,12 @@ import { firstAvailableOrg, ModuleHeader, ModuleSwitcherBar } from "./moduleShar
 import { styles } from "./moduleStyles";
 
 function ModuleBody({
+  highlightId,
   moduleId,
   myMembership,
   org,
 }: {
+  highlightId?: string;
   moduleId: NativeModuleId;
   myMembership: MobileMyMembership;
   org: MobileOrgSummary;
@@ -59,9 +61,9 @@ function ModuleBody({
     case "vehicles":
       return <VehiclesModule orgId={org._id} permissions={myMembership.permissions} />;
     case "customers":
-      return <CustomersModule orgId={org._id} permissions={myMembership.permissions} />;
+      return <CustomersModule highlightId={highlightId} orgId={org._id} permissions={myMembership.permissions} />;
     case "leads":
-      return <LeadsModule orgId={org._id} />;
+      return <LeadsModule highlightId={highlightId} orgId={org._id} />;
     case "messages":
       return <MessagesModule orgId={org._id} />;
     case "socialInbox":
@@ -71,9 +73,9 @@ function ModuleBody({
     case "tasks":
       return <TasksModule orgId={org._id} />;
     case "sales":
-      return <SalesModule myMembership={myMembership} orgId={org._id} />;
+      return <SalesModule highlightId={highlightId} myMembership={myMembership} orgId={org._id} />;
     case "expenses":
-      return <ExpensesModule orgId={org._id} />;
+      return <ExpensesModule highlightId={highlightId} orgId={org._id} />;
     case "accounting":
       return <AccountingModule orgId={org._id} />;
     case "sourcing":
@@ -122,9 +124,11 @@ function ModuleBody({
 }
 
 export function WorkspaceModuleScreen({
+  highlightId,
   moduleId,
   orgId,
 }: {
+  highlightId?: string;
   moduleId: string | null;
   orgId: string | null;
 }) {
@@ -178,7 +182,12 @@ export function WorkspaceModuleScreen({
         permissions={myMembership.permissions}
         roleName={myMembership.roleName}
       />
-      <ModuleBody moduleId={moduleDefinition.id} myMembership={myMembership} org={selectedOrg} />
+      <ModuleBody
+        highlightId={highlightId}
+        moduleId={moduleDefinition.id}
+        myMembership={myMembership}
+        org={selectedOrg}
+      />
     </Screen>
   );
 }

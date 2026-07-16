@@ -137,8 +137,20 @@ jest.mock("../features/workspace/WorkspaceModuleScreen", () => {
   const { Text } = jest.requireActual<typeof import("react-native")>("react-native");
 
   return {
-    WorkspaceModuleScreen: ({ moduleId, orgId }: { moduleId: string | null; orgId: string | null }) =>
-      React.createElement(Text, { testID: "workspace-module-screen" }, `${orgId ?? "null"}:${moduleId ?? "null"}`),
+    WorkspaceModuleScreen: ({
+      highlightId,
+      moduleId,
+      orgId,
+    }: {
+      highlightId?: string;
+      moduleId: string | null;
+      orgId: string | null;
+    }) =>
+      React.createElement(
+        Text,
+        { testID: "workspace-module-screen" },
+        `${orgId ?? "null"}:${moduleId ?? "null"}:${highlightId ?? "null"}`,
+      ),
   };
 });
 
@@ -291,19 +303,19 @@ describe("mobile Expo routes", () => {
   });
 
   test("normalizes workspace module route params", async () => {
-    mockParams = { moduleId: ["vehicles"], orgId: "org-1" };
+    mockParams = { moduleId: ["vehicles"], orgId: "org-1", highlightId: "lead-1" };
     expect((await render(<WorkspaceModuleRoute />)).getByTestId("workspace-module-screen").props.children).toBe(
-      "org-1:vehicles",
+      "org-1:vehicles:lead-1",
     );
 
     mockParams = { moduleId: [], orgId: [] };
     expect((await render(<WorkspaceModuleRoute />)).getByTestId("workspace-module-screen").props.children).toBe(
-      "null:null",
+      "null:null:null",
     );
 
     mockParams = {};
     expect((await render(<WorkspaceModuleRoute />)).getByTestId("workspace-module-screen").props.children).toBe(
-      "null:null",
+      "null:null:null",
     );
   });
 
