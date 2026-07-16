@@ -38,9 +38,9 @@
     "expo-font": "^57.0.1",
     "expo-linking": "~57.0.2",
     "expo-print": "~15.0.2",
-    "expo-sharing": "~14.0.1",
     "expo-router": "~57.0.4",
     "expo-secure-store": "~57.0.0",
+    "expo-sharing": "~14.0.1",
     "expo-splash-screen": "~57.0.2",
     "expo-status-bar": "~57.0.0",
     "expo-system-ui": "~57.0.0",
@@ -50,6 +50,7 @@
     "react-native-gesture-handler": "~2.32.0",
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "4.25.2",
+    "react-native-svg": "15.15.4",
     "react-native-web": "^0.21.2",
     "react-native-webview": "13.16.1"
   },

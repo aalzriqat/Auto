@@ -120,6 +120,9 @@ export interface MobileDashboardTeamTask {
   overdue: number;
   completed: number;
   name: string;
+  userId: string;
+  imageUrl?: string;
+  lastSeenAt?: number;
 }
 
 export interface MobileDashboardStats {
@@ -146,6 +149,9 @@ export interface MobileDashboardStats {
     name: string;
     revenue: number;
     deals: number;
+    userId: string;
+    imageUrl?: string;
+    lastSeenAt?: number;
   } | null;
 }
 

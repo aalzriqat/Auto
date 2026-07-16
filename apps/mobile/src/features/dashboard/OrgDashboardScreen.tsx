@@ -1,13 +1,13 @@
-import { nativeRoutes } from "@autoflow/shared";
+import { nativeRoutes, type MobileFoundationStringKey } from "@autoflow/shared";
 import { useAuth } from "@clerk/expo";
 import { UserButton } from "@clerk/expo/native";
 import { useConvexAuth, useQuery } from "convex/react";
 import { useRouter } from "expo-router";
-import { StatusBar } from "expo-status-bar";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   Animated,
   Easing,
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -38,6 +38,7 @@ import { useAppFontState } from "../../providers/AppFontContext";
 import { useLocale } from "../../providers/LocaleProvider";
 import { getTypographyStyle, theme } from "../../theme";
 import { WorkspaceModuleLauncher } from "../workspace/WorkspaceModuleLauncher";
+import { SmoothAreaChart } from "./SmoothAreaChart";
 import { TodayAgenda } from "./TodayAgenda";
 
 const TIME_RANGES: ReadonlyArray<{
@@ -120,12 +121,6 @@ function getSafeOrgs(orgs: Array<MobileOrgSummary | null> | undefined): MobileOr
   return (orgs ?? []).filter((org): org is MobileOrgSummary => org !== null);
 }
 
-function getTrendBarHeight(revenue: number, maxRevenue: number): number {
-  const normalizedRevenue = Math.max(0, revenue);
-  const scale = Math.max(1, maxRevenue);
-  return 10 + (normalizedRevenue / scale) * 38;
-}
-
 function getGreeting(locale: string, hour: number): string {
   if (hour < 12) {
     return locale === "ar" ? "صباح الخير" : "Good morning";
@@ -199,39 +194,42 @@ function useCountUp(target: number, duration = 700): number {
   return display;
 }
 
+function getFirstName(fullName: string | undefined): string | null {
+  const trimmed = fullName?.trim();
+  if (!trimmed) return null;
+  return trimmed.split(/\s+/)[0];
+}
+
 function Header({ org }: { org: MobileOrgSummary }) {
   const router = useRouter();
   const { locale, t, textDirection } = useLocale();
   const type = useDashboardTypography();
   const greeting = getGreeting(locale, new Date().getHours());
+  const me = useQuery(api.users.getMe, {});
+  const firstName = getFirstName(me?.name);
+  const greetingLine = firstName ? `${greeting}${locale === "ar" ? "، " : ", "}${firstName}` : greeting;
 
   return (
-    <View style={styles.heroBand}>
-      <StatusBar style="light" />
-      <View style={[styles.header, { direction: textDirection }]}>
-        <Pressable
-          accessibilityLabel={t("back")}
-          accessibilityRole="button"
-          style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
-          onPress={() => router.replace(nativeRoutes.home)}
-        >
-          <Icon color="text" name="back" size={20} />
-        </Pressable>
-        <View style={styles.headerActions}>
-          <LocaleToggle />
-          <UserButton />
-        </View>
-      </View>
-      <View style={[styles.headerText, { direction: textDirection }]}>
-        <Text numberOfLines={1} style={[type.display, styles.greetingText]}>
-          {greeting}
+    <View style={[styles.header, { direction: textDirection }]}>
+      <Pressable
+        accessibilityLabel={t("back")}
+        accessibilityRole="button"
+        style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}
+        onPress={() => router.replace(nativeRoutes.home)}
+      >
+        <Icon color="text" name="back" size={20} />
+      </Pressable>
+      <View style={styles.headerText}>
+        <Text numberOfLines={1} style={[type.title, styles.greetingText]}>
+          {greetingLine}
         </Text>
-        <View style={styles.orgPill}>
-          <Icon color="onPrimary" name="dashboard" size={13} />
-          <Text numberOfLines={1} style={[type.label, styles.orgPillText]}>
-            {org.name || t("untitledWorkspace")}
-          </Text>
-        </View>
+        <Text numberOfLines={1} style={[type.caption, styles.greetingSubtitle]}>
+          {org.name || t("untitledWorkspace")}
+        </Text>
+      </View>
+      <View style={styles.headerActions}>
+        <LocaleToggle />
+        <UserButton />
       </View>
     </View>
   );
@@ -286,22 +284,9 @@ function SalesHero({
   const type = useDashboardTypography();
   const latestTrend = stats.salesTrend.at(-1);
   const trendPoints = stats.salesTrend.length > 0 ? stats.salesTrend.slice(-8) : [{ name: "0", Revenue: 0 }];
-  const maxTrendRevenue = Math.max(...trendPoints.map((point) => point.Revenue), 1);
   const animatedRevenue = useCountUp(stats.salesVolumeThisMonth);
   const animatedSoldCount = useCountUp(stats.salesThisMonth);
-  const barProgress = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    barProgress.setValue(0);
-    const animation = Animated.timing(barProgress, {
-      toValue: 1,
-      duration: 650,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: false,
-    });
-    animation.start();
-    return () => animation.stop();
-  }, [barProgress, timeRange, trendPoints.length]);
+  const [chartWidth, setChartWidth] = useState(0);
 
   return (
     <Card style={[styles.salesHero, { direction: textDirection }]}>
@@ -320,18 +305,20 @@ function SalesHero({
 
       <TimeRangeControl value={timeRange} onChange={onChangeTimeRange} />
 
-      <View style={styles.trendRow}>
-        <View style={styles.trendLine}>
-          {trendPoints.map((point, index) => {
-            const height = getTrendBarHeight(point.Revenue, maxTrendRevenue);
-            return (
-              <Animated.View
-                key={`${point.name}-${index}`}
-                style={[styles.trendBar, { height: Animated.multiply(barProgress, height) }]}
-              />
-            );
-          })}
-        </View>
+      <View
+        style={styles.trendRow}
+        onLayout={(event) => setChartWidth(event.nativeEvent.layout.width)}
+      >
+        {chartWidth > 0 ? (
+          <SmoothAreaChart
+            color={theme.colors.primary}
+            height={110}
+            values={trendPoints.map((point) => point.Revenue)}
+            width={chartWidth}
+          />
+        ) : (
+          <View style={{ height: 110 }} />
+        )}
         <Text style={[styles.trendCaption, type.caption]}>
           {latestTrend?.name ? `${t("revenue")} ${latestTrend.name}` : t("revenue")}
         </Text>
@@ -406,6 +393,72 @@ function MetricPill({ label, value }: { label: string; value: string }) {
   );
 }
 
+// Mirrors the web team page's getLastSeenInfo tiers exactly (app/(dashboard)/[orgId]/team/page.tsx) —
+// lastSeenAt is throttled server-side to a write at most every few minutes, so "active now"
+// lines up with that window rather than claiming second-by-second accuracy.
+function getPresenceInfo(
+  t: (key: MobileFoundationStringKey) => string,
+  lastSeenAt: number | undefined,
+): { label: string; dotColor: string } {
+  if (!lastSeenAt) {
+    return { label: t("presenceOffline"), dotColor: theme.colors.subtleText };
+  }
+  const minutes = Math.floor((Date.now() - lastSeenAt) / 60_000);
+  if (minutes < 5) {
+    return { label: t("presenceActiveNow"), dotColor: theme.colors.success };
+  }
+  if (minutes < 60) {
+    return { label: t("presenceActiveMinutesAgo").replace("{0}", String(minutes)), dotColor: theme.colors.warning };
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return { label: t("presenceActiveHoursAgo").replace("{0}", String(hours)), dotColor: theme.colors.subtleText };
+  }
+  const days = Math.floor(hours / 24);
+  return { label: t("presenceActiveDaysAgo").replace("{0}", String(days)), dotColor: theme.colors.subtleText };
+}
+
+function MemberAvatar({ imageUrl, name, size = 44 }: { imageUrl?: string; name: string; size?: number }) {
+  const dimensionStyle = { width: size, height: size, borderRadius: size / 2 };
+
+  if (imageUrl) {
+    return <Image source={{ uri: imageUrl }} style={[styles.avatarImage, dimensionStyle]} />;
+  }
+
+  return (
+    <View style={[styles.avatar, dimensionStyle]}>
+      <Text style={styles.avatarText}>{name.slice(0, 2).toUpperCase() || "?"}</Text>
+    </View>
+  );
+}
+
+function PresenceDot({ lastSeenAt }: { lastSeenAt: number | undefined }) {
+  const { t } = useLocale();
+  const presence = getPresenceInfo(t, lastSeenAt);
+
+  return (
+    <View
+      accessibilityLabel={presence.label}
+      style={[styles.presenceDot, { backgroundColor: presence.dotColor }]}
+    />
+  );
+}
+
+function PresencePill({ lastSeenAt }: { lastSeenAt: number | undefined }) {
+  const { t } = useLocale();
+  const type = useDashboardTypography();
+  const presence = getPresenceInfo(t, lastSeenAt);
+
+  return (
+    <View style={styles.presencePill}>
+      <View style={[styles.presenceDot, { backgroundColor: presence.dotColor }]} />
+      <Text numberOfLines={1} style={[styles.presencePillText, type.caption]}>
+        {presence.label}
+      </Text>
+    </View>
+  );
+}
+
 function TeamPanel({ stats }: { stats: MobileDashboardStats }) {
   const { locale, t, textDirection } = useLocale();
   const type = useDashboardTypography();
@@ -416,17 +469,14 @@ function TeamPanel({ stats }: { stats: MobileDashboardStats }) {
       <Text style={[styles.panelTitle, type.label]}>{t("teamActivity")}</Text>
       {stats.topPerformer ? (
         <View style={styles.performerRow}>
-          <View style={styles.avatar}>
-            <Text style={[styles.avatarText, type.label]}>
-              {stats.topPerformer.name.slice(0, 2).toUpperCase() || "AF"}
-            </Text>
-          </View>
+          <MemberAvatar imageUrl={stats.topPerformer.imageUrl} name={stats.topPerformer.name} />
           <View style={styles.performerText}>
             <Text style={[styles.performerName, type.heading]}>{stats.topPerformer.name}</Text>
             <Text style={[styles.performerMeta, type.caption]}>
               {t("topPerformer")} · {plainNumber(stats.topPerformer.deals, locale)}
             </Text>
           </View>
+          <PresencePill lastSeenAt={stats.topPerformer.lastSeenAt} />
         </View>
       ) : (
         <Text style={[styles.panelBody, type.body]}>{t("noTopPerformer")}</Text>
@@ -434,11 +484,13 @@ function TeamPanel({ stats }: { stats: MobileDashboardStats }) {
 
       {topTeamTasks.length > 0 ? (
         <View style={styles.teamList}>
-          {topTeamTasks.map((member, index) => (
-            <View key={`${member.name}-${index}`} style={styles.teamRow}>
+          {topTeamTasks.map((member) => (
+            <View key={member.userId} style={styles.teamRow}>
+              <MemberAvatar imageUrl={member.imageUrl} name={member.name} size={30} />
               <Text numberOfLines={1} style={[styles.teamName, type.body]}>
                 {member.name}
               </Text>
+              <PresenceDot lastSeenAt={member.lastSeenAt} />
               <Text style={[styles.teamMeta, type.caption]}>
                 {plainNumber(member.pending + member.overdue, locale)} {t("pending")}
               </Text>
@@ -769,20 +821,13 @@ const styles = StyleSheet.create({
   performanceSection: {
     gap: theme.spacing.lg,
   },
-  heroBand: {
-    gap: theme.spacing.xl,
-    backgroundColor: theme.colors.hero,
-    paddingHorizontal: theme.spacing.lg,
-    paddingBottom: theme.spacing.xl,
-    borderBottomLeftRadius: theme.radius.xl,
-    borderBottomRightRadius: theme.radius.xl,
-    ...theme.shadows.md,
-  },
   header: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
     gap: theme.spacing.md,
+    paddingHorizontal: theme.spacing.lg,
+    paddingTop: theme.spacing.sm,
+    paddingBottom: theme.spacing.md,
   },
   backButton: {
     width: 38,
@@ -793,7 +838,9 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.surfaceAlt,
   },
   headerText: {
-    gap: theme.spacing.sm,
+    flex: 1,
+    minWidth: 0,
+    gap: 2,
   },
   headerActions: {
     flexDirection: "row",
@@ -801,22 +848,10 @@ const styles = StyleSheet.create({
     gap: theme.spacing.sm,
   },
   greetingText: {
-    color: theme.colors.onPrimary,
+    color: theme.colors.text,
   },
-  orgPill: {
-    alignSelf: "flex-start",
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing.xs,
-    borderRadius: theme.radius.full,
-    backgroundColor: "rgba(255,255,255,0.16)",
-    paddingHorizontal: theme.spacing.md,
-    paddingVertical: theme.spacing.xs,
-  },
-  orgPillText: {
-    color: theme.colors.onPrimary,
-    textTransform: "none",
-    letterSpacing: 0,
+  greetingSubtitle: {
+    color: theme.colors.mutedText,
   },
   quickRail: {
     flexDirection: "row",
@@ -969,17 +1004,6 @@ const styles = StyleSheet.create({
   trendRow: {
     gap: theme.spacing.sm,
   },
-  trendLine: {
-    minHeight: 56,
-    flexDirection: "row",
-    alignItems: "flex-end",
-    gap: theme.spacing.xs,
-  },
-  trendBar: {
-    flex: 1,
-    borderRadius: theme.radius.sm,
-    backgroundColor: theme.colors.primary,
-  },
   trendCaption: {
     color: theme.colors.mutedText,
     fontSize: 12,
@@ -1044,17 +1068,35 @@ const styles = StyleSheet.create({
     gap: theme.spacing.md,
   },
   avatar: {
-    width: 44,
-    height: 44,
     alignItems: "center",
     justifyContent: "center",
-    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.surfaceAlt,
+  },
+  avatarImage: {
     backgroundColor: theme.colors.surfaceAlt,
   },
   avatarText: {
     color: theme.colors.primary,
     fontSize: 14,
     fontWeight: "700",
+  },
+  presenceDot: {
+    width: 8,
+    height: 8,
+    borderRadius: theme.radius.full,
+  },
+  presencePill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.xs,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.surfaceAlt,
+    paddingHorizontal: theme.spacing.sm,
+    paddingVertical: theme.spacing.xs,
+  },
+  presencePillText: {
+    color: theme.colors.mutedText,
+    fontWeight: "600",
   },
   performerText: {
     flex: 1,
