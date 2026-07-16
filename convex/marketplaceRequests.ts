@@ -120,7 +120,10 @@ export const submitRequest = action({
     ...submitRequestBaseArgs,
     turnstileToken: v.string(),
   },
-  handler: async (ctx, args): Promise<{ requestId: Id<"marketplaceRequests">; matchedCount: number }> => {
+  handler: async (
+    ctx,
+    args
+  ): Promise<{ requestId: Id<"marketplaceRequests">; publicId: string; matchedCount: number }> => {
     const { requestArgs, clientFingerprint } = await verifyPublicSubmission(
       ctx,
       args,
@@ -136,7 +139,10 @@ export const submitRequest = action({
 
 export const createRequest = internalMutation({
   args: submitRequestBaseArgs,
-  handler: async (ctx, args): Promise<{ requestId: Id<"marketplaceRequests">; matchedCount: number }> => {
+  handler: async (
+    ctx,
+    args
+  ): Promise<{ requestId: Id<"marketplaceRequests">; publicId: string; matchedCount: number }> => {
     if (!args.consentAccepted) {
       throw new ConvexError("Please accept the consent notice to submit a request.");
     }
@@ -157,8 +163,12 @@ export const createRequest = internalMutation({
     });
 
     const now = Date.now();
+    // Unguessable Request Room token; the raw document id must never be the
+    // buyer's only credential since it can leak via referrers/screenshots.
+    const publicId = crypto.randomUUID().replace(/-/g, "");
     const requestId = await ctx.db.insert("marketplaceRequests", {
       status: "OPEN",
+      publicId,
       buyerFirstName,
       buyerPhone,
       buyerWhatsApp,
@@ -221,7 +231,7 @@ export const createRequest = internalMutation({
       await ctx.db.patch(requestId, { status: "MATCHED" });
     }
 
-    return { requestId, matchedCount: matched.length };
+    return { requestId, publicId, matchedCount: matched.length };
   },
 });
 

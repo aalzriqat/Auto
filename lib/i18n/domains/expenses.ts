@@ -95,6 +95,9 @@ export const expensesEn = {
   ViewCorrections: "View correction history",
   RefundAmountLabel: "Refund amount",
   WriteOffAmountLabel: "Write-off amount",
+  CorrectionAccountingDateLabel: "Date of the correction",
+  CorrectionAccountingDateHint:
+    "The date this actually happened — e.g. the date on the vendor's credit note. It must fall inside an open accounting period, and on or after the prepaid expense itself.",
   RefundPaymentMethodLabel: "Refund payment method",
   ChangeTermLabel: "Change the remaining term",
   NewTermMonthsLabel: "New term (months)",
@@ -235,6 +238,9 @@ export const expensesAr = {
   ViewCorrections: "عرض سجل التصحيحات",
   RefundAmountLabel: "مبلغ الاسترداد",
   WriteOffAmountLabel: "مبلغ الشطب",
+  CorrectionAccountingDateLabel: "تاريخ التصحيح",
+  CorrectionAccountingDateHint:
+    "التاريخ الذي حدث فيه التصحيح فعلاً — مثل تاريخ إشعار الدائن من المورّد. يجب أن يقع داخل فترة محاسبية مفتوحة، وفي تاريخ المصروف المدفوع مقدماً أو بعده.",
   RefundPaymentMethodLabel: "طريقة استرداد المبلغ",
   ChangeTermLabel: "تغيير المدة المتبقية",
   NewTermMonthsLabel: "المدة الجديدة (أشهر)",

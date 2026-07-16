@@ -6,6 +6,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
+import { dateInputToUtcMs, todayDateInput } from "@/lib/dateInput";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrencyFormatterInCurrency } from "@/hooks/useCurrencyFormatter";
@@ -638,6 +639,9 @@ function CorrectScheduleDialog({
   // minted per open — a retry within one open (e.g. a network blip) replays
   // idempotently, and a deliberate second open gets its own key.
   const idempotencyKey = useMemo(() => crypto.randomUUID(), []);
+  // Stable across the dialog's life so the default, the max, and the "did they
+  // change it?" check below all agree on the same "today".
+  const today = useMemo(() => todayDateInput(), []);
   const remainingRefundableTaxMinor = useQuery(api.prepaidExpenses.getRemainingRefundableTaxMinor, {
     orgId, scheduleId: schedule._id,
   });
@@ -653,6 +657,7 @@ function CorrectScheduleDialog({
       changeTerm: false,
       newTermMonths: schedule.termMonths,
       reason: "",
+      accountingDate: today,
     },
   });
   const changeTerm = form.watch("changeTerm");
@@ -672,6 +677,16 @@ function CorrectScheduleDialog({
         writeOffMinor: Math.round(values.writeOffAmount * factor),
         newTermMonths: values.changeTerm ? values.newTermMonths : undefined,
         reason: values.reason.trim(),
+        // Only sent when the accountant actually backdated it. Today is the
+        // default, and the default has to keep behaving exactly as it always
+        // has — the server applies its stricter rules (must land in an open
+        // period) only to a date someone deliberately chose, so defaulting to
+        // "send today, always" would start rejecting corrections in orgs whose
+        // current period was never opened, which used to queue quietly.
+        accountingDate:
+          values.accountingDate && values.accountingDate !== today
+            ? dateInputToUtcMs(values.accountingDate)
+            : undefined,
         idempotencyKey,
       });
       toast.success(t(result.status === "PENDING" ? "PrepaidCorrectionSubmittedForApproval" as any : "PrepaidScheduleCorrected" as any));
@@ -724,6 +739,23 @@ function CorrectScheduleDialog({
                 )}
               />
             </div>
+
+            {(refundAmount > 0 || writeOffAmount > 0) && (
+              <FormField
+                control={form.control}
+                name="accountingDate"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("CorrectionAccountingDateLabel" as any)}</FormLabel>
+                    <FormControl>
+                      <Input type="date" max={today} {...field} />
+                    </FormControl>
+                    <p className="text-xs text-muted-foreground">{t("CorrectionAccountingDateHint" as any)}</p>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
             {needsApproval && (
               <p className="text-xs text-amber-600 bg-amber-500/10 border border-amber-500/20 rounded-md px-3 py-2">

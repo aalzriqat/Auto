@@ -86,25 +86,77 @@ export const create = mutation({
  * `users` row to attribute the entry to, resolved from the first configured
  * SUPER_ADMIN_EMAILS address rather than a mutation argument.
  */
+/**
+ * The user an automation-run change is attributed to: the first configured
+ * SUPER_ADMIN_EMAILS address, resolved to its `users` row. Shared by the
+ * internal create/update entry points, which run under deploy-key auth with no
+ * Clerk session and so have no caller identity of their own to record.
+ */
+async function resolveAutomationAdmin(ctx: MutationCtx): Promise<Doc<"users">> {
+  const attributedEmail = (getValidatedEnv().SUPER_ADMIN_EMAILS ?? "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean)[0];
+  if (!attributedEmail) {
+    throw new Error("SUPER_ADMIN_EMAILS is not set on this deployment — cannot attribute an automated changelog change.");
+  }
+  const admin = await ctx.db
+    .query("users")
+    .withIndex("by_email", (q) => q.eq("email", attributedEmail))
+    .unique();
+  if (!admin) {
+    throw new Error(`No user found for super-admin email "${attributedEmail}" — cannot attribute an automated changelog change.`);
+  }
+  return admin;
+}
+
 export const createInternal = internalMutation({
   args: changelogEntryArgs,
   handler: async (ctx, args) => {
-    const attributedEmail = (getValidatedEnv().SUPER_ADMIN_EMAILS ?? "")
-      .split(",")
-      .map((e) => e.trim().toLowerCase())
-      .filter(Boolean)[0];
-    if (!attributedEmail) {
-      throw new Error("SUPER_ADMIN_EMAILS is not set on this deployment — cannot attribute an automated changelog entry.");
-    }
-    const admin = await ctx.db
-      .query("users")
-      .withIndex("by_email", (q) => q.eq("email", attributedEmail))
-      .unique();
-    if (!admin) {
-      throw new Error(`No user found for super-admin email "${attributedEmail}" — cannot attribute an automated changelog entry.`);
-    }
-
+    const admin = await resolveAutomationAdmin(ctx);
     return insertChangelogEntry(ctx, admin, args, "changelog:createInternal");
+  },
+});
+
+/**
+ * Automation-only counterpart to `update`, for correcting a published entry's
+ * wording from the CLI without a live Clerk session (same reason
+ * `createInternal` exists — see its comment). Patches only the fields provided,
+ * so a typo fix touches nothing else.
+ *
+ * Deliberately never touches `publishedAt` and never broadcasts: the copies
+ * already fanned out to inboxes are immutable point-in-time notifications, and
+ * a wording fix must not re-surface an old entry as unread or re-notify anyone.
+ * It only corrects what the What's New panel shows going forward.
+ */
+export const updateInternal = internalMutation({
+  args: {
+    entryId: v.id("changelogEntries"),
+    type: v.optional(changelogTypeValidator),
+    titleEn: v.optional(v.string()),
+    titleAr: v.optional(v.string()),
+    descriptionEn: v.optional(v.string()),
+    descriptionAr: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const admin = await resolveAutomationAdmin(ctx);
+    const { entryId, ...updates } = args;
+
+    const existing = await ctx.db.get(entryId);
+    if (!existing) throw new Error("Changelog entry not found.");
+
+    const patch = Object.fromEntries(Object.entries(updates).filter(([, v]) => v !== undefined));
+    if (Object.keys(patch).length === 0) throw new Error("No fields provided to update.");
+
+    await ctx.db.patch(entryId, { ...patch, updatedAt: Date.now(), updatedBy: admin._id });
+
+    await logAdminAction(ctx, admin, {
+      action: "changelog:updateInternal",
+      targetTable: "changelogEntries",
+      targetId: entryId,
+      before: { titleEn: existing.titleEn, descriptionEn: existing.descriptionEn },
+      after: { titleEn: updates.titleEn ?? existing.titleEn, descriptionEn: updates.descriptionEn ?? existing.descriptionEn },
+    });
   },
 });
 

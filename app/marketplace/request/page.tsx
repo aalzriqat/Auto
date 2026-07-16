@@ -40,6 +40,7 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     success: "Request sent!",
     successDetail: "matching dealers were notified and may contact you soon.",
     successDetailZero: "No matching dealers yet — we'll keep your request on file.",
+    trackRequest: "Track your request",
     error: "Something went wrong. Please try again.",
     consentRequired: "Please accept the consent notice to continue.",
     verifying: "Please complete the verification challenge.",
@@ -75,6 +76,7 @@ const STRINGS: Record<Lang, Record<string, string>> = {
     success: "تم إرسال الطلب!",
     successDetail: "تم إشعار معارض مطابقة وقد تتواصل معك قريباً.",
     successDetailZero: "لا يوجد معارض مطابقة حالياً — سنحتفظ بطلبك.",
+    trackRequest: "تابع حالة طلبك",
     error: "حدث خطأ ما. الرجاء المحاولة مرة أخرى.",
     consentRequired: "الرجاء الموافقة على إشعار الخصوصية للمتابعة.",
     verifying: "الرجاء إكمال تحدي التحقق.",
@@ -115,7 +117,7 @@ export default function MarketplaceRequestPage() {
   const submitRequest = useAction(api.marketplaceRequests.submitRequest);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<{ matchedCount: number } | null>(null);
+  const [result, setResult] = useState<{ requestId: string; matchedCount: number } | null>(null);
   const [consentChecked, setConsentChecked] = useState(false);
   const [paymentType, setPaymentType] = useState<"CASH" | "FINANCE" | "EITHER">("EITHER");
 
@@ -172,7 +174,7 @@ export default function MarketplaceRequestPage() {
         clientFingerprint: clientFingerprint(),
         turnstileToken,
       });
-      setResult({ matchedCount: response.matchedCount });
+      setResult({ requestId: response.requestId, matchedCount: response.matchedCount });
     } catch {
       setError(t.error);
     } finally {
@@ -220,6 +222,12 @@ export default function MarketplaceRequestPage() {
                   ? `${result.matchedCount} ${t.successDetail}`
                   : t.successDetailZero}
               </p>
+              <Link
+                href={`/marketplace/status/${result.requestId}`}
+                className="mt-3 inline-block rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700"
+              >
+                {t.trackRequest}
+              </Link>
             </div>
           </div>
         ) : (

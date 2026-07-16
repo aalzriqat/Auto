@@ -40,6 +40,28 @@ export const reportsEn = {
   Amount: "Amount",
   PrepaidAmortizedNote: "Prepaid — {monthsElapsed}/{amortizationMonths} months recognized of {totalAmount} total",
 
+  // Operational vs ledger — this report counts what happened operationally,
+  // including postings still queued or failed. The income statement counts only
+  // what reached the ledger. The two agree exactly when nothing is outstanding.
+  OperationalExpensesReport: "Operational Expenses Report",
+  OperationalTotal: "Operational Total",
+  PostedToPnl: "Posted to P&L",
+  CapitalizedToAssets: "Capitalized to Assets",
+  PendingPosting: "Pending Posting",
+  FailedPosting: "Failed Posting",
+  GlStatus: "Ledger Status",
+  GlStatePOSTED: "Posted",
+  GlStateCAPITALIZED: "Capitalized",
+  GlStatePENDING: "Pending",
+  GlStateFAILED: "Failed",
+  GlStateMIXED: "Partly posted",
+  OperationalReportNotice:
+    "This is an operational report: it counts what happened, including {count} posting(s) not yet in the ledger. The official profit & loss is the ledger-backed Income Statement.",
+  OperationalReportCapitalizedNote:
+    "All expenses here have posted. This operational total is {capitalized} higher than the Income Statement because that much was capitalized to inventory, which is reported as an asset rather than an expense.",
+  OperationalReportAllPosted: "Every expense in this period has posted to the ledger as a P&L expense, so this report and the Income Statement agree.",
+  ResolveUnpostedEntries: "Resolve unposted entries",
+
   // Empty states
   NoSalesFoundPeriod: "No sales found in this period.",
   NoExpensesFoundPeriod: "No expenses found in this period.",
@@ -88,6 +110,26 @@ export const reportsAr = {
   RelatedVehicle: "المركبة ذات الصلة",
   Amount: "المبلغ",
   PrepaidAmortizedNote: "مصروف مدفوع مقدماً — تم احتساب {monthsElapsed}/{amortizationMonths} أشهر من إجمالي {totalAmount}",
+
+  // Operational vs ledger
+  OperationalExpensesReport: "تقرير المصروفات التشغيلي",
+  OperationalTotal: "الإجمالي التشغيلي",
+  PostedToPnl: "مُرحّل إلى قائمة الدخل",
+  CapitalizedToAssets: "مُرسمل ضمن الأصول",
+  PendingPosting: "بانتظار الترحيل",
+  FailedPosting: "فشل الترحيل",
+  GlStatus: "حالة الترحيل",
+  GlStatePOSTED: "مُرحّل",
+  GlStateCAPITALIZED: "مُرسمل",
+  GlStatePENDING: "بانتظار الترحيل",
+  GlStateFAILED: "فشل الترحيل",
+  GlStateMIXED: "مُرحّل جزئياً",
+  OperationalReportNotice:
+    "هذا تقرير تشغيلي: يحتسب ما حدث فعلاً، بما في ذلك {count} قيد لم يصل إلى دفتر الأستاذ بعد. أما قائمة الدخل المبنية على دفتر الأستاذ فهي التقرير الرسمي للأرباح والخسائر.",
+  OperationalReportCapitalizedNote:
+    "جميع المصروفات هنا مُرحّلة. هذا الإجمالي التشغيلي يزيد عن قائمة الدخل بمقدار {capitalized} لأن هذا المبلغ رُسمل ضمن المخزون، ويظهر كأصل وليس كمصروف.",
+  OperationalReportAllPosted: "جميع مصروفات هذه الفترة مُرحّلة إلى دفتر الأستاذ كمصروف في قائمة الدخل، لذلك يتطابق هذا التقرير مع قائمة الدخل.",
+  ResolveUnpostedEntries: "معالجة القيود غير المُرحّلة",
 
   // Empty states
   NoSalesFoundPeriod: "لم يتم العثور على مبيعات في هذه الفترة.",

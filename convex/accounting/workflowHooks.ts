@@ -1272,6 +1272,17 @@ export async function hookFiCommissionRecognitionsReversed(
  * balances with no corresponding expense. Idempotent (reverseAccountingEvent
  * no-ops on an already-reversed event) and also drops any not-yet-posted
  * queued event (amortization or correction alike).
+ *
+ * Returns how many already-POSTED events it reversed, which is how a caller
+ * tells real ledger history apart from a schedule that never reached the GL.
+ * Note this is NOT implied by the source expense having posted: amortization
+ * refuses to run until EXPENSE_POSTED lands (prepaidExpenses.ts's
+ * "source_expense_not_posted" — it won't release an asset that was never
+ * booked), but a correction won't. correctSchedule can post an accelerated
+ * write-off against a schedule whose EXPENSE_POSTED is still queued behind a
+ * month that has no open period, so a count > 0 with no posted EXPENSE_POSTED
+ * is a reachable state, not a contradiction. A count of 0 means this schedule
+ * left no footprint in the ledger.
  */
 export async function hookPrepaidExpenseAmortizationsReversed(
   ctx: MutationCtx,
@@ -1282,7 +1293,7 @@ export async function hookPrepaidExpenseAmortizationsReversed(
     actorId: Id<"users">;
     reversalDate: number;
   }
-): Promise<void> {
+): Promise<number> {
   const scheduleIdStr = args.scheduleId.toString();
   const REVERSIBLE_EVENT_TYPES = [
     "PREPAID_EXPENSE_AMORTIZED",
@@ -1346,6 +1357,8 @@ export async function hookPrepaidExpenseAmortizationsReversed(
       if (entry.kind === "POST") await ctx.db.delete(entry._id);
     }
   }
+
+  return postedEvents.length;
 }
 
 export async function hookAssetImpaired(

@@ -21,6 +21,7 @@ async function seedPublishedDealer(
     city: string;
     withFinance?: boolean;
     isOptedIn?: boolean;
+    hidePrices?: boolean;
     sellingPrice?: number;
     financeTerms?: { insuranceRate?: number; adminFees?: number; commission?: number };
     trust?: {
@@ -94,7 +95,7 @@ async function seedPublishedDealer(
     subdomainSlug: opts.subdomainSlug,
     activeFinanceCompanyId,
     sections: [
-      { sectionKey: "vehicle.price", enabled: true },
+      { sectionKey: "vehicle.price", enabled: !opts.hidePrices },
       { sectionKey: "vehicle.photos", enabled: true },
     ],
   });
@@ -230,5 +231,23 @@ describe("marketplaceBrowse.search", () => {
 
     const result = await t.query(api.marketplaceBrowse.search, { maxMonthlyPayment: 1000 });
     expect(result.vehicles).toHaveLength(0);
+  });
+
+  test("still estimates the monthly payment from financePrice when the dealer hides public prices", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    await seedPublishedDealer(t, {
+      name: "Hidden Price Dealer",
+      subdomainSlug: "hiddenpricedealer",
+      city: "Amman",
+      withFinance: true,
+      hidePrices: true,
+      sellingPrice: 10000,
+      financeTerms: { insuranceRate: 1.5, adminFees: 50, commission: 100 },
+    });
+
+    const result = await t.query(api.marketplaceBrowse.search, { maxMonthlyPayment: 183 });
+    expect(result.vehicles).toHaveLength(1);
+    expect(result.vehicles[0].price).toBeNull();
+    expect(result.vehicles[0].estimatedMonthlyPayment).toBe(183);
   });
 });

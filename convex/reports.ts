@@ -1,5 +1,5 @@
 import { v, ConvexError } from "convex/values";
-import { query } from "./_generated/server";
+import { query, QueryCtx } from "./_generated/server";
 import { Id, Doc } from "./_generated/dataModel";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -11,7 +11,12 @@ import {
   recognizedAmountInRangeWithReversal,
   PREPAID_LOOKBACK_MS,
 } from "./utils/expenseAmortization";
-import { loadOrgPrepaidRecognitionByMonth, recognizedAmountInRangeFromEvents } from "./utils/prepaidRecognitionEvents";
+import {
+  loadOrgPrepaidRecognitionByMonth,
+  recognizedAmountInRangeFromEvents,
+  queuedEntryCountsInRange,
+  type RecognitionState,
+} from "./utils/prepaidRecognitionEvents";
 import { computeVehicleCapitalizedCost } from "./utils/vehicleCost";
 import { getOrgCurrency } from "./accounting/workflowHooks";
 
@@ -190,6 +195,68 @@ export const getInventoryReport = query({
   },
 });
 
+/**
+ * Every expense whose own debit has NOT reached the ledger, and why — keyed by
+ * expenseId.
+ *
+ * The outbox is the whole authority here, and can be, because a PAID expense
+ * never has "no GL event at all": hookExpensePosted either posts immediately or
+ * durably enqueues (workflowHooks.ts — an org with no chart of accounts enqueues
+ * with "No chart of accounts or open period at operation time"), and a drained
+ * row is patched to POSTED rather than deleted. So a PENDING/FAILED row here is
+ * exactly the set whose debit the income statement does not yet carry, and an
+ * expense absent from this map has posted.
+ *
+ * One indexed scan of the outbox — which is a queue, not a history — rather than
+ * a per-expense event lookup, or an org-wide scan of EXPENSE_POSTED, which is
+ * the highest-volume event type there is.
+ */
+async function loadUnpostedExpenseDebitStates(
+  ctx: QueryCtx,
+  orgId: Id<"organizations">
+): Promise<Map<string, RecognitionState>> {
+  const byExpenseId = new Map<string, RecognitionState>();
+  for (const status of ["PENDING", "FAILED"] as const) {
+    const queued = await ctx.db
+      .query("pendingAccountingEvents")
+      .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", status))
+      .collect();
+    for (const entry of queued) {
+      if (entry.kind !== "POST" || entry.eventType !== "EXPENSE_POSTED") continue;
+      // FAILED wins over PENDING: an expense with a dead-lettered debit needs
+      // attention even if some other row for it is still waiting its turn.
+      if (status === "FAILED" || !byExpenseId.has(entry.sourceId)) {
+        byExpenseId.set(entry.sourceId, status === "FAILED" ? "failed" : "pending");
+      }
+    }
+  }
+  return byExpenseId;
+}
+
+export type GlState = "POSTED" | "CAPITALIZED" | "PENDING" | "FAILED" | "MIXED";
+
+/**
+ * The row's headline posting state. Posted is only "posted to the P&L" — a cost
+ * capitalized into Vehicle Inventory really did reach the ledger, but as an
+ * asset the Income Statement never shows, so it can't be lumped in with expenses
+ * that did. MIXED = some posted, some still queued (only a schedule can be it).
+ */
+function glStateFor(row: {
+  postedAmount: number;
+  capitalizedAmount: number;
+  pendingCount: number;
+  failedCount: number;
+}): GlState {
+  const queued = row.pendingCount + row.failedCount;
+  if (queued > 0) {
+    const settled = row.postedAmount !== 0 || row.capitalizedAmount !== 0;
+    if (settled || (row.pendingCount > 0 && row.failedCount > 0)) return "MIXED";
+    return row.failedCount > 0 ? "FAILED" : "PENDING";
+  }
+  if (row.capitalizedAmount !== 0 && row.postedAmount === 0) return "CAPITALIZED";
+  return "POSTED";
+}
+
 export const getExpensesReport = query({
   args: {
     orgId: v.id("organizations"),
@@ -247,6 +314,7 @@ export const getExpensesReport = query({
       .collect();
     const scheduleByExpenseId = new Map(schedules.map((s) => [s.expenseId, s]));
     const recognitionEvents = await loadOrgPrepaidRecognitionByMonth(ctx, args.orgId, args.startDate, args.endDate);
+    const unpostedExpenseDebits = await loadUnpostedExpenseDebitStates(ctx, args.orgId);
 
     // Any status, INCLUDING CANCELLED: cancellation only stops future
     // recognition, it never un-happens history. A cancelled schedule's
@@ -336,6 +404,13 @@ export const getExpensesReport = query({
       vehicles.filter((v): v is NonNullable<typeof v> => v !== null).map(v => [v._id, v])
     );
 
+    let totalPosted = 0;
+    let totalCapitalized = 0;
+    let totalPending = 0;
+    let totalFailed = 0;
+    let pendingEntryCount = 0;
+    let failedEntryCount = 0;
+
     const enrichedExpenses = allExpenses.map((exp) => {
       // Prefer the authoritative schedule's own GL events; fall back to the
       // net-of-VAT expense doc only for a prepaid expense that has no
@@ -344,6 +419,50 @@ export const getExpensesReport = query({
       const recognizedAmount = schedule
         ? recognizedAmountInRangeFromEvents(recognitionEvents, schedule._id, args.startDate, args.endDate, schedule.currency)
         : recognizedAmountInRangeWithReversal(exp, args.startDate, args.endDate, currency);
+
+      // How much of this row the ledger has taken, and where. A cost capitalized
+      // into Vehicle Inventory posted for real but hit an ASSET account the
+      // Income Statement never shows — so it is its own bucket, not "posted",
+      // which here means "posted to the P&L". Otherwise the all-clear below
+      // would call a repair sitting in inventory reconciled against a P&L that
+      // never mentions it. A prepaid schedule is never capitalized (the two
+      // treatments are mutually exclusive — classifyExpensePosting), so the
+      // capitalized bucket only ever applies on the single-debit path.
+      let postedAmount = 0;
+      let capitalizedAmount = 0;
+      let pendingAmount = 0;
+      let failedAmount = 0;
+      let rowPendingCount = 0;
+      let rowFailedCount = 0;
+      if (schedule) {
+        postedAmount = recognizedAmountInRangeFromEvents(recognitionEvents, schedule._id, args.startDate, args.endDate, schedule.currency, "posted");
+        pendingAmount = recognizedAmountInRangeFromEvents(recognitionEvents, schedule._id, args.startDate, args.endDate, schedule.currency, "pending");
+        failedAmount = recognizedAmountInRangeFromEvents(recognitionEvents, schedule._id, args.startDate, args.endDate, schedule.currency, "failed");
+        const counts = queuedEntryCountsInRange(recognitionEvents, schedule._id, args.startDate, args.endDate);
+        rowPendingCount = counts.pending;
+        rowFailedCount = counts.failed;
+      } else {
+        const debitState = unpostedExpenseDebits.get(exp._id.toString());
+        const capitalized = exp.accountingTreatment === "CAPITALIZED_INVENTORY";
+        if (debitState === "pending") {
+          pendingAmount = recognizedAmount;
+          rowPendingCount = 1;
+        } else if (debitState === "failed") {
+          failedAmount = recognizedAmount;
+          rowFailedCount = 1;
+        } else if (capitalized) {
+          capitalizedAmount = recognizedAmount;
+        } else {
+          postedAmount = recognizedAmount;
+        }
+      }
+      totalPosted += postedAmount;
+      totalCapitalized += capitalizedAmount;
+      totalPending += pendingAmount;
+      totalFailed += failedAmount;
+      pendingEntryCount += rowPendingCount;
+      failedEntryCount += rowFailedCount;
+
       totalExpenses += recognizedAmount;
       let vehicleDesc = "General";
 
@@ -358,6 +477,11 @@ export const getExpensesReport = query({
         ...exp,
         vehicleDesc,
         recognizedAmount,
+        postedAmount,
+        capitalizedAmount,
+        pendingAmount,
+        failedAmount,
+        glState: glStateFor({ postedAmount, capitalizedAmount, pendingCount: rowPendingCount, failedCount: rowFailedCount }),
         amortization: schedule
           ? amortizationInfoFromScheduleProgress(schedule)
           : computeAmortizationInfo(exp, args.endDate, currency),
@@ -367,7 +491,24 @@ export const getExpensesReport = query({
     enrichedExpenses.sort((a, b) => b.date - a.date);
 
     return {
+      // The operational figure — what the schedules and expense rows say
+      // happened this window, posted or not, expense or capitalized. Kept as-is
+      // so it stays the single number this report has always meant, with the
+      // split beside it rather than silently redefining it. It equals
+      // totalPosted + totalCapitalized + totalPending + totalFailed.
       totalExpenses,
+      // What reached a P&L expense account — the only bucket the ledger-backed
+      // Income Statement can equal, and only when nothing else is outstanding.
+      totalPosted,
+      // Posted, but to Vehicle Inventory (an asset) — real GL, never on the P&L.
+      totalCapitalized,
+      totalPending,
+      totalFailed,
+      // Counts, not amounts: whether anything is still unresolved must not ride
+      // on a signed monetary net that two offsetting queued entries cancel.
+      pendingEntryCount,
+      failedEntryCount,
+      hasUnpostedEntries: pendingEntryCount + failedEntryCount > 0,
       expenses: enrichedExpenses,
     };
   },
