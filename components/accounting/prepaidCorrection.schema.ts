@@ -10,6 +10,10 @@ export const prepaidCorrectionSchema = z
     changeTerm: z.boolean().default(false),
     newTermMonths: z.coerce.number().int().min(1).max(600).optional(),
     reason: z.string().min(1, "A reason is required"),
+    // The date the correction happened, if it wasn't today. The server holds
+    // the real rules (not future, inside an open period, not before the expense
+    // it credits) since only it can see the periods and the ledger.
+    accountingDate: z.string().optional(),
   })
   .refine((v) => v.refundAmount === 0 || !!v.refundPaymentMethod, {
     message: "Select how the refund was received",

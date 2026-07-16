@@ -39,9 +39,28 @@ import {
   PaymentMethodSelect,
   errorMessage,
   scaleForCurrency,
+  todayInput,
   useAccountingSubmit,
 } from "./AccountingTabShared";
 import { prepaidCorrectionSchema, type PrepaidCorrectionFormValues } from "./prepaidCorrection.schema";
+
+/**
+ * "YYYY-MM-DD" -> UTC midnight.
+ *
+ * Deliberately NOT AccountingTabShared's dateInputToMs, which parses at LOCAL
+ * midnight. Every date in the ledger is bucketed by its UTC month
+ * (expenseAmortization.ts) and accounting periods are bounded with Date.UTC, so
+ * for a user east of UTC a local-midnight parse of the 1st resolves into the
+ * previous month — and, with annual periods, the previous period. A date the
+ * accountant picked to control which month a correction lands in is the last
+ * place that can be off by one. (The shared helper has the same latent issue for
+ * claims and bank accounts; left alone here rather than changed underneath two
+ * other features from this PR.)
+ */
+function dateInputToUtcMs(value: string): number {
+  const [year, month, day] = value.split("-").map(Number);
+  return Date.UTC(year, month - 1, day);
+}
 
 // Each prepaid schedule carries its own currency (set at creation, independent
 // of the org's CURRENT currency — see hooks/useCurrencyFormatter.ts), so every
@@ -653,6 +672,7 @@ function CorrectScheduleDialog({
       changeTerm: false,
       newTermMonths: schedule.termMonths,
       reason: "",
+      accountingDate: todayInput,
     },
   });
   const changeTerm = form.watch("changeTerm");
@@ -672,6 +692,16 @@ function CorrectScheduleDialog({
         writeOffMinor: Math.round(values.writeOffAmount * factor),
         newTermMonths: values.changeTerm ? values.newTermMonths : undefined,
         reason: values.reason.trim(),
+        // Only sent when the accountant actually backdated it. Today is the
+        // default, and the default has to keep behaving exactly as it always
+        // has — the server applies its stricter rules (must land in an open
+        // period) only to a date someone deliberately chose, so defaulting to
+        // "send today, always" would start rejecting corrections in orgs whose
+        // current period was never opened, which used to queue quietly.
+        accountingDate:
+          values.accountingDate && values.accountingDate !== todayInput
+            ? dateInputToUtcMs(values.accountingDate)
+            : undefined,
         idempotencyKey,
       });
       toast.success(t(result.status === "PENDING" ? "PrepaidCorrectionSubmittedForApproval" as any : "PrepaidScheduleCorrected" as any));
@@ -724,6 +754,23 @@ function CorrectScheduleDialog({
                 )}
               />
             </div>
+
+            {(refundAmount > 0 || writeOffAmount > 0) && (
+              <FormField
+                control={form.control}
+                name="accountingDate"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>{t("CorrectionAccountingDateLabel" as any)}</FormLabel>
+                    <FormControl>
+                      <Input type="date" max={todayInput} {...field} />
+                    </FormControl>
+                    <p className="text-xs text-muted-foreground">{t("CorrectionAccountingDateHint" as any)}</p>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
             {needsApproval && (
               <p className="text-xs text-amber-600 bg-amber-500/10 border border-amber-500/20 rounded-md px-3 py-2">
