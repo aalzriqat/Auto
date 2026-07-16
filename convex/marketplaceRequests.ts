@@ -1,5 +1,5 @@
 import { ConvexError, v } from "convex/values";
-import { ActionCtx, action, internalMutation, query } from "./_generated/server";
+import { ActionCtx, QueryCtx, action, internalMutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { verifyTurnstileToken, normalizeText, normalizeRequiredText } from "./websites";
@@ -235,33 +235,153 @@ export const createRequest = internalMutation({
   },
 });
 
+function phoneMatchesBuyerRequest(request: Doc<"marketplaceRequests">, buyerPhone: string): boolean {
+  return request.buyerPhone === buyerPhone.replace(/[^\d+]/g, "");
+}
+
+async function getBuyerRequestStatus(ctx: QueryCtx, request: Doc<"marketplaceRequests">) {
+  const matches = await ctx.db
+    .query("marketplaceRequestMatches")
+    .withIndex("by_request", (q) => q.eq("requestId", request._id))
+    .collect();
+
+  const responses = await ctx.db
+    .query("marketplaceResponses")
+    .withIndex("by_request", (q) => q.eq("requestId", request._id))
+    .collect();
+  const respondedOrgIds = new Set(
+    responses.filter((r) => r.kind !== "NOT_AVAILABLE").map((r) => r.orgId)
+  );
+
+  return {
+    status: request.status,
+    createdAt: request.createdAt,
+    matchedCount: matches.length,
+    respondedCount: respondedOrgIds.size,
+  };
+}
+
 /** Public: buyer checks their own request's status — no login, matched by id + phone. */
 export const getStatusForBuyer = query({
   args: { requestId: v.id("marketplaceRequests"), buyerPhone: v.string() },
   handler: async (ctx, args) => {
     const request = await ctx.db.get(args.requestId);
+    if (!request || !phoneMatchesBuyerRequest(request, args.buyerPhone)) return null;
+    return await getBuyerRequestStatus(ctx, request);
+  },
+});
+
+/**
+ * Public/mobile-safe: the buyer status lookup that accepts a pasted/link id
+ * string, normalizing it and returning null for a malformed id instead of
+ * surfacing a validator error to the UI. Same phone gate as getStatusForBuyer.
+ */
+export const getStatusForBuyerByPublicId = query({
+  args: { requestId: v.string(), buyerPhone: v.string() },
+  handler: async (ctx, args) => {
+    const requestId = ctx.db.normalizeId("marketplaceRequests", args.requestId.trim());
+    if (!requestId) return null;
+    const request = await ctx.db.get(requestId);
+    if (!request || !phoneMatchesBuyerRequest(request, args.buyerPhone)) return null;
+    return await getBuyerRequestStatus(ctx, request);
+  },
+});
+
+/**
+ * Public Request Room feed: everything the buyer sees for their request, keyed
+ * only by the unguessable publicId (possession of the link = read access; the
+ * phone is only needed for sensitive actions, handled elsewhere). Offers are
+ * sanitized — dealer identity is a display name + badges, never internal ids
+ * beyond what a buyer action needs. NOT_AVAILABLE replies are omitted; they
+ * aren't offers.
+ */
+export const getBuyerOffers = query({
+  args: { publicId: v.string() },
+  handler: async (ctx, args) => {
+    const request = await ctx.db
+      .query("marketplaceRequests")
+      .withIndex("by_publicId", (q) => q.eq("publicId", args.publicId.trim()))
+      .unique();
     if (!request) return null;
-    const normalizedPhone = args.buyerPhone.replace(/[^\d+]/g, "");
-    if (request.buyerPhone !== normalizedPhone) return null;
 
-    const matches = await ctx.db
-      .query("marketplaceRequestMatches")
-      .withIndex("by_request", (q) => q.eq("requestId", args.requestId))
-      .collect();
-
+    const now = Date.now();
     const responses = await ctx.db
       .query("marketplaceResponses")
-      .withIndex("by_request", (q) => q.eq("requestId", args.requestId))
+      .withIndex("by_request", (q) => q.eq("requestId", request._id))
       .collect();
-    const respondedOrgIds = new Set(
-      responses.filter((r) => r.kind !== "NOT_AVAILABLE").map((r) => r.orgId)
+
+    const offers = await Promise.all(
+      responses
+        .filter((response) => response.kind !== "NOT_AVAILABLE")
+        .map(async (response) => {
+          const [org, profile] = await Promise.all([
+            ctx.db.get(response.orgId),
+            ctx.db
+              .query("marketplaceDealerProfiles")
+              .withIndex("by_org", (q) => q.eq("orgId", response.orgId))
+              .unique(),
+          ]);
+
+          let vehicle: {
+            year?: number;
+            make: string;
+            model: string;
+            trim?: string;
+            mileage?: number;
+            photoUrl: string | null;
+            inspectionStatus?: string;
+            dealerGuarantee?: boolean;
+          } | null = null;
+          if (response.vehicleId) {
+            const v = await ctx.db.get(response.vehicleId);
+            if (v && !v.isDeleted) {
+              const firstImageId = v.imageIds?.[0];
+              vehicle = {
+                year: v.year,
+                make: v.make,
+                model: v.model,
+                trim: v.trim,
+                mileage: v.mileage,
+                photoUrl: firstImageId ? await ctx.storage.getUrl(firstImageId) : null,
+                inspectionStatus: v.inspectionStatus,
+                dealerGuarantee: v.dealerGuarantee,
+              };
+            }
+          }
+
+          const expiresAt = response.financeOffer?.expiresAt;
+          return {
+            responseId: response._id,
+            dealerName: org?.name ?? "Dealer",
+            dealerBadges: profile?.badges ?? [],
+            dealerAvgResponseMinutes: profile?.avgResponseMinutes ?? null,
+            kind: response.kind,
+            cashPriceJod: response.offerPriceJod ?? null,
+            financeOffer: response.financeOffer ?? null,
+            sourcingRange: response.sourcingRange ?? null,
+            vehicle,
+            note: response.note ?? null,
+            expiresAt: expiresAt ?? null,
+            isExpired: expiresAt !== undefined && expiresAt < now,
+            buyerAction: response.buyerAction ?? null,
+            contactUnlocked: response.contactUnlockedAt !== undefined,
+            createdAt: response.createdAt,
+          };
+        })
     );
 
+    // Newest offers first, matching how the Request Room timeline reads.
+    offers.sort((a, b) => b.createdAt - a.createdAt);
+
     return {
+      publicId: request.publicId,
       status: request.status,
       createdAt: request.createdAt,
-      matchedCount: matches.length,
-      respondedCount: respondedOrgIds.size,
+      make: request.make,
+      model: request.model,
+      buyerCity: request.buyerCity,
+      paymentType: request.paymentType,
+      offers,
     };
   },
 });

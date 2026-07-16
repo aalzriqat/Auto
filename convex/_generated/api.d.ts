@@ -69,6 +69,7 @@ import type * as instagramEngagement from "../instagramEngagement.js";
 import type * as leads from "../leads.js";
 import type * as liveChat from "../liveChat.js";
 import type * as marketplaceBrowse from "../marketplaceBrowse.js";
+import type * as marketplaceBuyerActions from "../marketplaceBuyerActions.js";
 import type * as marketplaceDealers from "../marketplaceDealers.js";
 import type * as marketplaceReports from "../marketplaceReports.js";
 import type * as marketplaceRequests from "../marketplaceRequests.js";
@@ -78,6 +79,7 @@ import type * as marketplaceWhatsAppIntake from "../marketplaceWhatsAppIntake.js
 import type * as memberships from "../memberships.js";
 import type * as migrateExpenseReversals from "../migrateExpenseReversals.js";
 import type * as migrateMarketplacePublicIds from "../migrateMarketplacePublicIds.js";
+import type * as migrateMarketplaceStatuses from "../migrateMarketplaceStatuses.js";
 import type * as migrateRoles from "../migrateRoles.js";
 import type * as migrations from "../migrations.js";
 import type * as notificationPreferences from "../notificationPreferences.js";
@@ -244,6 +246,7 @@ declare const fullApi: ApiFromModules<{
   leads: typeof leads;
   liveChat: typeof liveChat;
   marketplaceBrowse: typeof marketplaceBrowse;
+  marketplaceBuyerActions: typeof marketplaceBuyerActions;
   marketplaceDealers: typeof marketplaceDealers;
   marketplaceReports: typeof marketplaceReports;
   marketplaceRequests: typeof marketplaceRequests;
@@ -253,6 +256,7 @@ declare const fullApi: ApiFromModules<{
   memberships: typeof memberships;
   migrateExpenseReversals: typeof migrateExpenseReversals;
   migrateMarketplacePublicIds: typeof migrateMarketplacePublicIds;
+  migrateMarketplaceStatuses: typeof migrateMarketplaceStatuses;
   migrateRoles: typeof migrateRoles;
   migrations: typeof migrations;
   notificationPreferences: typeof notificationPreferences;

@@ -3,6 +3,49 @@ import { expect, test, describe } from "vitest";
 import schema from "./schema";
 import { api } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
+import { calculateUnifiedMurabaha } from "../lib/financing";
+
+async function seedVehicle(t: ReturnType<typeof convexTest>, orgId: Id<"organizations">) {
+  return await t.run((ctx) =>
+    ctx.db.insert("vehicles", {
+      orgId,
+      make: "Toyota",
+      model: "Corolla",
+      year: 2022,
+      mileage: 30000,
+      color: "White",
+      fuelType: "Petrol",
+      transmission: "Automatic",
+      sellingPrice: 20000,
+      status: "AVAILABLE",
+      createdAt: Date.now(),
+    })
+  );
+}
+
+async function seedFinanceCompany(t: ReturnType<typeof convexTest>, orgId: Id<"organizations">) {
+  return await t.run((ctx) =>
+    ctx.db.insert("financeCompanies", {
+      orgId,
+      name: "Test Finance Co",
+      profitRate: 5.5,
+      maxTermMonths: 72,
+      gracePeriodMonths: 0,
+      insuranceRate: 3,
+      adminFees: 150,
+      commission: 300,
+      includesCommissionInDebt: false,
+      isActive: true,
+    })
+  );
+}
+
+// A positive reply that needs no vehicle — used by tests exercising scoring,
+// quota, routing, and lifecycle rather than the HAVE_MATCH offer path.
+const CAN_SOURCE_REPLY = {
+  kind: "CAN_SOURCE" as const,
+  sourcingRange: { minJod: 15000, maxJod: 18000, etaDays: 14 },
+};
 
 async function seedDealerOrg(t: ReturnType<typeof convexTest>, opts?: { name?: string }) {
   const orgId = await t.run((ctx) =>
@@ -73,47 +116,117 @@ async function seedMatch(
 }
 
 describe("respond", () => {
-  test("creates a new customer and an attributed lead", async () => {
+  test("records the response but creates NO customer or lead (lead now waits for buyer consent)", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealerOrg(t);
     const requestId = await seedRequest(t);
     await seedMatch(t, requestId, orgId);
 
-    const { leadId } = await asSales.mutation(api.marketplaceResponses.respond, {
+    const { responseId } = await asSales.mutation(api.marketplaceResponses.respond, {
+      orgId,
+      requestId,
+      kind: "CAN_SOURCE",
+      sourcingRange: { minJod: 15000, maxJod: 18000, etaDays: 14 },
+      note: "Can source within two weeks",
+    });
+
+    const response = await t.run((ctx) => ctx.db.get(responseId));
+    expect(response).toMatchObject({ orgId, requestId, kind: "CAN_SOURCE" });
+
+    const customers = await t.run((ctx) => ctx.db.query("customers").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect());
+    expect(customers).toHaveLength(0);
+    const leads = await t.run((ctx) => ctx.db.query("leads").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect());
+    expect(leads).toHaveLength(0);
+  });
+
+  test("computes the finance offer from the dealer's finance company + down/term — dealer never types the installment", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, asSales } = await seedDealerOrg(t);
+    const requestId = await seedRequest(t);
+    await seedMatch(t, requestId, orgId);
+    const vehicleId = await seedVehicle(t, orgId);
+    const financeCompanyId = await seedFinanceCompany(t, orgId);
+
+    const { responseId } = await asSales.mutation(api.marketplaceResponses.respond, {
       orgId,
       requestId,
       kind: "HAVE_MATCH",
-      note: "Ready to show today",
+      vehicleId,
+      offerPriceJod: 20000,
+      financeCompanyId,
+      downPayment: 4000,
+      termMonths: 60,
     });
 
-    const lead = await t.run((ctx) => ctx.db.get(leadId));
-    expect(lead).toMatchObject({
-      orgId,
-      sourceChannel: "marketplace",
-      marketplaceRequestId: requestId,
-      stage: "NEW",
+    const response = await t.run((ctx) => ctx.db.get(responseId));
+    const expected = calculateUnifiedMurabaha({
+      vehiclePrice: 20000,
+      downPayment: 4000,
+      commission: 300,
+      processingFees: 150,
+      annualProfitRate: 5.5,
+      annualInsuranceRate: 3,
+      termMonths: 60,
+      gracePeriodMonths: 0,
+      includesCommissionInDebt: false,
     });
-
-    const customers = await t.run((ctx) => ctx.db.query("customers").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect());
-    expect(customers).toHaveLength(1);
-    expect(customers[0]).toMatchObject({ firstName: "Sami", phone: "+962791234567" });
+    expect(response?.financeOffer).toMatchObject({
+      vehiclePrice: 20000,
+      downPayment: 4000,
+      termMonths: 60,
+      financeCompanyId,
+    });
+    expect(response?.financeOffer?.monthlyInstallment).toBeCloseTo(Math.round(expected.monthlyInstallment), 5);
   });
 
-  test("reuses an existing customer matched by phone instead of duplicating", async () => {
+  test("moves the request to OFFERS_RECEIVED on a positive reply, never FULFILLED", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealerOrg(t);
     const requestId = await seedRequest(t);
     await seedMatch(t, requestId, orgId);
 
-    const existingCustomerId = await t.run((ctx) =>
-      ctx.db.insert("customers", { orgId, firstName: "Sami", lastName: "Existing", phone: "+962791234567" })
+    await asSales.mutation(api.marketplaceResponses.respond, {
+      orgId,
+      requestId,
+      kind: "CAN_SOURCE",
+      sourcingRange: { minJod: 15000, maxJod: 18000, etaDays: 10 },
+    });
+
+    expect((await t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("OFFERS_RECEIVED");
+  });
+
+  test("requires a vehicle for HAVE_MATCH and a sourcing range for CAN_SOURCE", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, asSales } = await seedDealerOrg(t);
+    const requestId = await seedRequest(t);
+    await seedMatch(t, requestId, orgId);
+
+    await expect(
+      asSales.mutation(api.marketplaceResponses.respond, { orgId, requestId, kind: "HAVE_MATCH" })
+    ).rejects.toThrow(/vehicle/i);
+
+    await expect(
+      asSales.mutation(api.marketplaceResponses.respond, { orgId, requestId, kind: "CAN_SOURCE" })
+    ).rejects.toThrow(/range/i);
+  });
+
+  test("writes a response.sent marketplace event", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId, asSales } = await seedDealerOrg(t);
+    const requestId = await seedRequest(t);
+    await seedMatch(t, requestId, orgId);
+
+    await asSales.mutation(api.marketplaceResponses.respond, {
+      orgId,
+      requestId,
+      kind: "CAN_SOURCE",
+      sourcingRange: { minJod: 15000, maxJod: 18000, etaDays: 7 },
+    });
+
+    const events = await t.run((ctx) =>
+      ctx.db.query("marketplaceEvents").withIndex("by_request", (q) => q.eq("requestId", requestId)).collect()
     );
-
-    await asSales.mutation(api.marketplaceResponses.respond, { orgId, requestId, kind: "CAN_SOURCE" });
-
-    const customers = await t.run((ctx) => ctx.db.query("customers").withIndex("by_org", (q) => q.eq("orgId", orgId)).collect());
-    expect(customers).toHaveLength(1);
-    expect(customers[0]._id).toBe(existingCustomerId);
+    expect(events.some((e) => e.event === "response.sent")).toBe(true);
   });
 
   test("updates responseScore using notifiedAt, falling back to matchedAt", async () => {
@@ -123,7 +236,7 @@ describe("respond", () => {
     const tenMinutesAgo = Date.now() - 10 * 60 * 1000;
     await seedMatch(t, requestId, orgId, { matchedAt: tenMinutesAgo - 60000, notifiedAt: tenMinutesAgo });
 
-    await asSales.mutation(api.marketplaceResponses.respond, { orgId, requestId, kind: "HAVE_MATCH" });
+    await asSales.mutation(api.marketplaceResponses.respond, { orgId, requestId, ...CAN_SOURCE_REPLY });
 
     const profile = await t.run((ctx) =>
       ctx.db.query("marketplaceDealerProfiles").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique()
@@ -141,7 +254,7 @@ describe("respond", () => {
       const requestId = await seedRequest(t, { buyerPhone: `+96279900000${i}` });
       const fiveMinutesAgo = Date.now() - 5 * 60 * 1000;
       await seedMatch(t, requestId, orgId, { matchedAt: fiveMinutesAgo - 60000, notifiedAt: fiveMinutesAgo });
-      await asSales.mutation(api.marketplaceResponses.respond, { orgId, requestId, kind: "HAVE_MATCH" });
+      await asSales.mutation(api.marketplaceResponses.respond, { orgId, requestId, ...CAN_SOURCE_REPLY });
     }
 
     const profile = await t.run((ctx) =>
@@ -151,7 +264,7 @@ describe("respond", () => {
     expect(profile?.badges).toContain("FAST_RESPONSE");
   });
 
-  test("marks the request FULFILLED on a positive response but not on NOT_AVAILABLE", async () => {
+  test("moves to OFFERS_RECEIVED on a positive reply but stays MATCHED on NOT_AVAILABLE", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     const { orgId: orgA, asSales: asSalesA } = await seedDealerOrg(t, { name: "Dealer A" });
     const { orgId: orgB, asSales: asSalesB } = await seedDealerOrg(t, { name: "Dealer B" });
@@ -162,8 +275,8 @@ describe("respond", () => {
     await asSalesA.mutation(api.marketplaceResponses.respond, { orgId: orgA, requestId, kind: "NOT_AVAILABLE" });
     expect((await t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("MATCHED");
 
-    await asSalesB.mutation(api.marketplaceResponses.respond, { orgId: orgB, requestId, kind: "HAVE_SIMILAR" });
-    expect((await t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("FULFILLED");
+    await asSalesB.mutation(api.marketplaceResponses.respond, { orgId: orgB, requestId, ...CAN_SOURCE_REPLY });
+    expect((await t.run((ctx) => ctx.db.get(requestId)))?.status).toBe("OFFERS_RECEIVED");
   });
 
   test("rejects a response from an org the request was never routed to", async () => {
@@ -205,11 +318,13 @@ describe("respond", () => {
     const requestId = await seedRequest(t);
     await seedMatch(t, requestId, orgId);
 
+    const vehicleId = await seedVehicle(t, orgId);
     await expect(
       asSales.mutation(api.marketplaceResponses.respond, {
         orgId,
         requestId,
         kind: "HAVE_MATCH",
+        vehicleId,
         offerPriceJod: -100,
       })
     ).rejects.toThrow(/non-negative/);
@@ -229,7 +344,7 @@ describe("respond", () => {
     );
 
     await expect(
-      asSales.mutation(api.marketplaceResponses.respond, { orgId, requestId, kind: "HAVE_MATCH" })
+      asSales.mutation(api.marketplaceResponses.respond, { orgId, requestId, ...CAN_SOURCE_REPLY })
     ).rejects.toThrow(/Upgrade required/);
   });
 
@@ -249,7 +364,7 @@ describe("respond", () => {
     );
 
     await expect(
-      asSales.mutation(api.marketplaceResponses.respond, { orgId, requestId, kind: "HAVE_MATCH" })
+      asSales.mutation(api.marketplaceResponses.respond, { orgId, requestId, ...CAN_SOURCE_REPLY })
     ).rejects.toThrow(/Upgrade required/);
   });
 
@@ -268,7 +383,7 @@ describe("respond", () => {
         )
     );
 
-    await asSales.mutation(api.marketplaceResponses.respond, { orgId, requestId, kind: "HAVE_MATCH" });
+    await asSales.mutation(api.marketplaceResponses.respond, { orgId, requestId, ...CAN_SOURCE_REPLY });
 
     const profile = await t.run((ctx) =>
       ctx.db.query("marketplaceDealerProfiles").withIndex("by_org", (q) => q.eq("orgId", orgId)).unique()
@@ -290,7 +405,7 @@ describe("respond", () => {
     for (let i = 0; i < 3; i++) {
       const requestId = await seedRequest(t, { buyerPhone: `+96279900111${i}` });
       await seedMatch(t, requestId, orgId);
-      await asSales.mutation(api.marketplaceResponses.respond, { orgId, requestId, kind: "HAVE_MATCH" });
+      await asSales.mutation(api.marketplaceResponses.respond, { orgId, requestId, ...CAN_SOURCE_REPLY });
     }
 
     const profile = await t.run((ctx) =>
@@ -315,10 +430,10 @@ describe("listForOrg", () => {
     expect(listBeforeResponse[0].requestId).toBe(requestForA);
     expect(listBeforeResponse[0].latestResponse).toBeNull();
 
-    await asSalesA.mutation(api.marketplaceResponses.respond, { orgId: orgA, requestId: requestForA, kind: "HAVE_MATCH" });
+    await asSalesA.mutation(api.marketplaceResponses.respond, { orgId: orgA, requestId: requestForA, ...CAN_SOURCE_REPLY });
 
     const listAfterResponse = await asSalesA.query(api.marketplaceResponses.listForOrg, { orgId: orgA });
-    expect(listAfterResponse[0].latestResponse).toMatchObject({ kind: "HAVE_MATCH" });
+    expect(listAfterResponse[0].latestResponse).toMatchObject({ kind: "CAN_SOURCE" });
   });
 });
 
@@ -332,7 +447,7 @@ describe("getStatusForBuyer respondedCount", () => {
     await seedMatch(t, requestId, orgB);
 
     await asSalesA.mutation(api.marketplaceResponses.respond, { orgId: orgA, requestId, kind: "NOT_AVAILABLE" });
-    await asSalesB.mutation(api.marketplaceResponses.respond, { orgId: orgB, requestId, kind: "HAVE_MATCH" });
+    await asSalesB.mutation(api.marketplaceResponses.respond, { orgId: orgB, requestId, ...CAN_SOURCE_REPLY });
 
     const status = await t.query(api.marketplaceRequests.getStatusForBuyer, {
       requestId,

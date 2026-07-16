@@ -177,6 +177,27 @@ describe("getStatusForBuyer / acceptOffer / declineOffer", () => {
     expect(rightPhone).toMatchObject({ status: "PENDING", offerAmountJod: null });
   });
 
+  test("getStatusForBuyerByPublicId accepts a raw id string and returns null for a malformed id", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const { orgId } = await seedDealer(t);
+    const { tradeInRequestId } = await t.mutation(internal.marketplaceTradeIns.createTradeInRequest, {
+      ...baseTradeInMutationArgs,
+      orgId,
+    });
+
+    const status = await t.query(api.marketplaceTradeIns.getStatusForBuyerByPublicId, {
+      tradeInRequestId,
+      buyerPhone: baseTradeInArgs.buyerPhone,
+    });
+    expect(status).toMatchObject({ status: "PENDING" });
+
+    const malformed = await t.query(api.marketplaceTradeIns.getStatusForBuyerByPublicId, {
+      tradeInRequestId: "not-a-real-id",
+      buyerPhone: baseTradeInArgs.buyerPhone,
+    });
+    expect(malformed).toBeNull();
+  });
+
   test("acceptOffer creates an attributed lead and rejects when there's no active offer", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.ts"));
     const { orgId, asSales } = await seedDealer(t);

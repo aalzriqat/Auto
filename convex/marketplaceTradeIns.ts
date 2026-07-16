@@ -1,5 +1,5 @@
 import { ConvexError, v } from "convex/values";
-import { action, internalMutation, mutation, query } from "./_generated/server";
+import { action, internalMutation, mutation, query, QueryCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { normalizeRequiredText, normalizeText } from "./websites";
@@ -153,21 +153,50 @@ export const makeOffer = mutation({
 });
 
 /** Public: buyer checks their trade-in offer status, phone-gated same as marketplaceRequests.getStatusForBuyer. */
+async function getBuyerTradeInStatus(
+  ctx: QueryCtx,
+  tradeInRequestId: Id<"marketplaceTradeInRequests">,
+  buyerPhone: string
+) {
+  const tradeIn = await ctx.db.get(tradeInRequestId);
+  if (!tradeIn) return null;
+  // normalizePhone throws on an unparseable number — for a read that just
+  // means "no match", so treat it as null rather than surfacing the error.
+  let normalizedPhone: string;
+  try {
+    normalizedPhone = normalizePhone(buyerPhone, "Phone");
+  } catch (error) {
+    if (error instanceof ConvexError) return null;
+    throw error;
+  }
+  if (tradeIn.buyerPhone !== normalizedPhone) return null;
+
+  return {
+    status: tradeIn.status,
+    offerAmountJod: tradeIn.offerAmountJod ?? null,
+    currentMake: tradeIn.currentMake,
+    currentModel: tradeIn.currentModel,
+    currentYear: tradeIn.currentYear,
+  };
+}
+
 export const getStatusForBuyer = query({
   args: { tradeInRequestId: v.id("marketplaceTradeInRequests"), buyerPhone: v.string() },
   handler: async (ctx, args) => {
-    const tradeIn = await ctx.db.get(args.tradeInRequestId);
-    if (!tradeIn) return null;
-    const normalizedPhone = normalizePhone(args.buyerPhone, "Phone");
-    if (tradeIn.buyerPhone !== normalizedPhone) return null;
+    return await getBuyerTradeInStatus(ctx, args.tradeInRequestId, args.buyerPhone);
+  },
+});
 
-    return {
-      status: tradeIn.status,
-      offerAmountJod: tradeIn.offerAmountJod ?? null,
-      currentMake: tradeIn.currentMake,
-      currentModel: tradeIn.currentModel,
-      currentYear: tradeIn.currentYear,
-    };
+/**
+ * Public/mobile-safe: buyer trade-in status by a pasted/link id string, null
+ * for a malformed id instead of a validator error. Same phone gate.
+ */
+export const getStatusForBuyerByPublicId = query({
+  args: { tradeInRequestId: v.string(), buyerPhone: v.string() },
+  handler: async (ctx, args) => {
+    const tradeInRequestId = ctx.db.normalizeId("marketplaceTradeInRequests", args.tradeInRequestId.trim());
+    if (!tradeInRequestId) return null;
+    return await getBuyerTradeInStatus(ctx, tradeInRequestId, args.buyerPhone);
   },
 });
 

@@ -270,6 +270,115 @@ describe("getStatusForBuyer", () => {
     });
     expect(wrongPhone).toBeNull();
   });
+
+  test("getStatusForBuyerByPublicId accepts a raw id string and returns null for a malformed id", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    await seedDealer(t, { name: "Dealer", areas: ["Amman"], brandsCarried: [] });
+    const result = await t.action(api.marketplaceRequests.submitRequest, baseRequestArgs);
+
+    const status = await t.query(api.marketplaceRequests.getStatusForBuyerByPublicId, {
+      requestId: result.requestId,
+      buyerPhone: baseRequestArgs.buyerPhone,
+    });
+    expect(status).toMatchObject({ status: "MATCHED", matchedCount: 1 });
+
+    const malformed = await t.query(api.marketplaceRequests.getStatusForBuyerByPublicId, {
+      requestId: "not-a-real-id",
+      buyerPhone: baseRequestArgs.buyerPhone,
+    });
+    expect(malformed).toBeNull();
+  });
+});
+
+describe("getBuyerOffers", () => {
+  async function seedRequestWithPublicId(t: ReturnType<typeof convexTest>, publicId: string) {
+    return await t.run((ctx) =>
+      ctx.db.insert("marketplaceRequests", {
+        status: "OFFERS_RECEIVED",
+        publicId,
+        buyerFirstName: "Sami",
+        buyerPhone: "+962791234567",
+        buyerCity: "Amman",
+        make: "Toyota",
+        model: "Corolla",
+        paymentType: "FINANCE",
+        buyerTimeframe: "ASAP",
+        buyerIntent: "HOT",
+        consentAcceptedAt: Date.now(),
+        clientFingerprint: "fp-offers",
+        expiresAt: Date.now() + 100000,
+        createdAt: Date.now(),
+      })
+    );
+  }
+
+  test("returns sanitized offers for a valid publicId and omits NOT_AVAILABLE replies", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Bloom Cars", createdAt: Date.now() }));
+    const otherOrgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Other Motors", createdAt: Date.now() }));
+    const userId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "u1", email: "u1@test.com", name: "Rep" }));
+    await t.run((ctx) =>
+      ctx.db.insert("marketplaceDealerProfiles", {
+        orgId, isOptedIn: true, areas: [], brandsCarried: [], badges: ["FAST_RESPONSE"],
+        totalResponses: 3, totalAccepted: 1, avgResponseMinutes: 12, tier: "FEATURED",
+        leadsUsedThisPeriod: 0, createdAt: Date.now(), updatedAt: Date.now(),
+      })
+    );
+    const requestId = await seedRequestWithPublicId(t, "room-token-1");
+
+    await t.run((ctx) =>
+      ctx.db.insert("marketplaceResponses", {
+        requestId, orgId, respondingUserId: userId, kind: "CAN_SOURCE",
+        sourcingRange: { minJod: 15000, maxJod: 18000, etaDays: 10 },
+        createdAt: Date.now(),
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("marketplaceResponses", {
+        requestId, orgId: otherOrgId, respondingUserId: userId, kind: "NOT_AVAILABLE",
+        createdAt: Date.now(),
+      })
+    );
+
+    const result = await t.query(api.marketplaceRequests.getBuyerOffers, { publicId: "room-token-1" });
+    expect(result?.status).toBe("OFFERS_RECEIVED");
+    expect(result?.offers).toHaveLength(1);
+    expect(result?.offers[0]).toMatchObject({
+      dealerName: "Bloom Cars",
+      dealerBadges: ["FAST_RESPONSE"],
+      dealerAvgResponseMinutes: 12,
+      kind: "CAN_SOURCE",
+      sourcingRange: { minJod: 15000, maxJod: 18000, etaDays: 10 },
+    });
+  });
+
+  test("marks an offer expired once its finance-offer expiry has passed", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Bloom Cars", createdAt: Date.now() }));
+    const userId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "u2", email: "u2@test.com", name: "Rep" }));
+    const requestId = await seedRequestWithPublicId(t, "room-token-2");
+    await t.run((ctx) =>
+      ctx.db.insert("marketplaceResponses", {
+        requestId, orgId, respondingUserId: userId, kind: "HAVE_SIMILAR",
+        offerPriceJod: 19000,
+        financeOffer: {
+          vehiclePrice: 19000, downPayment: 4000, termMonths: 60, monthlyInstallment: 320,
+          totalContractValue: 23200, totalProfit: 3000, insuranceAmount: 1200,
+          commission: 300, processingFees: 150, expiresAt: Date.now() - 1000,
+        },
+        createdAt: Date.now(),
+      })
+    );
+
+    const result = await t.query(api.marketplaceRequests.getBuyerOffers, { publicId: "room-token-2" });
+    expect(result?.offers[0].isExpired).toBe(true);
+  });
+
+  test("returns null for an unknown publicId", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const result = await t.query(api.marketplaceRequests.getBuyerOffers, { publicId: "does-not-exist" });
+    expect(result).toBeNull();
+  });
 });
 
 describe("expireStaleRequests", () => {
