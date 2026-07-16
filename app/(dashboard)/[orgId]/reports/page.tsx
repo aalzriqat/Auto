@@ -182,8 +182,8 @@ export default function ReportsPage() {
   const { t } = useLanguage();
   const { format, formatCompact } = useCurrency();
 
-  const [startDateStr, setStartDateStr] = useState(daysFromTodayDateInput(-30));
-  const [endDateStr, setEndDateStr] = useState(todayDateInput());
+  const [startDateStr, setStartDateStr] = useState(() => daysFromTodayDateInput(-30));
+  const [endDateStr, setEndDateStr] = useState(() => todayDateInput());
   const [selectedSalesperson, setSelectedSalesperson] = useState<string>("all");
 
   // UTC boundaries — the report buckets by UTC month, so a local setHours() here

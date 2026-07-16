@@ -108,8 +108,8 @@ export function GeneralLedgerTab() {
   const { t, locale } = useLanguage();
   const formatCurrency = useCurrencyFormatter();
 
-  const [startDateStr, setStartDateStr] = useState(daysFromTodayDateInput(-30));
-  const [endDateStr, setEndDateStr] = useState(todayDateInput());
+  const [startDateStr, setStartDateStr] = useState(() => daysFromTodayDateInput(-30));
+  const [endDateStr, setEndDateStr] = useState(() => todayDateInput());
   const [filterActive, setFilterActive] = useState(false);
 
   // UTC boundaries, matching how transactions are dated — see lib/dateInput.ts.
