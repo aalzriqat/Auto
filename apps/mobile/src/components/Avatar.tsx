@@ -1,4 +1,4 @@
-import { Image, StyleSheet, Text, View } from "react-native";
+import { Image, StyleSheet, Text, View, type ImageStyle, type StyleProp, type ViewStyle } from "react-native";
 
 import { theme } from "../theme";
 
@@ -6,17 +6,24 @@ export function MemberAvatar({
   imageUrl,
   name,
   size = 44,
+  style,
   testID,
-}: Readonly<{ imageUrl?: string; name: string; size?: number; testID?: string }>) {
+}: Readonly<{ imageUrl?: string; name: string; size?: number; style?: StyleProp<ViewStyle>; testID?: string }>) {
   const dimensionStyle = { width: size, height: size, borderRadius: size / 2 };
 
   if (imageUrl) {
-    return <Image source={{ uri: imageUrl }} style={[styles.avatarImage, dimensionStyle]} testID={testID} />;
+    return (
+      <Image
+        source={{ uri: imageUrl }}
+        style={[styles.avatarImage, dimensionStyle, style as StyleProp<ImageStyle>]}
+        testID={testID}
+      />
+    );
   }
 
   return (
-    <View style={[styles.avatar, dimensionStyle]} testID={testID}>
-      <Text style={styles.avatarText}>{name.slice(0, 2).toUpperCase() || "?"}</Text>
+    <View style={[styles.avatar, dimensionStyle, style]} testID={testID}>
+      <Text style={[styles.avatarText, { fontSize: Math.max(10, size / 3) }]}>{name.slice(0, 2).toUpperCase() || "?"}</Text>
     </View>
   );
 }

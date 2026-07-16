@@ -3,7 +3,7 @@ import { useAuth } from "@clerk/expo";
 import { useConvexAuth, useQuery } from "convex/react";
 import { Tabs, useRouter } from "expo-router";
 import { createContext, useContext, useEffect, useMemo } from "react";
-import { StyleSheet } from "react-native";
+import { StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import {
@@ -12,6 +12,7 @@ import {
   type MobileOrgSummary,
 } from "../../convexApi";
 import { EmptyState } from "../../components/EmptyState";
+import { FloatingMessengerFAB } from "../../components/FloatingMessengerFAB";
 import { Icon, type SemanticIconName } from "../../components/Icon";
 import { RouteLoadingState } from "../../components/RouteState";
 import { Screen } from "../../components/Screen";
@@ -134,55 +135,62 @@ export function WorkspaceTabsLayout({ orgId }: Readonly<{ orgId: string | null }
     org: selectedOrg,
     orgId: selectedOrg._id,
   };
+  const tabBarHeight = 64 + Math.max(insets.bottom, theme.spacing.sm);
 
   return (
     <WorkspaceTabsDataContext.Provider value={value}>
-      <Tabs
-        screenOptions={{
-          headerShown: false,
-          tabBarActiveTintColor: theme.colors.primary,
-          tabBarInactiveTintColor: theme.colors.mutedText,
-          tabBarLabelStyle: {
-            fontFamily: getFontFamily(locale, "medium", fontsLoaded),
-            fontSize: 11,
-            fontWeight: "700",
-            lineHeight: 14,
-          },
-          tabBarStyle: [
-            styles.tabBar,
-            {
-              height: 64 + Math.max(insets.bottom, theme.spacing.sm),
-              paddingBottom: Math.max(insets.bottom, theme.spacing.sm),
+      <View style={styles.root}>
+        <Tabs
+          screenOptions={{
+            headerShown: false,
+            tabBarActiveTintColor: theme.colors.primary,
+            tabBarInactiveTintColor: theme.colors.mutedText,
+            tabBarLabelStyle: {
+              fontFamily: getFontFamily(locale, "medium", fontsLoaded),
+              fontSize: 11,
+              fontWeight: "700",
+              lineHeight: 14,
             },
-          ],
-        }}
-      >
-        {orderedTabs.map((tab) => {
-          const label = t(tab.labelKey);
-          const visible = canShowTab(tab, myMembership.permissions, myMembership.roleName);
+            tabBarStyle: [
+              styles.tabBar,
+              {
+                height: tabBarHeight,
+                paddingBottom: Math.max(insets.bottom, theme.spacing.sm),
+              },
+            ],
+          }}
+        >
+          {orderedTabs.map((tab) => {
+            const label = t(tab.labelKey);
+            const visible = canShowTab(tab, myMembership.permissions, myMembership.roleName);
 
-          return (
-            <Tabs.Screen
-              key={tab.name}
-              name={tab.name}
-              options={{
-                href: visible ? undefined : null,
-                tabBarAccessibilityLabel: label,
-                tabBarIcon: ({ focused }) => (
-                  <Icon color={focused ? "primary" : "mutedText"} name={tab.icon} size={22} />
-                ),
-                tabBarLabel: label,
-                title: label,
-              }}
-            />
-          );
-        })}
-      </Tabs>
+            return (
+              <Tabs.Screen
+                key={tab.name}
+                name={tab.name}
+                options={{
+                  href: visible ? undefined : null,
+                  tabBarAccessibilityLabel: label,
+                  tabBarIcon: ({ focused }) => (
+                    <Icon color={focused ? "primary" : "mutedText"} name={tab.icon} size={22} />
+                  ),
+                  tabBarLabel: label,
+                  title: label,
+                }}
+              />
+            );
+          })}
+        </Tabs>
+        <FloatingMessengerFAB bottomOffset={tabBarHeight + theme.spacing.md} orgId={selectedOrg._id} />
+      </View>
     </WorkspaceTabsDataContext.Provider>
   );
 }
 
 const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+  },
   tabBar: {
     borderTopColor: theme.colors.border,
     borderTopWidth: StyleSheet.hairlineWidth,

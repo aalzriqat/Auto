@@ -1,9 +1,16 @@
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { Text, View } from "react-native";
+import { renderNotification } from "../../../../../../lib/notifications/render";
 import { api, type MobileNotification } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
-import { PAGE_SIZE, compactNumber, useGenericError, PrimaryButton, RecordCard, ModuleList } from "./moduleShared";
+import { DetailPill, PAGE_SIZE, compactNumber, useGenericError, PrimaryButton, RecordCard, ModuleList } from "./moduleShared";
 import { styles } from "./moduleStyles";
+
+function priorityLabel(priority: string | undefined, locale: "en" | "ar"): string {
+  if (priority === "urgent") return locale === "ar" ? "عاجل" : "Urgent";
+  if (priority === "low") return locale === "ar" ? "منخفض" : "Low";
+  return locale === "ar" ? "عادي" : "Normal";
+}
 
 export function NotificationsModule({ orgId }: { orgId: string }) {
   const { locale } = useLocale();
@@ -45,16 +52,23 @@ export function NotificationsModule({ orgId }: { orgId: string }) {
           />
         </View>
       }
-      renderItem={(notification: MobileNotification) => (
+      renderItem={(notification: MobileNotification) => {
+        const rendered = renderNotification(
+          locale,
+          notification.type ?? "",
+          notification.data as Record<string, string | number> | undefined,
+        );
+        const title = notification.title || rendered.title || (locale === "ar" ? "إشعار" : "Notification");
+        const message = notification.message || rendered.message;
+
+        return (
         <RecordCard>
           <View style={styles.recordHeader}>
-            <Text style={styles.recordTitle}>
-              {notification.title || notification.type || (locale === "ar" ? "إشعار" : "Notification")}
-            </Text>
+            <Text style={styles.recordTitle}>{title}</Text>
             <Text style={styles.statusPill}>{notification.isRead ? (locale === "ar" ? "مقروء" : "Read") : (locale === "ar" ? "جديد" : "New")}</Text>
           </View>
-          <Text style={styles.recordMeta}>{notification.message || notification.category || "-"}</Text>
-          <Text style={styles.recordMeta}>{notification.priority || "normal"}</Text>
+          {message ? <Text style={styles.recordMeta}>{message}</Text> : null}
+          <DetailPill label={priorityLabel(notification.priority, locale)} tone={notification.priority === "urgent" ? "warning" : "neutral"} />
           <View style={styles.cardActions}>
             {!notification.isRead ? (
               <PrimaryButton
@@ -70,7 +84,8 @@ export function NotificationsModule({ orgId }: { orgId: string }) {
             />
           </View>
         </RecordCard>
-      )}
+        );
+      }}
     />
   );
 }

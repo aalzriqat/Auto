@@ -659,22 +659,30 @@ export const styles = StyleSheet.create({
   },
   messageRow: {
     flexDirection: "row",
+    alignItems: "flex-end",
+    gap: theme.spacing.xs,
     justifyContent: "flex-start",
   },
   messageRowMine: {
     justifyContent: "flex-end",
   },
+  messageAvatarSlot: {
+    width: 26,
+    height: 26,
+  },
   messageBubble: {
-    maxWidth: "84%",
+    maxWidth: "78%",
     gap: theme.spacing.xs,
     borderRadius: theme.radius.lg,
     paddingHorizontal: theme.spacing.md,
     paddingVertical: theme.spacing.sm,
   },
   messageBubbleOther: {
+    borderBottomLeftRadius: 4,
     backgroundColor: theme.colors.surfaceAlt,
   },
   messageBubbleMine: {
+    borderBottomRightRadius: 4,
     backgroundColor: theme.colors.primary,
   },
   messageSender: {
@@ -690,6 +698,11 @@ export const styles = StyleSheet.create({
   messageBodyMine: {
     color: theme.colors.onPrimary,
   },
+  messageMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.xs,
+  },
   messageMeta: {
     color: theme.colors.mutedText,
     fontSize: 10,
@@ -697,6 +710,37 @@ export const styles = StyleSheet.create({
   },
   messageMetaMine: {
     color: theme.colors.primarySoft,
+  },
+  seenByStack: {
+    flexDirection: "row",
+  },
+  seenByAvatar: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    marginLeft: -4,
+    borderWidth: 1,
+    borderColor: theme.colors.surface,
+  },
+  typingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: theme.spacing.sm,
+  },
+  typingDotsShell: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    borderRadius: theme.radius.full,
+    backgroundColor: theme.colors.surfaceAlt,
+    paddingHorizontal: theme.spacing.md,
+    paddingVertical: theme.spacing.sm,
+  },
+  typingDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: theme.colors.mutedText,
   },
   typingText: {
     color: theme.colors.mutedText,

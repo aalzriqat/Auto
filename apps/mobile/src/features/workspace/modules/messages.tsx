@@ -1,13 +1,60 @@
 import { useMutation, usePaginatedQuery, useQuery } from "convex/react";
 import { useEffect, useRef, useState } from "react";
-import { Alert, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { Alert, Animated, Easing, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { MemberAvatar } from "../../../components/Avatar";
+import { Icon } from "../../../components/Icon";
 import { RouteLoadingState } from "../../../components/RouteState";
 import { api, type MobileDirectConversation, type MobileDirectMember, type MobileDirectMessage } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { theme } from "../../../theme";
-import { compactInitials } from "../nativeModules";
 import { relativeTimeLabel, directConversationTitle, isPaginationLoading, canLoadMore, useGenericError, SearchInput, PrimaryButton, FormField, FormModal, EmptyList } from "./moduleShared";
 import { styles } from "./moduleStyles";
+
+function directConversationAvatarUrl(
+  conversation: MobileDirectConversation,
+  currentUserId: string | undefined,
+): string | undefined {
+  if (conversation.type === "GROUP") return undefined;
+  const otherMember = conversation.members.find((member) => member?._id !== currentUserId);
+  return otherMember?.imageUrl;
+}
+
+function TypingDots() {
+  const dots = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current;
+
+  useEffect(() => {
+    const animations = dots.map((value, index) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(value, {
+            toValue: 1,
+            duration: 300,
+            delay: index * 150,
+            easing: Easing.out(Easing.quad),
+            useNativeDriver: true,
+          }),
+          Animated.timing(value, { toValue: 0, duration: 300, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+        ]),
+      ),
+    );
+    animations.forEach((animation) => animation.start());
+    return () => animations.forEach((animation) => animation.stop());
+  }, [dots]);
+
+  return (
+    <View style={styles.typingDotsShell}>
+      {dots.map((value, index) => (
+        <Animated.View
+          key={index}
+          style={[
+            styles.typingDot,
+            { transform: [{ translateY: value.interpolate({ inputRange: [0, 1], outputRange: [0, -4] }) }] },
+          ]}
+        />
+      ))}
+    </View>
+  );
+}
 
 export function MessagesModule({ orgId }: { orgId: string }) {
   const { locale, textDirection } = useLocale();
@@ -229,7 +276,7 @@ export function MessagesModule({ orgId }: { orgId: string }) {
                 onPress={() => setSelectedId(conversation._id)}
               >
                 <View style={styles.conversationAvatar}>
-                  <Text style={styles.conversationAvatarText}>{compactInitials(title)}</Text>
+                  <MemberAvatar imageUrl={directConversationAvatarUrl(conversation, me?._id)} name={title} size={42} />
                   {conversation.hasUnread ? <View style={styles.unreadDot} /> : null}
                 </View>
                 <View style={styles.conversationText}>
@@ -252,11 +299,11 @@ export function MessagesModule({ orgId }: { orgId: string }) {
           {activeConversation ? (
             <>
               <View style={styles.threadHeader}>
-                <View style={styles.conversationAvatar}>
-                  <Text style={styles.conversationAvatarText}>
-                    {compactInitials(directConversationTitle(activeConversation, me?._id, locale === "ar" ? "محادثة" : "Conversation"))}
-                  </Text>
-                </View>
+                <MemberAvatar
+                  imageUrl={directConversationAvatarUrl(activeConversation, me?._id)}
+                  name={directConversationTitle(activeConversation, me?._id, locale === "ar" ? "محادثة" : "Conversation")}
+                  size={42}
+                />
                 <View style={styles.headerText}>
                   <Text numberOfLines={1} style={styles.threadTitle}>
                     {directConversationTitle(activeConversation, me?._id, locale === "ar" ? "محادثة" : "Conversation")}
@@ -287,26 +334,52 @@ export function MessagesModule({ orgId }: { orgId: string }) {
                 {isPaginationLoading(messageStatus) ? (
                   <Text style={styles.mutedText}>{locale === "ar" ? "جاري التحميل..." : "Loading..."}</Text>
                 ) : null}
-                {chronologicalMessages.length ? chronologicalMessages.map((message: MobileDirectMessage) => {
+                {chronologicalMessages.length ? chronologicalMessages.map((message: MobileDirectMessage, index) => {
                   const isMine = message.senderId === me?._id;
-                  const statusLabel =
-                    message.status === "seen"
-                      ? locale === "ar" ? "مقروء" : "Seen"
-                      : message.status === "delivered"
-                        ? locale === "ar" ? "مستلم" : "Delivered"
-                        : message.status === "sent"
-                          ? locale === "ar" ? "مرسل" : "Sent"
-                          : "";
+                  const nextMessage = chronologicalMessages[index + 1];
+                  const isLastInRun = !nextMessage || nextMessage.senderId !== message.senderId;
                   return (
                     <View key={message._id} style={[styles.messageRow, isMine && styles.messageRowMine]}>
+                      {!isMine ? (
+                        <View style={styles.messageAvatarSlot}>
+                          {isLastInRun ? (
+                            <MemberAvatar imageUrl={message.senderImageUrl} name={message.senderName} size={26} />
+                          ) : null}
+                        </View>
+                      ) : null}
                       <View style={[styles.messageBubble, isMine ? styles.messageBubbleMine : styles.messageBubbleOther]}>
                         {!isMine && activeConversation.type === "GROUP" ? (
                           <Text style={styles.messageSender}>{message.senderName}</Text>
                         ) : null}
                         <Text style={[styles.messageBody, isMine && styles.messageBodyMine]}>{message.body}</Text>
-                        <Text style={[styles.messageMeta, isMine && styles.messageMetaMine]}>
-                          {relativeTimeLabel(message._creationTime, locale)}{statusLabel ? ` · ${statusLabel}` : ""}
-                        </Text>
+                        <View style={styles.messageMetaRow}>
+                          <Text style={[styles.messageMeta, isMine && styles.messageMetaMine]}>
+                            {relativeTimeLabel(message._creationTime, locale)}
+                          </Text>
+                          {isMine && activeConversation.type === "GROUP" && message.seenBy.length > 0 ? (
+                            <View style={styles.seenByStack}>
+                              {message.seenBy.slice(0, 4).map((viewer) => (
+                                <MemberAvatar
+                                  key={viewer.userId}
+                                  imageUrl={viewer.imageUrl}
+                                  name={viewer.name}
+                                  size={14}
+                                  style={styles.seenByAvatar}
+                                />
+                              ))}
+                            </View>
+                          ) : null}
+                          {isMine && activeConversation.type !== "GROUP" && message.status !== "sent" ? (
+                            <Icon
+                              color={message.status === "seen" ? "onPrimary" : "primarySoft"}
+                              name="checkDone"
+                              size={13}
+                            />
+                          ) : null}
+                          {isMine && activeConversation.type !== "GROUP" && message.status === "sent" ? (
+                            <Icon color="primarySoft" name="check" size={13} />
+                          ) : null}
+                        </View>
                       </View>
                     </View>
                   );
@@ -314,11 +387,14 @@ export function MessagesModule({ orgId }: { orgId: string }) {
                   <EmptyList label={locale === "ar" ? "ابدأ المحادثة برسالة." : "Start the conversation with a message."} />
                 )}
                 {typingNames.length ? (
-                  <Text style={styles.typingText}>
-                    {typingNames.length === 1
-                      ? `${typingNames[0]} ${locale === "ar" ? "يكتب..." : "is typing..."}`
-                      : locale === "ar" ? "عدة أشخاص يكتبون..." : "Several people are typing..."}
-                  </Text>
+                  <View style={styles.typingRow}>
+                    <TypingDots />
+                    <Text style={styles.typingText}>
+                      {typingNames.length === 1
+                        ? `${typingNames[0]} ${locale === "ar" ? "يكتب..." : "is typing..."}`
+                        : locale === "ar" ? "عدة أشخاص يكتبون..." : "Several people are typing..."}
+                    </Text>
+                  </View>
                 ) : null}
               </ScrollView>
 
@@ -385,9 +461,7 @@ export function MessagesModule({ orgId }: { orgId: string }) {
                 }
               }}
             >
-              <View style={styles.memberAvatar}>
-                <Text style={styles.memberAvatarText}>{compactInitials(member.name)}</Text>
-              </View>
+              <MemberAvatar imageUrl={member.imageUrl} name={member.name} size={38} />
               <View style={styles.headerText}>
                 <Text numberOfLines={1} style={styles.recordTitle}>{member.name}</Text>
                 <Text numberOfLines={1} style={styles.recordMeta}>{member.email ?? member.roleName ?? "-"}</Text>

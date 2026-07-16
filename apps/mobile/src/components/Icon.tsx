@@ -18,6 +18,7 @@ export const semanticIconGlyphs = {
   branches: "business-outline",
   calendar: "calendar-outline",
   check: "checkmark",
+  checkDone: "checkmark-done",
   chevronDown: "chevron-down",
   chevronForward: "chevron-forward",
   chevronUp: "chevron-up",
