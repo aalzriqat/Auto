@@ -187,10 +187,102 @@ describe("operational Expenses Report — posted vs pending vs failed", () => {
     });
 
     expect(report.totalPosted).toBeCloseTo(500, 6);
+    expect(report.totalCapitalized).toBeCloseTo(0, 6);
     expect(report.totalPending).toBeCloseTo(0, 6);
     expect(report.totalFailed).toBeCloseTo(0, 6);
+    expect(report.hasUnpostedEntries).toBe(false);
     expect(report.expenses[0].glState).toBe("POSTED");
     await assertParity(ctx, JAN_START, JAN_END, 500, "posted expense");
+  });
+
+  test("a capitalized vehicle cost is NOT counted as posted-to-P&L, and the report doesn't claim it agrees", async () => {
+    // The dangerous false assurance: the repair reached the ledger, but as an
+    // asset (Vehicle Inventory), so the Income Statement is 0 while the naive
+    // report would show it fully posted and print "reports agree".
+    const ctx = await seedDealer("split-capitalized");
+    const vehicleId = await ctx.t.run((c) =>
+      c.db.insert("vehicles", {
+        orgId: ctx.orgId, vin: "CAPVIN1", make: "Toyota", model: "Camry", year: 2025,
+        mileage: 0, color: "White", fuelType: "Gasoline", transmission: "Automatic",
+        purchasePrice: 40000, sellingPrice: 45000, status: "AVAILABLE",
+      })
+    );
+    await ctx.asOwner.mutation(api.expenses.create, {
+      orgId: ctx.orgId, title: "Engine repair", amount: 500, date: Date.UTC(YEAR, 0, 10),
+      category: "REPAIR", status: "PAID", paymentMethod: "CASH", vehicleId,
+    });
+
+    const report = await ctx.asOwner.query(api.reports.getExpensesReport, {
+      orgId: ctx.orgId, startDate: JAN_START, endDate: JAN_END,
+    });
+    const ledger = await ctx.asOwner.query(api.accountingReports.incomeStatement, {
+      orgId: ctx.orgId, fromDate: JAN_START, toDate: JAN_END,
+    });
+
+    // Operationally the money was spent; on the P&L it's nowhere.
+    expect(report.totalExpenses).toBeCloseTo(500, 6);
+    expect(report.totalCapitalized).toBeCloseTo(500, 6);
+    expect(report.totalPosted).toBeCloseTo(0, 6);
+    expect(ledger.totalExpenses / JOD_SCALE).toBeCloseTo(0, 6);
+    // The P&L bucket is what may equal the Income Statement — and it does (both 0).
+    expect(report.totalPosted).toBeCloseTo(ledger.totalExpenses / JOD_SCALE, 6);
+    // Not pending/failed — it really posted, just to an asset.
+    expect(report.hasUnpostedEntries).toBe(false);
+    expect(report.expenses[0].glState).toBe("CAPITALIZED");
+  });
+
+  test("offsetting queued entries net to zero but still count as unresolved", async () => {
+    // A queued amortization and a queued reversal of it cancel in money terms.
+    // If the all-clear rode on the signed net it would flip green with two
+    // entries outstanding — so it rides on the entry COUNT instead.
+    const ctx = await seedDealer("split-offsetting");
+    const expenseId = await ctx.asOwner.mutation(api.expenses.create, {
+      orgId: ctx.orgId, title: "Insurance", amount: 1200, date: Date.UTC(YEAR, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await ctx.t.run((c) =>
+      c.db.query("prepaidExpenseSchedules").withIndex("by_expense", (q) => q.eq("expenseId", expenseId)).first()
+    );
+    const amortEventId = await ctx.t.run((c) =>
+      c.db.insert("accountingEvents", {
+        orgId: ctx.orgId, eventType: "PREPAID_EXPENSE_AMORTIZED", sourceType: "prepaidExpenseSchedules",
+        sourceId: `prepaid_amort_${schedule!._id}_${YEAR}-01`, eventVersion: 1,
+        idempotencyKey: `amort_${schedule!._id}_${YEAR}-01`, occurredAt: JAN_START, accountingDate: JAN_START,
+        currency: "JOD", payloadHash: "t", status: "PENDING", createdBy: ctx.userId, createdAt: Date.now(),
+        payload: { scheduleId: schedule!._id.toString(), amountMinor: 100_000, yearMonth: `${YEAR}-01` },
+      })
+    );
+    // The queued amortization (+100) and a queued reversal of it (−100).
+    await ctx.t.run((c) =>
+      c.db.insert("pendingAccountingEvents", {
+        orgId: ctx.orgId, kind: "POST", status: "PENDING", attempts: 0,
+        idempotencyKey: `amort_pending_${schedule!._id}`,
+        eventType: "PREPAID_EXPENSE_AMORTIZED", sourceType: "prepaidExpenseSchedules",
+        sourceId: `prepaid_amort_${schedule!._id}_${YEAR}-01`, eventVersion: 1,
+        accountingDate: JAN_START, occurredAt: JAN_START, currency: "JOD", actorId: ctx.userId, createdAt: Date.now(),
+        reason: "queued", payload: { scheduleId: schedule!._id.toString(), amountMinor: 100_000, yearMonth: `${YEAR}-01` },
+      })
+    );
+    await ctx.t.run((c) =>
+      c.db.insert("pendingAccountingEvents", {
+        orgId: ctx.orgId, kind: "REVERSE", status: "PENDING", attempts: 0,
+        idempotencyKey: `amort_reverse_${schedule!._id}`,
+        sourceType: "prepaidExpenseSchedules", sourceId: `prepaid_amort_${schedule!._id}_${YEAR}-01`,
+        eventVersion: 1, accountingDate: JAN_START, occurredAt: JAN_START, currency: "JOD",
+        actorId: ctx.userId, createdAt: Date.now(), reason: "queued reversal",
+        originalEventId: amortEventId, payload: {},
+      })
+    );
+
+    const report = await ctx.asOwner.query(api.reports.getExpensesReport, {
+      orgId: ctx.orgId, startDate: JAN_START, endDate: JAN_END,
+    });
+
+    // Net pending is zero…
+    expect(report.totalPending).toBeCloseTo(0, 6);
+    // …but two entries are outstanding, so the all-clear must NOT fire.
+    expect(report.pendingEntryCount).toBe(2);
+    expect(report.hasUnpostedEntries).toBe(true);
   });
 
   test("a prepaid schedule with one month posted and the next queued reports as MIXED, split across both columns", async () => {

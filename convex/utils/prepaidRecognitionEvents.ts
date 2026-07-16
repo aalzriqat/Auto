@@ -64,7 +64,20 @@ function monthForRecognitionRow(
  */
 export type RecognitionState = "posted" | "pending" | "failed";
 
-export type RecognitionBuckets = { posted: number; pending: number; failed: number };
+/**
+ * A month's recognition split by posting state. `pending`/`failed` are SIGNED
+ * amounts — a queued reversal contributes a negative — so they can net to zero
+ * while entries remain outstanding; `pendingCount`/`failedCount` count the
+ * actual queued entries so "is anything unresolved?" never rides on a monetary
+ * net that two offsetting entries cancel.
+ */
+export type RecognitionBuckets = {
+  posted: number;
+  pending: number;
+  failed: number;
+  pendingCount: number;
+  failedCount: number;
+};
 
 /** scheduleId -> "YYYY-MM" -> minor units recognized that month, split by posting state. */
 export type OrgPrepaidRecognitionByMonth = Map<string, Map<string, RecognitionBuckets>>;
@@ -87,8 +100,12 @@ function addTo(
     bySchedule = new Map();
     map.set(scheduleId, bySchedule);
   }
-  const buckets = bySchedule.get(yearMonth) ?? { posted: 0, pending: 0, failed: 0 };
+  const buckets = bySchedule.get(yearMonth) ?? { posted: 0, pending: 0, failed: 0, pendingCount: 0, failedCount: 0 };
   buckets[state] += amountMinor;
+  // One addTo call = one entry, so count per call, before month-level summing
+  // collapses two offsetting entries into a single zero amount.
+  if (state === "pending") buckets.pendingCount += 1;
+  else if (state === "failed") buckets.failedCount += 1;
   bySchedule.set(yearMonth, buckets);
 }
 
@@ -283,4 +300,30 @@ export function recognizedAmountInRangeFromEvents(
   // the month it reversed nets negative, exactly as the ledger shows it.
   if (totalMinor === 0) return 0;
   return fromMinorUnits(totalMinor, currency);
+}
+
+/**
+ * How many queued recognition entries a schedule has in [startDate, endDate],
+ * split pending vs failed — the count, not the amount, because "is anything
+ * still unposted?" must survive two offsetting queued entries netting to zero.
+ */
+export function queuedEntryCountsInRange(
+  events: OrgPrepaidRecognitionByMonth,
+  scheduleId: Id<"prepaidExpenseSchedules">,
+  startDate: number,
+  endDate: number
+): { pending: number; failed: number } {
+  const byMonth = events.get(scheduleId.toString());
+  if (!byMonth) return { pending: 0, failed: 0 };
+  const startIdx = yearMonthIndex(startDate);
+  const endIdx = yearMonthIndex(endDate);
+  let pending = 0;
+  let failed = 0;
+  for (const [ym, buckets] of byMonth) {
+    const idx = yearMonthStringIndex(ym);
+    if (idx < startIdx || idx > endIdx) continue;
+    pending += buckets.pendingCount;
+    failed += buckets.failedCount;
+  }
+  return { pending, failed };
 }

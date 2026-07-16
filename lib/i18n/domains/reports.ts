@@ -45,17 +45,21 @@ export const reportsEn = {
   // what reached the ledger. The two agree exactly when nothing is outstanding.
   OperationalExpensesReport: "Operational Expenses Report",
   OperationalTotal: "Operational Total",
-  PostedToLedger: "Posted to Ledger",
+  PostedToPnl: "Posted to P&L",
+  CapitalizedToAssets: "Capitalized to Assets",
   PendingPosting: "Pending Posting",
   FailedPosting: "Failed Posting",
   GlStatus: "Ledger Status",
   GlStatePOSTED: "Posted",
+  GlStateCAPITALIZED: "Capitalized",
   GlStatePENDING: "Pending",
   GlStateFAILED: "Failed",
   GlStateMIXED: "Partly posted",
   OperationalReportNotice:
-    "This is an operational report: it counts what happened, including {unposted} not yet in the ledger. The official profit & loss is the ledger-backed Income Statement.",
-  OperationalReportAllPosted: "Every expense in this period has posted to the ledger, so this report and the Income Statement agree.",
+    "This is an operational report: it counts what happened, including {count} posting(s) not yet in the ledger. The official profit & loss is the ledger-backed Income Statement.",
+  OperationalReportCapitalizedNote:
+    "All expenses here have posted. This operational total is {capitalized} higher than the Income Statement because that much was capitalized to inventory, which is reported as an asset rather than an expense.",
+  OperationalReportAllPosted: "Every expense in this period has posted to the ledger as a P&L expense, so this report and the Income Statement agree.",
   ResolveUnpostedEntries: "Resolve unposted entries",
 
   // Empty states
@@ -110,17 +114,21 @@ export const reportsAr = {
   // Operational vs ledger
   OperationalExpensesReport: "تقرير المصروفات التشغيلي",
   OperationalTotal: "الإجمالي التشغيلي",
-  PostedToLedger: "مُرحّل إلى دفتر الأستاذ",
+  PostedToPnl: "مُرحّل إلى قائمة الدخل",
+  CapitalizedToAssets: "مُرسمل ضمن الأصول",
   PendingPosting: "بانتظار الترحيل",
   FailedPosting: "فشل الترحيل",
   GlStatus: "حالة الترحيل",
   GlStatePOSTED: "مُرحّل",
+  GlStateCAPITALIZED: "مُرسمل",
   GlStatePENDING: "بانتظار الترحيل",
   GlStateFAILED: "فشل الترحيل",
   GlStateMIXED: "مُرحّل جزئياً",
   OperationalReportNotice:
-    "هذا تقرير تشغيلي: يحتسب ما حدث فعلاً، بما في ذلك {unposted} لم تصل إلى دفتر الأستاذ بعد. أما قائمة الدخل المبنية على دفتر الأستاذ فهي التقرير الرسمي للأرباح والخسائر.",
-  OperationalReportAllPosted: "جميع مصروفات هذه الفترة مُرحّلة إلى دفتر الأستاذ، لذلك يتطابق هذا التقرير مع قائمة الدخل.",
+    "هذا تقرير تشغيلي: يحتسب ما حدث فعلاً، بما في ذلك {count} قيد لم يصل إلى دفتر الأستاذ بعد. أما قائمة الدخل المبنية على دفتر الأستاذ فهي التقرير الرسمي للأرباح والخسائر.",
+  OperationalReportCapitalizedNote:
+    "جميع المصروفات هنا مُرحّلة. هذا الإجمالي التشغيلي يزيد عن قائمة الدخل بمقدار {capitalized} لأن هذا المبلغ رُسمل ضمن المخزون، ويظهر كأصل وليس كمصروف.",
+  OperationalReportAllPosted: "جميع مصروفات هذه الفترة مُرحّلة إلى دفتر الأستاذ كمصروف في قائمة الدخل، لذلك يتطابق هذا التقرير مع قائمة الدخل.",
   ResolveUnpostedEntries: "معالجة القيود غير المُرحّلة",
 
   // Empty states

@@ -18,6 +18,7 @@ import {
   Target,
   BadgeDollarSign,
   BookCheck,
+  Boxes,
   Clock,
   TriangleAlert,
 } from "lucide-react";
@@ -97,10 +98,11 @@ function ReportsDateFilter({
   );
 }
 
-type GlState = "POSTED" | "PENDING" | "FAILED" | "MIXED";
+type GlState = "POSTED" | "CAPITALIZED" | "PENDING" | "FAILED" | "MIXED";
 
 const GL_STATE_STYLES: Record<GlState, string> = {
   POSTED: "bg-emerald-500/10 text-emerald-700 border-emerald-500/20",
+  CAPITALIZED: "bg-sky-500/10 text-sky-700 border-sky-500/20",
   PENDING: "bg-amber-500/10 text-amber-700 border-amber-500/20",
   FAILED: "bg-red-500/10 text-red-700 border-red-500/20",
   MIXED: "bg-amber-500/10 text-amber-700 border-amber-500/20",
@@ -121,43 +123,61 @@ function GlStateBadge({ state, t }: Readonly<{ state?: GlState; t: (k: string) =
 /**
  * Says out loud what this report is, so nobody reads it as the P&L.
  *
- * It counts what operationally happened — including postings still queued or
- * dead-lettered — while the Income Statement counts only what the ledger took.
- * When something is outstanding the two legitimately differ, by exactly the
- * unposted figure named here; when nothing is, they agree and the notice says
- * that instead of nagging. The Setup tab (the accounting page's default) is
- * where queued and failed entries get redriven.
+ * Three honest states, because "do the two reports agree?" has three answers:
+ *  - Something is still queued or dead-lettered → amber, count it, link to fix.
+ *    The trigger is the ENTRY COUNT, never a signed monetary net: a queued
+ *    amortization and its queued reversal cancel to zero while two entries wait.
+ *  - Everything posted, but some of it capitalized into inventory → the
+ *    operational total legitimately exceeds the Income Statement by that much,
+ *    which is an asset there, not an expense. Say so rather than claim they
+ *    match.
+ *  - Everything posted to the P&L and nothing capitalized → they genuinely
+ *    agree, and only then does the notice say so.
+ *
+ * The Setup tab (the accounting page's default) is where queued and failed
+ * entries get redriven.
  */
 function OperationalReportNotice({
   orgId,
-  unpostedAmount,
+  hasUnpostedEntries,
+  unpostedEntryCount,
+  capitalizedAmount,
   loaded,
   format,
   t,
 }: Readonly<{
   orgId: Id<"organizations"> | null;
-  unpostedAmount: number;
+  hasUnpostedEntries: boolean;
+  unpostedEntryCount: number;
+  capitalizedAmount: number;
   loaded: boolean;
   format: (n: number) => string;
   t: (k: string) => string;
 }>) {
   if (!loaded) return null;
-  if (unpostedAmount === 0) {
+  if (hasUnpostedEntries) {
     return (
-      <p className="mb-4 text-xs text-emerald-700 bg-emerald-500/10 border border-emerald-500/20 rounded-md px-3 py-2">
-        {t("OperationalReportAllPosted")}
+      <div className="mb-4 text-xs text-amber-700 bg-amber-500/10 border border-amber-500/20 rounded-md px-3 py-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span>{t("OperationalReportNotice").replace("{count}", String(unpostedEntryCount))}</span>
+        {orgId && (
+          <Link href={`/${orgId}/accounting`} className="font-medium underline underline-offset-2 no-print">
+            {t("ResolveUnpostedEntries")}
+          </Link>
+        )}
+      </div>
+    );
+  }
+  if (capitalizedAmount !== 0) {
+    return (
+      <p className="mb-4 text-xs text-sky-700 bg-sky-500/10 border border-sky-500/20 rounded-md px-3 py-2">
+        {t("OperationalReportCapitalizedNote").replace("{capitalized}", format(capitalizedAmount))}
       </p>
     );
   }
   return (
-    <div className="mb-4 text-xs text-amber-700 bg-amber-500/10 border border-amber-500/20 rounded-md px-3 py-2 flex flex-wrap items-center gap-x-2 gap-y-1">
-      <span>{t("OperationalReportNotice").replace("{unposted}", format(unpostedAmount))}</span>
-      {orgId && (
-        <Link href={`/${orgId}/accounting`} className="font-medium underline underline-offset-2 no-print">
-          {t("ResolveUnpostedEntries")}
-        </Link>
-      )}
-    </div>
+    <p className="mb-4 text-xs text-emerald-700 bg-emerald-500/10 border border-emerald-500/20 rounded-md px-3 py-2">
+      {t("OperationalReportAllPosted")}
+    </p>
   );
 }
 
@@ -411,13 +431,15 @@ export default function ReportsPage() {
 
             <OperationalReportNotice
               orgId={activeOrgId}
-              unpostedAmount={(expensesReport?.totalPending ?? 0) + (expensesReport?.totalFailed ?? 0)}
+              hasUnpostedEntries={expensesReport?.hasUnpostedEntries ?? false}
+              unpostedEntryCount={(expensesReport?.pendingEntryCount ?? 0) + (expensesReport?.failedEntryCount ?? 0)}
+              capitalizedAmount={expensesReport?.totalCapitalized ?? 0}
               loaded={!!expensesReport}
               format={format}
               t={t}
             />
 
-            <div className="grid gap-4 md:grid-cols-4 mb-4">
+            <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-5 mb-4">
               <Card className="print-shadow-none border print:border-gray-200">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
                   <CardTitle className="text-sm font-medium">{t("OperationalTotal")}</CardTitle>
@@ -429,11 +451,22 @@ export default function ReportsPage() {
               </Card>
               <Card className="print-shadow-none border print:border-gray-200">
                 <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                  <CardTitle className="text-sm font-medium">{t("PostedToLedger")}</CardTitle>
+                  <CardTitle className="text-sm font-medium">{t("PostedToPnl")}</CardTitle>
                   <BookCheck className="h-4 w-4 text-muted-foreground no-print" />
                 </CardHeader>
                 <CardContent>
                   <div className="text-2xl font-bold">{format(expensesReport?.totalPosted ?? 0)}</div>
+                </CardContent>
+              </Card>
+              <Card className="print-shadow-none border print:border-gray-200">
+                <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+                  <CardTitle className="text-sm font-medium">{t("CapitalizedToAssets")}</CardTitle>
+                  <Boxes className="h-4 w-4 text-muted-foreground no-print" />
+                </CardHeader>
+                <CardContent>
+                  <div className={`text-2xl font-bold ${(expensesReport?.totalCapitalized ?? 0) !== 0 ? "text-sky-600" : ""}`}>
+                    {format(expensesReport?.totalCapitalized ?? 0)}
+                  </div>
                 </CardContent>
               </Card>
               <Card className="print-shadow-none border print:border-gray-200">
