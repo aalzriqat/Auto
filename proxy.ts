@@ -10,6 +10,7 @@ import { isDealerWebsiteHost, normalizedHost } from "@/lib/dealerHost";
 const isPublicRoute = createRouteMatcher([
   "/",
   "/dealer-site(.*)",
+  "/marketplace(.*)",
   "/sign-in(.*)",
   "/sign-up(.*)",
   "/privacy",
