@@ -835,6 +835,7 @@ export interface MobileQuote {
 
 export interface MobileNotification {
   _id: string;
+  _creationTime: number;
   orgId: string;
   userId: string;
   title?: string;
@@ -2076,6 +2077,9 @@ export const api = {
     >("quotes:updateQuoteStatus"),
   },
   notifications: {
+    list: makeFunctionReference<"query", OrgScopedArgs, MobileNotification[]>(
+      "notifications:list",
+    ),
     listPage: makeFunctionReference<
       "query",
       NotificationListArgs,
@@ -2679,6 +2683,7 @@ export const api = {
     >;
   };
   notifications: {
+    list: FunctionReference<"query", "public", OrgScopedArgs, MobileNotification[]>;
     listPage: FunctionReference<"query", "public", NotificationListArgs, MobilePageResult<MobileNotification>>;
     unreadCount: FunctionReference<"query", "public", OrgScopedArgs, number>;
     markAsRead: FunctionReference<"mutation", "public", OrgScopedArgs & { notificationId: string }, null>;

@@ -20,6 +20,7 @@ import { Icon } from "../../components/Icon";
 import type { SemanticIconName } from "../../components/Icon";
 import { LocaleToggle } from "../../components/LocaleToggle";
 import { FadeSlideIn, useCountUp } from "../../components/Motion";
+import { NotificationBell } from "../../components/NotificationBell";
 import { MemberAvatar } from "../../components/Avatar";
 import { PresenceDot, PresencePill } from "../../components/Presence";
 import { RouteLoadingState } from "../../components/RouteState";
@@ -158,6 +159,7 @@ function Header({ org }: { org: MobileOrgSummary }) {
         </Text>
       </View>
       <View style={styles.headerActions}>
+        <NotificationBell orgId={org._id} />
         <LocaleToggle />
         <UserButton />
       </View>
