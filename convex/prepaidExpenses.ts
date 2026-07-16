@@ -48,6 +48,7 @@ import { notifyFinanceManagers, notifyUser, getActorName } from "./utils/notific
 import { paymentMethodValidator, type PaymentMethod } from "./utils/paymentMethods";
 import { runWithIdempotency } from "./utils/idempotency";
 import { drainEntries } from "./accountingOutbox";
+import { postedSourceExpenseEvent } from "./utils/prepaidSourceLedger";
 import { toMinorUnits } from "./utils/money";
 
 /** UTC "YYYY-MM" for a timestamp — the month recognition of that expense begins. */
@@ -137,31 +138,6 @@ export const listActivePrepaidSchedulesForRecognition = internalQuery({
       .paginate({ cursor: args.cursor ?? null, numItems: args.numItems ?? 200 });
   },
 });
-
-/**
- * The schedule's source expense as it actually stands in the ledger: the
- * EXPENSE_POSTED event that debits Prepaid Expenses, only once it has really
- * POSTED. A schedule is created ACTIVE the moment its expense is marked paid,
- * but that debit may still be sitting in the outbox (no open period covering
- * the expense's own date — postability is judged per event date, so an expense
- * dated in a month that never opens stays queued indefinitely). Null therefore
- * means "the prepaid asset does not exist in the GL yet", and nothing may
- * credit it.
- */
-async function postedSourceExpenseEvent(
-  ctx: MutationCtx,
-  orgId: Id<"organizations">,
-  expenseId: Id<"expenses">
-) {
-  return await ctx.db
-    .query("accountingEvents")
-    .withIndex("by_org_source", (q) =>
-      q.eq("orgId", orgId).eq("sourceType", "expenses").eq("sourceId", expenseId.toString())
-    )
-    .filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED"))
-    .filter((q) => q.eq(q.field("status"), "POSTED"))
-    .first();
-}
 
 /**
  * Blocks any correction that would post a GL entry against a prepaid asset the
@@ -601,18 +577,35 @@ export const redriveScheduleEvents = mutation({
     }
 
     const scheduleKey = args.scheduleId.toString();
-    const matches: Doc<"pendingAccountingEvents">[] = [];
+    const sourceKey = `expense_posted_${schedule.expenseId}`;
+    const scheduleRows: Doc<"pendingAccountingEvents">[] = [];
+    // The schedule's own asset debit. It is sourceType "expenses", not
+    // "prepaidExpenseSchedules", so a schedule-scoped sweep that filters on
+    // sourceType alone can never see it — leaving this button able to post the
+    // schedule's credits while the debit they depend on stays queued forever,
+    // which is precisely the state it is meant to rescue the accountant from.
+    let sourceRow: Doc<"pendingAccountingEvents"> | null = null;
     for (const status of ["PENDING", "FAILED"] as const) {
       const rows = await ctx.db
         .query("pendingAccountingEvents")
         .withIndex("by_org_status", (q) => q.eq("orgId", args.orgId).eq("status", status))
         .collect();
       for (const row of rows) {
+        if (row.kind === "POST" && row.idempotencyKey === sourceKey) {
+          sourceRow = row;
+          continue;
+        }
         if (row.sourceType !== "prepaidExpenseSchedules") continue;
         if ((row.payload as { scheduleId?: string })?.scheduleId !== scheduleKey) continue;
-        matches.push(row);
+        scheduleRows.push(row);
       }
     }
+
+    // Source debit first: the schedule's own entries are guarded against
+    // posting ahead of it (prepaidSourceLedger.ts), so draining them in the
+    // other order would hold every one of them and the button would report
+    // doing nothing on the very schedule it just unblocked.
+    const matches = sourceRow ? [sourceRow, ...scheduleRows] : scheduleRows;
 
     // A dead-lettered row's attempts counter is already at/above the retry
     // threshold — reset it so drainEntries gives it a real attempt instead of
