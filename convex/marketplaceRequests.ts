@@ -1,5 +1,5 @@
 import { ConvexError, v } from "convex/values";
-import { ActionCtx, action, internalMutation, query } from "./_generated/server";
+import { ActionCtx, QueryCtx, action, internalMutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
 import { verifyTurnstileToken, normalizeText, normalizeRequiredText } from "./websites";
@@ -235,34 +235,55 @@ export const createRequest = internalMutation({
   },
 });
 
+function phoneMatchesBuyerRequest(request: Doc<"marketplaceRequests">, buyerPhone: string): boolean {
+  return request.buyerPhone === buyerPhone.replace(/[^\d+]/g, "");
+}
+
+async function getBuyerRequestStatus(ctx: QueryCtx, request: Doc<"marketplaceRequests">) {
+  const matches = await ctx.db
+    .query("marketplaceRequestMatches")
+    .withIndex("by_request", (q) => q.eq("requestId", request._id))
+    .collect();
+
+  const responses = await ctx.db
+    .query("marketplaceResponses")
+    .withIndex("by_request", (q) => q.eq("requestId", request._id))
+    .collect();
+  const respondedOrgIds = new Set(
+    responses.filter((r) => r.kind !== "NOT_AVAILABLE").map((r) => r.orgId)
+  );
+
+  return {
+    status: request.status,
+    createdAt: request.createdAt,
+    matchedCount: matches.length,
+    respondedCount: respondedOrgIds.size,
+  };
+}
+
 /** Public: buyer checks their own request's status — no login, matched by id + phone. */
 export const getStatusForBuyer = query({
   args: { requestId: v.id("marketplaceRequests"), buyerPhone: v.string() },
   handler: async (ctx, args) => {
     const request = await ctx.db.get(args.requestId);
-    if (!request) return null;
-    const normalizedPhone = args.buyerPhone.replace(/[^\d+]/g, "");
-    if (request.buyerPhone !== normalizedPhone) return null;
+    if (!request || !phoneMatchesBuyerRequest(request, args.buyerPhone)) return null;
+    return await getBuyerRequestStatus(ctx, request);
+  },
+});
 
-    const matches = await ctx.db
-      .query("marketplaceRequestMatches")
-      .withIndex("by_request", (q) => q.eq("requestId", args.requestId))
-      .collect();
-
-    const responses = await ctx.db
-      .query("marketplaceResponses")
-      .withIndex("by_request", (q) => q.eq("requestId", args.requestId))
-      .collect();
-    const respondedOrgIds = new Set(
-      responses.filter((r) => r.kind !== "NOT_AVAILABLE").map((r) => r.orgId)
-    );
-
-    return {
-      status: request.status,
-      createdAt: request.createdAt,
-      matchedCount: matches.length,
-      respondedCount: respondedOrgIds.size,
-    };
+/**
+ * Public/mobile-safe: the buyer status lookup that accepts a pasted/link id
+ * string, normalizing it and returning null for a malformed id instead of
+ * surfacing a validator error to the UI. Same phone gate as getStatusForBuyer.
+ */
+export const getStatusForBuyerByPublicId = query({
+  args: { requestId: v.string(), buyerPhone: v.string() },
+  handler: async (ctx, args) => {
+    const requestId = ctx.db.normalizeId("marketplaceRequests", args.requestId.trim());
+    if (!requestId) return null;
+    const request = await ctx.db.get(requestId);
+    if (!request || !phoneMatchesBuyerRequest(request, args.buyerPhone)) return null;
+    return await getBuyerRequestStatus(ctx, request);
   },
 });
 

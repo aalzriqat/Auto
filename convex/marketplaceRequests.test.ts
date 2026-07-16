@@ -270,6 +270,24 @@ describe("getStatusForBuyer", () => {
     });
     expect(wrongPhone).toBeNull();
   });
+
+  test("getStatusForBuyerByPublicId accepts a raw id string and returns null for a malformed id", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    await seedDealer(t, { name: "Dealer", areas: ["Amman"], brandsCarried: [] });
+    const result = await t.action(api.marketplaceRequests.submitRequest, baseRequestArgs);
+
+    const status = await t.query(api.marketplaceRequests.getStatusForBuyerByPublicId, {
+      requestId: result.requestId,
+      buyerPhone: baseRequestArgs.buyerPhone,
+    });
+    expect(status).toMatchObject({ status: "MATCHED", matchedCount: 1 });
+
+    const malformed = await t.query(api.marketplaceRequests.getStatusForBuyerByPublicId, {
+      requestId: "not-a-real-id",
+      buyerPhone: baseRequestArgs.buyerPhone,
+    });
+    expect(malformed).toBeNull();
+  });
 });
 
 describe("getBuyerOffers", () => {
