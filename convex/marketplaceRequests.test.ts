@@ -203,6 +203,55 @@ describe("submitRequest", () => {
   });
 });
 
+describe("publicId", () => {
+  test("every request gets a distinct unguessable publicId, returned to the buyer and stored on the row", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    await seedDealer(t, { name: "Dealer", areas: ["Amman"], brandsCarried: [] });
+
+    const first = await t.action(api.marketplaceRequests.submitRequest, baseRequestArgs);
+    const second = await t.action(api.marketplaceRequests.submitRequest, {
+      ...baseRequestArgs,
+      clientFingerprint: "fp-2",
+      buyerPhone: "+962791234568",
+    });
+
+    expect(first.publicId).toMatch(/^[0-9a-f]{32}$/);
+    expect(second.publicId).toMatch(/^[0-9a-f]{32}$/);
+    expect(first.publicId).not.toBe(second.publicId);
+
+    const stored = await t.run((ctx) => ctx.db.get(first.requestId));
+    expect(stored?.publicId).toBe(first.publicId);
+  });
+
+  test("backfill assigns publicIds to legacy rows and leaves existing ones untouched", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const legacyRow = {
+      status: "OPEN" as const,
+      buyerFirstName: "Legacy",
+      buyerPhone: "+962790000000",
+      buyerCity: "Amman",
+      paymentType: "CASH" as const,
+      buyerTimeframe: "THIS_MONTH" as const,
+      buyerIntent: "COLD" as const,
+      consentAcceptedAt: Date.now(),
+      clientFingerprint: "fp-legacy",
+      expiresAt: Date.now() + 1000,
+      createdAt: Date.now(),
+    };
+    const legacyId = await t.run((ctx) => ctx.db.insert("marketplaceRequests", legacyRow));
+    const keptId = await t.run((ctx) =>
+      ctx.db.insert("marketplaceRequests", { ...legacyRow, publicId: "pre-existing-token" })
+    );
+
+    await t.mutation(internal.migrateMarketplacePublicIds.backfillMarketplacePublicIds, {});
+
+    const legacy = await t.run((ctx) => ctx.db.get(legacyId));
+    expect(legacy?.publicId).toMatch(/^[0-9a-f]{32}$/);
+    const kept = await t.run((ctx) => ctx.db.get(keptId));
+    expect(kept?.publicId).toBe("pre-existing-token");
+  });
+});
+
 describe("getStatusForBuyer", () => {
   test("returns status/count for the correct phone, null otherwise", async () => {
     const t = convexTest(schema, import.meta.glob("./**/*.ts"));

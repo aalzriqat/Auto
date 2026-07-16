@@ -95,6 +95,71 @@ export function calculateUnifiedMurabaha({
   };
 }
 
+// Above any realistic vehicle price in this market; bounds the bisection.
+const AFFORDABLE_PRICE_SEARCH_CEILING = 500_000;
+
+/**
+ * Inverse of calculateUnifiedMurabaha: the highest vehicle price whose
+ * computed monthly installment stays within the buyer's budget, under one
+ * finance company's terms.
+ *
+ * Implemented as a bisection over the forward engine itself — never a second
+ * closed-form formula — so the two can never drift apart if the engine's
+ * commission/insurance handling changes. monthlyInstallment is monotonically
+ * nondecreasing in vehiclePrice, which is all bisection needs.
+ */
+export function calculateMaximumAffordableVehiclePrice({
+  maximumMonthlyPayment,
+  downPayment,
+  termMonths,
+  financeTerms,
+}: {
+  maximumMonthlyPayment: number;
+  downPayment: number;
+  termMonths: number;
+  financeTerms: {
+    annualProfitRate: number;
+    annualInsuranceRate: number;
+    commission: number;
+    processingFees: number;
+    gracePeriodMonths?: number;
+    includesCommissionInDebt?: boolean;
+  };
+}): number {
+  const gracePeriodMonths = financeTerms.gracePeriodMonths ?? 0;
+  if (maximumMonthlyPayment <= 0 || termMonths <= 0 || termMonths - gracePeriodMonths <= 0) {
+    return 0;
+  }
+
+  const monthlyFor = (vehiclePrice: number) =>
+    calculateUnifiedMurabaha({
+      vehiclePrice,
+      downPayment,
+      commission: financeTerms.commission,
+      processingFees: financeTerms.processingFees,
+      annualProfitRate: financeTerms.annualProfitRate,
+      annualInsuranceRate: financeTerms.annualInsuranceRate,
+      termMonths,
+      gracePeriodMonths,
+      includesCommissionInDebt: financeTerms.includesCommissionInDebt ?? false,
+    }).monthlyInstallment;
+
+  let low = 0;
+  let high = AFFORDABLE_PRICE_SEARCH_CEILING;
+  if (monthlyFor(high) <= maximumMonthlyPayment) return high;
+
+  for (let iteration = 0; iteration < 40; iteration += 1) {
+    const mid = (low + high) / 2;
+    if (monthlyFor(mid) <= maximumMonthlyPayment) {
+      low = mid;
+    } else {
+      high = mid;
+    }
+  }
+
+  return Math.floor(low);
+}
+
 /**
  * Calculates the Debt Burden Ratio (DBR) to ensure a customer is eligible for the loan.
  * 
