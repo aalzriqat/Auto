@@ -1,5 +1,6 @@
 import { format } from "date-fns";
 import type { Id } from "@/convex/_generated/dataModel";
+import { dateInputToUtcMs, dateInputEndToUtcMs } from "@/lib/dateInput";
 
 export type Translate = (key: string) => string;
 
@@ -45,12 +46,15 @@ export function defaultPeriodForm(): PeriodFormState {
   };
 }
 
+// UTC boundaries (lib/dateInput.ts). These bound accounting PERIODS and
+// financial-report ranges, so a local-time parse would have set a Jordan user's
+// "2026-01-01" period to start on 2025-12-31 21:00Z — the previous fiscal year.
 export function dateInputToStartOfDayMs(value: string): number {
-  return new Date(`${value}T00:00:00`).getTime();
+  return dateInputToUtcMs(value);
 }
 
 export function dateInputToEndOfDayMs(value: string): number {
-  return new Date(`${value}T23:59:59.999`).getTime();
+  return dateInputEndToUtcMs(value);
 }
 
 export function formatAccountingDate(value: number): string {

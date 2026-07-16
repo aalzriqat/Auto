@@ -1,4 +1,5 @@
 import type { Id } from "@/convex/_generated/dataModel";
+import { dateInputToUtcMs, todayDateInput } from "@/lib/dateInput";
 
 export type Translate = (key: string) => string;
 
@@ -35,14 +36,16 @@ export function defaultCreateBankAccountForm(currency: string): CreateBankAccoun
     accountNumber: "",
     currency,
     openingBalance: "0",
-    openingBalanceDate: new Date().toISOString().slice(0, 10),
+    openingBalanceDate: todayDateInput(),
     isReconciliationTarget: false,
     notes: "",
   };
 }
 
 export function dateInputToMs(value: string): number {
-  const ms = new Date(`${value}T00:00:00`).getTime();
+  // Shared UTC parser (lib/dateInput.ts); the specific message is kept because
+  // this feeds the opening-balance date.
+  const ms = dateInputToUtcMs(value);
   if (Number.isNaN(ms)) {
     throw new Error("A valid opening balance date is required.");
   }

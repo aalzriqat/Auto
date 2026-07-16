@@ -6,6 +6,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
+import { dateInputToUtcMs, todayDateInput } from "@/lib/dateInput";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrencyFormatterInCurrency } from "@/hooks/useCurrencyFormatter";
@@ -42,36 +43,6 @@ import {
   useAccountingSubmit,
 } from "./AccountingTabShared";
 import { prepaidCorrectionSchema, type PrepaidCorrectionFormValues } from "./prepaidCorrection.schema";
-
-/**
- * "YYYY-MM-DD" -> UTC midnight.
- *
- * Deliberately NOT AccountingTabShared's dateInputToMs, which parses at LOCAL
- * midnight. Every date in the ledger is bucketed by its UTC month
- * (expenseAmortization.ts) and accounting periods are bounded with Date.UTC, so
- * for a user east of UTC a local-midnight parse of the 1st resolves into the
- * previous month — and, with annual periods, the previous period. A date the
- * accountant picked to control which month a correction lands in is the last
- * place that can be off by one. (The shared helper has the same latent issue for
- * claims and bank accounts; left alone here rather than changed underneath two
- * other features from this PR.)
- */
-function dateInputToUtcMs(value: string): number {
-  const [year, month, day] = value.split("-").map(Number);
-  return Date.UTC(year, month - 1, day);
-}
-
-/**
- * The accountant's LOCAL calendar today as "YYYY-MM-DD" — deliberately not
- * AccountingTabShared's `todayInput`, which is the UTC date. A user ahead of UTC
- * in the first hours of their day has a local date that is already "tomorrow" in
- * UTC; keying the picker's default and max off the UTC date would stop them
- * selecting their own today. The server allows a day of grace to match.
- */
-function localTodayInput(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
 
 // Each prepaid schedule carries its own currency (set at creation, independent
 // of the org's CURRENT currency — see hooks/useCurrencyFormatter.ts), so every
@@ -670,7 +641,7 @@ function CorrectScheduleDialog({
   const idempotencyKey = useMemo(() => crypto.randomUUID(), []);
   // Stable across the dialog's life so the default, the max, and the "did they
   // change it?" check below all agree on the same "today".
-  const today = useMemo(() => localTodayInput(), []);
+  const today = useMemo(() => todayDateInput(), []);
   const remainingRefundableTaxMinor = useQuery(api.prepaidExpenses.getRemainingRefundableTaxMinor, {
     orgId, scheduleId: schedule._id,
   });
