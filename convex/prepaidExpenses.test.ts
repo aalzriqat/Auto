@@ -1989,8 +1989,11 @@ describe("prepaid corrections — the accountant can date the correction", () =>
     // Guards the timezone fix: the future bound has a day of grace, so a user
     // at +offset picking their own local today — already 'tomorrow' in UTC in
     // the first hours of their day — isn't rejected at the month boundary.
+    // The date must be built from the real clock: shifting `now` forward first
+    // rolls to the day after tomorrow in the last hours of the UTC day, which
+    // is outside the grace window in every timezone.
     const { t, orgId, asOwner, scheduleId } = await seedPostedPrepaid("correction-tz-grace");
-    const d = new Date(Date.now() + 6 * 60 * 60 * 1000);
+    const d = new Date();
     const tomorrowUtcMidnight = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
 
     await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
