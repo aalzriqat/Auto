@@ -1,12 +1,15 @@
 import { ConvexError, v } from "convex/values";
-import { ActionCtx, QueryCtx, action, internalMutation, query } from "./_generated/server";
+import { ActionCtx, QueryCtx, MutationCtx, action, internalMutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Doc, Id } from "./_generated/dataModel";
-import { verifyTurnstileToken, normalizeText, normalizeRequiredText } from "./websites";
+import { verifyTurnstileToken, normalizeText, normalizeRequiredText, getPublishedSnapshotData } from "./websites";
 import { enforceMarketplaceSubmissionRateLimit, MarketplaceSubmissionRateLimitName } from "./rateLimit";
 import { notifyByPermission } from "./utils/notifications";
 import { PERMISSIONS } from "./utils/permissions";
-import { compareDealerRank, listOptedInDealerProfiles } from "./marketplaceDealers";
+import { compareDealerRank, listOptedInDealerProfiles, checkMarketplaceQuota } from "./marketplaceDealers";
+import { hasPlanFeature } from "./subscriptions";
+import { scoreVehicleAgainstRequest } from "./utils/marketplaceMatching";
+import { calculateUnifiedMurabaha } from "../lib/financing";
 
 const MAX_MATCHED_DEALERS = 5;
 const REQUEST_EXPIRES_AFTER_DAYS = 14;
@@ -108,6 +111,19 @@ const submitRequestBaseArgs = {
   priceMax: v.optional(v.number()),
   paymentType: paymentTypeValidator,
   monthlyBudget: v.optional(v.number()),
+  // Buyer's financing constraints — drive personalized installment estimates
+  // and finance-aware matching. Absent = illustrative 20%/60mo defaults.
+  financePreferences: v.optional(
+    v.object({
+      downPaymentAmount: v.optional(v.number()),
+      preferredTermMonths: v.optional(v.number()),
+      maximumMonthlyPayment: v.optional(v.number()),
+      allowHigherDownPayment: v.optional(v.boolean()),
+      maximumHigherDownPayment: v.optional(v.number()),
+      allowLongerTerm: v.optional(v.boolean()),
+      maximumTermMonths: v.optional(v.number()),
+    })
+  ),
   buyerTimeframe: buyerTimeframeValidator,
   consentAccepted: v.boolean(),
   clientFingerprint: v.string(),
@@ -136,6 +152,177 @@ export const submitRequest = action({
     });
   },
 });
+
+// Illustrative finance assumptions when the buyer gave no preferences — kept
+// in sync with the public browse estimate (marketplaceBrowse.ts).
+const DEFAULT_DOWN_PAYMENT_PCT = 0.2;
+const DEFAULT_TERM_MONTHS = 60;
+
+type SnapshotFinanceTerms = {
+  profitRate: number;
+  maxTermMonths: number;
+  gracePeriodMonths: number;
+  insuranceRate?: number;
+  adminFees?: number;
+  commission?: number;
+  includesCommissionInDebt?: boolean;
+};
+
+type SnapshotVehicleLite = {
+  id?: string;
+  make?: string;
+  model?: string;
+  year?: number | null;
+  price?: number | null;
+  financePrice?: number | null;
+  status?: string;
+};
+
+type BuyerFinancePreferences = {
+  downPaymentAmount?: number;
+  preferredTermMonths?: number;
+};
+
+/** Computes the buyer-personalized installment + the term snapshot the estimate was built from, so the buyer keeps seeing the exact numbers even as rates drift. */
+function computePersonalizedFinance(
+  price: number,
+  terms: SnapshotFinanceTerms,
+  prefs: BuyerFinancePreferences | undefined
+) {
+  const downPayment = prefs?.downPaymentAmount ?? Math.round(price * DEFAULT_DOWN_PAYMENT_PCT);
+  const termMonths = Math.min(prefs?.preferredTermMonths ?? DEFAULT_TERM_MONTHS, terms.maxTermMonths);
+  const result = calculateUnifiedMurabaha({
+    vehiclePrice: price,
+    downPayment,
+    commission: terms.commission ?? 0,
+    processingFees: terms.adminFees ?? 0,
+    annualProfitRate: terms.profitRate,
+    annualInsuranceRate: terms.insuranceRate ?? 0,
+    termMonths,
+    gracePeriodMonths: terms.gracePeriodMonths,
+    includesCommissionInDebt: terms.includesCommissionInDebt ?? false,
+  });
+  return {
+    monthly: Math.round(result.monthlyInstallment),
+    snapshot: {
+      vehiclePrice: price,
+      downPayment,
+      termMonths,
+      annualProfitRate: terms.profitRate,
+      annualInsuranceRate: terms.insuranceRate ?? 0,
+      commission: terms.commission ?? 0,
+      processingFees: terms.adminFees ?? 0,
+    },
+  };
+}
+
+type ScoredDealerMatch = {
+  profile: Doc<"marketplaceDealerProfiles">;
+  score: number;
+  tier: "INVENTORY" | "ELIGIBLE";
+  matchedVehicleRawId?: string;
+  estimatedMonthlyPayment?: number;
+  matchReasons?: string[];
+  calculationSnapshot?: ReturnType<typeof computePersonalizedFinance>["snapshot"];
+};
+
+/**
+ * Two-tier inventory-aware fan-out. For each opted-in dealer that passes the
+ * monetization quota *before* being considered (so a blocked dealer never
+ * consumes one of the request's limited slots), Tier A scores their published
+ * inventory against the request and keeps their single best vehicle; a dealer
+ * with no inventory hit but city/brand eligibility falls to Tier B for sourcing
+ * capacity. Dealers are then ranked by match quality, with FEATURED demoted to
+ * a final tie-break only — sponsorship buys directory placement, not a better
+ * match than a genuinely closer car. Inserts up to MAX_MATCHED_DEALERS rows.
+ */
+async function matchDealersToRequest(
+  ctx: MutationCtx,
+  params: {
+    requestId: Id<"marketplaceRequests">;
+    criteria: Parameters<typeof scoreVehicleAgainstRequest>[0];
+    buyerCity: string;
+    make?: string;
+    financePreferences?: BuyerFinancePreferences;
+    now: number;
+  }
+): Promise<Array<{ orgId: Id<"organizations"> }>> {
+  const candidates = await listOptedInDealerProfiles(ctx);
+  const scored: ScoredDealerMatch[] = [];
+
+  for (const profile of candidates) {
+    const org = await ctx.db.get(profile.orgId);
+    if (!org || org.suspended) continue;
+    // Quota BEFORE inclusion — a blocked dealer must not occupy a match slot a
+    // reachable dealer could have used.
+    if (!checkMarketplaceQuota(profile, params.now).allowed) continue;
+
+    let best: Omit<ScoredDealerMatch, "profile" | "tier"> | null = null;
+    if (await hasPlanFeature(ctx, profile.orgId, "websiteBuilder")) {
+      const snapshot = await getPublishedSnapshotData(ctx, profile.orgId);
+      const financeTerms = (snapshot?.financeCompany as SnapshotFinanceTerms | null | undefined) ?? null;
+      const vehicles = Array.isArray(snapshot?.vehicles) ? (snapshot!.vehicles as SnapshotVehicleLite[]) : [];
+
+      for (const vehicle of vehicles) {
+        if (!vehicle.make || !vehicle.model) continue;
+        if (vehicle.status && vehicle.status !== "AVAILABLE") continue;
+
+        const financeBasePrice = vehicle.financePrice ?? vehicle.price ?? null;
+        const finance =
+          financeTerms && financeBasePrice != null
+            ? computePersonalizedFinance(financeBasePrice, financeTerms, params.financePreferences)
+            : null;
+
+        const result = scoreVehicleAgainstRequest(
+          params.criteria,
+          { make: vehicle.make, model: vehicle.model, year: vehicle.year ?? null, price: vehicle.price ?? null },
+          { monthlyEstimate: finance?.monthly ?? null, financeAvailable: Boolean(financeTerms) }
+        );
+        if (!result) continue;
+
+        if (!best || result.score > best.score) {
+          best = {
+            score: result.score,
+            matchedVehicleRawId: vehicle.id,
+            estimatedMonthlyPayment: finance?.monthly,
+            matchReasons: result.reasons,
+            calculationSnapshot: finance?.snapshot,
+          };
+        }
+      }
+    }
+
+    if (best) {
+      scored.push({ profile, tier: "INVENTORY", ...best });
+    } else if (dealerMatchesRequest(profile, { buyerCity: params.buyerCity, make: params.make })) {
+      scored.push({ profile, tier: "ELIGIBLE", score: 0 });
+    }
+  }
+
+  // Match quality first; FEATURED/response-rank only breaks ties between
+  // equally good matches (compareDealerRank already front-loads FEATURED).
+  scored.sort((a, b) => (b.score !== a.score ? b.score - a.score : compareDealerRank(a.profile, b.profile)));
+
+  const chosen = scored.slice(0, MAX_MATCHED_DEALERS);
+  for (const candidate of chosen) {
+    const matchedVehicleId = candidate.matchedVehicleRawId
+      ? ctx.db.normalizeId("vehicles", candidate.matchedVehicleRawId) ?? undefined
+      : undefined;
+    await ctx.db.insert("marketplaceRequestMatches", {
+      requestId: params.requestId,
+      orgId: candidate.profile.orgId,
+      matchedAt: params.now,
+      matchTier: candidate.tier,
+      matchedVehicleId,
+      estimatedMonthlyPayment: candidate.estimatedMonthlyPayment,
+      matchScore: candidate.score,
+      matchReasons: candidate.matchReasons,
+      calculationSnapshot: candidate.calculationSnapshot,
+    });
+  }
+
+  return chosen.map((c) => ({ orgId: c.profile.orgId }));
+}
 
 export const createRequest = internalMutation({
   args: submitRequestBaseArgs,
@@ -181,6 +368,7 @@ export const createRequest = internalMutation({
       priceMax: args.priceMax,
       paymentType: args.paymentType,
       monthlyBudget: args.monthlyBudget,
+      financePreferences: args.financePreferences,
       buyerTimeframe: args.buyerTimeframe,
       buyerIntent,
       consentAcceptedAt: now,
@@ -190,22 +378,14 @@ export const createRequest = internalMutation({
       createdAt: now,
     });
 
-    const candidates = await listOptedInDealerProfiles(ctx);
-
-    const eligible: Doc<"marketplaceDealerProfiles">[] = [];
-    for (const profile of candidates) {
-      if (!dealerMatchesRequest(profile, { buyerCity, make })) continue;
-      const org = await ctx.db.get(profile.orgId);
-      if (!org || org.suspended) continue;
-      eligible.push(profile);
-    }
-
-    // Same ranking as the public directory (Phase 60) and now boosted by
-    // Phase 63's FEATURED tier — a dealer paying for featured placement
-    // should also win fan-out priority, not just directory position.
-    eligible.sort(compareDealerRank);
-
-    const matched = eligible.slice(0, MAX_MATCHED_DEALERS);
+    const matched = await matchDealersToRequest(ctx, {
+      requestId,
+      criteria: { make, model, yearMin: args.yearMin, yearMax: args.yearMax, priceMin: args.priceMin, priceMax: args.priceMax, paymentType: args.paymentType, monthlyBudget: args.monthlyBudget },
+      buyerCity,
+      make,
+      financePreferences: args.financePreferences,
+      now,
+    });
 
     const intentLabelEn: Record<BuyerIntent, string> = {
       HOT: "Confirmed intent — ready soon",
@@ -214,13 +394,8 @@ export const createRequest = internalMutation({
     };
     const vehicleDescription = [make, model].filter(Boolean).join(" ") || "a vehicle";
 
-    for (const profile of matched) {
-      await ctx.db.insert("marketplaceRequestMatches", {
-        requestId,
-        orgId: profile.orgId,
-        matchedAt: now,
-      });
-      await notifyByPermission(ctx, profile.orgId, PERMISSIONS.MARKETPLACE_RESPOND, "marketplace.request_matched", {
+    for (const candidate of matched) {
+      await notifyByPermission(ctx, candidate.orgId, PERMISSIONS.MARKETPLACE_RESPOND, "marketplace.request_matched", {
         intentLabel: intentLabelEn[buyerIntent],
         vehicleDescription,
         city: buyerCity,
