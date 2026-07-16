@@ -1,4 +1,4 @@
-import { calculateUnifiedMurabaha, calculateDBR } from "./financing";
+import { calculateUnifiedMurabaha, calculateDBR, calculateMaximumAffordableVehiclePrice } from "./financing";
 import { describe, it, expect } from "vitest";
 
 describe("Financing Logic", () => {
@@ -138,6 +138,111 @@ describe("Financing Logic", () => {
       expect(result.monthlyInstallment).toBe(0);
       // Everything else still computes normally — only the division is guarded.
       expect(result.totalContractValue).toBeGreaterThan(0);
+    });
+  });
+
+  describe("calculateMaximumAffordableVehiclePrice", () => {
+    const standardTerms = {
+      annualProfitRate: 5,
+      annualInsuranceRate: 1.5,
+      commission: 100,
+      processingFees: 50,
+    };
+
+    it("round-trips the standard-loan fixture: its own installment affords its own price", () => {
+      // Standard loan above: 10000 price / 2000 down / 60mo -> 182.526.../mo.
+      const budget = 10951.5625 / 60;
+      const maxPrice = calculateMaximumAffordableVehiclePrice({
+        maximumMonthlyPayment: budget,
+        downPayment: 2000,
+        termMonths: 60,
+        financeTerms: standardTerms,
+      });
+
+      expect(maxPrice).toBeGreaterThanOrEqual(9999);
+      expect(maxPrice).toBeLessThanOrEqual(10000);
+    });
+
+    it("is tight: the result fits the budget and one dinar more does not", () => {
+      const budget = 250;
+      const maxPrice = calculateMaximumAffordableVehiclePrice({
+        maximumMonthlyPayment: budget,
+        downPayment: 3000,
+        termMonths: 60,
+        financeTerms: standardTerms,
+      });
+
+      const atResult = calculateUnifiedMurabaha({
+        vehiclePrice: maxPrice,
+        downPayment: 3000,
+        termMonths: 60,
+        ...standardTerms,
+      }).monthlyInstallment;
+      const oneMore = calculateUnifiedMurabaha({
+        vehiclePrice: maxPrice + 1,
+        downPayment: 3000,
+        termMonths: 60,
+        ...standardTerms,
+      }).monthlyInstallment;
+
+      expect(atResult).toBeLessThanOrEqual(budget);
+      expect(oneMore).toBeGreaterThan(budget);
+    });
+
+    it("round-trips the Dar Al Tamweel spreadsheet fixture (flat commission model)", () => {
+      const maxPrice = calculateMaximumAffordableVehiclePrice({
+        maximumMonthlyPayment: 272.2073333,
+        downPayment: 1000,
+        termMonths: 60,
+        financeTerms: {
+          annualProfitRate: 8.8,
+          annualInsuranceRate: 0.65,
+          commission: 275,
+          processingFees: 500,
+          includesCommissionInDebt: true,
+        },
+      });
+
+      expect(maxPrice).toBeGreaterThanOrEqual(11299);
+      expect(maxPrice).toBeLessThanOrEqual(11300);
+    });
+
+    it("returns 0 for degenerate inputs (no budget, no term, grace consumes the term)", () => {
+      expect(
+        calculateMaximumAffordableVehiclePrice({
+          maximumMonthlyPayment: 0,
+          downPayment: 2000,
+          termMonths: 60,
+          financeTerms: standardTerms,
+        })
+      ).toBe(0);
+      expect(
+        calculateMaximumAffordableVehiclePrice({
+          maximumMonthlyPayment: 300,
+          downPayment: 2000,
+          termMonths: 0,
+          financeTerms: standardTerms,
+        })
+      ).toBe(0);
+      expect(
+        calculateMaximumAffordableVehiclePrice({
+          maximumMonthlyPayment: 300,
+          downPayment: 2000,
+          termMonths: 12,
+          financeTerms: { ...standardTerms, gracePeriodMonths: 12 },
+        })
+      ).toBe(0);
+    });
+
+    it("caps at the search ceiling for absurdly large budgets", () => {
+      const maxPrice = calculateMaximumAffordableVehiclePrice({
+        maximumMonthlyPayment: 1_000_000,
+        downPayment: 0,
+        termMonths: 60,
+        financeTerms: standardTerms,
+      });
+
+      expect(maxPrice).toBe(500_000);
     });
   });
 

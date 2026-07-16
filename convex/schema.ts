@@ -3298,10 +3298,21 @@ export default defineSchema({
     status: v.union(
       v.literal("OPEN"),
       v.literal("MATCHED"),
+      // Legacy: any fulfilling dealer reply used to set this directly. New
+      // rows use OFFERS_RECEIVED (dealer replied) → ACCEPTED/COMPLETED
+      // (buyer action) instead; kept until prod rows are migrated.
       v.literal("FULFILLED"),
+      v.literal("OFFERS_RECEIVED"),
+      v.literal("ACCEPTED"),
+      v.literal("COMPLETED"),
       v.literal("EXPIRED"),
       v.literal("SPAM")
     ),
+    // Unguessable share token — the buyer's only key to their Request Room.
+    // Optional because rows predating it exist in prod; backfilled by
+    // migrateMarketplacePublicIds. Raw document ids stay accepted for the
+    // legacy status lookup but must never gate buyer actions.
+    publicId: v.optional(v.string()),
     buyerFirstName: v.string(),
     buyerPhone: v.string(),
     buyerWhatsApp: v.optional(v.string()),
@@ -3314,6 +3325,31 @@ export default defineSchema({
     priceMax: v.optional(v.number()),
     paymentType: v.union(v.literal("CASH"), v.literal("FINANCE"), v.literal("EITHER")),
     monthlyBudget: v.optional(v.number()),
+    // Buyer's own financing constraints — drives personalized installment
+    // estimates and finance-aware matching, unlike the fixed 20%/60mo
+    // illustrative defaults used when these are absent.
+    financePreferences: v.optional(
+      v.object({
+        downPaymentAmount: v.optional(v.number()),
+        preferredTermMonths: v.optional(v.number()),
+        maximumMonthlyPayment: v.optional(v.number()),
+        allowHigherDownPayment: v.optional(v.boolean()),
+        maximumHigherDownPayment: v.optional(v.number()),
+        allowLongerTerm: v.optional(v.boolean()),
+        maximumTermMonths: v.optional(v.number()),
+      })
+    ),
+    bodyType: v.optional(v.string()),
+    // What the buyer allows dealers to flex on when proposing similar options.
+    flexibility: v.optional(
+      v.object({
+        yearDelta: v.optional(v.number()),
+        budgetDelta: v.optional(v.number()),
+        allowSimilarModel: v.optional(v.boolean()),
+        allowNearbyCity: v.optional(v.boolean()),
+        allowDifferentColor: v.optional(v.boolean()),
+      })
+    ),
     buyerTimeframe: v.union(
       v.literal("ASAP"),
       v.literal("THIS_WEEK"),
@@ -3329,7 +3365,8 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_status", ["status"])
-    .index("by_city", ["buyerCity"]),
+    .index("by_city", ["buyerCity"])
+    .index("by_publicId", ["publicId"]),
 
   // One row per matched dealer per request — not a flat array on
   // marketplaceRequests — so notify/respond timestamps are trackable per
@@ -3341,6 +3378,31 @@ export default defineSchema({
     matchedAt: v.number(),
     notifiedAt: v.optional(v.number()),
     notifiedVia: v.optional(v.union(v.literal("WHATSAPP_MANUAL"), v.literal("WHATSAPP_AUTO"))),
+    // INVENTORY = a concrete published vehicle scored against the request;
+    // ELIGIBLE = city/brand backfill kept for sourcing capacity. Absent on
+    // rows matched before finance-aware matching shipped.
+    matchTier: v.optional(v.union(v.literal("INVENTORY"), v.literal("ELIGIBLE"))),
+    matchedVehicleId: v.optional(v.id("vehicles")),
+    estimatedMonthlyPayment: v.optional(v.number()),
+    estimatedTotalContractValue: v.optional(v.number()),
+    matchScore: v.optional(v.number()),
+    matchReasons: v.optional(v.array(v.string())),
+    financeCompanyId: v.optional(v.id("financeCompanies")),
+    // Terms as of match time — finance-company rates drift, and the buyer
+    // must keep seeing the numbers their estimate was actually built from.
+    calculationSnapshot: v.optional(
+      v.object({
+        vehiclePrice: v.number(),
+        downPayment: v.number(),
+        termMonths: v.number(),
+        annualProfitRate: v.number(),
+        annualInsuranceRate: v.number(),
+        commission: v.number(),
+        processingFees: v.number(),
+      })
+    ),
+    // Buyer consented to reveal their phone to this one dealer.
+    contactUnlockedAt: v.optional(v.number()),
   })
     .index("by_request", ["requestId"])
     .index("by_org", ["orgId"]),
@@ -3360,10 +3422,67 @@ export default defineSchema({
     vehicleId: v.optional(v.id("vehicles")),
     offerPriceJod: v.optional(v.number()),
     note: v.optional(v.string()),
+    // Full computed offer, AutoFlow-calculated from the dealer's selected
+    // finance company + down/term — the dealer never types the installment.
+    // Snapshot semantics: what the buyer was quoted survives rate changes.
+    financeOffer: v.optional(
+      v.object({
+        vehiclePrice: v.number(),
+        downPayment: v.number(),
+        termMonths: v.number(),
+        monthlyInstallment: v.number(),
+        totalContractValue: v.number(),
+        totalProfit: v.number(),
+        insuranceAmount: v.number(),
+        commission: v.number(),
+        processingFees: v.number(),
+        financeCompanyId: v.optional(v.id("financeCompanies")),
+        expiresAt: v.optional(v.number()),
+      })
+    ),
+    // CAN_SOURCE replies carry an honest range + ETA instead of pretending a
+    // concrete vehicle exists.
+    sourcingRange: v.optional(
+      v.object({
+        minJod: v.number(),
+        maxJod: v.number(),
+        etaDays: v.number(),
+      })
+    ),
+    buyerAction: v.optional(
+      v.union(v.literal("SHORTLISTED"), v.literal("ACCEPTED"), v.literal("DECLINED"))
+    ),
+    buyerActionAt: v.optional(v.number()),
+    // Buyer consented to reveal their phone to this response's dealer.
+    contactUnlockedAt: v.optional(v.number()),
     createdAt: v.number(),
   })
     .index("by_request", ["requestId"])
     .index("by_org", ["orgId"]),
+
+  // Funnel telemetry (request submitted, offer sent/viewed/accepted, contact
+  // unlocked, ...) — powers dealer response-SLA scoring and liquidity
+  // metrics. Append-only; no PII beyond the ids.
+  marketplaceEvents: defineTable({
+    requestId: v.optional(v.id("marketplaceRequests")),
+    orgId: v.optional(v.id("organizations")),
+    event: v.string(),
+    meta: v.optional(v.record(v.string(), v.union(v.string(), v.number(), v.boolean()))),
+    createdAt: v.number(),
+  })
+    .index("by_request", ["requestId"])
+    .index("by_org_event", ["orgId", "event"]),
+
+  // Anonymous buyers have no Clerk account — push tokens key off the
+  // request's publicId instead.
+  marketplaceBuyerPushTokens: defineTable({
+    publicId: v.string(),
+    token: v.string(),
+    platform: v.union(v.literal("IOS"), v.literal("ANDROID"), v.literal("WEB")),
+    createdAt: v.number(),
+  })
+    .index("by_publicId", ["publicId"])
+    .index("by_token", ["token"]),
 
   // Tracks manual WhatsApp sends of the weekly proof report (Phase 58B),
   // same wa.me deep-link pattern as marketplaceRequestMatches' notifiedAt —
