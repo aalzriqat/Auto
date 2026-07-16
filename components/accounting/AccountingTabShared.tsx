@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 import { toast } from "@/components/ui/sonner";
+import { dateInputToUtcMs, todayDateInput } from "@/lib/dateInput";
 export { PaymentMethodSelect, type PaymentMethod, type Translate } from "@/components/payments/PaymentMethodSelect";
 
 const CURRENCY_SCALES: Record<string, number> = {
@@ -26,7 +27,7 @@ const CURRENCY_SCALES: Record<string, number> = {
   JPY: 0,
 };
 
-export const todayInput = new Date().toISOString().slice(0, 10);
+export const todayInput = todayDateInput();
 
 export type CurrencyFormatter = (amount: number, fractionDigits?: number) => string;
 
@@ -37,7 +38,10 @@ export function scaleForCurrency(currency: string): number {
 }
 
 export function dateInputToMs(value: string): number {
-  return new Date(`${value}T00:00:00`).getTime();
+  // Delegates to the shared UTC parser — see lib/dateInput.ts for why the old
+  // `${value}T00:00:00` form silently dropped a Jordan user's date into the
+  // previous UTC month.
+  return dateInputToUtcMs(value);
 }
 
 export function errorMessage(error: unknown): string {

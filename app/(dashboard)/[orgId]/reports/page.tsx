@@ -49,10 +49,7 @@ import {
 import { downloadCSV } from "@/lib/utils/export";
 import { RoleGuard } from "@/components/auth/RoleGuard";
 import { paginationOptsValidator } from "convex/server";
-
-const defaultEndDate = new Date();
-const defaultStartDate = new Date();
-defaultStartDate.setDate(defaultStartDate.getDate() - 30);
+import { dateInputToUtcMs, dateInputEndToUtcMs, todayDateInput, daysFromTodayDateInput } from "@/lib/dateInput";
 
 function ReportsDateFilter({
   startDateStr,
@@ -185,12 +182,15 @@ export default function ReportsPage() {
   const { t } = useLanguage();
   const { format, formatCompact } = useCurrency();
 
-  const [startDateStr, setStartDateStr] = useState(defaultStartDate.toISOString().split("T")[0]);
-  const [endDateStr, setEndDateStr] = useState(defaultEndDate.toISOString().split("T")[0]);
+  const [startDateStr, setStartDateStr] = useState(() => daysFromTodayDateInput(-30));
+  const [endDateStr, setEndDateStr] = useState(() => todayDateInput());
   const [selectedSalesperson, setSelectedSalesperson] = useState<string>("all");
 
-  const startDate = new Date(startDateStr).setHours(0, 0, 0, 0);
-  const endDate = new Date(endDateStr).setHours(23, 59, 59, 999);
+  // UTC boundaries — the report buckets by UTC month, so a local setHours() here
+  // pulled a Jordan user's range 3 hours into the previous day and clipped the
+  // last 3 hours of the end date. See lib/dateInput.ts.
+  const startDate = dateInputToUtcMs(startDateStr);
+  const endDate = dateInputEndToUtcMs(endDateStr);
 
   const salesReport = useQuery(api.reports.getSalesAndProfitReport, activeOrgId ? { orgId: activeOrgId, startDate, endDate } : "skip");
   const inventoryReport = useQuery(api.reports.getInventoryReport, activeOrgId ? { orgId: activeOrgId } : "skip");

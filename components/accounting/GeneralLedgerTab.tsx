@@ -10,10 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-
-const defaultEnd = new Date();
-const defaultStart = new Date();
-defaultStart.setDate(defaultStart.getDate() - 30);
+import { dateInputToUtcMs, dateInputEndToUtcMs, todayDateInput, daysFromTodayDateInput } from "@/lib/dateInput";
 
 type LedgerTransaction = {
   _id: string;
@@ -111,12 +108,13 @@ export function GeneralLedgerTab() {
   const { t, locale } = useLanguage();
   const formatCurrency = useCurrencyFormatter();
 
-  const [startDateStr, setStartDateStr] = useState(defaultStart.toISOString().split("T")[0]);
-  const [endDateStr, setEndDateStr] = useState(defaultEnd.toISOString().split("T")[0]);
+  const [startDateStr, setStartDateStr] = useState(() => daysFromTodayDateInput(-30));
+  const [endDateStr, setEndDateStr] = useState(() => todayDateInput());
   const [filterActive, setFilterActive] = useState(false);
 
-  const startDate = filterActive ? new Date(startDateStr).setHours(0, 0, 0, 0) : undefined;
-  const endDate = filterActive ? new Date(endDateStr).setHours(23, 59, 59, 999) : undefined;
+  // UTC boundaries, matching how transactions are dated — see lib/dateInput.ts.
+  const startDate = filterActive ? dateInputToUtcMs(startDateStr) : undefined;
+  const endDate = filterActive ? dateInputEndToUtcMs(endDateStr) : undefined;
 
   const { results: transactions, status, loadMore } = usePaginatedQuery(
     api.transactions.list,

@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import { Doc, Id } from "@/convex/_generated/dataModel";
+import { dateInputToUtcMs, todayDateInput, daysFromTodayDateInput } from "@/lib/dateInput";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrencyFormatter } from "@/hooks/useCurrencyFormatter";
@@ -66,11 +67,11 @@ type ApprovalRow = Doc<"collectionApprovalRequests"> & {
   requestedByName: string;
 };
 
-const todayInput = new Date().toISOString().slice(0, 10);
-const weekFromNowInput = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+const todayInput = todayDateInput();
+const weekFromNowInput = daysFromTodayDateInput(7);
 
 function dateInputToMs(value: string) {
-  return new Date(`${value}T00:00:00`).getTime();
+  return dateInputToUtcMs(value);
 }
 
 function formatDate(value: number) {
