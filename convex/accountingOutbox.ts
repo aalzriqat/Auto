@@ -18,6 +18,7 @@ import { internalMutation, mutation, query } from "./_generated/server";
 import { MutationCtx } from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { PostCommand, postAccountingEvent } from "./accounting/postingEngine";
+import { prepaidPostingBlockedReason } from "./utils/prepaidSourceLedger";
 import { reverseAccountingEvent } from "./accounting/reversals";
 import { requireTenantAuth } from "./utils/tenancy";
 import { PERMISSIONS } from "./utils/permissions";
@@ -219,6 +220,19 @@ async function markEntryFailed(ctx: MutationCtx, p: Doc<"pendingAccountingEvents
 }
 
 /**
+ * Records WHY an entry was skipped without counting it as an attempt, so it
+ * stays PENDING and drains by itself once its blocker clears. The reason lands
+ * in lastError purely so it is visible on the Accounting → Setup pending list —
+ * an entry that silently refuses to post with no explanation is worse for the
+ * accountant than one that fails loudly.
+ */
+async function markEntryHeld(ctx: MutationCtx, p: Doc<"pendingAccountingEvents">, reason: string): Promise<void> {
+  const lastError = `Waiting to post: ${reason}.`;
+  if (p.lastError === lastError) return;
+  await ctx.db.patch(p._id, { lastError });
+}
+
+/**
  * Attempts to post/reverse a batch of already-fetched outbox rows, one at a
  * time, isolating each row's failure from the rest. Factored out of
  * drainPendingForOrg so a narrower, pre-filtered subset (e.g. one prepaid
@@ -228,11 +242,31 @@ async function markEntryFailed(ctx: MutationCtx, p: Doc<"pendingAccountingEvents
 export async function drainEntries(
   ctx: MutationCtx,
   entries: Doc<"pendingAccountingEvents">[]
-): Promise<{ posted: number; failed: number }> {
+): Promise<{ posted: number; failed: number; held: number }> {
   let posted = 0;
   let failed = 0;
+  let held = 0;
 
   for (const p of entries) {
+    // Posting-side guard. What makes an entry drain is "a period covering THIS
+    // entry's date opened" — which says nothing about whether the entry is
+    // still coherent with the rest of the ledger. A prepaid correction queued
+    // before prepaidExpenses.ts's guard existed would otherwise post here and
+    // credit an asset whose debit is still queued, recreating the exact
+    // negative balance that guard prevents, with no operator action. Reversals
+    // are exempt: they unwind something that already posted.
+    if (p.kind === "POST") {
+      const blockedReason = await prepaidPostingBlockedReason(ctx, p);
+      if (blockedReason) {
+        // Held, not failed: this entry is not broken and retrying it is not
+        // wrong — it is waiting on something else to post first. Routing it
+        // through markEntryFailed would burn attempts and eventually
+        // dead-letter a perfectly valid entry for someone else's blocker.
+        await markEntryHeld(ctx, p, blockedReason);
+        held++;
+        continue;
+      }
+    }
     try {
       const resultEventId = p.kind === "POST" ? await postPendingEntry(ctx, p) : await reversePendingEntry(ctx, p);
       await markEntryPosted(ctx, p, resultEventId);
@@ -244,14 +278,14 @@ export async function drainEntries(
     }
   }
 
-  return { posted, failed };
+  return { posted, failed, held };
 }
 
 export async function drainPendingForOrg(
   ctx: MutationCtx,
   orgId: Id<"organizations">,
   limit = 50
-): Promise<{ posted: number; failed: number }> {
+): Promise<{ posted: number; failed: number; held: number }> {
   const pending = await ctx.db
     .query("pendingAccountingEvents")
     .withIndex("by_org_status", (q) => q.eq("orgId", orgId).eq("status", "PENDING"))

@@ -223,6 +223,48 @@ describe("prepaid expense — monthly amortization", () => {
     expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(0);
   });
 
+  test("recognition inside the start month is never dated before the debit it releases", async () => {
+    // The asset debit takes the expense's own date; recognition of the
+    // in-progress month takes min(end-of-month, now) — two different clocks. An
+    // expense dated later in its own start month than the day the cron runs
+    // therefore credits Prepaid Expenses days before anything debits it,
+    // leaving the asset negative in between. Same month, so the fix is to date
+    // the credit at the debit, not to refuse it: refusing would stall real
+    // recognition (and the close that depends on it) for a schedule that is
+    // perfectly valid.
+    const { t, orgId, userId, asOwner } = await seedDealer("amort-dating");
+    const paidOn = Date.UTC(2026, 0, 25);
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: paidOn,
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+
+    // The cron runs on the 5th — twenty days before the expense's own date.
+    const result = await t.mutation(internal.prepaidExpenses.amortizePrepaidExpenseForMonth, {
+      orgId, scheduleId: schedule!._id, yearMonth: "2026-01",
+      occurredAt: Date.UTC(2026, 0, 5), systemActorId: userId,
+    });
+
+    // Recognition still happens — a schedule whose asset is genuinely booked
+    // must not be stalled by the guard.
+    expect(result.posted).toBe(true);
+    expect(result.amountMinor).toBe(100_000);
+    const after = await t.run((ctx) => ctx.db.get(schedule!._id));
+    expect(after!.monthsRecognized).toBe(1);
+
+    const amortized = await t.run((ctx) =>
+      ctx.db.query("accountingEvents").filter((q) => q.eq(q.field("eventType"), "PREPAID_EXPENSE_AMORTIZED")).first()
+    );
+    const debit = await t.run((ctx) =>
+      ctx.db.query("accountingEvents").filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED")).first()
+    );
+    expect(debit!.accountingDate).toBe(paidOn);
+    // …but never before its own debit, and never outside the month it recognizes.
+    expect(amortized!.accountingDate).toBeGreaterThanOrEqual(debit!.accountingDate);
+    expect(amortized!.accountingDate).toBeLessThanOrEqual(Date.UTC(2026, 0, 31, 23, 59, 59, 999));
+  });
+
   test("strict month ordering: a month at/before the last recognized one is rejected", async () => {
     const { t, orgId, userId, asOwner } = await seedDealer("order");
     const expenseId = await asOwner.mutation(api.expenses.create, {
@@ -1366,7 +1408,7 @@ describe("Phase 3 — redriveScheduleEvents", () => {
     const result = await asOwner.mutation(api.prepaidExpenses.redriveScheduleEvents, {
       orgId, scheduleId: schedule!._id,
     });
-    expect(result).toEqual({ posted: 0, failed: 0 });
+    expect(result).toEqual({ posted: 0, failed: 0, held: 0 });
   });
 });
 
@@ -1513,5 +1555,640 @@ describe("Fix #3 — inactive accounts cannot be posted to", () => {
         ],
       })
     ).rejects.toThrow(/inactive/i);
+  });
+});
+
+// A refund or write-off is a pure CREDIT to the Prepaid Expenses asset (a
+// refund also credits input VAT). If the EXPENSE_POSTED that should have
+// debited that asset is still queued — which happens whenever the expense is
+// dated in a month that never got an open period, since postability is judged
+// per event date — the correction posts a credit against a balance that was
+// never booked, leaving Prepaid Expenses (and input VAT) negative with no
+// offsetting debit. amortizeScheduleForMonth has always refused to recognize in
+// this state ("source_expense_not_posted"); corrections never had the same
+// guard. The queued original does block the period close, but an unclosable
+// period plus a nonsensical balance sheet is not a correct entry.
+describe("prepaid corrections — refuse to post against an unbooked asset", () => {
+  /** A paid prepaid expense whose EXPENSE_POSTED never posted, plus its ACTIVE schedule. */
+  async function seedQueuedPrepaid(t: T, orgId: Id<"organizations">) {
+    const expenseId = await t.run((ctx) =>
+      ctx.db.insert("expenses", {
+        orgId, title: "Insurance", amount: 1200, taxAmount: 200, date: Date.UTC(2026, 0, 1),
+        category: "FEES", status: "PAID", isPrepaid: true, amortizationMonths: 12,
+      })
+    );
+    const scheduleId = await t.run((ctx) =>
+      ctx.db.insert("prepaidExpenseSchedules", {
+        orgId, expenseId, currency: "JOD", totalMinor: 1_000_000, termMonths: 12,
+        expenseSystemKey: "PROFESSIONAL_FEES_EXPENSE", startYearMonth: "2026-01",
+        recognizedMinor: 0, monthsRecognized: 0, status: "ACTIVE", createdAt: Date.now(),
+      })
+    );
+    return { expenseId, scheduleId };
+  }
+
+  const NOT_POSTED = /hasn't posted to the ledger yet/i;
+
+  test("rejects a write-off while the source expense is still queued", async () => {
+    const { t, orgId, asOwner } = await seedDealer("guard-wo");
+    const { scheduleId } = await seedQueuedPrepaid(t, orgId);
+
+    await expect(
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId, scheduleId, writeOffMinor: 300_000, reason: "Early cancellation",
+      })
+    ).rejects.toThrow(NOT_POSTED);
+
+    expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(0);
+    expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(0);
+  });
+
+  test("rejects a refund while the source expense is still queued", async () => {
+    const { t, orgId, asOwner } = await seedDealer("guard-rf");
+    const { scheduleId } = await seedQueuedPrepaid(t, orgId);
+
+    await expect(
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId, scheduleId, refundMinor: 300_000, refundPaymentMethod: "BANK_TRANSFER",
+        reason: "Policy cancelled, vendor refunded",
+      })
+    ).rejects.toThrow(NOT_POSTED);
+
+    expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(0);
+  });
+
+  test("rejects a VAT-bearing refund while the source expense is still queued", async () => {
+    // The refund's VAT leg credits input VAT that the queued EXPENSE_POSTED
+    // never debited, so it must be refused for the same reason as the net leg.
+    const { t, orgId, asOwner } = await seedDealer("guard-vat");
+    const { scheduleId } = await seedQueuedPrepaid(t, orgId);
+
+    await expect(
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId, scheduleId, refundMinor: 300_000, refundTaxMinor: 60_000,
+        refundPaymentMethod: "BANK_TRANSFER", reason: "Partial refund with VAT",
+      })
+    ).rejects.toThrow(NOT_POSTED);
+
+    expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(0);
+  });
+
+  test("writes no correction row and leaves the schedule untouched when refused", async () => {
+    const { t, orgId, asOwner } = await seedDealer("guard-atomic");
+    const { scheduleId } = await seedQueuedPrepaid(t, orgId);
+    const before = await t.run((ctx) => ctx.db.get(scheduleId));
+
+    await expect(
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId, scheduleId, writeOffMinor: 300_000, newTermMonths: 6, reason: "Early cancellation",
+      })
+    ).rejects.toThrow(NOT_POSTED);
+
+    const corrections = await t.run((ctx) =>
+      ctx.db.query("prepaidScheduleCorrections").withIndex("by_schedule", (q) => q.eq("scheduleId", scheduleId)).collect()
+    );
+    expect(corrections).toHaveLength(0);
+    const after = await t.run((ctx) => ctx.db.get(scheduleId));
+    expect(after!.totalMinor).toBe(before!.totalMinor);
+    expect(after!.termMonths).toBe(before!.termMonths);
+    expect(after!.status).toBe("ACTIVE");
+  });
+
+  test("refuses at submission, so a request is never even queued for approval", async () => {
+    const { t, orgId } = await seedDealer("guard-submit");
+    const { scheduleId } = await seedQueuedPrepaid(t, orgId);
+    const { asUser: asAccountant } = await addFinanceUser(t, orgId, "guard-submit-accountant");
+
+    await expect(
+      asAccountant.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId, scheduleId, writeOffMinor: 300_000, reason: "Early cancellation",
+      })
+    ).rejects.toThrow(NOT_POSTED);
+
+    const requests = await t.run((ctx) =>
+      ctx.db.query("prepaidCorrectionRequests").withIndex("by_schedule", (q) => q.eq("scheduleId", scheduleId)).collect()
+    );
+    expect(requests).toHaveLength(0);
+  });
+
+  test("re-checks at approval: a request approved after the source un-posts is refused", async () => {
+    // The submission-time check can't be the only one — an approval can land
+    // long after the request, and the ledger may have moved underneath it.
+    const { t, orgId, userId, asOwner } = await seedDealer("guard-approve");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    const { asUser: asAccountant } = await addFinanceUser(t, orgId, "guard-approve-accountant");
+    const submitted = await asAccountant.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Early cancellation",
+    });
+    expect(submitted.status).toBe("PENDING");
+
+    // The source EXPENSE_POSTED stops being POSTED between request and approval
+    // (e.g. the expense itself was reversed in the meantime).
+    const posted = await t.run((ctx) =>
+      ctx.db.query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", "expenses").eq("sourceId", expenseId.toString())
+        )
+        .filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED"))
+        .first()
+    );
+    await t.run((ctx) => ctx.db.patch(posted!._id, { status: "REVERSED" }));
+
+    await expect(
+      asOwner.mutation(api.prepaidExpenses.approveCorrectionRequest, {
+        orgId, requestId: submitted.requestId!,
+      })
+    ).rejects.toThrow(NOT_POSTED);
+
+    const corrections = await t.run((ctx) =>
+      ctx.db.query("prepaidScheduleCorrections").withIndex("by_schedule", (q) => q.eq("scheduleId", schedule!._id)).collect()
+    );
+    expect(corrections).toHaveLength(0);
+  });
+
+  test("allows a term-only correction while the source expense is queued", async () => {
+    // Reshaping future recognition posts nothing, so there's no unbooked asset
+    // to credit and no reason to block the accountant.
+    const { t, orgId, asOwner } = await seedDealer("guard-term");
+    const { scheduleId } = await seedQueuedPrepaid(t, orgId);
+
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId, newTermMonths: 6, reason: "Corrected coverage period",
+    });
+
+    const after = await t.run((ctx) => ctx.db.get(scheduleId));
+    expect(after!.termMonths).toBe(6);
+    expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(0);
+  });
+
+  test("allows the correction once the source expense has actually posted", async () => {
+    const { t, orgId, userId, asOwner } = await seedDealer("guard-ok");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Early cancellation",
+    });
+
+    const corrections = await t.run((ctx) =>
+      ctx.db.query("prepaidScheduleCorrections").withIndex("by_schedule", (q) => q.eq("scheduleId", schedule!._id)).collect()
+    );
+    expect(corrections).toHaveLength(1);
+    expect(corrections[0].writeOffMinor).toBe(300_000);
+  });
+});
+
+// "Posted" is not the same as "posted by now". EXPENSE_POSTED is dated from the
+// expense's own `date` field, a correction books at wall-clock now, and nothing
+// rejects a future-dated expense (validations/expenses.ts types date as a plain
+// z.number()). So a prepayment dated in December, entered in July into an open
+// annual period, is genuinely POSTED while its debit sits months ahead of a
+// refund booked today — crediting Prepaid Expenses now leaves the asset negative
+// until December, when the debit finally lands.
+describe("prepaid corrections — refuse to post ahead of the original entry", () => {
+  const JUL = Date.UTC(2026, 6, 15);
+  const DEC = Date.UTC(2026, 11, 1);
+  const NOT_YET = /recognized in the ledger on a later date/i;
+
+  /** A prepaid expense dated in December but entered (and posted) in July. */
+  async function seedFutureDatedPrepaid(t: T, orgId: Id<"organizations">, asOwner: Awaited<ReturnType<typeof seedDealer>>["asOwner"]) {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(JUL);
+    try {
+      const expenseId = await asOwner.mutation(api.expenses.create, {
+        orgId, title: "Insurance (starts December)", amount: 1200, date: DEC,
+        category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+      });
+      const schedule = await scheduleForExpense(t, expenseId);
+      return { expenseId, scheduleId: schedule!._id };
+    } finally {
+      clock.mockRestore();
+    }
+  }
+
+  test("the future-dated expense really does post, dated in the future", async () => {
+    // Guards the premise: if this ever stops posting, the tests below would pass
+    // for the wrong reason (caught by the not-posted branch instead).
+    const { t, orgId, asOwner } = await seedDealer("date-premise");
+    const { expenseId } = await seedFutureDatedPrepaid(t, orgId, asOwner);
+
+    const posted = await t.run((ctx) =>
+      ctx.db.query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", "expenses").eq("sourceId", expenseId.toString())
+        )
+        .filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED"))
+        .first()
+    );
+    expect(posted?.status).toBe("POSTED");
+    expect(posted?.accountingDate).toBe(DEC);
+  });
+
+  test("rejects a refund dated before the original entry", async () => {
+    const { t, orgId, asOwner } = await seedDealer("date-rf");
+    const { scheduleId } = await seedFutureDatedPrepaid(t, orgId, asOwner);
+
+    const clock = vi.spyOn(Date, "now").mockReturnValue(JUL);
+    try {
+      await expect(
+        asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+          orgId, scheduleId, refundMinor: 300_000, refundPaymentMethod: "BANK_TRANSFER",
+          reason: "Vendor refunded early",
+        })
+      ).rejects.toThrow(NOT_YET);
+    } finally {
+      clock.mockRestore();
+    }
+
+    // The original December debit stands; no refund credit was applied on top.
+    expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(1_200_000);
+  });
+
+  test("rejects a write-off dated before the original entry", async () => {
+    const { t, orgId, asOwner } = await seedDealer("date-wo");
+    const { scheduleId } = await seedFutureDatedPrepaid(t, orgId, asOwner);
+
+    const clock = vi.spyOn(Date, "now").mockReturnValue(JUL);
+    try {
+      await expect(
+        asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+          orgId, scheduleId, writeOffMinor: 300_000, reason: "Cancelled before it started",
+        })
+      ).rejects.toThrow(NOT_YET);
+    } finally {
+      clock.mockRestore();
+    }
+
+    expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(0);
+    expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(1_200_000);
+  });
+
+  test("allows a term-only correction on a future-dated expense", async () => {
+    // Posts nothing, so there is no ordering to get wrong.
+    const { t, orgId, asOwner } = await seedDealer("date-term");
+    const { scheduleId } = await seedFutureDatedPrepaid(t, orgId, asOwner);
+
+    const clock = vi.spyOn(Date, "now").mockReturnValue(JUL);
+    try {
+      await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId, scheduleId, newTermMonths: 6, reason: "Corrected coverage period",
+      });
+    } finally {
+      clock.mockRestore();
+    }
+
+    const after = await t.run((ctx) => ctx.db.get(scheduleId));
+    expect(after!.termMonths).toBe(6);
+  });
+
+  test("allows the refund once the original entry's date has been reached", async () => {
+    const { t, orgId, asOwner } = await seedDealer("date-ok");
+    const { scheduleId } = await seedFutureDatedPrepaid(t, orgId, asOwner);
+
+    // Same correction, now booked after December rather than before it.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 11, 20));
+    try {
+      await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId, scheduleId, refundMinor: 300_000, refundPaymentMethod: "BANK_TRANSFER",
+        reason: "Vendor refunded",
+      });
+    } finally {
+      clock.mockRestore();
+    }
+
+    const corrections = await t.run((ctx) =>
+      ctx.db.query("prepaidScheduleCorrections").withIndex("by_schedule", (q) => q.eq("scheduleId", scheduleId)).collect()
+    );
+    expect(corrections).toHaveLength(1);
+    expect(corrections[0].refundMinor).toBe(300_000);
+  });
+
+  test("re-checks ordering at approval, not just at submission", async () => {
+    // Submitted while the original was already posted and in the past, then the
+    // schedule is re-pointed at a future-dated expense before approval. The
+    // approval must vet the ordering itself rather than trust the request.
+    const { t, orgId, userId, asOwner } = await seedDealer("date-approve");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    const { asUser: asAccountant } = await addFinanceUser(t, orgId, "date-approve-accountant");
+    const submitted = await asAccountant.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Early cancellation",
+    });
+    expect(submitted.status).toBe("PENDING");
+
+    // The original entry's date moves ahead of the approval.
+    const posted = await t.run((ctx) =>
+      ctx.db.query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", "expenses").eq("sourceId", expenseId.toString())
+        )
+        .filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED"))
+        .first()
+    );
+    await t.run((ctx) => ctx.db.patch(posted!._id, { accountingDate: Date.UTC(2027, 5, 1) }));
+
+    await expect(
+      asOwner.mutation(api.prepaidExpenses.approveCorrectionRequest, {
+        orgId, requestId: submitted.requestId!,
+      })
+    ).rejects.toThrow(NOT_YET);
+
+    const corrections = await t.run((ctx) =>
+      ctx.db.query("prepaidScheduleCorrections").withIndex("by_schedule", (q) => q.eq("scheduleId", schedule!._id)).collect()
+    );
+    expect(corrections).toHaveLength(0);
+  });
+});
+
+// The mutation guard can only vet what it is asked to do now. It cannot see a
+// correction queued before it existed, still sitting in the outbox. Those post
+// through the drain — whose trigger is "a period covering THIS entry's date
+// opened", which says nothing about whether the source expense's own month is
+// postable. So without a guard at the posting boundary, opening a period is
+// enough to recreate the exact negative-asset state the mutation guard exists
+// to prevent, with no operator action and nothing to click.
+describe("prepaid corrections — the outbox refuses to post them against an unbooked asset", () => {
+  /**
+   * The pre-guard shape: an expense dated in a month that never opens (so its
+   * EXPENSE_POSTED can never drain) whose write-off was queued anyway, dated in
+   * a month that IS about to open.
+   */
+  async function seedLegacyQueuedCorrection(t: T, orgId: Id<"organizations">, userId: Id<"users">) {
+    const expenseId = await t.run((ctx) =>
+      ctx.db.insert("expenses", {
+        orgId, title: "Insurance", amount: 1200, date: Date.UTC(2025, 11, 15),
+        category: "FEES", status: "PAID", isPrepaid: true, amortizationMonths: 12,
+      })
+    );
+    const scheduleId = await t.run((ctx) =>
+      ctx.db.insert("prepaidExpenseSchedules", {
+        orgId, expenseId, currency: "JOD", totalMinor: 1_200_000, termMonths: 12,
+        expenseSystemKey: "PROFESSIONAL_FEES_EXPENSE", startYearMonth: "2025-12",
+        recognizedMinor: 0, monthsRecognized: 0, status: "ACTIVE", createdAt: Date.now(),
+      })
+    );
+    // The asset debit, permanently queued: 2025 has no period in this org.
+    await t.run((ctx) =>
+      ctx.db.insert("pendingAccountingEvents", {
+        orgId, kind: "POST", status: "PENDING", attempts: 0,
+        idempotencyKey: `expense_posted_${expenseId}`,
+        eventType: "EXPENSE_POSTED", sourceType: "expenses", sourceId: expenseId.toString(),
+        eventVersion: 1, accountingDate: Date.UTC(2025, 11, 15), occurredAt: Date.UTC(2025, 11, 15),
+        currency: "JOD", actorId: userId, createdAt: Date.now(),
+        reason: "No chart of accounts or open period at operation time",
+        payload: { expenseId: expenseId.toString(), amountMinor: 1_200_000, currency: "JOD", isPrepaid: true },
+      })
+    );
+    // The write-off, queued before the guard existed, dated inside 2026.
+    const writeOffId = await t.run((ctx) =>
+      ctx.db.insert("pendingAccountingEvents", {
+        orgId, kind: "POST", status: "PENDING", attempts: 0,
+        idempotencyKey: `prepaid_written_off_${scheduleId}_c1`,
+        eventType: "PREPAID_EXPENSE_WRITTEN_OFF", sourceType: "prepaidExpenseSchedules",
+        sourceId: `${scheduleId}_c1`, eventVersion: 1,
+        accountingDate: Date.UTC(2026, 2, 20), occurredAt: Date.UTC(2026, 2, 20),
+        currency: "JOD", actorId: userId, createdAt: Date.now(),
+        reason: "No chart of accounts or open period at operation time",
+        payload: { scheduleId: scheduleId.toString(), amountMinor: 300_000, currency: "JOD", expenseSystemKey: "PROFESSIONAL_FEES_EXPENSE" },
+      })
+    );
+    return { expenseId, scheduleId, writeOffId };
+  }
+
+  test("an org-wide drain holds a legacy queued write-off instead of posting it", async () => {
+    const { t, orgId, userId } = await seedDealer("drain-legacy");
+    const { writeOffId } = await seedLegacyQueuedCorrection(t, orgId, userId);
+
+    const result = await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+
+    expect(result.held).toBe(1);
+    expect(result.posted).toBe(0);
+    // Prepaid Expenses is untouched: no credit without its debit.
+    expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(0);
+    expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(0);
+  });
+
+  test("a held entry stays PENDING and burns no retry attempts", async () => {
+    // Held is not failed. It is waiting on someone else's blocker, so counting
+    // attempts would dead-letter a perfectly valid entry for no fault of its own.
+    const { t, orgId, userId } = await seedDealer("drain-held-state");
+    const { writeOffId } = await seedLegacyQueuedCorrection(t, orgId, userId);
+
+    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+
+    const row = await t.run((ctx) => ctx.db.get(writeOffId));
+    expect(row!.status).toBe("PENDING");
+    expect(row!.attempts).toBe(0);
+    // …and it says why, so it isn't a silent refusal on the pending list.
+    expect(row!.lastError).toMatch(/has not posted to the ledger yet/i);
+  });
+
+  test("the same entry posts by itself once its source debit posts", async () => {
+    // The hold must be a wait, not a dead end.
+    const { t, orgId, userId } = await seedDealer("drain-unblocks");
+    const { expenseId, scheduleId } = await seedLegacyQueuedCorrection(t, orgId, userId);
+
+    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(0);
+
+    // The source expense's own month finally posts.
+    await t.run((ctx) =>
+      ctx.db.insert("accountingEvents", {
+        orgId, eventType: "EXPENSE_POSTED", sourceType: "expenses", sourceId: expenseId.toString(),
+        eventVersion: 1, idempotencyKey: `expense_posted_${expenseId}_manual`,
+        occurredAt: Date.UTC(2025, 11, 15), accountingDate: Date.UTC(2025, 11, 15),
+        currency: "JOD", payload: { expenseId: expenseId.toString() }, payloadHash: "t",
+        status: "POSTED", createdBy: userId, createdAt: Date.now(),
+      })
+    );
+
+    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+
+    // Now the credit lands, with its debit already in place.
+    expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(300_000);
+  });
+
+  test("a queued correction dated before its posted source is held too", async () => {
+    // The ordering half of the same invariant, at the posting boundary.
+    const { t, orgId, userId } = await seedDealer("drain-ordering");
+    const expenseId = await t.run((ctx) =>
+      ctx.db.insert("expenses", {
+        orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 11, 1),
+        category: "FEES", status: "PAID", isPrepaid: true, amortizationMonths: 12,
+      })
+    );
+    const scheduleId = await t.run((ctx) =>
+      ctx.db.insert("prepaidExpenseSchedules", {
+        orgId, expenseId, currency: "JOD", totalMinor: 1_200_000, termMonths: 12,
+        expenseSystemKey: "PROFESSIONAL_FEES_EXPENSE", startYearMonth: "2026-12",
+        recognizedMinor: 0, monthsRecognized: 0, status: "ACTIVE", createdAt: Date.now(),
+      })
+    );
+    // Source posted, but dated December.
+    await t.run((ctx) =>
+      ctx.db.insert("accountingEvents", {
+        orgId, eventType: "EXPENSE_POSTED", sourceType: "expenses", sourceId: expenseId.toString(),
+        eventVersion: 1, idempotencyKey: `expense_posted_${expenseId}`,
+        occurredAt: Date.UTC(2026, 11, 1), accountingDate: Date.UTC(2026, 11, 1),
+        currency: "JOD", payload: { expenseId: expenseId.toString() }, payloadHash: "t",
+        status: "POSTED", createdBy: userId, createdAt: Date.now(),
+      })
+    );
+    // Refund queued for July — five months before the debit it credits.
+    await t.run((ctx) =>
+      ctx.db.insert("pendingAccountingEvents", {
+        orgId, kind: "POST", status: "PENDING", attempts: 0,
+        idempotencyKey: `prepaid_refunded_${scheduleId}_c1`,
+        eventType: "PREPAID_EXPENSE_REFUNDED", sourceType: "prepaidExpenseSchedules",
+        sourceId: `${scheduleId}_c1`, eventVersion: 1,
+        accountingDate: Date.UTC(2026, 6, 15), occurredAt: Date.UTC(2026, 6, 15),
+        currency: "JOD", actorId: userId, createdAt: Date.now(),
+        reason: "No chart of accounts or open period at operation time",
+        payload: { scheduleId: scheduleId.toString(), amountMinor: 300_000, currency: "JOD", paymentMethod: "BANK_TRANSFER" },
+      })
+    );
+
+    const result = await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+    expect(result.held).toBe(1);
+    expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(0);
+  });
+
+  test("a healthy queued correction still drains normally", async () => {
+    // The guard must not become a blanket refusal to post corrections.
+    const { t, orgId, userId, asOwner } = await seedDealer("drain-healthy");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await t.run((ctx) =>
+      ctx.db.insert("pendingAccountingEvents", {
+        orgId, kind: "POST", status: "PENDING", attempts: 0,
+        idempotencyKey: `prepaid_written_off_${schedule!._id}_c1`,
+        eventType: "PREPAID_EXPENSE_WRITTEN_OFF", sourceType: "prepaidExpenseSchedules",
+        sourceId: `${schedule!._id}_c1`, eventVersion: 1,
+        accountingDate: Date.UTC(2026, 2, 20), occurredAt: Date.UTC(2026, 2, 20),
+        currency: "JOD", actorId: userId, createdAt: Date.now(),
+        reason: "queued",
+        payload: { scheduleId: schedule!._id.toString(), amountMinor: 300_000, currency: "JOD", expenseSystemKey: "PROFESSIONAL_FEES_EXPENSE" },
+      })
+    );
+
+    await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+
+    // End state, not the drain's counters: opening a period schedules its own
+    // background drain, so which call actually posts the row is a race. What
+    // must hold either way is that it posted and hit the P&L.
+    const row = await t.run((ctx) =>
+      ctx.db.query("pendingAccountingEvents").filter((q) => q.eq(q.field("orgId"), orgId)).first()
+    );
+    expect(row!.status).toBe("POSTED");
+    expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(300_000);
+  });
+
+  test("a queued prepaid credit whose schedule reference is missing is held, not posted", async () => {
+    // Fail closed. The posting rules never read scheduleId — they have the
+    // amount and the accounts they need — so an event whose schedule reference
+    // is absent posts perfectly happily while the guard, which can only find
+    // the asset's debit *through* the schedule, has nothing to check and waves
+    // it past. That is the one shape nobody can audit after the fact.
+    const { t, orgId, userId } = await seedDealer("drain-no-schedule-ref");
+    await t.run((ctx) =>
+      ctx.db.insert("pendingAccountingEvents", {
+        orgId, kind: "POST", status: "PENDING", attempts: 0,
+        idempotencyKey: "prepaid_written_off_orphan",
+        eventType: "PREPAID_EXPENSE_WRITTEN_OFF", sourceType: "prepaidExpenseSchedules",
+        sourceId: "orphan_c1", eventVersion: 1,
+        accountingDate: Date.UTC(2026, 2, 20), occurredAt: Date.UTC(2026, 2, 20),
+        currency: "JOD", actorId: userId, createdAt: Date.now(), reason: "queued",
+        payload: { amountMinor: 300_000, currency: "JOD", expenseSystemKey: "PROFESSIONAL_FEES_EXPENSE" },
+      })
+    );
+
+    const result = await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+
+    expect(result.held).toBe(1);
+    expect(result.posted).toBe(0);
+    expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(0);
+    expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(0);
+  });
+
+  test("a queued prepaid credit whose schedule row no longer exists is held, not posted", async () => {
+    // The dangling half of the same hole: the reference is well-formed, the row
+    // it names is gone, so the guard cannot reach the debit to vet it.
+    const { t, orgId, userId } = await seedDealer("drain-dangling-schedule");
+    const expenseId = await t.run((ctx) =>
+      ctx.db.insert("expenses", {
+        orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+        category: "FEES", status: "PAID", isPrepaid: true, amortizationMonths: 12,
+      })
+    );
+    const scheduleId = await t.run((ctx) =>
+      ctx.db.insert("prepaidExpenseSchedules", {
+        orgId, expenseId, currency: "JOD", totalMinor: 1_200_000, termMonths: 12,
+        expenseSystemKey: "PROFESSIONAL_FEES_EXPENSE", startYearMonth: "2026-01",
+        recognizedMinor: 0, monthsRecognized: 0, status: "ACTIVE", createdAt: Date.now(),
+      })
+    );
+    await t.run((ctx) => ctx.db.delete(scheduleId));
+    await t.run((ctx) =>
+      ctx.db.insert("pendingAccountingEvents", {
+        orgId, kind: "POST", status: "PENDING", attempts: 0,
+        idempotencyKey: `prepaid_written_off_${scheduleId}_c1`,
+        eventType: "PREPAID_EXPENSE_WRITTEN_OFF", sourceType: "prepaidExpenseSchedules",
+        sourceId: `${scheduleId}_c1`, eventVersion: 1,
+        accountingDate: Date.UTC(2026, 2, 20), occurredAt: Date.UTC(2026, 2, 20),
+        currency: "JOD", actorId: userId, createdAt: Date.now(), reason: "queued",
+        payload: { scheduleId: scheduleId.toString(), amountMinor: 300_000, currency: "JOD", expenseSystemKey: "PROFESSIONAL_FEES_EXPENSE" },
+      })
+    );
+
+    const result = await t.mutation(internal.accountingOutbox.drainPendingAccountingEvents, { orgId });
+
+    expect(result.held).toBe(1);
+    expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(0);
+  });
+
+  test("the schedule redrive button posts the source debit, not just the credits", async () => {
+    // The debit is sourceType "expenses", so a schedule-scoped sweep filtering
+    // on sourceType alone could never reach it — the button would hold every
+    // row and report doing nothing on the schedule it was meant to unblock.
+    const { t, orgId, userId, asOwner } = await seedDealer("redrive-source");
+    const { scheduleId } = await seedLegacyQueuedCorrection(t, orgId, userId);
+    // Give 2025 a period so the source debit is postable once it's included.
+    await asOwner.mutation(api.accountingPeriods.create, {
+      orgId, startDate: Date.UTC(2025, 0, 1), endDate: Date.UTC(2025, 11, 31, 23, 59, 59, 999),
+      fiscalYear: 2025, periodNumber: 2,
+    });
+    const periods = await asOwner.query(api.accountingPeriods.list, { orgId });
+    const p2025 = periods.find((p) => p.fiscalYear === 2025)!;
+    await asOwner.mutation(api.accountingPeriods.open, { orgId, periodId: p2025._id });
+
+    await asOwner.mutation(api.prepaidExpenses.redriveScheduleEvents, { orgId, scheduleId });
+
+    // Both rows go: the debit first, then the write-off that depends on it.
+    // Asserted as end state — opening the 2025 period above schedules its own
+    // drain, so which call posts them is a race; that they BOTH post is not.
+    const rows = await t.run((ctx) =>
+      ctx.db.query("pendingAccountingEvents").filter((q) => q.eq(q.field("orgId"), orgId)).collect()
+    );
+    expect(rows.every((r) => r.status === "POSTED")).toBe(true);
+    expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(300_000);
   });
 });

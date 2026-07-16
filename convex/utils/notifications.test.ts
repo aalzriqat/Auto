@@ -1,5 +1,5 @@
 import { convexTest } from "convex-test";
-import { expect, test, describe, vi } from "vitest";
+import { expect, test, describe, vi, beforeEach, afterEach } from "vitest";
 import schema from "../schema";
 import { notifyUser, notifyManagers, notifyAllMembers, notifyOwner, notifyByPermission, notifyFinanceManagers, getActorName } from "./notifications";
 import { PERMISSIONS } from "./permissions";
@@ -8,6 +8,31 @@ vi.mock("../rateLimit", () => ({
   rateLimiter: { limit: vi.fn().mockResolvedValue({ ok: true }) },
   checkTenantWriteLimit: vi.fn().mockResolvedValue({ ok: true, retryAfter: 0 }),
 }));
+
+// Every notify* helper fans out to sender actions (email/WhatsApp/push) through
+// ctx.scheduler.runAfter(0, ...), and convex-test backs that with a real
+// setTimeout. Left alone, those senders therefore execute on a later tick —
+// after the test that scheduled them has already finished — and whatever they
+// emit races the vitest worker's teardown, surfacing as
+//   EnvironmentTeardownError: Closing rpc while "onUserConsoleLog" was pending
+// which fails the entire job while every test still reports as passing. It only
+// bites under CI's timing (sendNotificationEmail calls getValidatedEnv, which
+// throws when the backend env isn't configured, and convex-test logs that
+// failure whenever it happens to land), which is exactly what makes it a flake
+// rather than an honest failure.
+//
+// These tests assert on the _scheduled_functions table — that a sender was or
+// wasn't scheduled — and never on a sender running, so freezing setTimeout
+// keeps the scheduling observable while ensuring nothing executes outside the
+// test that asked for it. Only setTimeout is faked: Date and the rest stay real
+// so convex-test's own timing is untouched.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["setTimeout"] });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 async function seedOrg(t: ReturnType<typeof convexTest>) {
   const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Test Org", createdAt: Date.now() }));
