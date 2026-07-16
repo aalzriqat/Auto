@@ -160,8 +160,11 @@ export const search = query({
         if (args.priceMin != null && (vehicle.price ?? Infinity) < args.priceMin) continue;
         if (args.priceMax != null && (vehicle.price ?? -Infinity) > args.priceMax) continue;
 
+        // financePrice survives the dealer's "hide public prices" toggle, so a
+        // price-hidden vehicle still gets a real installment estimate.
+        const financeBasePrice = vehicle.financePrice ?? vehicle.price;
         const estimatedMonthlyPayment =
-          vehicle.price != null ? estimateMonthlyPayment(vehicle.price, financeCompany) : null;
+          financeBasePrice != null ? estimateMonthlyPayment(financeBasePrice, financeCompany) : null;
         if (args.maxMonthlyPayment != null && (estimatedMonthlyPayment ?? Infinity) > args.maxMonthlyPayment) continue;
 
         merged.push({
