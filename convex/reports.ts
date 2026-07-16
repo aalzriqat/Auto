@@ -233,7 +233,7 @@ async function loadUnpostedExpenseDebitStates(
   return byExpenseId;
 }
 
-type GlState = "POSTED" | "CAPITALIZED" | "PENDING" | "FAILED" | "MIXED";
+export type GlState = "POSTED" | "CAPITALIZED" | "PENDING" | "FAILED" | "MIXED";
 
 /**
  * The row's headline posting state. Posted is only "posted to the P&L" — a cost

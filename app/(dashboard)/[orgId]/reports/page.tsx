@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import type { GlState } from "@/convex/reports";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useCurrency } from "@/hooks/useCurrency";
@@ -97,8 +98,6 @@ function ReportsDateFilter({
     </div>
   );
 }
-
-type GlState = "POSTED" | "CAPITALIZED" | "PENDING" | "FAILED" | "MIXED";
 
 const GL_STATE_STYLES: Record<GlState, string> = {
   POSTED: "bg-emerald-500/10 text-emerald-700 border-emerald-500/20",

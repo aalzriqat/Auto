@@ -1985,6 +1985,34 @@ describe("prepaid corrections — the accountant can date the correction", () =>
     ).rejects.toThrow(/can't be dated in the future/i);
   });
 
+  test("a date that is tomorrow in UTC but today for a user ahead of UTC is accepted", async () => {
+    // Guards the timezone fix: the future bound has a day of grace, so a user
+    // at +offset picking their own local today — already 'tomorrow' in UTC in
+    // the first hours of their day — isn't rejected at the month boundary.
+    const { t, orgId, asOwner, scheduleId } = await seedPostedPrepaid("correction-tz-grace");
+    const d = new Date(Date.now() + 6 * 60 * 60 * 1000);
+    const tomorrowUtcMidnight = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1);
+
+    await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId, writeOffMinor: 300_000, accountingDate: tomorrowUtcMidnight,
+      reason: "Recorded in the first hours of the day, +3 timezone", idempotencyKey: "k1",
+    });
+
+    const correction = await t.run((c) => c.db.query("prepaidScheduleCorrections").first());
+    expect(correction!.accountingDate).toBe(tomorrowUtcMidnight);
+  });
+
+  test("two or more days ahead is future in every timezone and still refused", async () => {
+    const { orgId, asOwner, scheduleId } = await seedPostedPrepaid("correction-two-days");
+    await expect(
+      asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId, scheduleId, writeOffMinor: 300_000,
+        accountingDate: Date.now() + 2 * 24 * 60 * 60 * 1000,
+        reason: "Genuinely future", idempotencyKey: "k1",
+      })
+    ).rejects.toThrow(/can't be dated in the future/i);
+  });
+
   test("a correction dated into a closed period is refused, not silently queued", async () => {
     // Silently queueing against a filed month is the failure this exists to
     // prevent: it looks like success and lands nowhere.

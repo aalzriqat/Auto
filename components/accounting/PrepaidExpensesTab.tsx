@@ -39,7 +39,6 @@ import {
   PaymentMethodSelect,
   errorMessage,
   scaleForCurrency,
-  todayInput,
   useAccountingSubmit,
 } from "./AccountingTabShared";
 import { prepaidCorrectionSchema, type PrepaidCorrectionFormValues } from "./prepaidCorrection.schema";
@@ -60,6 +59,18 @@ import { prepaidCorrectionSchema, type PrepaidCorrectionFormValues } from "./pre
 function dateInputToUtcMs(value: string): number {
   const [year, month, day] = value.split("-").map(Number);
   return Date.UTC(year, month - 1, day);
+}
+
+/**
+ * The accountant's LOCAL calendar today as "YYYY-MM-DD" — deliberately not
+ * AccountingTabShared's `todayInput`, which is the UTC date. A user ahead of UTC
+ * in the first hours of their day has a local date that is already "tomorrow" in
+ * UTC; keying the picker's default and max off the UTC date would stop them
+ * selecting their own today. The server allows a day of grace to match.
+ */
+function localTodayInput(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 // Each prepaid schedule carries its own currency (set at creation, independent
@@ -657,6 +668,9 @@ function CorrectScheduleDialog({
   // minted per open — a retry within one open (e.g. a network blip) replays
   // idempotently, and a deliberate second open gets its own key.
   const idempotencyKey = useMemo(() => crypto.randomUUID(), []);
+  // Stable across the dialog's life so the default, the max, and the "did they
+  // change it?" check below all agree on the same "today".
+  const today = useMemo(() => localTodayInput(), []);
   const remainingRefundableTaxMinor = useQuery(api.prepaidExpenses.getRemainingRefundableTaxMinor, {
     orgId, scheduleId: schedule._id,
   });
@@ -672,7 +686,7 @@ function CorrectScheduleDialog({
       changeTerm: false,
       newTermMonths: schedule.termMonths,
       reason: "",
-      accountingDate: todayInput,
+      accountingDate: today,
     },
   });
   const changeTerm = form.watch("changeTerm");
@@ -699,7 +713,7 @@ function CorrectScheduleDialog({
         // "send today, always" would start rejecting corrections in orgs whose
         // current period was never opened, which used to queue quietly.
         accountingDate:
-          values.accountingDate && values.accountingDate !== todayInput
+          values.accountingDate && values.accountingDate !== today
             ? dateInputToUtcMs(values.accountingDate)
             : undefined,
         idempotencyKey,
@@ -763,7 +777,7 @@ function CorrectScheduleDialog({
                   <FormItem>
                     <FormLabel>{t("CorrectionAccountingDateLabel" as any)}</FormLabel>
                     <FormControl>
-                      <Input type="date" max={todayInput} {...field} />
+                      <Input type="date" max={today} {...field} />
                     </FormControl>
                     <p className="text-xs text-muted-foreground">{t("CorrectionAccountingDateHint" as any)}</p>
                     <FormMessage />

@@ -203,9 +203,14 @@ function endOfDayMs(now: number): number {
  *
  * - **Not in the future.** A refund or write-off records something that has
  *   already happened; there is no vendor credit note you have not received yet.
- *   Bounded at the end of the UTC day so "today" is accepted whatever timezone
- *   the browser resolved the date picker in, rather than rejecting a date that
- *   is merely hours ahead of the server's clock.
+ *   Bounded at the end of the UTC day AFTER now — a full day of grace — because
+ *   the accountant's "today" is their local date, and a user ahead of UTC (the
+ *   +3 target market, in the first hours of their day) picks a calendar date
+ *   that is already "tomorrow" in UTC. Bounding at end-of-today-UTC would reject
+ *   their genuine today at exactly the month boundary this feature exists to get
+ *   right. Max real offset is +14h, well inside the day of grace; a date two or
+ *   more days ahead is future in every timezone and still refused, and the
+ *   open-period and ordering guards below are the real safety anyway.
  * - **Inside an OPEN period.** Not merely "not closed": a closed period has been
  *   filed and must not be restated, and a date with no period at all would post
  *   nowhere — it would queue against a month that may never open, which is
@@ -223,7 +228,8 @@ async function requireUsableCorrectionAccountingDate(
   accountingDate: number,
   now: number
 ): Promise<void> {
-  if (accountingDate > endOfDayMs(now)) {
+  const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+  if (accountingDate > endOfDayMs(now + ONE_DAY_MS)) {
     throw new ConvexError(
       "A correction can't be dated in the future — record it on the date the refund or credit note actually happened."
     );
