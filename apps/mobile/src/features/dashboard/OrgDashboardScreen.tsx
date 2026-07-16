@@ -207,7 +207,8 @@ function Header({ org }: { org: MobileOrgSummary }) {
   const greeting = getGreeting(locale, new Date().getHours());
   const me = useQuery(api.users.getMe, {});
   const firstName = getFirstName(me?.name);
-  const greetingLine = firstName ? `${greeting}${locale === "ar" ? "، " : ", "}${firstName}` : greeting;
+  const orgName = org.name || t("untitledWorkspace");
+  const subtitleLine = firstName ? `${firstName} · ${orgName}` : orgName;
 
   return (
     <View style={[styles.header, { direction: textDirection }]}>
@@ -221,10 +222,10 @@ function Header({ org }: { org: MobileOrgSummary }) {
       </Pressable>
       <View style={styles.headerText}>
         <Text numberOfLines={1} style={[type.title, styles.greetingText]}>
-          {greetingLine}
+          {greeting}
         </Text>
         <Text numberOfLines={1} style={[type.caption, styles.greetingSubtitle]}>
-          {org.name || t("untitledWorkspace")}
+          {subtitleLine}
         </Text>
       </View>
       <View style={styles.headerActions}>
