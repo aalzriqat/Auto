@@ -2,6 +2,8 @@ import { useAction, useMutation, usePaginatedQuery, useQuery } from "convex/reac
 import { useState } from "react";
 import { Alert, Text, View } from "react-native";
 import { api, type MobileMembership } from "../../../convexApi";
+import { MemberAvatar } from "../../../components/Avatar";
+import { PresencePill } from "../../../components/Presence";
 import { useLocale } from "../../../providers/LocaleProvider";
 import { PAGE_SIZE, parseRequiredNumber, useGenericError, PrimaryButton, FormField, SelectField, FormModal, RecordCard, ModuleList } from "./moduleShared";
 import { styles } from "./moduleStyles";
@@ -118,8 +120,14 @@ export function TeamModule({ orgId }: { orgId: string }) {
         }
         renderItem={(member: MobileMembership) => (
           <RecordCard>
-            <Text style={styles.recordTitle}>{member.userName}</Text>
-            <Text style={styles.recordMeta}>{member.userEmail}</Text>
+            <View style={styles.entityHeader}>
+              <MemberAvatar imageUrl={member.userImage} name={member.userName} />
+              <View style={styles.entityText}>
+                <Text style={styles.recordTitle}>{member.userName}</Text>
+                <Text style={styles.recordMeta}>{member.userEmail}</Text>
+              </View>
+              <PresencePill lastSeenAt={member.lastSeenAt} />
+            </View>
             <Text style={styles.recordMeta}>{member.roleName} · {member.commissionRate}%</Text>
             <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => openMember(member)} />
           </RecordCard>
