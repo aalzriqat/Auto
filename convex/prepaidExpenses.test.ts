@@ -1705,3 +1705,169 @@ describe("prepaid corrections — refuse to post against an unbooked asset", () 
     expect(corrections[0].writeOffMinor).toBe(300_000);
   });
 });
+
+// "Posted" is not the same as "posted by now". EXPENSE_POSTED is dated from the
+// expense's own `date` field, a correction books at wall-clock now, and nothing
+// rejects a future-dated expense (validations/expenses.ts types date as a plain
+// z.number()). So a prepayment dated in December, entered in July into an open
+// annual period, is genuinely POSTED while its debit sits months ahead of a
+// refund booked today — crediting Prepaid Expenses now leaves the asset negative
+// until December, when the debit finally lands.
+describe("prepaid corrections — refuse to post ahead of the original entry", () => {
+  const JUL = Date.UTC(2026, 6, 15);
+  const DEC = Date.UTC(2026, 11, 1);
+  const NOT_YET = /recognized in the ledger on a later date/i;
+
+  /** A prepaid expense dated in December but entered (and posted) in July. */
+  async function seedFutureDatedPrepaid(t: T, orgId: Id<"organizations">, asOwner: Awaited<ReturnType<typeof seedDealer>>["asOwner"]) {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(JUL);
+    try {
+      const expenseId = await asOwner.mutation(api.expenses.create, {
+        orgId, title: "Insurance (starts December)", amount: 1200, date: DEC,
+        category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+      });
+      const schedule = await scheduleForExpense(t, expenseId);
+      return { expenseId, scheduleId: schedule!._id };
+    } finally {
+      clock.mockRestore();
+    }
+  }
+
+  test("the future-dated expense really does post, dated in the future", async () => {
+    // Guards the premise: if this ever stops posting, the tests below would pass
+    // for the wrong reason (caught by the not-posted branch instead).
+    const { t, orgId, asOwner } = await seedDealer("date-premise");
+    const { expenseId } = await seedFutureDatedPrepaid(t, orgId, asOwner);
+
+    const posted = await t.run((ctx) =>
+      ctx.db.query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", "expenses").eq("sourceId", expenseId.toString())
+        )
+        .filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED"))
+        .first()
+    );
+    expect(posted?.status).toBe("POSTED");
+    expect(posted?.accountingDate).toBe(DEC);
+  });
+
+  test("rejects a refund dated before the original entry", async () => {
+    const { t, orgId, asOwner } = await seedDealer("date-rf");
+    const { scheduleId } = await seedFutureDatedPrepaid(t, orgId, asOwner);
+
+    const clock = vi.spyOn(Date, "now").mockReturnValue(JUL);
+    try {
+      await expect(
+        asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+          orgId, scheduleId, refundMinor: 300_000, refundPaymentMethod: "BANK_TRANSFER",
+          reason: "Vendor refunded early",
+        })
+      ).rejects.toThrow(NOT_YET);
+    } finally {
+      clock.mockRestore();
+    }
+
+    // The original December debit stands; no refund credit was applied on top.
+    expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(1_200_000);
+  });
+
+  test("rejects a write-off dated before the original entry", async () => {
+    const { t, orgId, asOwner } = await seedDealer("date-wo");
+    const { scheduleId } = await seedFutureDatedPrepaid(t, orgId, asOwner);
+
+    const clock = vi.spyOn(Date, "now").mockReturnValue(JUL);
+    try {
+      await expect(
+        asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+          orgId, scheduleId, writeOffMinor: 300_000, reason: "Cancelled before it started",
+        })
+      ).rejects.toThrow(NOT_YET);
+    } finally {
+      clock.mockRestore();
+    }
+
+    expect(await accountNetMinor(t, orgId, "PROFESSIONAL_FEES_EXPENSE")).toBe(0);
+    expect(await accountNetMinor(t, orgId, "PREPAID_EXPENSES")).toBe(1_200_000);
+  });
+
+  test("allows a term-only correction on a future-dated expense", async () => {
+    // Posts nothing, so there is no ordering to get wrong.
+    const { t, orgId, asOwner } = await seedDealer("date-term");
+    const { scheduleId } = await seedFutureDatedPrepaid(t, orgId, asOwner);
+
+    const clock = vi.spyOn(Date, "now").mockReturnValue(JUL);
+    try {
+      await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId, scheduleId, newTermMonths: 6, reason: "Corrected coverage period",
+      });
+    } finally {
+      clock.mockRestore();
+    }
+
+    const after = await t.run((ctx) => ctx.db.get(scheduleId));
+    expect(after!.termMonths).toBe(6);
+  });
+
+  test("allows the refund once the original entry's date has been reached", async () => {
+    const { t, orgId, asOwner } = await seedDealer("date-ok");
+    const { scheduleId } = await seedFutureDatedPrepaid(t, orgId, asOwner);
+
+    // Same correction, now booked after December rather than before it.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 11, 20));
+    try {
+      await asOwner.mutation(api.prepaidExpenses.correctSchedule, {
+        orgId, scheduleId, refundMinor: 300_000, refundPaymentMethod: "BANK_TRANSFER",
+        reason: "Vendor refunded",
+      });
+    } finally {
+      clock.mockRestore();
+    }
+
+    const corrections = await t.run((ctx) =>
+      ctx.db.query("prepaidScheduleCorrections").withIndex("by_schedule", (q) => q.eq("scheduleId", scheduleId)).collect()
+    );
+    expect(corrections).toHaveLength(1);
+    expect(corrections[0].refundMinor).toBe(300_000);
+  });
+
+  test("re-checks ordering at approval, not just at submission", async () => {
+    // Submitted while the original was already posted and in the past, then the
+    // schedule is re-pointed at a future-dated expense before approval. The
+    // approval must vet the ordering itself rather than trust the request.
+    const { t, orgId, userId, asOwner } = await seedDealer("date-approve");
+    const expenseId = await asOwner.mutation(api.expenses.create, {
+      orgId, title: "Insurance", amount: 1200, date: Date.UTC(2026, 0, 1),
+      category: "FEES", status: "PAID", paymentMethod: "CASH", isPrepaid: true, amortizationMonths: 12,
+    });
+    const schedule = await scheduleForExpense(t, expenseId);
+    await amortize(t, orgId, schedule!._id, userId, "2026-01");
+
+    const { asUser: asAccountant } = await addFinanceUser(t, orgId, "date-approve-accountant");
+    const submitted = await asAccountant.mutation(api.prepaidExpenses.correctSchedule, {
+      orgId, scheduleId: schedule!._id, writeOffMinor: 300_000, reason: "Early cancellation",
+    });
+    expect(submitted.status).toBe("PENDING");
+
+    // The original entry's date moves ahead of the approval.
+    const posted = await t.run((ctx) =>
+      ctx.db.query("accountingEvents")
+        .withIndex("by_org_source", (q) =>
+          q.eq("orgId", orgId).eq("sourceType", "expenses").eq("sourceId", expenseId.toString())
+        )
+        .filter((q) => q.eq(q.field("eventType"), "EXPENSE_POSTED"))
+        .first()
+    );
+    await t.run((ctx) => ctx.db.patch(posted!._id, { accountingDate: Date.UTC(2027, 5, 1) }));
+
+    await expect(
+      asOwner.mutation(api.prepaidExpenses.approveCorrectionRequest, {
+        orgId, requestId: submitted.requestId!,
+      })
+    ).rejects.toThrow(NOT_YET);
+
+    const corrections = await t.run((ctx) =>
+      ctx.db.query("prepaidScheduleCorrections").withIndex("by_schedule", (q) => q.eq("scheduleId", schedule!._id)).collect()
+    );
+    expect(corrections).toHaveLength(0);
+  });
+});

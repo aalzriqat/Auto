@@ -179,17 +179,34 @@ async function postedSourceExpenseEvent(
  * it was written ("source_expense_not_posted"); corrections were simply never
  * given the same guard. A term-only correction is still allowed — it posts
  * nothing, it only reshapes future recognition.
+ *
+ * "Posted" alone isn't enough: it has to be posted *by* the date this
+ * correction books at. The two are dated from different clocks — EXPENSE_POSTED
+ * takes the expense's own `date` (expenses.ts), while a correction books at
+ * wall-clock now — and nothing stops an expense being dated in the future. So a
+ * prepayment dated 1 December, entered and posted in July into an open annual
+ * period, is genuinely POSTED while its debit sits five months ahead of a
+ * refund booked today: the asset goes negative from July until December, when
+ * the debit finally lands. Comparing accountingDate against the correction's own
+ * date is what makes the guard about the ledger's timeline rather than about
+ * row existence.
  */
 async function requireSourceExpensePostedForGlCorrection(
   ctx: MutationCtx,
   schedule: Doc<"prepaidExpenseSchedules">,
-  amounts: { refundMinor: number; writeOffMinor: number }
+  amounts: { refundMinor: number; writeOffMinor: number },
+  correctionDate: number
 ): Promise<void> {
   if (amounts.refundMinor <= 0 && amounts.writeOffMinor <= 0) return;
   const posted = await postedSourceExpenseEvent(ctx, schedule.orgId, schedule.expenseId);
   if (!posted) {
     throw new ConvexError(
       "This prepaid expense hasn't posted to the ledger yet, so it can't be refunded or written off — that would credit a Prepaid Expenses balance that was never debited. Resolve the pending accounting event first (Accounting → Setup), then try again. Changing the amortization term is still allowed."
+    );
+  }
+  if (posted.accountingDate > correctionDate) {
+    throw new ConvexError(
+      "This prepaid expense is recognized in the ledger on a later date than this correction, so refunding or writing it off now would credit a Prepaid Expenses balance that doesn't exist yet — leaving the asset negative until the original entry's date is reached. Changing the amortization term is still allowed."
     );
   }
 }
@@ -745,14 +762,22 @@ async function applyScheduleCorrection(
     throw new ConvexError(`Cannot correct a schedule with status "${schedule.status}".`);
   }
 
+  // The one date this correction happens on: handed to the guard and then used
+  // verbatim for the correction row and its GL entries, so the date the guard
+  // vets is the date that actually posts. Reading the clock again lower down
+  // would let the two drift apart and reopen the ordering hole the guard closes.
+  const now = Date.now();
+
   // Re-checked here rather than only at submission: this is the single choke
   // point both the direct path and approveCorrectionRequest go through, and an
   // approval can land long after the request, by which time the source expense
-  // may still be unposted.
-  await requireSourceExpensePostedForGlCorrection(ctx, schedule, {
-    refundMinor: args.refundMinor,
-    writeOffMinor: args.writeOffMinor,
-  });
+  // may still be unposted — or still be dated ahead of the approval.
+  await requireSourceExpensePostedForGlCorrection(
+    ctx,
+    schedule,
+    { refundMinor: args.refundMinor, writeOffMinor: args.writeOffMinor },
+    now
+  );
 
   const newTermMonths = args.newTermMonths ?? schedule.termMonths;
   const remainingRefundableTaxMinor =
@@ -769,7 +794,6 @@ async function applyScheduleCorrection(
     remainingRefundableTaxMinor
   );
 
-  const now = Date.now();
   const correctionId = await ctx.db.insert("prepaidScheduleCorrections", {
     orgId: args.orgId,
     scheduleId: args.scheduleId,
@@ -925,7 +949,15 @@ export const correctSchedule = mutation({
         if (schedule.status !== "ACTIVE") {
           throw new ConvexError(`Cannot correct a schedule with status "${schedule.status}".`);
         }
-        await requireSourceExpensePostedForGlCorrection(ctx, schedule, { refundMinor, writeOffMinor });
+        // Vetted against submission time, which is the earliest the correction
+        // could post. applyScheduleCorrection re-runs it against the real
+        // posting date at approval — this is only to fail the accountant fast.
+        await requireSourceExpensePostedForGlCorrection(
+          ctx,
+          schedule,
+          { refundMinor, writeOffMinor },
+          Date.now()
+        );
 
         const newTermMonths = args.newTermMonths ?? schedule.termMonths;
         const remainingRefundableTaxMinor =
