@@ -124,3 +124,67 @@ describe("changelog createInternal (CLI automation, no live session)", () => {
     ).rejects.toThrow();
   });
 });
+
+describe("changelog updateInternal (CLI automation, no live session)", () => {
+  async function seedEntry(t: ReturnType<typeof convexTest>) {
+    await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "admin_cli", email: "admin@autoflow.dev", name: "Admin" })
+    );
+    return await t.mutation(internal.changelog.createInternal, {
+      type: "IMPROVEMENT",
+      titleEn: "Original title",
+      titleAr: "العنوان الأصلي",
+      descriptionEn: "Original body. Reports now always match the ledger exactly.",
+      descriptionAr: "النص الأصلي. التقارير تطابق دفتر الأستاذ دائماً.",
+    });
+  }
+
+  test("patches only the fields provided and leaves publishedAt untouched", async () => {
+    const t = convexTest(schema, modules);
+    const entryId = await seedEntry(t);
+    const before = await t.run((ctx) => ctx.db.get(entryId));
+
+    await t.mutation(internal.changelog.updateInternal, {
+      entryId,
+      descriptionEn: "Corrected body.",
+      descriptionAr: "النص المصحح.",
+    });
+
+    const after = await t.run((ctx) => ctx.db.get(entryId));
+    expect(after?.descriptionEn).toBe("Corrected body.");
+    expect(after?.descriptionAr).toBe("النص المصحح.");
+    // Untouched: title, type, and — crucially — publishedAt (a wording fix must
+    // not re-surface the entry as unread).
+    expect(after?.titleEn).toBe("Original title");
+    expect(after?.type).toBe("IMPROVEMENT");
+    expect(after?.publishedAt).toBe(before?.publishedAt);
+    expect(after?.updatedAt).toBeGreaterThan(0);
+  });
+
+  test("throws on an unknown entry", async () => {
+    const t = convexTest(schema, modules);
+    await t.run((ctx) =>
+      ctx.db.insert("users", { clerkId: "admin_cli", email: "admin@autoflow.dev", name: "Admin" })
+    );
+    const ghost = await t.run(async (ctx) => {
+      const id = await ctx.db.insert("changelogEntries", {
+        type: "FIX", titleEn: "t", titleAr: "t", descriptionEn: "d", descriptionAr: "d",
+        publishedAt: Date.now(), createdBy: (await ctx.db.query("users").first())!._id, createdAt: Date.now(),
+      });
+      await ctx.db.delete(id);
+      return id;
+    });
+
+    await expect(
+      t.mutation(internal.changelog.updateInternal, { entryId: ghost, descriptionEn: "x" })
+    ).rejects.toThrow(/not found/i);
+  });
+
+  test("throws when no updatable field is provided", async () => {
+    const t = convexTest(schema, modules);
+    const entryId = await seedEntry(t);
+    await expect(
+      t.mutation(internal.changelog.updateInternal, { entryId })
+    ).rejects.toThrow(/no fields/i);
+  });
+});
