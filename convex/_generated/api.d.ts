@@ -8,11 +8,6 @@
  * @module
  */
 
-import type * as accounting_accountSnapshots from "../accounting/accountSnapshots.js";
-import type * as accounting_postingEngine from "../accounting/postingEngine.js";
-import type * as accounting_postingRules from "../accounting/postingRules.js";
-import type * as accounting_reversals from "../accounting/reversals.js";
-import type * as accounting_workflowHooks from "../accounting/workflowHooks.js";
 import type * as accountingCutover from "../accountingCutover.js";
 import type * as accountingLedger from "../accountingLedger.js";
 import type * as accountingMigration from "../accountingMigration.js";
@@ -20,6 +15,11 @@ import type * as accountingOutbox from "../accountingOutbox.js";
 import type * as accountingPeriods from "../accountingPeriods.js";
 import type * as accountingReports from "../accountingReports.js";
 import type * as accountingSetup from "../accountingSetup.js";
+import type * as accounting_accountSnapshots from "../accounting/accountSnapshots.js";
+import type * as accounting_postingEngine from "../accounting/postingEngine.js";
+import type * as accounting_postingRules from "../accounting/postingRules.js";
+import type * as accounting_reversals from "../accounting/reversals.js";
+import type * as accounting_workflowHooks from "../accounting/workflowHooks.js";
 import type * as adminAnalytics from "../adminAnalytics.js";
 import type * as adminAudit from "../adminAudit.js";
 import type * as adminAuth from "../adminAuth.js";
@@ -48,6 +48,7 @@ import type * as customers from "../customers.js";
 import type * as dashboard from "../dashboard.js";
 import type * as dealerProductDeferrals from "../dealerProductDeferrals.js";
 import type * as deposits from "../deposits.js";
+import type * as diagnosePrepaidLedgerIntegrity from "../diagnosePrepaidLedgerIntegrity.js";
 import type * as directMessages from "../directMessages.js";
 import type * as documents from "../documents.js";
 import type * as domainRegistrar from "../domainRegistrar.js";
@@ -141,6 +142,7 @@ import type * as utils_paymentMethods from "../utils/paymentMethods.js";
 import type * as utils_paymentWebhook from "../utils/paymentWebhook.js";
 import type * as utils_permissions from "../utils/permissions.js";
 import type * as utils_prepaidRecognitionEvents from "../utils/prepaidRecognitionEvents.js";
+import type * as utils_prepaidSourceLedger from "../utils/prepaidSourceLedger.js";
 import type * as utils_saleCancellation from "../utils/saleCancellation.js";
 import type * as utils_saleCompletion from "../utils/saleCompletion.js";
 import type * as utils_saleHelpers from "../utils/saleHelpers.js";
@@ -180,11 +182,6 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
-  "accounting/accountSnapshots": typeof accounting_accountSnapshots;
-  "accounting/postingEngine": typeof accounting_postingEngine;
-  "accounting/postingRules": typeof accounting_postingRules;
-  "accounting/reversals": typeof accounting_reversals;
-  "accounting/workflowHooks": typeof accounting_workflowHooks;
   accountingCutover: typeof accountingCutover;
   accountingLedger: typeof accountingLedger;
   accountingMigration: typeof accountingMigration;
@@ -192,6 +189,11 @@ declare const fullApi: ApiFromModules<{
   accountingPeriods: typeof accountingPeriods;
   accountingReports: typeof accountingReports;
   accountingSetup: typeof accountingSetup;
+  "accounting/accountSnapshots": typeof accounting_accountSnapshots;
+  "accounting/postingEngine": typeof accounting_postingEngine;
+  "accounting/postingRules": typeof accounting_postingRules;
+  "accounting/reversals": typeof accounting_reversals;
+  "accounting/workflowHooks": typeof accounting_workflowHooks;
   adminAnalytics: typeof adminAnalytics;
   adminAudit: typeof adminAudit;
   adminAuth: typeof adminAuth;
@@ -220,6 +222,7 @@ declare const fullApi: ApiFromModules<{
   dashboard: typeof dashboard;
   dealerProductDeferrals: typeof dealerProductDeferrals;
   deposits: typeof deposits;
+  diagnosePrepaidLedgerIntegrity: typeof diagnosePrepaidLedgerIntegrity;
   directMessages: typeof directMessages;
   documents: typeof documents;
   domainRegistrar: typeof domainRegistrar;
@@ -313,6 +316,7 @@ declare const fullApi: ApiFromModules<{
   "utils/paymentWebhook": typeof utils_paymentWebhook;
   "utils/permissions": typeof utils_permissions;
   "utils/prepaidRecognitionEvents": typeof utils_prepaidRecognitionEvents;
+  "utils/prepaidSourceLedger": typeof utils_prepaidSourceLedger;
   "utils/saleCancellation": typeof utils_saleCancellation;
   "utils/saleCompletion": typeof utils_saleCompletion;
   "utils/saleHelpers": typeof utils_saleHelpers;
