@@ -125,7 +125,7 @@ describe("mobile shell components", () => {
     );
 
     await waitFor(() => {
-      expect(rtlIcon.getByTestId("back-icon").props.children).toBe("chevron-forward:#0f172a:20");
+      expect(rtlIcon.getByTestId("back-icon").props.children).toBe("chevron-forward:#f2f5fb:20");
     });
   });
 
@@ -461,7 +461,7 @@ describe("mobile shell components", () => {
     const t = (key: Parameters<typeof getMobileFoundationString>[1]) => getMobileFoundationString("en", key);
     const now = Date.now();
 
-    expect(getPresenceInfo(t, undefined)).toEqual({ label: "Offline", dotColor: "#94a3b8" });
+    expect(getPresenceInfo(t, undefined)).toEqual({ label: "Offline", dotColor: "#6b7a95" });
     expect(getPresenceInfo(t, now - 60_000).label).toBe("Active now");
     expect(getPresenceInfo(t, now - 10 * 60_000).label).toBe("Active 10m ago");
     expect(getPresenceInfo(t, now - 3 * 3_600_000).label).toBe("Active 3h ago");

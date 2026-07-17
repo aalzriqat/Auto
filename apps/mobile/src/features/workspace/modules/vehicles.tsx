@@ -7,8 +7,8 @@ import { getFuelTypeOptions, getTransmissionOptions, getVehicleColorOptions, get
 import { useLocale } from "../../../providers/LocaleProvider";
 import { getMobileVinReadiness, normalizeVinInput } from "../mobileVinDecode";
 import { PAGE_SIZE, type Option, fetchDecodedMobileVin, vinNotReadyMessage, vinChecksumWarningMessage, vinDecodeResultMessage, compactNumber, money, maybeText, parseOptionalNumber, parseRequiredNumber, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, MetricCard, ModuleList, getOptionLabel, firstVehicleImageUrl, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
+import { useRouter } from "expo-router";
 import { styles } from "./moduleStyles";
-import { VehicleDetailSheet } from "./vehicleDetail";
 
 export function VehiclesModule({ orgId, permissions }: { orgId: string; permissions: readonly string[] }) {
   const { locale } = useLocale();
@@ -23,8 +23,8 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
     { initialNumItems: PAGE_SIZE },
   );
   const [search, setSearch] = useState("");
+  const router = useRouter();
   const [editing, setEditing] = useState<MobileVehicle | null>(null);
-  const [detailVehicle, setDetailVehicle] = useState<MobileVehicle | null>(null);
   const [open, setOpen] = useState(false);
   const [vehicleStep, setVehicleStep] = useState(0);
   const [saving, setSaving] = useState(false);
@@ -124,7 +124,6 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
   function openEdit(vehicle: MobileVehicle) {
     vinDecodeRequestRef.current += 1;
     setEditing(vehicle);
-    setDetailVehicle(null);
     setVehicleStep(0);
     setVinDecodeMessage(null);
     setForm({
@@ -333,7 +332,16 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
               </View>
               {vehicle.pendingStatusRequest ? <Text style={styles.warningText}>{vehicle.pendingStatusRequest}</Text> : null}
               <View style={styles.cardActions}>
-                <PrimaryButton label={locale === "ar" ? "تفاصيل" : "Details"} tone="muted" onPress={() => setDetailVehicle(vehicle)} />
+                <PrimaryButton
+                  label={locale === "ar" ? "تفاصيل" : "Details"}
+                  tone="muted"
+                  onPress={() =>
+                    router.push({
+                      pathname: "/org/[orgId]/vehicles/[vehicleId]" as any,
+                      params: { orgId, vehicleId: vehicle._id },
+                    })
+                  }
+                />
                 <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => openEdit(vehicle)} />
                 <PrimaryButton label={locale === "ar" ? "أرشفة" : "Archive"} tone="danger" onPress={() => archive(vehicle)} />
               </View>
@@ -425,14 +433,6 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
           />
         </GuidedStepFlow>
       </FormModal>
-      <VehicleDetailSheet
-        orgId={orgId}
-        permissions={permissions}
-        vehicle={detailVehicle}
-        onArchive={(target) => archive(target, () => setDetailVehicle(null))}
-        onClose={() => setDetailVehicle(null)}
-        onEdit={(target) => openEdit(target)}
-      />
     </>
   );
 }
