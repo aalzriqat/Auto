@@ -18,6 +18,7 @@ import { Screen } from "../../components/Screen";
 import { useAppFontState } from "../../providers/AppFontContext";
 import { useLocale } from "../../providers/LocaleProvider";
 import { getTypographyStyle, theme } from "../../theme";
+import { OTA_UPDATE_NUMBER } from "../../otaUpdateNumber";
 import {
   filterWorkspaces,
   getSafeWorkspaces,
@@ -178,6 +179,19 @@ function AuthenticatedHome() {
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent}>
+      <View
+        style={{
+          backgroundColor: "#e11d48",
+          paddingVertical: 20,
+          paddingHorizontal: 16,
+          borderRadius: 14,
+          alignItems: "center",
+        }}
+      >
+        <Text style={{ color: "#ffffff", fontSize: 22, fontWeight: "800", textAlign: "center" }}>
+          {`🚀 OTA UPDATE #${OTA_UPDATE_NUMBER} LIVE ✅`}
+        </Text>
+      </View>
       <View style={[styles.header, { direction: textDirection }]}>
         <View style={styles.headerText}>
           <Text style={[styles.brand, type.label]}>{t("appName")}</Text>
