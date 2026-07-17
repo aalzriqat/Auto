@@ -1,6 +1,7 @@
 import { nativeRoutes } from "@autoflow/shared";
 import { useAuth, useSSO } from "@clerk/expo";
 import { useSignIn } from "@clerk/expo/legacy";
+import { useConvexAuth } from "convex/react";
 import { useRouter } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import { useCallback, useEffect, useState } from "react";
@@ -27,6 +28,7 @@ export default function SignInRoute() {
   const { fontsLoaded } = useAppFontState();
   const { locale, t, textDirection } = useLocale();
   const { isSignedIn } = useAuth();
+  const { isAuthenticated } = useConvexAuth();
   const { isLoaded, signIn, setActive } = useSignIn();
   const { startSSOFlow } = useSSO();
 
@@ -34,9 +36,15 @@ export default function SignInRoute() {
   // every path (Google SSO, password, or an already-active session on launch);
   // the OAuth flow in particular activates the session out-of-band, so relying
   // on the mutation's return value alone left the user stranded here.
+  //
+  // Gate on Convex auth too, not just Clerk: a Clerk session whose issuer the
+  // Convex deployment does not trust leaves isSignedIn=true / isAuthenticated
+  // =false. Redirecting on isSignedIn alone bounced the user straight back to
+  // this screen from home (which also treats that state as signed out),
+  // trapping them with no way to reach the form and retry.
   useEffect(() => {
-    if (isSignedIn) router.replace(nativeRoutes.home);
-  }, [isSignedIn, router]);
+    if (isSignedIn && isAuthenticated) router.replace(nativeRoutes.home);
+  }, [isSignedIn, isAuthenticated, router]);
 
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
