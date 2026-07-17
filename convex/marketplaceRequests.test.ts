@@ -485,6 +485,41 @@ describe("getBuyerOffers", () => {
     const result = await t.query(api.marketplaceRequests.getBuyerOffers, { publicId: "does-not-exist" });
     expect(result).toBeNull();
   });
+
+  test("reports matchedCount and respondedCount for the Request Room timeline", async () => {
+    const t = convexTest(schema, import.meta.glob("./**/*.ts"));
+    const orgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Bloom Cars", createdAt: Date.now() }));
+    const otherOrgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Other Motors", createdAt: Date.now() }));
+    const silentOrgId = await t.run((ctx) => ctx.db.insert("organizations", { name: "Quiet Autos", createdAt: Date.now() }));
+    const userId = await t.run((ctx) => ctx.db.insert("users", { clerkId: "u3", email: "u3@test.com", name: "Rep" }));
+    const requestId = await seedRequestWithPublicId(t, "room-token-3");
+
+    // Three dealers were matched...
+    for (const matchedOrgId of [orgId, otherOrgId, silentOrgId]) {
+      await t.run((ctx) =>
+        ctx.db.insert("marketplaceRequestMatches", {
+          requestId, orgId: matchedOrgId, matchTier: "ELIGIBLE", matchedAt: Date.now(),
+        })
+      );
+    }
+    // ...one replied with an offer, one said NOT_AVAILABLE, one stayed silent.
+    await t.run((ctx) =>
+      ctx.db.insert("marketplaceResponses", {
+        requestId, orgId, respondingUserId: userId, kind: "CAN_SOURCE",
+        sourcingRange: { minJod: 15000, maxJod: 18000, etaDays: 10 }, createdAt: Date.now(),
+      })
+    );
+    await t.run((ctx) =>
+      ctx.db.insert("marketplaceResponses", {
+        requestId, orgId: otherOrgId, respondingUserId: userId, kind: "NOT_AVAILABLE", createdAt: Date.now(),
+      })
+    );
+
+    const result = await t.query(api.marketplaceRequests.getBuyerOffers, { publicId: "room-token-3" });
+    expect(result?.matchedCount).toBe(3);
+    // NOT_AVAILABLE is not an offer, so it doesn't count as a reply.
+    expect(result?.respondedCount).toBe(1);
+  });
 });
 
 describe("expireStaleRequests", () => {

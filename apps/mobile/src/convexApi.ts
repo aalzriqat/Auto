@@ -80,7 +80,15 @@ export type MobileSocialPlatform = "instagram" | "facebook";
 export type MobileSocialConversationKind = "comment" | "dm";
 export type MobileNotificationPriority = "urgent" | "normal" | "low";
 export type MobileCommissionMode = "AUTO_TIERS" | "AUTO_MEMBER" | "MANUAL";
-export type MobileMarketplaceRequestStatus = "OPEN" | "MATCHED" | "FULFILLED" | "EXPIRED" | "SPAM";
+export type MobileMarketplaceRequestStatus =
+  | "OPEN"
+  | "MATCHED"
+  | "OFFERS_RECEIVED"
+  | "ACCEPTED"
+  | "COMPLETED"
+  | "FULFILLED"
+  | "EXPIRED"
+  | "SPAM";
 export type MobileMarketplaceResponseKind =
   | "HAVE_MATCH"
   | "HAVE_SIMILAR"
@@ -1137,7 +1145,74 @@ export interface MobileMarketplaceTradeInBuyerStatus {
 
 export interface MobileMarketplaceSubmitRequestResult {
   requestId: string;
+  publicId: string;
   matchedCount: number;
+}
+
+/** AutoFlow-computed finance offer snapshot attached to a dealer's reply. */
+export interface MobileMarketplaceFinanceOffer {
+  vehiclePrice: number;
+  downPayment: number;
+  termMonths: number;
+  monthlyInstallment: number;
+  totalContractValue: number;
+  totalProfit: number;
+  insuranceAmount: number;
+  commission: number;
+  processingFees: number;
+  financeCompanyId?: string;
+  expiresAt?: number;
+}
+
+/** CAN_SOURCE reply: an honest price range + ETA, not a concrete vehicle. */
+export interface MobileMarketplaceSourcingRange {
+  minJod: number;
+  maxJod: number;
+  etaDays: number;
+}
+
+export type MobileMarketplaceBuyerAction = "SHORTLISTED" | "ACCEPTED" | "DECLINED";
+
+/** One sanitized dealer offer as the buyer sees it in their Request Room. */
+export interface MobileBuyerOffer {
+  responseId: string;
+  dealerName: string;
+  dealerBadges: string[];
+  dealerAvgResponseMinutes: number | null;
+  kind: MobileMarketplaceResponseKind;
+  cashPriceJod: number | null;
+  financeOffer: MobileMarketplaceFinanceOffer | null;
+  sourcingRange: MobileMarketplaceSourcingRange | null;
+  vehicle: {
+    year?: number;
+    make: string;
+    model: string;
+    trim?: string;
+    mileage?: number;
+    photoUrl: string | null;
+    inspectionStatus?: string;
+    dealerGuarantee?: boolean;
+  } | null;
+  note: string | null;
+  expiresAt: number | null;
+  isExpired: boolean;
+  buyerAction: MobileMarketplaceBuyerAction | null;
+  contactUnlocked: boolean;
+  createdAt: number;
+}
+
+/** The whole Request Room feed, keyed by the unguessable publicId. */
+export interface MobileBuyerRoom {
+  publicId: string;
+  status: MobileMarketplaceRequestStatus;
+  createdAt: number;
+  make?: string;
+  model?: string;
+  buyerCity: string;
+  paymentType: MobilePaymentType;
+  matchedCount: number;
+  respondedCount: number;
+  offers: MobileBuyerOffer[];
 }
 
 export interface MobileMarketplaceSubmitTradeInResult {
@@ -1723,6 +1798,19 @@ type MarketplaceMakeOfferArgs = OrgScopedArgs & {
 
 type BuyerRequestStatusArgs = {
   requestId: string;
+  buyerPhone: string;
+};
+
+type BuyerRoomArgs = {
+  publicId: string;
+};
+
+type BuyerRoomOfferArgs = {
+  publicId: string;
+  responseId: string;
+};
+
+type BuyerRoomContactArgs = BuyerRoomOfferArgs & {
   buyerPhone: string;
 };
 
@@ -2385,6 +2473,33 @@ export const api = {
       BuyerRequestStatusArgs,
       MobileMarketplaceRequestBuyerStatus | null
     >("marketplaceRequests:getStatusForBuyerByPublicId"),
+    getBuyerOffers: makeFunctionReference<
+      "query",
+      BuyerRoomArgs,
+      MobileBuyerRoom | null
+    >("marketplaceRequests:getBuyerOffers"),
+  },
+  marketplaceBuyerActions: {
+    shortlistOffer: makeFunctionReference<
+      "mutation",
+      BuyerRoomOfferArgs,
+      null
+    >("marketplaceBuyerActions:shortlistOffer"),
+    declineOffer: makeFunctionReference<
+      "mutation",
+      BuyerRoomOfferArgs,
+      null
+    >("marketplaceBuyerActions:declineOffer"),
+    allowContact: makeFunctionReference<
+      "mutation",
+      BuyerRoomContactArgs,
+      null
+    >("marketplaceBuyerActions:allowContact"),
+    acceptOffer: makeFunctionReference<
+      "mutation",
+      BuyerRoomContactArgs,
+      null
+    >("marketplaceBuyerActions:acceptOffer"),
   },
   marketplaceResponses: {
     listForOrg: makeFunctionReference<
@@ -2971,6 +3086,18 @@ export const api = {
       BuyerRequestStatusArgs,
       MobileMarketplaceRequestBuyerStatus | null
     >;
+    getBuyerOffers: FunctionReference<
+      "query",
+      "public",
+      BuyerRoomArgs,
+      MobileBuyerRoom | null
+    >;
+  };
+  marketplaceBuyerActions: {
+    shortlistOffer: FunctionReference<"mutation", "public", BuyerRoomOfferArgs, null>;
+    declineOffer: FunctionReference<"mutation", "public", BuyerRoomOfferArgs, null>;
+    allowContact: FunctionReference<"mutation", "public", BuyerRoomContactArgs, null>;
+    acceptOffer: FunctionReference<"mutation", "public", BuyerRoomContactArgs, null>;
   };
   marketplaceResponses: {
     listForOrg: FunctionReference<"query", "public", OrgScopedArgs, MobileMarketplaceRequestRow[]>;
