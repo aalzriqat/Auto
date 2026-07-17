@@ -2,20 +2,22 @@ import type { ConfigContext, ExpoConfig } from "expo/config";
 
 const appScheme = process.env.EXPO_PUBLIC_APP_SCHEME || "autoflow";
 
-// Expo push needs the EAS project id to mint tokens. Set once via `eas init`
-// (writes extra.eas.projectId) or the EXPO_PUBLIC_EAS_PROJECT_ID env var. When
-// absent, push-token registration is skipped gracefully (see usePushRegistration).
-const easProjectId = process.env.EXPO_PUBLIC_EAS_PROJECT_ID;
+// The EAS project created for AutoFlow (expo.dev, account "aalzriqat"). This id
+// is what both EAS Update (OTA) and the Expo push service route by. It's public
+// (it ships in the app bundle), so it's fine hardcoded; the env var only exists
+// to point a different build at a different project / self-hosted server.
+const easProjectId = process.env.EXPO_PUBLIC_EAS_PROJECT_ID ?? "bddc3f4c-6f00-402c-913f-380afbd7fa05";
 
-// OTA update endpoint. `eas update:configure` writes this as
-// https://u.expo.dev/<projectId>; the env var is the self-host / manual escape
-// hatch. When unset, OTA is simply off (the in-app checker no-ops).
-const updatesUrl = process.env.EXPO_PUBLIC_UPDATES_URL;
+// OTA update endpoint — EAS Update serves each project at u.expo.dev/<projectId>.
+const updatesUrl = process.env.EXPO_PUBLIC_UPDATES_URL ?? `https://u.expo.dev/${easProjectId}`;
 
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
   name: "AutoFlow",
-  slug: "autoflow-native",
+  // Must match the EAS project's slug + owning account for `eas` commands and
+  // the update/push services to resolve to the right project.
+  slug: "autoflow",
+  owner: "aalzriqat",
   scheme: appScheme,
   // Drives the "appVersion" runtimeVersion policy below: OTA JS bundles only
   // load onto a native build with a matching runtimeVersion, so bump this

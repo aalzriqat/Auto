@@ -14,21 +14,25 @@ Drop `assets/icon.png`, `assets/adaptive-icon.png`, `assets/splash-logo.png`
 (the AutoFlow logo) before building — the config already references them.
 
 ## 2. Over-the-air updates (EAS Update)
+**Already wired:** the EAS project id (`bddc3f4c-6f00-402c-913f-380afbd7fa05`,
+account `aalzriqat`), the `owner`/`slug`, and the update URL
+(`https://u.expo.dev/<projectId>`) are baked into `app.config.ts` — so you do
+**not** need `eas init` or `eas update:configure`. You only need to log in to
+publish updates:
 ```bash
 cd apps/mobile
-npx eas login            # your Expo account
-npx eas init             # creates the project + writes extra.eas.projectId
-npx eas update:configure # writes updates.url (https://u.expo.dev/<projectId>)
+npx eas login   # your Expo account (aalzriqat)
 ```
 Then, to push a JS-only update after that first build:
 ```bash
 npx eas update --branch production --message "what changed"
 ```
 The app calls `checkForOtaUpdate()` on launch and reloads into the new bundle.
-If you'd rather self-host, set `EXPO_PUBLIC_UPDATES_URL` instead of using EAS.
+To point at a different project or a self-hosted server, override with the
+`EXPO_PUBLIC_EAS_PROJECT_ID` / `EXPO_PUBLIC_UPDATES_URL` env vars.
 
 ## 3. Push notifications
-- Needs the EAS project id from step 2 (Expo mints push tokens against it).
+- Uses the same wired EAS project id (Expo mints push tokens against it).
 - On launch (once signed in) the app requests the notification permission,
   registers the device's Expo token via `mobilePushTokens.register`, and
   `dispatch()` then delivers to it for any lead/message/task notification.
