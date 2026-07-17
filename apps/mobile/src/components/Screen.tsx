@@ -31,7 +31,7 @@ export function Screen({
 
   return (
     <SafeAreaView style={styles.screen}>
-      <StatusBar style="dark" />
+      <StatusBar style="light" />
       {scroll ? (
         <ScrollView
           keyboardShouldPersistTaps="handled"

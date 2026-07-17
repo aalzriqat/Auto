@@ -23,34 +23,54 @@ const fontFamilies = {
 } as const;
 
 export const theme = {
+  // Premium dark ("automotive") theme. The brand hues (teal `primary`, orange
+  // `accent`) are preserved verbatim — only the neutral canvas/surfaces/tints
+  // were flipped to dark, and brighter same-hue *Glow tokens were added for
+  // accent TEXT that needs to stay legible on a near-black background.
   colors: {
-    background: "#f2f2f7",
-    surface: "#ffffff",
-    surfaceAlt: "#eef0f5",
-    surfaceMuted: "#f7f7fa",
-    border: "#e3e3e9",
-    borderStrong: "#d1d1d6",
-    text: "#0f172a",
-    mutedText: "#64748b",
-    subtleText: "#94a3b8",
+    background: "#0a0f1c",
+    surface: "#141b2b",
+    surfaceAlt: "#1e2739",
+    surfaceMuted: "#111828",
+    border: "#28324a",
+    borderStrong: "#3b475f",
+    text: "#f2f5fb",
+    mutedText: "#9db0cb",
+    subtleText: "#6b7a95",
+    // Brand teal — kept exactly. Used as a FILL (buttons/selected chips) with
+    // white `onPrimary` text on top; `primaryGlow` is its on-dark text variant.
     primary: "#0f766e",
     primaryDark: "#134e4a",
-    primarySoft: "#ccfbf1",
+    primarySoft: "#0f3a37",
     onPrimary: "#ffffff",
+    // Brand orange — kept exactly. `accentGlow` is the on-dark text variant.
     accent: "#ea580c",
-    accentSoft: "#ffedd5",
-    danger: "#e11d48",
-    dangerSoft: "#ffe4e6",
-    success: "#16a34a",
-    successSoft: "#dcfce7",
-    info: "#0284c7",
-    infoSoft: "#e0f2fe",
-    indigo: "#4f46e5",
-    indigoSoft: "#e0e7ff",
-    warning: "#d97706",
-    warningSoft: "#fef3c7",
-    hero: "#0f172a",
+    accentSoft: "#3a2414",
+    danger: "#fb7185",
+    dangerSoft: "#3a1c23",
+    success: "#34d399",
+    successSoft: "#123528",
+    info: "#38bdf8",
+    infoSoft: "#0e2b3e",
+    indigo: "#818cf8",
+    indigoSoft: "#20264a",
+    warning: "#fbbf24",
+    warningSoft: "#332a10",
+    hero: "#0b1220",
     heroAlt: "#0e7490",
+    // Premium dark-theme additions (same hues, tuned for dark contrast + depth).
+    primaryGlow: "#2dd4bf",
+    accentGlow: "#fb923c",
+    glassBg: "rgba(255,255,255,0.05)",
+    glassStrong: "rgba(255,255,255,0.08)",
+    glassBorder: "rgba(255,255,255,0.10)",
+    overlayScrim: "rgba(4,8,16,0.66)",
+  },
+  gradients: {
+    // teal -> cyan -> indigo: the signature hero band used on first-launch surfaces.
+    hero: ["#0f766e", "#0e7490", "#1e3a8a"],
+    heroDeep: ["#0f2a2e", "#0b1220"],
+    price: ["#2dd4bf", "#0f766e"],
   },
   spacing: {
     xs: 4,

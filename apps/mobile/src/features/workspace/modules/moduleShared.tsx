@@ -462,7 +462,7 @@ export function ModuleSwitcherBar({
               }
             >
               <View style={styles.moduleSwitchChipContent}>
-                <Icon color={selected ? "primary" : "mutedText"} name={module.icon} size={16} />
+                <Icon color={selected ? "onPrimary" : "mutedText"} name={module.icon} size={16} />
                 <Text
                   numberOfLines={1}
                   style={[styles.moduleSwitchText, selected && styles.moduleSwitchTextSelected]}

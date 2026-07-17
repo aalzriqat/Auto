@@ -42,7 +42,7 @@ export const styles = StyleSheet.create({
     gap: theme.spacing.sm,
   },
   brand: {
-    color: theme.colors.primary,
+    color: theme.colors.primaryGlow,
     fontSize: 11,
     fontWeight: "700",
     letterSpacing: 0,
@@ -173,6 +173,8 @@ export const styles = StyleSheet.create({
   recordCard: {
     gap: theme.spacing.sm,
     borderRadius: theme.radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.lg,
     ...theme.shadows.sm,
@@ -197,7 +199,7 @@ export const styles = StyleSheet.create({
     backgroundColor: theme.colors.primarySoft,
   },
   entityAvatarText: {
-    color: theme.colors.primaryDark,
+    color: theme.colors.primaryGlow,
     fontSize: 14,
     fontWeight: "700",
   },
@@ -209,6 +211,8 @@ export const styles = StyleSheet.create({
   vehicleRecordCard: {
     gap: theme.spacing.md,
     borderRadius: theme.radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.lg,
     ...theme.shadows.sm,
@@ -307,7 +311,7 @@ export const styles = StyleSheet.create({
     gap: theme.spacing.sm,
   },
   warningText: {
-    color: theme.colors.accent,
+    color: theme.colors.accentGlow,
     fontSize: 13,
     fontWeight: "600",
   },
@@ -373,6 +377,8 @@ export const styles = StyleSheet.create({
   },
   emptyState: {
     borderRadius: theme.radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.xl,
     ...theme.shadows.sm,
@@ -385,6 +391,8 @@ export const styles = StyleSheet.create({
   summaryPanel: {
     gap: theme.spacing.md,
     borderRadius: theme.radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.lg,
     ...theme.shadows.sm,
@@ -450,6 +458,8 @@ export const styles = StyleSheet.create({
     minHeight: 118,
     justifyContent: "space-between",
     borderRadius: theme.radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
     padding: theme.spacing.lg,
     ...theme.shadows.sm,
@@ -597,7 +607,7 @@ export const styles = StyleSheet.create({
     backgroundColor: theme.colors.surfaceAlt,
   },
   conversationAvatarText: {
-    color: theme.colors.primary,
+    color: theme.colors.primaryGlow,
     fontSize: 13,
     fontWeight: "700",
   },
@@ -692,7 +702,7 @@ export const styles = StyleSheet.create({
     backgroundColor: theme.colors.primary,
   },
   messageSender: {
-    color: theme.colors.primary,
+    color: theme.colors.primaryGlow,
     fontSize: 11,
     fontWeight: "700",
   },
@@ -715,7 +725,7 @@ export const styles = StyleSheet.create({
     fontWeight: "600",
   },
   messageMetaMine: {
-    color: theme.colors.primarySoft,
+    color: "rgba(255,255,255,0.72)",
   },
   seenByStack: {
     flexDirection: "row",
@@ -793,7 +803,7 @@ export const styles = StyleSheet.create({
     backgroundColor: theme.colors.surfaceAlt,
   },
   memberAvatarText: {
-    color: theme.colors.primary,
+    color: theme.colors.primaryGlow,
     fontSize: 12,
     fontWeight: "700",
   },
@@ -867,7 +877,7 @@ export const styles = StyleSheet.create({
     fontWeight: "600",
   },
   vehiclePrice: {
-    color: theme.colors.primary,
+    color: theme.colors.primaryGlow,
     fontSize: 18,
     fontWeight: "700",
     letterSpacing: -0.3,
@@ -931,7 +941,7 @@ export const styles = StyleSheet.create({
     borderBottomColor: "transparent",
   },
   underlineTabSelected: {
-    borderBottomColor: theme.colors.primary,
+    borderBottomColor: theme.colors.primaryGlow,
   },
   underlineTabText: {
     color: theme.colors.mutedText,
@@ -939,7 +949,7 @@ export const styles = StyleSheet.create({
     fontWeight: "600",
   },
   underlineTabTextSelected: {
-    color: theme.colors.primary,
+    color: theme.colors.primaryGlow,
   },
   pushedScreenContent: {
     gap: theme.spacing.lg,

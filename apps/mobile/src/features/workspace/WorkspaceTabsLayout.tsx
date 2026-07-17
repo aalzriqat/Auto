@@ -143,7 +143,7 @@ export function WorkspaceTabsLayout({ orgId }: Readonly<{ orgId: string | null }
         <Tabs
           screenOptions={{
             headerShown: false,
-            tabBarActiveTintColor: theme.colors.primary,
+            tabBarActiveTintColor: theme.colors.primaryGlow,
             tabBarInactiveTintColor: theme.colors.mutedText,
             tabBarLabelStyle: {
               fontFamily: getFontFamily(locale, "medium", fontsLoaded),
@@ -172,7 +172,7 @@ export function WorkspaceTabsLayout({ orgId }: Readonly<{ orgId: string | null }
                   href: visible ? undefined : null,
                   tabBarAccessibilityLabel: label,
                   tabBarIcon: ({ focused }) => (
-                    <Icon color={focused ? "primary" : "mutedText"} name={tab.icon} size={22} />
+                    <Icon color={focused ? "primaryGlow" : "mutedText"} name={tab.icon} size={22} />
                   ),
                   tabBarLabel: label,
                   title: label,

@@ -4,6 +4,7 @@ import { Stack } from "expo-router";
 
 import { RouteErrorState } from "../src/components/RouteState";
 import { AppProviders } from "../src/providers/AppProviders";
+import { theme } from "../src/theme";
 
 type ExpoRouteErrorBoundaryProps = {
   error: Error;
@@ -17,7 +18,12 @@ export function ErrorBoundary({ error, retry }: ExpoRouteErrorBoundaryProps) {
 export default function RootLayout() {
   return (
     <AppProviders>
-      <Stack screenOptions={{ headerShown: false }} />
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          contentStyle: { backgroundColor: theme.colors.background },
+        }}
+      />
     </AppProviders>
   );
 }
