@@ -1,7 +1,6 @@
 import { nativeRoutes } from "@autoflow/shared";
 import { useSSO } from "@clerk/expo";
 import { useSignIn } from "@clerk/expo/legacy";
-import * as Linking from "expo-linking";
 import { useRouter } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import { useCallback, useState } from "react";
@@ -53,9 +52,11 @@ export default function SignInRoute() {
     setBusy("google");
     setError(null);
     try {
+      // No redirectUrl → useSSO defaults to AuthSession.makeRedirectUri({ path:
+      // "sso-callback" }), i.e. autoflow://sso-callback, which the standalone
+      // build handles.
       const { createdSessionId, setActive: ssoSetActive } = await startSSOFlow({
         strategy: "oauth_google",
-        redirectUrl: Linking.createURL("/"),
       });
       if (createdSessionId && ssoSetActive) {
         await ssoSetActive({ session: createdSessionId });
@@ -74,7 +75,12 @@ export default function SignInRoute() {
     setBusy("password");
     setError(null);
     try {
-      const attempt = await signIn.create({ identifier: identifier.trim(), password });
+      // Two-step: create the sign-in with the identifier, then attempt the
+      // password first factor explicitly. More robust than passing password to
+      // create(), and surfaces a clear error when the account has no password
+      // (e.g. a Google-only account).
+      await signIn.create({ identifier: identifier.trim() });
+      const attempt = await signIn.attemptFirstFactor({ strategy: "password", password });
       if (attempt.status === "complete") {
         await setActive({ session: attempt.createdSessionId });
         finishSignIn();
