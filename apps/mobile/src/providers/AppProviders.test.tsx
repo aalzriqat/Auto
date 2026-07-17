@@ -28,6 +28,13 @@ jest.mock("convex/react-clerk", () => ({
   ConvexProviderWithClerk: ({ children }: { children: ReactNode }) => children,
 }));
 
+// The push gate is a side-effect wrapper pulling in native modules
+// (expo-notifications/router). This suite covers font loading, so stub it to a
+// passthrough; its own logic is tested via pushLink.test.ts and on-device.
+jest.mock("../notifications/PushNotificationsGate", () => ({
+  PushNotificationsGate: ({ children }: { children: ReactNode }) => children,
+}));
+
 jest.mock("react-native-safe-area-context", () => {
   const React = jest.requireActual<typeof import("react")>("react");
   const { View } = jest.requireActual<typeof import("react-native")>("react-native");

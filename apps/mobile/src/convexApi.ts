@@ -1793,6 +1793,16 @@ export const api = {
       "users:getMe",
     ),
   },
+  mobilePushTokens: {
+    register: makeFunctionReference<
+      "mutation",
+      { token: string; platform: "IOS" | "ANDROID"; deviceName?: string },
+      string
+    >("mobilePushTokens:register"),
+    remove: makeFunctionReference<"mutation", { token: string }, null>(
+      "mobilePushTokens:remove",
+    ),
+  },
   memberships: {
     list: makeFunctionReference<"query", MembershipListArgs, MobilePageResult<MobileMembership>>(
       "memberships:list",
@@ -2484,6 +2494,15 @@ export const api = {
   };
   users: {
     getMe: FunctionReference<"query", "public", Record<string, never>, MobileUserProfile>;
+  };
+  mobilePushTokens: {
+    register: FunctionReference<
+      "mutation",
+      "public",
+      { token: string; platform: "IOS" | "ANDROID"; deviceName?: string },
+      string
+    >;
+    remove: FunctionReference<"mutation", "public", { token: string }, null>;
   };
   memberships: {
     list: FunctionReference<"query", "public", MembershipListArgs, MobilePageResult<MobileMembership>>;
