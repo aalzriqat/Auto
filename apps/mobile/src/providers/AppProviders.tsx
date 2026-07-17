@@ -22,6 +22,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { validateMobileEnv } from "../config/env";
 import { PushNotificationsGate } from "../notifications/PushNotificationsGate";
 import { getTypographyStyle, theme } from "../theme";
+import { NativeUpdateGate } from "../updates/NativeUpdateGate";
 import { OtaUpdateGate } from "../updates/OtaUpdateGate";
 import {
   AppFontStateProvider,
@@ -110,7 +111,9 @@ export function AppProviders({ children }: { children: ReactNode }) {
           {envResult.success && convex ? (
             <ClerkProvider publishableKey={envResult.data.clerkPublishableKey} tokenCache={tokenCache}>
               <ConvexProviderWithClerk client={convex} useAuth={useAuth}>
-                <PushNotificationsGate>{children}</PushNotificationsGate>
+                <NativeUpdateGate>
+                  <PushNotificationsGate>{children}</PushNotificationsGate>
+                </NativeUpdateGate>
               </ConvexProviderWithClerk>
             </ClerkProvider>
           ) : (

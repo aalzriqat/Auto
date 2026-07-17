@@ -103,6 +103,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   ],
   extra: {
     ...config.extra,
+    // Monotonic native build ordinal the app compares against the server's
+    // latest published release (mobileReleases) to decide whether to prompt for
+    // a new APK. Bump via EXPO_PUBLIC_BUILD_NUMBER on every native build, in
+    // step with the buildNumber you publish through mobileReleases.publishRelease.
+    buildNumber: Number(process.env.EXPO_PUBLIC_BUILD_NUMBER ?? "1"),
     eas: {
       ...(config.extra?.eas as Record<string, unknown> | undefined),
       ...(easProjectId ? { projectId: easProjectId } : {}),

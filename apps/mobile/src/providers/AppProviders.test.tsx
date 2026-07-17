@@ -39,6 +39,10 @@ jest.mock("../updates/OtaUpdateGate", () => ({
   OtaUpdateGate: ({ children }: { children: ReactNode }) => children,
 }));
 
+jest.mock("../updates/NativeUpdateGate", () => ({
+  NativeUpdateGate: ({ children }: { children: ReactNode }) => children,
+}));
+
 jest.mock("react-native-safe-area-context", () => {
   const React = jest.requireActual<typeof import("react")>("react");
   const { View } = jest.requireActual<typeof import("react-native")>("react-native");

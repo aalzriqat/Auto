@@ -84,6 +84,7 @@ import type * as migrateMarketplaceStatuses from "../migrateMarketplaceStatuses.
 import type * as migrateRoles from "../migrateRoles.js";
 import type * as migrations from "../migrations.js";
 import type * as mobilePushTokens from "../mobilePushTokens.js";
+import type * as mobileReleases from "../mobileReleases.js";
 import type * as notificationPreferences from "../notificationPreferences.js";
 import type * as notifications from "../notifications.js";
 import type * as orgCustomFields from "../orgCustomFields.js";
@@ -264,6 +265,7 @@ declare const fullApi: ApiFromModules<{
   migrateRoles: typeof migrateRoles;
   migrations: typeof migrations;
   mobilePushTokens: typeof mobilePushTokens;
+  mobileReleases: typeof mobileReleases;
   notificationPreferences: typeof notificationPreferences;
   notifications: typeof notifications;
   orgCustomFields: typeof orgCustomFields;
