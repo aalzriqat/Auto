@@ -27,12 +27,13 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   slug: "autoflow",
   owner: "aalzriqat",
   scheme: appScheme,
-  // Drives the "appVersion" runtimeVersion policy below: OTA JS bundles only
-  // load onto a native build with a matching runtimeVersion, so bump this
-  // whenever you ship a NATIVE change (new module/permission) to force a fresh
-  // APK instead of pushing an incompatible bundle over-the-air.
   version: "1.0.0",
-  runtimeVersion: { policy: "appVersion" },
+  // Bare projects (a committed android/ dir) can't use a runtimeVersion policy
+  // like {"policy":"appVersion"} — EAS requires an explicit string. OTA JS
+  // bundles only load onto a native build with a MATCHING runtimeVersion, so
+  // bump this by hand (and ship a fresh APK) whenever you make a NATIVE change
+  // (new module/permission); pure-JS changes keep the same value and go OTA.
+  runtimeVersion: "1.0.0",
   ...(updatesUrl
     ? {
         updates: {
