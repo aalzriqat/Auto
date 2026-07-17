@@ -9,6 +9,10 @@ buildscript {
     classpath('com.android.tools.build:gradle')
     classpath('com.facebook.react:react-native-gradle-plugin')
     classpath('org.jetbrains.kotlin:kotlin-gradle-plugin')
+    // Firebase (FCM) for Expo push. Making the plugin available here is
+    // harmless on its own; app/build.gradle only applies it when a
+    // google-services.json is present.
+    classpath('com.google.gms:google-services:4.4.2')
   }
 }
 

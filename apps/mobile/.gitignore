@@ -9,3 +9,9 @@ ios/**/build/
 *.tsbuildinfo
 expo-env.d.ts
 # @end expo-cli
+
+# FCM credentials for Expo push. Carries the Android Firebase key — provide it
+# locally (apps/mobile/google-services.json) or via the GOOGLE_SERVICES_JSON
+# env / EAS secret. The Gradle plugin applies only when this file is present.
+google-services.json
+android/app/google-services.json
