@@ -1305,6 +1305,24 @@ export default defineSchema({
   })
     .index("by_publishedAt", ["publishedAt"]),
 
+  // Expo push tokens for the native app, one row per user per device. Distinct
+  // from pushSubscriptions (browser Web Push / VAPID) and from
+  // marketplaceBuyerPushTokens (anonymous buyers keyed by publicId). Granting
+  // the OS notification permission and registering a token here IS the mobile
+  // push opt-in — delivery to these is not gated by the web `pushEnabled`
+  // preference. NOTE: Expo delivers Android push via FCM, so it does not reach
+  // devices without Google Play Services (e.g. Huawei/HMS).
+  mobilePushTokens: defineTable({
+    userId: v.id("users"),
+    token: v.string(), // ExponentPushToken[...]
+    platform: v.union(v.literal("IOS"), v.literal("ANDROID")),
+    deviceName: v.optional(v.string()),
+    createdAt: v.number(),
+    lastSeenAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_token", ["token"]),
+
   test_drives: defineTable({
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),
