@@ -17,6 +17,7 @@
     }
   },
   "scripts": {
+    "eas-build-pre-install": "node scripts/place-google-services.js",
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
