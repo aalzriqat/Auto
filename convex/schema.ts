@@ -1305,6 +1305,45 @@ export default defineSchema({
   })
     .index("by_publishedAt", ["publishedAt"]),
 
+  // Published native builds of the Expo mobile app, for the APK-fallback
+  // updater. Only NATIVE builds live here (a new APK the user sideloads) —
+  // JS-only changes ship over-the-air via expo-updates and never touch this
+  // table. The app compares its own buildNumber to the newest row's and, when
+  // behind, prompts the user to download the APK.
+  mobileAppReleases: defineTable({
+    platform: v.union(v.literal("ANDROID"), v.literal("IOS")),
+    // Monotonic build ordinal — higher means newer. A numeric compare, so 12
+    // always beats 9 (unlike a naive string compare of "1.10" vs "1.9").
+    buildNumber: v.number(),
+    versionName: v.string(), // human label, e.g. "1.4.0"
+    runtimeVersion: v.string(),
+    apkUrl: v.string(), // self-hosted signed APK (Huawei has no Play Store)
+    releaseNotesEn: v.optional(v.string()),
+    releaseNotesAr: v.optional(v.string()),
+    mandatory: v.optional(v.boolean()),
+    createdBy: v.id("users"),
+    createdAt: v.number(),
+  })
+    .index("by_platform_build", ["platform", "buildNumber"]),
+
+  // Expo push tokens for the native app, one row per user per device. Distinct
+  // from pushSubscriptions (browser Web Push / VAPID) and from
+  // marketplaceBuyerPushTokens (anonymous buyers keyed by publicId). Granting
+  // the OS notification permission and registering a token here IS the mobile
+  // push opt-in — delivery to these is not gated by the web `pushEnabled`
+  // preference. NOTE: Expo delivers Android push via FCM, so it does not reach
+  // devices without Google Play Services (e.g. Huawei/HMS).
+  mobilePushTokens: defineTable({
+    userId: v.id("users"),
+    token: v.string(), // ExponentPushToken[...]
+    platform: v.union(v.literal("IOS"), v.literal("ANDROID")),
+    deviceName: v.optional(v.string()),
+    createdAt: v.number(),
+    lastSeenAt: v.number(),
+  })
+    .index("by_user", ["userId"])
+    .index("by_token", ["token"]),
+
   test_drives: defineTable({
     orgId: v.id("organizations"),
     vehicleId: v.id("vehicles"),

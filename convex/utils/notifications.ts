@@ -98,6 +98,25 @@ export async function dispatch(
       link: opts.link,
     });
   }
+
+  // Native push is opt-in by OS permission: registering a device token is the
+  // consent, so it delivers independently of the web `pushEnabled` preference
+  // above. Only schedule the action when the user actually has a device on
+  // file, so notifications for token-less (web-only) users cost nothing extra.
+  const hasMobileToken =
+    (await ctx.db
+      .query("mobilePushTokens")
+      .withIndex("by_user", (q) => q.eq("userId", userId))
+      .first()) !== null;
+  if (hasMobileToken) {
+    await ctx.scheduler.runAfter(0, internal.expoPush.sendMobilePush, {
+      userId,
+      locale,
+      type,
+      data: data ?? {},
+      link: opts.link,
+    });
+  }
 }
 
 /** Notifies a single specific user. */

@@ -1765,6 +1765,17 @@ type MarketplaceSubmitTradeInArgs = {
   turnstileToken: string;
 };
 
+export type MobileReleaseInfo = {
+  buildNumber: number;
+  versionName: string;
+  runtimeVersion: string;
+  apkUrl: string;
+  releaseNotesEn: string | null;
+  releaseNotesAr: string | null;
+  mandatory: boolean;
+  updateAvailable: boolean;
+};
+
 export const api = {
   adminAuth: {
     isSuperAdmin: makeFunctionReference<"query", Record<string, never>, boolean>(
@@ -1792,6 +1803,23 @@ export const api = {
     getMe: makeFunctionReference<"query", Record<string, never>, MobileUserProfile>(
       "users:getMe",
     ),
+  },
+  mobilePushTokens: {
+    register: makeFunctionReference<
+      "mutation",
+      { token: string; platform: "IOS" | "ANDROID"; deviceName?: string },
+      string
+    >("mobilePushTokens:register"),
+    remove: makeFunctionReference<"mutation", { token: string }, null>(
+      "mobilePushTokens:remove",
+    ),
+  },
+  mobileReleases: {
+    getLatestRelease: makeFunctionReference<
+      "query",
+      { platform: "ANDROID" | "IOS"; currentBuildNumber?: number },
+      MobileReleaseInfo | null
+    >("mobileReleases:getLatestRelease"),
   },
   memberships: {
     list: makeFunctionReference<"query", MembershipListArgs, MobilePageResult<MobileMembership>>(
@@ -2484,6 +2512,23 @@ export const api = {
   };
   users: {
     getMe: FunctionReference<"query", "public", Record<string, never>, MobileUserProfile>;
+  };
+  mobilePushTokens: {
+    register: FunctionReference<
+      "mutation",
+      "public",
+      { token: string; platform: "IOS" | "ANDROID"; deviceName?: string },
+      string
+    >;
+    remove: FunctionReference<"mutation", "public", { token: string }, null>;
+  };
+  mobileReleases: {
+    getLatestRelease: FunctionReference<
+      "query",
+      "public",
+      { platform: "ANDROID" | "IOS"; currentBuildNumber?: number },
+      MobileReleaseInfo | null
+    >;
   };
   memberships: {
     list: FunctionReference<"query", "public", MembershipListArgs, MobilePageResult<MobileMembership>>;

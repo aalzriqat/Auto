@@ -55,6 +55,7 @@ import type * as domainRegistrar from "../domainRegistrar.js";
 import type * as email from "../email.js";
 import type * as exchangeRates from "../exchangeRates.js";
 import type * as expenses from "../expenses.js";
+import type * as expoPush from "../expoPush.js";
 import type * as facebookEngagement from "../facebookEngagement.js";
 import type * as facebookIntegrations from "../facebookIntegrations.js";
 import type * as facebookPosting from "../facebookPosting.js";
@@ -82,6 +83,8 @@ import type * as migrateMarketplacePublicIds from "../migrateMarketplacePublicId
 import type * as migrateMarketplaceStatuses from "../migrateMarketplaceStatuses.js";
 import type * as migrateRoles from "../migrateRoles.js";
 import type * as migrations from "../migrations.js";
+import type * as mobilePushTokens from "../mobilePushTokens.js";
+import type * as mobileReleases from "../mobileReleases.js";
 import type * as notificationPreferences from "../notificationPreferences.js";
 import type * as notifications from "../notifications.js";
 import type * as orgCustomFields from "../orgCustomFields.js";
@@ -233,6 +236,7 @@ declare const fullApi: ApiFromModules<{
   email: typeof email;
   exchangeRates: typeof exchangeRates;
   expenses: typeof expenses;
+  expoPush: typeof expoPush;
   facebookEngagement: typeof facebookEngagement;
   facebookIntegrations: typeof facebookIntegrations;
   facebookPosting: typeof facebookPosting;
@@ -260,6 +264,8 @@ declare const fullApi: ApiFromModules<{
   migrateMarketplaceStatuses: typeof migrateMarketplaceStatuses;
   migrateRoles: typeof migrateRoles;
   migrations: typeof migrations;
+  mobilePushTokens: typeof mobilePushTokens;
+  mobileReleases: typeof mobileReleases;
   notificationPreferences: typeof notificationPreferences;
   notifications: typeof notifications;
   orgCustomFields: typeof orgCustomFields;
