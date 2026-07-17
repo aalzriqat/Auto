@@ -1,9 +1,9 @@
 import { nativeRoutes } from "@autoflow/shared";
-import { useSSO } from "@clerk/expo";
+import { useAuth, useSSO } from "@clerk/expo";
 import { useSignIn } from "@clerk/expo/legacy";
 import { useRouter } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { Card } from "../../src/components/Card";
@@ -26,8 +26,17 @@ export default function SignInRoute() {
   const router = useRouter();
   const { fontsLoaded } = useAppFontState();
   const { locale, t, textDirection } = useLocale();
+  const { isSignedIn } = useAuth();
   const { isLoaded, signIn, setActive } = useSignIn();
   const { startSSOFlow } = useSSO();
+
+  // Single source of truth for "signed in → leave the sign-in screen". Covers
+  // every path (Google SSO, password, or an already-active session on launch);
+  // the OAuth flow in particular activates the session out-of-band, so relying
+  // on the mutation's return value alone left the user stranded here.
+  useEffect(() => {
+    if (isSignedIn) router.replace(nativeRoutes.home);
+  }, [isSignedIn, router]);
 
   const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
