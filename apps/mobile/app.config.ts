@@ -7,11 +7,32 @@ const appScheme = process.env.EXPO_PUBLIC_APP_SCHEME || "autoflow";
 // absent, push-token registration is skipped gracefully (see usePushRegistration).
 const easProjectId = process.env.EXPO_PUBLIC_EAS_PROJECT_ID;
 
+// OTA update endpoint. `eas update:configure` writes this as
+// https://u.expo.dev/<projectId>; the env var is the self-host / manual escape
+// hatch. When unset, OTA is simply off (the in-app checker no-ops).
+const updatesUrl = process.env.EXPO_PUBLIC_UPDATES_URL;
+
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
   name: "AutoFlow",
   slug: "autoflow-native",
   scheme: appScheme,
+  // Drives the "appVersion" runtimeVersion policy below: OTA JS bundles only
+  // load onto a native build with a matching runtimeVersion, so bump this
+  // whenever you ship a NATIVE change (new module/permission) to force a fresh
+  // APK instead of pushing an incompatible bundle over-the-air.
+  version: "1.0.0",
+  runtimeVersion: { policy: "appVersion" },
+  ...(updatesUrl
+    ? {
+        updates: {
+          url: updatesUrl,
+          // Don't stall the splash waiting on the update server; apply a fetched
+          // update on the next launch instead (see checkForOtaUpdate).
+          fallbackToCacheTimeout: 0,
+        },
+      }
+    : {}),
   orientation: "portrait",
   userInterfaceStyle: "automatic",
   // Square 1024x1024 app icon (see assets/README.md for the source-of-truth

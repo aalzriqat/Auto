@@ -22,6 +22,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { validateMobileEnv } from "../config/env";
 import { PushNotificationsGate } from "../notifications/PushNotificationsGate";
 import { getTypographyStyle, theme } from "../theme";
+import { OtaUpdateGate } from "../updates/OtaUpdateGate";
 import {
   AppFontStateProvider,
   useAppFontState,
@@ -103,7 +104,8 @@ function ConfigurationError({ message }: { message: string }) {
 export function AppProviders({ children }: { children: ReactNode }) {
   return (
     <SafeAreaProvider>
-      <AppFontGate>
+      <OtaUpdateGate>
+        <AppFontGate>
         <LocaleProvider>
           {envResult.success && convex ? (
             <ClerkProvider publishableKey={envResult.data.clerkPublishableKey} tokenCache={tokenCache}>
@@ -115,7 +117,8 @@ export function AppProviders({ children }: { children: ReactNode }) {
             <ConfigurationError message={configurationErrorMessage} />
           )}
         </LocaleProvider>
-      </AppFontGate>
+        </AppFontGate>
+      </OtaUpdateGate>
     </SafeAreaProvider>
   );
 }
