@@ -484,6 +484,7 @@ export const makeStyles = (theme: AppTheme) =>
     fontSize: 28,
     fontWeight: "700",
     letterSpacing: -0.5,
+    fontVariant: ["tabular-nums"],
   },
   metricCaption: {
     color: theme.colors.mutedText,
@@ -889,6 +890,7 @@ export const makeStyles = (theme: AppTheme) =>
     fontSize: 18,
     fontWeight: "700",
     letterSpacing: -0.3,
+    fontVariant: ["tabular-nums"],
   },
   galleryStrip: {
     gap: theme.spacing.sm,
@@ -923,6 +925,7 @@ export const makeStyles = (theme: AppTheme) =>
     color: theme.colors.text,
     fontSize: 15,
     fontWeight: "700",
+    fontVariant: ["tabular-nums"],
   },
   detailTotalRow: {
     flexDirection: "row",
@@ -1055,6 +1058,7 @@ export const makeStyles = (theme: AppTheme) =>
     fontSize: 25,
     fontWeight: "800",
     letterSpacing: -0.5,
+    fontVariant: ["tabular-nums"],
   },
   vehicleCardBody: {
     gap: theme.spacing.sm,
