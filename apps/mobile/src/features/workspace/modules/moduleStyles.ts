@@ -161,6 +161,12 @@ export const makeStyles = (theme: AppTheme) =>
     paddingHorizontal: theme.spacing.lg,
     paddingVertical: theme.spacing.xs,
   },
+  summaryToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    gap: theme.spacing.xs,
+  },
   chipSelected: {
     backgroundColor: theme.colors.primary,
   },

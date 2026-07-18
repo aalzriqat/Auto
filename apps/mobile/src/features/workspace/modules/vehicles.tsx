@@ -28,6 +28,7 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
     { initialNumItems: PAGE_SIZE },
   );
   const [search, setSearch] = useState("");
+  const [showStats, setShowStats] = useState(false);
   const router = useRouter();
   const [editing, setEditing] = useState<MobileVehicle | null>(null);
   const [open, setOpen] = useState(false);
@@ -306,12 +307,27 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
               <PrimaryButton label={locale === "ar" ? "إضافة" : "Add"} onPress={openCreate} />
             </View>
             <SegmentedControl options={statusOptions} value={filter} onChange={setFilter} />
-            <View style={styles.metricGrid}>
-              <MetricCard title={locale === "ar" ? "النتائج" : "Results"} value={compactNumber(filtered.length, locale)} caption={locale === "ar" ? "مطابقة للبحث" : "matching search"} />
-              <MetricCard title={locale === "ar" ? "المتاح" : "Available"} value={compactNumber(availableCount, locale)} caption={locale === "ar" ? "جاهز للبيع" : "ready to sell"} />
-              <MetricCard title={locale === "ar" ? "القيمة" : "Value"} value={money(inventoryValue, locale)} caption={locale === "ar" ? "سعر البيع" : "list value"} />
-              <MetricCard title={locale === "ar" ? "الهامش" : "Margin"} value={money(projectedMargin, locale)} caption={locale === "ar" ? "تقديري" : "projected"} />
-            </View>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ expanded: showStats }}
+              style={({ pressed }) => [styles.chip, styles.summaryToggle, pressed && styles.pressed]}
+              onPress={() => setShowStats((value) => !value)}
+            >
+              <Text style={styles.chipText}>
+                {showStats
+                  ? (locale === "ar" ? "إخفاء الملخص" : "Hide summary")
+                  : (locale === "ar" ? "ملخص المخزون" : "Inventory summary")}
+              </Text>
+              <Icon color="mutedText" name={showStats ? "chevronUp" : "chevronDown"} size={14} />
+            </Pressable>
+            {showStats ? (
+              <View style={styles.metricGrid}>
+                <MetricCard title={locale === "ar" ? "النتائج" : "Results"} value={compactNumber(filtered.length, locale)} caption={locale === "ar" ? "مطابقة للبحث" : "matching search"} />
+                <MetricCard title={locale === "ar" ? "المتاح" : "Available"} value={compactNumber(availableCount, locale)} caption={locale === "ar" ? "جاهز للبيع" : "ready to sell"} />
+                <MetricCard title={locale === "ar" ? "القيمة" : "Value"} value={money(inventoryValue, locale)} caption={locale === "ar" ? "سعر البيع" : "list value"} />
+                <MetricCard title={locale === "ar" ? "الهامش" : "Margin"} value={money(projectedMargin, locale)} caption={locale === "ar" ? "تقديري" : "projected"} />
+              </View>
+            ) : null}
           </>
         }
         renderItem={(vehicle) => {
