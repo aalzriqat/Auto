@@ -148,6 +148,9 @@ describe("marketplace mobile helpers", () => {
   it.each([
     ["OPEN", "marketplaceRequestStatusOpen"],
     ["MATCHED", "marketplaceRequestStatusMatched"],
+    ["OFFERS_RECEIVED", "marketplaceRequestStatusOffersReceived"],
+    ["ACCEPTED", "marketplaceRequestStatusAccepted"],
+    ["COMPLETED", "marketplaceRequestStatusCompleted"],
     ["FULFILLED", "marketplaceRequestStatusFulfilled"],
     ["EXPIRED", "marketplaceRequestStatusExpired"],
     ["SPAM", "marketplaceRequestStatusSpam"],

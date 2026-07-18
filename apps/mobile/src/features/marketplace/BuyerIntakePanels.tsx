@@ -24,10 +24,10 @@ import { SearchableSelectField } from "../../components/SearchableSelectField";
 import { getMobileEnv } from "../../config/env";
 import { useLocale } from "../../providers/LocaleProvider";
 import { theme } from "../../theme";
+import { type SavedBuyerRequest } from "./buyerRequestsStore";
 import { getMarketplaceClientFingerprint } from "./marketplaceFingerprint";
 import { getMarketplaceSelectOptions } from "./marketplaceSelectOptions";
 import {
-  formatNumber,
   parseOptionalWholeNumber,
   trimOrUndefined,
 } from "./marketplaceUtils";
@@ -289,7 +289,9 @@ function StepActions({
   );
 }
 
-export function BuyerRequestPanel() {
+export function BuyerRequestPanel({
+  onRequestSubmitted,
+}: Readonly<{ onRequestSubmitted: (request: SavedBuyerRequest) => void | Promise<void> }>) {
   const { locale, t, textDirection } = useLocale();
   const submitRequest = useAction(api.marketplaceRequests.submitRequest);
   const [fields, setFields] = useState<RequestFields>(DEFAULT_REQUEST_FIELDS);
@@ -297,7 +299,6 @@ export function BuyerRequestPanel() {
   const [verificationResetKey, setVerificationResetKey] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [submittedRequest, setSubmittedRequest] = useState<{ requestId: string; matchedCount: number } | null>(null);
   const [activeStep, setActiveStep] = useState(0);
   const turnstileSiteKey = getTurnstileSiteKey();
   const selectOptions = getMarketplaceSelectOptions(locale);
@@ -376,13 +377,15 @@ export function BuyerRequestPanel() {
     setSubmitting(true);
     try {
       const clientFingerprint = await getMarketplaceClientFingerprint(locale);
+      const make = trimOrUndefined(fields.make);
+      const model = trimOrUndefined(fields.model);
       const submitResponse = await submitRequest({
         buyerFirstName,
         buyerPhone,
         buyerWhatsApp: trimOrUndefined(fields.buyerWhatsApp),
         buyerCity,
-        make: trimOrUndefined(fields.make),
-        model: trimOrUndefined(fields.model),
+        make,
+        model,
         yearMin: parseOptionalWholeNumber(fields.yearMin),
         yearMax: parseOptionalWholeNumber(fields.yearMax),
         priceMin: parseOptionalWholeNumber(fields.priceMin),
@@ -398,11 +401,20 @@ export function BuyerRequestPanel() {
         turnstileToken,
       });
 
-      setSubmittedRequest(submitResponse);
       setFields(DEFAULT_REQUEST_FIELDS);
       setActiveStep(0);
       setTurnstileToken(null);
       setVerificationResetKey((value) => value + 1);
+      // Value before a success box: drop the buyer straight into their live
+      // Request Room, persisting the publicId so they can return to it later.
+      await onRequestSubmitted({
+        publicId: submitResponse.publicId,
+        phone: buyerPhone,
+        make,
+        model,
+        createdAt: Date.now(),
+        seenOfferCount: 0,
+      });
     } catch (error) {
       const message = t("marketplaceSubmitFailed");
       setError(message);
@@ -420,25 +432,6 @@ export function BuyerRequestPanel() {
         <Text style={styles.panelTitle}>{t("marketplaceBuyerRequestTitle")}</Text>
         <Text style={styles.panelSubtitle}>{t("marketplaceBuyerRequestSubtitle")}</Text>
       </View>
-
-      {submittedRequest ? (
-        <Notice
-          title={t("marketplaceRequestSent")}
-          body={
-            submittedRequest.matchedCount > 0
-              ? `${formatNumber(submittedRequest.matchedCount, locale)} ${t("marketplaceRequestSentMatched")}`
-              : t("marketplaceRequestSentZero")
-          }
-        />
-      ) : null}
-      {submittedRequest ? (
-        <View style={styles.idBox}>
-          <Text style={styles.fieldLabel}>{t("marketplaceRequestIdLabel")}</Text>
-          <Text selectable style={styles.idText}>
-            {submittedRequest.requestId}
-          </Text>
-        </View>
-      ) : null}
 
       <GuidedStepFlow activeIndex={activeStep} steps={requestSteps}>
         {activeStep === 0 ? (

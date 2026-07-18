@@ -943,6 +943,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "أصبحت قائمة إغلاق الفترة تفصل الأمور التي يجب إصلاحها فعلاً قبل الإغلاق عن فروقات دفاتر الأستاذ المساعدة التي تكون عادةً مجرد توقيت بين الفترات وتحتاج مراجعة فقط، فلم يعد بالإمكان منع إغلاق شهر سليم بسبب نشاط حدث بعد انتهائه.",
     publishedAt: releaseAt(2026, 7, 14, 2),
   },
+  {
+    type: "FEATURE",
+    titleEn: "Buyers now watch dealer offers arrive live in the app",
+    titleAr: "المشترون يتابعون عروض المعارض تصل مباشرةً في التطبيق",
+    descriptionEn: "The mobile marketplace has a new Request Room: after a buyer tells us what car they want, they land straight in a live screen where each matching dealer's offer streams in as it arrives, with the monthly payment, cash price, and trust badges. Buyers can shortlist, compare two or three offers side by side, and only their chosen dealer sees their phone number after they explicitly allow contact. A My Requests tab keeps every request one tap away, with a badge when new offers land.",
+    descriptionAr: "أصبح لسوق التطبيق غرفة طلب جديدة: بعد أن يخبرنا المشتري بالسيارة التي يريدها، ينتقل مباشرةً إلى شاشة حيّة تظهر فيها عروض المعارض المطابقة أولاً بأول مع القسط الشهري والسعر نقداً وشارات الثقة. يمكن للمشتري حفظ العروض ومقارنة عرضين أو ثلاثة جنباً إلى جنب، ولا يظهر رقم هاتفه إلا للمعرض الذي يختاره وبعد موافقته الصريحة. ويحتفظ تبويب «طلباتي» بكل طلب على بُعد نقرة واحدة مع إشعار عند وصول عروض جديدة.",
+    publishedAt: releaseAt(2026, 7, 18, 1),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;
