@@ -59,6 +59,8 @@ export const semanticIconGlyphs = {
   tasks: "checkbox-outline",
   tasksFilled: "checkbox",
   team: "people-circle-outline",
+  themeDark: "moon-outline",
+  themeLight: "sunny-outline",
   today: "sunny-outline",
   valuationCompanies: "scale-outline",
   vehicles: "car-sport-outline",

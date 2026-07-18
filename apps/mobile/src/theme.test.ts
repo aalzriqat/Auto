@@ -1,4 +1,4 @@
-import { getFontFamily, getTypographyStyle, theme } from "./theme";
+import { buildTheme, getFontFamily, getTypographyStyle, resolveStatusBarStyle, theme } from "./theme";
 
 describe("mobile theme tokens", () => {
   test("keeps the brand color palette stable while expanding shape and depth tokens", () => {
@@ -14,6 +14,28 @@ describe("mobile theme tokens", () => {
     );
     expect(theme.shadows.md.elevation).toBe(4);
     expect(theme.shadows.lg.elevation).toBe(8);
+  });
+
+  test("builds both light and dark palettes, keeping brand hues, and maps the status bar", () => {
+    const light = buildTheme("light");
+    const dark = buildTheme("dark");
+
+    // Default/active theme is light — the original app look.
+    expect(theme.colors.background).toBe(light.colors.background);
+    expect(light.colors.background).toBe("#f2f2f7");
+    expect(light.colors.surface).toBe("#ffffff");
+    // Dark flips the neutrals but keeps the brand teal/orange verbatim.
+    expect(dark.colors.background).toBe("#0a0f1c");
+    expect(dark.colors.primary).toBe("#0f766e");
+    expect(dark.colors.accent).toBe("#ea580c");
+    // On-dark accent text uses a brighter same-hue glow; light keeps the base.
+    expect(dark.colors.primaryGlow).toBe("#2dd4bf");
+    expect(light.colors.primaryGlow).toBe("#0f766e");
+    // Non-color tokens are shared across themes.
+    expect(dark.radius).toEqual(light.radius);
+
+    expect(resolveStatusBarStyle("light")).toBe("dark");
+    expect(resolveStatusBarStyle("dark")).toBe("light");
   });
 
   test("resolves typography families by locale and falls back when fonts are not ready", () => {

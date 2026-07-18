@@ -3,6 +3,7 @@ import { Alert, FlatList, KeyboardAvoidingView, Modal, Platform, Pressable, Scro
 import { FadeSlideIn } from "../../../components/Motion";
 import { Icon } from "../../../components/Icon";
 import { LocaleToggle } from "../../../components/LocaleToggle";
+import { ThemeToggle } from "../../../components/ThemeToggle";
 import { SearchableSelectField, type SearchableSelectOption } from "../../../components/SearchableSelectField";
 import { api, type MobileDirectConversation, type MobileFinanceCompany, type MobileOrgSummary, type MobileSale, type MobileSaleStatus, type MobileVehicle } from "../../../convexApi";
 import { useLocale } from "../../../providers/LocaleProvider";
@@ -361,6 +362,7 @@ export function ModuleHeader({
         </Text>
       </View>
       <View style={styles.headerActions}>
+        <ThemeToggle />
         <LocaleToggle />
       </View>
     </View>

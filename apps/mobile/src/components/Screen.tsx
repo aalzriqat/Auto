@@ -3,7 +3,7 @@ import { ScrollView, StyleSheet, type StyleProp, type ViewStyle } from "react-na
 import { SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 
-import { theme } from "../theme";
+import { statusBarStyle, theme } from "../theme";
 
 type ScreenPadding = "none" | "sm" | "md" | "lg";
 
@@ -31,7 +31,7 @@ export function Screen({
 
   return (
     <SafeAreaView style={styles.screen}>
-      <StatusBar style="light" />
+      <StatusBar style={statusBarStyle} />
       {scroll ? (
         <ScrollView
           keyboardShouldPersistTaps="handled"
