@@ -1,37 +1,38 @@
 name: Build APK (EAS)
 
-# On-demand Android APK build, for getting a fresh install onto a test device
-# without a local Android toolchain.
-#
-# This uses `eas build --local`: it runs the *exact same EAS build recipe* (same
-# eas.json profiles, same remote Android keystore) but ON THE GITHUB RUNNER
-# instead of Expo's cloud servers. Compared to a cloud build that is a strict
-# win on the free tier:
-#   - No EAS build queue — the build starts immediately.
-#   - Does NOT count against the free-tier monthly Android build cap (local
-#     builds are unlimited).
-#   - The runner minutes are spent actually compiling (~10-20 min) instead of
-#     idling while a queued cloud build runs.
-# The only cost is GitHub Actions minutes (free/unlimited on public repos).
+# On-demand Android APK build via EAS, for getting a fresh install onto a test
+# device without a local Android toolchain. This is a *cloud* build (it runs on
+# Expo's servers), so the GitHub runner only needs eas-cli + the EXPO_TOKEN
+# secret to authenticate. The EXPO_PUBLIC_* bundle config comes from the EAS
+# build profile's environment (already configured on the project), exactly like
+# eas-update.yml — not from this workflow.
 #
 # The finished APK is attached to the run as an artifact
-# ("autoflow-apk-<profile>"). To install: download the artifact, unzip it, open
-# the .apk on the device.
+# ("autoflow-apk-<profile>") and its Expo build page is linked in the run
+# summary. To install: download the artifact, unzip it, open the .apk on the
+# device.
 #
 # Dispatch this against whatever branch/ref you want built (the "Run workflow"
-# ref) — e.g. `main`, or a branch that has a feature merged, so the APK carries
-# it.
+# ref) — e.g. `main`, or a branch that has the mobile dark-theme merged, so the
+# APK carries it.
 #
 # NOTES / CAVEATS:
-#  - EXPO_TOKEN is still required: `eas build --local --non-interactive` fetches
-#    the project's remote Android keystore from EAS to sign the APK. If a first
-#    run fails on credentials, run `eas credentials` locally once to
-#    generate/select a keystore, then re-run.
-#  - The Android SDK is preinstalled on ubuntu-latest; we pin the build to the
-#    runner's bundled JDK 17 (JAVA_HOME_17_X64) since Expo/Gradle needs 17.
-#  - If a run ever fails on "no space left on device", the RN build ran the
-#    runner out of disk — free some up first (e.g. remove /usr/share/dotnet,
-#    /opt/ghc) or fall back to a cloud build (`eas build` without `--local`).
+#  - A cloud build (queue + compile) can take ~10-40 min; on Expo's free tier
+#    Android builds queue and are monthly-limited. This job WAITS for completion
+#    so it can attach the artifact. If you'd rather not spend the Actions minutes
+#    waiting, switch `eas build` below to `--no-wait` and drop the download/
+#    upload steps — the run summary still gets the Expo build URL.
+#  - The build needs an Android keystore to already exist on EAS for this project
+#    (prior builds created one). If a first run fails on credentials, run
+#    `eas credentials` locally once to generate/select one, then re-run.
+#  - ⚠️ DO NOT switch this to `eas build --local`. It was tried (PR #103) and
+#    (a) fails at the monorepo pre-install step and (b) — critically — the
+#    eas-cli-local-build-plugin echoes its job payload, which contains the
+#    Android signing keystore + passwords, to stdout, leaking them into this
+#    PUBLIC repo's Actions log. The cloud build above keeps credentials on
+#    Expo's servers and never prints them. If the cloud build also stalls on
+#    this pnpm monorepo, build the APK LOCALLY with gradle assembleRelease
+#    (see the "Windows local APK build" runbook) rather than `--local` in CI.
 
 on:
   workflow_dispatch:
@@ -50,8 +51,8 @@ permissions:
   contents: read
 
 concurrency:
-  # Never cancel an in-flight build — don't throw away a compile that's already
-  # running.
+  # Never cancel an in-flight build — it may be a queued/limited EAS build we
+  # don't want to throw away.
   group: build-apk-${{ github.event.inputs.profile }}
   cancel-in-progress: false
 
@@ -74,14 +75,10 @@ jobs:
           node-version: "22.21.1"
           cache: "pnpm"
 
-      # Warms the pnpm content-addressable store so the local build's own
-      # install phase is fast (hardlinks from the store). `--ignore-scripts` is
-      # fine here — the actual native compile is done by `eas build --local`,
-      # which runs its own install (applying patches/postinstall) internally.
-      - name: Warm dependency store
+      - name: Install dependencies
         run: pnpm install --frozen-lockfile --ignore-scripts
 
-      - name: Build APK locally (via EAS)
+      - name: Build APK on EAS
         working-directory: apps/mobile
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
@@ -89,37 +86,45 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${EXPO_TOKEN:-}" ]; then
-            echo "::error::EXPO_TOKEN secret not set — add it (expo.dev > Account > Access tokens) so the local build can fetch the signing keystore."
+            echo "::error::EXPO_TOKEN secret not set — add it (expo.dev > Account > Access tokens) to build via CI."
             exit 1
           fi
-          # Expo/Gradle needs JDK 17; pin to the runner's bundled 17.
-          export JAVA_HOME="${JAVA_HOME_17_X64:-$JAVA_HOME}"
-          export PATH="$JAVA_HOME/bin:$PATH"
-          java -version
-          # `--local` runs the EAS build on this runner (no queue, no monthly
-          # cap). `--output` drops the signed APK straight to disk.
+          # `--json` implies --non-interactive and waits for the build to finish,
+          # then prints a JSON array describing the build(s). Redirect it to a
+          # file so the human-readable progress still streams to the Actions log.
           npx --yes eas-cli@latest build \
             --platform android \
             --profile "$PROFILE" \
-            --local \
             --non-interactive \
-            --output "autoflow-${PROFILE}.apk"
-          ls -lh autoflow-*.apk
+            --json > build-result.json
+          cat build-result.json
 
-      - name: Summarize
+      - name: Resolve APK URL
         working-directory: apps/mobile
         run: |
           set -euo pipefail
-          SIZE=$(ls -lh autoflow-*.apk | awk '{print $5}')
+          URL=$(node -e "const fs=require('fs');const b=JSON.parse(fs.readFileSync('build-result.json','utf8'));const x=Array.isArray(b)?b[0]:b;const a=(x&&x.artifacts)||{};process.stdout.write(a.applicationArchiveUrl||a.buildUrl||'')")
+          if [ -z "$URL" ]; then
+            echo "::error::Could not resolve an APK URL from the EAS build output (see build-result.json above)."
+            exit 1
+          fi
+          echo "APK_URL=$URL" >> "$GITHUB_ENV"
           {
-            echo "### 📦 APK build finished (local)"
+            echo "### 📦 APK build finished"
             echo ""
             echo "- Profile: \`${{ github.event.inputs.profile }}\`"
             echo "- Ref: \`${{ github.ref_name }}\`"
-            echo "- Size: \`${SIZE}\`"
+            echo "- [Download APK from Expo]($URL)"
             echo ""
-            echo "Grab it from this run's **autoflow-apk-${{ github.event.inputs.profile }}** artifact below, then open the \`.apk\` on the device."
+            echo "Or grab it from this run's **autoflow-apk-${{ github.event.inputs.profile }}** artifact below."
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Download APK
+        working-directory: apps/mobile
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 "$APK_URL" -o "autoflow-${{ github.event.inputs.profile }}.apk"
+          ls -lh autoflow-*.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
