@@ -6,7 +6,8 @@ import { Doc } from "@/convex/_generated/dataModel";
 import { useLanguage } from "@/components/providers/LanguageProvider";
 import { useOrg } from "@/components/providers/OrgProvider";
 import { ImportWizard, ImportFieldConfig, ImportRow, normalizeKey } from "@/components/import/ImportWizard";
-import { downloadXlsxTemplate, SpreadsheetRows } from "@/lib/spreadsheet";
+import { SpreadsheetRows } from "@/lib/spreadsheet";
+import { downloadVehicleTemplate } from "@/components/vehicles/vehicleSheet";
 
 const NEW_COMPANY_PREFIX = "valuation:new:";
 const EXISTING_COMPANY_PREFIX = "valuation:id:";
@@ -56,6 +57,15 @@ const COL_MAP: Record<string, string> = {
   "purchase price": "purchasePrice", cost: "purchasePrice", "buy price": "purchasePrice",
   "سعر الشراء": "purchasePrice", التكلفة: "purchasePrice",
 
+  // Owned stock vs sourced (drop-ship). Note bare "type" is already mapped to
+  // make above, so the source-type column must be a distinct header.
+  "source type": "sourceType", sourcetype: "sourceType", "نوع المصدر": "sourceType",
+  "نوع الملكية": "sourceType", "الملكية": "sourceType",
+
+  // Supplier the sourced vehicle came from
+  "sourced from": "sourcedFrom", sourcedfrom: "sourcedFrom", supplier: "sourcedFrom",
+  "المورد": "sourcedFrom", "اسم المورد": "sourcedFrom", "مصدر السيارة": "sourcedFrom",
+
   // Misc
   status: "status", الحالة: "status",
   notes: "notes", comments: "notes", remarks: "notes", ملاحظات: "notes",
@@ -75,7 +85,9 @@ const VEHICLE_FIELDS: ImportFieldConfig[] = [
   { key: "fuelType", label: "Fuel Type" },
   { key: "transmission", label: "Transmission" },
   { key: "sellingPrice", label: "Selling Price", required: true },
-  { key: "purchasePrice", label: "Purchase Price" },
+  { key: "purchasePrice", label: "Purchase Price / Cost" },
+  { key: "sourceType", label: "Source Type (Stock / Sourced)" },
+  { key: "sourcedFrom", label: "Sourced From (supplier)" },
   { key: "status", label: "Status" },
   { key: "notes", label: "Notes" },
 ];
@@ -87,10 +99,20 @@ const PREVIEW_COLUMNS = [
   { key: "vin", label: "VIN" },
   { key: "color", label: "Color" },
   { key: "mileage", label: "KM" },
+  { key: "sourceType", label: "Type" },
   { key: "purchasePrice", label: "Cost", align: "end" as const },
   { key: "sellingPrice", label: "Selling Price", align: "end" as const },
   { key: "valuations", label: "Financing Company Valuations" },
 ];
+
+function normalizeImportSourceType(raw: unknown): "STOCK" | "SOURCED" {
+  const value = String(raw ?? "").trim().toUpperCase();
+  if (!value) return "STOCK";
+  if (value === "SOURCED" || value.includes("SOURCE") || value.includes("مصدر") || value.includes("خارج")) {
+    return "SOURCED";
+  }
+  return "STOCK";
+}
 
 /**
  * Reads a worksheet that may have a single OR double header row.
@@ -157,6 +179,9 @@ function deriveVehicleRow(mapped: Record<string, any>): Record<string, any> {
     ? parseFloat(String(mapped.purchasePrice).replace(/,/g, ""))
     : undefined;
 
+  const sourceType = normalizeImportSourceType(mapped.sourceType);
+  const sourcedFrom = String(mapped.sourcedFrom ?? "").trim();
+
   const valuations: Array<{ companyId?: string; companyName?: string; valuationAmount: number }> = [];
   Object.entries(mapped).forEach(([key, value]) => {
     if (!key.startsWith(NEW_COMPANY_PREFIX) && !key.startsWith(EXISTING_COMPANY_PREFIX)) return;
@@ -181,6 +206,14 @@ function deriveVehicleRow(mapped: Record<string, any>): Record<string, any> {
     fuelType, transmission,
     sellingPrice: isNaN(sellingPrice) ? 0 : sellingPrice,
     purchasePrice: purchasePrice && !isNaN(purchasePrice) ? purchasePrice : undefined,
+    // Only fields declared in the importBulk validator may be returned here —
+    // the whole derived row (minus _errors) is sent as the mutation payload, and
+    // Convex rejects any undeclared field. sourcedFromName holds the supplier.
+    sourceType,
+    // For a sourced vehicle the supplier cost is the same "Cost" column that
+    // owned stock uses for purchase price; importBulk mirrors it into sourceCost.
+    sourceCost: sourceType === "SOURCED" && purchasePrice && !isNaN(purchasePrice) ? purchasePrice : undefined,
+    sourcedFromName: sourceType === "SOURCED" ? (sourcedFrom || undefined) : undefined,
     status: mapped.status ? String(mapped.status).toUpperCase() : undefined,
     notes: mapped.notes ? String(mapped.notes).trim() : undefined,
     valuations,
@@ -193,6 +226,14 @@ function validateVehicleRow(row: Record<string, any>): string[] {
   if (!row.model) errors.push("Missing Model");
   if (!row.year || isNaN(row.year) || row.year < 1900 || row.year > new Date().getFullYear() + 2) errors.push("Invalid Year");
   if (row.mileage !== undefined && (isNaN(row.mileage) || row.mileage < 0)) errors.push("Invalid Mileage");
+  if (row.sourceType === "SOURCED") {
+    // Sourced vehicles must name their supplier and carry a supplier cost — the
+    // same constraint the create-sourced flow enforces (backend re-checks too).
+    if (!row.sourcedFromName) errors.push("Sourced vehicle needs a supplier (Sourced From)");
+    if (!row.purchasePrice || isNaN(row.purchasePrice) || row.purchasePrice <= 0) {
+      errors.push("Sourced vehicle needs a Cost");
+    }
+  }
   return errors;
 }
 
@@ -207,6 +248,10 @@ function renderVehiclePreviewCell(row: ImportRow, key: string) {
       return row.mileage !== undefined && !isNaN(row.mileage)
         ? row.mileage.toLocaleString()
         : <span className="text-muted-foreground text-xs">TBD</span>;
+    case "sourceType":
+      return row.sourceType === "SOURCED"
+        ? <span className="text-xs text-orange-600">Sourced</span>
+        : <span className="text-xs text-muted-foreground">Stock</span>;
     case "purchasePrice": return row.purchasePrice ? row.purchasePrice.toLocaleString() : "—";
     case "sellingPrice": return row.sellingPrice > 0 ? row.sellingPrice.toLocaleString() : "—";
     case "valuations": {
@@ -220,38 +265,6 @@ function renderVehiclePreviewCell(row: ImportRow, key: string) {
     }
     default: return null;
   }
-}
-
-// ---------------------------------------------------------------------------
-// Template download — matches the dealership's existing spreadsheet layout
-// ---------------------------------------------------------------------------
-async function downloadTemplate() {
-  const row1 = ["TYPE/Name", "VIN", "Color", "KM", "Cost", "Model", "المتخصصة", "الكوتر", "التخمين", "", ""];
-  const row2 = ["",           "",    "",      "",   "",     "",       "",          "",        "بندار",    "تمكين", "السماحة"];
-  // KM=number → zero-km or known mileage; KM=empty → used car, mileage to be added later
-  const example1 = ["Toyota", "JTDKARFU7G3529873", "White", "45000", "14000", "Camry 2022", "18000", "17500", "19000", "18500", "17000"];
-  const example2 = ["BYD", "LJ136HBDA4P123456", "Black", "", "22000", "Dolphin 2024", "26000", "25000", "27000", "26500", "25500"];
-
-  await downloadXlsxTemplate({
-    fileName: "vehicle_import_template.xlsx",
-    sheetName: "Vehicles",
-    rows: [row1, row2, example1, example2],
-    columnWidth: 16,
-    // Merge التخمين across columns I-K.
-    merges: [{ startRow: 1, startCol: 9, endRow: 1, endCol: 11 }],
-    rightAlignedCells: [
-      { row: 1, col: 7 },
-      { row: 1, col: 8 },
-      { row: 1, col: 9 },
-      { row: 1, col: 10 },
-      { row: 1, col: 11 },
-      { row: 2, col: 7 },
-      { row: 2, col: 8 },
-      { row: 2, col: 9 },
-      { row: 2, col: 10 },
-      { row: 2, col: 11 },
-    ],
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -285,7 +298,7 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
       validateRow={validateVehicleRow}
       previewColumns={PREVIEW_COLUMNS}
       renderPreviewCell={renderVehiclePreviewCell}
-      templateBuilder={downloadTemplate}
+      templateBuilder={downloadVehicleTemplate}
       resolveDynamicFields={({ valuationHeaders }) => {
         const extraFields: ImportFieldConfig[] = [];
         const extraAutoGuess: Record<string, string> = {};
@@ -309,7 +322,28 @@ export function VehicleImportDialog({ open, onOpenChange }: Props) {
       }}
       onImport={(vehicles) => {
         if (!activeOrgId) return Promise.resolve({ inserted: 0, skipped: 0 });
-        return importBulk({ orgId: activeOrgId, vehicles: vehicles as any });
+        // Send only the fields importBulk's validator declares — Convex rejects
+        // any undeclared field, so we pick explicitly rather than spreading the
+        // whole derived row (which also carries preview-only helper values).
+        const payload = vehicles.map((v) => ({
+          make: v.make,
+          model: v.model,
+          year: v.year,
+          vin: v.vin,
+          color: v.color,
+          mileage: v.mileage,
+          fuelType: v.fuelType,
+          transmission: v.transmission,
+          sellingPrice: v.sellingPrice,
+          purchasePrice: v.purchasePrice,
+          sourceType: v.sourceType,
+          sourcedFromName: v.sourcedFromName,
+          sourceCost: v.sourceCost,
+          status: v.status,
+          notes: v.notes,
+          valuations: v.valuations,
+        }));
+        return importBulk({ orgId: activeOrgId, vehicles: payload as any });
       }}
     />
   );

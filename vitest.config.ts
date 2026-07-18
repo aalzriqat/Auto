@@ -1,6 +1,12 @@
 import { defineConfig } from "vitest/config";
+import path from "node:path";
 
 export default defineConfig({
+  resolve: {
+    // Mirror the Next.js "@/..." path alias so client-side modules (and their
+    // tests) resolve the same way in vitest as they do in the app build.
+    alias: { "@": path.resolve(__dirname, ".") },
+  },
   test: {
     environment: "jsdom",
     setupFiles: ["./vitest.setup.ts"],

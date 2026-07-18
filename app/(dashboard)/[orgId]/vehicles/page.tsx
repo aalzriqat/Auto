@@ -26,6 +26,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Plus, Search, Pencil, Trash2, ImageIcon, Download, ClipboardList, Check, X, Hourglass, History, Eye, FileSpreadsheet } from "lucide-react";
 import { VehicleImportDialog } from "@/components/vehicles/VehicleImportDialog";
+import { VehicleExportButton } from "@/components/vehicles/VehicleExportButton";
 import { toast } from "@/components/ui/sonner";
 import {
   Dialog,
@@ -285,6 +286,7 @@ export default function VehiclesPage() {
               )}
             </Button>
           )}
+          <VehicleExportButton />
           {canCreate && (
             <Button variant="outline" onClick={() => setIsImportDialogOpen(true)}>
               <FileSpreadsheet className="me-2 h-4 w-4" /> {t("Import" as any)}

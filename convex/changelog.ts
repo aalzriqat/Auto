@@ -975,6 +975,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "المشترون الذين يسمحون بالإشعارات أصبح يوصلهم تنبيه على هواتفهم لحظة ما يرد أي معرض على طلب سيارتهم — ليعودوا فوراً إلى غرفة الطلب ويراجعوا العرض وهو جديد، دون الحاجة لإبقاء التطبيق مفتوحاً.",
     publishedAt: releaseAt(2026, 7, 18, 4),
   },
+  {
+    type: "FEATURE",
+    titleEn: "Export your whole inventory to the import template",
+    titleAr: "تصدير كامل المخزون إلى قالب الاستيراد",
+    descriptionEn: "The vehicles screen now has an Export button that downloads every car in the exact import spreadsheet format — including owned-stock vs sourced vehicles and finance-company valuations — so an inventory can be re-imported into another dealer account instantly. Import now understands the owned-stock and sourced columns too.",
+    descriptionAr: "أصبحت شاشة السيارات تحتوي على زر تصدير يحمّل كل سيارة بنفس تنسيق ملف الاستيراد تماماً — بما في ذلك التمييز بين المخزون المملوك والسيارات المصدّرة وتقييمات شركات التمويل — بحيث يمكن إعادة استيراد المخزون إلى حساب معرض آخر فوراً. كما أصبح الاستيراد يتعرّف على أعمدة المخزون المملوك والمصدّر.",
+    publishedAt: releaseAt(2026, 7, 18, 5),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;
