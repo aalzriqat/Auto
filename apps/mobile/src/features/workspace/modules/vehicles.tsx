@@ -1,6 +1,6 @@
 import { useMutation, usePaginatedQuery } from "convex/react";
 import { useEffect, useRef, useState } from "react";
-import { Alert, Image, Text, View } from "react-native";
+import { Alert, Image, Pressable, Text, View } from "react-native";
 import { GuidedStepFlow, type GuidedStep } from "../../../components/GuidedStepFlow";
 import { api, type MobileVehicle, type MobileVehicleStatus } from "../../../convexApi";
 import { getFuelTypeOptions, getTransmissionOptions, getVehicleColorOptions, getVehicleMakeOptions } from "../../../data/mobileOptions";
@@ -8,6 +8,10 @@ import { useLocale } from "../../../providers/LocaleProvider";
 import { getMobileVinReadiness, normalizeVinInput } from "../mobileVinDecode";
 import { PAGE_SIZE, type Option, fetchDecodedMobileVin, vinNotReadyMessage, vinChecksumWarningMessage, vinDecodeResultMessage, compactNumber, money, maybeText, parseOptionalNumber, parseRequiredNumber, useGenericError, SearchInput, PrimaryButton, SegmentedControl, FormField, SelectField, FormModal, MetricCard, ModuleList, getOptionLabel, firstVehicleImageUrl, DetailPill, SummaryRow, SummaryPanel, WizardActions } from "./moduleShared";
 import { useRouter } from "expo-router";
+import { GradientFill } from "../../../components/Premium";
+import { Icon } from "../../../components/Icon";
+import { PressableScale } from "../../../components/Motion";
+import { theme } from "../../../theme";
 import { styles } from "./moduleStyles";
 
 export function VehiclesModule({ orgId, permissions }: { orgId: string; permissions: readonly string[] }) {
@@ -274,6 +278,18 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
     );
   }
 
+  function openVehicleMenu(vehicle: MobileVehicle) {
+    Alert.alert(
+      `${vehicle.year} ${vehicle.make} ${vehicle.model}`,
+      "",
+      [
+        { text: locale === "ar" ? "إلغاء" : "Cancel", style: "cancel" },
+        { text: locale === "ar" ? "تعديل" : "Edit", onPress: () => openEdit(vehicle) },
+        { text: locale === "ar" ? "أرشفة" : "Archive", style: "destructive", onPress: () => archive(vehicle) },
+      ],
+    );
+  }
+
   return (
     <>
       <ModuleList
@@ -299,53 +315,63 @@ export function VehiclesModule({ orgId, permissions }: { orgId: string; permissi
         }
         renderItem={(vehicle) => {
           const imageUrl = firstVehicleImageUrl(vehicle);
+          const statusText = statusOptions.find((option) => option.value === vehicle.status)?.label ?? vehicle.status;
           return (
-            <View style={styles.vehicleRecordCard}>
-              <View style={styles.vehicleMediaRow}>
-                <View style={styles.vehicleThumb}>
-                  {imageUrl ? (
-                    <Image
-                      source={{ uri: imageUrl }}
-                      style={styles.vehicleThumbImage}
-                      resizeMode="cover"
-                    />
-                  ) : (
-                    <Text style={styles.vehicleThumbText}>{vehicle.make.slice(0, 2).toUpperCase()}</Text>
-                  )}
-                </View>
-                <View style={styles.vehicleCardText}>
-                  <View style={styles.recordHeader}>
-                    <Text style={styles.recordTitle}>{vehicle.year} {vehicle.make} {vehicle.model}</Text>
-                    <Text style={styles.statusPill}>{vehicle.status}</Text>
+            <PressableScale
+              accessibilityLabel={`${vehicle.year} ${vehicle.make} ${vehicle.model}`}
+              style={styles.vehicleCard}
+              onPress={() =>
+                router.push({
+                  pathname: "/org/[orgId]/vehicles/[vehicleId]" as any,
+                  params: { orgId, vehicleId: vehicle._id },
+                })
+              }
+            >
+              <View style={styles.vehiclePhoto}>
+                {imageUrl ? (
+                  <Image source={{ uri: imageUrl }} style={styles.vehiclePhotoImage} resizeMode="cover" />
+                ) : (
+                  <>
+                    <GradientFill colors={theme.gradients.hero} direction="diagonal" />
+                    <View style={styles.vehiclePhotoPlaceholder}>
+                      <Text style={styles.vehiclePhotoInitials}>{vehicle.make.slice(0, 2).toUpperCase()}</Text>
+                    </View>
+                  </>
+                )}
+                <GradientFill colors={["rgba(2,6,14,0)", "rgba(2,6,14,0.82)"]} direction="vertical" />
+                <View style={styles.vehiclePhotoTop}>
+                  <View style={styles.vehiclePhotoStatus}>
+                    <Text style={styles.vehiclePhotoStatusText}>{statusText}</Text>
                   </View>
-                  <Text style={styles.recordMeta}>{vehicle.trim || vehicle.vin}</Text>
-                  <Text style={styles.vehiclePrice}>{money(vehicle.sellingPrice, locale)}</Text>
-                  <View style={styles.detailPillRow}>
-                    <DetailPill label={`${vehicle.mileage.toLocaleString()} km`} tone="info" />
-                    <DetailPill label={vehicle.transmission || "-"} />
-                  </View>
+                  <Pressable
+                    accessibilityLabel={locale === "ar" ? "المزيد" : "More options"}
+                    accessibilityRole="button"
+                    hitSlop={8}
+                    style={styles.vehiclePhotoOverflow}
+                    onPress={() => openVehicleMenu(vehicle)}
+                  >
+                    <Icon color="onPrimary" name="more" size={18} />
+                  </Pressable>
+                </View>
+                <View style={styles.vehiclePhotoBottom}>
+                  <Text numberOfLines={1} style={styles.vehiclePhotoTitle}>
+                    {vehicle.year} {vehicle.make} {vehicle.model}
+                  </Text>
+                  <Text style={styles.vehiclePhotoPrice}>{money(vehicle.sellingPrice, locale)}</Text>
                 </View>
               </View>
-              <View style={styles.vehicleFactRow}>
-                <Text style={styles.recordMeta}>{vehicle.vin}</Text>
-                <Text style={styles.recordMeta}>{vehicle.color || "-"} · {vehicle.fuelType || "-"}</Text>
+              <View style={styles.vehicleCardBody}>
+                <View style={styles.detailPillRow}>
+                  <DetailPill label={`${vehicle.mileage.toLocaleString()} km`} tone="info" />
+                  <DetailPill label={vehicle.transmission || "-"} />
+                  {vehicle.fuelType ? <DetailPill label={vehicle.fuelType} /> : null}
+                </View>
+                <Text numberOfLines={1} style={styles.recordMeta}>{vehicle.trim || vehicle.vin}</Text>
+                {vehicle.pendingStatusRequest ? (
+                  <Text style={styles.warningText}>{vehicle.pendingStatusRequest}</Text>
+                ) : null}
               </View>
-              {vehicle.pendingStatusRequest ? <Text style={styles.warningText}>{vehicle.pendingStatusRequest}</Text> : null}
-              <View style={styles.cardActions}>
-                <PrimaryButton
-                  label={locale === "ar" ? "تفاصيل" : "Details"}
-                  tone="muted"
-                  onPress={() =>
-                    router.push({
-                      pathname: "/org/[orgId]/vehicles/[vehicleId]" as any,
-                      params: { orgId, vehicleId: vehicle._id },
-                    })
-                  }
-                />
-                <PrimaryButton label={locale === "ar" ? "تعديل" : "Edit"} tone="muted" onPress={() => openEdit(vehicle)} />
-                <PrimaryButton label={locale === "ar" ? "أرشفة" : "Archive"} tone="danger" onPress={() => archive(vehicle)} />
-              </View>
-            </View>
+            </PressableScale>
           );
         }}
       />
