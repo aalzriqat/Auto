@@ -1,0 +1,75 @@
+name: EAS Update (OTA)
+
+# Permanent fix for concurrent OTA clobbering: nobody hand-publishes OTA from a
+# feature branch. Every merge to main auto-publishes the INTEGRATED main bundle
+# to the `preview` channel (the internal test build's channel), so parallel
+# workstreams (marketplace, mobile redesign, ...) always ship together and
+# "last publish wins" is harmless because every publish is the same main.
+#
+# Requires one repo secret: EXPO_TOKEN (expo.dev -> Account -> Access tokens).
+# The EXPO_PUBLIC_* bundle config comes from the EAS `preview`/`production`
+# environments (already configured on the project), not from this workflow.
+
+on:
+  push:
+    branches: ["main"]
+    # Only republish when something that actually changes the JS bundle lands.
+    paths:
+      - "apps/mobile/**"
+      - "packages/shared/**"
+      - ".github/workflows/eas-update.yml"
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "EAS channel to publish (preview = test device, production = release)"
+        required: true
+        default: "preview"
+        type: choice
+        options:
+          - preview
+          - production
+
+concurrency:
+  # A newer main publish supersedes an in-flight one — they'd be identical main
+  # bundles anyway, so cancel the stale run instead of racing it.
+  group: eas-update-${{ github.event.inputs.channel || 'preview' }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Publish OTA update from main
+        working-directory: apps/mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          CHANNEL: ${{ github.event.inputs.channel || 'preview' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${EXPO_TOKEN:-}" ]; then
+            echo "::warning::EXPO_TOKEN secret not set — skipping OTA publish. Add it (expo.dev > Account > Access tokens) to enable auto-publish of main to the '${CHANNEL}' channel."
+            exit 0
+          fi
+          npx --yes eas-cli@latest update \
+            --channel "$CHANNEL" \
+            --environment "$CHANNEL" \
+            --message "CI: main@${GITHUB_SHA::7}" \
+            --non-interactive
