@@ -96,6 +96,7 @@ const makeStyles = (theme: AppTheme) => StyleSheet.create({
   },
   value: {
     color: theme.colors.text,
+    fontVariant: ["tabular-nums"],
   },
   caption: {
     color: theme.colors.mutedText,
