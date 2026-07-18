@@ -1,8 +1,10 @@
 import { StyleSheet } from "react-native";
 
-import { theme } from "../../../theme";
+import { useThemedStyles } from "../../../providers/ThemeProvider";
+import { theme, type AppTheme } from "../../../theme";
 
-export const styles = StyleSheet.create({
+export const makeStyles = (theme: AppTheme) =>
+  StyleSheet.create({
   scroll: {
     flex: 1,
   },
@@ -1052,5 +1054,11 @@ export const styles = StyleSheet.create({
     gap: theme.spacing.sm,
     padding: theme.spacing.lg,
   },
-});
+  });
+
+// Static light fallback for any not-yet-migrated consumer.
+export const styles = makeStyles(theme);
+
+// Reactive styles that follow the active theme. Prefer this in components.
+export const useStyles = () => useThemedStyles(makeStyles);
 

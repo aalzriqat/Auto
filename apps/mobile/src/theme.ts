@@ -1,4 +1,4 @@
-import { readInitialThemeMode, type ThemeMode } from "./themeMode";
+import { type ThemeMode } from "./themeMode";
 
 export type { ThemeMode };
 export type FontLocale = "en" | "ar";
@@ -214,12 +214,12 @@ export function resolveStatusBarStyle(mode: ThemeMode): "light" | "dark" {
   return mode === "dark" ? "light" : "dark";
 }
 
-// The mode is resolved ONCE at startup (see themeMode.readInitialThemeMode) so
-// the stylesheets below build from the correct palette. Toggling persists the
-// new mode and reloads the JS, which re-runs this module.
-export const themeMode: ThemeMode = readInitialThemeMode();
-export const theme = buildTheme(themeMode);
-export const statusBarStyle = resolveStatusBarStyle(themeMode);
+export type AppTheme = ReturnType<typeof buildTheme>;
+
+// Static fallback (light). The LIVE theme comes from ThemeProvider / useAppTheme;
+// this remains for mode-independent tokens (spacing/radius/typography/gradients)
+// and any static stylesheet not yet migrated to the reactive hook.
+export const theme = buildTheme("light");
 
 const typographyWeights = {
   display: "bold",

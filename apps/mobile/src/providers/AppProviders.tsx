@@ -30,6 +30,7 @@ import {
   type AppFontState,
 } from "./AppFontContext";
 import { LocaleProvider, useLocale } from "./LocaleProvider";
+import { ThemeProvider } from "./ThemeProvider";
 
 export { useAppFontState } from "./AppFontContext";
 
@@ -107,6 +108,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
     <SafeAreaProvider>
       <OtaUpdateGate>
         <AppFontGate>
+        <ThemeProvider>
         <LocaleProvider>
           {envResult.success && convex ? (
             <ClerkProvider publishableKey={envResult.data.clerkPublishableKey} tokenCache={tokenCache}>
@@ -120,6 +122,7 @@ export function AppProviders({ children }: { children: ReactNode }) {
             <ConfigurationError message={configurationErrorMessage} />
           )}
         </LocaleProvider>
+        </ThemeProvider>
         </AppFontGate>
       </OtaUpdateGate>
     </SafeAreaProvider>

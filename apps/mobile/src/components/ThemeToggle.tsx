@@ -2,14 +2,14 @@ import { Pressable, StyleSheet, Text } from "react-native";
 
 import { useAppFontState } from "../providers/AppFontContext";
 import { useLocale } from "../providers/LocaleProvider";
-import { getTypographyStyle, theme, themeMode } from "../theme";
-import { setThemeModeAndReload, type ThemeMode } from "../themeMode";
+import { useThemeMode, useThemedStyles } from "../providers/ThemeProvider";
+import { getTypographyStyle, type AppTheme } from "../theme";
+import { type ThemeMode } from "../themeMode";
 import { Icon, type SemanticIconName } from "./Icon";
 
 /**
  * Pure view model for the theme toggle — kept separate so both theme modes and
- * both locales are unit-testable without needing to flip the app-wide theme
- * (which is resolved once at startup).
+ * both locales are unit-testable.
  */
 export function resolveThemeToggle(
   currentMode: ThemeMode,
@@ -28,16 +28,16 @@ export function resolveThemeToggle(
 export function ThemeToggle() {
   const { locale } = useLocale();
   const { fontsLoaded } = useAppFontState();
-  const { nextMode, label, iconName, accessibilityLabel } = resolveThemeToggle(themeMode, locale);
+  const { mode, toggle } = useThemeMode();
+  const styles = useThemedStyles(makeStyles);
+  const { label, iconName, accessibilityLabel } = resolveThemeToggle(mode, locale);
 
   return (
     <Pressable
       accessibilityLabel={accessibilityLabel}
       accessibilityRole="button"
       style={({ pressed }) => [styles.toggle, getThemeTogglePressedStyle(pressed)]}
-      onPress={() => {
-        void setThemeModeAndReload(nextMode);
-      }}
+      onPress={toggle}
     >
       <Icon color="primary" name={iconName} size={16} />
       <Text style={[styles.toggleText, getTypographyStyle("label", locale, fontsLoaded)]}>{label}</Text>
@@ -46,27 +46,25 @@ export function ThemeToggle() {
 }
 
 export function getThemeTogglePressedStyle(pressed: boolean) {
-  return pressed ? styles.pressed : null;
+  return pressed ? { opacity: 0.82 } : null;
 }
 
-const styles = StyleSheet.create({
-  toggle: {
-    minWidth: 58,
-    height: 40,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: theme.spacing.xs,
-    borderRadius: theme.radius.md,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surface,
-    paddingHorizontal: theme.spacing.sm,
-  },
-  toggleText: {
-    color: theme.colors.text,
-  },
-  pressed: {
-    opacity: 0.82,
-  },
-});
+const makeStyles = (theme: AppTheme) =>
+  StyleSheet.create({
+    toggle: {
+      minWidth: 58,
+      height: 40,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: theme.spacing.xs,
+      borderRadius: theme.radius.md,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: theme.colors.border,
+      backgroundColor: theme.colors.surface,
+      paddingHorizontal: theme.spacing.sm,
+    },
+    toggleText: {
+      color: theme.colors.text,
+    },
+  });
