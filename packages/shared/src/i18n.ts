@@ -350,6 +350,22 @@ const mobileFoundationStringEntries = [
   ["marketplaceConfirmPhoneMismatch", "That number doesn't match this request.", "الرقم لا يطابق هذا الطلب."],
   ["marketplaceRoomActionFailed", "Something went wrong. Please try again.", "صار خطأ. حاول مرة أخرى."],
   ["marketplaceRoomOpenAfterSubmit", "See your offers", "شوف عروضك"],
+  // Request wizard R2b — value-before-identity + affordability readout
+  ["marketplaceWizardStepVehicle", "The car", "السيارة"],
+  ["marketplaceWizardStepVehicleHint", "Tell us what you're after — skip anything you're flexible on.", "قلنا شو بدك — تجاوز أي شي إنت مرن فيه."],
+  ["marketplaceWizardStepBudget", "Budget", "الميزانية"],
+  ["marketplaceWizardStepBudgetHint", "Set your monthly payment and we'll show your reach.", "حدد قسطك الشهري ومنوريك مداك."],
+  ["marketplaceWizardStepPreferences", "Preferences", "التفضيلات"],
+  ["marketplaceWizardStepPreferencesHint", "Where are you looking?", "وين عم تدوّر؟"],
+  ["marketplaceWizardStepContact", "Your details", "بياناتك"],
+  ["marketplaceWizardStepContactHint", "Last step — how should dealers reach you?", "آخر خطوة — كيف توصلك المعارض؟"],
+  ["marketplaceAffordabilityTitle", "Your approximate reach", "مداك التقريبي"],
+  ["marketplaceAffordabilityHint", "Based on your monthly payment, you can reach a car around:", "بناءً على قسطك الشهري، بتقدر توصل لسيارة بحدود:"],
+  ["marketplaceAffordabilityAcross", "across {count} finance options", "عبر {count} جهات تمويل"],
+  ["marketplaceAffordabilityDownPayment", "Down payment", "الدفعة الأولى"],
+  ["marketplaceAffordabilityTerm", "Term (months)", "مدة التمويل (شهر)"],
+  ["marketplaceAffordabilityEmpty", "Enter a monthly payment to see your budget reach.", "أدخل قسطاً شهرياً لتشوف مدى ميزانيتك."],
+  ["marketplaceAffordabilityNone", "We couldn't estimate a range yet — dealers will still send offers.", "ما قدرنا نحسب المدى بعد — المعارض رح تبعتلك عروض عالكل."],
 ] as const satisfies ReadonlyArray<readonly [string, string, string]>;
 
 type MobileFoundationStringEntry = (typeof mobileFoundationStringEntries)[number];

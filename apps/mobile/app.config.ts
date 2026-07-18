@@ -24,7 +24,11 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
   // whenever you ship a NATIVE change (new module/permission) to force a fresh
   // APK instead of pushing an incompatible bundle over-the-air.
   version: "1.0.0",
-  runtimeVersion: { policy: "appVersion" },
+  // Bare workflow (android/ is committed) → eas update can't resolve a policy,
+  // so pin the runtime version concretely. Must equal the value the installed
+  // APK embeds (the old "appVersion" policy resolved to `version` = "1.0.0").
+  // Bump this in lockstep whenever you ship a NATIVE change + build a fresh APK.
+  runtimeVersion: "1.0.0",
   ...(updatesUrl
     ? {
         updates: {

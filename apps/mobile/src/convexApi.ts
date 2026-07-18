@@ -1201,6 +1201,15 @@ export interface MobileBuyerOffer {
   createdAt: number;
 }
 
+/** Reverse-finance affordability spread across marketplace dealers' finance terms. */
+export interface MobileAffordabilityRange {
+  minPriceJod: number;
+  maxPriceJod: number;
+  companiesConsidered: number;
+  downPayment: number;
+  termMonths: number;
+}
+
 /** The whole Request Room feed, keyed by the unguessable publicId. */
 export interface MobileBuyerRoom {
   publicId: string;
@@ -1803,6 +1812,12 @@ type BuyerRequestStatusArgs = {
 
 type BuyerRoomArgs = {
   publicId: string;
+};
+
+type AffordabilityRangeArgs = {
+  maximumMonthlyPayment: number;
+  downPayment?: number;
+  termMonths?: number;
 };
 
 type BuyerRoomOfferArgs = {
@@ -2462,6 +2477,13 @@ export const api = {
       string
     >("marketplaceDealers:updateProfile"),
   },
+  marketplaceAffordability: {
+    getAffordabilityRange: makeFunctionReference<
+      "query",
+      AffordabilityRangeArgs,
+      MobileAffordabilityRange | null
+    >("marketplaceAffordability:getAffordabilityRange"),
+  },
   marketplaceRequests: {
     submitRequest: makeFunctionReference<
       "action",
@@ -3071,6 +3093,14 @@ export const api = {
       "public",
       MarketplaceDealerProfileUpdateArgs,
       string
+    >;
+  };
+  marketplaceAffordability: {
+    getAffordabilityRange: FunctionReference<
+      "query",
+      "public",
+      AffordabilityRangeArgs,
+      MobileAffordabilityRange | null
     >;
   };
   marketplaceRequests: {
