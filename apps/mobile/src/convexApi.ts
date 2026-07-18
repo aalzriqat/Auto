@@ -1834,6 +1834,12 @@ type BuyerRoomContactArgs = BuyerRoomOfferArgs & {
   buyerPhone: string;
 };
 
+type BuyerPushRegisterArgs = {
+  publicId: string;
+  token: string;
+  platform: "IOS" | "ANDROID" | "WEB";
+};
+
 type MarketplaceSubmitRequestArgs = {
   buyerFirstName: string;
   buyerPhone: string;
@@ -2528,6 +2534,13 @@ export const api = {
       null
     >("marketplaceBuyerActions:acceptOffer"),
   },
+  marketplaceBuyerPush: {
+    registerBuyerPushToken: makeFunctionReference<
+      "mutation",
+      BuyerPushRegisterArgs,
+      null
+    >("marketplaceBuyerPush:registerBuyerPushToken"),
+  },
   marketplaceResponses: {
     listForOrg: makeFunctionReference<
       "query",
@@ -3133,6 +3146,9 @@ export const api = {
     declineOffer: FunctionReference<"mutation", "public", BuyerRoomOfferArgs, null>;
     allowContact: FunctionReference<"mutation", "public", BuyerRoomContactArgs, null>;
     acceptOffer: FunctionReference<"mutation", "public", BuyerRoomContactArgs, null>;
+  };
+  marketplaceBuyerPush: {
+    registerBuyerPushToken: FunctionReference<"mutation", "public", BuyerPushRegisterArgs, null>;
   };
   marketplaceResponses: {
     listForOrg: FunctionReference<"query", "public", OrgScopedArgs, MobileMarketplaceRequestRow[]>;

@@ -18,6 +18,7 @@ import { FormField } from "../../components/FormField";
 import { Icon } from "../../components/Icon";
 import { RouteLoadingState } from "../../components/RouteState";
 import { useLocale } from "../../providers/LocaleProvider";
+import { registerForPushNotificationsAsync } from "../../notifications/pushSetup";
 import { theme } from "../../theme";
 import { setRequestSeenOfferCount } from "./buyerRequestsStore";
 import { formatMoney, formatNumber, getRequestStatusKey } from "./marketplaceUtils";
@@ -415,6 +416,7 @@ export function RequestRoomScreen({
   const declineOffer = useMutation(api.marketplaceBuyerActions.declineOffer);
   const allowContact = useMutation(api.marketplaceBuyerActions.allowContact);
   const acceptOffer = useMutation(api.marketplaceBuyerActions.acceptOffer);
+  const registerBuyerPush = useMutation(api.marketplaceBuyerPush.registerBuyerPushToken);
 
   const [selected, setSelected] = useState<string[]>([]);
   const [compareOpen, setCompareOpen] = useState(false);
@@ -435,6 +437,24 @@ export function RequestRoomScreen({
   useEffect(() => {
     if (room) void setRequestSeenOfferCount(publicId, offerCount);
   }, [room, publicId, offerCount]);
+
+  // Offer to notify this device the moment a new offer lands in this room. Best
+  // effort: silently no-ops on a simulator, denied permission, or web.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const registration = await registerForPushNotificationsAsync();
+      if (cancelled || !registration) return;
+      try {
+        await registerBuyerPush({ publicId, token: registration.token, platform: registration.platform });
+      } catch (error) {
+        console.error("Failed to register buyer push token", error);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [publicId, registerBuyerPush]);
 
   function reportActionFailure(error: unknown) {
     console.error("Request room action failed", error);
