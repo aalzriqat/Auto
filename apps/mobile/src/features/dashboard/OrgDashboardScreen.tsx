@@ -1,6 +1,6 @@
 import { nativeRoutes } from "@autoflow/shared";
 import { useAuth } from "@clerk/expo";
-import { UserButton } from "@clerk/expo/native";
+import { ProfileButton } from "../../components/ProfileButton";
 import { useConvexAuth, useQuery } from "convex/react";
 import { useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
@@ -165,7 +165,7 @@ function Header({ org }: { org: MobileOrgSummary }) {
         <NotificationBell orgId={org._id} />
         <ThemeToggle />
         <LocaleToggle />
-        <UserButton />
+        <ProfileButton />
       </View>
     </View>
   );
