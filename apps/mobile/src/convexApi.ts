@@ -1797,6 +1797,11 @@ type MarketplaceRespondArgs = OrgScopedArgs & {
   kind: MobileMarketplaceResponseKind;
   vehicleId?: string;
   offerPriceJod?: number;
+  financeCompanyId?: string;
+  downPayment?: number;
+  termMonths?: number;
+  offerExpiresAt?: number;
+  sourcingRange?: { minJod: number; maxJod: number; etaDays: number };
   note?: string;
 };
 
