@@ -1,0 +1,126 @@
+name: Build APK (EAS)
+
+# On-demand Android APK build via EAS, for getting a fresh install onto a test
+# device without a local Android toolchain. This is a *cloud* build (it runs on
+# Expo's servers), so the GitHub runner only needs eas-cli + the EXPO_TOKEN
+# secret to authenticate. The EXPO_PUBLIC_* bundle config comes from the EAS
+# build profile's environment (already configured on the project), exactly like
+# eas-update.yml — not from this workflow.
+#
+# The finished APK is attached to the run as an artifact
+# ("autoflow-apk-<profile>") and its Expo build page is linked in the run
+# summary. To install: download the artifact, unzip it, open the .apk on the
+# device.
+#
+# Dispatch this against whatever branch/ref you want built (the "Run workflow"
+# ref) — e.g. `main`, or a branch that has the mobile dark-theme merged, so the
+# APK carries it.
+#
+# NOTES / CAVEATS:
+#  - A cloud build (queue + compile) can take ~10-40 min; on Expo's free tier
+#    Android builds queue and are monthly-limited. This job WAITS for completion
+#    so it can attach the artifact. If you'd rather not spend the Actions minutes
+#    waiting, switch `eas build` below to `--no-wait` and drop the download/
+#    upload steps — the run summary still gets the Expo build URL.
+#  - The build needs an Android keystore to already exist on EAS for this project
+#    (prior builds created one). If a first run fails on credentials, run
+#    `eas credentials` locally once to generate/select one, then re-run.
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: "EAS build profile (also the OTA channel the APK listens on)"
+        required: true
+        default: "preview"
+        type: choice
+        options:
+          - preview
+          - production
+          - development
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never cancel an in-flight build — it may be a queued/limited EAS build we
+  # don't want to throw away.
+  group: build-apk-${{ github.event.inputs.profile }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa # v4
+        with:
+          version: 11.13.0
+
+      - name: Use Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "22.21.1"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Build APK on EAS
+        working-directory: apps/mobile
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          PROFILE: ${{ github.event.inputs.profile }}
+        run: |
+          set -euo pipefail
+          if [ -z "${EXPO_TOKEN:-}" ]; then
+            echo "::error::EXPO_TOKEN secret not set — add it (expo.dev > Account > Access tokens) to build via CI."
+            exit 1
+          fi
+          # `--json` implies --non-interactive and waits for the build to finish,
+          # then prints a JSON array describing the build(s). Redirect it to a
+          # file so the human-readable progress still streams to the Actions log.
+          npx --yes eas-cli@latest build \
+            --platform android \
+            --profile "$PROFILE" \
+            --non-interactive \
+            --json > build-result.json
+          cat build-result.json
+
+      - name: Resolve APK URL
+        working-directory: apps/mobile
+        run: |
+          set -euo pipefail
+          URL=$(node -e "const fs=require('fs');const b=JSON.parse(fs.readFileSync('build-result.json','utf8'));const x=Array.isArray(b)?b[0]:b;const a=(x&&x.artifacts)||{};process.stdout.write(a.applicationArchiveUrl||a.buildUrl||'')")
+          if [ -z "$URL" ]; then
+            echo "::error::Could not resolve an APK URL from the EAS build output (see build-result.json above)."
+            exit 1
+          fi
+          echo "APK_URL=$URL" >> "$GITHUB_ENV"
+          {
+            echo "### 📦 APK build finished"
+            echo ""
+            echo "- Profile: \`${{ github.event.inputs.profile }}\`"
+            echo "- Ref: \`${{ github.ref_name }}\`"
+            echo "- [Download APK from Expo]($URL)"
+            echo ""
+            echo "Or grab it from this run's **autoflow-apk-${{ github.event.inputs.profile }}** artifact below."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Download APK
+        working-directory: apps/mobile
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 "$APK_URL" -o "autoflow-${{ github.event.inputs.profile }}.apk"
+          ls -lh autoflow-*.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: autoflow-apk-${{ github.event.inputs.profile }}
+          path: apps/mobile/autoflow-*.apk
+          if-no-files-found: error
