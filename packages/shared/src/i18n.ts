@@ -366,6 +366,18 @@ const mobileFoundationStringEntries = [
   ["marketplaceAffordabilityTerm", "Term (months)", "مدة التمويل (شهر)"],
   ["marketplaceAffordabilityEmpty", "Enter a monthly payment to see your budget reach.", "أدخل قسطاً شهرياً لتشوف مدى ميزانيتك."],
   ["marketplaceAffordabilityNone", "We couldn't estimate a range yet — dealers will still send offers.", "ما قدرنا نحسب المدى بعد — المعارض رح تبعتلك عروض عالكل."],
+  // Dealer finance-offer composer (R2c)
+  ["marketplaceComposerFinanceTitle", "Finance offer (optional)", "عرض تمويل (اختياري)"],
+  ["marketplaceComposerFinanceCompany", "Finance company", "جهة التمويل"],
+  ["marketplaceComposerNoFinance", "No finance offer", "بدون عرض تمويل"],
+  ["marketplaceComposerExpiryDays", "Offer valid for (days)", "صلاحية العرض (أيام)"],
+  ["marketplaceComposerFinanceHint", "AutoFlow computes the monthly installment from your terms — the buyer never sees a typed number.", "يحسب أوتوفلو القسط الشهري من شروطك — المشتري لا يرى رقماً مكتوباً باليد."],
+  ["marketplaceComposerNeedsFinanceFields", "A finance offer needs a price, down payment, and term.", "عرض التمويل يحتاج سعراً ودفعة أولى ومدة."],
+  ["marketplaceComposerSourcingTitle", "Sourcing range", "نطاق التوفير"],
+  ["marketplaceComposerSourceMin", "Lowest price", "أقل سعر"],
+  ["marketplaceComposerSourceMax", "Highest price", "أعلى سعر"],
+  ["marketplaceComposerSourceEta", "Availability (days)", "مدة التوفير (أيام)"],
+  ["marketplaceComposerNeedsRange", "A sourcing reply needs a valid price range and availability.", "رد التوفير يحتاج نطاق سعر صحيح ومدة توفير."],
 ] as const satisfies ReadonlyArray<readonly [string, string, string]>;
 
 type MobileFoundationStringEntry = (typeof mobileFoundationStringEntries)[number];

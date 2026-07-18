@@ -959,6 +959,14 @@ const HISTORICAL_ENTRIES: HistoricalChangelogEntry[] = [
     descriptionAr: "أصبح مسار «اطلب سيارة» في التطبيق يبدأ بالقيمة: يسألك عن السيارة وميزانيتك أولاً، ويعرض لك مدى الأسعار التقريبي الذي تقدر توصله بقسط شهري معيّن — محسوباً مباشرةً من شروط تمويل المعارض الحقيقية — قبل أن يطلب اسمك أو رقمك. بيانات تواصلك أصبحت الخطوة الأخيرة لا الأولى.",
     publishedAt: releaseAt(2026, 7, 18, 2),
   },
+  {
+    type: "FEATURE",
+    titleEn: "Dealers can send finance offers from the mobile app",
+    titleAr: "المعارض تقدر ترسل عروض تمويل من التطبيق",
+    descriptionEn: "When replying to a marketplace buyer from your phone, you can now pick the vehicle, choose a finance company, and enter the down payment, term, and offer validity — AutoFlow computes the exact monthly installment and shows the buyer a full finance offer (you never type the installment). Replies that can source a car also carry an honest price range and availability instead of a made-up figure.",
+    descriptionAr: "عند الرد على مشترٍ من السوق عبر هاتفك، أصبح بإمكانك اختيار السيارة وجهة التمويل وإدخال الدفعة الأولى والمدة وصلاحية العرض — ويحتسب أوتوفلو القسط الشهري بدقّة ويعرض للمشتري عرض تمويل كاملاً (دون أن تكتب القسط يدوياً). كما تحمل ردود التوفير نطاق سعر صادقاً ومدة توفير بدل رقم تقديري.",
+    publishedAt: releaseAt(2026, 7, 18, 3),
+  },
 ];
 
 const DUPLICATE_LOOKUP_LIMIT = 25;
